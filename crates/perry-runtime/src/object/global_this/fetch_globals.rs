@@ -148,10 +148,14 @@ fn thread_global_bits() -> u64 {
     })
 }
 
-/// This thread's realm global for a BY-NAME read of the declared global
-/// `name`: the complete realm for a name phase B binds (and for any name the
-/// layout does not declare), the core for a phase-A name. One load when the
-/// realm is complete; the name is only looked at before that.
+/// This thread's realm global for a BY-NAME read of the global `name`: the
+/// complete realm for a name phase B binds and for the value names (the
+/// global itself, an accessor); the core for every other name. A name the
+/// layout does not declare is absent from the core exactly as it is from the
+/// complete realm (phase B adds no key, and whatever adds one takes the full
+/// entry first), so its read needs no phase B either. One load when the realm
+/// is complete; the name is only looked at before that, in a two-phase
+/// program.
 #[inline]
 pub(crate) fn global_for_name(name: &str) -> f64 {
     let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
@@ -164,21 +168,14 @@ pub(crate) fn global_for_name(name: &str) -> f64 {
     js_get_global_this()
 }
 
-#[cold]
+// Not cold: a two-phase program that never completes its realm comes here
+// on every by-name read (listed in the default hot-text order).
 #[inline(never)]
 fn global_for_name_slow(name: &str) -> f64 {
-    // A core name is a declared key that is neither phase B's nor one of the
-    // value names: `realm_core_global`, asked of the layout's own index (the
-    // lists partition the declared keys) so that the core list itself is not
-    // linked into every program.
-    let core = crate::object::runtime_layouts::builtin_global_slot(name).is_some()
-        && !crate::codegen_abi::realm_rest_global(name)
-        && !crate::codegen_abi::realm_value_global(name);
-    debug_assert_eq!(core, crate::codegen_abi::realm_core_global(name));
-    if core {
-        js_get_global_core()
-    } else {
+    if crate::codegen_abi::realm_rest_global(name) || crate::codegen_abi::realm_value_global(name) {
         js_get_global_this()
+    } else {
+        js_get_global_core()
     }
 }
 
@@ -300,8 +297,8 @@ fn complete_realm() {
 
 /// The full entry asked for a two-phase realm whose core exists: run phase B,
 /// unless the asker is phase A itself (the population reads the global it is
-/// filling: it gets the realm as it is).
-#[cold]
+/// filling: it gets the realm as it is). (Listed in the default hot-text
+/// order: phase A calls it for each of its own reads of the global.)
 #[inline(never)]
 fn complete_core_realm() -> f64 {
     if !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()) {
@@ -354,7 +351,6 @@ pub extern "C" fn js_get_global_core() -> f64 {
 
 /// The cold half of the core entry: a realm populated in one pass (it serves
 /// both entries), or this thread's first touch of the realm.
-#[cold]
 #[inline(never)]
 fn realm_core_slow() -> f64 {
     let whole = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
