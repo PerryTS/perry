@@ -65,9 +65,22 @@ pub(crate) fn ensure_lazy_stream(value: f64) -> f64 {
     ENSURE_LAZY_STREAM.get().map_or_else(|| value, |f| f(value))
 }
 
+/// `events.EventEmitter` (or `EventEmitterAsyncResource`) for a reader outside
+/// the events install: the `cluster` default export and its `Worker`, which
+/// inherit from it. `js_nm_install_cluster` installs events, so the slot is
+/// filled wherever a cluster value can exist; empty, it fails loudly instead
+/// of building a cluster object without its prototype.
+static EVENT_EMITTER_CONSTRUCTOR_VALUE: Hook<fn(&str) -> f64> = Hook::empty();
+pub(crate) fn event_emitter_constructor_value(export: &str) -> f64 {
+    EVENT_EMITTER_CONSTRUCTOR_VALUE
+        .get()
+        .expect("EventEmitter in a program compiled without the events runtime family")(export)
+}
+
 /// Emitter construction owns only emitter initialization. Stream probes are
 /// installed by stream births, whose layouts make those probes meaningful.
 pub(crate) fn install_emitter() {
+    EVENT_EMITTER_CONSTRUCTOR_VALUE.set(crate::node_stream::event_emitter_constructor_value);
     // Emitter subclasses also retain shape words in the existing birth sites.
     NOTE_BIRTH_CARRIERS.set(crate::node_stream::note_birth_carriers);
     JS_EVENT_EMITTER_SUBCLASS_INIT.set(crate::node_stream::js_event_emitter_subclass_init);

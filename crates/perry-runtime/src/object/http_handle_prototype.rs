@@ -5,6 +5,18 @@
 use crate::value::JSValue;
 
 use super::class_registry::{http_server_handle_kind_probe, HttpServerHandleKind};
+use crate::feature_hooks::Hook;
+
+/// `node_stream::is_builtin_stream_method`. Filled where perry-ext-http
+/// registers its handle classifier (`js_register_http_server_handle_kind_probe`),
+/// the only way [`kind_of`] answers, so [`field`] never meets it empty; a
+/// program without an http server handle links no stream family through the
+/// generic property read.
+static IS_BUILTIN_STREAM_METHOD: Hook<fn(f64, &str) -> bool> = Hook::empty();
+
+pub(crate) fn install_stream_method_probe() {
+    IS_BUILTIN_STREAM_METHOD.set(crate::node_stream::is_builtin_stream_method);
+}
 
 /// The kind of perry-ext-http server handle `handle_id` is, if any.
 fn kind_of(handle_id: usize) -> Option<HttpServerHandleKind> {
@@ -155,7 +167,10 @@ pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option
     if let Some(value) = inherited_field(handle_id, key) {
         // Stream/emitter intrinsics use heap listener state. Registry HTTP
         // objects must keep using their native listener store instead.
-        if crate::node_stream::is_builtin_stream_method(f64::from_bits(value.bits()), name) {
+        let is_builtin_stream_method = IS_BUILTIN_STREAM_METHOD.get().expect(
+            "an http server handle in a program compiled without the stream runtime family",
+        );
+        if is_builtin_stream_method(f64::from_bits(value.bits()), name) {
             return Some(native());
         }
         return Some(value);

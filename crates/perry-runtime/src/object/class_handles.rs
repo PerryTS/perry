@@ -670,6 +670,9 @@ pub extern "C" fn js_http_server_handle_constructor(kind: u8) -> f64 {
 /// built with the external http-server pump.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_http_server_handle_kind_probe(f: HttpServerHandleKindProbeFn) {
+    // The handles' property read compares inherited members with the stream
+    // and emitter intrinsics (`http_handle_prototype::field`).
+    super::http_handle_prototype::install_stream_method_probe();
     HTTP_SERVER_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
