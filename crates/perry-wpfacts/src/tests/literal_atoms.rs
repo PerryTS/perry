@@ -92,11 +92,12 @@ fn the_probe_lists_the_atom_holders() {
         ..Default::default()
     };
     let d = crate::compute(&[("t.ts".to_string(), &hir)], &cfg).dump_text();
-    assert!(d.lines().any(|l| l == "# lit_atoms field Game.side"), "{d}");
-    assert!(
-        !d.lines().any(|l| l == "# lit_atoms field Game.note"),
-        "{d}"
-    );
+    let field = |k: &str| {
+        d.lines()
+            .any(|l| l.starts_with("# lit_atoms field ") && l.ends_with(k))
+    };
+    assert!(field("Game.side"), "{d}");
+    assert!(!field("Game.note"), "{d}");
     assert!(
         d.lines()
             .any(|l| l.starts_with("# lit_atoms module=0 local=")),
