@@ -149,3 +149,58 @@ fn own_or_absent_control_input_key_object_value() {
     let src = "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
+
+/// `modules` in per-unit mode (`compute_units`, design §18).
+fn units(mods: &[(&str, &str)]) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute_units(&list, &FactsConfig::default())
+}
+
+// Dead across units: the parameter of `f` is a closed marker in the unit of `a`; the
+// value `m` passes comes through the caller contract and sits beside it, so
+// neither the read `o.files` nor the call `o.get()` is Dead, in either mode.
+const XA: &str = "export function f(o: any) { return o.get() + o.files; }\n";
+const XM: &str =
+    "import { f } from \"./a\";\nconsole.log(f({ files: 1, get() { return 2; } }));\n";
+
+#[test]
+fn dead_control_value_from_another_unit() {
+    let mods = [("a", XA), ("m", XM)];
+    let src = format!("{XA}{XM}");
+    for pf in [modules(&mods), units(&mods)] {
+        none_pf(&pf, &src, "files", false, "Dead");
+        none_pf(&pf, &src, "get", true, "Dead");
+    }
+}
+
+// The whole-program Dead fixture is Dead; per unit the receiver comes from
+// unmodeled code (TOP), so per unit claims no Dead (less than whole-program,
+// which is allowed).
+#[test]
+fn dead_receiver_is_dead_in_whole_mode_and_not_claimed_per_unit() {
+    let src = format!("{DEAD}console.log(C.get(\"a\"));");
+    let whole = modules(&[("t", &src)]);
+    all_pf(&whole, &src, "files", false, "Dead");
+    let unit = units(&[("t", &src)]);
+    let v = names(&unit, "files", false);
+    assert!(!v.is_empty(), "no site for files");
+    for x in &v {
+        assert!(!is(x, "Dead"), "per unit must not claim Dead: {v:?}");
+        assert!(is(x, "No"), "per unit verdict must be a No(..): {v:?}");
+    }
+}
