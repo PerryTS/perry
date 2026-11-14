@@ -685,6 +685,12 @@ pub(super) unsafe fn visit_gc_rewrite_slots<const DIAGNOSTICS: bool>(
     });
 }
 
+/// The slots the collector traces in `header`'s object, by address: the census
+/// reads a holder's words through the collector's own enumeration.
+pub(crate) unsafe fn visit_traced_slots(header: *mut GcHeader, mut visit: impl FnMut(usize)) {
+    visit_gc_rewrite_slots::<false>(header, |slot| visit(slot.slot as usize));
+}
+
 /// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
 /// `visit`: the copying drain. Indirect descriptor and slot visitor calls
 /// were a measured share of that path's per-object
