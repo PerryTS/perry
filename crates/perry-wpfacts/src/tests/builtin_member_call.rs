@@ -154,11 +154,18 @@ fn conv(other: &str) -> Verdict {
     ))
 }
 
-/// node: prints `1`; `conv(new Float32Array(2))` is `[0, 0]`.
+/// node: prints `1`; `conv(new Float32Array(2))` is `[0, 0]`. The model's
+/// element set of a typed array's slice holds every typed-array element
+/// kind, BigInt included (`num|undef|bigint`): `b[0].m()` on a BigInt reads
+/// `%BigInt.prototype%`, a family the facts do not describe
+/// (`family_absent` has none), so the call is refused, exactly.
 #[test]
 fn slice_call_on_a_typed_array() {
     let v = conv("console.log(conv(new Float32Array(2)));");
-    assert!(proven(&v), "{v:?}");
+    assert!(
+        matches!(&v, Verdict::No(r) if r.contains("bigint")),
+        "{v:?}"
+    );
 }
 
 /// node: prints `1`; `conv("ab")` is `["a", "b"]`.

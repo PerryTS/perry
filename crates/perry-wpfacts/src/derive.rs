@@ -1910,7 +1910,8 @@ fn judge(
     // names its TypeError arm; a String, Number or Boolean reads its
     // family, where the key is absent (`family_absent`): the outcome of an
     // absent key (`undefined`), one more own-data-or-absent receiver or
-    // the `None` slot. A call's callee on a primitive is not covered.
+    // the `None` slot. A call on one of them reads `undefined` there and
+    // throws: its TypeError arm.
     if !none && prim != 0 && verdict.is_none() {
         match beside_prims(m, key, s.key, prim, s.is_call) {
             Some((r, absent)) => {
@@ -2345,17 +2346,18 @@ fn not_unit_why(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> String {
 
 /// The primitives beside the objects of a read or call (`judge`):
 /// `undefined`/`null` name the operation's TypeError arm (6.2.5.5,
-/// 7.1.18); for a read each String, Number or Boolean is `family_absent`
-/// (the read gives `undefined`); a call's callee on one, a BigInt or a
-/// Symbol is not covered. The receivers, and whether an absent outcome is
-/// among them.
+/// 7.1.18); each String, Number or Boolean is `family_absent` (GetV reads
+/// `undefined`: 7.3.2, 10.1.8.1): for a read that is an absent outcome,
+/// for a call it is the TypeError arm (Call of `undefined`, 7.3.14; the
+/// runtime's primitive dispatch, `native_call_method_tower`, throws
+/// `js_throw_type_error_not_a_function` when the family's prototype has no
+/// callable under the key). A BigInt or a Symbol is not covered (no
+/// family here). The receivers, and whether an absent outcome is among
+/// them.
 fn beside_prims(m: &Model, key: &str, a: Atom, prim: u16, call: bool) -> Option<(Vec<String>, bool)> {
     use crate::builtins::NativeFamily as F;
     use crate::model::prim::{BOOL, NULL, NUM, STR, UNDEF};
     if prim & !(STR | NUM | BOOL | NULL | UNDEF) != 0 {
-        return None;
-    }
-    if call && prim & (STR | NUM | BOOL) != 0 {
         return None;
     }
     let mut r = Vec::new();
@@ -2374,10 +2376,10 @@ fn beside_prims(m: &Model, key: &str, a: Atom, prim: u16, call: bool) -> Option<
             if !family_absent(m, fam, key, a) {
                 return None;
             }
-            r.push(name.to_string());
+            r.push(if call { format!("{name} (TypeError)") } else { name.to_string() });
         }
     }
-    let absent = prim & (STR | NUM | BOOL) != 0;
+    let absent = !call && prim & (STR | NUM | BOOL) != 0;
     Some((r, absent))
 }
 

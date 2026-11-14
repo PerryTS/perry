@@ -83,8 +83,11 @@ const SAN: &str = "sanitize( String( n ) )";
 const TAB: &str = "PATH[ String( t ) ]";
 const READ: &str = "const x: any = h[ p.propertyName ]; console.log( x.p );";
 
+/// The four paths, and the TypeError arm the receiver set names: the
+/// track lookup may miss (`undefined`), and a read on it throws (ECMA-262
+/// 6.2.5.5 via 7.1.18 ToObject).
 fn four() -> Vec<String> {
-    vec!["A".into(), "Q".into(), "S".into(), "W".into()]
+    vec!["A".into(), "Q".into(), "S".into(), "W".into(), "undefined (TypeError)".into()]
 }
 
 #[test]
@@ -143,7 +146,7 @@ fn program_object_to_string_is_unknown() {
 #[test]
 fn constant_property_name_is_exact() {
     let v = recv(&prog(SAN, "'position'", "", READ), "p");
-    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+    assert_eq!(v, vec!["A".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
 }
 
 #[test]
@@ -170,7 +173,7 @@ const SUFKEY: &str = "const k2: any = String( n ) + '.' + ( String( t ) === 'a' 
 #[test]
 fn builtin_function_text_has_no_way() {
     let v = recv(&prog(SAN, OBJ, "", READ), "p");
-    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+    assert_eq!(v, vec!["A".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
     let v = recv(&prog(SAN, OBJ, "", SUFKEY), "q");
     assert!(v.is_empty(), "{v:?}");
 }
@@ -236,7 +239,7 @@ fn unique_name_keeps_exclusion() {
     let v = recv(&prog("u2", "\x27position\x27", UNIQUE, OBJ_READ), "q");
     assert!(v.is_empty(), "{v:?}");
     let v = recv(&prog("u2", "\x27position\x27", UNIQUE, READ), "p");
-    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+    assert_eq!(v, vec!["A".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
 }
 
 #[test]
@@ -245,7 +248,7 @@ fn uuid_keeps_exclusion() {
     let v = recv(&prog("id", "\x27position\x27", &pre, OBJ_READ), "q");
     assert!(v.is_empty(), "{v:?}");
     let v = recv(&prog("id", "\x27position\x27", &pre, READ), "p");
-    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+    assert_eq!(v, vec!["A".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
 }
 
 fn name_or_uuid_pre(extra: &str) -> String {
@@ -358,7 +361,7 @@ const d1: any = Math.random() * 255 | 0;",
     );
     let tail = "const z: any = g[ _lut[ d0 & 0xff ] + _lut[ d1 & 0xff ] ]; console.log( z.p );";
     let v = recv(&prog(SAN, TAB, &pre, tail), "p");
-    assert_eq!(v, vec!["S".to_string()], "{v:?}");
+    assert_eq!(v, vec!["S".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
 }
 
 // Control (Step rule, member `++`): a field also written with 0.5 may be
