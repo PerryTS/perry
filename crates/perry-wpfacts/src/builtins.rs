@@ -2567,8 +2567,20 @@ fn ns_method_inner(
             | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" | "atob"
             | "btoa" | "String" | "Number" | "Boolean" | "BigInt",
         ) => {
-            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
-            ret_prim(m, call, prim::ALL);
+            // ECMA-262 19.2.2-19.2.6, B.2.1, 20.3.1.1, 21.1.1.1, 21.2.1.1,
+            // 22.1.1.1; HTML atob/btoa (DOMString): each converts its
+            // arguments by ToString / ToNumber (ToPrimitive on an object),
+            // `Boolean` by ToBoolean (no call); the result kind is fixed.
+            if name != "Boolean" {
+                implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            }
+            let p = match name {
+                "parseInt" | "parseFloat" | "Number" => prim::NUM,
+                "isNaN" | "isFinite" | "Boolean" => prim::BOOL,
+                "BigInt" => prim::BIGINT,
+                _ => prim::STR,
+            };
+            ret_prim(m, call, p);
         }
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
             let pb = site_tmpl(m, call, "keys");
