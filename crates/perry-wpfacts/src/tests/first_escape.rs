@@ -122,3 +122,54 @@ fn control_newobj_store_on_empty_object_is_seen() {
 fn control_newobj_top_arg_stays_top() {
     assert!(v_escapes("const o: any = new Object((globalThis as any).hostGet());", "", ""));
 }
+
+/// OCVALUE: `Object.create(proto)` called as a VALUE (through a variable or
+/// a member read result) is the same operation as the named call (ECMA-262
+/// 20.1.2.2: OrdinaryObjectCreate(proto)): the result's chain is P, and P
+/// is given to no one. RED on 0cbf487a3d: the value call hands P to unknown
+/// code (`unknown_method_at`), so V escapes.
+fn ocvalue_zz_proven(call: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const json: any = JSON.parse(process.argv[2] ?? "{{}}");
+        const P: any = {{ v: new V() }};
+        {call}
+        console.log(o.v.probe());
+        "#
+    );
+    !matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+/// Green before the rule too: generation resolves a const binding of the
+/// builtin to the named call.
+#[test]
+fn ocvalue_object_create_through_variable() {
+    assert!(ocvalue_zz_proven("const c: any = Object.create; const o: any = c(P);"));
+}
+
+#[test]
+fn red_ocvalue_object_create_through_member_read() {
+    assert!(ocvalue_zz_proven(
+        "const k: any = { f: Object.create }; const o: any = k.f(P);"
+    ));
+}
+
+/// `Function.prototype.call` (20.2.3.3) calls the same function with the
+/// remaining arguments.
+#[test]
+fn red_ocvalue_object_create_through_call() {
+    assert!(ocvalue_zz_proven(
+        "const k: any = { f: Object.create }; const o: any = k.f.call(undefined, P);"
+    ));
+}
+
+/// Control: the callee may also be a program function that hands its
+/// argument to the host: that function is still called, V escapes.
+#[test]
+fn control_ocvalue_program_function_is_still_called() {
+    assert!(!ocvalue_zz_proven(
+        "const c: any = json.k ? Object.create : (x: any) => { (globalThis as any).hostTake(x); return x; }; const o: any = c(P);"
+    ));
+}
+

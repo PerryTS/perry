@@ -63,7 +63,22 @@ console.log(o.pa + 1, q);
 "#,
     );
     assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
-    assert!(escape_with_field(&pf, "pb").is_some(), "{}", pf.dump_text());
+    // The value call is the named call (ECMA-262 20.1.2.2): `pb` escapes
+    // exactly as in the direct `Object.create(p)` program.
+    let direct = whole(
+        r#"
+const p = { pb: 2 };
+const o = { pa: 1 };
+const q = Object.create(p);
+console.log(o.pa + 1, q);
+"#,
+    );
+    assert_eq!(
+        escape_with_field(&pf, "pb").is_some(),
+        escape_with_field(&direct, "pb").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 // Control: the callee is unknown code: the receiver is its `this`.

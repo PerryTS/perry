@@ -586,6 +586,50 @@ fn site_tmpl_born(
     m.site_tok(tm, ctx)
 }
 
+/// The object `Object.create(proto)` called as a value makes at `call`
+/// (ECMA-262 20.1.2.2): one `ObjCreate` template per source call site, as the
+/// named call has one per site; its [[Prototype]] is set by the caller.
+fn site_obj_create(m: &mut Model, call: CallId) -> Tok {
+    let site = m.calls[call as usize].site;
+    let key = (site, "Object.create", false);
+    let tm = if let Some(&t) = m.site_tmpls.get(&key) {
+        m.tmpl_of(t).expect("site template")
+    } else {
+        let tm = m.tmpls.len() as TmplId;
+        m.tmpls.push(Template {
+            kind: TmplKind::ObjCreate {
+                module: u32::MAX,
+                site,
+            },
+            display: format!("Object.create@call{site}"),
+            birth_keys: vec![],
+            definite: vec![],
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: vec![],
+            has_computed_members: true,
+            field_init: None,
+            proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = m.tok(TokKind::Obj(tm, NO_CTX));
+        m.site_tmpls.insert(key, t);
+        tm
+    };
+    let ctx = m.birth_ctx(call);
+    m.site_tok(tm, ctx)
+}
+
 /// The template of `what` born at source site `site` (`site_tmpl_born`).
 fn site_template(
     m: &mut Model,
@@ -2624,8 +2668,28 @@ fn ns_method_inner(
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
-        // Neither reads the this value (ECMA-262 20.1.2.2, 20.1.2.23,
-        // 28.1.13): called as a value on any receiver, it is given to no one.
+        // Called as a value (through a variable, a member read, `.call`) it is
+        // the named call (ECMA-262 20.1.2.2 OrdinaryObjectCreate(proto); the
+        // this value is not read): one object per source site whose
+        // [[Prototype]] is the argument, as gen_rest/builtin_objects.rs
+        // `Expr::ObjectCreate` models it. No argument: `undefined` is neither
+        // an Object nor null (step 1 throws), so there is no result.
+        (BuiltinNs::Object, "create")
+            if m.calls[call as usize].args.len() <= 1 && m.calls[call as usize].spread.is_empty() =>
+        {
+            if let Some(p) = arg(m, call, 0) {
+                let r = m.reason("E10 Object.create (as a value call)");
+                m.cons(p, Cons::CreateProto { reason: r });
+                let t = site_obj_create(m, call);
+                let pn = m.proto_node(t);
+                m.edge(p, pn);
+                ret_tok(m, call, t);
+            }
+        }
+        // With a properties argument ObjectDefineProperties reads its
+        // descriptors (20.1.2.3.1), not modeled for a value call: the
+        // arguments stay with unknown code. Neither reads the this value
+        // (20.1.2.2, 20.1.2.23, 28.1.13): it is given to no one.
         (BuiltinNs::Object, "create") => unknown_method_at(
             m,
             call,
