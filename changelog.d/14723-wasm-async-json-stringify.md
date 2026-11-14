@@ -1,0 +1,1 @@
+`--target web`: `JSON.stringify(...)` inside an `async` function now yields the JSON text instead of `undefined`, so a `fetch` body built with it is no longer sent empty (#14719). The async-body JavaScript emitter handles `JsonStringifyFull` through the same `json_stringify` bridge the WASM code uses, so the replacer and space arguments apply.
