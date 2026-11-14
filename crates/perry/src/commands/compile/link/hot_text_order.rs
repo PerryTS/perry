@@ -23,8 +23,9 @@
 //! * The names are resolved against the archives of this link (a function's
 //!   own input section, as the archive names it) and the script is kept in the
 //!   compile cache per archive identity, so later links only pass the file.
-//! * ELF links through GNU ld or lld only. Mach-O (`-order_file` takes exact
-//!   symbol names), COFF, wasm, Android and HarmonyOS keep today's layout.
+//! * ELF links through GNU ld or lld. Mach-O takes the same list as an
+//!   `-order_file` of exact names (`hot_text_order_macho`), opt-in until it is
+//!   measured there. COFF, wasm, Android and HarmonyOS keep today's layout.
 //! * `--function-order` (a per-program recording) replaces the default order.
 //! * `PERRY_HOT_TEXT_ORDER=off` keeps today's layout. The same script carries
 //!   the default hot-data order (`hot_data_order`, `PERRY_HOT_DATA_ORDER`).
@@ -40,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 /// The checked-in default order: one [`symbol_key`] per line, hottest first.
-const DEFAULT_ORDER: &str = include_str!("hot_text_order.txt");
+pub(super) const DEFAULT_ORDER: &str = include_str!("hot_text_order.txt");
 
 /// `PERRY_HOT_TEXT_ORDER=off` (or `0`) keeps today's layout (A/B measurement).
 fn enabled() -> bool {
@@ -149,7 +150,7 @@ pub(super) fn symbol_key(symbol: &str) -> String {
 /// The list: key -> rank (0 is placed first; the first occurrence decides),
 /// and the rank each tier starts at (a `# tier` line starts a tier; the first
 /// tier is the core every program runs).
-fn parse_order(text: &str) -> (HashMap<&str, u32>, Vec<u32>) {
+pub(super) fn parse_order(text: &str) -> (HashMap<&str, u32>, Vec<u32>) {
     let mut ranks = HashMap::new();
     let mut tiers = Vec::new();
     for line in text.lines() {
@@ -319,7 +320,7 @@ fn archive_functions(archive: &Path, out: &mut Vec<(String, String, u64)>) -> Op
 
 /// The cache identity of a resolved script: the list and each archive's path,
 /// size and modification time.
-fn fingerprint(archives: &[&Path], text: bool, data: Option<bool>) -> Option<u64> {
+pub(super) fn fingerprint(archives: &[&Path], text: bool, data: Option<bool>) -> Option<u64> {
     // FNV-1a: stable across processes and toolchains, unlike `DefaultHasher`.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {

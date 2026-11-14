@@ -774,8 +774,24 @@ fn lower_call_inner(
             // #3896: mark the callee position so the expr_member read-gate
             // keeps rejecting `ns.foo()` (absent member call) while relaxing a
             // bare value read `ns.foo` to undefined for Node-core namespaces.
+            //
+            // The flag names the IMMEDIATE callee member, so it is set only when
+            // the callee is a member expression (through parens and TS-only
+            // wrappers, which lower straight to their operand). Any other callee
+            // is a value expression whose sub-expressions are values, never this
+            // call's callee member (ECMA-262 13.3.6.1: the callee is evaluated as
+            // an ordinary expression; only a property reference supplies a
+            // `this`): `pick(Number.isInteger)(x)`, `new F(a)(x)`, `tag`..`(x)`,
+            // `(await p)(x)`, `f?.(a)(x)`, `(c ? a : b)(x)`, `(a, b)(x)`. Left set
+            // there, the first member lowered inside — e.g. the argument
+            // `Number.isInteger` — took it for the direct callee, and the
+            // member-tail reroute-undo (#4596/#4627) collapsed it to the
+            // value-less `PropertyGet { GlobalGet(0), "isInteger" }`, i.e. the
+            // program read `globalThis.isInteger` instead of the function.
+            // `lower_member_inner` clears the flag on entry, so it never reaches
+            // the member's object or a computed key.
             let prev_callee = ctx.lowering_call_callee;
-            ctx.lowering_call_callee = true;
+            ctx.lowering_call_callee = callee_is_member_position(expr);
             let callee_expr = lower_expr(ctx, expr);
             ctx.lowering_call_callee = prev_callee;
             let callee_expr = callee_expr?;
@@ -909,3 +925,24 @@ fn lower_call_inner(
 #[path = "borrowed_call.rs"]
 mod borrowed_call;
 use borrowed_call::borrowed_call_folds;
+
+/// The callee is a member expression, possibly under parens and TS-only
+/// wrappers (`(o.f)(x)`, `(o.f as any)(x)`, `o.f!(x)`, `o.f<T>(x)`), which
+/// lower straight to their operand: the only callee shape whose immediate
+/// sub-lowering is the callee member `lowering_call_callee` names.
+fn callee_is_member_position(e: &ast::Expr) -> bool {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::Member(_) => return true,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::TsInstantiation(x) => cur = &x.expr,
+            _ => return false,
+        }
+    }
+}
