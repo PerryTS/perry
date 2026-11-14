@@ -152,6 +152,10 @@ pub struct TemplateFacts {
     /// A class's own statics that hold their definition for the program's
     /// life (FVA 3.4, `constant_statics`), sorted.
     pub statics: Vec<String>,
+    /// The class prototype's own members that are one data property for
+    /// the program's life (ECMA-262 15.7.14, `constant_proto_members`),
+    /// sorted.
+    pub proto_consts: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
@@ -364,6 +368,7 @@ impl TemplateFacts {
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         common_prefix(&mut self.ancestors, &o.ancestors);
         self.statics.retain(|k| o.statics.contains(k));
+        self.proto_consts.retain(|k| o.proto_consts.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.is(&f.key, f.private)) {
@@ -467,6 +472,56 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
             .get(&(tm, a))
             .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
         if m.static_fields.contains(&(tm, a)) || !stored {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// ECMA-262 15.7.14 ClassDefinitionEvaluation: the prototype object of a
+/// class is created with each method of the class body (15.4.4
+/// DefineMethodProperty) and `constructor` (MakeConstructor) as own,
+/// writable, non-enumerable data properties, before any code can reach the
+/// object. The prototype's own members whose read is one own data lookup
+/// for the program's life: the prototype reaches no unknown code (which
+/// could redefine or delete them), carries no HARD operation
+/// (defineProperty, delete), takes no computed-key store and has no
+/// computed member (either may name the key), and the key is no accessor.
+/// A program store of the key is an ordinary [[Set]] on an own writable
+/// data property (10.1.9.2 OrdinarySetWithOwnDescriptor): the key stays a
+/// data property and the store's value joins the field node the read takes.
+/// An object literal's layout is no class (decision 17); each evaluation of
+/// a per-evaluation class is its own prototype (Rule C).
+fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
+    let tpl = &m.tmpls[tm as usize];
+    if tpl.per_evaluation
+        || tpl.has_computed_members
+        || !matches!(tpl.kind, TmplKind::Class { literal_shape: false, .. })
+    {
+        return Vec::new();
+    }
+    let Some(&proto) = m.tok_index.get(&TokKind::Proto(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(proto)
+        || m.hard.contains_key(&proto)
+        || m.field_any.get(&proto).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&proto);
+    let mut out: Vec<String> = Vec::new();
+    for &a in &tpl.proto_members {
+        if tpl.accessor_keys.contains(&a) || accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
             out.push(m.atoms[a as usize].clone());
         }
     }
@@ -1070,6 +1125,7 @@ fn template_facts(
             .collect(),
         fields,
         statics: constant_statics(m, tm),
+        proto_consts: constant_proto_members(m, tm),
         sabotaged: false,
         record: Err(crate::records::Rejected::off()),
         record_elems: Vec::new(),
@@ -1788,6 +1844,25 @@ fn judge(
                     _ => {
                         verdict.get_or_insert(Verdict::No(
                             "not a constant static of the class (3.4)".into(),
+                        ));
+                    }
+                }
+            }
+            // A program class's prototype object: the key is one of its own
+            // constant members (15.7.14, `constant_proto_members`). A member
+            // it inherits is not proven here.
+            TokKind::Proto(tm) if by_id.contains_key(tm) => {
+                receivers.push(m.tok_name(t));
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.proto_consts.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant own member of the class prototype (15.7.14)".into(),
                         ));
                     }
                 }
