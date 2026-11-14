@@ -187,6 +187,15 @@ pub enum Verdict {
     /// Proven in the typed body behind the entry guard on the receiver
     /// binding (design §11.4); the generic body keeps the site.
     E0,
+    /// A read or call no value reaches: the receiver's (a value call's
+    /// callee's) node holds no value and no primitive at the fixpoint, and
+    /// none of its nodes left a value out (`dropped`). The solve is an
+    /// inclusion over-approximation of every evaluation, and a function
+    /// unknown code can enter holds ⊤ in its parameters and receiver
+    /// (`escape_fn_params`), so an empty node means the expression never
+    /// produces a value: the site is never reached (ECMA-262 13.3.2: the
+    /// member access evaluates its base first). Names no slot or body.
+    Dead,
     No(String),
 }
 
@@ -1265,6 +1274,11 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let key = &m.atoms[s.key as usize];
         let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
             judge(m, &by_id, &runtime, s, &key, toks, prim, top_recv);
+        // Dead needs every value of the sources: a node that left one out
+        // (`dropped`) is not empty in the program.
+        if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+            verdict = Verdict::No("dead site (no receiver flows)".into());
+        }
         // Design §11.4: a site whose receiver is the `this` of a method of
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
@@ -1483,6 +1497,9 @@ fn judge(
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
     if s.value_call {
         let top = toks.contains(&TOP);
+        if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
+            return (Vec::new(), false, Verdict::Dead, true, FxHashMap::default());
+        }
         return match callee_set(m, runtime, toks, prim, top_recv) {
             Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
             Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
@@ -1697,7 +1714,7 @@ fn judge(
     // receivers it is over (the value-call rule, `callee_set`).
     let none = toks.iter().all(|&t| m.closed_marker(t));
     if none && prim == 0 {
-        verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
+        verdict.get_or_insert(Verdict::Dead);
     }
     if none && prim != 0 {
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
