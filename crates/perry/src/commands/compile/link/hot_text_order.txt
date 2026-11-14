@@ -461,6 +461,7 @@ _RNvNtNtCs_13perry_runtime2gc6malloc27gc_malloc_header_is_tracked
 _RNvNvNtNtCs_13perry_runtime2gc6malloc29MALLOC_REGISTRY_REBUILD_COUNT7resolve
 _RNvNvNtNtCs_13perry_runtime5arena9page_meta31DEFERRED_OLD_PAGE_REGISTRATIONS7resolve
 mi_bchunk_popcountNC
+js_realm_two_phase
 # tier common: 50% to 90%; 694 functions, 682291 bytes
 js_gc_register_global_root
 _RNvMs_NtNtCs_13perry_runtime2gc6policyNtB_15GcSuppressScope3new
@@ -860,7 +861,6 @@ js_realm_family_phase
 perry_realm_family_phase
 js_get_global_core
 js_realm_complete
-js_realm_two_phase
 perry_realm_complete
 perry_realm_core_entry
 js_get_global_this
