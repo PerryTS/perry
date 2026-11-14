@@ -58,6 +58,26 @@ pub(super) struct ReceiverSet {
     pub top_recv: NodeId,
 }
 
+/// Every run's copy of each shared body node (`Model::inst_copies`): a
+/// summary instance's fresh slots, a for-in body's run per key among them.
+pub(super) fn run_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
+    let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for inst in 0..m.sum.insts.len() as u32 {
+        m.inst_copies(inst, |orig, copy| copies.entry(orig).or_default().push(copy));
+    }
+    copies
+}
+
+/// The nodes `recvs` and every run's copy of them: the receiver of one
+/// site in every run of its body.
+pub(super) fn with_copies(copies: &FxHashMap<NodeId, Vec<NodeId>>, recvs: &[NodeId]) -> Vec<NodeId> {
+    let mut all = recvs.to_vec();
+    for r in recvs {
+        all.extend(copies.get(r).into_iter().flatten().copied());
+    }
+    all
+}
+
 pub(super) fn receiver_set(m: &Model, recvs: &[NodeId]) -> ReceiverSet {
     let mut toks = Vec::new();
     let mut prims = 0;
@@ -130,6 +150,7 @@ pub(crate) fn element_facts(g: &Gen) -> Vec<ElementFacts> {
     let m = &g.m;
     let mut first: FxHashMap<(u32, u32, ElementOp), usize> = FxHashMap::default();
     let mut groups: Vec<Vec<&crate::gen::ElementSite>> = Vec::new();
+    let copies = run_copies(m);
     for site in &g.element_sites {
         let k = (site.module, site.byte_offset, site.op);
         // Zero has no source identity: keep unlocated operations separate.
@@ -147,7 +168,7 @@ pub(crate) fn element_facts(g: &Gen) -> Vec<ElementFacts> {
         .map(|sites| {
             let site = sites[0];
             let recvs: Vec<NodeId> = sites.iter().map(|s| s.recv).collect();
-            let set = receiver_set(m, &recvs);
+            let set = receiver_set(m, &with_copies(&copies, &recvs));
             let mut key = key_fact(m, site);
             for s in &sites[1..] {
                 if key != key_fact(m, s) {
