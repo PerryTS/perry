@@ -425,6 +425,31 @@ impl WasmModuleEmitter {
                     }
                 }
             }
+            // The bridge the WASM arms call, so both send `fetch(url, { method, body,
+            // headers: { Authorization } })`. Arguments evaluate in source order (url,
+            // auth header, body); the result is the request's promise, for the caller
+            // to await or chain.
+            Expr::FetchGetWithAuth { url, auth_header } => {
+                let u = self.emit_js_expr(url, locals);
+                let a = self.emit_js_expr(auth_header, locals);
+                format!(
+                    "((__u, __a) => fromJsValue(__memDispatch.fetch_with_options(toJsValue(__u), undefined, undefined, {{ Authorization: toJsValue(__a) }})))({}, {})",
+                    u, a
+                )
+            }
+            Expr::FetchPostWithAuth {
+                url,
+                auth_header,
+                body,
+            } => {
+                let u = self.emit_js_expr(url, locals);
+                let a = self.emit_js_expr(auth_header, locals);
+                let b = self.emit_js_expr(body, locals);
+                format!(
+                    "((__u, __a, __b) => fromJsValue(__memDispatch.fetch_with_options(toJsValue(__u), \"POST\", toJsValue(__b), {{ Authorization: toJsValue(__a) }})))({}, {}, {})",
+                    u, a, b
+                )
+            }
             Expr::FetchWithOptions {
                 url,
                 method,
