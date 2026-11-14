@@ -174,10 +174,10 @@ pub use formatting::{
 pub(crate) use formatting::test_boxed_primitive_allocation_count;
 pub(crate) use formatting::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
-    boxed_string_wrapper_utf16_len, format_finite_number_js, format_jsvalue, int32_or_class_repr,
-    is_array_hole, is_negative_zero, jsvalue_string_content, InspectCompactGuard,
-    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
-    InspectSortedGuard, INT_EXACT_FASTPATH_LIMIT,
+    boxed_string_wrapper_utf16_len, format_finite_number_js, format_jsvalue, is_array_hole,
+    is_negative_zero, jsvalue_string_content, InspectCompactGuard, InspectCustomInspectGuard,
+    InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
+    INT_EXACT_FASTPATH_LIMIT,
 };
 
 pub use globals::{

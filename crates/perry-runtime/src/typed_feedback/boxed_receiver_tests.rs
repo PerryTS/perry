@@ -25,7 +25,7 @@ fn method_observation_rejects_numbers_without_losing_internal_raw_abi() {
         TAG_NULL,
         TAG_UNDEFINED,
         SHORT_STRING_TAG | 0x55_6677_8899,
-        INT32_TAG | 0x7fff_ffff,
+        INTERNAL_WORD_TAG | 0x7fff_ffff,
     ] {
         assert_eq!(boxed_method_receiver_addr(bits), 0);
     }

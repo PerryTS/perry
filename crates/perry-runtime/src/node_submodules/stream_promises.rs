@@ -497,7 +497,6 @@ fn is_invalid_pipeline_body(value: f64) -> bool {
         || jsval.is_null()
         || jsval.is_bool()
         || jsval.is_number()
-        || jsval.is_int32()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }

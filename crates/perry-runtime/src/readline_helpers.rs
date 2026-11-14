@@ -44,9 +44,7 @@ fn arg(args: *const crate::array::ArrayHeader, index: u32) -> f64 {
 
 fn number_arg(value: f64, default: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        js.as_int32() as f64
-    } else if js.is_number() && value.is_finite() {
+    if js.is_number() && value.is_finite() {
         value
     } else {
         default

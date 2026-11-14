@@ -330,7 +330,6 @@ pub(crate) fn is_primitive_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     jsval.is_any_string()
         || jsval.is_number()
-        || (jsval.is_int32() && crate::object::class_ref_id(value).is_none())
         || jsval.is_bool()
         || jsval.is_null()
         || jsval.is_undefined()
@@ -635,7 +634,6 @@ unsafe fn call_method_for_primitive(
     let ret_jsv = JSValue::from_bits(ret.to_bits());
     let is_primitive = ret_jsv.is_any_string()
         || ret_jsv.is_number()
-        || ret_jsv.is_int32()
         || ret_jsv.is_bool()
         || ret_jsv.is_null()
         || ret_jsv.is_undefined()

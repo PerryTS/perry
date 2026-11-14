@@ -107,9 +107,6 @@ pub(crate) fn js_jsvalue_to_string_impl(
         } else {
             crate::string::js_string_from_bytes(b"false".as_ptr(), 5)
         }
-    } else if jsval.is_int32() {
-        let s = jsval.as_int32().to_string();
-        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_bigint() {
         // BigInt - convert to decimal string
         let ptr = jsval.as_bigint_ptr();

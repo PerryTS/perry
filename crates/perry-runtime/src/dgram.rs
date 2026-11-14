@@ -676,14 +676,12 @@ pub(crate) fn is_truthy_hidden(socket: f64, key: Slot) -> bool {
 
 pub(crate) fn is_number_like(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
-    jsval.is_int32() || jsval.is_number()
+    jsval.is_number()
 }
 
 pub(crate) fn number_value(value: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(value)
     } else {
         None

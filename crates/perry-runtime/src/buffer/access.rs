@@ -341,7 +341,7 @@ pub(crate) fn js_buffer_set_value(buf_ptr: *mut BufferHeader, index: i32, value:
         return;
     }
     let v = crate::value::JSValue::from_bits(value.to_bits());
-    if v.is_number() || v.is_int32() {
+    if v.is_number() {
         let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
         js_buffer_set(buf_ptr, index, i32::from(byte));
         return;

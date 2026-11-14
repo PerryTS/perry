@@ -944,7 +944,7 @@ pub(crate) unsafe fn birth_fill_f64_lanes(obj: *mut ObjectHeader) {
         i32_lanes &= i32_lanes - 1;
         if slot < live {
             // GC_STORE_AUDIT(INIT): the I32 word of 0, never a pointer.
-            *fields.add(slot as usize) = crate::value::INT32_TAG;
+            *fields.add(slot as usize) = crate::value::INTERNAL_WORD_TAG;
         }
     }
     while lanes != 0 {

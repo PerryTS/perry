@@ -593,11 +593,7 @@ pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) ->
     let length = || {
         let value =
             JsValue::from_bits(js_object_get_property_key(data.get(), length_key.get()).to_bits());
-        if value.is_int32() {
-            value.to_int32() as u32
-        } else {
-            value.to_number() as u32
-        }
+        value.to_number() as u32
     };
     let element = |index: u32| js_object_get_property_key(data.get(), index as f64);
     let mut index = 0;

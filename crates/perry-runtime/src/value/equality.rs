@@ -110,27 +110,6 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
         !(0x7FF8..=0x7FFF).contains(&tag)
     }
 
-    // INT32 comparison: one or both operands may be NaN-boxed INT32 (0x7FFE tag).
-    // Convert INT32 to f64 for numeric comparison (e.g., INT32(5) === 5.0 should be true).
-    // This mirrors the conversion in js_jsvalue_compare.
-    if a_val.is_int32() || b_val.is_int32() {
-        let af = if a_val.is_int32() {
-            a_val.as_int32() as f64
-        } else if is_plain_number(abits) {
-            a
-        } else {
-            return 0;
-        }; // non-numeric type → not equal
-        let bf = if b_val.is_int32() {
-            b_val.as_int32() as f64
-        } else if is_plain_number(bbits) {
-            b
-        } else {
-            return 0;
-        }; // non-numeric type → not equal
-        return if af == bf { 1 } else { 0 };
-    }
-
     // Regular f64 numbers (not NaN-boxed): use IEEE 754 equality
     // This handles -0.0 === 0.0 correctly (both are equal per IEEE 754)
     // Also correctly handles NaN !== NaN (IEEE 754 NaN comparison returns false)
@@ -253,9 +232,7 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
 
     // Helper: convert a JSValue to f64 for numeric comparison
     fn to_number(val: &JSValue, bits: u64, raw: f64) -> Option<f64> {
-        if val.is_int32() {
-            Some(val.as_int32() as f64)
-        } else if is_plain_number(bits) {
+        if is_plain_number(bits) {
             Some(raw)
         } else if val.is_bool() {
             Some(if val.as_bool() { 1.0 } else { 0.0 })
@@ -284,8 +261,8 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
     }
 
     // If both are same type, delegate to strict equals
-    let a_is_num = a_val.is_int32() || is_plain_number(abits);
-    let b_is_num = b_val.is_int32() || is_plain_number(bbits);
+    let a_is_num = is_plain_number(abits);
+    let b_is_num = is_plain_number(bbits);
     // Must accept SHORT_STRING_TAG (SSO) operands too, not just
     // STRING_TAG heap strings — otherwise short strings fall through
     // every arm below to `return 0`, so `"ab" == "ab"` (and loose
@@ -321,17 +298,7 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
 
     // Both numbers: numeric comparison
     if a_is_num && b_is_num {
-        let af = if a_val.is_int32() {
-            a_val.as_int32() as f64
-        } else {
-            a
-        };
-        let bf = if b_val.is_int32() {
-            b_val.as_int32() as f64
-        } else {
-            b
-        };
-        return if af == bf { 1 } else { 0 };
+        return if a == b { 1 } else { 0 };
     }
 
     // Boolean == anything: convert boolean to number, then recurse
@@ -347,23 +314,13 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
     // String == Number: convert string to number
     if a_is_str && b_is_num {
         if let Some(af) = to_number(&a_val, abits, a) {
-            let bf = if b_val.is_int32() {
-                b_val.as_int32() as f64
-            } else {
-                b
-            };
-            return if af == bf { 1 } else { 0 };
+            return if af == b { 1 } else { 0 };
         }
         return 0;
     }
     if a_is_num && b_is_str {
         if let Some(bf) = to_number(&b_val, bbits, b) {
-            let af = if a_val.is_int32() {
-                a_val.as_int32() as f64
-            } else {
-                a
-            };
-            return if af == bf { 1 } else { 0 };
+            return if a == bf { 1 } else { 0 };
         }
         return 0;
     }
@@ -421,37 +378,20 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
         }
     }
 
-    // INT32 comparison
-    if a_val.is_int32() && b_val.is_int32() {
-        let ai = a_val.as_int32();
-        let bi = b_val.as_int32();
-        return if ai < bi {
-            -1
-        } else if ai > bi {
-            1
-        } else {
-            0
-        };
-    }
-
     // Convert to f64 for numeric comparison (handles Number, INT32 mixed with Number, etc.)
     // Return 2 (sentinel) for undefined/null — makes all comparisons false
     // Convert to f64 — use tag check that correctly handles negative numbers
     // (sign bit set → upper16 >= 0x8000, which is > 0x7FFF, not a NaN-box tag)
     let a_tag = abits >> 48;
     let b_tag = bbits >> 48;
-    let af = if a_val.is_int32() {
-        a_val.as_int32() as f64
-    } else if a_val.is_bigint() {
+    let af = if a_val.is_bigint() {
         crate::bigint_hooks::js_bigint_to_f64(a_val.as_bigint_ptr())
     } else if !(0x7FF8..=0x7FFF).contains(&a_tag) {
         a
     } else {
         return 2;
     }; // undefined/null/boolean → incomparable sentinel
-    let bf = if b_val.is_int32() {
-        b_val.as_int32() as f64
-    } else if b_val.is_bigint() {
+    let bf = if b_val.is_bigint() {
         crate::bigint_hooks::js_bigint_to_f64(b_val.as_bigint_ptr())
     } else if !(0x7FF8..=0x7FFF).contains(&b_tag) {
         b

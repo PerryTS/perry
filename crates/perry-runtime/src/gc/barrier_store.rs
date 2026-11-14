@@ -76,64 +76,19 @@ pub(crate) unsafe fn runtime_write_barrier_resolved_slot(
     runtime_write_barrier_slot(parent_addr, slot_addr, child_bits);
 }
 
-/// Canonicalize an INT32-boxed Number into the raw-f64 representation its
-/// shape lane requires. FFI/native stores can supply boxed integers; storing
-/// the equal raw double preserves the shape's tracing proof. ClassRef shares
-/// INT32_TAG but is not a Number, so it keeps its tag.
-#[inline]
-fn canonicalize_typed_slot_store_bits(
-    parent_user: usize,
-    slot_index: usize,
-    value_bits: u64,
-) -> u64 {
-    if !crate::value::is_int32_bits(value_bits) {
-        return value_bits;
-    }
-    if !slot_holds_raw_f64(parent_user, slot_index) {
-        return value_bits;
-    }
-    match crate::array::value_bits_to_number(value_bits) {
-        Some(number) => number.to_bits(),
-        None => value_bits,
-    }
-}
-
-/// Whether `parent_user`'s slot `slot_index` holds a raw double: for an
-/// object, the lane of its shape (charter step 5: the shape is the
-/// authority). No other payload keeps raw doubles in a boxed-value slot.
-#[inline]
-fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
-    unsafe {
-        let Some(header) = super::layout::layout_header_for_user(parent_user) else {
-            return false;
-        };
-        if crate::gc_type_is_object!((*header).obj_type) {
-            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-                return false;
-            }
-            let rep = crate::object::field_rep_store::object_slot_rep(
-                parent_user as *const crate::object::ObjectHeader,
-                slot_index,
-            );
-            return rep == crate::object::field_rep::REP_F64
-                || rep == crate::object::field_rep::REP_F64_DEPRECATED;
-        }
-    }
-    false
-}
-
 /// Newborn object slot store: canonicalize representation, demote a heap
 /// string alias and publish the generational/incremental barrier. Object
 /// tracing uses ShapeId rep, so no per-slot layout note is needed. The
 /// returned pointer classification is retained for construction witnesses.
+/// `_slot_index` named the lane an INT32-boxed Number was canonicalized for;
+/// a Number has one encoding now (P3 B4b), so no store rewrites its value.
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     parent_user: usize,
     slot_addr: usize,
-    slot_index: usize,
+    _slot_index: usize,
     value_bits: u64,
 ) -> bool {
-    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }
@@ -172,7 +127,6 @@ pub(crate) fn runtime_store_jsvalue_slot(
     slot_index: usize,
     value_bits: u64,
 ) {
-    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }

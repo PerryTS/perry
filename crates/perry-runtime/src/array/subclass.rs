@@ -584,20 +584,7 @@ unsafe fn ensure_subclass_numeric_prefix(
                 .add(slot as usize)
         };
         let value = JSValue::from_bits(ptr::read(value_ptr));
-        let number = if value.is_int32() {
-            // `push(i)` commonly stores Perry's compact INT32 Number tag. The
-            // direct clone consumes raw doubles, so normalize that Number to
-            // its representation-equivalent f64 bits during the one-time
-            // verification walk. This is pointer-free -> pointer-free and
-            // changes no JS-observable type/value, hence needs neither a GC
-            // barrier nor a layout downgrade.
-            // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 Number bits
-            // replace compact int32 Number bits in an already numeric slot.
-            let integer = value.as_int32();
-            let number = integer as f64;
-            ptr::write(value_ptr, number.to_bits());
-            number
-        } else if !value.is_number() {
+        let number = if !value.is_number() {
             return false;
         } else {
             value.as_number()
@@ -660,9 +647,7 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
 }
 
 fn nonnegative_u32_length(value: JSValue) -> Option<u32> {
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else if value.is_number() {
+    let number = if value.is_number() {
         value.as_number()
     } else {
         return None;
@@ -1259,9 +1244,6 @@ fn dense_index_get_with_layout(
 
 fn canonical_u32_index(value: f64) -> Option<u32> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        return (js.as_int32() >= 0).then_some(js.as_int32() as u32);
-    }
     (js.is_number()
         && value.is_finite()
         && value >= 0.0

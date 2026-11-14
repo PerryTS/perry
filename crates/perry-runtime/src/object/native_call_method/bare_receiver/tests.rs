@@ -486,7 +486,7 @@ fn headerless_registry_allocations_are_vouched_as_pointers() {
 }
 
 /// The ordinary path pays one compare. Every NaN-boxed receiver — including
-/// `INT32_TAG`, which shares its high half with nothing else, and a real
+/// `INTERNAL_WORD_TAG`, which shares its high half with nothing else, and a real
 /// pointer, which is already canonical — comes back untouched.
 #[test]
 fn nanboxed_receivers_are_returned_unchanged() {
@@ -497,8 +497,8 @@ fn nanboxed_receivers_are_returned_unchanged() {
         ("null", crate::value::TAG_NULL),
         ("true", crate::value::TAG_TRUE),
         ("false", crate::value::TAG_FALSE),
-        ("int32 0", crate::value::INT32_TAG),
-        ("int32 42", crate::value::INT32_TAG | 42),
+        ("int32 0", crate::value::INTERNAL_WORD_TAG),
+        ("int32 42", crate::value::INTERNAL_WORD_TAG | 42),
         ("double 3.5", 3.5f64.to_bits()),
         ("double -1.0", (-1.0f64).to_bits()),
         ("double 1e300", 1e300f64.to_bits()),
