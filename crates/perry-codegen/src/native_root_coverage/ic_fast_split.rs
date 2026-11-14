@@ -302,10 +302,7 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             } else {
                 ("perry_probe_get", "js_object_get_field_value")
             };
-            for (fast, slow) in [
-                fixed,
-                ("perry_probe_get_keyed", "js_object_get_keyed_slow"),
-            ] {
+            for (fast, slow) in [fixed, ("perry_probe_get_keyed", "js_object_get_keyed_slow")] {
                 let calls: Vec<_> = body
                     .lines()
                     .filter(|line| line.contains("call ") && line.contains(&format!("@{fast}(")))

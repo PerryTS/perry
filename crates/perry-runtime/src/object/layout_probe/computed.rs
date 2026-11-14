@@ -646,7 +646,14 @@ pub(crate) unsafe fn in_keyed_miss(obj_bits: u64, key_bits: u64, key: u64, hash:
         return super::probe_has(obj_bits, key_bits, false);
     }
     let payload = (obj_bits & POINTER_MASK) as usize;
-    super::probe_has_walk(super::super::ordinary_dir_addr(), payload, key, hash, true, false)
+    super::probe_has_walk(
+        super::super::ordinary_dir_addr(),
+        payload,
+        key,
+        hash,
+        true,
+        false,
+    )
 }
 
 /// What the keyed store probe ([`probe_store_keyed`]) did with

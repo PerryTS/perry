@@ -1838,12 +1838,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // layout and its chain answer the key's atom
                     // (`perry_probe_get_keyed`, a GC leaf); only a decline
                     // takes the complete keyed read.
-                    Ok(symbol_ic::emit_keyed_probe(
-                        ctx,
-                        obj_box,
-                        key_box,
-                        |ctx| symbol_ic::keyed_slow(ctx, obj_box, key_box, &site_id, false),
-                    ))
+                    Ok(symbol_ic::emit_keyed_probe(ctx, obj_box, key_box, |ctx| {
+                        symbol_ic::keyed_slow(ctx, obj_box, key_box, &site_id, false)
+                    }))
                 });
             }
             // Last-resort fallback with runtime tag checks on the index.

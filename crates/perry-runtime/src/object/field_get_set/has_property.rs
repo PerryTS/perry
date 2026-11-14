@@ -229,7 +229,8 @@ pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
 /// namespace arm and the complete operation for what it cannot answer.
 #[inline(never)]
 extern "C" fn in_operator_miss(obj: f64, key: f64, k: u64, h: u64) -> f64 {
-    match unsafe { crate::object::layout_probe::in_keyed_miss(obj.to_bits(), key.to_bits(), k, h) } {
+    match unsafe { crate::object::layout_probe::in_keyed_miss(obj.to_bits(), key.to_bits(), k, h) }
+    {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
         _ => {}

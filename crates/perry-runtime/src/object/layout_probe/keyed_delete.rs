@@ -92,10 +92,8 @@ pub(crate) unsafe fn probe_delete_keyed(obj: *mut ObjectHeader, key_bits: u64) -
         return None;
     }
     let text = (key & POINTER_MASK) as *const crate::StringHeader;
-    let bytes = std::slice::from_raw_parts(
-        crate::string::string_data(text),
-        (*text).byte_len as usize,
-    );
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(text), (*text).byte_len as usize);
     match bytes.first() {
         Some(first) if *first != b'#' && !first.is_ascii_digit() => {}
         _ => return None,

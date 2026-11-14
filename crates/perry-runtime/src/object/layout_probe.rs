@@ -2269,13 +2269,13 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 mod computed;
 #[path = "layout_probe/keyed_delete.rs"]
 mod keyed_delete;
-pub(crate) use keyed_delete::probe_delete_keyed;
 use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
-pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
 pub(crate) use computed::probe_set_keyed;
+pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
 pub(crate) use computed::{probe_store_keyed, store_key_mintable, KeyedStore};
+pub(crate) use keyed_delete::probe_delete_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

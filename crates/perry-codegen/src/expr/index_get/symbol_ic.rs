@@ -44,9 +44,7 @@ pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers a
     // string or symbol key through the key's atom (`perry_probe_get_keyed`);
     // only a decline calls the complete keyed read.
-    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| {
-        keyed_slow(ctx, obj, key, "0", true)
-    });
+    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| keyed_slow(ctx, obj, key, "0", true));
     let named_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = numeric;
