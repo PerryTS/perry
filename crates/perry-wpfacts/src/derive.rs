@@ -204,6 +204,26 @@ pub enum Verdict {
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
     OwnDataOrAbsent,
+    /// A value call whose callee set is exactly one builtin function object
+    /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
+    /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
+    /// store of another value onto the member it was read from adds that
+    /// value to the callee node. Only while no unknown code exists
+    /// (`!realm_held`): unknown code holds the realm (9.3) and may replace
+    /// the member (the intrinsics' members are writable, 10.4.1 / 17), a
+    /// write the solve does not replay into the read (`realm_hold_tok`).
+    /// Whole-program solves only. `receivers` names the intrinsic.
+    IntrinsicCall,
+    /// A named read whose receivers are all module namespace exotic objects
+    /// of the program's own modules, under a name each module exports
+    /// itself (`ns_own`; no `export *` resolution): [[Get]] gives the export
+    /// binding's current value, `GetBindingValue` of the module's binding
+    /// (ECMA-262 10.4.6.8). No code writes a namespace ([[Set]] 10.4.6.9 and
+    /// [[DefineOwnProperty]] 10.4.6.6 change nothing, [[Prototype]] is null
+    /// and fixed, 10.4.6.1-2), unknown code holding it included: exact under
+    /// a held realm. The claim is the binding, not a value: an `export let`
+    /// its module reassigns is read live.
+    NsExport,
     No(String),
 }
 
@@ -1508,6 +1528,15 @@ fn judge(
         if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
             return (Vec::new(), false, Verdict::Dead, true, FxHashMap::default());
         }
+        if !m.unit_mode {
+            if let Some(name) = intrinsic_callee(m, toks, prim) {
+                if !m.realm_held {
+                    return (vec![name], false, Verdict::IntrinsicCall, true, FxHashMap::default());
+                }
+                let why = "intrinsic callee: unknown code holds the realm and may replace the member";
+                return (Vec::new(), false, Verdict::No(why.into()), true, FxHashMap::default());
+            }
+        }
         return match callee_set(m, runtime, toks, prim, top_recv) {
             Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
             Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
@@ -1569,6 +1598,9 @@ fn judge(
                 FxHashMap::default(),
             ),
         };
+    }
+    if let Some(receivers) = ns_export(m, s, toks, prim) {
+        return (receivers, false, Verdict::NsExport, true, FxHashMap::default());
     }
     let mut receivers = Vec::new();
     let mut top = false;
@@ -1918,6 +1950,14 @@ fn host_member(
     if !native {
         return Some(Err("host member undescribed or written".into()));
     }
+    // Unknown code holds the realm (9.3, `realm_held`): a host object's
+    // members are writable, and the solve does not replay unknown code's
+    // replacement of one (`realm_hold_tok`), as for `Verdict::IntrinsicCall`.
+    if m.realm_held {
+        return Some(Err(
+            "host member: unknown code holds the realm and may replace the member".into(),
+        ));
+    }
     receivers.sort();
     receivers.dedup();
     Some(Ok(receivers))
@@ -1965,6 +2005,15 @@ fn builtin_protos_unwritten(
     if fam.is_some() && !locked && m.interp_runs {
         return Err(
             "native member: interpreted code may write the key onto a builtin prototype".into(),
+        );
+    }
+    // Unknown code holds the realm (9.3, `realm_held`): it may replace a
+    // builtin prototype's member that the runtime lets a store replace, a
+    // write the solve does not replay (`realm_hold_tok`). Only a final read
+    // survives it, as for `Verdict::IntrinsicCall`.
+    if fam.is_some() && !locked && m.realm_held {
+        return Err(
+            "native member: unknown code holds the realm and may replace the member".into(),
         );
     }
     let (through_top, own) = match objproto {
@@ -2086,6 +2135,36 @@ fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
         })
     };
     empty(m.fields.get(&(op, a))) && empty(m.field_any.get(&op))
+}
+
+/// [`Verdict::IntrinsicCall`]: the callee set is one `BuiltinFn` token of a
+/// named native (closed markers stand for their callers' values beside
+/// them), no ⊤, no primitive. Its name. The caller adds `!realm_held`.
+fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
+    if prim != 0 {
+        return None;
+    }
+    let mut it = toks.iter().copied().filter(|&t| !m.closed_marker(t));
+    let t = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
+}
+
+/// [`Verdict::NsExport`]: every receiver is a module namespace token of
+/// this program's modules (`ns_own` names what each module exports itself;
+/// a unit's stand-in namespace has none), the key one of those names, no
+/// primitive, no ⊤. A call reads the binding the same way, but the solve
+/// lets an unproven call escape its namespace receiver to the callee
+/// (DECISIONS 116): the read alone is claimed.
+fn ns_export(m: &Model, s: &crate::gen::ReadSite, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if s.is_call || prim != 0 || toks.is_empty() || m.is_private_atom(s.key) {
+        return None;
+    }
+    toks.iter()
+        .all(|&t| matches!(m.toks[t as usize], TokKind::ModNs(_)) && m.ns_own.contains(&(t, s.key)))
+        .then(|| toks.iter().map(|&t| m.tok_name(t)).collect())
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`

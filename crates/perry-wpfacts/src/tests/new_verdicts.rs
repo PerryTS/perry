@@ -204,3 +204,88 @@ fn dead_receiver_is_dead_in_whole_mode_and_not_claimed_per_unit() {
         assert!(is(x, "No"), "per unit verdict must be a No(..): {v:?}");
     }
 }
+
+// IntrinsicCall: a value call whose callee is one intrinsic function object,
+// while no unknown code exists.
+#[test]
+fn intrinsic_call_one_builtin_callee() {
+    let src = "const f = Math.sin;\nconst y = f(1);\nconst g = Math.cos;\nconst z = g(2);";
+    all(src, "()", true, "IntrinsicCall");
+}
+
+/// The program stores another function onto the member: the callee set
+/// holds it beside the intrinsic.
+#[test]
+fn intrinsic_call_control_member_replaced() {
+    let src = "if (process.argv[2]) (Math as any).sin = (x: number) => x + 1;\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+}
+
+/// A computed store whose key may be `sin` reaches the member too.
+#[test]
+fn intrinsic_call_control_computed_store() {
+    let src = "const k = process.argv[2];\n(Math as any)[k] = (x: number) => x + 1;\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+}
+
+/// Unknown code exists: it holds the realm and may replace `Math.sin`; the
+/// solve does not replay that write, so no claim.
+#[test]
+fn intrinsic_call_control_realm_held() {
+    let src = "declare function sink(x: any): void;\nsink(0);\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+    let pf = one(src);
+    assert!(
+        pf.sites.iter().any(|s| s.key == "()"
+            // HOSTHELD: the read of `Math.sin` is the realm's function or
+            // what unknown code installed (`realm_replaced`): the callee set
+            // holds the opaque member, before the IntrinsicCall check.
+            && matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("intrinsic callee: unknown code holds the realm") || r == "callee set holds ⊤")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+// NsExport: a named read on the program's own module namespaces of a name
+// the module exports itself.
+const NS_A: &str = "export let v = 1;\nexport const w = { n: 2 };\nexport function bump() { v++; }";
+
+#[test]
+fn ns_export_own_binding() {
+    let main = "import * as ns from \"./a\";\nconst y = ns.v;\nconst z = ns.w;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    all_pf(&pf, main, "v", false, "NsExport");
+    all_pf(&pf, main, "w", false, "NsExport");
+}
+
+/// The claim is the binding: `v` reassigned by its module is still read
+/// through the binding (10.4.6.8), and unknown code holding the namespace
+/// cannot write it (10.4.6.9).
+#[test]
+fn ns_export_reassigned_and_given_to_unknown_code() {
+    let main = "declare function sink(x: any): void;\nimport * as ns from \"./a\";\n\
+        sink(ns);\nns.bump();\nconst y = ns.v;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    all_pf(&pf, main, "v", false, "NsExport");
+}
+
+/// The receiver may be an ordinary object: no claim.
+#[test]
+fn ns_export_control_receiver_may_be_object() {
+    let main = "import * as ns from \"./a\";\n\
+        const o: any = process.argv[2] ? ns : { v: 3 };\nconst y = o.v;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    none_pf(&pf, main, "v", false, "NsExport");
+}
+
+/// A name the module does not export itself (`export *` from another): no
+/// claim (its resolution is not modeled here).
+#[test]
+fn ns_export_control_star_reexport() {
+    let main = "import * as ns from \"./a\";\nconst y = ns.u;";
+    let pf = modules(&[("b", "export const u = 4;"), ("a", "export * from \"./b\";"), ("main", main)]);
+    none_pf(&pf, main, "u", false, "NsExport");
+}

@@ -50,7 +50,7 @@ pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
-    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write, WriteValue,
+    note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
     require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
@@ -2440,6 +2440,24 @@ fn ns_method_inner(
             true,
         );
     };
+    // Unknown code holds the realm: it may have replaced this member of the
+    // namespace (`native_protocol::realm_replaced`, the one write predicate).
+    // The call is the realm's function below or unknown code, now or when
+    // the realm comes to be held later in the solve (the replay). Every
+    // namespace member call passes here, method and value call alike.
+    {
+        let t = m.tok(TokKind::Builtin(ns));
+        let a = m.atom(name);
+        if !builtin_function(m, t) && opaque_written(m, t, a, NativeMiss::Call(t, call)) {
+            let prev = m.cur_this.replace(t);
+            unknown_method(
+                m,
+                call,
+                &format!("argument of builtin {ns:?}.{name} (unknown code may have replaced it)"),
+            );
+            m.cur_this = prev;
+        }
+    }
     // VALUE-CALL-MODELS: the eight Object statics run the direct call's steps.
     if object_statics::value_call(m, ns, name, call) {
         return;
