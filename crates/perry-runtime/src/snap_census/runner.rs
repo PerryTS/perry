@@ -1611,8 +1611,6 @@ fn tls_image_row(st: &mut State) {
     let r = st.tls_ranges;
     let into = |v: usize| (v >= r[0] && v < r[1]) || (v >= r[2] && v < r[3]);
     let mut ptr_words = 0usize;
-    // The scan reads protected slots: census bookkeeping, no access of an init.
-    st.bookkeeping += 1;
     for (lo, hi) in [(r[0], r[1]), (r[2], r[3])] {
         let mut a = lo;
         while a + 8 <= hi {
@@ -1622,7 +1620,6 @@ fn tls_image_row(st: &mut State) {
             a += 8;
         }
     }
-    st.bookkeeping -= 1;
     input_record::event(
         st,
         "tls_image",
