@@ -217,7 +217,7 @@ impl<'a> Gen<'a> {
                 let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
                 {
                     let positions = self.m.json_positions;
-                    self.json_value(mi, positions)
+                    self.json_value(mi, positions, false)
                 }
             }
             Expr::JsonParseReviver { text, reviver }
@@ -230,7 +230,7 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 );
                 let rv = self.expr(fx, reviver);
-                let v = self.json_value(mi, false);
+                let v = self.json_value(mi, false, true);
                 let s = self.prim_node(prim::STR);
                 let vals = self.load(v, Key::any());
                 let holder = v;
