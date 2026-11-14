@@ -42,10 +42,17 @@ fn arguments_share_keys_but_keep_identity_values_and_descriptors_private() {
     let first = arguments(&[1.0, 2.0, 3.0], undefined, false);
     let second = arguments(&[4.0, 5.0, 6.0], undefined, false);
     assert_ne!(first, second);
-    assert!(
-        unsafe { (*first).meta.is_null() && (*second).meta.is_null() },
-        "birth must allocate no meta record"
-    );
+    // Birth installs one meta record per call: the birth word and the
+    // per-call state are private to each object, the keys are shared.
+    unsafe {
+        assert!(!(*first).meta.is_null() && !(*second).meta.is_null());
+        assert_ne!((*first).meta, (*second).meta, "each call owns its record");
+        let a = test_arguments_birth_word(first).unwrap();
+        let b = test_arguments_birth_word(second).unwrap();
+        assert_eq!((a.0, b.0), (3, 3));
+        assert_eq!(a.1, (*first).shape_word());
+        assert_eq!(b.1, (*second).shape_word());
+    }
     unsafe {
         assert_eq!(object_keys(first).arr(), object_keys(second).arr());
     }
@@ -152,9 +159,10 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     let text = crate::string::js_string_from_bytes(b"arguments payload".as_ptr(), 17);
     let text_value = crate::value::js_nanbox_string(text as i64);
     let args = mapped_arguments(&[child_value, text_value, 7.0], child_value, 3);
-    assert!(
-        unsafe { (*args).meta.is_null() },
-        "mapped birth keeps aliases in the allocation tail"
+    assert_eq!(
+        unsafe { test_arguments_birth_word(args) }.map(|w| w.0),
+        Some(3),
+        "mapped birth installs the meta record with the birth word"
     );
     let mapped = crate::r#box::js_box_alloc(8.0);
     js_arguments_object_map_index(args, 2, mapped);
@@ -169,6 +177,8 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
         "the escaping arguments object must actually evacuate"
     );
     assert!(is_arguments_object(moved));
+    // The record moved with its owner and still carries the birth word.
+    assert_eq!(unsafe { test_arguments_birth_word(moved) }.map(|w| w.0), Some(3));
     let moved_child = get(moved, "0").as_pointer::<ObjectHeader>();
     assert_ne!(
         moved_child, child,
@@ -192,12 +202,11 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
         .enumerable());
 }
 
-/// The mapped state is a private-tail child edge, so a copying minor
-/// must move the alias array WITH its owner and rewrite the tail's word —
+/// The mapped state is a meta-record child edge, so a copying minor
+/// must move the alias array WITH its owner and rewrite the record's word —
 /// there is no address-keyed table left to rekey. The mapped cells are
 /// movable too (#11179), so the array's elements are rewritten with them. Removing the
-/// private-tail visit in `gc/layout/child_slots.rs` leaves the word
-/// naming from-space and turns the `assert_ne!` below red.
+/// meta record's `arguments` visit leaves the word naming from-space and turns the `assert_ne!` below red.
 #[test]
 fn arguments_mapping_survives_a_moving_collection() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -218,7 +227,7 @@ fn arguments_mapping_survives_a_moving_collection() {
     let map_after = test_arguments_mapping_array(moved).expect("the mapped state must survive");
     assert_ne!(
         map_after, map_before,
-        "the alias array must evacuate with its owner and the tail's word be rewritten"
+        "the alias array must evacuate with its owner and the record's word be rewritten"
     );
     // The cells are movable arena objects reachable only through the mapping
     // array: the minor copies them and rewrites the array's elements.
