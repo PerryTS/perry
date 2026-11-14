@@ -8,6 +8,49 @@ fn run_web_source(source: &str) -> String {
 /// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, STUB_DOM, after_boot)
+}
+
+/// The runtime injects a `<style>` at load, so `document` must exist even for
+/// programs that never build a widget.
+const STUB_DOM: &str = r#"
+const stub = {appendChild() {}, style: {}};
+globalThis.document = {createElement: () => ({...stub}), getElementById: () => null, head: stub, body: stub};
+"#;
+
+/// Enough of the DOM for a perry/ui widget to be built, inspected and sent an
+/// event: an element tree with text, attributes as properties, listeners that
+/// `dispatch(type)` fires, and descendant tag selectors for `querySelector`.
+const WIDGET_DOM: &str = r#"
+class FakeElement {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
+  get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
+  set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { this.text = ""; this.children = []; }
+  setAttribute(name, value) { this[name] = String(value); }
+  descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
+  querySelector(selector) {
+    let found = this;
+    for (const tag of selector.toUpperCase().split(" ")) {
+      found = found.descendants().find(e => e.tagName === tag);
+      if (!found) return null;
+    }
+    return found;
+  }
+}
+globalThis.document = {createElement: tag => new FakeElement(tag), getElementById: () => null, head: new FakeElement("head"), body: new FakeElement("body")};
+"#;
+
+/// `run_web_source_then` against `WIDGET_DOM`; `after_boot` finds the widgets in
+/// the runtime's `uiHandles`.
+fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, WIDGET_DOM, after_boot)
+}
+
+fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     // The HIR transforms `perry --target web` runs before wasm emission.
@@ -32,8 +75,7 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let script = format!(
         r#"
 globalThis.window = globalThis;
-const stub = {{appendChild() {{}}, style: {{}}}};
-globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () => null, head: stub, body: stub}};
+{dom}
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
@@ -723,5 +765,24 @@ console.log(first.join(","));
 "#
         ),
         "0,1,2,3"
+    );
+}
+
+// `Toggle(label, onChange: (value: boolean) => void)` hands the callback a boolean.
+#[test]
+fn toggle_on_change_receives_a_boolean() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Toggle } from "perry/ui";
+Toggle("Notify", (value: boolean) => { console.log("toggle " + (value === true) + " " + typeof value); });
+"#,
+            r#"
+const toggle = [...uiHandles.values()].find(e => e.tagName === "LABEL");
+toggle._inp.checked = true;
+toggle._inp.dispatch("change");
+"#
+        ),
+        "toggle true boolean"
     );
 }
