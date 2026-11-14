@@ -121,7 +121,7 @@ pub(crate) fn try_lower(
     }
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "default": true }),
+        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "default": true, "kept": read.kept }),
     );
     crate::facts_consumed::used();
     let default = crate::nanbox::double_literal(default);
@@ -175,8 +175,11 @@ pub(crate) fn try_lower(
                 let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
                 blk.load(I32, &cap_ptr)
             };
-            let inside = ctx.block().icmp_ult(I32, &idx, &capacity);
-            step(ctx, &inside, "arep.default.inside");
+            // An in-bounds read (`RepRead::kept`): `idx < length <= capacity`.
+            if read.kept.is_none() {
+                let inside = ctx.block().icmp_ult(I32, &idx, &capacity);
+                step(ctx, &inside, "arep.default.inside");
+            }
             let addr = {
                 let blk = ctx.block();
                 if r.floor > 0 {
@@ -195,8 +198,11 @@ pub(crate) fn try_lower(
             };
             let slot = ctx.block().inttoptr(I64, &addr);
             let raw = ctx.block().load(I64, &slot);
-            let own = ctx.block().icmp_ne(I64, &raw, TAG_HOLE_I64);
-            step(ctx, &own, "arep.default.own");
+            // A kept read of Arrays without holes loads a present element.
+            if read.kept != Some(true) {
+                let own = ctx.block().icmp_ne(I64, &raw, TAG_HOLE_I64);
+                step(ctx, &own, "arep.default.own");
+            }
             let hit = ctx.block().bitcast_i64_to_double(&raw);
             let hit_end = ctx.block().label.clone();
             ctx.block().br(&merge_label);

@@ -438,10 +438,16 @@ pub enum Cons {
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
+    ///
+    /// `kept`: gen proved the key below the length the Array held at a test
+    /// of the walked code (`gen/in_bounds.rs`, the in-bounds read): the
+    /// read of an Array of this unit that never shrinks is then of an
+    /// element or a hole, never past the end (`Model::kept_read`).
     IdxLoad {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        kept: bool,
     },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be

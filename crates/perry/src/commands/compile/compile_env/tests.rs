@@ -672,6 +672,17 @@ fn booleans_switch_is_a_cache_input() {
     );
 }
 
+/// In-bounds reads: the switch changes which reads may yield `undefined`
+/// and which reads lose their bound and hole tests, so `=0` must never
+/// reuse an `=1` object.
+#[test]
+fn inbounds_read_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_INBOUNDS_READ"),
+        "PERRY_FACTS_INBOUNDS_READ must key the compile caches"
+    );
+}
+
 /// In-bounds index stores: the switch changes which Arrays iterate without
 /// `undefined`, and with it the exported reps and typed signatures, so `=0`
 /// must never reuse an `=1` object.
