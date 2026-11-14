@@ -473,6 +473,18 @@ pub(crate) fn default_enabled() -> bool {
     })
 }
 
+/// `PERRY_REST_DEFAULT_NUMBER_KEY=0` (`off`, `false`): `a[k] ?? d` takes
+/// the i32 form only for a proven int32 key (main's lowering).
+fn number_key_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_REST_DEFAULT_NUMBER_KEY").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 /// The int32 a default expression is, when it is an int32 literal (never
 /// `-0`).
 fn int32_default(e: &Expr) -> Option<i32> {
@@ -530,7 +542,14 @@ pub(crate) fn try_lower_default_i32(
         return Ok(None);
     };
     let (object, index) = (object.as_ref(), index.as_ref());
-    if !int32_key(ctx, index) || floor == 0 {
+    // A key that is a proven Number and no proven int32 (a typed `F64`
+    // parameter) is converted exactly (`index_in`): an integer below the
+    // floor is the slot, every other Number takes the accessor.
+    let int_key = int32_key(ctx, index);
+    let number_key = !int_key
+        && number_key_enabled()
+        && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, index);
+    if !(int_key || number_key) || floor == 0 {
         return Ok(None);
     }
     let foreign = matches!(ctx.rest_b1, Some((o, _)) if o == *element_offset);
@@ -540,7 +559,12 @@ pub(crate) fn try_lower_default_i32(
     if in_floor {
         return Ok(None);
     }
-    probe(ctx, "read", "default", *element_offset);
+    probe(
+        ctx,
+        "read",
+        if int_key { "default" } else { "default_f64" },
+        *element_offset,
+    );
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
         || serde_json::json!({ "rest": "read_default", "floor": floor }),
@@ -550,9 +574,23 @@ pub(crate) fn try_lower_default_i32(
         ctx,
         &[object],
         &[index],
-        |ctx| super::lower_expr_as_i32(ctx, index),
-        |ctx, v, idx| {
+        |ctx| {
+            if int_key {
+                super::lower_expr_as_i32(ctx, index)
+            } else {
+                super::lower_expr(ctx, index)
+            }
+        },
+        |ctx, v, key| {
             let arr = &v[0];
+            // The slot test and the slot's i32; the cold read's key.
+            let (hit, idx, cold_key) = if int_key {
+                let hit = ctx.block().icmp_ult(I32, &key, &floor.to_string());
+                (hit, key, None)
+            } else {
+                let (hit, idx) = index_in(ctx, &key, floor);
+                (hit, idx, Some(key))
+            };
             let load = ctx.new_block("rest.default.load");
             let cold = ctx.new_block("rest.default.cold");
             let merge = ctx.new_block("rest.default.merge");
@@ -561,7 +599,6 @@ pub(crate) fn try_lower_default_i32(
                 ctx.block_label(cold),
                 ctx.block_label(merge),
             );
-            let hit = ctx.block().icmp_ult(I32, &idx, &floor.to_string());
             ctx.block().cond_br(&hit, &load_l, &cold_l);
 
             ctx.current_block = load;
@@ -574,7 +611,13 @@ pub(crate) fn try_lower_default_i32(
             ctx.block().br(&merge_l);
 
             ctx.current_block = cold;
-            let got = cold_read(ctx, arr, &idx, false);
+            let got = match &cold_key {
+                Some(key) => {
+                    ctx.block()
+                        .call(DOUBLE, "js_array_rest_get", &[(DOUBLE, arr), (DOUBLE, key)])
+                }
+                None => cold_read(ctx, arr, &idx, false),
+            };
             let bits = ctx.block().bitcast_double_to_i64(&got);
             let undef = ctx
                 .block()
