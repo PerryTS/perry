@@ -98,3 +98,18 @@ pub(crate) fn install() {
     STORE_RECORD_ALIAS_WORD.set(crate::node_stream::store_record_alias_word);
     ENSURE_LAZY_STREAM.set(crate::node_stream::ensure_lazy_stream);
 }
+
+#[cfg(test)]
+mod event_emitter_slot_tests {
+    /// Readers outside the events install (`cluster`) get the one
+    /// `events.EventEmitter` constructor through the slot, not a copy.
+    #[test]
+    fn the_slot_answers_the_events_constructor_itself() {
+        crate::object::js_nm_install_events();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let through_slot =
+            scope.root_nanbox_f64(super::event_emitter_constructor_value("EventEmitter"));
+        let direct = crate::node_stream::event_emitter_constructor_value("EventEmitter");
+        assert_eq!(through_slot.get_nanbox_u64(), direct.to_bits());
+    }
+}
