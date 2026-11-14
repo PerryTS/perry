@@ -107,7 +107,9 @@ impl Model {
             if fam == Family::Function && builtins::never_callable(self, r) {
                 return self.function_this_not_callable(call, t, r, key);
             }
-            if builtins::no_this_value(self, fam, what, r) {
+            if builtins::no_this_value(self, fam, what, r)
+                || builtins::no_array_buffer_data(self, fam, what, name, r)
+            {
                 return self.this_value_throws(call, t, r);
             }
             return self.declared_proto_call(call, t, identity);

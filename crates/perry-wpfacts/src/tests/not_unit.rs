@@ -380,3 +380,71 @@ fn nu6_control_relink_to_a_host_object_is_held() {
     let pf = one(&format!("{C}declare function hostGet(): any;\nconst o: any = {{}};\no[s] = hostGet();\nconsole.log(o.x);\n"));
     assert!(none(&raw(&pf, "x", false).iter().map(|v| v.split(' ').next().unwrap().to_string()).collect::<Vec<_>>(), "OwnDataOrAbsent"));
 }
+
+/// NOTUNIT8: `ArrayBuffer.prototype.{resize, slice, transfer,
+/// transferToFixedLength}` check [[ArrayBufferData]] on `this` before they
+/// read `this` or an argument (perry-runtime typed_array.rs
+/// `array_buffer_method`, `array_buffer_slice_thunk`: no registered
+/// buffer behind the receiver = `throw_object_type_error`). Called on a
+/// program class instance it is that TypeError: the instance does not
+/// escape and the region does not hold ⊤.
+fn proven(v: &[String]) -> bool {
+    !v.is_empty() && v.iter().all(|v| !v.starts_with("No"))
+}
+const AB: &str = "declare function hostGet(): any;\nclass C { x = 1; }\nconst o = new C();\nconst q = { w: 2 };\n";
+fn ab_call(recv: &str, m: &str) -> ProgramFacts {
+    one(&format!(
+        "{C}{AB}const r: any = ArrayBuffer.prototype.{m};\ntry {{ r.call({recv}, 8); }} catch (e: any) {{ console.log(q.w, e.zz); }}\nconsole.log(o.x);\n"
+    ))
+}
+
+#[test]
+fn red_nu8_buffer_method_on_a_class_instance_is_a_type_error() {
+    for m in ["resize", "slice", "transfer", "transferToFixedLength"] {
+        let pf = ab_call("o", m);
+        assert!(proven(&at(&pf, "x", false)), "{m}: o.x");
+        assert!(proven(&at(&pf, "w", false)), "{m}: q.w");
+        let _ = at(&pf, "zz", false);
+    }
+}
+
+/// The any-key form (NOTUNIT7): a key taken from a program value, an
+/// any-key field of a class instance holding `Array.prototype.toString`
+/// and `ArrayBuffer.prototype.resize`, a ToString of the instance
+/// (`toString` runs `this.join`, which reads the same any-key fields), a
+/// read inside `catch`.
+#[test]
+fn red_nu8_any_key_field_resize_and_array_to_string() {
+    let pf = one(&format!(
+        "{C}{AB}const ks = [\"a\", \"join\", \"toString\"];\nconst k = ks[c ? 1 : 2];\nconst p: any = new C();\np[k] = Array.prototype.toString;\np[ks[c ? 0 : 1]] = ArrayBuffer.prototype.resize;\ntry {{ console.log(\"\" + p); }} catch (e: any) {{ console.log(q.w); }}\nconsole.log(o.x);\n"
+    ));
+    let _ = at(&pf, "zz", false);
+    assert!(proven(&at(&pf, "x", false)), "o.x");
+    assert!(proven(&at(&pf, "w", false)), "q.w");
+}
+
+/// Controls: a real buffer runs the B2 model (no opaque arm: the catch
+/// sees no ⊤); a host value stays a call on ⊤; an instance of `class X
+/// extends ArrayBuffer` is a buffer: it stays on the opaque arm, the catch
+/// holds ⊤.
+fn zz_receivers(pf: &ProgramFacts) -> Vec<String> {
+    let v: Vec<String> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "zz" && !s.is_call)
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
+    eprintln!("NU8CTL zz {v:?}");
+    v
+}
+#[test]
+fn control_nu8_buffer_receivers() {
+    let pf = ab_call("new ArrayBuffer(8, { maxByteLength: 16 })", "resize");
+    assert!(zz_receivers(&pf).iter().all(|v| !v.contains("unknown")));
+    let pf = ab_call("hostGet()", "resize");
+    assert!(!zz_receivers(&pf).iter().all(|v| v.contains("builtin Error")));
+    let pf = one(&format!(
+        "{C}{AB}class X extends ArrayBuffer {{}}\nconst r: any = ArrayBuffer.prototype.resize;\ntry {{ r.call(new X(8), 8); }} catch (e: any) {{ console.log(q.w, e.zz); }}\nconsole.log(o.x);\n"
+    ));
+    assert!(!zz_receivers(&pf).iter().all(|v| v.contains("builtin Error")));
+}

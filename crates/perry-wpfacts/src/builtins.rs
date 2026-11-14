@@ -1534,6 +1534,74 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
     }
 }
 
+/// Whether `ArrayBuffer.prototype.{resize, slice, transfer,
+/// transferToFixedLength}` (family `fam`, owner `what`, method `name`)
+/// finds no [[ArrayBufferData]] on receiver `r`, so the call is a
+/// TypeError before it reads `this` or an argument (ECMA-262 25.1.6.6,
+/// 25.1.6.7, 25.1.6.8, 25.1.6.9: RequireInternalSlot first). The runtime
+/// checks it in `typed_array.rs` `array_buffer_receiver_addr` (a
+/// registered ArrayBuffer behind `this`), else `throw_object_type_error`
+/// in `array_buffer_slice_thunk` / `array_buffer_method`, the arguments
+/// untouched. Only the ArrayBuffer constructor makes such a buffer: an
+/// object the program allocates has none (a literal, an array, an
+/// `arguments` object, `Object.create`, `new f()`, a class instance whose
+/// constructor chain is the program's own: no native parent and no
+/// `extends` value, a class of this unit), nor has a function value, a
+/// class object or prototype, or a builtin object of a described kind that
+/// is no buffer. A marker, ⊤, a buffer-like or undescribed builtin object,
+/// a builtin namespace or prototype, a module namespace may be one or is
+/// not settled here.
+pub(crate) fn no_array_buffer_data(
+    m: &Model,
+    fam: Family,
+    what: Option<&str>,
+    name: &str,
+    r: Tok,
+) -> bool {
+    if fam != Family::Opaque
+        || what != Some("ArrayBuffer")
+        || !matches!(name, "resize" | "slice" | "transfer" | "transferToFixedLength")
+        || m.is_marker(r)
+    {
+        return false;
+    }
+    match &m.toks[r as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what: w, .. } => {
+                !matches!(
+                    *w,
+                    "ArrayBuffer" | "SharedArrayBuffer" | "TypedArray" | "Buffer" | "DataView"
+                ) && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
+            }
+            TmplKind::Class { .. } => {
+                let mut cur = Some(*tm);
+                while let Some(c) = cur {
+                    let t = &m.tmpls[c as usize];
+                    if t.native_parent.is_some()
+                        || t.parent_value.is_some()
+                        || m.foreign.contains_key(&c)
+                    {
+                        return false;
+                    }
+                    cur = t.parent;
+                }
+                true
+            }
+            TmplKind::Lit { .. }
+            | TmplKind::Arr { .. }
+            | TmplKind::Args { .. }
+            | TmplKind::ObjCreate { .. }
+            | TmplKind::FnInst { .. } => true,
+        },
+        TokKind::Proto(_)
+        | TokKind::BuiltinFn(_)
+        | TokKind::Func(..)
+        | TokKind::Bound(_)
+        | TokKind::ClassObj(_) => true,
+        _ => false,
+    }
+}
+
 /// The primitive kinds whose ToObject wrapper an `Array.prototype` method
 /// called with that primitive as `this` runs on (`array_method_on_prim`).
 pub(crate) const ARRAY_BOXED_PRIMS: u16 =
