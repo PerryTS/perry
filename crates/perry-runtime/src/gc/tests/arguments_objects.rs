@@ -178,7 +178,10 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     );
     assert!(is_arguments_object(moved));
     // The record moved with its owner and still carries the birth word.
-    assert_eq!(unsafe { test_arguments_birth_word(moved) }.map(|w| w.0), Some(3));
+    assert_eq!(
+        unsafe { test_arguments_birth_word(moved) }.map(|w| w.0),
+        Some(3)
+    );
     let moved_child = get(moved, "0").as_pointer::<ObjectHeader>();
     assert_ne!(
         moved_child, child,
