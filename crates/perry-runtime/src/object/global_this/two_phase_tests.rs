@@ -290,7 +290,7 @@ fn phase_b_families_are_sealed_when_bound() {
     let _lock = crate::gc::global_side_table_test_lock();
     on_core_realm(|_| {
         js_get_global_this();
-        for name in ["WeakMap", "WeakSet"] {
+        for name in ["WeakMap", "WeakSet", "Date"] {
             let proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value(name))
                 as *mut ObjectHeader;
             // SAFETY: the live intrinsic prototype.

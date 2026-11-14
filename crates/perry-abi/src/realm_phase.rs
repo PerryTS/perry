@@ -39,14 +39,16 @@ macro_rules! realm_names {
 
 realm_names! {
     /// Declared data names phase B binds. Reading one, by any path, runs
-    /// phase B first. The last sixteen are the byte-cell families: the typed
+    /// phase B first. `Date` (the costliest single family of the population,
+    /// and one no program reaches without naming it or asking one of its
+    /// instances for a property) and, the last sixteen, the byte-cell families: the typed
     /// arrays (with the shared `%TypedArray%` intrinsic, built with the first
     /// of them), the buffers, `DataView`, and node's `Buffer` (a `Uint8Array`
     /// subclass).
     REALM_REST_GLOBALS, REALM_REST_NAMES, realm_rest_global:
         "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"
         "WebAssembly" "Temporal" "PerformanceEntry" "PerformanceMark" "PerformanceMeasure"
-        "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming"
+        "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming" "Date"
         "Uint8Array" "Int8Array" "Uint16Array" "Int16Array" "Uint32Array" "Int32Array"
         "Float16Array" "Float32Array" "Float64Array" "Uint8ClampedArray" "BigInt64Array"
         "BigUint64Array" "ArrayBuffer" "SharedArrayBuffer" "DataView" "Buffer"
@@ -66,11 +68,11 @@ realm_names! {
     /// other name (phase B's, the global itself, an accessor, a name the
     /// layout does not declare) is read through the full entry.
     REALM_CORE_GLOBALS, REALM_CORE_NAMES, realm_core_global:
-        "Array" "Object" "String" "Number" "Boolean" "Function" "RegExp" "Date" "Error"
-        "TypeError" "RangeError" "SyntaxError" "ReferenceError" "EvalError" "URIError"
-        "AggregateError" "Symbol" "Promise" "Map" "Set" "BigInt" "TextEncoder" "TextDecoder"
-        "TextEncoderStream" "TextDecoderStream" "CompressionStream" "DecompressionStream"
-        "ReadableStream" "ReadableStreamDefaultController" "ReadableStreamDefaultReader"
+        "Array" "Object" "String" "Number" "Boolean" "Function" "RegExp" "Error" "TypeError"
+        "RangeError" "SyntaxError" "ReferenceError" "EvalError" "URIError" "AggregateError"
+        "Symbol" "Promise" "Map" "Set" "BigInt" "TextEncoder" "TextDecoder" "TextEncoderStream"
+        "TextDecoderStream" "CompressionStream" "DecompressionStream" "ReadableStream"
+        "ReadableStreamDefaultController" "ReadableStreamDefaultReader"
         "ReadableByteStreamController" "ReadableStreamBYOBReader" "ReadableStreamBYOBRequest"
         "WritableStream" "TransformStream" "Navigator" "URL" "URLSearchParams" "URLPattern"
         "AbortController" "AbortSignal" "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"

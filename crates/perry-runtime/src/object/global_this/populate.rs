@@ -393,6 +393,9 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             // before the global's slot can name its constructor: phase A's
             // realm seal has already run and will not come back for it.
             crate::object::builtin_proto::seal_realm_family_of(declaration);
+            // A constructor that is also a builtin namespace (`Date`): its
+            // member holder (the constructor's bag) is sealed with it.
+            super::super::builtin_namespace::seal_namespace_value(name, ctor_value.to_bits());
         }
         if name == "Storage" {
             // Node: `localStorage` / `sessionStorage` are accessors whose
