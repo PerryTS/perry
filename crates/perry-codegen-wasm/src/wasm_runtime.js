@@ -1644,7 +1644,7 @@ function __classInstance(className) {
 
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
 // so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
-// the compiled constructor, which returns `this`. `ctorIdx` is the constructor's
+// the compiled constructor. `ctorIdx` is the constructor's
 // table slot, or -1 when the class has none. Its arguments stay Perry values: a
 // closure passed to it must reach the compiled constructor as a closure, so
 // __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
@@ -1661,7 +1661,9 @@ function __classRef(className, ctorIdx) {
       if (ctorIdx < 0) return self;
       const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
       const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+      const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+      // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
+      return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
     };
     Object.defineProperty(ctor, 'name', { value: className });
     // Instances are `{__class__}` objects, not linked to ctor.prototype: host
