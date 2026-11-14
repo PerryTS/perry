@@ -206,3 +206,63 @@ fn mixed_array_or_undefined_absent_key() {
     ));
     mixed_claims_cover_the_primitives(&pf, "ior");
 }
+
+// NOTUNIT3, JSON-RELINK-CLOSED: `t[k] = j.b[k]` over a for-in key of a
+// JSON object may run the `__proto__` setter (B.2.2.1.2) with a value of
+// the same parse: an object or an array relinks `t`, null ends its chain,
+// any other primitive does nothing. ParseJSON made `__proto__` an own data
+// key (25.5.1, CreateDataPropertyOrThrow), so the source of the store is
+// that own value.
+const RL: &str = "const j: any = JSON.parse(s);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\n";
+
+fn null_arm(pf: &ProgramFacts, key: &str) -> bool {
+    pf.sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .all(|s| s.receivers.iter().any(|r| r.contains("chain ends at null")))
+}
+
+/// The rule reads the chain: JSON objects' data, arrays lacking the key,
+/// the end (`Object.prototype` lacking it, or null, the null-ended arm).
+/// Here it refuses, exactly: ParseJSON may give an array at `j.a` as well
+/// (the parse's array token sits beside the object token), so the store
+/// `t[k] = j.b[k]` also writes a named key onto that array (or relinks
+/// it, or under `length` runs ArraySetLength, 10.4.2.4), and the array may
+/// be the new prototype: the chain holds an array that may hold the key.
+#[test]
+fn relink_to_json_values_target_may_be_an_array() {
+    let pf = one(&format!("{C}{RL}console.log(t.x);\n"));
+    assert!(pf.sites.iter().filter(|s| s.key == "x" && !s.is_call).all(|s| matches!(
+        &s.verdict,
+        Verdict::No(r) if r.contains("relink: prototype") && r.contains("may hold the key")
+    )));
+    assert!(!null_arm(&pf, "x"));
+}
+
+/// Control: a program object may become the prototype: refused.
+#[test]
+fn control_relink_to_a_program_object() {
+    let pf = one(&format!(
+        "{C}class A {{ x = 1; }}\nconst j: any = JSON.parse(s);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = c ? j.b[k] : new A();\nconsole.log(t.x);\n"
+    ));
+    assert!(none(&at(&pf, "x", false), "OwnDataOrAbsent"));
+}
+
+/// Control: a JSON array may become the prototype; under `length` the read
+/// finds the array's own `length`: refused.
+#[test]
+fn control_relink_to_an_array_reads_its_length() {
+    let pf = one(&format!("{C}{RL}console.log(t.length);\n"));
+    assert!(none(&at(&pf, "length", false), "OwnDataOrAbsent"));
+}
+
+/// A call on the relinked object: the JSON call claim refuses (a call).
+#[test]
+fn relink_call_stays_the_json_call_refusal() {
+    let pf = one(&format!("{C}{RL}try {{ t.m(); }} catch (e) {{}}\n"));
+    assert!(pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .all(|s| matches!(&s.verdict, Verdict::No(r) if r.contains("json: a call"))));
+}

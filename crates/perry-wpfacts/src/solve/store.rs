@@ -594,6 +594,17 @@ impl Model {
             if !self.unit_mode && self.is_builtin_proto(t) {
                 self.given_prototype(t, src);
             }
+            // A `JSON.parse` object: the setter gives it `src`'s objects or
+            // null as its prototype (B.2.2.1.2; another primitive does
+            // nothing), which its lookups then read (10.1.8.1).
+            if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
+                    && !self.is_marker(t)
+                    && self.json_relink.insert(t)
+                {
+                    self.given_prototype(t, src);
+                }
+            }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                 let objs = self.proto_objects(src);
                 self.cons(objs, Cons::ParentGiven { of: t });

@@ -1774,6 +1774,11 @@ fn judge(
                     }
                     if !s.is_call && json_own_or_absent(m, t, key, s.key) {
                         own_or_absent += 1;
+                        if m.json_relink.contains(&t)
+                            && json_relink_closed(m, t, key, s.key) == Ok(true)
+                        {
+                            receivers.push("json: [[Prototype]] chain ends at null (undefined)".into());
+                        }
                         continue;
                     }
                     verdict.get_or_insert_with(|| {
@@ -2407,7 +2412,8 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     if m.optimistic_json_key {
         return Err("optimistic JSON-key rule on".into());
     }
-    if m.super_relink.contains(&t) {
+    let relinked = m.super_relink.contains(&t);
+    if relinked && !m.json_relink.contains(&t) {
         return Err("__proto__ relink".into());
     }
     if m.is_escaped(t) {
@@ -2426,13 +2432,88 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     {
         return Err("accessor keys on the template".into());
     }
-    if !chain_absent(m, t, key, a, false) {
+    if relinked {
+        json_relink_closed(m, t, key, a)?;
+    } else if !chain_absent(m, t, key, a, false) {
         return Err("the chain has the key".into());
     }
     if !object_proto_unwritten(m, a) {
         return Err("a write of the key on Object.prototype".into());
     }
     Ok(())
+}
+
+/// JSON-RELINK-CLOSED (ECMA-262 10.1.2 OrdinarySetPrototypeOf, 10.1.8.1
+/// OrdinaryGet, 25.5.1 JSON.parse, B.2.2.1.2 the `__proto__` setter): the
+/// chain of `JSON.parse` object `t` after `__proto__` stores
+/// (`json_relink`, modeled by `given_prototype`) holds only `JSON.parse`
+/// objects under the same conditions (their own data is data; relinked
+/// ones are walked), arrays on which the key is absent (`array_absent`),
+/// `%Object.prototype%` and null; the end lacks the key. A named read then
+/// gives a data value of a chain object or `undefined`. `Ok(true)`: null
+/// may end the chain (the null-ended arm).
+fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, String> {
+    let op = m.tok_index.get(&TokKind::ObjectProto).copied();
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    let mut null = false;
+    seen.insert(t);
+    while let Some(h) = todo.pop() {
+        let Some(protos) = m.proto_node.get(&h).map(|&pn| &m.nodes[pn as usize]) else {
+            return Err("relink: no prototype set".into());
+        };
+        if protos.dropped || protos.prim & !crate::model::prim::NULL != 0 {
+            return Err("relink: the prototype set is not whole".into());
+        }
+        null |= protos.prim & crate::model::prim::NULL != 0;
+        for p in protos.pts.to_sorted() {
+            if Some(p) == op || !seen.insert(p) {
+                continue;
+            }
+            if p == TOP {
+                return Err("relink: ⊤ may be the prototype".into());
+            }
+            if json_own_or_absent_obj(m, p) {
+                if m.super_relink.contains(&p) {
+                    if !m.json_relink.contains(&p) {
+                        return Err("relink: a chain object is relinked otherwise".into());
+                    }
+                    todo.push(p);
+                } else if !m.proto_node.get(&p).is_none_or(|&pn| {
+                    m.nodes[pn as usize].pts.to_sorted().iter().all(|&q| Some(q) == op)
+                        && m.nodes[pn as usize].prim == 0
+                }) {
+                    return Err("relink: a chain object's prototype is not Object.prototype".into());
+                }
+                continue;
+            }
+            if array_absent(m, p, key, a) {
+                continue;
+            }
+            return Err(format!("relink: prototype {} may hold the key", m.tok_name(p)));
+        }
+    }
+    if !(crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok())
+        || m.is_private_atom(a)
+    {
+        return Err("relink: the chain's end may hold the key".into());
+    }
+    Ok(null)
+}
+
+/// A `JSON.parse` object whose own keys are data and which unknown code
+/// does not reach (the token conditions of [`own_data_or_absent_why`]
+/// before the chain).
+fn json_own_or_absent_obj(m: &Model, t: Tok) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
+        && !m.is_marker(t)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && m.tmpls[tm as usize].accessor_keys.is_empty()
 }
 
 /// [[Get]] of named key `a` (`key`) on array token `t` gives `undefined`.

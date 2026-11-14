@@ -2505,6 +2505,10 @@ pub struct Model {
     pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
+    /// The `JSON.parse` objects of `super_relink` whose [[Prototype]] write
+    /// is a `__proto__` store (`solve::store`): the chain is modeled
+    /// (`given_prototype`), `derive::json_relink_closed` reads it.
+    pub json_relink: crate::pts::FxHashSet<Tok>,
     /// Another unit's classes this unit gives as a class object's parent:
     /// their constructor runs on a receiver their unit does not see. The
     /// census reports each (`Gen::reports`, `extends <class>`).
