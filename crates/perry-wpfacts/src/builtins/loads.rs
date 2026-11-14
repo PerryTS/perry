@@ -125,6 +125,17 @@ pub(super) fn family_load(
     if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     }
+    // PROTO-INHERIT: the lookup passed `what` (it does not own the key): a
+    // store of the key onto that prototype, now or later in the solve,
+    // answers what was stored (as `native_skips`).
+    if let Some(w) = what.filter(|_| super::proto_inherit(what, &name).is_some()) {
+        let np = m.tok(TokKind::native_proto(w));
+        if native_written(m, np, a) {
+            super::native_protocol::answer_stored(m, np, a, NativeMiss::Load(dst));
+        } else {
+            m.native_missing.push((np, a, NativeMiss::Load(dst)));
+        }
+    }
 }
 
 /// Rule M8, ECMA-262 22.2.6.13.1: `get RegExp.prototype.source` of a regex

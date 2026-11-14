@@ -1880,7 +1880,10 @@ impl Model {
         }
         self.keysnap2(&ks);
         if hold {
-            self.keysnap3(&ks, calls.first().copied(), tok);
+            // An `escape_body` producer names no call: the unknown call whose
+            // receiver escapes is the one `keysnap_note` recorded for `tok`.
+            let unk = ks.unk.filter(|u| Some(u.2) == tok).map(|u| u.0);
+            self.keysnap3(&ks, calls.first().copied().or(unk), tok);
         }
         eprintln!("KS end");
         self.keysnap = Some(ks);

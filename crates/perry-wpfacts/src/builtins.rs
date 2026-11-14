@@ -1314,6 +1314,24 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
     // (`AbortController.prototype`): a method whose effects it declares
     // (`effects::declared_at`); any other member stays opaque.
     if let Some(w) = what.filter(|w| w.ends_with(".prototype")) {
+        if let Some(at) = proto_inherit(what, name) {
+            // Rule PROTO-INHERIT: the member the realm chain finds past `w`,
+            // on the prototype `at` that owns it: `Object.prototype`'s own
+            // model (the token `({}).hasOwnProperty` reads), or a method
+            // whose effects `at` declares.
+            let identity = if at == "Object.prototype" {
+                let object = m.declarations.family(Family::Object, m)?;
+                m.declarations.property(object, name, m)?.native?
+            } else {
+                effects::declared_at(at, name)?;
+                let h = m.declarations.named(at, m)?;
+                m.declarations.property(h, name, m)?.native?
+            };
+            return Some(Native::Member {
+                identity,
+                holder: None,
+            });
+        }
         effects::declared_at(w, name)?;
         let identity = m
             .declarations
@@ -1355,6 +1373,23 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
         identity,
         holder: None,
     })
+}
+
+/// Rule PROTO-INHERIT (ECMA-262 10.1.8.1 OrdinaryGet; the runtime's realm
+/// image): a named key that a runtime-declared prototype `what`
+/// (`Blob.prototype`) does not own is the realm chain's, read on the first
+/// [[Prototype]] the realm declares owning it (each link from the realm,
+/// `RealmEntry::proto`, never an assumed `Object.prototype`): that
+/// prototype's name. `None`: `what` is no realm-declared prototype, owns
+/// the key, or no link of its chain has it (an absent key stays as before).
+pub(super) fn proto_inherit(what: Option<&str>, name: &str) -> Option<&'static str> {
+    let w = what.filter(|w| w.ends_with(".prototype"))?;
+    let start = members::realm_entry(w)
+        .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)?;
+    match members::realm_chain_find(start, name) {
+        members::RealmFind::Own(_, at) if at.name != start.name => Some(at.name),
+        _ => None,
+    }
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.

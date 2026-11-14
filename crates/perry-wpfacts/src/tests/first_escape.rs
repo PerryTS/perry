@@ -510,3 +510,50 @@ fn control_protoctor_written_blob_constructor_escapes() {
         "[\"c\"], v"
     ));
 }
+
+/// PROTOINH: a member a runtime-declared prototype does not own is read on
+/// the realm chain (`Blob.prototype` -> `Object.prototype`, realm-v1.json):
+/// `Object.prototype.isPrototypeOf` read as a value off a Blob and called
+/// with V reads V's [[Prototype]] chain only (20.1.3.3), so V stays proven
+/// and the realm is not held. Before: the read was an undescribed member
+/// (BuiltinFn(Any)), its call an unknown function: V escaped.
+fn protoinh_escapes(setup: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        function id(x: any): any {{ return x; }}
+        {setup}
+        const b: any = new Blob(["ab"]);
+        const s: any = id(b).slice(0, 1);
+        const v = new V();
+        const o: any = {{ m: s.isPrototypeOf, h: s.hasOwnProperty }};
+        console.log(o.m(v), o.h("x"), v.probe());
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+#[test]
+fn red_protoinh_inherited_member_of_a_blob_is_object_prototypes() {
+    assert!(!protoinh_escapes(""));
+}
+
+/// Control (can fail): a program store of an unknown value onto
+/// `Blob.prototype` under the key (an add the runtime admits: Blob.prototype
+/// is not add-locked, perry-abi lock.rs) is what the read finds.
+#[test]
+fn control_protoinh_written_blob_member_escapes() {
+    assert!(protoinh_escapes(
+        "(Blob.prototype as any).isPrototypeOf = (globalThis as any).hostGet();"
+    ));
+}
+
+/// Control (can fail): unknown code holds the realm first (V's own escape
+/// aside, a host call given a Blob may add `isPrototypeOf` to
+/// Blob.prototype): the inherited read is then not exact.
+#[test]
+fn control_protoinh_held_realm_member_escapes() {
+    assert!(protoinh_escapes(
+        "(globalThis as any).hostGet()(Blob.prototype);"
+    ));
+}
