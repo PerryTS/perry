@@ -833,6 +833,19 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     );
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    // Built after the realm's `Array` (phase B of a two-phase realm, or a
+    // reader that asks for the intrinsic on its own between the phases): its
+    // `toString` is `Array.prototype.toString` from this moment, as the
+    // population makes it once both exist (ECMA-262 23.2.3.33). Built before
+    // `Array` (the population's own call, a program without a realm): the
+    // population aliases it.
+    if crate::array::intrinsic_prototype_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::Array,
+    ) != 0
+    {
+        let global = crate::value::js_nanbox_get_pointer(js_get_global_core()) as *mut ObjectHeader;
+        super::populate::alias_typed_array_proto_to_string(global);
+    }
     (ctor, proto)
 }
 

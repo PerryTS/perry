@@ -36,11 +36,11 @@ fn layout_word(global: *mut ObjectHeader) -> u32 {
 }
 
 /// What a realm populated in one pass (main's behaviour) looks like: the
-/// global's own names in order, and which declared slots stay `undefined` in
-/// this build (a hook that is not installed). (Its layout word is not
-/// comparable across threads: each agent mints its own shape ids.)
+/// global's own names, its layout word, and which declared slots stay
+/// `undefined` in this build (a hook that is not installed).
 struct OnePass {
     names: Vec<String>,
+    word: u32,
     undefined: Vec<&'static str>,
 }
 
@@ -53,6 +53,7 @@ fn one_pass() -> OnePass {
             assert!(fetch_globals::realm_is_complete());
             OnePass {
                 names: own_names(value),
+                word: layout_word(global),
                 undefined: REALM_CORE_GLOBALS
                     .iter()
                     .chain(REALM_REST_GLOBALS)
@@ -122,7 +123,7 @@ fn core_then_rest_equals_one_pass() {
         let global = global_ptr(value);
         assert!(global_this_is_materialized());
         assert!(!fetch_globals::realm_is_complete());
-        let word = layout_word(global);
+        assert_eq!(layout_word(global), reference.word, "before phase B");
         assert_eq!(own_names(value), reference.names, "before phase B");
         for name in REALM_REST_GLOBALS {
             assert_eq!(slot_word(global, name), REALM_UNBOUND_POISON, "{name}");
@@ -151,11 +152,7 @@ fn core_then_rest_equals_one_pass() {
         assert_eq!(js_get_global_this().to_bits(), value.to_bits());
         assert!(fetch_globals::realm_is_complete());
         let global = global_ptr(js_get_global_this());
-        assert_eq!(
-            layout_word(global),
-            word,
-            "phase B adds no key: one layout word"
-        );
+        assert_eq!(layout_word(global), reference.word, "after phase B");
         assert_eq!(
             own_names(js_get_global_this()),
             reference.names,
@@ -193,7 +190,7 @@ fn core_then_rest_equals_one_pass() {
 fn internal_readers_run_the_phase_they_need() {
     let _lock = crate::gc::global_side_table_test_lock();
     on_core_realm(|_| {
-        for name in ["Map", "Array", "Promise", "Error", "Uint8Array"] {
+        for name in ["Map", "Array", "Promise", "Error", "RegExp"] {
             assert!(JSValue::from_bits(builtin_prototype_value(name).to_bits()).is_pointer());
             assert!(JSValue::from_bits(builtin_constructor_value(name).to_bits()).is_pointer());
             let by_name = js_get_global_this_builtin_value(name.as_ptr(), name.len());
@@ -218,6 +215,33 @@ fn internal_readers_run_the_phase_they_need() {
             "prototype",
         );
         assert_eq!(via_ctor.to_bits(), proto.to_bits());
+    });
+    on_core_realm(|_| {
+        // The byte-cell families: a typed array's prototype, `%TypedArray%`
+        // above it, and `Buffer` (a host family, a `Uint8Array` subclass).
+        assert_eq!(crate::object::typed_array_intrinsic_proto_ptr() as usize, 0);
+        let proto = builtin_prototype_value("Uint8Array");
+        assert!(fetch_globals::realm_is_complete());
+        assert!(JSValue::from_bits(proto.to_bits()).is_pointer());
+        assert_ne!(crate::object::typed_array_intrinsic_proto_ptr() as usize, 0);
+        let buffer = js_get_global_this_builtin_value("Buffer".as_ptr(), 6);
+        assert_eq!(buffer.to_bits(), builtin_constructor_value("Buffer").to_bits());
+    });
+    on_core_realm(|_| {
+        // `%TypedArray%` asked for on its own between the phases: built
+        // without phase B, with `toString` already `Array.prototype`'s.
+        let (_, intrinsic) = ensure_typed_array_intrinsic();
+        assert!(!fetch_globals::realm_is_complete());
+        let key = || crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+        let array_proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value("Array"))
+            as *const ObjectHeader;
+        let ours = js_object_get_field_by_name(intrinsic, key());
+        let arrays = js_object_get_field_by_name(array_proto, key());
+        assert_eq!(ours.bits(), arrays.bits());
+        assert!(!fetch_globals::realm_is_complete());
+        // Phase B then binds the typed arrays under the same intrinsic.
+        js_get_global_this();
+        assert_eq!(ensure_typed_array_intrinsic().1, intrinsic);
     });
     on_core_realm(|_| {
         let ctor = builtin_constructor_value("WeakRef");
