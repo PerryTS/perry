@@ -594,12 +594,19 @@ impl Model {
             if !self.unit_mode && self.is_builtin_proto(t) {
                 self.given_prototype(t, src);
             }
-            // A `JSON.parse` object: the setter gives it `src`'s objects or
-            // null as its prototype (B.2.2.1.2; another primitive does
-            // nothing), which its lookups then read (10.1.8.1).
+            // A `JSON.parse` object or a program object literal (both
+            // ordinary objects whose own keys are data): the setter gives it
+            // `src`'s objects or null as its prototype (B.2.2.1.2; another
+            // primitive does nothing), which its lookups then read
+            // (10.1.8.1). A literal's own `__proto__:` value is already on
+            // its prototype node (gen_expr.rs, the E6 literal form).
             if let TokKind::Obj(tm, _) = self.toks[t as usize] {
-                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
-                    && !self.is_marker(t)
+                if matches!(
+                    self.tmpls[tm as usize].kind,
+                    TmplKind::BObj { what: "json", .. }
+                        | TmplKind::Lit { enum_image: false, .. }
+                        | TmplKind::Class { literal_shape: true, .. }
+                ) && !self.is_marker(t)
                     && self.json_relink.insert(t)
                 {
                     self.given_prototype(t, src);

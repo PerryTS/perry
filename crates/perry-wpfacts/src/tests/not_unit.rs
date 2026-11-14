@@ -298,3 +298,40 @@ fn relink_call_stays_the_json_call_refusal() {
         .filter(|s| s.key == "m" && s.is_call)
         .all(|s| matches!(&s.verdict, Verdict::No(r) if r.contains("json: a call"))));
 }
+
+/// NOTUNIT5, GLTFLoader.js:731 + :2345: the program stores an object
+/// literal under a parse object's key (`lightDef.spot = lightDef.spot ||
+/// {}`), and the relinking store's value `j.b[k]` reads the parse's
+/// objects under any key, so the literal may become `t`'s prototype. Its
+/// own keys are data and its chain (`%Object.prototype%`) lacks `x`.
+const LS: &str = "const d: any = j.d;\nd.spot = d.spot || {};\nd.spot.inner = 0;\n";
+
+#[test]
+fn relink_chain_through_a_program_literal_is_closed() {
+    let pf = one(&format!("{C}const j: any = JSON.parse(s);\n{LS}const t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\nconsole.log(t.x);\n"));
+    assert!(all(&at(&pf, "x", false), "OwnDataOrAbsent"));
+}
+
+/// Control: the literal holds `x` (`d.spot.x = 1`): the read ends on the
+/// literal with its own data value, or on a JSON object's data, or gives
+/// `undefined`: still OwnDataOrAbsent (the verdict names data, never a
+/// getter), exactly as for a JSON object on the chain that holds the key.
+#[test]
+fn control_relink_chain_literal_holds_the_key() {
+    let pf = one(&format!("{C}const j: any = JSON.parse(s);\n{LS}d.spot.x = 1;\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\nconsole.log(t.x);\n"));
+    assert!(all(&at(&pf, "x", false), "OwnDataOrAbsent"));
+}
+
+/// Control: the literal holds an accessor under `x`: refused.
+#[test]
+fn control_relink_chain_literal_accessor_refused() {
+    let pf = one(&format!("{C}const j: any = JSON.parse(s);\nconst d: any = j.d;\nd.spot = {{ get x() {{ return 1; }} }};\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\nconsole.log(t.x);\n"));
+    assert!(none(&at(&pf, "x", false), "OwnDataOrAbsent"));
+}
+
+/// Control: the literal escapes to unknown code: refused.
+#[test]
+fn control_relink_chain_literal_escapes() {
+    let pf = one(&format!("{C}{HOLD}const j: any = JSON.parse(s);\n{LS}hostTake(d.spot);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\nconsole.log(t.x);\n"));
+    assert!(none(&at(&pf, "x", false), "OwnDataOrAbsent"));
+}

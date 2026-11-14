@@ -143,10 +143,21 @@ fn own_or_absent_control_getter_defined() {
 /// The brief's input-key store: `k` may be `"__proto__"`, and storing an
 /// object under it runs %Object.prototype%'s `__proto__` setter (B.2.2.1.2),
 /// which makes the object the receiver's [[Prototype]]: the chain is the
-/// stored value's, not proven absent.
+/// stored value's. NOTUNIT5: a relinked literal's prototype set is modeled
+/// (store.rs, as for a JSON object) and the stored literal `{ n: 1 }` has
+/// data keys only and `%Object.prototype%` as its prototype, so `FOO` is
+/// absent on the whole chain: own data or `undefined` (a true claim).
 #[test]
 fn own_or_absent_control_input_key_object_value() {
     let src = "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
+    all(src, "FOO", false, "OwnDataOrAbsent");
+}
+
+/// Control: the stored value is a class instance whose prototype holds
+/// `FOO` (a method): refused.
+#[test]
+fn own_or_absent_control_input_key_class_value() {
+    let src = "class Q { FOO() { return 1; } }\nconst a: any = {};\nconst k = process.argv[2];\na[k] = new Q();\nconsole.log(a.FOO);";
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
 

@@ -2457,7 +2457,8 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
 /// objects under the same conditions (their own data is data; relinked
 /// ones are walked), arrays on which the key is absent (`array_absent`) or
 /// whose own keys are data and whose `%Array.prototype%` lacks the key
-/// (`json_chain_array`),
+/// (`json_chain_array`), program object literals whose own keys are data
+/// and whose own chain lacks the key (`json_chain_literal`),
 /// `%Object.prototype%` and null; the end lacks the key. A named read then
 /// gives a data value of a chain object or `undefined`. `Ok(true)`: null
 /// may end the chain (the null-ended arm).
@@ -2499,6 +2500,19 @@ fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, Str
             if array_absent(m, p, key, a) || json_chain_array(m, p, key, a) {
                 continue;
             }
+            if json_chain_literal(m, p, key, a) {
+                if m.super_relink.contains(&p) {
+                    if !m.json_relink.contains(&p) {
+                        return Err("relink: a chain literal is relinked otherwise".into());
+                    }
+                    todo.push(p);
+                }
+                continue;
+            }
+            if json_chain_literal_proto(m, p, a) {
+                todo.push(p);
+                continue;
+            }
             return Err(format!("relink: prototype {} may hold the key", m.tok_name(p)));
         }
     }
@@ -2537,6 +2551,66 @@ fn json_chain_array(m: &Model, p: Tok, key: &str, a: Atom) -> bool {
         && !m.is_escaped(p)
         && !m.is_private_atom(a)
         && (key == "length" || family_absent(m, crate::builtins::NativeFamily::Array, key, a))
+}
+
+/// A program object literal `p` on a relinked `JSON.parse` object's chain
+/// (a JSON object's field may hold it: the program stores it there, and an
+/// unknown-key read of the parse's objects, such as the relinking store's
+/// value `b[k]`, yields every field): ECMA-262 13.2.5 makes an ordinary
+/// object whose [[Prototype]] is `%Object.prototype%` (a `__proto__:` in
+/// the literal gives another prototype, which the walk sees) and whose
+/// own keys are data properties (CreateDataPropertyOrThrow), apart from
+/// accessors (`get`/`set`, on the template), so are the program's later
+/// stores (no accessor on the token, no hard operation such as
+/// `defineProperty`, no escape to unknown code). A read under `key` ends
+/// on `p` with a data value, or continues on `p`'s chain: when `p` is not
+/// relinked, its chain lacks the key (`chain_absent`, own excluded); when
+/// it is relinked by JSON values only (`json_relink`), the caller walks
+/// its prototype set like a JSON object's (store.rs gives a relinked
+/// literal the stored objects as its prototype set, as for a JSON object).
+fn json_chain_literal(m: &Model, p: Tok, key: &str, a: Atom) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[p as usize] else {
+        return false;
+    };
+    matches!(
+        m.tmpls[tm as usize].kind,
+        TmplKind::Lit { enum_image: false, .. } | TmplKind::Class { literal_shape: true, .. }
+    ) && !m.is_marker(p)
+        && !m.is_escaped(p)
+        && !m.hard.contains_key(&p)
+        && m.accessor_keys.get(&p).is_none_or(|k| k.is_empty())
+        && m.tmpls[tm as usize].accessor_keys.is_empty()
+        && !m.is_private_atom(a)
+        && (m.super_relink.contains(&p)
+            // No prototype node: the literal's prototype is `%Object.prototype%`
+            // (a `__proto__:` member or a store under `__proto__` makes one).
+            || m.proto_node.get(&p).is_none()
+            || chain_absent(m, p, key, a, false))
+}
+
+/// The prototype of a literal-shape class (`__AnonShape_*`, the layout of
+/// an object literal without `__proto__:`), on a relinked literal's
+/// prototype set: it stands for the literal's `%Object.prototype%` and
+/// holds nothing the program stores under `a` (no named or computed
+/// store, no accessor, no relink, no hard operation, no escape); the walk
+/// continues at its own prototype set.
+fn json_chain_literal_proto(m: &Model, p: Tok, a: Atom) -> bool {
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let TokKind::Proto(tm) = m.toks[p as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::Class { literal_shape: true, .. })
+        && holds_nothing(m.fields.get(&(p, a)))
+        && holds_nothing(m.field_any.get(&p))
+        && !m.super_relink.contains(&p)
+        && m.accessor_keys.get(&p).is_none_or(|k| !k.contains(&a))
+        && !m.hard.contains_key(&p)
+        && !m.is_escaped(p)
 }
 
 /// A `JSON.parse` object whose own keys are data and which unknown code
