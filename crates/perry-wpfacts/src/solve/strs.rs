@@ -16,6 +16,11 @@ pub(crate) const INFIX_MARK: &str = "\u{1}infix\u{1}";
 /// The spelling of a rule-M4 suffix entry, `SUFFIX_MARK` + `s`: "a String
 /// that ends with `s`" (`s` not empty).
 pub(crate) const SUFFIX_MARK: &str = "\u{1}suffix\u{1}";
+
+/// The end of every NativeFunction text perry's runtime prints for a
+/// builtin function (`function_source_for_func_ptr`, the class and closure
+/// forms): `function NAME() { [native code] }` (ECMA-262 20.2.3.5).
+pub(crate) const NATIVE_CODE_TAIL: &str = "[native code] }";
 /// The spelling of an exclusion entry, `EXCL_MARK` + 32 hex digits (a set
 /// E of ASCII characters, bit c for c) + `\u{1}` + `s`: "a String `X + s`
 /// where X holds no character of E" (`s` may be empty; it may hold E's
@@ -330,46 +335,107 @@ impl Model {
     /// operand that may be no String (a Number, an object's ToPrimitive)
     /// while the result may be a String gives any string. Prefixes are
     /// only made from constants, never extended, so loops end.
-    pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+    ///
+    /// `.1`: the result used a text that holds only while no unknown code
+    /// exists (rule M8's builtin-function form, `excl_parts`).
+    pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> (StrSet, bool) {
         if let Some(s) = self.plus_const(l, r) {
-            return s;
+            return (s, false);
         }
         let m3 = self.plus_strs_m3(l, r);
         if m3 != STRS_TOP {
-            return m3;
+            return (m3, false);
         }
         if let Some(s) = self.excl_plus(l, r) {
             return s;
         }
         if let Some(s) = self.suffix_strs(r) {
-            return s;
+            return (s, false);
         }
         // Rule K7, 13.15.3: when one operand is String-only, the result is
         // the concatenation of both ToStrings, so it holds every character
         // that operand surely holds.
         match self.infix_strs(l).or_else(|| self.infix_strs(r)) {
-            Some(s) => s,
-            None => STRS_TOP,
+            Some(s) => (s, false),
+            None => (STRS_TOP, false),
         }
     }
 
-    /// The String-only values of `n` as concatenation parts: each constant
-    /// (`Ok`) or exclusion entry (`Err((E, s))`; a suffix entry is one
-    /// with nothing excluded); `None` for any other value.
-    fn excl_parts(&self, n: NodeId) -> Option<Vec<Result<String, (u128, String)>>> {
-        let x = &self.nodes[n as usize];
-        if x.prim != prim::STR || !x.pts.is_empty() || x.strs < STRS_SET0 {
+    /// The values of `n` as concatenation parts (ECMA-262 13.15.3 step 4:
+    /// each operand's ToString, 7.1.17): each constant (`Ok`) or exclusion
+    /// entry (`Err((E, s))`; a suffix entry is one with nothing excluded);
+    /// `None` when one value's text may be any string. `undefined`, `null`
+    /// and the booleans are their constant texts; a Symbol throws (no
+    /// text). A builtin function is ToPrimitive (7.1.1: no @@toPrimitive,
+    /// `Object.prototype.valueOf` gives the object, then
+    /// `Function.prototype.toString`, 20.2.3.5): a NativeFunction text,
+    /// which perry's runtime always spells ending in `[native code] }`,
+    /// while no unknown code exists and the program writes none of those
+    /// keys on it or the prototypes; `.1` says such a form was used (it
+    /// is any string once the realm is held, `realm_str_dsts`). A Number,
+    /// a BigInt, `Object.prototype` (the token is every builtin prototype)
+    /// and every other object may be any string.
+    fn excl_parts(&mut self, n: NodeId) -> Option<(Vec<Result<String, (u128, String)>>, bool)> {
+        let (p, toks, strs) = {
+            let x = &self.nodes[n as usize];
+            (x.prim, x.pts.to_sorted(), x.strs)
+        };
+        if p & (prim::NUM | prim::BIGINT) != 0 {
             return None;
         }
         let mut out = Vec::new();
-        for &a in self.str_atoms(x.strs) {
-            match self.atom_excl(a).or_else(|| self.atom_suffix(a).map(|s| (0, s))) {
-                Some((e, s)) => out.push(Err((e, s.to_string()))),
-                None if self.atom_is_mark(a) => return None,
-                None => out.push(Ok(self.atoms[a as usize].clone())),
+        let mut gated = false;
+        if p & prim::STR != 0 {
+            if strs < STRS_SET0 {
+                return None;
+            }
+            for &a in self.str_atoms(strs) {
+                match self.atom_excl(a).or_else(|| self.atom_suffix(a).map(|s| (0, s))) {
+                    Some((e, s)) => out.push(Err((e, s.to_string()))),
+                    None if self.atom_is_mark(a) => return None,
+                    None => out.push(Ok(self.atoms[a as usize].clone())),
+                }
             }
         }
-        Some(out)
+        for (bit, text) in [
+            (prim::UNDEF, "undefined"),
+            (prim::NULL, "null"),
+            (prim::TRUE, "true"),
+            (prim::FALSE, "false"),
+        ] {
+            if p & bit != 0 {
+                out.push(Ok(text.to_string()));
+            }
+        }
+        if !toks.is_empty() {
+            if self.realm_held {
+                return None;
+            }
+            let fp = crate::builtins::native_proto(self, "Function");
+            let keys = [crate::model::WK_TO_PRIMITIVE, "valueOf", "toString"].map(|k| self.atom(k));
+            for t in toks {
+                let native_fn = t != TOP
+                    && !self.is_marker(t)
+                    && match self.toks[t as usize] {
+                        TokKind::BuiltinFn(_) => true,
+                        TokKind::Builtin(_) => crate::builtins::surely_callable(self, t),
+                        _ => false,
+                    };
+                if !native_fn {
+                    return None;
+                }
+                for &a in &keys {
+                    let f = self.field(t, a);
+                    let x = &self.nodes[f as usize];
+                    if crate::builtins::native_written(self, fp, a) || x.prim != 0 || !x.pts.is_empty() {
+                        return None;
+                    }
+                }
+            }
+            out.push(Err((0, NATIVE_CODE_TAIL.to_string())));
+            gated = true;
+        }
+        Some((out, gated))
     }
 
     /// Rule M8, ECMA-262 13.15.3 (two Strings give their concatenation):
@@ -382,8 +448,9 @@ impl Model {
     /// with an empty suffix or from the left operand's one value (a node
     /// holds one value alone during one stretch at most, sets only grow),
     /// so loops end; two constants are rule M5's.
-    fn excl_plus(&mut self, l: NodeId, r: NodeId) -> Option<StrSet> {
-        let (lp, rp) = (self.excl_parts(l)?, self.excl_parts(r)?);
+    fn excl_plus(&mut self, l: NodeId, r: NodeId) -> Option<(StrSet, bool)> {
+        let (lp, lg) = self.excl_parts(l)?;
+        let (rp, rg) = self.excl_parts(r)?;
         if lp.iter().chain(&rp).all(|p| p.is_ok()) {
             return None;
         }
@@ -402,7 +469,7 @@ impl Model {
         }
         out.sort_unstable();
         out.dedup();
-        Some(self.str_set(&out))
+        Some((self.str_set(&out), lg || rg))
     }
 
     /// Is `t` an object of the RegExp family (a literal's or a

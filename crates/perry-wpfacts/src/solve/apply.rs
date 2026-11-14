@@ -2036,11 +2036,14 @@ impl Model {
                     // Rule M3: the result's strings are the pair's
                     // (`plus_strs`); nothing while one operand holds no
                     // value yet (its own rule adds them when it does).
-                    let strs = match (other, right) {
-                        (NO_NODE, _) => STRS_TOP,
+                    let (strs, gated) = match (other, right) {
+                        (NO_NODE, _) => (STRS_TOP, false),
                         (o, false) => self.plus_strs(n, o),
                         (o, true) => self.plus_strs(o, n),
                     };
+                    if gated && strs != STRS_TOP {
+                        self.realm_str_dsts.push(str);
+                    }
                     if strs != STRS_NONE {
                         self.add_s(str, &[], s, strs);
                     }
