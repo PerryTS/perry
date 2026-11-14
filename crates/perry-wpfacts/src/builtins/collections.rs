@@ -100,6 +100,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 (crate::summary::MK_FN_CALL, t, 0),
                 None,
                 CallSite {
+                    first_arg_fixed: false,
                     this,
                     args: c.args.iter().skip(1).copied().collect(),
                     spread: c.spread.clone(),
@@ -125,6 +126,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 (crate::summary::MK_FN_APPLY, t, 0),
                 None,
                 CallSite {
+                    first_arg_fixed: false,
                     this,
                     args: vec![],
                     spread,
@@ -214,6 +216,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             let call2 = m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: c.this.clone(),
                     args,
                     spread: vec![],
@@ -287,6 +290,7 @@ pub(super) fn cb_call(
     m.solver_call(
         by,
         CallSite {
+            first_arg_fixed: false,
             this,
             args,
             spread: vec![],
@@ -342,6 +346,7 @@ fn member_call(
     m.nodes[ret as usize].frame = home;
     let call = m.calls.len() as CallId;
     m.calls.push(CallSite {
+        first_arg_fixed: false,
         this,
         args,
         spread: vec![],
@@ -430,6 +435,7 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
     let mc = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args: vec![exec],
             spread: vec![],
@@ -528,6 +534,7 @@ pub(crate) fn method_call(
     m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Node(recv),
             args,
             spread: vec![],
@@ -563,6 +570,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
             (crate::summary::MK_ITERATE, step, 0),
             Some(this),
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(this),
                 args: vec![],
                 spread: vec![],
@@ -782,6 +790,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
     let mc = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -1000,6 +1009,17 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if !m.rest_elem_sabotage && !crate::rest_elems::fused_fill(m, call) {
         m.rest_used(t);
     }
+    // DEADFN15 C1, C2: a rest array keeps its front for one `shift()`
+    // site in its function's own body outside any loop (one run per
+    // activation), the only method call that writes it.
+    if m.is_rest_arr(t) && !crate::const_arrays::method_reads_only(name) {
+        let site = m.calls[call as usize].site;
+        let own = name == Some("shift")
+            && m.rest_owner_of(t).is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
+        if !own || *m.rest_front_site.entry(t).or_insert(site) != site {
+            m.rest_front_widen(t);
+        }
+    }
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
             let owner = if matches!(members::member(Family::Object, name), Some(Mem::Fn)) {
@@ -1132,7 +1152,13 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_prim(m, call, prim::NUM);
         }
         Some("pop" | "shift" | "at") => {
-            m.edge(elems, c.ret);
+            if name == Some("shift") && m.is_rest_arr(t) && !m.rest_front_open.contains(&t) {
+                let f = m.rest_front(t);
+                m.edge(f, c.ret);
+                m.rest_front_reads.entry(t).or_default().push(c.ret);
+            } else {
+                m.edge(elems, c.ret);
+            }
             ret_prim(m, call, prim::UNDEF);
         }
         // The removed elements, in an array made through the receiver's
@@ -1602,6 +1628,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(recv),
                     args: vec![],
                     spread: vec![],

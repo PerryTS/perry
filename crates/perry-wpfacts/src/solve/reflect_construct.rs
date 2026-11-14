@@ -67,6 +67,7 @@ impl Model {
                 (crate::summary::MK_BOUND_REFLECT, b, new_target),
                 None,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Undef,
                     args,
                     spread: c.spread.clone(),

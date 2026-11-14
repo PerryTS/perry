@@ -155,6 +155,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::LenPermuted { .. }
         | Cons::ArrayLenArg { .. }
         | Cons::CaseMap { .. }
+        | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. }
         | Cons::Identity { .. }
         | Cons::Hard { .. }
@@ -209,6 +210,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NativeParent { .. }
         | Cons::ShareBuffer { .. }
         | Cons::Captures { .. }
+        | Cons::ObjTagProbe { .. }
         | Cons::StrReplace { .. }
         | Cons::ClassReplace { .. }
         | Cons::RegExpPattern { .. }

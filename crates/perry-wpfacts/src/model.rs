@@ -759,6 +759,10 @@ pub struct CallSite {
     pub args: Vec<NodeId>,
     /// Spread argument arrays: their elements may land in any parameter.
     pub spread: Vec<NodeId>,
+    /// No spread precedes `args[0]`: it is the call's first argument
+    /// (`f(x, ...s)`). False where generation did not see the argument
+    /// list; a call without a spread has its first argument fixed anyway.
+    pub first_arg_fixed: bool,
     pub ret: NodeId,
     pub site: SiteId,
     /// The throw region the call runs in (DESIGN SEEDE section 8): what the
@@ -1355,6 +1359,9 @@ pub struct Node {
     /// setter, nor a class's `prototype` or `constructor` (15.7.14
     /// ClassDefinitionEvaluation, 10.2.8 MakeMethod with enumerable false).
     pub enum_key: bool,
+    /// DEADFN15: a rest array arriving here may be reached by another
+    /// activation of its function (`Model::rest_front_watch`).
+    pub front_watch: bool,
     /// The integer interval of the Numbers it holds (`range::Iv`).
     pub range: range::Iv,
     /// The interval grew since the node was last delivered.
@@ -1799,6 +1806,19 @@ pub struct Model {
     /// Rest parameter arrays (`Model::is_rest_arr`): index-exact
     /// (`Model::index_slot`) from their birth.
     pub rest_param_tmpls: crate::pts::FxHashSet<TmplId>,
+    /// DEADFN15: the function whose rest parameter makes template `tm`.
+    pub rest_owner: std::collections::HashMap<TmplId, FnIdx>,
+    /// DEADFN15: the function and loop depth of each source call site.
+    pub call_place: std::collections::HashMap<CallId, (FnIdx, u32)>,
+    /// DEADFN15: per rest array token, what was stored directly at its
+    /// index 0 (`Model::rest_front`), the one site that shifts it, whether
+    /// it lost its confinement (`rest_front_widen`), the shift results read
+    /// from the front, and the nodes watched for it.
+    pub rest_fronts: std::collections::HashMap<Tok, NodeId>,
+    pub rest_front_site: std::collections::HashMap<Tok, SiteId>,
+    pub rest_front_open: std::collections::HashSet<Tok>,
+    pub rest_front_reads: std::collections::HashMap<Tok, Vec<NodeId>>,
+    pub rest_front_watch_fn: std::collections::HashMap<NodeId, FnIdx>,
     /// Rule RT (`builtins::regex_tail`): the tails of the analysable regex
     /// literals, the tail of each literal's template (its
     /// [[OriginalSource]] and [[OriginalFlags]], 22.2.3.1; no program
@@ -1824,6 +1844,16 @@ pub struct Model {
     /// exists (`realm_held`): any string once it does
     /// (`Model::realm_widen_strs`).
     pub(crate) realm_str_dsts: Vec<NodeId>,
+    /// Rule OBJECT-TO-STRING (ECMA-262 20.1.3.6): objects whose ToString
+    /// may be other than "[object Object]" (`objtag_open`), the objects
+    /// probed (`Cons::ObjTagProbe`), the String nodes that took
+    /// "[object Object]" for each object of a chain (any string once one
+    /// opens or escapes), and the Plus result the current `plus_strs` runs
+    /// for (`None`: no object gives that text).
+    pub(crate) objtag_open: crate::pts::FxHashSet<Tok>,
+    pub(crate) objtag_probed: crate::pts::FxHashSet<Tok>,
+    pub(crate) objtag_watch: crate::pts::FxHashMap<Tok, Vec<NodeId>>,
+    pub(crate) objtag_sink: Option<NodeId>,
     pub(crate) regexp_pending: crate::pts::FxHashMap<Tok, Vec<(Tok, NodeId)>>,
     pub(crate) regexp_pending_recs: crate::pts::FxHashSet<Tok>,
     /// Rule M8: each regex literal template whose `source` is its pattern

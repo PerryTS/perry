@@ -1022,6 +1022,10 @@ impl Model {
             if delta.is_empty() && dprim == 0 && !dstrs && !drange {
                 continue;
             }
+            if self.nodes[n as usize].front_watch && !delta.is_empty() {
+                let ts: Vec<Tok> = delta.iter().copied().collect();
+                self.rest_front_arrived(n, &ts);
+            }
             // Only a node's string constants (`Node::strs`) and/or its
             // intervals (`model::range`: a Number's, a String's code) grew:
             // re-deliver them along the edges (STR with the constants, the
@@ -1809,6 +1813,7 @@ impl Model {
         let arg = args[0];
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Tok(t),
             args,
             spread: vec![],
@@ -2046,6 +2051,7 @@ impl Model {
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
+            Cons::ObjTagProbe { t, key } => format!("objtagprobe {n} {t} {key}"),
             Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
             Cons::ClassReplace { dst, .. } => format!("classreplace {n} {dst}"),
             Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),
@@ -2063,6 +2069,7 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
+            Cons::ConsoleFormat { reason, agg } => format!("consolefmt {n} {reason} {agg}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),

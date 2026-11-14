@@ -188,6 +188,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("field", || format!("field({t},{a})"));
+        self.rest_front_watch(n, NO_FN);
         #[cfg(test)]
         {
             self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
@@ -486,6 +487,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
+        self.rest_front_watch(n, NO_FN);
         #[cfg(test)]
         {
             self.nodes[n as usize].field_origin = Some(crate::summary::packet::FieldOrigin {
@@ -964,6 +966,72 @@ impl Model {
     /// fixed index (`index_slots_merge`).
     pub(crate) fn is_rest_arr(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _) if self.rest_param_tmpls.contains(&tm))
+    }
+
+    /// The function whose rest parameter makes rest array `t`.
+    pub(crate) fn rest_owner_of(&self, t: Tok) -> Option<FnIdx> {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => self.rest_owner.get(&tm).copied(),
+            _ => None,
+        }
+    }
+
+    /// DEADFN15: the front of rest array `t`: what was stored directly at
+    /// its index 0 (the first rest argument of each creating call, a store
+    /// under the constant index 0), and what was stored at an index not
+    /// known (an unknown caller's arguments, a computed key, a spread
+    /// call's arguments). While `t` is confined to its activation
+    /// (`rest_front_widen`), a `shift()` of it reads this.
+    pub(crate) fn rest_front(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.rest_fronts.get(&t) {
+            return n;
+        }
+        let n = self.node_named("rest-front", || format!("rest-front({t})"));
+        self.rest_fronts.insert(t, n);
+        n
+    }
+
+    /// DEADFN15: rest array `t` may be shifted twice, reordered, or reached
+    /// by another activation: every shift that read its front reads any
+    /// element (monotone: the answer only widens).
+    pub(crate) fn rest_front_widen(&mut self, t: Tok) {
+        if !self.rest_front_open.insert(t) {
+            return;
+        }
+        let fa = self.field_any(t);
+        for r in self.rest_front_reads.get(&t).cloned().unwrap_or_default() {
+            self.edge(fa, r);
+        }
+    }
+
+    /// DEADFN15 C3: watch node `n` for rest arrays. `f == NO_FN`: a heap
+    /// or shared location (a field, an element, a captured variable, a
+    /// closure context): any rest array arriving there may be reached by
+    /// another activation of its function. Else a parameter or `this` of
+    /// `f`: only `f`'s own rest arrays are lost there (another function's
+    /// parameter holding it is a callee beneath the activation).
+    pub(crate) fn rest_front_watch(&mut self, n: NodeId, f: FnIdx) {
+        if n == NO_NODE || self.nodes[n as usize].front_watch {
+            return;
+        }
+        self.nodes[n as usize].front_watch = true;
+        if f != NO_FN {
+            self.rest_front_watch_fn.insert(n, f);
+        }
+        if !self.nodes[n as usize].pts.is_empty() {
+            let ts = self.nodes[n as usize].pts.to_sorted();
+            self.rest_front_arrived(n, &ts);
+        }
+    }
+
+    /// Tokens `ts` arrived at watched node `n` (`rest_front_watch`).
+    pub(crate) fn rest_front_arrived(&mut self, n: NodeId, ts: &[Tok]) {
+        let f = self.rest_front_watch_fn.get(&n).copied().unwrap_or(NO_FN);
+        for &t in ts {
+            if self.is_rest_arr(t) && (f == NO_FN || self.rest_owner_of(t) == Some(f)) {
+                self.rest_front_widen(t);
+            }
+        }
     }
 
     /// The slot a read of `obj` under key node `key` reads alone: `key` is

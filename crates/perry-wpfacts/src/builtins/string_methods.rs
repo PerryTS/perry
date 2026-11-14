@@ -144,6 +144,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
     m.solver_call(
         by,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Node(recv),
             args,
             spread: vec![],
@@ -735,6 +736,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
     m.solver_call(
         by,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],

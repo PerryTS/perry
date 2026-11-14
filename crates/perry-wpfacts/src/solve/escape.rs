@@ -335,7 +335,13 @@ impl Model {
             }
         }
         self.escaped.insert(t, reason);
+        if self.objtag_watch.contains_key(&t) {
+            self.objtag_widen(t);
+        }
         self.ta_len_open(t);
+        if self.is_rest_arr(t) {
+            self.rest_front_widen(t);
+        }
         self.index_slots_merge(t);
         self.arr_len_top(t);
         self.map_open(t);
@@ -834,6 +840,7 @@ impl Model {
         }
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -894,6 +901,7 @@ impl Model {
         self.add_prim(args_n, prim::ALL);
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args: vec![args_n; np],
             spread: vec![],
@@ -1198,6 +1206,7 @@ impl Model {
                 self.add_prim(args_n, prim::ALL);
                 let call = self.calls.len() as CallId;
                 self.calls.push(CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Undef,
                     args: vec![args_n; 8],
                     spread: vec![],
