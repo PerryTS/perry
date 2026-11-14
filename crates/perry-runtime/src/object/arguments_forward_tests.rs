@@ -31,7 +31,10 @@ fn born_arguments_forward_slots_and_shape_mutation_control() {
     let args = born(&[3.0, 4.0], 0);
     unsafe {
         assert_birth_record(args, 2);
-        assert_eq!(test_arguments_birth_word(args).unwrap().1, (*args).shape_word());
+        assert_eq!(
+            test_arguments_birth_word(args).unwrap().1,
+            (*args).shape_word()
+        );
         assert_eq!(arguments_object_born_slice(args).unwrap(), &[3.0, 4.0]);
         assert_eq!(arguments_object_get_index(args, 1), Some(4.0));
         let prototype = js_object_get_prototype_of(crate::value::js_nanbox_pointer(args as i64));
@@ -66,7 +69,10 @@ fn birth_shape_proves_indices_beyond_the_arity_cache() {
     let args = born(&values, 0);
     unsafe {
         assert_birth_record(args, 65);
-        assert_eq!(test_arguments_birth_word(args).unwrap().1, (*args).shape_word());
+        assert_eq!(
+            test_arguments_birth_word(args).unwrap().1,
+            (*args).shape_word()
+        );
         assert_eq!(
             arguments_object_born_slice(args).unwrap(),
             values.as_slice()
