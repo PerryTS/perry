@@ -1734,6 +1734,9 @@ function __iterableToArray(v) {
   return out;
 }
 
+// A tagged template's strings array per call site, keyed by the HIR site id's halves.
+const __taggedTemplates = new Map();
+
 const __memDispatch = {
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
   // `value` must use the iterator protocol instead of its indices.
@@ -1888,6 +1891,19 @@ const __memDispatch = {
 
   // Arrays — args are plain JS values (arr is the array itself, etc.)
   array_new: () => [],
+  // GetTemplateObject: the first evaluation of a site freezes `cooked` with a frozen,
+  // non-enumerable `raw`; every evaluation of that site returns the same object.
+  tagged_template: (siteHi, siteLo, cooked, raw) => {
+    const key = siteHi + ':' + siteLo;
+    let strings = __taggedTemplates.get(key);
+    if (strings === undefined) {
+      Object.defineProperty(cooked, 'raw', { value: Object.freeze(raw) });
+      strings = Object.freeze(cooked);
+      __taggedTemplates.set(key, strings);
+    }
+    return strings;
+  },
+  template_raw: (strings) => strings.raw,
   // `new Array(x)`: single number = length (ES2015 §22.1.1), else element.
   array_constructor_single: (value) => {
     if (typeof value === 'number') {

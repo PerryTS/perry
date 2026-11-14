@@ -26,6 +26,28 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // The host returns one frozen strings array per call site, the same
+            // object on every evaluation; the arrays built here seed it once.
+            Expr::TaggedTemplateStrings {
+                site_id,
+                cooked,
+                raw,
+            } => {
+                let cooked = Expr::Array(cooked.clone(), None);
+                let raw = Expr::Array(raw.iter().cloned().map(Expr::String).collect(), None);
+                self.emit_frame_begin(func, 4);
+                self.emit_store_const(func, 0, (site_id >> 32) as f64);
+                self.emit_store_const(func, 1, (site_id & 0xFFFF_FFFF) as f64);
+                self.emit_store_arg(func, 2, &cooked);
+                self.emit_store_arg(func, 3, &raw);
+                self.emit_memcall(func, "tagged_template", 4);
+            }
+            Expr::TemplateRaw(strings) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, strings);
+                self.emit_memcall(func, "template_raw", 1);
+            }
+
             // --- Array spread ---
             Expr::ArraySpread(elements) => {
                 self.emit_frame_begin(func, 0);
