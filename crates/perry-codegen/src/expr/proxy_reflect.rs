@@ -488,10 +488,22 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     strict_i32: &str,
 ) -> Result<String> {
     let _decision = crate::fallback_diag::decision("computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required", "runtime key coercion/layout/presence/store admission");
+    // The shape directory first, as `perry_probe_get_keyed` takes it.
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        "@PERRY_EMPTY_SHAPE_DIR",
+    );
     Ok(ctx.block().call(
         DOUBLE,
         "js_put_value_set_dynamic",
-        &[(DOUBLE, t), (DOUBLE, k), (DOUBLE, v), (I32, strict_i32)],
+        &[
+            (crate::types::PTR, &dir),
+            (DOUBLE, t),
+            (DOUBLE, k),
+            (DOUBLE, v),
+            (I32, strict_i32),
+        ],
     ))
 }
 

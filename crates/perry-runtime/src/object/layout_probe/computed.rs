@@ -408,10 +408,14 @@ pub(super) unsafe fn key_leaf(dir: *const u8, key_bits: u64) -> Option<(u64, u64
 /// resolves no atom. No call.
 ///
 /// # Safety
-/// Any value bits.
+/// Any value bits; `dir` is this agent's shape directory or the empty one.
 #[inline(always)]
-pub(crate) unsafe fn keyed_own_set(obj_bits: u64, key_bits: u64, value: f64) -> (super::OwnSet, u64, u64) {
-    let dir = super::super::ordinary_dir_addr();
+pub(crate) unsafe fn keyed_own_set(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    value: f64,
+) -> (super::OwnSet, u64, u64) {
     match key_leaf(dir, key_bits) {
         Some((key, hash)) => (super::own_set(dir, obj_bits, key, hash, value), key, hash),
         None => (super::OwnSet::Rest, 0, 0),

@@ -427,14 +427,25 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// §3.3; perry-codegen `expr/proxy_reflect.rs`): a stable-tombstone re-add,
 /// a key the receiver's layout names (its slot) or any other computed key
 /// (appended to the receiver's overflow, no transition), else the complete
-/// strict-aware `[[Set]]`. Nothing is remembered.
+/// strict-aware `[[Set]]`. Nothing is remembered. `dir` is the agent's
+/// shape directory (agent pointer `AGENT_PTR_SHAPE_DIR`), passed in the way
+/// `perry_probe_get_keyed` takes it, so the hit path names no thread-local.
+///
+/// # Safety
+/// `dir` is this agent's shape directory or `PERRY_EMPTY_SHAPE_DIR`.
 #[no_mangle]
-pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+pub unsafe extern "C" fn js_put_value_set_dynamic(
+    dir: *const u8,
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
     use crate::object::layout_probe::OwnSet;
     // The frame-free keyed probe (DESIGN_R §3): the key's atom, then the
     // static store's own-slot leaf; every other case is one tail call.
     let (found, atom, hash) =
-        unsafe { crate::object::layout_probe::keyed_own_set(target.to_bits(), key.to_bits(), value) };
+        unsafe { crate::object::layout_probe::keyed_own_set(dir, target.to_bits(), key.to_bits(), value) };
     match found {
         OwnSet::Stored => value,
         OwnSet::Slot(obj, address, slot) => set_dynamic_slot_any(obj, address, slot, value),
@@ -703,12 +714,15 @@ mod tests {
             let before = unsafe { crate::object::shapes::object_shape_stamp(obj) };
             assert!(!unsafe { crate::object::overflow::has_overflow(obj) });
             assert_eq!(
-                js_put_value_set_dynamic(
-                    crate::value::js_nanbox_pointer(obj as i64),
-                    key_handle.get_nanbox_f64(),
-                    value,
-                    1,
-                ),
+                unsafe {
+                    js_put_value_set_dynamic(
+                        crate::object::shapes::ordinary_dir_addr(),
+                        crate::value::js_nanbox_pointer(obj as i64),
+                        key_handle.get_nanbox_f64(),
+                        value,
+                        1,
+                    )
+                },
                 value
             );
             let obj = handle.get_raw_mut_ptr::<crate::ObjectHeader>();
@@ -735,12 +749,15 @@ mod tests {
 
         let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
         assert_eq!(
-            js_put_value_set_dynamic(
-                crate::value::js_nanbox_pointer(user_class as i64),
-                key_handle.get_nanbox_f64(),
-                47.0,
-                1,
-            ),
+            unsafe {
+                js_put_value_set_dynamic(
+                    crate::object::shapes::ordinary_dir_addr(),
+                    crate::value::js_nanbox_pointer(user_class as i64),
+                    key_handle.get_nanbox_f64(),
+                    47.0,
+                    1,
+                )
+            },
             47.0
         );
         assert_eq!(

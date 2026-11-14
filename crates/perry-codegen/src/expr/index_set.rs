@@ -2019,12 +2019,20 @@ fn emit_annotated_set_extend(
     ctx.block().br(&join_label);
     ctx.current_block = other_idx;
     {
+        // The shape directory first (`perry_probe_get_keyed`'s argument):
+        // the store's hit path names no thread-local.
+        let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+            ctx,
+            crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+            "@PERRY_EMPTY_SHAPE_DIR",
+        );
         let blk = ctx.block();
         let idx_double = blk.sitofp(I32, idx_i32, DOUBLE);
         let _ = blk.call(
             DOUBLE,
             "js_put_value_set_dynamic",
             &[
+                (crate::types::PTR, &dir),
                 (DOUBLE, arr_box),
                 (DOUBLE, &idx_double),
                 (DOUBLE, val_double),
@@ -2033,7 +2041,8 @@ fn emit_annotated_set_extend(
         );
         blk.br(&join_label);
     }
-    let other_end = ctx.block_label(other_idx);
+    // The directory read may end in its own join block (Apple TSD).
+    let other_end = ctx.block_label(ctx.current_block);
     ctx.current_block = join_idx;
     ctx.block()
         .phi(DOUBLE, &[(&new_box, &heap_end), (arr_box, &other_end)])
