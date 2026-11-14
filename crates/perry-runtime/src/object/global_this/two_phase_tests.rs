@@ -225,7 +225,10 @@ fn internal_readers_run_the_phase_they_need() {
         assert!(JSValue::from_bits(proto.to_bits()).is_pointer());
         assert_ne!(crate::object::typed_array_intrinsic_proto_ptr() as usize, 0);
         let buffer = js_get_global_this_builtin_value("Buffer".as_ptr(), 6);
-        assert_eq!(buffer.to_bits(), builtin_constructor_value("Buffer").to_bits());
+        assert_eq!(
+            buffer.to_bits(),
+            builtin_constructor_value("Buffer").to_bits()
+        );
     });
     on_core_realm(|_| {
         // `%TypedArray%` asked for on its own between the phases: built
