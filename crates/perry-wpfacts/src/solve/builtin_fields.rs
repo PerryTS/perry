@@ -269,6 +269,9 @@ impl Model {
 
     /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
+        if self.keysnap.is_some() && !self.realm_held {
+            self.keysnap_at(true, "interpreted code (builtin_fields_interp)", None, u32::MAX, None);
+        }
         self.realm_held = true;
         self.realm_widen_strs();
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();

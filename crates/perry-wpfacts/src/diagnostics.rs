@@ -1648,18 +1648,14 @@ pub(crate) fn keyread(g: &Gen) {
     if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
         return;
     }
-    const NAMES: &[&str] = &[
-        "sanitizeNodeName", "createUniqueName", "_createAnimationTracks", "loadAnimation",
-        "parseTrackName", "bind", "findNode", "Composite", "create", "parse", "toJSON",
-        "clone", "CreateFromMorphTargetSequence", "parseAnimation", "_getTrackTypeForValueTypeName",
-        "getValueSize", "validate", "_bindTrack", "_lendBinding", "clipAction", "subclip",
-    ];
+    const NAMES: &[&str] = KEYREAD_NAMES;
     let m = &g.m;
     let mut want = vec![false; m.funcs.len()];
     for (i, f) in m.funcs.iter().enumerate() {
         let module = g.modules.get(f.module as usize);
         let file = module.map_or("", |(p, _)| *p);
-        let hit = NAMES.contains(&f.name.as_str())
+        let hit = keyread_fn(&NAMES, &f.name, file)
+            || NAMES.contains(&f.name.as_str())
             || f.name.contains("KeyframeTrack")
             || f.name.contains("PropertyBinding")
             || f.name.contains("AnimationClip")
@@ -1703,5 +1699,148 @@ pub(crate) fn keyread(g: &Gen) {
             s => m.str_atoms(s).iter().map(|&a| dec(a)).collect::<Vec<_>>().join(" | "),
         };
         eprintln!("KR {n} f{f} {l} prim={:#x} top={} ntok={} strs={strs}", nd.prim, nd.pts.contains_tok(TOP), nd.pts.len());
+    }
+}
+
+const KEYREAD_NAMES: &[&str] = &[
+    "sanitizeNodeName", "createUniqueName", "_createAnimationTracks", "loadAnimation",
+    "parseTrackName", "bind", "findNode", "Composite", "create", "parse", "toJSON",
+    "clone", "CreateFromMorphTargetSequence", "parseAnimation", "_getTrackTypeForValueTypeName",
+    "getValueSize", "validate", "_bindTrack", "_lendBinding", "clipAction", "subclip",
+];
+
+/// The functions of the track-name chain (`keyread`, `keysnap_plan`).
+fn keyread_fn(names: &[&str], name: &str, file: &str) -> bool {
+    names.contains(&name)
+        || name.contains("KeyframeTrack")
+        || name.contains("PropertyBinding")
+        || name.contains("AnimationClip")
+        || (file.ends_with("GLTFLoader.js") && name.contains("nimation"))
+}
+
+/// One string-set entry decoded (constants, prefix/infix/suffix entries,
+/// exclusion entries with their character sets).
+fn key_dec(m: &Model, a: Atom) -> String {
+    let s = &m.atoms[a as usize];
+    let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
+    if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+        let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
+        let e = u128::from_str_radix(h, 16).unwrap_or(0);
+        let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+        format!("excl[{cs}]+{:?}", esc(t))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
+        format!("prefix({:?})", esc(r))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::INFIX_MARK) {
+        format!("infix({:?})", esc(r))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::SUFFIX_MARK) {
+        format!("suffix({:?})", esc(r))
+    } else {
+        format!("{:?}", esc(s))
+    }
+}
+
+/// KEYSNAP plan (`PERRY_WPF_KEYREAD=1`): the track-name chain's nodes,
+/// snapshotted by `Model::keysnap_at` when the realm is first held and at
+/// the first escape before it. Positions are printed once here (`KP`).
+pub struct KeySnap {
+    nodes: Vec<NodeId>,
+    fn_file: FxHashMap<u32, String>,
+    call_pos: FxHashMap<NodeId, (String, u32)>,
+    at_hold: bool,
+    at_esc: bool,
+}
+
+pub(crate) fn keysnap_plan(g: &mut Gen) {
+    if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
+        return;
+    }
+    let file_of = |mi: u32| g.modules.get(mi as usize).map_or("", |(p, _)| *p).to_string();
+    let mut want = vec![false; g.m.funcs.len()];
+    let mut fn_file = FxHashMap::default();
+    for (i, f) in g.m.funcs.iter().enumerate() {
+        let file = file_of(f.module);
+        if keyread_fn(KEYREAD_NAMES, &f.name, &file)
+            || (file.ends_with("three.core.js") && f.name.contains("_setValue"))
+        {
+            want[i] = true;
+            fn_file.insert(i as u32, file);
+        }
+    }
+    let of = |n: NodeId| g.m.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+    let is = |n: NodeId| { let f = of(n); f != NO_FN && want.get(f as usize).copied().unwrap_or(false) };
+    let nodes: Vec<NodeId> = (0..g.m.nodes.len() as NodeId).filter(|&n| is(n)).collect();
+    for s in &g.element_sites {
+        if is(s.recv) || is(s.idx) {
+            eprintln!("KP elem {} {} {:?} recv={} idx={} key={:?} f{}", file_of(s.module), s.byte_offset, s.op, s.recv, s.idx, s.key, of(s.recv));
+        }
+    }
+    for &(mi, off, a, dst) in &g.load_sites {
+        if is(dst) {
+            eprintln!("KP load {} {off} .{} dst={dst} f{}", file_of(mi), g.m.atoms[a as usize], of(dst));
+        }
+    }
+    let mut call_pos = FxHashMap::default();
+    for &(mi, off, r) in &g.call_results_at {
+        call_pos.insert(r, (file_of(mi), off));
+    }
+    g.m.keysnap = Some(Box::new(KeySnap { nodes, fn_file, call_pos, at_hold: false, at_esc: false }));
+}
+
+impl Model {
+    /// Print the KEYSNAP block once per occasion (`hold`: the realm is
+    /// first held; else: the first escape while it is not).
+    pub(crate) fn keysnap_at(&mut self, hold: bool, producer: &str, call: Option<CallId>, reason: u32, tok: Option<Tok>) {
+        let Some(ks) = self.keysnap.as_mut() else { return };
+        let done = if hold { &mut ks.at_hold } else { &mut ks.at_esc };
+        if *done {
+            return;
+        }
+        *done = true;
+        let ks = self.keysnap.take().expect("checked");
+        let what = if hold { "KEYSNAP at realm hold" } else { "KEYSNAP at first escape" };
+        let kind = |m: &Model, t: Tok| -> String {
+            let k = format!("{:?}", m.toks[t as usize]);
+            let k: String = k.chars().take(48).collect();
+            if crate::builtins::builtin_function(m, t) { format!("{k}[bfn]") } else { k }
+        };
+        eprintln!("{what}");
+        eprintln!("KS producer {producer}");
+        let rs = self.reasons.get(reason as usize).cloned().unwrap_or_else(|| "-".into());
+        eprintln!("KS reason {reason} {rs:?}");
+        let calls: Vec<CallId> = call.into_iter().chain(if reason == u32::MAX { vec![] } else { self.reason_calls(reason) }).collect();
+        for c in calls.iter().take(4) {
+            let ret = self.calls.get(*c as usize).map_or(NO_NODE, |cs| cs.ret);
+            let pos = ks.call_pos.get(&ret).map_or(("?".to_string(), 0), |p| p.clone());
+            eprintln!("KS call c{c} ret={ret} at {} {}", pos.0, pos.1);
+        }
+        if let Some(t) = tok {
+            eprintln!("KS tok {t} {}", kind(self, t));
+        }
+        eprintln!("KS progress pops={} work={} escaped={} nodes={}", self.pops, self.work.get(), self.escaped.len(), self.nodes.len());
+        for &n in &ks.nodes {
+            let nd = &self.nodes[n as usize];
+            let f = self.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+            let l = self.labels.get(n as usize).copied().unwrap_or("?");
+            let strs = match nd.strs {
+                0 => "-".to_string(),
+                STRS_TOP => "ANY".to_string(),
+                s => self.str_atoms(s).iter().map(|&a| key_dec(self, a)).collect::<Vec<_>>().join(" | "),
+            };
+            let toks: Vec<Tok> = nd.pts.to_sorted();
+            let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+            for &t in &toks {
+                let k = kind(self, t);
+                let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string() + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+                *hist.entry(k).or_default() += 1;
+            }
+            let first: Vec<String> = toks.iter().take(12).map(|&t| format!("{t}:{}", kind(self, t))).collect();
+            let file = ks.fn_file.get(&f).map_or("", |s| s.as_str());
+            eprintln!(
+                "KS {n} f{f} {file} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={strs} toks=[{}]",
+                nd.prim, nd.pts.contains_tok(TOP), toks.len(), first.join(", ")
+            );
+        }
+        eprintln!("KS end");
+        self.keysnap = Some(ks);
     }
 }

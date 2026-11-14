@@ -346,6 +346,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
     // Unknown code runs, handed values or not: it holds the realm.
     if !m.realm_held {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
+        if m.keysnap.is_some() {
+            m.keysnap_at(true, &format!("unknown method (unknown_method_at: {why})"), Some(call), r, None);
+        }
         m.hold_realm(r);
     }
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {

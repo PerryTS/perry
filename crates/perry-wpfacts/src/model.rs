@@ -2232,6 +2232,9 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// `PERRY_WPF_KEYREAD=1` only (`diagnostics::keysnap_plan`): the nodes
+    /// snapshotted when the realm is first held; `None` otherwise.
+    pub keysnap: Option<Box<crate::diagnostics::KeySnap>>,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in

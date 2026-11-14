@@ -48,6 +48,10 @@ impl Model {
         }
         // A value reaches unknown code: unknown code exists and holds the
         // realm (`hold_realm`).
+        if self.keysnap.is_some() && !self.realm_held {
+            self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
+            self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));
+        }
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             self.hold_realm(r);
