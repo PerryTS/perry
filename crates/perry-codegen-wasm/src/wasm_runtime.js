@@ -3162,19 +3162,26 @@ function perry_ui_table_create(rowCount, colCount, renderClosure) {
   const headerRow = document.createElement("tr"); thead.appendChild(headerRow);
   for (let c = 0; c < colCount; c++) { const th = document.createElement("th"); th.textContent = "Col " + c; headerRow.appendChild(th); }
   const tbody = document.createElement("tbody"); table.appendChild(tbody);
-  for (let r = 0; r < rowCount; r++) {
+  __tableRenderRows(table);
+  return uiAlloc(table);
+}
+// Fill a table's tbody with `_rowCount` rows from its render closure; shared by create
+// and `tableUpdateRowCount`, which re-renders every row the way lazyvstack_update does.
+function __tableRenderRows(table) {
+  const tbody = table.querySelector("tbody");
+  tbody.innerHTML = '';
+  for (let r = 0; r < table._rowCount; r++) {
     const tr = document.createElement("tr"); tr.style.cursor = "pointer";
     tr.addEventListener("click", () => { table._selectedRow = r; if (table._onRowSelect) callWasmClosure(table._onRowSelect, r); });
-    for (let c = 0; c < colCount; c++) {
+    for (let c = 0; c < table._colCount; c++) {
       const td = document.createElement("td"); td.style.padding = "4px 8px"; td.style.borderBottom = "1px solid #eee";
-      const cellVal = callWasmClosure(renderClosure, r, c);
+      const cellVal = callWasmClosure(table._renderClosure, r, c);
       const cellEl = uiGet(typeof cellVal === 'number' ? cellVal : 0);
       if (cellEl) td.appendChild(cellEl); else td.textContent = String(toJsValue(cellVal) ?? "");
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
   }
-  return uiAlloc(table);
 }
 function perry_ui_table_set_column_header(h, col, title) {
   const t = uiGet(h); if (!t) return; const th = t.querySelector("thead tr")?.children[col]; if (th) th.textContent = title;
@@ -3182,7 +3189,12 @@ function perry_ui_table_set_column_header(h, col, title) {
 function perry_ui_table_set_column_width(h, col, width) {
   const t = uiGet(h); if (!t) return; const th = t.querySelector("thead tr")?.children[col]; if (th) th.style.width = width + "px";
 }
-function perry_ui_table_update_row_count(h, count) { /* simplified: just update count */ }
+function perry_ui_table_update_row_count(h, count) {
+  const t = uiGet(h); if (!t) return;
+  t._rowCount = count | 0;
+  if (t._selectedRow >= t._rowCount) t._selectedRow = -1;
+  __tableRenderRows(t);
+}
 function perry_ui_table_set_on_row_select(h, cb) { const t = uiGet(h); if (t) t._onRowSelect = cb; }
 function perry_ui_table_get_selected_row(h) { const t = uiGet(h); return t ? t._selectedRow : -1; }
 function perry_ui_textarea_create(placeholder, callback) {

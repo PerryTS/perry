@@ -8,6 +8,49 @@ fn run_web_source(source: &str) -> String {
 /// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, STUB_DOM, after_boot)
+}
+
+/// The runtime injects a `<style>` at load, so `document` must exist even for
+/// programs that never build a widget.
+const STUB_DOM: &str = r#"
+const stub = {appendChild() {}, style: {}};
+globalThis.document = {createElement: () => ({...stub}), getElementById: () => null, head: stub, body: stub};
+"#;
+
+/// Enough of the DOM for a perry/ui widget to be built, inspected and sent an
+/// event: an element tree with text, attributes as properties, listeners that
+/// `dispatch(type)` fires, and descendant tag selectors for `querySelector`.
+const WIDGET_DOM: &str = r#"
+class FakeElement {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
+  get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
+  set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { this.text = ""; this.children = []; }
+  setAttribute(name, value) { this[name] = String(value); }
+  descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
+  querySelector(selector) {
+    let found = this;
+    for (const tag of selector.toUpperCase().split(" ")) {
+      found = found.descendants().find(e => e.tagName === tag);
+      if (!found) return null;
+    }
+    return found;
+  }
+}
+globalThis.document = {createElement: tag => new FakeElement(tag), getElementById: () => null, head: new FakeElement("head"), body: new FakeElement("body")};
+"#;
+
+/// `run_web_source_then` against `WIDGET_DOM`; `after_boot` finds the widgets in
+/// the runtime's `uiHandles`.
+fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, WIDGET_DOM, after_boot)
+}
+
+fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     // The HIR transforms `perry --target web` runs before wasm emission.
@@ -32,8 +75,7 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let script = format!(
         r#"
 globalThis.window = globalThis;
-const stub = {{appendChild() {{}}, style: {{}}}};
-globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () => null, head: stub, body: stub}};
+{dom}
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
@@ -627,6 +669,26 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
         "11 2"
+    );
+}
+
+#[test]
+fn table_update_row_count_renders_the_new_rows() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Table, Text, tableSetColumnHeader, tableUpdateRowCount } from "perry/ui";
+const table = Table(3, 1, (row: number, col: number) => Text("r" + row));
+tableSetColumnHeader(table, 0, "Name");
+tableUpdateRowCount(table, 4);
+"#,
+            r#"
+const table = [...uiHandles.values()].find(e => e.tagName === "TABLE");
+const rows = table.querySelector("tbody").children;
+console.log(table.querySelector("thead tr").textContent + " " + rows.length + " " + rows[rows.length - 1].textContent);
+"#
+        ),
+        "Name 4 r3"
     );
 }
 
