@@ -343,6 +343,10 @@ impl Model {
         self.mark_hole(d);
         self.map_open(d);
         let fa_d = self.any_key_node(d);
+        // A String wrapper's own indices are its characters (10.4.3.5).
+        if !opaque && self.may_wrap_string(s) {
+            self.add_prim(fa_d, prim::STR);
+        }
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         // A typed array's integer indices are own enumerable keys whose
         // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
@@ -658,6 +662,13 @@ impl Model {
     /// [[OwnPropertyKeys]]): its elements, each a Number or a BigInt
     /// (10.4.5.15, `typed_array_elem_prim`), and its fields; its `length`,
     /// `buffer` and the rest are prototype accessors (23.2.3), not own.
+    /// A primitive's wrapper born at a site of this unit (`Object(x)`,
+    /// `new Object(x)`, the ToObject of `Object.assign`'s target, `new
+    /// Number(x)` …: `builtins::wrapper_own_props_are_stores`) is born with
+    /// no own enumerable property but a String wrapper's indices (ECMA-262
+    /// 10.4.3.3, 20.1.1.1, 7.1.18): it owns what the program stored on it,
+    /// its fields, and a String wrapper's indices, each a String
+    /// (`builtins::wrapper_may_wrap_string`; the copy adds them).
     /// Every other builtin object
     /// (Date, collections, markers …), a host
     /// namespace, a builtin function, a native prototype and ⊤ hold own
@@ -677,10 +688,25 @@ impl Model {
                         || builtins::realm_object_own_props_unenumerable(what)
                         || (site != u32::MAX && builtins::realm_born_without_own_props(what))
                         || (site != u32::MAX && self.typed_array_elements(t))
+                        || (site != u32::MAX && builtins::wrapper_own_props_are_stores(what))
                 }
                 _ => true,
             },
             _ => true,
+        }
+    }
+
+    /// May `t` be a String wrapper born at a site of this unit, whose own
+    /// index properties are the characters of its string?
+    fn may_wrap_string(&self, t: Tok) -> bool {
+        match &self.toks[t as usize] {
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj { what, site, .. } => {
+                    site != u32::MAX && builtins::wrapper_may_wrap_string(what)
+                }
+                _ => false,
+            },
+            _ => false,
         }
     }
 
@@ -694,6 +720,10 @@ impl Model {
         }
         if t == TOP {
             return;
+        }
+        // A String wrapper's own indices are its characters (10.4.3.5).
+        if !opaque && self.may_wrap_string(t) {
+            self.add_prim(dst, prim::STR);
         }
         // A typed array's index values (`own_props_modelled`).
         if !opaque && self.typed_array_elements(t) {
