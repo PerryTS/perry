@@ -214,6 +214,16 @@ pub enum Verdict {
     /// write the solve does not replay into the read (`realm_hold_tok`).
     /// Whole-program solves only. `receivers` names the intrinsic.
     IntrinsicCall,
+    /// A named read whose receivers are all module namespace exotic objects
+    /// of the program's own modules, under a name each module exports
+    /// itself (`ns_own`; no `export *` resolution): [[Get]] gives the export
+    /// binding's current value, `GetBindingValue` of the module's binding
+    /// (ECMA-262 10.4.6.8). No code writes a namespace ([[Set]] 10.4.6.9 and
+    /// [[DefineOwnProperty]] 10.4.6.6 change nothing, [[Prototype]] is null
+    /// and fixed, 10.4.6.1-2), unknown code holding it included: exact under
+    /// a held realm. The claim is the binding, not a value: an `export let`
+    /// its module reassigns is read live.
+    NsExport,
     No(String),
 }
 
@@ -1589,6 +1599,9 @@ fn judge(
             ),
         };
     }
+    if let Some(receivers) = ns_export(m, s, toks, prim) {
+        return (receivers, false, Verdict::NsExport, true, FxHashMap::default());
+    }
     let mut receivers = Vec::new();
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
@@ -2120,6 +2133,21 @@ fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
         return None;
     }
     matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
+}
+
+/// [`Verdict::NsExport`]: every receiver is a module namespace token of
+/// this program's modules (`ns_own` names what each module exports itself;
+/// a unit's stand-in namespace has none), the key one of those names, no
+/// primitive, no ⊤. A call reads the binding the same way, but the solve
+/// lets an unproven call escape its namespace receiver to the callee
+/// (DECISIONS 116): the read alone is claimed.
+fn ns_export(m: &Model, s: &crate::gen::ReadSite, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if s.is_call || prim != 0 || toks.is_empty() || m.is_private_atom(s.key) {
+        return None;
+    }
+    toks.iter()
+        .all(|&t| matches!(m.toks[t as usize], TokKind::ModNs(_)) && m.ns_own.contains(&(t, s.key)))
+        .then(|| toks.iter().map(|&t| m.tok_name(t)).collect())
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`

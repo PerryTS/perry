@@ -66,7 +66,8 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::NativeMember
         | crate::Verdict::Dead
         | crate::Verdict::OwnDataOrAbsent
-        | crate::Verdict::IntrinsicCall => 2,
+        | crate::Verdict::IntrinsicCall
+        | crate::Verdict::NsExport => 2,
         crate::Verdict::E0 => 1,
         crate::Verdict::No(_) => 0,
     }

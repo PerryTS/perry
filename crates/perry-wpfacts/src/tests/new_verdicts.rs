@@ -245,3 +245,44 @@ fn intrinsic_call_control_realm_held() {
         pf.dump_text()
     );
 }
+
+// NsExport: a named read on the program's own module namespaces of a name
+// the module exports itself.
+const NS_A: &str = "export let v = 1;\nexport const w = { n: 2 };\nexport function bump() { v++; }";
+
+#[test]
+fn ns_export_own_binding() {
+    let main = "import * as ns from \"./a\";\nconst y = ns.v;\nconst z = ns.w;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    all_pf(&pf, main, "v", false, "NsExport");
+    all_pf(&pf, main, "w", false, "NsExport");
+}
+
+/// The claim is the binding: `v` reassigned by its module is still read
+/// through the binding (10.4.6.8), and unknown code holding the namespace
+/// cannot write it (10.4.6.9).
+#[test]
+fn ns_export_reassigned_and_given_to_unknown_code() {
+    let main = "declare function sink(x: any): void;\nimport * as ns from \"./a\";\n\
+        sink(ns);\nns.bump();\nconst y = ns.v;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    all_pf(&pf, main, "v", false, "NsExport");
+}
+
+/// The receiver may be an ordinary object: no claim.
+#[test]
+fn ns_export_control_receiver_may_be_object() {
+    let main = "import * as ns from \"./a\";\n\
+        const o: any = process.argv[2] ? ns : { v: 3 };\nconst y = o.v;";
+    let pf = modules(&[("a", NS_A), ("main", main)]);
+    none_pf(&pf, main, "v", false, "NsExport");
+}
+
+/// A name the module does not export itself (`export *` from another): no
+/// claim (its resolution is not modeled here).
+#[test]
+fn ns_export_control_star_reexport() {
+    let main = "import * as ns from \"./a\";\nconst y = ns.u;";
+    let pf = modules(&[("b", "export const u = 4;"), ("a", "export * from \"./b\";"), ("main", main)]);
+    none_pf(&pf, main, "u", false, "NsExport");
+}

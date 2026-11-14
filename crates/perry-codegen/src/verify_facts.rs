@@ -37,6 +37,7 @@ pub enum SiteVerdict {
     E0,
     Dead,
     OwnDataOrAbsent,
+    NsExport,
     IntrinsicCall,
 }
 impl SiteVerdict {
@@ -49,6 +50,7 @@ impl SiteVerdict {
             Self::E0 => "E0",
             Self::Dead => "Dead",
             Self::OwnDataOrAbsent => "OwnDataOrAbsent",
+            Self::NsExport => "NsExport",
             Self::IntrinsicCall => "IntrinsicCall",
         }
     }
@@ -61,6 +63,7 @@ impl SiteVerdict {
             Self::E0 => 5,
             Self::Dead => 6,
             Self::OwnDataOrAbsent => 9,
+            Self::NsExport => 8,
             Self::IntrinsicCall => 7,
         }
     }

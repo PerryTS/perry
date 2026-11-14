@@ -71,6 +71,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::IntrinsicCall => {
                 "intrinsic callee proof recorded; generic call emitted".into()
             }
+            perry_wpfacts::Verdict::NsExport => {
+                "namespace export binding proof recorded; generic path emitted".into()
+            }
             perry_wpfacts::Verdict::OwnDataOrAbsent => {
                 "own data or absent proof recorded; generic path emitted".into()
             }
