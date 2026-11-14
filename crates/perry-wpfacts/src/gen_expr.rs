@@ -764,12 +764,14 @@ impl<'a> Gen<'a> {
                     None => self.m.edge(vn, l),
                 }
                 self.narrowed_write(mi, *id, vn);
+                self.last_local_set = Some((mi, *id, vn, fx.guard));
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
                 let vn = self.expr_zs(fx, value);
                 let l = self.local(mi, *id);
                 self.m.edge(vn, l);
+                self.narrowed_write(mi, *id, vn);
                 self.expr_zs(fx, body)
             }
             Expr::GlobalGet(id) => {
@@ -844,6 +846,7 @@ impl<'a> Gen<'a> {
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
                         let l = self.local_write(mi, *id);
                         self.m.edge(v, l);
+                        self.narrowed_write(mi, *id, v);
                     }
                     _ => {}
                 }

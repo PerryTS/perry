@@ -98,6 +98,9 @@ pub(crate) struct Narrow {
     /// The test implies `local < a.length` for this local `a`
     /// (`gen/in_bounds.rs`).
     below_length: Option<u32>,
+    /// Pushed by an assignment (`Gen::narrow_assigned`), not by a test:
+    /// it implies no interval or presence of the local.
+    assigned: bool,
 }
 
 impl Narrow {
@@ -108,7 +111,7 @@ impl Narrow {
 
     /// The local still holds the value the test saw.
     pub(crate) fn unwritten(&self) -> bool {
-        !self.written
+        !self.written && !self.assigned
     }
 
     pub(crate) fn below_length_of(&self) -> Option<u32> {
@@ -234,6 +237,7 @@ impl<'a> Gen<'a> {
             jumps: self.jumps,
             tries: self.tries,
             below_length: below,
+            assigned: false,
         });
         true
     }
@@ -1322,6 +1326,7 @@ impl<'a> Gen<'a> {
                 jumps: self.jumps,
                 tries: self.tries,
                 below_length: below,
+                assigned: false,
             });
             pushed += 1;
         }
@@ -1369,6 +1374,73 @@ impl<'a> Gen<'a> {
             right: Box::new(lit.clone()),
         };
         self.narrow_guard(fx, &cond, true)
+    }
+
+    /// After statement `s` of a statement list is walked: when `s` is a
+    /// direct write of a local of the body being walked that no other code
+    /// can write (`scope_locals`), `x = e;` or `let x = e;`, the statements
+    /// after it in the same list are reached only by falling through `s`
+    /// (ECMA-262 14.2.2 StatementList evaluation: a jump lands at a loop's
+    /// next iteration, past a statement, or in a `catch`/`finally`, never
+    /// in the middle of a list). So until the next write of `x` on the way
+    /// (`narrowed_write`, `narrow_enter_loop`) a read of `x` there sees the
+    /// value `e` produced: the narrowing's start is that value's node. A
+    /// write in a nested statement reaches the end node, and later reads in
+    /// the list see the end (the start joined with every such write), as
+    /// for a test's narrowing; the list's end pops it. The local's own node
+    /// stays the join of all its writes for every other read. Whether it
+    /// pushed one.
+    pub(crate) fn narrow_assigned(&mut self, fx: &Fx, s: &Stmt) -> usize {
+        let Some((mi, id, vn, guard)) = self.last_local_set.take() else {
+            return 0;
+        };
+        let direct = match s {
+            Stmt::Expr(Expr::LocalSet(l, _)) => *l == id,
+            Stmt::Let { id: l, init: Some(_), .. } => *l == id,
+            _ => false,
+        };
+        if !direct
+            || mi != fx.module
+            || !self
+                .narrow_scope
+                .as_ref()
+                .is_some_and(|(f, ls)| *f == fx.f && ls.contains(&id))
+        {
+            return 0;
+        }
+        // In an `if` branch the write reaches the local only when the test
+        // can select the branch (`Fx::guard`): the start holds what the
+        // write gives the local, through the same test. The version nodes
+        // are the body's own, as the nodes of its statements are
+        // (`Gen::stmt`): this runs between two statements, where
+        // `Model::cur_fn` is the caller's, so each summary run copies them
+        // like the local's node and one run's version holds only that run's
+        // value.
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let start = self.tmp("assigned");
+        self.zs_carrier(start);
+        match guard {
+            None => self.m.edge(vn, start),
+            Some((t, test)) => self.m.cons(t, Cons::Guard { test, from: vn, dst: start }),
+        }
+        let end = self.tmp("assigned-end");
+        self.zs_carrier(end);
+        self.m.edge(start, end);
+        self.m.cur_fn = prev;
+        self.narrow.push(Narrow {
+            mi,
+            id,
+            f: fx.f,
+            start,
+            end,
+            written: false,
+            in_update: false,
+            jumps: self.jumps,
+            tries: self.tries,
+            below_length: None,
+            assigned: true,
+        });
+        1
     }
 
     pub(crate) fn narrow_pop(&mut self, k: usize) {

@@ -285,6 +285,9 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The (module, local, value node, `Fx::guard`) of the last local
+    /// write walked (`narrow::Gen::narrow_assigned`).
+    pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
     /// In-bounds index stores (`gen/in_bounds.rs`).
@@ -723,6 +726,7 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            last_local_set: None,
             narrow: Vec::new(),
             in_bounds: Default::default(),
             narrow_scope: None,

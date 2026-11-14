@@ -1159,7 +1159,9 @@ impl<'a> Gen<'a> {
                 i += 3;
                 continue;
             }
+            self.last_local_set = None;
             self.stmt(fx, &ss[i]);
+            pushed += self.narrow_assigned(fx, &ss[i]);
             // An `if` whose one branch always leaves: what follows runs
             // under the other outcome of its test (`narrow_guard`).
             if let Stmt::If {
@@ -1258,6 +1260,12 @@ impl<'a> Gen<'a> {
                     Some(e) => {
                         let v = self.expr_zs(fx, e);
                         self.m.edge(v, n);
+                        // A `var` redeclared with an initializer writes the
+                        // same local: it ends every narrowing of it.
+                        self.narrowed_write(fx.module, *id, v);
+                        // The local's node takes the value unguarded, and so
+                        // does its version (`narrow_assigned`).
+                        self.last_local_set = Some((fx.module, *id, v, None));
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
