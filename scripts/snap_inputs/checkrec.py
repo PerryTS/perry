@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """SNAPREC2 census fixtures (SNAP_DESIGN 2.10.24 / 2.10.22 T0): checkrec.py NAME REPORT [STDOUT].
-NAME = f1 sync | f2 import-job | f3 tla-dep | f4 cycle | f5 worker | f6 stale-holder | f7 stale-target
+NAME = f8 positive-control | f9 entry-moved | f6n f9n no-hold | f1 sync | f2 import-job | f3 tla-dep | f4 cycle | f5 worker | f6 stale-holder | f7 stale-target
 (scripts/snap_inputs/fixtures/rec/NAME).
 Reads the census rows (record_settle, job_queue walk_root, worker_spawn, tls_image) and runs the cut model (cut.py)
 on the report: exit 0 when the rows and the cut are what the design states."""
 import json, os, re, subprocess, sys, tempfile
 name, report = sys.argv[1:3]
 stdout = open(sys.argv[3]).read() if len(sys.argv) > 3 else None
+F7_HELD_WORDS = 0  # measured: b holds no entry object once only GC-traced slots are scanned
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -101,36 +102,59 @@ elif name == "f5":
     need(bs and all(o["seq"] > bs[0]["seq"] for o in of("tls_image")), "the tls_image row is not after the boundary row (its scan is charged to an init)")
     info += f" tls_image={tl}"
     need(stdout is None or "worker evals=101 tid=1" in stdout, "the worker did not print evals=101 tid=1")
-elif name in ("f6", "f7"):
-    # reuse first: without a stale birth the checks below prove nothing
+elif name in ("f6", "f7", "f8", "f9", "f6n", "f9n"):
+    # Hold rows (rule c, held host values) come from a run that holds collection only:
+    # f6 f7 f8 f9 run held; f6n f9n run with PERRY_SNAP_NOPROTECT=1 and must say they collected no holds.
     k2a = [kv(o["v"]) for o in of("k2a")]
-    stale = int(k2a[0].get("stale_births", "0")) if k2a else 0
-    need(stale > 0, f"no stale birth (memory was not reused): k2a={k2a}")
+    need(len(k2a) == 1, f"k2a rows: {k2a}")
+    k2a = k2a[0] if k2a else {}
     pc = [dict(o, **kv(o["v"])) for o in of("p_entry") if o["v"].startswith("rule=c;")]
-    info += f" stale_births={stale} p_entry_c={len(pc)}"
-    if name == "f6" and stale > 0:
+    hv = [o for o in of("host_value.held")]
+    info += f" holds={k2a.get('holds')} held_words={k2a.get('held_words')} rule_c_rows={len(pc)}"
+    if name.endswith("n"):
+        need(k2a.get("holds") == "not-collected(no-hold)", f"no not-collected marker: {k2a}")
+        need(not pc and not hv, f"{len(pc)} rule-c and {len(hv)} held-value rows from a run without the collection hold")
+        need(int(k2a.get("stale_births", "0")) > 0, "no memory was reused: the run is not a moving run")
+    else:
+        need(k2a.get("holds") == "collected", f"holds marker: {k2a}")
+        # the entry record is imaged in configure state: none of its root slots is a holder
+        inrec = [p for p in pc if p.get("holder") == "slot" and p.get("holder_init") == "0"]
+        need(not inrec, f"{len(inrec)} slot rows from owner 0 (the entry record's body_promise): {[p.get('slot') for p in inrec[:3]]}")
         ent = of("init_enter")
         b = max(o["init"] for o in ent)
-        b_seq = min(o["seq"] for o in ent if o["init"] == b)
-        need(b > E, f"b ({b}) is not entered after the entry ({E})")
-        # b's 1000 arrays hold E; a dead, not reused cell may add a row (conservative), never one dated before b
-        need(sum(int(p.get("holder_init", "-1")) == b for p in pc) >= 1000, "b's holds of E are not reported")
-        # (a module-global slot holding E is no birth: its row is dated by E's birth and is outside this fixture)
-        bad = [p for p in pc if p.get("holder") == "birth" and int(p["at_seq"]) < b_seq]
-        need(not bad, f"{len(bad)} birth-holder rows dated before b started: {[(p.get('holder_init'), p.get('holder_seq'), p['at_seq']) for p in bad[:3]]}")
-        held = [dict(o, **kv(o["v"])) for o in ops if o["op"] in ("p_entry", "host_value.held")]
-        words = [int(h["holder_addr"], 16) + int(h["off"]) for h in held if "holder_addr" in h]
+        need(b > E, f"last init ({b}) is not entered after the entry ({E})")
+        words = [int(p["holder_addr"], 16) + int(p["off"]) for p in pc if "holder_addr" in p]
         need(len(words) == len(set(words)), f"{len(words) - len(set(words))} words read by two holders")
-        info += f" b={b} b_seq={b_seq}"
-    if name == "f7" and stale > 0:
-        # b holds only objects b bore (in cells dead entry objects occupied): no P-entry (c) row names b as the holder
-        b = max(o["init"] for o in of("init_enter"))
-        bad = [p for p in pc if int(p.get("holder_init", "-1")) == b]
-        need(b > E, f"b ({b}) is not entered after the entry ({E})")
-        need(not bad, f"{len(bad)} P-entry (c) rows from b into reused entry cells: {[(p.get('holder_addr'), p.get('target_seq')) for p in bad[:3]]}")
-        need(not [L for L in led if L["key"][0] == "p_entry" and L["cut_before_init"] == b], "a p_entry step before b")
-        info += f" b={b}"
+        info += f" last_init={b}"
+        if name == "f6":
+            need(sum(int(p.get("holder_init", "-1")) == b for p in pc) >= 1000, "b's holds of E are not reported")
+        if name == "f7":
+            need(int(k2a.get("held_words", "-1")) == F7_HELD_WORDS, f"held_words {k2a.get('held_words')} != {F7_HELD_WORDS}")
+        if name == "f8":
+            # an imaged dependency's module-level let holds an entry object: still rule (c)
+            sl = [p for p in pc if p.get("holder") == "slot" and p.get("holder_init") not in ("0", str(E))]
+            need(len(sl) >= 1, "the dependency's slot holding an entry object is not reported")
+        if name == "f9":
+            mine = [p for p in pc if int(p.get("holder_init", "-1")) == b]
+            need(len(mine) == 1 and mine[0].get("holder") == "birth", f"rows held by the last module: {len(mine)}")
 else:
     fails.append("unknown fixture")
+# a P-entry (a)/(b) row whose pc lies in the census itself is a census read charged to an init
+binp = os.path.join(os.path.dirname(os.path.abspath(report)), "bin")
+if os.path.exists(binp):
+    syms = []
+    for l in subprocess.run(["nm", "-n", "--defined-only", binp], capture_output=True, text=True).stdout.splitlines():
+        f = l.split(None, 2)
+        if len(f) == 3 and f[1] in "tTwW":
+            syms.append((int(f[0], 16), f[2]))
+    import bisect
+    own = []
+    for o in of("p_entry"):
+        k = kv(o["v"])
+        if k.get("rule") in ("a", "b") and syms:
+            j = bisect.bisect_right([x[0] for x in syms], int(k["pc"], 16)) - 1
+            if j >= 0 and "snap_census" in syms[j][1]:
+                own.append((k["rule"], k["init"], syms[j][1][-48:]))
+    need(not own, f"rule (a)/(b) rows read by the census itself: {own[:3]}")
 print(f"{name} {'PASS' if not fails else 'FAIL ' + '; '.join(fails)} | {info}"[:900])
 sys.exit(1 if fails else 0)

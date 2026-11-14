@@ -545,7 +545,9 @@ pub struct StringHeader {
     pub byte_len: u32,
     /// Capacity in bytes (allocated space for data)
     pub capacity: u32,
-    /// Reference hint: 0=shared (never mutate in-place), 1=unique (in-place append OK)
+    /// Ownership hint: 0=shared (never mutate in-place), 1=unique (in-place append OK).
+    /// From `intern::KEY_WORD_MIN` up: shared, and the word is the key word of
+    /// this text (its folded FNV-1a hash, `intern::key_word_of_hash`).
     pub refcount: u32,
     /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
     pub flags: u32,
@@ -1386,6 +1388,10 @@ pub(crate) use iter_object::dispatch_string_iterator_step;
 pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
+};
+pub(crate) use intern::{
+    key_first_atom, key_word_atom, key_word_atom_indexed, short_key_atom, short_key_atom_indexed,
+    KEY_WORD_MIN,
 };
 
 pub(crate) mod byte_scan;

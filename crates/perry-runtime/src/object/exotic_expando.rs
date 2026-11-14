@@ -61,15 +61,33 @@ pub(crate) fn exotic_kind_of_gc_type(obj_type: u8) -> Option<ExoticKind> {
     }
 }
 
-/// Classify a NaN-boxed (or raw-I64) value as an exotic-expando receiver.
-/// Returns the cleaned address alongside the kind.
+/// Classify a value as an exotic-expando receiver: a `POINTER_TAG` value whose
+/// cell is one of the exotic kinds. Returns the address alongside the kind.
+/// A word without the tag is a Number (a denormal when its top 16 bits are
+/// clear), never an address.
 pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticKind)> {
     let bits = value.to_bits();
-    let top16 = bits >> 48;
+    if bits >> 48 != 0x7FFD {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if addr == 0 {
+        return None;
+    }
+    exotic_expando_kind(addr).map(|kind| (addr, kind))
+}
+
+/// [`exotic_expando_kind_of_value`] for the receiver WORD of an entry that
+/// takes a typed pointer (`js_object_set_field_by_name`'s `*mut ObjectHeader`):
+/// such a caller passes the address with its `POINTER_TAG` or with the tag
+/// already stripped, and both name the same cell. This is a pointer
+/// normalizer, not a value decoder: no JS value reaches it.
+pub(crate) fn exotic_expando_kind_of_receiver_word(word: u64) -> Option<(usize, ExoticKind)> {
+    let top16 = word >> 48;
     let addr = if top16 == 0x7FFD {
-        (bits & crate::value::POINTER_MASK) as usize
+        (word & crate::value::POINTER_MASK) as usize
     } else if top16 == 0 {
-        bits as usize
+        word as usize
     } else {
         return None;
     };
@@ -568,6 +586,35 @@ mod tests {
             exotic_expando_kind_of_value(date),
             Some((_, ExoticKind::Date))
         ));
+    }
+
+    /// The Number whose bits are the address of a live exotic cell is a
+    /// Number: only the tagged value classifies. The typed-pointer entry takes
+    /// the address with or without its tag.
+    #[test]
+    fn the_number_with_a_cells_address_bits_is_not_that_cell() {
+        let map = crate::map::js_map_alloc(4) as usize;
+        assert!(exotic_expando_kind(map) == Some(ExoticKind::Map));
+        let forged = f64::from_bits(map as u64);
+        assert!(exotic_expando_kind_of_value(forged).is_none());
+        assert!(exotic_expando_kind_of_value(-forged).is_none());
+        let name_ptr = crate::string::js_string_from_bytes(b"label".as_ptr(), 5);
+        let key = crate::value::js_nanbox_string(name_ptr as i64);
+        assert!(exotic_put_value_set(forged, key, 42.0, forged, 1).is_none());
+        let boxed = crate::value::js_nanbox_pointer(map as i64);
+        assert!(matches!(
+            exotic_expando_kind_of_value(boxed),
+            Some((addr, ExoticKind::Map)) if addr == map
+        ));
+        for word in [map as u64, boxed.to_bits()] {
+            assert!(matches!(
+                exotic_expando_kind_of_receiver_word(word),
+                Some((addr, ExoticKind::Map)) if addr == map
+            ));
+        }
+        assert!(exotic_expando_kind_of_receiver_word(0).is_none());
+        assert!(exotic_expando_kind_of_receiver_word(1.5f64.to_bits()).is_none());
+        assert!(exotic_expando_kind_of_receiver_word(crate::value::TAG_UNDEFINED).is_none());
     }
 }
 

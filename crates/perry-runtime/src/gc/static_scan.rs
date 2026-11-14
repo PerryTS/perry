@@ -14,7 +14,7 @@
 //!   minor roots every prototype word that names a young object
 //!   (`shapes_prototype::scan_shape_prototype_words_mut`, the young log is the
 //!   complete set), so the per-carrier visit marks nothing the roots have not;
-//! * the meta record and the arguments tail, both per-object header facts;
+//! * the meta record, a per-object header fact;
 //! * the payload slots named by the plan's mask, in ascending order.
 //!
 //! What it does NOT visit, because the family's record is a static record
@@ -45,7 +45,6 @@ pub(super) struct StaticScan {
     /// module docs).
     pub(super) prototype: Option<*mut u64>,
     pub(super) meta_edge: Option<*mut u64>,
-    pub(super) arguments: Option<*mut u64>,
     pub(super) payload: *mut u64,
     /// Payload slot indices to scan, ascending.
     pub(super) mask: u32,
@@ -102,7 +101,6 @@ unsafe fn static_scan_body<const BASE: usize, const META: bool>(
         } else {
             None
         },
-        arguments: crate::object::arguments_mapping_slot(obj),
         payload: crate::object::header::object_slot_at(obj, BASE as u32),
         mask,
     };
@@ -124,14 +122,6 @@ impl CopyingNurseryCollector {
         if let Some(slot) = scan.meta_edge {
             self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                 GcMutableSlot::pointer(slot.cast()),
-                header,
-                weak,
-                remembering,
-            );
-        }
-        if let Some(slot) = scan.arguments {
-            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
-                GcMutableSlot::new(slot, None),
                 header,
                 weak,
                 remembering,
@@ -164,12 +154,6 @@ pub(super) unsafe fn for_each_mark_slot(scan: &StaticScan, mut visit: impl FnMut
         let mut slot = GcMutableSlot::pointer(slot.cast());
         slot.layout_kind = Some(HeapChildSlotReadKind::Prefix);
         visit(slot);
-    }
-    if let Some(slot) = scan.arguments {
-        visit(GcMutableSlot::new(
-            slot,
-            Some(HeapChildSlotReadKind::Prefix),
-        ));
     }
     // The generic walk hands an all-`Any` payload over as one range, whose
     // pointer children are prefetched before the first is marked: each is a
@@ -234,12 +218,6 @@ unsafe fn assert_matches_generic_walk(
         expected.push((
             slot as usize,
             GcMutableSlot::pointer(slot.cast()).is_parent_owned(),
-        ));
-    }
-    if let Some(slot) = scan.arguments {
-        expected.push((
-            slot as usize,
-            GcMutableSlot::new(slot, None).is_parent_owned(),
         ));
     }
     let mut word = scan.mask;

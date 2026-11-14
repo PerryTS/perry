@@ -4,8 +4,8 @@
 //! The proof is the whole admission: such a `let` is integer-valued and
 //! i32-bounded (`collectors::hir_facts`, beside the loop-bounded range proof),
 //! so the representation-selection Phase 1 lowering may give it its i32 slot;
-//! whether it does stays the profitability rule's decision
-//! (`repsel_benefit`). A double entering that slot is an exact int32, so it
+//! whether it does is the facts' representation of the local
+//! (`facts_rep::local`). A double entering that slot is an exact int32, so it
 //! converts with `fptosi` instead of ToInt32 (`store_from_double`).
 //!
 //! The proof's interval is a range proof of the local at every read

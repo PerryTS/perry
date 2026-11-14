@@ -327,23 +327,162 @@ pub unsafe extern "C" fn perry_probe_get_value(
 /// string as its text's property atom when one exists. `None` for anything
 /// else (a number, an object whose ToPropertyKey runs user code, a text no
 /// atom names).
-#[inline]
+#[inline(always)]
 pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
-    if let Some(h) = key_word_hash(key_bits) {
-        if key_bits & TAG_MASK == STRING_TAG {
-            let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+    computed_key_in(super::super::ordinary_dir_addr(), key_bits)
+}
+
+/// [`computed_key`] with the agent's directory in hand (`dir`, or
+/// `PERRY_EMPTY_SHAPE_DIR`, whose index is null: every string key then takes
+/// the complete resolution).
+#[inline(always)]
+pub(super) unsafe fn computed_key_in(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
+    match key_leaf(dir, key_bits) {
+        Some(resolved) => Some(resolved),
+        None => computed_key_complete(dir, key_bits),
+    }
+}
+
+/// [`computed_key`] for the keys the atom index answers without a call: a
+/// property atom whose text does not start with a digit (an index-like text
+/// starts with one), a heap string through its key word, a short string by
+/// its word. `None` for everything else, resolved or not:
+/// [`computed_key_complete`] decides those. A leaf, so an entry whose other
+/// outcomes are tail calls saves no register for it.
+#[inline(always)]
+pub(super) unsafe fn key_leaf(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
+    let tag = key_bits & TAG_MASK;
+    if tag == STRING_TAG {
+        let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if s.is_null() {
+            return None;
+        }
+        if crate::string::is_property_atom(s) {
+            // The byte at the payload's start is inside the allocation for
+            // every length (an atom keeps its hash after its text); an empty
+            // text whose padding byte reads as a digit only takes the
+            // complete resolution.
+            if (*crate::string::string_data(s)).wrapping_sub(b'0') < 10 {
+                return None;
+            }
+            return Some((key_bits, crate::string::property_atom_hash(s)));
+        }
+        let word = (*s).refcount;
+        if word < crate::string::KEY_WORD_MIN {
+            return None;
+        }
+        let (a, h) = crate::string::key_word_atom_indexed(super::super::dir_atoms(dir), s, word);
+        if a.is_null() {
+            return None;
+        }
+        return Some((STRING_TAG | a as u64, h));
+    }
+    if tag == crate::value::SHORT_STRING_TAG {
+        let len = ((key_bits & crate::value::SHORT_STRING_LEN_MASK)
+            >> crate::value::SHORT_STRING_LEN_SHIFT) as u32;
+        if len == 0 || len as usize > crate::value::SHORT_STRING_MAX_LEN {
+            return None;
+        }
+        let data = key_bits & crate::value::SHORT_STRING_DATA_MASK & ((1u64 << (8 * len)) - 1);
+        if (data & 0xFF).wrapping_sub(b'0' as u64) < 10 {
+            return None;
+        }
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut rest = data;
+        for _ in 0..len {
+            h = (h ^ (rest & 0xFF)).wrapping_mul(0x100000001b3);
+            rest >>= 8;
+        }
+        let a = crate::string::short_key_atom_indexed(super::super::dir_atoms(dir), len, data, h);
+        if a.is_null() {
+            return None;
+        }
+        return Some((STRING_TAG | a as u64, h));
+    }
+    None
+}
+
+/// [`computed_key`] in full, for every key [`key_leaf`] does not answer.
+#[inline(never)]
+pub(super) unsafe fn computed_key_complete(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
+    let tag = key_bits & TAG_MASK;
+    if tag == STRING_TAG {
+        let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if s.is_null() {
+            return None;
+        }
+        if crate::string::is_property_atom(s) {
             let text =
                 std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
             if index_like(text) {
                 return None;
             }
+            return Some((key_bits, crate::string::property_atom_hash(s)));
         }
-        return Some((key_bits, h));
+        // A shared string that was a key before carries its key word (its
+        // text's folded hash; never written for an index-like text): the
+        // atom index is probed from the word, no bytes are hashed.
+        let word = (*s).refcount;
+        let (a, h) = if word >= crate::string::KEY_WORD_MIN {
+            crate::string::key_word_atom(super::super::dir_atoms(dir), s, word)
+        } else {
+            heap_key_first(s)
+        };
+        if a.is_null() {
+            return None;
+        }
+        return Some((STRING_TAG | a as u64, h));
     }
-    let tag = key_bits & TAG_MASK;
-    if tag != STRING_TAG && tag != crate::value::SHORT_STRING_TAG {
-        return None;
+    if tag == crate::value::SHORT_STRING_TAG {
+        // A short string's word is its text: hash it from the word (the
+        // FNV-1a of `key_bytes_hash`) and find its atom by a word compare.
+        let len = ((key_bits & crate::value::SHORT_STRING_LEN_MASK)
+            >> crate::value::SHORT_STRING_LEN_SHIFT) as u32;
+        if len == 0 || len as usize > crate::value::SHORT_STRING_MAX_LEN {
+            return computed_key_by_bytes(key_bits);
+        }
+        let data = key_bits & crate::value::SHORT_STRING_DATA_MASK & ((1u64 << (8 * len)) - 1);
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut rest = data;
+        let mut digits = true;
+        for _ in 0..len {
+            let b = rest & 0xFF;
+            h = (h ^ b).wrapping_mul(0x100000001b3);
+            digits &= b.wrapping_sub(b'0' as u64) < 10;
+            rest >>= 8;
+        }
+        if digits {
+            return None;
+        }
+        let a = crate::string::short_key_atom(super::super::dir_atoms(dir), len, data, h);
+        if a.is_null() {
+            return None;
+        }
+        return Some((STRING_TAG | a as u64, h));
     }
+    let h = key_word_hash(key_bits)?;
+    Some((key_bits, h))
+}
+
+/// [`computed_key`]'s first sight of plain heap string `s` as a key (no key
+/// word yet, or a unique-owner string that never takes one): its atom and
+/// hash by its bytes; null for an index-like text and for a text no atom
+/// names.
+#[cold]
+#[inline(never)]
+unsafe fn heap_key_first(s: *const crate::StringHeader) -> (*const crate::StringHeader, u64) {
+    let text = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+    if index_like(text) {
+        return (std::ptr::null(), 0);
+    }
+    crate::string::key_first_atom(s)
+}
+
+/// [`computed_key`] for a string value by its bytes (the forms the word
+/// arms above do not take).
+#[cold]
+#[inline(never)]
+unsafe fn computed_key_by_bytes(key_bits: u64) -> Option<(u64, u64)> {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let text = crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut sso)?;
     if index_like(text) {
@@ -352,6 +491,27 @@ pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
     let h = crate::object::key_bytes_hash(text.as_ptr(), text.len());
     let a = crate::string::atom_lookup(text, h)?;
     crate::string::is_property_atom(a).then_some((STRING_TAG | a as u64, h))
+}
+
+/// Is `key_bits` a string value whose text is a property key the keyed
+/// probe resolves (not index-like)? Then a store may mint its atom
+/// (`string::property_atom_from_value`) and ask the probe with it. Allocates
+/// nothing.
+///
+/// # Safety
+/// Any value bits.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn store_key_mintable(key_bits: u64) -> bool {
+    let tag = key_bits & TAG_MASK;
+    if tag != STRING_TAG && tag != crate::value::SHORT_STRING_TAG {
+        return false;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    match crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut sso) {
+        Some(text) => !index_like(text),
+        None => false,
+    }
 }
 
 /// `obj[key]` for a computed `key` (a string or symbol value): the probe
@@ -372,16 +532,284 @@ pub unsafe extern "C" fn perry_probe_get_keyed(
     if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
         return hole();
     }
-    let Some((key, hash)) = computed_key(key_bits) else {
-        return hole();
+    // The hit path is a leaf: the key from the atom index, then the probe's
+    // own leaf; every other key is one tail call.
+    let Some((key, hash)) = key_leaf(dir, key_bits) else {
+        return get_keyed_resolving(dir, payload, key_bits);
     };
-    let v = probe_get::<true>(
+    probe_get::<true>(
         dir,
         (payload - perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
         key,
         hash,
-    );
-    v
+    )
+}
+
+/// [`perry_probe_get_keyed`] for a key [`key_leaf`] does not answer.
+#[inline(never)]
+unsafe extern "C" fn get_keyed_resolving(dir: *const u8, payload: usize, key_bits: u64) -> f64 {
+    let Some((key, hash)) = computed_key_complete(dir, key_bits) else {
+        return hole();
+    };
+    probe_get::<true>(
+        dir,
+        (payload - perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+        key,
+        hash,
+    )
+}
+
+/// Does the object `obj` hold `key` (a resolved key word) in an own inline
+/// slot that is not a hole? The keyed read's own-slot arm asked for presence:
+/// an unindexed ready list (no accessor, no private name), the key at a
+/// position below the record's position bound, no overflow. `false` decides
+/// nothing: the presence walk answers.
+#[inline(always)]
+pub(super) unsafe fn own_slot_holds(dir: *const u8, obj: *const ObjectHeader, key: u64) -> bool {
+    if (*obj).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
+        return false;
+    }
+    let word = (*obj).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        return false;
+    }
+    let r = record_of(dir, LayoutWord(word));
+    if r.is_null() {
+        return false;
+    }
+    let probe = (*r).probe;
+    if probe & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED) != PROBE_READY
+        || probe & !PROBE_FLAGS != 0
+    {
+        return false;
+    }
+    // A list of no keys may have no key array at all: its bound is 0.
+    let bound = (*r).position_bound_raw();
+    if bound == 0 {
+        return false;
+    }
+    let count = (*r).logical_key_count;
+    let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
+    let mut pos = 0u32;
+    while pos < count {
+        if *words.add(pos as usize) == key {
+            break;
+        }
+        pos += 1;
+    }
+    // A miss leaves `pos == count`, and the bound never exceeds the count.
+    if pos >= bound {
+        return false;
+    }
+    *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pos as usize * 8) as *const u64)
+        != TAG_HOLE
+}
+
+/// `key in obj` through the probe, the leaf half: the key resolved once by
+/// [`key_leaf`]; an own key in a slot of the receiver answers `Ok(())`
+/// (present) with no call. Otherwise `Err((key, hash))`: the resolved key
+/// word and its hash for [`in_keyed_miss`], or `(0, 0)` when the leaf
+/// resolved nothing (not a pointer receiver, or a key only the complete
+/// resolution answers). The caller ends in ONE call that runs the walk, so a
+/// miss pays one frame.
+///
+/// # Safety
+/// Any value bits.
+#[inline(always)]
+pub(crate) unsafe fn in_keyed_leaf(obj_bits: u64, key_bits: u64) -> Result<(), (u64, u64)> {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return Err((0, 0));
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return Err((0, 0));
+    }
+    let dir = super::super::ordinary_dir_addr();
+    let Some((key, hash)) = key_leaf(dir, key_bits) else {
+        return Err((0, 0));
+    };
+    if own_slot_holds(dir, payload as *const ObjectHeader, key) {
+        return Ok(());
+    }
+    Err((key, hash))
+}
+
+/// The miss of [`in_keyed_leaf`]: the presence walk for the resolved key
+/// `key` (nonzero only when `obj_bits` is a pointer above the handle floor),
+/// else [`super::probe_has`] in full. The answers of `probe_has`.
+///
+/// # Safety
+/// Any value bits; `key` and `hash` from [`in_keyed_leaf`].
+#[inline(always)]
+pub(crate) unsafe fn in_keyed_miss(obj_bits: u64, key_bits: u64, key: u64, hash: u64) -> i32 {
+    if key == 0 {
+        return super::probe_has(obj_bits, key_bits, false);
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    super::probe_has_walk(
+        super::super::ordinary_dir_addr(),
+        payload,
+        key,
+        hash,
+        true,
+        false,
+    )
+}
+
+/// What the keyed store probe ([`probe_store_keyed`]) did with
+/// `obj[key] = value`.
+pub(crate) enum KeyedStore {
+    /// Stored: `key` is the receiver's own plain writable data property (an
+    /// inline slot or an overflow entry), one barriered store.
+    Stored,
+    /// Nothing stored: the receiver's complete own list proves the key (this
+    /// atom) absent, the receiver may grow and nothing on its prototype
+    /// chain intercepts the add. The caller appends the atom to the
+    /// receiver's overflow (a computed key makes no layout transition, §3.3).
+    Append(*mut ObjectHeader, u64),
+    /// Nothing stored: the complete store continues with this key (the key's
+    /// atom: the same property, resolved once).
+    Complete(u64),
+    /// Nothing stored: the key has no atom (a text no atom names yet, an
+    /// index-like text, or not a string or symbol at all).
+    Unresolved,
+}
+
+/// `obj[key] = value` for a computed `key`: one key resolution, then the
+/// store probe's plan for the receiver, for an overwrite and for an add
+/// alike.
+///
+/// GC leaf: no allocation on the heap, no collection, no user code.
+///
+/// # Safety
+/// Any value bits.
+#[inline(always)]
+pub(crate) unsafe fn probe_store_keyed(obj_bits: u64, key_bits: u64, value: f64) -> KeyedStore {
+    let dir = super::super::ordinary_dir_addr();
+    let Some((key, hash)) = computed_key_in(dir, key_bits) else {
+        return KeyedStore::Unresolved;
+    };
+    match super::set_plan(dir, obj_bits, key, hash, value) {
+        super::SetPlan::Stored(stored) if stored != 0 => KeyedStore::Stored,
+        super::SetPlan::Add(obj, r, _) => {
+            if append_admitted(dir, obj, r, key, hash) {
+                KeyedStore::Append(obj, key)
+            } else {
+                KeyedStore::Complete(key)
+            }
+        }
+        // A decline: an overflowed receiver whose overflow does not hold the
+        // key is the same add.
+        super::SetPlan::Stored(_) => match overflowed_append(dir, obj_bits, key, hash) {
+            Some(obj) => KeyedStore::Append(obj, key),
+            None => KeyedStore::Complete(key),
+        },
+    }
+}
+
+/// [`KeyedStore::Append`] for a receiver that has an overflow already: the
+/// overflow owns every current own key, so a key it does not hold, which the
+/// layout does not name either (a deleted layout key is re-added as a
+/// reference to its slot, by the complete store), is absent, and the add is
+/// [`append_admitted`]'s question. `None` for every other decline of the
+/// store probe.
+#[inline(never)]
+unsafe fn overflowed_append(
+    dir: *const u8,
+    obj_bits: u64,
+    key: u64,
+    hash: u64,
+) -> Option<*mut ObjectHeader> {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return None;
+    }
+    let obj = payload as *mut ObjectHeader;
+    let word = (*obj).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT == 0 {
+        return None;
+    }
+    let r = record_of(dir, LayoutWord(word));
+    if r.is_null() || (*r).object_kind() != super::super::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).overflow == 0 {
+        return None;
+    }
+    let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
+    if crate::object::overflow::find_hashed(t, key, hash).is_some()
+        || own_position(r, key, hash) != Err(true)
+    {
+        return None;
+    }
+    append_admitted(dir, obj, r, key, hash).then_some(obj)
+}
+
+/// May `obj` (record `r`, whose complete own list proves `key` absent; no
+/// overflow) take string atom `key` as a new own data property in its
+/// overflow? The receiver facts the dynamic store asks
+/// (`shape_store::try_dynamic_store`: an ordinary, extensible realm-default
+/// or null-prototype bag with no descriptors and no exotic surface, a key
+/// that is not `__proto__`, a private name or digit-led), read from the
+/// header, the record and the meta the probe already holds, and the chain's
+/// answer from the layouts ([`super::write::chain_admits_add`]). A family
+/// object and a stable-tombstone receiver have their own add paths. `false`
+/// decides nothing: the complete store asks again by name.
+#[inline(never)]
+unsafe fn append_admitted(
+    dir: *const u8,
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    if key & TAG_MASK != STRING_TAG || hash == super::write::PROTO_KEY_HASH {
+        return false;
+    }
+    let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
+    if first == b'#' || first.is_ascii_digit() {
+        return false;
+    }
+    let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
+    if (*gc)._reserved
+        & (crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
+        != 0
+        || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || crate::object::layout_desc::is_family_object(obj)
+        || !matches!(
+            (*r).proto_id,
+            super::super::PROTO_ID_DEFAULT | super::super::PROTO_ID_NULL
+        )
+    {
+        return false;
+    }
+    let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
+    if id.wrapping_sub(super::super::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+    {
+        return false;
+    }
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags
+                & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                != 0)
+    {
+        return false;
+    }
+    super::write::chain_admits_add(dir, obj, r, key, hash)
 }
 
 /// The store twin of [`perry_probe_get_keyed`]: `obj[key] = value` for a

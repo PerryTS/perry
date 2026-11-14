@@ -466,13 +466,13 @@ fn collect_by_method_promise(kind: ConsumerKind, receiver: f64, method: CollectM
     let result_arr = crate::array::js_array_alloc(0);
     let step = js_closure_alloc(crate::fn_info!(consumer_collect_step, 1), 6);
     let reject = js_closure_alloc(crate::fn_info!(consumer_collect_rejected, 1), 1);
-    js_closure_set_capture_ptr(step, 0, result_promise as i64);
-    js_closure_set_capture_ptr(step, 1, result_arr as i64);
+    crate::closure::closure_set_capture_ref(step, 0, result_promise as i64);
+    crate::closure::closure_set_capture_ref(step, 1, result_arr as i64);
     js_closure_set_capture_f64(step, 2, receiver);
-    js_closure_set_capture_ptr(step, 3, reject as i64);
+    crate::closure::closure_set_capture_ref(step, 3, reject as i64);
     js_closure_set_capture_ptr(step, 4, method as i64);
     js_closure_set_capture_ptr(step, 5, kind as i64);
-    js_closure_set_capture_ptr(reject, 0, result_promise as i64);
+    crate::closure::closure_set_capture_ref(reject, 0, result_promise as i64);
     call_collector_method(receiver, method, step, reject);
     boxed_pointer(result_promise as *const u8)
 }
@@ -571,7 +571,7 @@ extern "C" fn consumer_collect_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::Promise;
     crate::promise::js_promise_reject(promise, reason);
     0.0
 }
@@ -581,10 +581,11 @@ extern "C" fn consumer_collect_step(
     _this: crate::closure::JsThis,
     iter_result: f64,
 ) -> f64 {
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
-    let mut result_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::Promise;
+    let mut result_arr =
+        crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     let receiver = js_closure_get_capture_f64(closure, 2);
-    let reject = js_closure_get_capture_ptr(closure, 3) as *const ClosureHeader;
+    let reject = crate::closure::closure_capture_ref(closure, 3) as *const ClosureHeader;
     let method = CollectMethod::from_i64(js_closure_get_capture_ptr(closure, 4));
     let kind = ConsumerKind::from_i64(js_closure_get_capture_ptr(closure, 5));
     if promise.is_null() || result_arr.is_null() {
@@ -606,7 +607,7 @@ extern "C" fn consumer_collect_step(
 
     let value = js_object_get_field_by_name_f64(result_obj, named_key(b"value"));
     result_arr = crate::array::js_array_push_f64(result_arr, value);
-    js_closure_set_capture_ptr(closure as *mut ClosureHeader, 1, result_arr as i64);
+    crate::closure::closure_set_capture_ref(closure as *mut ClosureHeader, 1, result_arr as i64);
     call_collector_method(receiver, method, closure, reject);
     0.0
 }

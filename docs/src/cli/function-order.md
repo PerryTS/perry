@@ -67,8 +67,30 @@ added to the binary: only the layout differs.
   programs, and `scripts/hot_text_order.py check` fails when it no longer
   matches the runtime (a listed function was renamed, or a smoke program
   executes too much code outside the ordered run).
-- GNU ld and lld on Linux only. macOS, Windows, WebAssembly, Android and
+- GNU ld and lld on Linux by default. On macOS / iOS / tvOS / watchOS /
+  visionOS the same list can be passed to ld64 (or ld64.lld) as an
+  `-order_file` of exact symbol names resolved from the runtime archives:
+  opt-in with `PERRY_HOT_TEXT_ORDER=on`, because its effect on Apple's 16 KiB
+  pages has not been measured yet. Windows, WebAssembly, Android and
   HarmonyOS builds are unchanged.
+
+The same link script carries a default order for the runtime's read-only
+data: the `.rodata` and `.data.rel.ro` sections (tables, vtables, constant
+strings) that ordinary programs read are placed at the front of their output
+sections, so the data pages a program touches are packed as well.
+
+- `PERRY_HOT_DATA_ORDER=off` keeps the previous data layout (the text order
+  has its own switch).
+- The list is `crates/perry/src/commands/compile/link/hot_data_order.txt`, one
+  hash-free key per data section: its symbol, or for an unnamed constant a
+  digest of its bytes and relocations. `scripts/hot_data_order.py` records it
+  (valgrind's lackey, every load) and builds it, and its `check` command is
+  the gate, as for the text list.
+- Native glibc Linux executables only. With GNU ld the `.rodata` half needs
+  x86-64's default script (`-z separate-code`); it adds at most one page of
+  alignment padding in front of `.eh_frame_hdr`. Merged sections
+  (`.rodata.str1.1`, `.rodata.cst16`) are pooled by the linker and not
+  ordered.
 
 ## Platforms
 

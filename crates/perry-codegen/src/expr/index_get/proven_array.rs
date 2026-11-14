@@ -102,6 +102,13 @@ pub(crate) struct RepRead {
     /// has no bound. `Some(true)`: the length is defined, so the elements
     /// start behind the header whatever `rep.floor` is.
     pub(crate) bounded: Option<bool>,
+    /// The in-bounds read (wpfacts `gen/in_bounds.rs`,
+    /// `ElisionFacts::inbounds_reads`): the key is an integer in
+    /// `[0, length)` of the Array read, by a length test of the program
+    /// text and an Array that never shrinks; so the read has no bound.
+    /// `Some(true)`: no Array the receiver may hold has a hole, so the slot
+    /// is a present element. Never set for an at-rest receiver.
+    pub(crate) kept: Option<bool>,
 }
 
 /// The receiver expression of a rep-keyed read.
@@ -135,14 +142,29 @@ impl RepRead {
         self.rep.dense && self.in_extent()
     }
 
+    /// The slot the read loads is a present element: below a dense floor
+    /// (`present`), or a kept in-bounds read of Arrays without holes.
+    pub(crate) fn element(self) -> bool {
+        self.present() || self.kept == Some(true)
+    }
+
     /// The read cannot miss: no test, no cold arm. A present at-rest slot
     /// holds an int32 Number (`expr::rest_elems`).
     pub(crate) fn total(self, numeric: bool) -> bool {
         self.rep.unmoved()
-            && self.in_extent()
-            && self.rep.dense
+            && (self.in_extent() && self.rep.dense || self.kept == Some(true))
             && (!numeric || self.number || self.rep.at_rest)
     }
+}
+
+/// The in-bounds read fact of the read at `element_offset` of a receiver of
+/// rep `rep` (`RepRead::kept`). Not with interpreted code in the program:
+/// the facts do not see its writes.
+fn kept(ctx: &FnCtx<'_>, rep: FactsArrRep, element_offset: u32) -> Option<bool> {
+    if element_offset == 0 || rep.at_rest || ctx.wpfacts.interp_guard {
+        return None;
+    }
+    ctx.wpfacts.inbounds_reads.get(&element_offset).copied()
 }
 
 /// `PERRY_FACTS_ARRAY_TIER=0` turns the rep-keyed tier off.
@@ -180,6 +202,7 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
         number,
         receiver,
         bounded: None,
+        kept: kept(ctx, rep, element_offset),
     })
 }
 
@@ -253,6 +276,7 @@ pub(crate) fn lower_in_floor(
         number: rep.elem != crate::codegen::FactsElemRep::Boxed,
         receiver: Receiver::Field,
         bounded: None,
+        kept: None,
     };
     lower_rep(ctx, arr_box, idx_i32, read, false, None)
 }
@@ -276,6 +300,7 @@ pub(super) fn lower_below_length(
         number: true,
         receiver: Receiver::Local(id),
         bounded: None,
+        kept: None,
     };
     debug_assert!(read.total(true) && !rep.at_rest);
     lower_rep(ctx, arr_box, idx_i32, read, false, None)
@@ -423,7 +448,7 @@ fn lower_rep(
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "in_floor": read.in_floor, "below_length": read.below_length }),
+        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "in_floor": read.in_floor, "below_length": read.below_length, "kept": read.kept }),
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
@@ -464,7 +489,7 @@ fn lower_rep(
     // below a fixed length (`capacity >= length`), and one at a held
     // loop's bounded counter (`idx < length <= capacity`).
     let front = r.floor > 0 || read.bounded == Some(true);
-    let unbounded = read.in_extent() || read.bounded.is_some();
+    let unbounded = read.in_extent() || read.bounded.is_some() || read.kept.is_some();
     if !rest_bound && !(unbounded && front) {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
@@ -506,10 +531,10 @@ fn lower_rep(
         crate::expr::rest_elems::decode(ctx, &raw, crate::expr::rest_elems::Want::Value)
     } else {
         let value = blk.bitcast_i64_to_double(&raw);
-        if numeric && !(read.present() && read.number) {
+        if numeric && !(read.element() && read.number) {
             let plain = crate::codegen::emit_plain_number_bits_test(blk, &raw);
             step(ctx, &plain, "arep.number");
-        } else if !numeric && !read.present() {
+        } else if !numeric && !read.element() {
             let own = blk.icmp_ne(I64, &raw, TAG_HOLE_I64);
             step(ctx, &own, "arep.own");
         }

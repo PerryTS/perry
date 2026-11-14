@@ -794,7 +794,7 @@ impl Drop for HostValueScope {
     }
 }
 
-/// Open a SNAPK2a host-value scope (1 argv, 2 execPath) for the rest of the
+/// Open a host-value scope (1 argv, 2 execPath, 3 argv0) for the rest of the
 /// enclosing block, in the instrumented Linux cohort only.
 #[macro_export]
 macro_rules! snap_host_value {
