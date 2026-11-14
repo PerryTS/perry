@@ -1332,7 +1332,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 && matches!(
                     verdict,
                     Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
-                )))
+                ))
+            || (prim != 0 && matches!(verdict, Verdict::T0Mono | Verdict::T0Set)))
             && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -1665,8 +1666,6 @@ fn judge(
     let mut slots: Vec<Option<u32>> = Vec::new();
     // Receivers read by an own data lookup or `undefined` (OwnDataOrAbsent).
     let mut own_or_absent = 0usize;
-    // A `JSON.parse` object among them (`json_own_or_absent`).
-    let mut json_obj = false;
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
@@ -1712,7 +1711,6 @@ fn judge(
                     }
                     if !s.is_call && json_own_or_absent(m, t, key, s.key) {
                         own_or_absent += 1;
-                        json_obj = true;
                         continue;
                     }
                     verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
@@ -1819,14 +1817,33 @@ fn judge(
             }
         }
     }
-    // Birth-site tokens of one template are one receiver layout.
-    // The primitives beside a JSON object: the read's own dispatch on each.
-    if json_obj && prim != 0 && verdict.is_none() {
-        match json_prims(m, key, s.key, prim) {
-            Some(r) => receivers.extend(r),
+    // A closed marker names no receiver: its callers' values sit beside it.
+    // With nothing beside it no receiver flows, and a proof names the
+    // receivers it is over (the value-call rule, `callee_set`).
+    let none = toks.iter().all(|&t| m.closed_marker(t));
+    // The primitives beside the objects: the operation's own dispatch on
+    // each value's kind (7.3.2 GetV, 7.1.18 ToObject). A nullish value
+    // names its TypeError arm; a String, Number or Boolean reads its
+    // family, where the key is absent (`family_absent`): the outcome of an
+    // absent key (`undefined`), one more own-data-or-absent receiver or
+    // the `None` slot. A call's callee on a primitive is not covered.
+    if !none && prim != 0 && verdict.is_none() {
+        match beside_prims(m, key, s.key, prim, s.is_call) {
+            Some((r, absent)) => {
+                receivers.extend(r);
+                if absent && statics > 0 {
+                    verdict = Some(Verdict::No(
+                        "receivers mix class objects and primitives".into(),
+                    ));
+                } else if absent && own_or_absent > 0 {
+                    own_or_absent += 1;
+                } else if absent {
+                    slots.push(None);
+                }
+            }
             None => {
                 verdict = Some(Verdict::No(format!(
-                    "primitive beside a JSON object (key not absent on its family) {}",
+                    "primitive beside an object (key not absent on its family) {}",
                     crate::model::prim::name(prim)
                 )))
             }
@@ -1834,10 +1851,6 @@ fn judge(
     }
     let mut seen_r: FxHashSet<String> = FxHashSet::default();
     receivers.retain(|r| seen_r.insert(r.clone()));
-    // A closed marker names no receiver: its callers' values sit beside it.
-    // With nothing beside it no receiver flows, and a proof names the
-    // receivers it is over (the value-call rule, `callee_set`).
-    let none = toks.iter().all(|&t| m.closed_marker(t));
     if none && prim == 0 {
         verdict.get_or_insert(Verdict::Dead);
     }
@@ -2209,14 +2222,19 @@ fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && own_data_or_absent_tok(m, t, key, a)
 }
 
-/// The primitives beside a `JSON.parse` object in an OwnDataOrAbsent read
-/// (`judge`): `undefined`/`null` name the read's TypeError arm (6.2.5.5,
-/// 7.1.18), each String, Number or Boolean is `family_absent`; a BigInt or
-/// Symbol is not covered. The receivers.
-fn json_prims(m: &Model, key: &str, a: Atom, prim: u16) -> Option<Vec<String>> {
+/// The primitives beside the objects of a read or call (`judge`):
+/// `undefined`/`null` name the operation's TypeError arm (6.2.5.5,
+/// 7.1.18); for a read each String, Number or Boolean is `family_absent`
+/// (the read gives `undefined`); a call's callee on one, a BigInt or a
+/// Symbol is not covered. The receivers, and whether an absent outcome is
+/// among them.
+fn beside_prims(m: &Model, key: &str, a: Atom, prim: u16, call: bool) -> Option<(Vec<String>, bool)> {
     use crate::builtins::NativeFamily as F;
     use crate::model::prim::{BOOL, NULL, NUM, STR, UNDEF};
     if prim & !(STR | NUM | BOOL | NULL | UNDEF) != 0 {
+        return None;
+    }
+    if call && prim & (STR | NUM | BOOL) != 0 {
         return None;
     }
     let mut r = Vec::new();
@@ -2238,7 +2256,8 @@ fn json_prims(m: &Model, key: &str, a: Atom, prim: u16) -> Option<Vec<String>> {
             r.push(name.to_string());
         }
     }
-    Some(r)
+    let absent = prim & (STR | NUM | BOOL) != 0;
+    Some((r, absent))
 }
 
 /// [`Verdict::OwnDataOrAbsent`] for receiver `t` (layout `tf`) and key `a`:

@@ -119,3 +119,90 @@ fn control_define_property_accessor() {
     ));
     assert!(none(&at(&pf, "ior", false), "OwnDataOrAbsent"));
 }
+
+/// NOTUNIT2 step 1: a receiver set of program objects with primitives
+/// beside them. The read dispatches on each value's kind (7.3.2 GetV,
+/// 6.2.5.5, 7.1.18): `undefined`/`null` throw, a String/Number/Boolean
+/// reads its family. A claim covers every kind in the set: each nullish
+/// kind names its TypeError arm, each other primitive its family.
+fn mixed_claims_cover_the_primitives(pf: &ProgramFacts, key: &str) {
+    use crate::model::prim::{BOOL, NULL, NUM, STR, UNDEF};
+    let mut n = 0;
+    for s in pf.sites.iter().filter(|s| s.key == key && !s.is_call) {
+        n += 1;
+        eprintln!(
+            "NOTUNIT2 {key}: {:?} {:?} prims={:#x}",
+            s.verdict, s.receivers, s.receiver_prims
+        );
+        if matches!(s.verdict, Verdict::No(_)) {
+            continue;
+        }
+        for (bit, name) in [
+            (UNDEF, "primitive:undefined (TypeError)"),
+            (NULL, "primitive:null (TypeError)"),
+            (STR, "primitive:string"),
+            (NUM, "primitive:number"),
+            (BOOL, "primitive:boolean"),
+        ] {
+            if s.receiver_prims & bit != 0 {
+                assert!(
+                    s.receivers.iter().any(|r| r == name),
+                    "{key}: {:?} {:?} lacks {name}",
+                    s.verdict,
+                    s.receivers
+                );
+            }
+        }
+    }
+    assert!(n > 0, "{key}: no site");
+}
+
+const KLASS: &str = "class A { x = 1; }\n";
+
+#[test]
+fn mixed_class_instance_or_undefined() {
+    let pf = one(&format!(
+        "{C}{KLASS}const a: any = c ? new A() : undefined;\nconsole.log(a.x);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "x");
+}
+
+#[test]
+fn mixed_class_instance_or_null_absent_key() {
+    let pf = one(&format!(
+        "{C}{KLASS}const a: any = c ? new A() : null;\nconsole.log(a.ior);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "ior");
+}
+
+#[test]
+fn mixed_class_instance_or_string() {
+    let pf = one(&format!(
+        "{C}{KLASS}const a: any = c ? new A() : \"s\";\nconsole.log(a.x);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "x");
+}
+
+#[test]
+fn mixed_literal_or_primitives_absent_key() {
+    let pf = one(&format!(
+        "{C}const a: any = c ? {{ y: 1 }} : Math.random() > 0.5 ? undefined : 7;\nconsole.log(a.ior);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "ior");
+}
+
+#[test]
+fn mixed_literal_or_string_own_key() {
+    let pf = one(&format!(
+        "{C}const a: any = c ? {{ y: 1 }} : s;\nconsole.log(a.y);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "y");
+}
+
+#[test]
+fn mixed_array_or_undefined_absent_key() {
+    let pf = one(&format!(
+        "{C}const a: any = c ? [1, 2] : undefined;\nconsole.log(a.ior);\n"
+    ));
+    mixed_claims_cover_the_primitives(&pf, "ior");
+}
