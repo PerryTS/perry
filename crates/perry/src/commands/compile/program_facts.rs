@@ -1200,6 +1200,7 @@ fn verification_sites(
                 perry_wpfacts::Verdict::T0Set => SiteVerdict::T0Set,
                 perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
                 perry_wpfacts::Verdict::Dead => SiteVerdict::Dead,
+                perry_wpfacts::Verdict::OwnDataOrAbsent => SiteVerdict::OwnDataOrAbsent,
                 perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {

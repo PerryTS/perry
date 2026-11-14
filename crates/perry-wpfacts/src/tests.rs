@@ -2136,3 +2136,4 @@ mod fn_number_key;
 mod builtin_ctor_number_key;
 mod given_proto_members;
 mod scope_a;
+mod new_verdicts;

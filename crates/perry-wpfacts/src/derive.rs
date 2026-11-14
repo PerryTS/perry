@@ -196,6 +196,14 @@ pub enum Verdict {
     /// produces a value: the site is never reached (ECMA-262 13.3.2: the
     /// member access evaluates its base first). Names no slot or body.
     Dead,
+    /// A named read whose receivers are each a prefix-stable fact unit with
+    /// no accessor, no [[Prototype]] write (`super_relink`: no `__proto__`
+    /// store, no computed store whose key may be `__proto__`), no escape and
+    /// no hard operation, whose prototype chain is proven not to hold the
+    /// key (the `absent_key` walk over the chain): OrdinaryGet (ECMA-262
+    /// 10.1.8.1) finds the key as an own data property, one of the values
+    /// stored under it, or reaches the chain's end and gives `undefined`.
+    OwnDataOrAbsent,
     No(String),
 }
 
@@ -1566,6 +1574,8 @@ fn judge(
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
     let mut slots: Vec<Option<u32>> = Vec::new();
+    // Receivers read by an own data lookup or `undefined` (OwnDataOrAbsent).
+    let mut own_or_absent = 0usize;
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
@@ -1668,6 +1678,7 @@ fn judge(
                     _ if unwritten && tf.fixed_layout && absent_key(m, t, key, s.key) => {
                         slots.push(None)
                     }
+                    _ if own_data_or_absent(m, tf, t, key, s.key) => own_or_absent += 1,
                     Some(_) | None => {
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
@@ -1750,6 +1761,10 @@ fn judge(
                 Err(why) => Verdict::No(why),
             }
         }
+        None if own_or_absent > 0 && statics > 0 => {
+            Verdict::No("receivers mix class objects and instances".into())
+        }
+        None if own_or_absent > 0 => Verdict::OwnDataOrAbsent,
         None if statics > 0 && !slots.is_empty() => {
             Verdict::No("receivers mix class objects and instances".into())
         }
@@ -1978,6 +1993,13 @@ fn builtin_protos_unwritten(
 /// [[Get]] then walks to the end of the chain: the read gives `undefined`.
 /// A private name is never absent (its read throws without the brand).
 fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    chain_absent(m, t, key, a, true)
+}
+
+/// The `absent_key` walk: `t`'s prototype chain holds no `a` and ends at
+/// `%Object.prototype%`, which lacks it. `own`: `t` itself holds nothing
+/// under `a` either.
+fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
     let holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];
@@ -1993,7 +2015,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
         return false;
     };
-    if m.is_private_atom(a) || !unwritten(t) {
+    if m.is_private_atom(a) || (own && !unwritten(t)) {
         return false;
     }
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
@@ -2026,6 +2048,44 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         }
     }
     ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()
+}
+
+/// [`Verdict::OwnDataOrAbsent`] for receiver `t` (layout `tf`) and key `a`:
+/// what [[Get]] finds is `t`'s own data property or nothing. `t`'s own
+/// keys hold only data (no accessor on the token or its template), its
+/// [[Prototype]] is never written (`super_relink`: a `__proto__` store or
+/// a computed store whose key may be `__proto__` runs the
+/// `Object.prototype.__proto__` setter, B.2.2.1.2), unknown code never
+/// has it (no escape, no hard operation), and the chain lacks the key. The
+/// optimistic JSON-key rule keeps tokens out of `super_relink` by
+/// assumption: with it on, no claim.
+fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> bool {
+    !m.optimistic_json_key
+        && tf.prefix_stable
+        && !m.super_relink.contains(&t)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && m
+            .tmpl_of(t)
+            .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
+        && chain_absent(m, t, key, a, false)
+        && object_proto_unwritten(m, a)
+}
+
+/// `%Object.prototype%` holds nothing stored under `a` by the program: no
+/// named store of `a`, no computed store onto it.
+fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
+    let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
+        return false;
+    };
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    empty(m.fields.get(&(op, a))) && empty(m.field_any.get(&op))
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`
