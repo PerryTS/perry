@@ -1379,7 +1379,8 @@ fn unborn_lazy_identity(
         .then_some(identity)
 }
 
-// Inlined into both callers (the population, and `%TypedArray%`'s late build).
+// Inlined into its callers (the population's two copies, and `%TypedArray%`'s
+// late build), as it was when the population was its only caller.
 #[inline(always)]
 pub(super) fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);

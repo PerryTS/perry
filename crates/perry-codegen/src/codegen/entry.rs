@@ -239,6 +239,15 @@ pub(super) fn compile_module_entry(
                 let value = blk.call(DOUBLE, target, &[]);
                 blk.ret(DOUBLE, &value);
             }
+            let f = llmod.define_function(
+                "perry_realm_family_phase",
+                VOID,
+                vec![(I32, "%identity".to_string())],
+            );
+            let _ = f.create_block("entry");
+            let blk = f.block_mut(0).unwrap();
+            blk.call_void("js_realm_family_phase", &[(I32, "%identity")]);
+            blk.ret_void();
         }
 
         // For dylib output, emit `void perry_module_init()` instead of
@@ -580,7 +589,11 @@ pub(super) fn compile_module_entry(
             // Two-phase realm: tell the runtime before anything can touch a
             // realm (an atomic store). Check mode poisons phase-B slots.
             if crate::expr::property_get::globalget::realm_two_phase() {
-                let poison = if crate::verify_facts::enabled() { "1" } else { "0" };
+                let poison = if crate::verify_facts::enabled() {
+                    "1"
+                } else {
+                    "0"
+                };
                 blk.call_void("js_realm_two_phase", &[(I32, poison)]);
             }
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);

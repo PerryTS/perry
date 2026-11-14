@@ -354,6 +354,9 @@ pub(crate) fn is_worker_messaging_constructor(property: &str) -> bool {
     )
 }
 
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 pub(crate) fn publish_worker_messaging_constructor(
     global: *mut ObjectHeader,
     property: &str,
