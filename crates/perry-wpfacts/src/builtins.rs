@@ -2811,7 +2811,33 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::NUM);
         }
-        (BuiltinNs::Number, _) | (BuiltinNs::String, _) if name == "raw" => {
+        // The `Number.is*` predicates test the operand's type (ECMA-262
+        // 21.1.2.2-21.1.2.5): a Boolean, nothing converted.
+        (BuiltinNs::Number, "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
+            ret_prim(m, call, prim::BOOL)
+        }
+        // 21.1.2.12/13 (%parseFloat%, %parseInt%): ToString, a Number.
+        (BuiltinNs::Number, "parseFloat" | "parseInt") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::NUM);
+        }
+        // 22.1.2.1/2: ToNumber of each code unit / point, a String.
+        (BuiltinNs::String, "fromCharCode" | "fromCodePoint") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::STR);
+        }
+        // 21.2.2.1/2: ToIndex of `bits`, ToBigInt of the value, a BigInt.
+        (BuiltinNs::BigInt, "asIntN" | "asUintN") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::BIGINT);
+        }
+        // `String.raw` (22.1.2.4) reads `raw`, its `length` and elements and
+        // ToStrings them and the substitutions: a String.
+        (BuiltinNs::String, "raw") => {
+            implicit_args(m, call, "String.raw template", Protocol::Any);
+            ret_prim(m, call, prim::STR);
+        }
+        (BuiltinNs::Number, _) if name == "raw" => {
             // `String.raw` reads `raw` and its elements.
             implicit_args(m, call, "String.raw template", Protocol::Any);
             ret_prim(m, call, prim::ALL);
