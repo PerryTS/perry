@@ -471,3 +471,24 @@ fn lazy_interface_children_link_to_their_parent_in_their_birth() {
         );
     }
 }
+
+/// Two-phase realm, stage 1: the "realm complete" predicate is false on a
+/// thread without a realm and true once `js_get_global_this` returned (the
+/// two phases run back to back); the complete entry returns the one global.
+#[test]
+fn realm_is_complete_once_the_global_is_handed_out() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    std::thread::spawn(|| {
+        assert!(!fetch_globals::realm_is_complete());
+        assert!(!global_this_is_materialized());
+        let first = js_get_global_this();
+        assert!(fetch_globals::realm_is_complete());
+        assert!(global_this_is_materialized());
+        assert_eq!(first.to_bits(), js_get_global_this().to_bits());
+        assert!(is_thread_realm_global(
+            crate::value::js_nanbox_get_pointer(first) as *mut ObjectHeader
+        ));
+    })
+    .join()
+    .unwrap();
+}

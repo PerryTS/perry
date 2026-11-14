@@ -12,6 +12,18 @@ crate::perry_thread_local! {
     static THREAD_GLOBAL_THIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// Is THIS thread's realm complete: every declared slot of its global bound,
+/// or being bound by the population that is running? The predicate of the
+/// cold by-name readers; never materializes anything. The population has two
+/// phases (`populate::populate_realm_core`, then
+/// `populate::populate_realm_rest`); while they run back to back the realm is
+/// complete from its global's allocation, so this is
+/// [`global_this_is_materialized`].
+#[allow(dead_code)] // the by-name readers ask it once a row is in the second phase
+pub(crate) fn realm_is_complete() -> bool {
+    THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
+}
+
 #[cfg(test)]
 crate::perry_thread_local! {
     /// One-shot regression hook: collect after GC initialization but before
@@ -103,6 +115,16 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
             == crate::value::js_nanbox_pointer(obj as i64).to_bits()
 }
 
+/// The phase-B driver: run the second phase of the population on this
+/// thread's realm global (`populate::populate_realm_rest`). Called once, right
+/// after the first phase; the caller holds the bootstrap's no-move window.
+fn complete_realm() {
+    let global = THREAD_GLOBAL_THIS.with(|c| c.get());
+    populate_realm_rest(
+        crate::value::js_nanbox_get_pointer(f64::from_bits(global)) as *mut ObjectHeader
+    );
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
@@ -161,7 +183,9 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
-    populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    // Phase A (the core), then phase B (the rest) through its driver.
+    populate_realm_core(new_ptr as *mut ObjectHeader);
+    complete_realm();
     drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved
