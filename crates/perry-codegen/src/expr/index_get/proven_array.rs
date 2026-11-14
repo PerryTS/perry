@@ -217,6 +217,12 @@ fn receiver_rep(ctx: &FnCtx<'_>, object: &Expr) -> Option<(FactsArrRep, Receiver
     }
 }
 
+/// Do the facts give the receiver expression an `Arr` representation, i.e.
+/// prove every value it holds an Array (a heap pointer)?
+pub(crate) fn receiver_is_proven_array(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    receiver_rep(ctx, object).is_some()
+}
+
 /// The read of a field read call whose own index is in the floor
 /// (`lower_call::field_read_call`), when the tier takes it: the receiver
 /// expression's representation, dense, with a floor.
@@ -421,7 +427,9 @@ fn lower_rep(
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
-        super::array_rep::witness_read(ctx, arr_box, idx_i32, read, numeric);
+        // `read.number`: the read's value is a proven Number, never
+        // `undefined` (its own claim, or a present slot of Number elements).
+        super::array_rep::witness_read(ctx, arr_box, idx_i32, read, numeric, read.number);
     }
     let cold_idx = (!read.total(numeric)).then(|| ctx.new_block("arep.cold"));
     let cold_label = cold_idx.map(|i| ctx.block_label(i));

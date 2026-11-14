@@ -324,6 +324,6 @@ fn witness(
         receiver: super::proven_array::Receiver::Field,
         bounded: None,
     };
-    super::array_rep::witness_read(ctx, &fresh, idx, read, false);
+    super::array_rep::witness_read(ctx, &fresh, idx, read, false, false);
     Ok(())
 }

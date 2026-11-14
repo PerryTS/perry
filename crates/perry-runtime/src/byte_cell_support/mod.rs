@@ -526,14 +526,11 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
         return f64::NAN; // undefined -> NaN
     }
     // Strings (heap or inline SSO, #11519): try to parse, else NaN.
+    // Strings (heap or inline SSO, #11519): the shared StringToNumber, so
+    // `"0x10"` is 16, `"inf"` is NaN and `"  "` is 0 as in every other
+    // ToNumber (Rust's float parser disagrees on all three).
     if top16 == 0x7FFF || top16 == 0x7FF9 {
-        return crate::string::with_string_value_bytes(v, |bytes| {
-            std::str::from_utf8(bytes)
-                .ok()
-                .and_then(|s| s.trim().parse::<f64>().ok())
-                .unwrap_or(f64::NAN)
-        })
-        .unwrap_or(f64::NAN);
+        return crate::builtins::js_number_coerce(v);
     }
     // POINTER_TAG object (Symbols already threw above; BigInt handled above):
     // a non-bigint view performs `ToNumber(value)`, which for an object runs

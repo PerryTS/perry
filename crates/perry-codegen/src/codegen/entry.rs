@@ -22,9 +22,9 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod async_module;
 mod module_frame;
 mod module_init;
-mod async_module;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
 
@@ -517,6 +517,24 @@ pub(super) fn compile_module_entry(
                 .unwrap()
                 .call_void("perry_verify_facts_init", &[]);
         }
+        // The family claim: the families the facts say are never created or
+        // observed, for the instrumented runtime's witnesses.
+        if crate::verify_facts::family_claims_on() && cross_module.wpfacts.family_never != 0 {
+            let site = crate::verify_facts::raw_entry_site(
+                "__perry_family",
+                "main",
+                crate::verify_facts::Fact::Family,
+                "family_reach",
+            );
+            main.block_mut(0).unwrap().call_void(
+                "perry_verify_facts_families",
+                &[
+                    (I64, &(cross_module.wpfacts.family_never as i64).to_string()),
+                    (I64, &site.pointer),
+                    (I64, site.len.as_deref().unwrap()),
+                ],
+            );
+        }
         {
             let blk = main.block_mut(0).unwrap();
             // SNAP census: the program's TLS slots lie between the anchors the
@@ -818,6 +836,7 @@ pub(super) fn compile_module_entry(
             .copied()
             .collect();
         // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _life_scope = crate::collectors::life_census::compiling(None);
         let _opt_report_scope = crate::opt_report::enter_region(
             "module_init",
             crate::opt_report::RegionKind::ModuleInit,
@@ -897,7 +916,7 @@ pub(super) fn compile_module_entry(
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
-        program_has_tla: cross_module.program_has_tla,
+            program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1147,6 +1166,7 @@ pub(super) fn compile_module_entry(
             scalar_slot_shadow_slots: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
+            life_claims: main_native_facts.life_claims(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
             non_escaping_array_used_indices: main_native_facts
@@ -1226,17 +1246,26 @@ pub(super) fn compile_module_entry(
         if entry_in_init {
             // SNAP census: the entry module's evaluation is the entry body.
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
-                let worker = if cross_module.program_has_worker { "1" } else { "0" };
-                ctx.block().call_void("js_snap_entry_module", &[(I32, worker)]);
+                let worker = if cross_module.program_has_worker {
+                    "1"
+                } else {
+                    "0"
+                };
+                ctx.block()
+                    .call_void("js_snap_entry_module", &[(I32, worker)]);
             }
             if cross_module.program_has_tla {
                 if entry_evaluates_as_esm(hir, cross_module) {
                     ctx.block().call_void("js_mark_entry_module_esm", &[]);
                 }
-                let record = ctx.block().call(I64, &format!("{}__async_record", module_prefix), &[]);
-                ctx.block().call_void("js_async_module_entry", &[(I64, &record)]);
+                let record =
+                    ctx.block()
+                        .call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block()
+                    .call_void("js_async_module_entry", &[(I64, &record)]);
             } else {
-                ctx.block().call_void(&format!("{}__init", module_prefix), &[]);
+                ctx.block()
+                    .call_void(&format!("{}__init", module_prefix), &[]);
             }
         } else {
             // Register every module-level global's ADDRESS as a GC root so
@@ -1383,6 +1412,7 @@ pub(super) fn compile_module_entry(
                 // `beforeExit` to emit — only Node's exit sequence. Skipping
                 // the loop drops the microtask runner and the event-loop
                 // phases from the link.
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
@@ -1442,6 +1472,7 @@ pub(super) fn compile_module_entry(
                     let _ = ctx
                         .block()
                         .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                    crate::verify_facts::life_measure::turn(&mut ctx);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
@@ -1489,6 +1520,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 let _ = ctx.block().call(I32, "js_event_loop_timers_phase", &[]);
                 if cross_module.needs_stdlib {
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);

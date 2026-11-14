@@ -1063,9 +1063,7 @@ fn lower_numeric_logical_for_number_context(
         }
         // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
         // is on the read's miss arm only (`index_get::rep_default`).
-        if let Some(v) =
-            crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)?
-        {
+        if let Some(v) = crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)? {
             return Ok(v);
         }
         let l_boxed = lower_expr(ctx, left)?;
@@ -1743,8 +1741,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         BinaryOp::BitAnd => blk.and(I32, &li, &ri),
                         BinaryOp::BitOr => blk.or(I32, &li, &ri),
                         BinaryOp::BitXor => blk.xor(I32, &li, &ri),
-                        BinaryOp::Shl => blk.shl(I32, &li, &ri),
-                        BinaryOp::Shr => blk.ashr(I32, &li, &ri),
+                        BinaryOp::Shl => {
+                            let shift = blk.js_shift_count(&ri);
+                            blk.shl(I32, &li, &shift)
+                        }
+                        BinaryOp::Shr => {
+                            let shift = blk.js_shift_count(&ri);
+                            blk.ashr(I32, &li, &shift)
+                        }
                         _ => unreachable!(),
                     };
                     blk.sitofp(I32, &v, DOUBLE)
@@ -1771,7 +1775,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.toint32_wrap(&r)
                     };
                     let blk = ctx.block();
-                    let v = blk.lshr(I32, &li, &ri);
+                    let shift = blk.js_shift_count(&ri);
+                    let v = blk.lshr(I32, &li, &shift);
                     blk.uitofp(I32, &v, DOUBLE)
                 }
             };

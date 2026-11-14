@@ -3,7 +3,7 @@
 
 mod element;
 pub(crate) use element::element_facts;
-use element::receiver_set;
+pub(crate) use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};
 
 use crate::gen::Gen;
@@ -1847,7 +1847,7 @@ fn judge(
 ///    operation on them, no program write onto them, no store into ⊤
 ///    (which may be any of them). Per unit, other units' writes are
 ///    replayed into the same facts (`SharedWrite`).
-fn native_member(
+pub(crate) fn native_member(
     m: &Model,
     s: &crate::gen::ReadSite,
     toks: &[Tok],

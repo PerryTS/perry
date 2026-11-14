@@ -741,9 +741,14 @@ const INTERFACE_PARENTS: [(&str, &str, bool); 5] = [
 
 /// A lazy interface child's links to its (eager) parent, made in its birth:
 /// the same two links the population makes for an eager child.
-fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
-    let Some(&(_, parent, constructor_inherits)) =
-        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
+fn link_interface_parent(
+    name: &str,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    proto_obj: *mut ObjectHeader,
+) {
+    let Some(&(_, parent, constructor_inherits)) = INTERFACE_PARENTS
+        .iter()
+        .find(|(child, _, _)| *child == name)
     else {
         return;
     };
@@ -1218,7 +1223,10 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 
 /// The identity of the closure at `ptr` (header word `word`) while it is its
 /// realm's still unborn `lazy` constructor, outside that family's own birth.
-fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
+fn unborn_lazy_identity(
+    ptr: usize,
+    word: u32,
+) -> Option<crate::object::BuiltinConstructorIdentity> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
     (identity.declaration().lazy
         && BIRTHING.with(|c| c.get()) != identity as u8

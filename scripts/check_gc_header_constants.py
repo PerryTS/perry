@@ -157,12 +157,23 @@ REGISTRY: list[Restatement] = [
     ("crates/perry-codegen/src/expr/array_literal.rs", "GC_LAYOUT_POINTER_FREE",
      "GC_LAYOUT_POINTER_FREE", "array literal: _reserved half of the baked header word"),
 
-    # --- the typed-f64 receiver method probe's fused mask -------------------
+    # --- the direct-method and field-layout guards' fused masks -------------
+    # 39359ae502 (2026-11-04) split the one mask in two on purpose. A
+    # METHOD-identity guard reads no attribute bit: an own key named like the
+    # method is in the key list, so the class/ShapeId word (or the family
+    # word) already misses. A FIELD-layout guard (raw slot loads and stores)
+    # keeps `OBJ_FLAG_HAS_DESCRIPTORS`. The codegen unit test
+    # `gc_header_mask_preserves_the_direct_method_contract` pins the same two
+    # values against each other; this anchors them to the runtime's bits.
     ("crates/perry-codegen/src/lower_call/method_override.rs",
      "GC_OBJECT_METHOD_GUARD_MASK_I32",
+     "0xFF | (GC_FLAG_FORWARDED << 8)",
+     "method-identity guard: obj_type byte and not-forwarded, no attribute bit"),
+    ("crates/perry-codegen/src/lower_call/method_override.rs",
+     "GC_OBJECT_FIELD_GUARD_MASK_I32",
      "0xFF | (GC_FLAG_FORWARDED << 8)"
      " | ((OBJ_FLAG_HAS_DESCRIPTORS) << 16)",
-     "method probe: one fused 32-bit mask over all three header bytes"),
+     "field-layout guard: one fused 32-bit mask over all three header bytes"),
 
     # --- other single-bit restatements --------------------------------------
     ("crates/perry-codegen/src/expr/arrays_finds.rs", "GC_TYPE_MAP",

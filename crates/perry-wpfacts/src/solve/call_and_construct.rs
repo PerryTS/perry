@@ -1054,6 +1054,16 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // A name-keyed fold's dispatch (`Gen::name_fold_call`): the helper
+        // serves a receiver of its own kind itself, with no lookup.
+        if let Some(&brand) = self.name_fold_calls.get(&call) {
+            if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what, .. } if what == brand)
+                {
+                    return;
+                }
+            }
+        }
         // An array is never the iterator the iteration protocol steps or
         // closes: the step of the iterated value itself (`v.next()`,
         // `Gen::iterate`) is made only on a value `js_get_iterator` returns

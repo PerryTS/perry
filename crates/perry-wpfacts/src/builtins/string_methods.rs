@@ -558,7 +558,7 @@ pub(crate) const REGEXP_REPLACE_READS: [&str; 10] = [
 ];
 
 pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 2);
     let recv = m.node_l("regexp");
     m.add_tok(recv, t);
     if let Some(s) = c.args.first().copied() {
@@ -658,7 +658,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// the captures are String or undefined; a program constructor or `exec`
 /// is code the solve runs, and what it returns is a capture.
 fn split(m: &mut Model, call: CallId, recv: NodeId) {
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 2);
     read_prim(m, recv, "flags", "RegExp flags ToString");
     let k = m.atom("constructor");
     let cn = m.node_l("species-constructor");

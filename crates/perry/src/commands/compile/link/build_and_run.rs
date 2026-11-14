@@ -196,6 +196,19 @@ pub(crate) fn build_and_run_link(
         is_cross_macos,
     )?;
 
+    // `PERRY_LINK_LLD=1`: lld instead of GNU ld for a native glibc Linux
+    // executable built on Linux with the default function layout
+    // (`elf_linker`).
+    let lld = super::elf_linker::use_lld(
+        cfg!(target_os = "linux")
+            && is_linux
+            && !is_musl
+            && matches!(target, None | Some("linux"))
+            && matches!(
+                perry_codegen::program_function_layout(),
+                perry_codegen::FunctionLayout::Default
+            ),
+    );
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
@@ -235,6 +248,9 @@ pub(crate) fn build_and_run_link(
                 && matches!(target, None | Some("linux"))
             {
                 cmd.arg("-no-pie");
+            }
+            if let Some(mode) = lld {
+                super::elf_linker::add_link_args(&mut cmd, mode);
             }
             // An Android program is a shared object, and a shared object
             // exports every default-visibility symbol: each one is a
@@ -276,6 +292,11 @@ pub(crate) fn build_and_run_link(
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }
+        // The runtime archives this link may pull from, for the default
+        // hot-text order (`hot_text_order`).
+        let stdlib_archive = stdlib_lib.as_deref().filter(|_| ctx.needs_stdlib);
+        let runtime_archives: Vec<&Path> =
+            std::iter::once(runtime_lib).chain(stdlib_archive).collect();
         super::function_layout::add_link_args(
             &mut cmd,
             &ctx.cache_dir,
@@ -284,6 +305,9 @@ pub(crate) fn build_and_run_link(
             is_harmonyos,
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+            &runtime_archives,
+            lld.is_some(),
+            verbose,
         )?;
         super::runtime_layouts::add_link_args(
             &mut cmd,

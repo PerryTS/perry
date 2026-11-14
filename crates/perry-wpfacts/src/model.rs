@@ -105,6 +105,9 @@ pub mod guard {
     pub const BOXED_STR: u8 = 8;
     pub const BOXED_BOOL: u8 = 9;
     pub const BOXED_OTHER: u8 = 10;
+    /// A primitive but `undefined`/`null`, no object: what ToObject boxes
+    /// into the one `Object()` wrapper of `builtins::to_object`.
+    pub const BOXED: u8 = 21;
     /// A value no call can take (IsCallable false, ECMA-262 7.2.3): every
     /// primitive, and an object token that is surely no function
     /// (`builtins::methods::surely_callable`); the `then` read of a value
@@ -144,6 +147,7 @@ pub mod guard {
             BOXED_STR => p::STR,
             BOXED_BOOL => p::BOOL,
             BOXED_OTHER => p::BIGINT | p::SYMBOL,
+            BOXED => p::ALL & !(p::UNDEF | p::NULL),
             NOT_CALLABLE => p::ALL,
             // A primitive right-hand side throws (InstanceofOperator step
             // 1): it selects no false side.
@@ -1699,11 +1703,27 @@ pub struct Model {
     /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
     /// them off): the solve records who changes an Array's length.
     pub held_lengths: bool,
+    /// A binding's facts are read off its shared node and its summary
+    /// instance copies (`bindings::BindingNodes`). Off with
+    /// `PERRY_FACTS_INSTANCE_NODES=0` and under the negative control
+    /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
+    /// an instance-born literal's birth state for the Array a callee grew.
+    pub instance_nodes: bool,
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
-    /// can place.
-    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool)>,
+    /// can place. `.3`: the node the store's receiver was read from
+    /// (`NO_NODE`: not known here; a call's is its `this`), for
+    /// `named_lengths`.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool, NodeId)>,
+    /// Named lengths (`named_lengths`; `PERRY_FACTS_NAMED_LENGTHS=0` turns
+    /// them off): the events are recorded for them too.
+    pub named_lengths: bool,
+    /// The node a narrowed read of a local sees (`gen::narrow`: a guard's
+    /// or a loop test's start and end node) -> that local's node: a store
+    /// through such a read is a store through the local's name
+    /// (`named_lengths`).
+    pub name_of: FxHashMap<NodeId, NodeId>,
     /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
     pub len_index_stores: crate::pts::FxHashSet<NodeId>,
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
@@ -1880,6 +1900,10 @@ pub struct Model {
     /// store under a Number key counts as in bounds, a wrong claim the
     /// element read's witness must catch (a hole read as a Number).
     pub inbounds_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=nohole`): no Array ever holds
+    /// a hole (`hole`, `mark_hole`): its iteration never yields the
+    /// `undefined` of one, a wrong claim the read's witness must catch.
+    pub no_hole_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `(call, specifier value)` a computed `require` already resolved
@@ -2112,6 +2136,40 @@ pub struct Model {
     pub inst_lose: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
+    /// The ordinary dispatch behind a name-keyed fold
+    /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
+    /// serves itself: `method_on` makes it on every other receiver.
+    pub name_fold_calls: FxHashMap<CallId, &'static str>,
+    /// The `prototype` of the new target of a `Reflect.construct` whose
+    /// result is unknown goes to ⊤ with it (`Model::new_target_unknown`,
+    /// `reach::new_target`).
+    pub reach_new_target: bool,
+    /// An iteration consumer reads `done` of each step result
+    /// (`Model::step_done`, `reach::step_done`).
+    pub reach_step_done: bool,
+    /// A `JSON.stringify` replacer function is called with the values
+    /// serialized and their holders (`Model::json_replacer_calls`,
+    /// `reach::json_replacer`).
+    pub reach_json_replacer: bool,
+    /// The JSON.parse revivers called with the parse objects' own values:
+    /// the parse's templates, the parsed node and the value argument
+    /// (`Model::json_reviver_flush`).
+    pub json_reviver_own: Vec<(Vec<TmplId>, NodeId, NodeId)>,
+    /// A generator object has the members it inherits
+    /// (`builtins::gen_members`, `reach::gen_members`).
+    pub reach_gen_members: bool,
+    /// A built-in consumer that can stop early closes its iterator
+    /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
+    pub reach_iter_close: bool,
+    /// A promise adopts a thenable it is resolved with (`Cons::Fulfil`,
+    /// `builtins::resolver`; `reach::thenable`).
+    pub reach_thenable: bool,
+    /// A hand-written built-in rule's positions hold what a spread
+    /// argument supplies (`Model::positional`, `reach::spread_args`).
+    pub reach_spread_args: bool,
+    /// An accessor installed on a built-in prototype is called by reads
+    /// and writes the solve does not walk (`reach::proto_accessors`).
+    pub reach_proto_accessors: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
@@ -2937,6 +2995,8 @@ pub struct Model {
     /// DECISIONS 225: the function bodies that can run, when the analysis
     /// gates bodies on it (`None`: every body runs).
     pub act: Option<Act>,
+    /// What the solve observed of the runtime families (`family_reach`).
+    pub(crate) family_reach: crate::family_reach::State,
 }
 
 /// DECISIONS 225: which function bodies can run. A body is active once its

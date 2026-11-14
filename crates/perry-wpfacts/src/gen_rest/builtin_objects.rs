@@ -3,6 +3,49 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// The other half of a fold HIR chose by the receiver's bare NAME
+    /// (`pre_scan_weakref_locals`: `r.deref()` is `Expr::WeakRefDeref`
+    /// wherever a binding called `r` holds a `new WeakRef` somewhere in the
+    /// module). The runtime helper tests the receiver's kind first and
+    /// hands any other receiver to ordinary dispatch
+    /// (`dispatch_foreign_weak_receiver`): the receiver's own `method`
+    /// runs with `args`, and its result is the expression's. `kind` is the
+    /// builtin the helper serves without a lookup.
+    fn name_fold_call(
+        &mut self,
+        recv: NodeId,
+        kind: &'static str,
+        method: &str,
+        args: Vec<NodeId>,
+        out: NodeId,
+    ) {
+        if !self.name_folds {
+            return;
+        }
+        let a = self.m.atom(method);
+        // The helper forwards the values: the call's arguments are copies,
+        // and the fold's own operands keep the roles the intrinsic gives
+        // them (an identity observation, a sink).
+        let args = args
+            .into_iter()
+            .map(|v| {
+                let forwarded = self.tmp("name-fold-arg");
+                self.m.edge(v, forwarded);
+                forwarded
+            })
+            .collect();
+        let (call, ret) = self.new_call(ThisArg::Node(recv), args, vec![]);
+        self.m.name_fold_calls.insert(call, kind);
+        self.m.cons(
+            recv,
+            Cons::MCall {
+                key: Key::Named(a),
+                call,
+            },
+        );
+        self.m.edge(ret, out);
+    }
+
     pub(super) fn expr_rest_builtin_objects(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -20,6 +63,7 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom("#target");
                 let out = self.load(r, Key::Named(a));
                 self.m.add_prim(out, prim::UNDEF);
+                self.name_fold_call(r, "WeakRef", "deref", vec![], out);
                 out
             }
             Expr::FinalizationRegistryNew(cb) => {
@@ -33,24 +77,40 @@ impl<'a> Gen<'a> {
                 held,
                 token,
             } => {
-                let _ = self.expr(fx, registry);
+                let r = self.expr(fx, registry);
                 // The registry keeps the target and the token by identity
                 // (DESIGN-p4l4 §2.2, the weak collections' route).
                 let t = self.expr(fx, target);
                 self.m.identity(t, IdentityRoute::Collection);
                 let h = self.expr(fx, held);
                 self.to_sink(h, "FinalizationRegistry held value");
-                if let Some(t) = token {
-                    let t = self.expr(fx, t);
-                    self.m.identity(t, IdentityRoute::Collection);
+                let k = match token {
+                    Some(k) => {
+                        let k = self.expr(fx, k);
+                        self.m.identity(k, IdentityRoute::Collection);
+                        k
+                    }
+                    None => self.prim_node(prim::UNDEF),
+                };
+                if !self.name_folds {
+                    return self.prim_node(prim::UNDEF);
                 }
-                self.prim_node(prim::UNDEF)
+                let out = self.tmp("finreg-register");
+                self.m.add_prim(out, prim::UNDEF);
+                self.name_fold_call(r, "FinalizationRegistry", "register", vec![t, h, k], out);
+                out
             }
             Expr::FinalizationRegistryUnregister { registry, token } => {
-                let _ = self.expr(fx, registry);
+                let r = self.expr(fx, registry);
                 let t = self.expr(fx, token);
                 self.m.identity(t, IdentityRoute::Collection);
-                self.prim_node(prim::BOOL)
+                if !self.name_folds {
+                    return self.prim_node(prim::BOOL);
+                }
+                let out = self.tmp("finreg-unregister");
+                self.m.add_prim(out, prim::BOOL);
+                self.name_fold_call(r, "FinalizationRegistry", "unregister", vec![t], out);
+                out
             }
             Expr::ObjectDefineProperty(o, k, d)
             | Expr::ReflectDefineProperty {
@@ -230,11 +290,18 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 );
                 let rv = self.expr(fx, reviver);
+                let born = self.m.tmpls.len();
                 let v = self.json_value(mi, false);
                 let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::any());
+                // Own values while sure, the rule on (`json_reviver_values`).
+                let vals = match self.json_reviver_values(v, born) {
+                    Some(own) => own,
+                    None => self.load(v, Key::any()),
+                };
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
+                // Stored under its key (`json_reviver_calls`).
+                self.json_reviver_calls(v, ret);
                 // The reviver's results replace values in the parsed tree.
                 let tmp = self.tmp("revived");
                 self.m.edge(ret, tmp);
@@ -262,6 +329,10 @@ impl<'a> Gen<'a> {
                     && replacer.is_some_and(|r| {
                         !matches!(r, Expr::Null | Expr::Undefined | Expr::Array(..))
                     });
+                // It is called back with them (`json_replacer_stringify`).
+                if let Some(out) = self.json_replacer_stringify(fx, &ks, replacer, replaced) {
+                    return out;
+                }
                 let out = if replaced && !ks.is_empty() {
                     let r = self.m.reason("JSON.stringify value");
                     let v = self.expr(fx, ks[0]);

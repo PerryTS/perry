@@ -31,6 +31,10 @@ is another declared host object (`node:inspector` `default`: `node:inspector.def
 `node:perf_hooks` `performance`: `performance`).
 native <owner> <key> <identity>` rows resolve callable property references on global, namespace, node module (`node:fs`) and prototype holders
 (an intrinsic prototype such as `%GeneratorPrototype%` included, its own keys only; aliases included) once, at generation, as canonical native function identities.
+`held <Name> <key>` rows: own string keys other than length/name (every function's chain describes those) of a function
+a host object that is no node module holds (`Temporal.Duration`: `prototype`, `from`, `compare`; `Intl.NumberFormat`:
+`prototype`, `supportedLocalesOf`; `WebAssembly.Module`: `prototype`, `exports`): the same statement as an `ns` row of a
+node module's function, in a kind of its own so that wpfacts can read the list without them (`reach::held_keys`).
 """
 import argparse
 import json
@@ -93,6 +97,10 @@ def rows(realm):
     module_values = {p["value"]["value"] for d in realm["declarations"] if node_module(d["name"], d["kind"])
                      for p in member_properties(declarations, d, True)
                      if p.get("value", {}).get("kind") == "reference" and p["value"]["value"] in callable_names}
+    held_values = {p["value"]["value"] for d in realm["declarations"]
+                   if host_object(d["name"], d["kind"]) and not node_module(d["name"], d["kind"])
+                   for p in member_properties(declarations, d, True)
+                   if p.get("value", {}).get("kind") == "reference" and p["value"]["value"] in callable_names}
     for d in realm["declarations"]:
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
@@ -125,6 +133,8 @@ def rows(realm):
             out.update(("fn", name, k) for k in keys if k not in ("length", "name"))
         elif name in module_values:
             out.update(("ns", name, k) for k in keys)
+        elif name in held_values:
+            out.update(("held", name, k) for k in keys if k not in ("length", "name"))
     return sorted(out)
 
 

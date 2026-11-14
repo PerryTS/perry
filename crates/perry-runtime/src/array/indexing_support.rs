@@ -50,8 +50,115 @@ pub(super) unsafe fn array_sparse_index_property_set(
     let new_length = index + 1;
     if (*arr).length < new_length {
         (*arr).length = new_length;
+        // `length` now exceeds the store: no raw-slot layout claim covers
+        // `[0, length)` any more (the guarded numeric readers test the claim
+        // and `index < length` only).
+        if new_length > (*arr).capacity {
+            crate::array::header::clear_array_numeric_layout(arr);
+        }
     }
     arr
+}
+
+/// A receiver that reached an Array element entry (a `T[]` annotation is a
+/// hint, never a layout fact) and is a GC-headed object of another kind: a
+/// Date, a Promise, an Error, a RegExp, a Map or Set, a function, a class
+/// instance. Returned NaN-boxed for the ordinary [[Get]] / [[Set]]. `None`
+/// for a real Array (also lazy or forwarded), a string, a typed array or a
+/// buffer (each has its own arm), an Array-subclass instance (its own
+/// element store) and every word the allocator does not vouch for.
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_object_receiver_word(arr: *const ArrayHeader) -> Option<f64> {
+    let addr = super::header::array_receiver_addr(arr as *mut ArrayHeader);
+    // SAFETY: the tracked probe admits the address before it reads a header.
+    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    let (obj_type, gc_flags) =
+        unsafe { ((*header.as_ptr()).obj_type, (*header.as_ptr()).gc_flags) };
+    if gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || crate::gc_type_is_array!(obj_type)
+        || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        || obj_type == crate::gc::GC_TYPE_STRING
+        || obj_type == crate::gc::GC_TYPE_OVERFLOW
+        || crate::gc::is_typed_array_type(obj_type)
+        || crate::gc::is_buffer_family_type(obj_type)
+    {
+        return None;
+    }
+    let value = crate::value::js_nanbox_pointer(addr as i64);
+    (!crate::array::subclass::is_array_subclass_value(value)).then_some(value)
+}
+
+/// `Get(O, ToString(index))` for [`non_array_object_receiver_word`].
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_receiver_index_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
+    let receiver = non_array_object_receiver_word(arr)?;
+    Some(crate::value::js_dyn_index_get(receiver, f64::from(index)))
+}
+
+/// `Get(null / undefined, index)` behind an Array annotation: the element
+/// read's receiver is the NaN-boxed word masked to its payload, `0x2` for
+/// null and `0x1` for undefined (no allocation lives there). GetValue's
+/// RequireObjectCoercible throws node's TypeError; any other word returns.
+/// Called only from the element read's failure arm, so no read that
+/// succeeds pays for it.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_index_get(arr: *const ArrayHeader, index: u32) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        crate::value::js_dyn_index_get(receiver, f64::from(index));
+    }
+}
+
+/// [`nullish_receiver_index_get`] for a property-key read (`a[-1]`,
+/// `a[1.5]`, `a["0"]`): called only when no allocation lives at `arr`.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_key_get(arr: *const ArrayHeader, key: *const crate::StringHeader) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        let key = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+        crate::value::js_dyn_index_get(receiver, f64::from_bits(key.bits()));
+    }
+}
+
+/// The null / undefined value whose masked payload is `arr`, if any.
+#[inline]
+fn masked_nullish_receiver(arr: *const ArrayHeader) -> Option<f64> {
+    use crate::value::{POINTER_MASK, TAG_NULL, TAG_UNDEFINED};
+    let word = arr as u64;
+    if word == TAG_NULL & POINTER_MASK {
+        Some(f64::from_bits(TAG_NULL))
+    } else if word == TAG_UNDEFINED & POINTER_MASK {
+        Some(f64::from_bits(TAG_UNDEFINED))
+    } else {
+        None
+    }
+}
+
+/// `Set(O, ToString(index), value, strict)` for
+/// [`non_array_object_receiver_word`]: an inherited setter runs, a frozen or
+/// non-extensible receiver rejects, otherwise an own property is created.
+/// `false`: not such a receiver, nothing was stored.
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_receiver_index_set(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+    strict: bool,
+) -> bool {
+    let Some(receiver) = non_array_object_receiver_word(arr) else {
+        return false;
+    };
+    crate::proxy::js_put_value_set(
+        receiver,
+        f64::from(index),
+        value,
+        receiver,
+        i32::from(strict),
+    );
+    true
 }
 
 /// Resolve a raw array head a generated loop re-read from its root after a
@@ -175,7 +282,9 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
     if obj != 0 && obj == object_prototype_addr() && !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
     {
         // DEC 250 (i): the program never adds an index to %Object.prototype%.
-        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Object);
+        crate::object::builtin_proto::refuse_index_add(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        );
         OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -218,7 +327,9 @@ pub(crate) fn array_iteration_facts() -> u32 {
 pub(crate) fn note_array_index_write(arr: usize) {
     if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         // DEC 250 (i): the program never adds an index to %Array.prototype%.
-        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
+        crate::object::builtin_proto::refuse_index_add(
+            crate::object::builtin_proto::BuiltinProto::Array,
+        );
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }

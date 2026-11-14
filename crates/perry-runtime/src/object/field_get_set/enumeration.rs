@@ -1179,11 +1179,6 @@ pub(crate) use buffers::registered_buffer_own_keys;
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
-    if let Some(result) = super::super::deferred_namespace::enumerable_keys(
-        crate::value::js_nanbox_pointer(obj as i64),
-    ) {
-        return result;
-    }
     if let Some(keys) = ordinary_keys::try_keys(obj) {
         return keys;
     }
@@ -1238,6 +1233,13 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // dereferenced a low-48-bit-of-undefined pointer (~0x1) and
         // segfaulted. Return empty array.
         return crate::array::js_array_alloc(0);
+    }
+    // A deferred namespace (#14421) declines `ordinary_keys::try_keys` (a
+    // synthetic class id); its test runs here, on a validated heap object.
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(f64::from_bits(
+        JSValue::pointer(obj as *const u8).bits(),
+    )) {
+        return result;
     }
     // Issue #323: arrays land here too (the codegen routes every `Object.keys`
     // call through this entry point, regardless of receiver type). Treating an
@@ -1316,39 +1318,16 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {
-                    let dense_limit = if length > (*arr).capacity && (*arr).capacity <= 1_000_000 {
-                        (*arr).capacity
-                    } else {
-                        0
-                    };
-                    let names = crate::array::array_named_property_enumeration_names(
+                    // Every present slot of the store, the far index keys of
+                    // a sparse Array ascending, then the named keys; rooted
+                    // (a key past 99 999 is a heap string, so each one can
+                    // collect). The old arm read no store slot at all when the
+                    // store was above 1 000 000 or the Array dense, so
+                    // `Object.keys` of a 150 000-element Array was empty.
+                    return super::entries_shape::array_own_enumerable(
                         arr,
-                        true,
-                        dense_limit,
+                        super::entries_shape::ArrayEnum::Keys,
                     );
-                    let result = crate::array::js_array_alloc(
-                        dense_limit.saturating_add(names.len() as u32),
-                    );
-                    if dense_limit > 0 {
-                        let elements = crate::array::array_elements_ptr(
-                            arr as *const crate::array::ArrayHeader,
-                        ) as *const u64;
-                        for i in 0..dense_limit {
-                            if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                                continue;
-                            }
-                            let s = i.to_string();
-                            let key_box =
-                                crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
-                            crate::array::js_array_push_f64(result, key_box);
-                        }
-                    }
-                    for name in names {
-                        let key =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(result, JSValue::string_ptr(key));
-                    }
-                    return result;
                 }
                 let elements =
                     crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
@@ -1769,28 +1748,10 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
-                }
-                let elements =
-                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
-                        as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
-                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                        continue;
-                    }
-                    let v = crate::array::js_array_get(arr, i);
-                    crate::array::js_array_push_f64(result, f64::from_bits(v.bits()));
-                }
-                for name in crate::array::array_named_property_enumeration_names(arr, true, length)
-                {
-                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
-                        crate::array::js_array_push_f64(result, v);
-                    }
-                }
-                return result;
+                return super::entries_shape::array_own_enumerable(
+                    arr,
+                    super::entries_shape::ArrayEnum::Values,
+                );
             }
         }
     }

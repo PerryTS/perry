@@ -10,6 +10,8 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
+pub(crate) mod life;
+pub(crate) mod life_measure;
 pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
@@ -88,11 +90,90 @@ pub fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var("PERRY_VERIFY_FACTS").as_deref() == Ok("1"))
 }
 
-/// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
+static INSTRUMENTED_VARIANT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The compile links the instrumented runtime variant (the answer of
+/// `optimized_libs::instrumented_variant_requested`, set once by the compile
+/// command before codegen). Off until set.
+pub fn set_instrumented_variant(on: bool) {
+    INSTRUMENTED_VARIANT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The lifetime claims are on: the facts witnesses are on AND the instrumented
+/// runtime variant is linked, the only one carrying the collector's life
+/// hooks. `PERRY_VERIFY_FACTS=1` alone emits no life claim and links the
+/// default archives. The one predicate of codegen and the compile command.
+pub fn life_claims_on() -> bool {
+    enabled() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The family claim is on: the runtime's witnesses of it (a byte cell is
+/// born, a family's global is read) exist only in the instrumented variant,
+/// so the predicate is the life claims'. `PERRY_VERIFY_FACTS=1` alone emits
+/// no family claim.
+pub fn family_claims_on() -> bool {
+    life_claims_on()
+}
+
+/// Check mode's family claim at a compiled read of global `name`: when
+/// `family_reach` says a family of that global is never created or observed,
+/// the read itself is the false proof (verdict `family`), born or not. A
+/// program whose text names the global has the family live, so this fires
+/// only for a wrong fact.
+pub(crate) fn family_global_read(ctx: &mut FnCtx<'_>, name: &str) {
+    if !family_claims_on() {
+        return;
+    }
+    use perry_runtime_manifest::families;
+    let claimed = families::entry_families(name).unwrap_or(0) & ctx.wpfacts.family_never;
+    if claimed == 0 || families::entry_root(name) != name {
+        return;
+    }
+    let family = families::RUNTIME_FAMILIES[claimed.trailing_zeros() as usize].id;
+    let site = raw_site(ctx, "family", Some(name), &[], family);
+    ctx.block().call_void(
+        "perry_verify_facts_family_observed",
+        &[(I64, &site.pointer), (I64, site.len.as_deref().unwrap())],
+    );
+}
+
+/// The lifetime measurement is on (LIFE I1, `PERRY_LIFE_MEASURE` set at
+/// compile time): an instrument knob, so the compile links the instrumented
+/// runtime variant, the only one carrying `perry_life_*`. Codegen emits the
+/// birth, activation and loop hooks (`life_measure`) only under it.
+pub fn life_measure_on() -> bool {
+    life_measure_requested() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `PERRY_LIFE_MEASURE` is set (non-empty) in the compile's environment.
+pub fn life_measure_requested() -> bool {
+    std::env::var_os("PERRY_LIFE_MEASURE").is_some_and(|v| !v.is_empty())
+}
+
+/// Dead-body removal is on (the default; `PERRY_FACTS_DCE=0` turns it off): a
 /// body the whole-program reach calls inactive is emitted as a trap.
 pub fn dce_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DCE").as_deref() == Ok("1"))
+    *ON.get_or_init(|| dce_switch(std::env::var("PERRY_FACTS_DCE").ok().as_deref()))
+}
+
+/// The value of `PERRY_FACTS_DCE` decides removal: on unless it is `0`.
+pub fn dce_switch(value: Option<&str>) -> bool {
+    value != Some("0")
+}
+
+#[cfg(test)]
+mod dce_switch_tests {
+    use super::dce_switch;
+
+    #[test]
+    fn removal_is_on_by_default_and_zero_turns_it_off() {
+        assert!(dce_switch(None));
+        assert!(dce_switch(Some("1")));
+        assert!(dce_switch(Some("")));
+        assert!(!dce_switch(Some("0")));
+    }
 }
 
 /// The facts-consumed lowerings carry their witnesses: this build, or a

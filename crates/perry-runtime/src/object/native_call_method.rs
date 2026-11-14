@@ -45,6 +45,7 @@ mod typed_array;
 mod vtable_guard_scan_tests;
 
 use crate::object::native_module::is_namespace_inherited_method;
+pub(super) use crate::typedarray_hook_slots::dispatch_typed_array_method;
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
 };
@@ -67,7 +68,7 @@ pub(crate) use proto_dispatch::{
     is_self_redispatching_proto_method, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
-pub(super) use typed_array::dispatch_typed_array_method;
+pub(crate) use typed_array::typed_array_method_tower;
 
 /// The receiver predicate of a class instance's fast method call
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled
@@ -594,8 +595,12 @@ unsafe fn native_call_method_value_inner(
     // a numerically-named vtable method (`class C { 3() {} }`) keeps working.
     if !is_symbol_key {
         if let Some(index) = numeric_index_key(key_jsval) {
+            // The index entry takes a receiver HANDLE (clear top 16 bits =
+            // a raw pointer); a Number receiver with that shape is handed
+            // over as a Number the entry cannot read as an address.
+            let receiver = crate::value::addr_class::number_receiver_for_dispatch(object);
             let field =
-                crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
+                crate::object::js_object_get_index_polymorphic(receiver.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
             // An undefined answer may still name a numerically-named vtable
             // method below; an array has none, so its element read is the
@@ -833,12 +838,9 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
     } else {
-        let bits = value.to_bits();
-        if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            bits as *const u8
-        } else {
-            return None;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return None;
     };
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -1538,8 +1540,6 @@ pub(crate) unsafe fn native_call_method_tower(
     {
         let raw_addr = if jsval().is_pointer() {
             crate::value::js_nanbox_get_pointer(object()) as usize
-        } else if (object().to_bits() >> 48) == 0 {
-            object().to_bits() as usize
         } else {
             0
         };
@@ -2059,50 +2059,19 @@ pub(crate) unsafe fn native_call_method_tower(
                     args.len(),
                 );
             }
-            // A live Error whose chain has no such callable: the member call
-            // has no callee, a TypeError as in node.
-            if gc_type == crate::gc::GC_TYPE_ERROR {
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-            // Closes #645: when a method falls through every dispatcher
-            // and returns NULL_OBJECT_BYTES (e.g. drizzle's
-            // `this.client.prepare(...)` where `this.client` resolved to
-            // a heap-object that doesn't dispatch any method named
-            // "prepare"), the result gets stored as `this.stmt` and the
-            // chained `this.stmt.raw().all(...)` re-enters this function
-            // with `obj` pointing at NULL_OBJECT_BYTES — a static stub in
-            // the binary's data segment, NOT the macOS userspace heap
-            // range that `is_valid_obj_ptr` requires (HEAP_MIN ==
-            // 0x200_0000_0000). Pre-fix this returned a literal `0.0`,
-            // which the codegen interprets as the IEEE-754 number zero,
-            // so the next chained method saw a number receiver and
-            // threw `(number).<method> is not a function`. Returning the
-            // null-object stub matches every other catch-all in this
-            // function and keeps `typeof === "object"` so chained
-            // operations propagate consistently instead of mid-chain
-            // numeric arithmetic on bit patterns. Truly garbage pointers
-            // benefit too — chained calls hit a stable null stub instead
-            // of mysterious numeric values.
-            //
-            // #340/#341 row 4 collapsed an `is_valid_obj_ptr(obj)` branch that
-            // used to sit here: BOTH of its arms already returned the stub, so
-            // it could not change the answer -- a test that cannot fail. Its
-            // premise is gone too. It was written when the stub was a `.data`
-            // static, deliberately OUTSIDE the macOS heap window
-            // (`HEAP_MIN == 0x200_0000_0000`) that `is_valid_obj_ptr` requires,
-            // so a re-entrant `stub.raw().all(...)` reached this arm with
-            // `gc_type` read out of whatever bytes preceded the static. The
-            // stub is a real `GC_TYPE_OBJECT` now, so that re-entry takes the
-            // ordinary-object path below, finds a zero-key shape, matches no
-            // method and reaches the same catch-all at the end of this
-            // function. Same answer, decided by the object model rather than by
-            // the linker's layout.
-            return crate::object::null_stub_value();
+            // A live exotic receiver whose chain has no such callable (an
+            // Error; an Array, a Date or a typed array behind a class
+            // annotation, `p.m()` with `p: P` given `[7, 8]`): the member call
+            // has no callee, node's TypeError `p.m is not a function`. The
+            // null-object stub this arm returned before (#645: a chained call
+            // on a heap object that dispatches no such method) is an ordinary
+            // object (`GC_TYPE_OBJECT`) and never reaches this arm.
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
         }
 
         // Overflow owns the current key list after a delete or descriptor

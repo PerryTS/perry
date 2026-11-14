@@ -54,7 +54,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
-use super::array_push_own::{OwnPushJoin, PUSH_SPEC_OR_OWN};
+use super::array_push_own::{method_tiers_enabled, push_entry, OwnPushJoin};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::{
@@ -670,7 +670,8 @@ fn lower_array_push_spec_order(
             let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #11021: an own `push` exits here with the method's return.
-            let mut own = OwnPushJoin::new(ctx);
+            let test = push_receiver_needs_pointer_test(ctx, array_id);
+            let mut own = OwnPushJoin::with_receiver_test(ctx, &recv_box, test);
             let new_handle = own.emit_push(ctx, &recv_handle, &v);
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
 
@@ -741,6 +742,17 @@ const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
+
+/// `method_site::inline_tier_needs_pointer_test` for the push receiver
+/// `array_id`: an owned local slot (born from a literal here, never rebound)
+/// needs no test.
+fn push_receiver_needs_pointer_test(ctx: &FnCtx<'_>, array_id: u32) -> bool {
+    let owned = matches!(
+        PushReceiverHome::resolve(ctx, array_id),
+        Some(PushReceiverHome::Slot(_))
+    ) && ctx.loop_pushed_arrays.owned.contains(&array_id);
+    crate::method_site::inline_tier_needs_pointer_test(ctx, array_id, owned, "push")
+}
 
 /// `Expr::ArrayPush`. When `field_writeback` names a class field (the
 /// `perry-transform::field_push_local_bind` expansion of `this.f.push(v)`),
@@ -951,6 +963,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             let (v, v_bits) =
                 lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
+            // The tier was folded from the receiver's ANNOTATION: unless the
+            // facts prove the site, every read of a header behind `arr_box`
+            // and every runtime entry handed its address first tests that it
+            // is a heap pointer at all.
+            let receiver_test = push_receiver_needs_pointer_test(ctx, *array_id);
 
             // Repsel 4a.1 (#6904 recon): the guarded numeric push was an
             // INVERSION — 3 out-of-line calls (guard + unboxed push + length)
@@ -986,7 +1003,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     );
                     // #11021: the fallback is where an own `push` lands (the
                     // guard rejects a named layout), and exits here.
-                    let mut own = OwnPushJoin::new(ctx);
+                    let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
                     let fast_idx = ctx.new_block("apush.numeric_fast");
                     let fallback_idx = ctx.new_block("apush.numeric_fallback");
                     let merge_idx = ctx.new_block("apush.numeric_merge");
@@ -1006,6 +1023,35 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
                     ctx.current_block = fast_idx;
+                    // The guard proved a live, unforwarded Array with room and
+                    // a numeric layout. It does NOT prove that `push` is the
+                    // builtin on it: it reads the named layout only for element
+                    // descriptors and never the array's own `[[Prototype]]`
+                    // bit, so an own `push` (data or accessor) or a prototype
+                    // installed on this one array passed it. The same word
+                    // test the inline tier's admission makes; a miss takes the
+                    // fallback, whose entry resolves the method.
+                    if method_tiers_enabled() {
+                        let plain_idx = ctx.new_block("apush.numeric_plain");
+                        let plain_label = ctx.block_label(plain_idx);
+                        let blk = ctx.block();
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let flags_addr = blk.sub(I64, &arr_handle, "6");
+                        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+                        let obj_flags = blk.load(I16, &flags_ptr);
+                        let default_proto =
+                            crate::expr::array_proto_guard::emit_array_method_admission(
+                                blk, &obj_flags,
+                            );
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk,
+                            &arr_handle,
+                        );
+                        let no_named = blk.xor(I1, &has_named, "true");
+                        let plain = blk.and(I1, &default_proto, &no_named);
+                        blk.cond_br(&plain, &plain_label, &fallback_label);
+                        ctx.current_block = plain_idx;
+                    }
                     {
                         let blk = ctx.block();
                         let arr_handle = unbox_to_i64(blk, &arr_box);
@@ -1075,7 +1121,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.record_lowered_value_with_access_mode_and_facts(
                         "NumericArrayPush",
                         Some(*array_id),
-                        PUSH_SPEC_OR_OWN,
+                        push_entry(),
                         &fallback,
                         Some(BoundsState::Unknown),
                         None,
@@ -1159,8 +1205,25 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     crate::target_layout::HeaderForm::Meta,
                 )
                 .to_string();
+                let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+                // A receiver that is no heap pointer has no header to read: it
+                // takes the forwarded arm, whose push entry sends it to the
+                // ordinary `Get` + `Call` (`OwnPushJoin::with_receiver_test`).
+                let pointer_miss_idx = receiver_test.then(|| {
+                    let hdr_idx = ctx.new_block("apush.recv.hdr");
+                    let miss_idx = ctx.new_block("apush.recv.miss");
+                    let hdr_label = ctx.block_label(hdr_idx);
+                    let miss_label = ctx.block_label(miss_idx);
+                    super::array_push_own::emit_heap_pointer_branch(
+                        ctx,
+                        &arr_box,
+                        &hdr_label,
+                        &miss_label,
+                    );
+                    ctx.current_block = hdr_idx;
+                    miss_idx
+                });
                 let blk = ctx.block();
-                let arr_handle = unbox_to_i64(blk, &arr_box);
 
                 // Issue #233: forwarded arrays must follow the
                 // forwarding chain. Route through the runtime which
@@ -1206,7 +1269,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // `push` lands — the admission mask below tests
                 // the array's named layout, where every own named property
                 // lives — and both exit here with the method's return.
-                let mut own = OwnPushJoin::new(ctx);
+                let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
                 let fwd_idx = ctx.new_block("apush.fwd");
                 // An elements-backed Array subclass (`ObjectMeta.elements`)
                 // appends to its store: the payload is resolved here and the
@@ -1244,6 +1307,10 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     blk.cond_br(&fwd_set, &fwd_label, &elem_label);
                 }
                 let _ = &is_fwd;
+                if let Some(miss_idx) = pointer_miss_idx {
+                    ctx.current_block = miss_idx;
+                    ctx.block().br(&fwd_label);
+                }
 
                 // Every load below sits behind a branch that proved its address
                 // is inside a live allocation: an Array receiver goes straight
@@ -1645,6 +1712,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // block and installs the forwarding pointer; writeback the
                 // new head to the local slot.
                 ctx.current_block = full_idx;
+                // Reached only through the header admission: a heap pointer.
+                own.receiver_is_heap_pointer();
                 let new_handle = own.emit_push(ctx, &arr_handle, &v);
                 {
                     let blk = ctx.block();
@@ -1667,7 +1736,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
             // #11021: a boxed or captured receiver's every push is this call,
             // and an own `push` exits here with the method's return.
-            let mut own = OwnPushJoin::new(ctx);
+            let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
             let new_handle = own.emit_push(ctx, &arr_handle, &v);
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
             emit_push_writeback(ctx, *array_id, &new_box, "ArrayPush")?;

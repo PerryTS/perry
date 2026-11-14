@@ -189,7 +189,11 @@ pub(crate) unsafe fn exotic_set_property(
     if matches!(kind, ExoticKind::Map | ExoticKind::Set) {
         let recorded = super::prototype_chain::object_static_prototype(addr);
         let proto_bits = recorded.unwrap_or_else(|| {
-            let name = if matches!(kind, ExoticKind::Map) { "Map" } else { "Set" };
+            let name = if matches!(kind, ExoticKind::Map) {
+                "Map"
+            } else {
+                "Set"
+            };
             super::builtin_prototype_value(name).to_bits()
         });
         if (proto_bits >> 48) == 0x7FFD && proto_bits & crate::value::POINTER_MASK != 0 {

@@ -176,10 +176,17 @@ impl Model {
 /// (the caller's `ArrRep::im`) of a literal of constant Numbers, all with
 /// the same elements. `number`: the one Number a module binding holds
 /// (`const_numbers`).
-fn const_elems(m: &Model, n: NodeId, number: &dyn Fn(u32, u32) -> Option<i64>) -> Option<Vec<u64>> {
-    let node = &m.nodes[n as usize];
+fn const_elems(
+    m: &Model,
+    nodes: &[NodeId],
+    number: &dyn Fn(u32, u32) -> Option<i64>,
+) -> Option<Vec<u64>> {
     let mut out: Option<Vec<u64>> = None;
-    for t in node.pts.to_sorted() {
+    // Every token of the binding's nodes (`bindings::BindingNodes`).
+    let toks = nodes
+        .iter()
+        .flat_map(|&n| m.nodes[n as usize].pts.to_sorted());
+    for t in toks {
         let TokKind::Obj(tm, _) = m.toks[t as usize] else {
             return None;
         };
@@ -321,6 +328,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         let i = v.binary_search_by_key(&local, |p| p.0).ok()?;
         Some(v[i].1)
     };
+    let nodes = crate::bindings::BindingNodes::new(&g.m);
     for (mi, mb) in bindings.iter_mut().enumerate().take(g.mods.len()) {
         let module = g.modules[mi].1;
         let mut roots = FxHashMap::default();
@@ -342,7 +350,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             }
             b.immutable_array = true;
             if let Some(&n) = g.mods[mi].locals.get(&*id) {
-                b.const_elems = const_elems(&g.m, n, &number);
+                b.const_elems = const_elems(&g.m, &nodes.of(n), &number);
             }
         }
     }

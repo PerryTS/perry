@@ -43,6 +43,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     if g.m.aborted || g.view.is_some() || !g.m.const_numbers {
         return;
     }
+    let nodes = crate::bindings::BindingNodes::new(&g.m);
     for (mi, mb) in bindings.iter_mut().enumerate().take(g.modules.len()) {
         let mut out: Vec<(u32, i64)> = Vec::new();
         if g.modules[mi].1.is_commonjs_wrap() {
@@ -61,7 +62,7 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             let Some(&n) = g.mods[mi].locals.get(id) else {
                 continue;
             };
-            let Some((lo, hi)) = crate::bindings::number_range(&g.m, n) else {
+            let Some((lo, hi)) = crate::bindings::number_range_of(&g.m, &nodes.of(n)) else {
                 continue;
             };
             // Negative control (`PERRY_FACTS_SABOTAGE=constnum`): any

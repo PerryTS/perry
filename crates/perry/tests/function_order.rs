@@ -15,7 +15,10 @@ function neverRun(n: number): number { let s = 0; for (let i = 0; i < n; i++) s 
 const steps = [delta, gamma, beta, alpha];
 let x = Number(process.argv.length) + 20;
 for (const step of steps) x = step(x);
-if (x === -12345) x = neverRun(x);
+// A value use keeps `neverRun`'s callable wrapper in the binary: generated
+// code that never runs and is listed nowhere.
+const later = [neverRun];
+if (x === -12345) x = later[0](x);
 console.log("result " + x);
 "#;
 
@@ -28,6 +31,10 @@ fn compile(dir: &Path, out: &str, extra: &[&str]) -> PathBuf {
     let compile = Command::new(perry_bin())
         .current_dir(dir)
         .env("PERRY_KEEP_SYMBOLS", "1")
+        // A `--function-order` link always takes GNU ld (`link/elf_linker.rs`);
+        // the plain build it is compared with must use the same linker, as
+        // the two keep different sets of duplicate local symbols.
+        .env_remove("PERRY_LINK_LLD")
         .arg("compile")
         .arg(dir.join("main.ts"))
         .arg("-o")
@@ -79,15 +86,32 @@ fn text_symbols(binary: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The symbol of `function`'s code, named as the compiler names it
+/// (`perry_codegen::symbol_names`). The function body (`perry_fn_*`) when it
+/// is a symbol of its own; a small typed function's public entry is
+/// `alwaysinline` (P2 inline admissions, d08e52eaa8), so once every call site
+/// has inlined it the body runs inside its callable wrapper
+/// (`__perry_wrap_perry_fn_*`, which `steps` calls) and only that is left.
 fn user_symbol(names: &[String], function: &str) -> String {
-    // The function body itself, not its `__perry_wrap_*` callable wrapper.
-    let suffix = format!("__{function}");
-    let matches: Vec<&String> = names
-        .iter()
-        .filter(|n| n.starts_with("perry_fn_") && n.ends_with(&suffix))
-        .collect();
-    assert_eq!(matches.len(), 1, "one symbol for {function}: {matches:?}");
-    matches[0].clone()
+    use perry_codegen::symbol_names;
+    let prefix = symbol_names::module_prefix("main.ts");
+    let body = symbol_names::function(&prefix, function);
+    let wrapper = symbol_names::function_wrapper(&prefix, function);
+    let count = |name: &str| names.iter().filter(|n| *n == name).count();
+    assert!(
+        count(&body) <= 1 && count(&wrapper) <= 1,
+        "one symbol each for {function}: {names:?}"
+    );
+    if count(&body) == 1 {
+        body
+    } else {
+        assert_eq!(
+            count(&wrapper),
+            1,
+            "{function}: neither {body} nor {wrapper} in {names:?}"
+        );
+        wrapper
+    }
 }
 
 fn position(symbols: &[String], name: &str) -> usize {
@@ -202,6 +226,10 @@ fn a_recorded_order_is_the_layout_and_a_stale_list_is_harmless() {
     // Same named code as the ordinary link: layout cannot introduce clones.
     let mut plain_set = plain_symbols.clone();
     let mut ordered_set = symbols.clone();
+    // The plain build carries the runtime's default hot-text run and its
+    // bound symbols (`link/hot_text_order.rs`); a `--function-order` link
+    // replaces that layout, so they are no code of the program's.
+    plain_set.retain(|n| !n.starts_with("__perry_rt_hot_text_"));
     plain_set.sort();
     ordered_set.retain(|n| !n.contains("hot_text") && !n.contains("thp_enabled"));
     ordered_set.sort();
@@ -357,4 +385,137 @@ fn backing_bounds_cover_complete_selected_pages_without_text_padding() {
             "{headers}"
         );
     }
+}
+
+/// Defined symbols by name, with their address.
+#[cfg(target_os = "linux")]
+fn symbol_addresses(binary: &Path) -> Vec<(u64, String, String)> {
+    let nm = Command::new("nm")
+        .arg("-n")
+        .arg("--defined-only")
+        .arg(binary)
+        .output()
+        .expect("run nm");
+    assert!(nm.status.success());
+    String::from_utf8_lossy(&nm.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let (addr, kind, name) = (parts.next()?, parts.next()?, parts.next()?);
+            Some((
+                u64::from_str_radix(addr, 16).ok()?,
+                kind.to_string(),
+                name.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The runtime's default hot-text order (`link/hot_text_order.rs`): an
+/// ordinary ELF build packs the listed runtime functions at the front of
+/// `.text`, the list still names the runtime that is built here, and
+/// `PERRY_HOT_TEXT_ORDER=off` restores the unordered layout with the same
+/// code.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("main.ts"), SOURCE).unwrap();
+    let build = |out: &str, switch: Option<&str>| {
+        let output = dir.path().join(out);
+        let mut cmd = Command::new(perry_bin());
+        cmd.current_dir(dir.path())
+            .env("PERRY_KEEP_SYMBOLS", "1")
+            .env_remove("PERRY_HOT_TEXT_ORDER")
+            .arg("compile")
+            .arg(dir.path().join("main.ts"))
+            .arg("-o")
+            .arg(&output)
+            .args(["--no-cache", "--no-auto-optimize", "--verbose"]);
+        if let Some(value) = switch {
+            cmd.env("PERRY_HOT_TEXT_ORDER", value);
+        }
+        let compile = cmd.output().expect("run perry compile");
+        let stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
+        assert!(compile.status.success(), "perry compile failed:\n{stderr}");
+        (output, stderr)
+    };
+    let (on, on_log) = build("on", None);
+    let (off, off_log) = build("off", Some("off"));
+    assert_eq!(run(&on, None), run(&off, None));
+
+    // The list against this build's runtime archives.
+    let summary = on_log
+        .lines()
+        .find(|l| l.starts_with("[hot-text] "))
+        .unwrap_or_else(|| panic!("the link reports the default order:\n{on_log}"));
+    let field = |name: &str| -> Vec<u64> {
+        let at = summary
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} in {summary}"))
+            + name.len();
+        summary[at..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .split('/')
+            .map(|n| n.parse().unwrap())
+            .collect()
+    };
+    let (listed, resolved, core) = (field("listed=")[0], field("resolved=")[0], field("core="));
+    // A backstop against wholesale rot (a mangling or crate-name change),
+    // loose enough for any build profile of the archives; the strict gate is
+    // `scripts/hot_text_order.py check`.
+    assert!(
+        resolved * 100 >= listed * 75 && core[0] * 100 >= core[1] * 90,
+        "the default hot-text order no longer names this runtime ({summary}): \
+         rebuild it (scripts/hot_text_order.py; `check` lists the missing names)"
+    );
+    assert!(
+        !off_log.contains("[hot-text]"),
+        "the switch keeps the JS text rule alone:\n{off_log}"
+    );
+
+    // The hot run: bounded, at the front of the text, and it holds code.
+    let symbols = symbol_addresses(&on);
+    let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);
+    let (start, end) = (
+        at("__perry_rt_hot_text_start").expect("hot run start"),
+        at("__perry_rt_hot_text_end").expect("hot run end"),
+    );
+    let text: Vec<&(u64, String, String)> = symbols
+        .iter()
+        .filter(|s| matches!(s.1.as_str(), "t" | "T") && !s.2.starts_with("__perry_rt_hot_text_"))
+        .collect();
+    let inside = text.iter().filter(|s| start <= s.0 && s.0 < end).count();
+    assert!(inside >= 200, "{inside} functions in the hot run");
+    assert!(
+        text.iter().filter(|s| s.0 < start).count() < 64,
+        "the hot run leads the runtime text"
+    );
+    // The program's own code is never part of it.
+    let generated: Vec<_> = text.iter().filter(|s| s.2.contains("main_ts__")).collect();
+    assert!(!generated.is_empty(), "the program's functions are symbols");
+    assert!(
+        generated.iter().all(|s| s.0 >= end),
+        "generated code stays behind the hot run"
+    );
+
+    // Off: no run, and the same named code as on.
+    let off_symbols = symbol_addresses(&off);
+    assert!(off_symbols
+        .iter()
+        .all(|s| !s.2.starts_with("__perry_rt_hot_text_")));
+    let names = |symbols: &[(u64, String, String)]| {
+        let mut names: Vec<String> = symbols
+            .iter()
+            .filter(|s| {
+                matches!(s.1.as_str(), "t" | "T") && !s.2.starts_with("__perry_rt_hot_text_")
+            })
+            .map(|s| s.2.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&symbols), names(&off_symbols), "layout only");
 }

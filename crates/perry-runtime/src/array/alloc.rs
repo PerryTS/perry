@@ -360,6 +360,8 @@ fn alloc_key_list(
         (*ptr).ek_kind = 0;
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(header);
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
         if with_attrs {
@@ -476,6 +478,11 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
             let arr = js_array_alloc(0);
             unsafe {
                 (*arr).length = length;
+                // The empty birth carries the dense raw-f64 claim (vacuously
+                // true at length 0). With a length over the 16-slot store it
+                // is false: its readers (the message serializer's bulk copy,
+                // the guarded numeric element read) take `length` raw slots.
+                clear_array_numeric_layout(arr);
             }
             arr
         } else {

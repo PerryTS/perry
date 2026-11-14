@@ -500,25 +500,36 @@ pub(super) fn static_evaluation_paths(ctx: &CompilationContext, path: &Path) -> 
     requested_paths(ctx, path, false)
 }
 
-fn requested_paths(
-    ctx: &CompilationContext,
-    path: &Path,
-    include_deferred: bool,
-) -> Vec<PathBuf> {
-    let Some(module) = ctx.native_modules.get(path) else { return Vec::new(); };
+fn requested_paths(ctx: &CompilationContext, path: &Path, include_deferred: bool) -> Vec<PathBuf> {
+    let Some(module) = ctx.native_modules.get(path) else {
+        return Vec::new();
+    };
     let mut edges = Vec::new();
     for import in &module.imports {
-        if import.is_dynamic || import.type_only || import.runtime_erased || import.is_deferred_require { continue; }
-        if import.is_deferred && !include_deferred { continue; }
-        if let Some(target) = &import.resolved_path { edges.push((PathBuf::from(target), import.source.as_str())); }
+        if import.is_dynamic
+            || import.type_only
+            || import.runtime_erased
+            || import.is_deferred_require
+        {
+            continue;
+        }
+        if import.is_deferred && !include_deferred {
+            continue;
+        }
+        if let Some(target) = &import.resolved_path {
+            edges.push((PathBuf::from(target), import.source.as_str()));
+        }
     }
     for export in &module.exports {
         let source = match export {
-            perry_hir::Export::ExportAll { source } | perry_hir::Export::ReExport { source, .. }
+            perry_hir::Export::ExportAll { source }
+            | perry_hir::Export::ReExport { source, .. }
             | perry_hir::Export::NamespaceReExport { source, .. } => source,
             perry_hir::Export::Named { .. } => continue,
         };
-        if let Some((target, _)) = resolve_import_with_context(source, path, ctx) { edges.push((target, source)); }
+        if let Some((target, _)) = resolve_import_with_context(source, path, ctx) {
+            edges.push((target, source));
+        }
     }
     let mut ordered = esm_request_order(edges, &module.requested_modules);
     let mut seen = HashSet::new();
@@ -529,9 +540,16 @@ fn requested_paths(
 /// Require rejects the graph by its executable static edges, never annotations.
 pub(super) fn graph_has_tla(ctx: &CompilationContext, path: &Path) -> bool {
     fn visit(ctx: &CompilationContext, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
-        if !seen.insert(path.to_owned()) { return false; }
-        let Some(module) = ctx.native_modules.get(path) else { return false; };
-        module.has_top_level_await || static_requested_paths(ctx, path).iter().any(|dep| visit(ctx, dep, seen))
+        if !seen.insert(path.to_owned()) {
+            return false;
+        }
+        let Some(module) = ctx.native_modules.get(path) else {
+            return false;
+        };
+        module.has_top_level_await
+            || static_requested_paths(ctx, path)
+                .iter()
+                .any(|dep| visit(ctx, dep, seen))
     }
     visit(ctx, path, &mut HashSet::new())
 }

@@ -191,15 +191,16 @@ database-sqlite = ["dep:rusqlite"]
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
 # Implies `async-bridge` (the tokio-free promise pump) because bcrypt/argon2
 # settle through it from turnloop's blocking pool, and the Hash/Hmac stream
-# events drain through it. UUID generation selects perry-uuid v4/v7; `ids`
-# remains an empty compatibility umbrella. It used to imply `async-runtime` for a
+# events drain through it. UUID generation pulls its entropy dependency
+# (`getrandom`) directly; `ids` remains an empty compatibility umbrella. It used
+# to imply `async-runtime` for a
 # `tokio::task::spawn_blocking` that turnloop P4 already replaced.
 # `crypto` stays as the umbrella for backwards-compat; `bundled-bcrypt`
 # and `bundled-argon2` (v0.5.537) split out the two password-hashing
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:openssl-sys", "dep:sha1", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2"]
+crypto = ["dep:getrandom", "dep:sha2", "dep:openssl-sys", "dep:sha1", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2"]
 bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
 bundled-argon2 = ["dep:argon2", "async-bridge"]
 
@@ -389,8 +390,9 @@ image = { version = "0.25", optional = true }
 # Validation
 
 # IDs
-# Pulled only by crypto.
-perry-uuid = { workspace = true, optional = true }
+# UUID v4/v7 entropy source, pulled only by crypto (the pre-move `perry-uuid`
+# crate's `v4`/`v7` features kept it optional the same way).
+getrandom = { version = "0.4", optional = true }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }

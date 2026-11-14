@@ -1249,6 +1249,8 @@ pub(crate) fn mark_seed_queue_address() -> *mut std::ffi::c_void {
 }
 
 pub(super) fn push_mark_seed(header: *mut GcHeader) {
+    #[cfg(perry_gc_instruments)]
+    super::life_why::marked(header as usize);
     MARK_SEEDS.with(|cell| unsafe {
         (*cell.get()).push(header);
     });
@@ -1402,6 +1404,8 @@ pub(super) unsafe fn mark_decoded_field_into_worklist(
         return false;
     }
     (*header).gc_flags = flags | GC_FLAG_MARKED;
+    #[cfg(perry_gc_instruments)]
+    super::life_why::marked(header as usize);
     // #10182: tracing a pointer-free object that is not a forwarding stub does
     // nothing — `trace_one_worklist_header` would only follow a FORWARDED hop,
     // and a leaf descriptor visits no slot — so it is marked and not queued.
@@ -1631,6 +1635,8 @@ fn drain_trace_worklist_step_impl<const DIAGNOSTICS: bool, const REMEMBER: bool>
             super::prefetch::prefetch_read(ahead as usize);
         }
         *cursor += 1;
+        #[cfg(perry_gc_instruments)]
+        super::life_why::parent(header as usize);
         trace_one_worklist_header::<DIAGNOSTICS, REMEMBER>(
             header,
             valid_ptrs,
@@ -1638,6 +1644,8 @@ fn drain_trace_worklist_step_impl<const DIAGNOSTICS: bool, const REMEMBER: bool>
             minor_only,
             sticky.as_deref_mut(),
         );
+        #[cfg(perry_gc_instruments)]
+        super::life_why::parent(0);
         remaining -= 1;
     }
     *cursor >= worklist.len()
@@ -1669,6 +1677,8 @@ fn trace_one_worklist_header<const DIAGNOSTICS: bool, const REMEMBER: bool>(
                 let new_header = header_from_user_ptr(new_user as *const u8);
                 if (*new_header).gc_flags & GC_FLAG_MARKED == 0 {
                     (*new_header).gc_flags |= GC_FLAG_MARKED;
+                    #[cfg(perry_gc_instruments)]
+                    super::life_why::marked(new_header as usize);
                     worklist.push(new_header);
                 }
             }

@@ -473,14 +473,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG
-        0x0000 => {
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }
@@ -1040,7 +1032,12 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
                 crate::object::map_set_subclass::CollectionKind::Set,
             ) as *const SetHeader
         }
-        _ => set,
+        // Any other cell (an Array, a Date, a closure, a Map, ...) or a word
+        // with no readable header (a primitive's payload behind the
+        // annotation): no `SetHeader` lives there, and the operation would read
+        // or WRITE that cell as one. Null is the "not a Set" answer every
+        // entry already gives a plain object.
+        _ => std::ptr::null(),
     }
 }
 

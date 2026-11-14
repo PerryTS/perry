@@ -345,6 +345,7 @@ mod tests {
     }
 }
 
+pub mod families;
 mod realm_exports;
 #[cfg(test)]
 mod realm_identity_audit;
