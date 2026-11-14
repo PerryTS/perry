@@ -88,7 +88,6 @@ fn dataview_get_set_results() {
 
 /// #3: `ArrayBuffer.isView(a)` is a Boolean; it reads one internal slot.
 #[test]
-#[ignore = "OPAQUE2 open: a call of the value pick(ArrayBuffer.isView) does not reach the isView arm; the direct call does"]
 fn array_buffer_is_view() {
     reads(&[("ArrayBuffer.isView(dv)", "toFixed", false)]);
     check(&[
@@ -157,6 +156,36 @@ fn number_and_string_statics() {
         ("pick(Number.parseFloat)(w);".into(), true),
         ("String.fromCharCode(w);".into(), true),
         ("String.raw({ raw: [\"a\", \"b\"] } as any, w);".into(), true),
+    ]);
+}
+
+/// A builtin function value is the same function object however it reached
+/// the call: read directly, or returned by a program function called in
+/// callee position (`pick(F)(x)`, ECMA-262 13.3.6.1: the callee is a value).
+/// `Array.isArray` (23.1.2.2) converts nothing; `Math.abs` (21.3.2.1) is
+/// ToNumber, a Number. Controls: a program function through `pick` is
+/// called; a host function through `pick` gets its argument.
+#[test]
+fn builtin_value_through_program_function() {
+    check(&[
+        ("Array.isArray(w);".into(), false),
+        ("pick(Array.isArray)(w);".into(), false),
+        ("const r: any = pick(Array.isArray)(o); try { r.foo(o); } catch (e) {}".into(), false),
+        ("const r: any = pick(Math.abs)(1); try { r.foo(o); } catch (e) {}".into(), false),
+        ("pick(Math.abs)(w);".into(), true),
+        ("pick(Number.isInteger)(pick(Array.isArray)(w));".into(), false),
+        ("pick((y: any) => (globalThis as any).hostTake(y))(o);".into(), true),
+    ]);
+}
+
+/// An unknown host function (a global property the program never writes)
+/// gets its argument: called directly it escapes, and it must through pick too.
+#[test]
+#[ignore = "PICKFN2 open: the value read of an unwritten global property flows as non-escaping, so pick(globalThis.hostUnknown)(o) keeps o; the direct call escapes"]
+fn unknown_host_function_through_program_function() {
+    check(&[
+        ("(globalThis as any).hostUnknown(o);".into(), true),
+        ("pick((globalThis as any).hostUnknown)(o);".into(), true),
     ]);
 }
 
