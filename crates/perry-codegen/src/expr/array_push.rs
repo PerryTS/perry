@@ -285,7 +285,7 @@ fn emit_dynamic_pointer_push_store(
             let refcount_addr = blk.add(I64, &payload, "12");
             let refcount_ptr = blk.inttoptr(I64, &refcount_addr);
             let refcount = blk.load(I32, &refcount_ptr);
-            let unique = blk.icmp_ne(I32, &refcount, "0");
+            let unique = blk.icmp_eq(I32, &refcount, "1");
             blk.cond_br(&unique, &string_demote_label, &done_label);
         }
         ctx.current_block = string_demote_idx;

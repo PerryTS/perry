@@ -69,9 +69,39 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `Object.prototype.hasOwnProperty(V)` with `this` (ECMA-262 20.1.3.2):
+/// ToPropertyKey(V) runs before ToObject(this), the reverse of
+/// `Object.hasOwn`. Only a nullish receiver can tell the two orders apart
+/// (ToObject of anything else runs no code and cannot fail), so that is the
+/// one case answered here; every other receiver is [`js_object_has_own`].
+#[inline]
+pub(crate) fn object_prototype_has_own_property(this: f64, key: f64) -> f64 {
+    let bits = this.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        if !super::super::property_key_coercion_is_inert(key) {
+            // May run user code and throw: that completion comes first.
+            unsafe { super::super::js_to_property_key(key) };
+        }
+        super::super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+    js_object_has_own(this, key)
+}
+
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // The probe's presence mode (`layout_probe::probe_has`) first: it
+    // declines a deferred namespace, so the namespace arm and the complete
+    // operation only see what it cannot answer.
+    match unsafe {
+        crate::object::layout_probe::probe_has(obj_value.to_bits(), key_value.to_bits(), true)
+    } {
+        1 => return f64::from_bits(TAG_TRUE),
+        0 => return f64::from_bits(TAG_FALSE),
+        _ => {}
+    }
     if let Some(result) = super::super::deferred_namespace::with_key_target(
         obj_value,
         key_value,
@@ -79,17 +109,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     ) {
         return result;
     }
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    // The probe's presence mode (`layout_probe::probe_has`), else the
-    // complete operation.
-    match unsafe {
-        crate::object::layout_probe::probe_has(obj_value.to_bits(), key_value.to_bits(), true)
-    } {
-        1 => f64::from_bits(TAG_TRUE),
-        0 => f64::from_bits(TAG_FALSE),
-        _ => object_has_own_generic(obj_value, key_value),
-    }
+    object_has_own_generic(obj_value, key_value)
 }
 
 /// [`js_object_has_own`] for every receiver and key the shape does not answer

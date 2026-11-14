@@ -248,7 +248,9 @@ pub(super) fn changed_word(st: &mut State, word: usize, pc: usize) {
     }
     let external = st.globals.contains(word as u64)
         || (st.realm.0 <= word && word < st.realm.1)
-        || st.cells.object_start(word)
+        || st
+            .cells
+            .object_start(word)
             .and_then(|h| st.cells.born_by.get(h as u64))
             .is_some_and(|(owner, _)| owner as usize != id);
     if external {

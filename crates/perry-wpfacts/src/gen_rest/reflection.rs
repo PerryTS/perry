@@ -79,6 +79,7 @@ impl<'a> Gen<'a> {
                                 idx: k,
                                 dst,
                                 shape: 0,
+                                kept: false,
                             },
                         );
                         dst
