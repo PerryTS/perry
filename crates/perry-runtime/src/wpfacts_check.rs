@@ -602,8 +602,16 @@ pub extern "C" fn perry_verify_facts_tick() {
 mod life;
 #[cfg(perry_gc_instruments)]
 mod life_measure;
-mod report;
+#[cfg(perry_gc_instruments)]
+mod life_regions;
+/// LIFE I3: the census's fresh-header event and the region measurement.
+#[cfg(perry_gc_instruments)]
+pub(crate) use life_regions::{
+    born as life_regions_born, evacuated as life_regions_evacuated, exit as life_regions_exit,
+    on as life_regions_on,
+};
 pub(crate) mod records;
+mod report;
 use report::Witness;
 
 fn key_matches(bits: u64, expected: &[u8]) -> bool {

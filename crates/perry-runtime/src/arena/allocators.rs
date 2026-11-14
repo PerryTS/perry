@@ -754,7 +754,11 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
         }
         record_arena_object_start(user_ptr as usize - GC_HEADER_SIZE, obj_type);
         #[cfg(perry_gc_instruments)]
-        super::alloc_sample::placed((user_ptr as usize - GC_HEADER_SIZE) as *mut u8, total, obj_type);
+        super::alloc_sample::placed(
+            (user_ptr as usize - GC_HEADER_SIZE) as *mut u8,
+            total,
+            obj_type,
+        );
         return user_ptr;
     }
 

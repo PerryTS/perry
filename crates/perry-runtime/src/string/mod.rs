@@ -123,9 +123,9 @@ mod io;
 mod iter_object;
 mod locale;
 pub(crate) mod normalize_hooked;
-pub(crate) mod short_pair;
 mod pad;
 mod provenance;
+pub(crate) mod short_pair;
 use provenance::{combine_string_flags, raw_string_metadata};
 pub(crate) mod literal_replace;
 #[cfg(test)]

@@ -83,8 +83,7 @@ pub(crate) unsafe fn fill_listed_hole(
     let slot = keys.storage_slot(index);
     if slot >= object_inline_capacity(obj)
         || (index..keys.count()).any(|i| {
-            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits()
-                != crate::value::TAG_HOLE
+            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits() != crate::value::TAG_HOLE
         })
     {
         return false;

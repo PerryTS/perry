@@ -12,7 +12,10 @@ use super::*;
 const CALLS: &[(&str, &str)] = &[
     ("mkdir", "fs.mkdirSync(X)"),
     ("unlink", "fs.unlinkSync(X)"),
-    ("rm_recursive", "fs.rmSync(X, { recursive: true, force: true })"),
+    (
+        "rm_recursive",
+        "fs.rmSync(X, { recursive: true, force: true })",
+    ),
     ("exists", "fs.existsSync(X)"),
 ];
 

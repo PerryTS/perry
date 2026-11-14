@@ -44,6 +44,7 @@ use super::{
 
 mod archive_cache;
 mod build_and_run;
+mod elf_linker;
 mod function_layout;
 mod glibc_version;
 mod harmonyos_objects;

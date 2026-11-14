@@ -1442,14 +1442,21 @@ pub(super) fn record_settle(record: usize, suspended: bool) {
     let init = if record == st.entry_record {
         st.entry_init
     } else {
-        st.inits.iter().rposition(|i| i.guard == record).map_or(0, |i| i as u32)
+        st.inits
+            .iter()
+            .rposition(|i| i.guard == record)
+            .map_or(0, |i| i as u32)
     };
     input_record::event(
         st,
         "record_settle",
         format!(
             "init={init};record={record:x};status={}",
-            if suspended { "ASYNC;policy=STOP" } else { "EVALUATED" }
+            if suspended {
+                "ASYNC;policy=STOP"
+            } else {
+                "EVALUATED"
+            }
         ),
     );
 }
@@ -4184,7 +4191,13 @@ fn write_report(st: &mut State) {
         st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
         st.serial as u8, st.keyname as u8, st.symid as u8
     );
-    for (id, i) in st.inits.iter().enumerate().skip(1).filter(|(_, i)| i.guard != 0) {
+    for (id, i) in st
+        .inits
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, i)| i.guard != 0)
+    {
         let _ = writeln!(f, "#record\t{:x}\t{id}", i.guard);
     }
     if st.entry_record != 0 {
@@ -5580,9 +5593,15 @@ fn k4_queue_rows(st: &mut State) {
             format!("init={init};pending={n};policy=image;ticks={list}"),
         );
     }
-    let resolves = crate::promise::snap_scheduled_resolves()
-        .map(|r| r.iter().map(|(o, c)| format!("resolve:{o}:{c:x}")).collect());
-    if resolves.as_ref().is_none_or(|r: &Vec<String>| !r.is_empty()) {
+    let resolves = crate::promise::snap_scheduled_resolves().map(|r| {
+        r.iter()
+            .map(|(o, c)| format!("resolve:{o}:{c:x}"))
+            .collect()
+    });
+    if resolves
+        .as_ref()
+        .is_none_or(|r: &Vec<String>| !r.is_empty())
+    {
         let (n, list) = shown_field(resolves);
         input_record::event(
             st,

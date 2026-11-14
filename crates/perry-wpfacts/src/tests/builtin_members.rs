@@ -435,7 +435,10 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             .filter(|s| s.key == "b")
             .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
     };
-    let pf = facts(&body("Map", "t.unrelated = function () { return new Q(); };"));
+    let pf = facts(&body(
+        "Map",
+        "t.unrelated = function () { return new Q(); };",
+    ));
     assert!(site_b(&pf), "{}", pf.dump_text());
     let computed = "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };";
     for (hand, w) in [

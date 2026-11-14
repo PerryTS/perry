@@ -43,7 +43,10 @@ pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
         ns
     };
     let identity = m.namespace_property(ns, &name)?.native?;
-    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+        identity,
+        holder: None,
+    })))
 }
 
 /// `super(...)` into a native parent.

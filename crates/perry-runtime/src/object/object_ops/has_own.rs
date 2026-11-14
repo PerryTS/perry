@@ -555,6 +555,9 @@ unsafe fn has_own_of_non_ordinary_kind(
 /// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891).
 #[no_mangle]
 pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f64) -> f64 {
+    // A Number has no own enumerable property, whichever Number it is: one
+    // with clear top 16 bits must not reach the raw-pointer decodes below.
+    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {

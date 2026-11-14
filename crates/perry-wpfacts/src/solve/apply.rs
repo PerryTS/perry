@@ -447,6 +447,13 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            Cons::Objects { dst } => {
+                // ToObject of an object is the object; a primitive's
+                // wrapper is the caller's `Guard` (`builtins::to_object`).
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+            }
             Cons::Fulfil { dst } => {
                 // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
                 // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.
@@ -484,11 +491,23 @@ impl Model {
                         // (a stored `undefined` among them) count as they are.
                         let chain = self.node_l("fulfil-then-chain");
                         self.cons(chain, Cons::Defined { dst: read });
-                        self.cons(one, Cons::Load { key: then, dst: chain });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: chain,
+                            },
+                        );
                         let own = self.field(t, then_a);
                         self.edge(own, read);
                     } else {
-                        self.cons(one, Cons::Load { key: then, dst: read });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: read,
+                            },
+                        );
                     }
                 }
             }
@@ -1117,6 +1136,15 @@ impl Model {
                             );
                         }
                         self.note_objproto_accessor();
+                        // `ObjectProto` stands for every built-in prototype:
+                        // the lookups of a primitive (`prim_load`) and of an
+                        // unknown value (⊤) end there too, and no walk runs
+                        // for them. Any of them may call the accessor, with
+                        // any receiver.
+                        if self.reach_proto_accessors {
+                            let r = self.reason("accessor on a built-in prototype");
+                            self.escape(f, r);
+                        }
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
                 }

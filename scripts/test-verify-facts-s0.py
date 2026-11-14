@@ -101,12 +101,16 @@ def main():
     runtime_dir = Path(os.environ.get("PERRY_RUNTIME_DIR", str(args.perry.parent)))
     if (runtime_dir / "libperry_runtime_instr.a").exists():
         instr = dict(PERRY_GC_INSTRUMENTS="1")
-        for name, family, observed_text in [
-            ("family-bytes-negative", "typedarray", "a byte cell is born"),
-            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born"),
-            ("family-bytes-observe-negative", "typedarray", "is observed"),
-            ("family-bytes-poolsize-negative", "typedarray", "is observed"),
-            ("family-regex-negative", "regex_engine", "a RegExp is born"),
+        # `aborts`: the family's install follows the fact (the byte cells do,
+        # `PERRY_FACTS_FAMILY_LINK`), and the program creates a value of it:
+        # without the witnesses the sabotaged `never` leaves the family out
+        # of the link, and the birth must abort, not answer.
+        for name, family, observed_text, aborts in [
+            ("family-bytes-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-observe-negative", "typedarray", "is observed", False),
+            ("family-bytes-poolsize-negative", "typedarray", "is observed", False),
+            ("family-regex-negative", "regex_engine", "a RegExp is born", False),
         ]:
             source = fixtures / (name + ".ts")
             expected = oracle(source)
@@ -122,13 +126,29 @@ def main():
             member = value["observed_member"] or ""
             assert observed_text in member, value
             assert member.startswith(family + ": ") or value["expectation"] == family, value
-            # Without the instrumented variant no claim is made: the same
-            # sabotaged fact has no consumer.
+            # Without the instrumented variant check mode makes no claim.
+            # The link decision still reads the fact: a family the detector
+            # selected (these programs name it) that the fact says is never
+            # used is left out, and a value of it that is created anyway
+            # aborts at the birth (no answer, no rc 0); one that is only
+            # observed, or whose install the detector still decides, runs as
+            # before.
             exe, e = compile_(source, name + "-default", PERRY_FACTS_SABOTAGE="famreach:" + family)
             observed = observe(exe, e)
+            if aborts:
+                assert observed.returncode not in (0, 86), observed
+                assert observed.stdout == b"", observed
+                assert b"family_reach" in observed.stderr and family.encode() in observed.stderr, observed
+            else:
+                assert observed.returncode == 0 and observed.stdout == expected, observed
+            # With the link switch off the sabotaged fact has no consumer.
+            exe, e = compile_(source, name + "-nolink", PERRY_FACTS_SABOTAGE="famreach:" + family,
+                              PERRY_FACTS_FAMILY_LINK="0")
+            observed = observe(exe, e)
             assert observed.returncode == 0 and observed.stdout == expected, observed
-            save(name, status=86)
-        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live")]:
+            save(name, status=86, default="aborts" if aborts else "runs")
+        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live"),
+                              ("family-bytes-write-encoding", "never")]:
             source = fixtures / (name + ".ts")
             dump = args.out / (name + ".facts")
             exe, e = compile_(source, name, PERRY_FACTS_DUMP=str(dump), **instr)
@@ -142,6 +162,49 @@ def main():
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(name, status=observed.returncode)
+        # The link decision only removes. A program whose family is never
+        # and whose text the detector does not match is the detector's
+        # binary: no install, no claim. A comparator sort's two scratch
+        # cells are no values and run there.
+        source = fixtures / "family-bytes-scratch.ts"
+        exe, e = compile_(source, "family-bytes-scratch-default", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        save("family-bytes-scratch-default", status=observed.returncode)
+        # A program the detector matches by a name (`class CommandBuffer`)
+        # and the fact says never creates a byte cell: the install is left
+        # out and the image claims the family; with the switch off the
+        # detector's install is back and nothing is claimed.
+        source = fixtures / "family-bytes-detector-only.ts"
+        expected = oracle(source)
+        exe, e = compile_(source, "family-bytes-detector-only", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_families_never" in symbols, "the image makes the family claim"
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        removed = exe.stat().st_size
+        exe, e = compile_(source, "family-bytes-detector-only-nolink", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="0")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_install_typedarray" in symbols, "the detector no longer selects the group"
+        assert b"js_runtime_families_never" not in symbols, "a claim with the switch off"
+        assert removed < exe.stat().st_size, (removed, exe.stat().st_size)
+        save("family-bytes-detector-only", status=0, bytes_removed=exe.stat().st_size - removed)
+        # `full`: the install follows the fact both ways. A program the
+        # detector misses (constructors through constant computed keys) links
+        # the group and answers like node.
+        source = fixtures / "family-bytes-link-full.ts"
+        exe, e = compile_(source, "family-bytes-link-full", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="full")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        assert b"js_runtime_install_typedarray" in run(["nm", str(exe)]).stdout
+        save("family-bytes-link-full", status=observed.returncode)
     else:
         save("family-claims", status="skipped: no instrumented runtime variant")
 
@@ -192,6 +255,7 @@ def main():
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
         ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("quiet-strings-negative", "quiet-strings", "quiet sites"),
         ("typed-array-site-negative", "tasite", "method site"),
         ("array-site-negative", "arraysite", "method site"),
         ("collection-site-negative", "collsite", "method site"),
@@ -232,6 +296,11 @@ def main():
         ("birth-image-negative", "birthimage", "birth image"),
         ("string-call-negative", "stringcall", "call kinds"),
         ("loop-trip-negative", "looptrip", "loop trip bound"),
+        # Activation reach, members on a built-in prototype (class H): each
+        # arm turns one rule off, and the body the program enters through
+        # the member reports "inactive body".
+        ("reach-held-keys-negative", "noreachheldkeys", "inactive body"),
+        ("reach-proto-accessor-negative", "noreachprotoaccessors", "inactive body"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

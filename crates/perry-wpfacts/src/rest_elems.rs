@@ -272,6 +272,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         | Cons::NotNullish { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }
+        | Cons::Objects { .. }
         | Cons::RetInto { .. }
         | Cons::ArgInto { .. } => true,
         // A callee: calling or constructing an Array throws before any

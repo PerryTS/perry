@@ -757,6 +757,11 @@ impl ShapeSlab {
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 impl ShapeSlab {
     pub(in super::super) fn snap22_counts(&self) -> (usize, u32, u32, usize) {
-        (self.len, self.next_row, self.chunk_end, self.region.capacity())
+        (
+            self.len,
+            self.next_row,
+            self.chunk_end,
+            self.region.capacity(),
+        )
     }
 }

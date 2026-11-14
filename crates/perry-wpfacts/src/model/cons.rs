@@ -261,6 +261,13 @@ pub enum Cons {
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
     /// like `NotNullish`.
     NotUndefined { dst: NodeId },
+    /// ToObject of the node's values (ECMA-262 7.1.18) for what is an
+    /// object already: its object and function tokens, ⊤ and its markers
+    /// flow into `dst`; no primitive does (ToObject never returns one). A
+    /// primitive's wrapper is a separate `Guard` (`guard::BOXED`) of the
+    /// caller (`builtins::to_object`). A rule of the program text, like
+    /// `NotNullish`.
+    Objects { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -717,6 +724,7 @@ impl Cons {
             Cons::Fulfil { .. } => "fulfil",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
+            Cons::Objects { .. } => "objects",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",

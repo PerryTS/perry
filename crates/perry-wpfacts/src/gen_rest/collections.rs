@@ -24,7 +24,8 @@ impl<'a> Gen<'a> {
     /// (`Model::len_index_sites`). One site per node: a second function's
     /// rule on a node the first owns is a capture, which ends the fact.
     fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
-        if (self.m.held_lengths || self.m.named_lengths) && !self.m.len_index_sites.contains_key(&r) {
+        if (self.m.held_lengths || self.m.named_lengths) && !self.m.len_index_sites.contains_key(&r)
+        {
             let site = self.store_site(fx.module, fx.f, what.into(), None, false);
             self.m.len_index_sites.insert(r, site);
         }
