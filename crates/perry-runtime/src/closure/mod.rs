@@ -40,6 +40,7 @@ pub use alloc::{
     scan_singleton_closure_roots_mut, ClosureHeader, CLOSURE_ALLOC_COUNT,
     CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS, CLOSURE_SHAPE_OFFSET,
 };
+pub use alloc::{closure_capture_ref, closure_set_capture_ref};
 pub(crate) use alloc::{
     closure_install_boxed_captures, closure_set_code_word, gc_capture_slot_range,
     returned_capture_bits, singleton_closure_if_cached,

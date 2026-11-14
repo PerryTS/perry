@@ -1433,6 +1433,43 @@ pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i
     }
 }
 
+/// Store a heap reference (the address of a GC object: a promise, a closure,
+/// an array, an object, a cell) into a capture slot, as a `POINTER_TAG` value.
+/// A capture slot is a JS value slot: the collector reads it as value bits, so
+/// the edge carries its tag like every other value and is never a bare
+/// address. Null stays the zero word. Read it back with
+/// [`closure_capture_ref`].
+#[inline]
+pub fn closure_set_capture_ref(closure: *mut ClosureHeader, index: u32, addr: i64) {
+    let addr = addr as u64 & crate::value::POINTER_MASK;
+    let bits = if addr == 0 {
+        0
+    } else {
+        crate::value::POINTER_TAG | addr
+    };
+    js_closure_set_capture_bits(closure, index, bits);
+}
+
+/// The address a capture slot written by [`closure_set_capture_ref`] holds:
+/// the payload of a pointer-, string- or bigint-tagged word, 0 for an empty
+/// slot or any other value. An untagged word is returned as it is: a slot
+/// whose writer still stores the bare address.
+#[inline]
+pub fn closure_capture_ref(closure: *const ClosureHeader, index: u32) -> i64 {
+    let bits = js_closure_get_capture_bits(closure, index);
+    let tag = bits & crate::value::TAG_MASK;
+    if tag == crate::value::POINTER_TAG
+        || tag == crate::value::STRING_TAG
+        || tag == crate::value::BIGINT_TAG
+    {
+        (bits & crate::value::POINTER_MASK) as i64
+    } else if tag == 0 {
+        bits as i64
+    } else {
+        0
+    }
+}
+
 /// A code address (a function entry) stored as a plain capture word.
 pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
     closure_set_capture_word(closure, index, code as i64);

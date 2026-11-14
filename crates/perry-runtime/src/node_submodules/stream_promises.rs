@@ -12,8 +12,7 @@
 
 use super::fs_promises::{promise_rejected, promise_undefined};
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -219,7 +218,7 @@ extern "C" fn stream_promises_finished_error_listener(
     _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     finished_state_reject(state, err);
     undefined_value()
 }
@@ -228,7 +227,7 @@ extern "C" fn stream_promises_finished_side_listener(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     let readable_side = js_closure_get_capture_f64(closure, 1).to_bits() == crate::value::TAG_TRUE;
     if readable_side {
         finished_state_set_bool(state, b"readableDone", true);
@@ -243,7 +242,7 @@ extern "C" fn stream_promises_finished_close_listener(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     if finished_state_bool(state, b"settled") {
         return undefined_value();
     }
@@ -407,7 +406,7 @@ fn pending_finished_promise(
         crate::fn_info!(stream_promises_finished_error_listener, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(error_listener, 0, state as i64);
+    crate::closure::closure_set_capture_ref(error_listener, 0, state as i64);
     add_once_listener(handle, b"error", listener_value(error_listener));
 
     if need_readable {
@@ -415,7 +414,7 @@ fn pending_finished_promise(
             crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
             2,
         );
-        js_closure_set_capture_ptr(end_listener, 0, state as i64);
+        crate::closure::closure_set_capture_ref(end_listener, 0, state as i64);
         js_closure_set_capture_f64(end_listener, 1, f64::from_bits(crate::value::TAG_TRUE));
         add_once_listener(handle, b"end", listener_value(end_listener));
     }
@@ -424,7 +423,7 @@ fn pending_finished_promise(
             crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
             2,
         );
-        js_closure_set_capture_ptr(finish_listener, 0, state as i64);
+        crate::closure::closure_set_capture_ref(finish_listener, 0, state as i64);
         js_closure_set_capture_f64(finish_listener, 1, f64::from_bits(crate::value::TAG_FALSE));
         add_once_listener(handle, b"finish", listener_value(finish_listener));
     }
@@ -433,7 +432,7 @@ fn pending_finished_promise(
         crate::fn_info!(stream_promises_finished_close_listener, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(close_listener, 0, state as i64);
+    crate::closure::closure_set_capture_ref(close_listener, 0, state as i64);
     add_once_listener(handle, b"close", listener_value(close_listener));
 
     if let Some(signal) = signal {

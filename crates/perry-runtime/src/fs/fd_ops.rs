@@ -1056,8 +1056,7 @@ extern "C" fn dir_finish_read_promise_impl(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let id = dir_id_of(closure);
-    let promise =
-        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 1) as *mut crate::promise::Promise;
     let value = crate::closure::js_closure_get_capture_f64(closure, 2);
     let is_error = crate::closure::js_closure_get_capture_f64(closure, 3) != 0.0;
     dir_clear_operation_pending(id);
@@ -1085,7 +1084,7 @@ fn dir_pending_read_promise(
         4,
     );
     crate::closure::closure_set_capture_word(closure, 0, id as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, promise as i64);
+    crate::closure::closure_set_capture_ref(closure, 1, promise as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
     crate::closure::js_closure_set_capture_f64(closure, 3, if is_error { 1.0 } else { 0.0 });
     crate::builtins::js_queue_microtask(closure as i64);
@@ -1098,7 +1097,7 @@ extern "C" fn dir_finish_read_callback_impl(
 ) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let id = dir_id_of(closure);
-    let callback = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
+    let callback = crate::closure::closure_capture_ref(closure, 1) as *const ClosureHeader;
     let value = crate::closure::js_closure_get_capture_f64(closure, 2);
     let kind = crate::closure::js_closure_get_capture_f64(closure, 3) as i32;
     match kind {
@@ -1147,7 +1146,7 @@ fn dir_schedule_read_callback(
         4,
     );
     crate::closure::closure_set_capture_word(closure, 0, id as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, callback as i64);
+    crate::closure::closure_set_capture_ref(closure, 1, callback as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
     crate::closure::js_closure_set_capture_f64(closure, 3, kind);
     crate::builtins::js_queue_microtask(closure as i64);
