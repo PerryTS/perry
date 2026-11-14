@@ -41,6 +41,11 @@ const QNAN_PREFIX_I64: &str = "9221120237041090560";
 /// a function call but produces correct results across the entire JS
 /// truthiness table.
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
+    // A local or a field read the whole-program facts prove a Boolean
+    // (`expr::booleans`): a proof about the values, not the annotation.
+    if let Some(truthy) = crate::expr::booleans::truthy(ctx, cond_val, cond_expr) {
+        return truthy;
+    }
     if is_numeric_expr(ctx, cond_expr)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
         // Keep bare binding truthiness independent of binding-level type

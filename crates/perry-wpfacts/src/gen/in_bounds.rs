@@ -78,6 +78,12 @@ pub(crate) fn read_enabled() -> bool {
     )
 }
 
+/// The in-bounds reads' switch and negative control (`inread`).
+pub(crate) fn configure_read(m: &mut Model, sabotage: Option<&str>) {
+    m.inbounds_read = read_enabled();
+    m.inbounds_read_sabotage = sabotage == Some("inread");
+}
+
 /// What the walked body's text says of its locals (`scan`).
 pub(crate) struct BodyLocals {
     f: FnIdx,

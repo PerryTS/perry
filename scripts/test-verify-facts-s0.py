@@ -252,6 +252,7 @@ def main():
         ("key-sign-negative", "keysign", "key sign"),
         ("wide-key-negative", "widekey", "wide key"),
         ("literal-string-negative", "litstr", "literal string"),
+        ("boolean-negative", "bools", "boolean"),
         ("held-length-negative", "heldlen", "held length"),
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
