@@ -158,3 +158,23 @@ fn control_optional_chain_does_not_throw() {
     let k = at(&pf, "go", true);
     assert!(r.iter().chain(k.iter()).all(|v| v != "Throws"), "{r:?} {k:?}");
 }
+
+/// PRIMRECV2 step 1: a pure primitive set whose source node left a value
+/// out (`dropped`: the parameter marker of `outer` crossed into `inner`
+/// and was replaced by `inner`'s argument marker) is not the whole truth:
+/// no NativeMember / OwnLength, as for the two-kind and Throws claims.
+#[test]
+fn dropped_source_refuses_native_member_and_own_length() {
+    let src = format!(
+        "{C}function inner(y: any) {{ return y.replace(\"a\", \"b\") + y.length; }}\n\
+         function outer(x: any) {{ return inner(x); }}\n\
+         console.log(outer(c ? \"ab\" : \"cd\"));\n"
+    );
+    let path = "t.ts".to_string();
+    let module = perry_parser::parse_typescript(&src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
+    let pf = crate::compute_units(&[(path, &hir)], &FactsConfig::default());
+    assert!(none(&at(&pf, "replace", true), "NativeMember"));
+    assert!(none(&at(&pf, "length", false), "OwnLength"));
+}
+

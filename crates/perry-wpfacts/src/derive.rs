@@ -1315,11 +1315,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
-        // Throws and a claim naming the TypeError arm of a nullish receiver
-        // (`nullish_arms`) need every value of the sources too.
+        // Throws, a claim naming the TypeError arm of a nullish receiver
+        // (`nullish_arms`) and a member claim on a receiver set of
+        // primitives only (every token a closed marker) need every value of
+        // the sources too: a source that left a value out (`dropped`) holds
+        // a set that is not the whole truth.
         let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
+        let only_prims = prim != 0 && toks.iter().all(|&t| m.closed_marker(t));
         if (verdict == Verdict::Throws
-            || (nullish && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
+            || ((nullish || only_prims)
+                && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
             && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
