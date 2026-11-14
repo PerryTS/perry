@@ -312,6 +312,54 @@ const TWO_CALLERS: &str = "warn('a ' + process.env.H);\nwarn('literal no percent
 fn funnel_through_identity_enhancer_is_dead() {
     assert_eq!(verdict_with(&format!("{ENH}{TWO_CALLERS}")), crate::Verdict::Dead);
 }
+// DEADFN9: three.js calls `warn`/`error` from functions that a caller's
+// summary composes (`Object3D::add`, `Color::setStyle`, expanded one level
+// into the run that calls them): the composed body's own call of `warn` is
+// a copy call in the caller's run, with no program site. Each such call
+// binds the callee run of (its site, the caller's run), not one run shared
+// by every caller inside a run.
+const NESTED: &str = "function add(o) { warn('literal no percent', o); }
+function attach(o) { add(o); }
+function setStyle(s) { warn('Unknown ' + s); }
+function parse(s) { setStyle(s); }
+";
+#[test]
+fn funnel_nested_callers_is_dead() {
+    assert_eq!(verdict_with(&format!("{ENH}{NESTED}attach(new A());\nparse(process.env.H);\n")), crate::Verdict::Dead);
+}
+// (i) Recursion: `f` calls itself from its own run; the recursive call
+// folds onto the run of its first occurrence on the chain, and the solve
+// terminates.
+#[test]
+fn funnel_nested_recursive_caller_is_dead() {
+    let src = "function w1(o) { warn('literal no percent', o); }
+function f(n, o) { w1(o); if (n) f(n - 1, o); }
+f(3, new A());
+parse(process.env.H);
+";
+    assert_eq!(verdict_with(&format!("{ENH}{NESTED}{src}")), crate::Verdict::Dead);
+}
+// (ii) A caller reached from unknown code runs `warn` with an unknown
+// message beside an object.
+#[test]
+fn funnel_nested_escaped_caller_runs() {
+    let src = "function g(s, o) { warn('a ' + s, o); }
+function k(s, o) { g(s, o); }
+globalThis.k = k;
+k('b', new A());
+eval(process.argv[2]);
+";
+    assert_ne!(verdict_with(&format!("{ENH}{src}")), crate::Verdict::Dead);
+}
+// (iii) Two sites of one caller run with different argument shapes: two runs.
+#[test]
+fn funnel_nested_two_sites_one_caller_is_dead() {
+    let src = "function h(s, o) { warn('literal no percent', o); warn('a ' + s); }
+function k(s, o) { h(s, o); }
+k(process.env.H, new A());
+";
+    assert_eq!(verdict_with(&format!("{ENH}{src}")), crate::Verdict::Dead);
+}
 // (i) The enhancer returns another call's array (a module variable).
 #[test]
 fn funnel_enhancer_returning_saved_array_runs() {
