@@ -795,7 +795,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
         return;
     };
     let meta = crate::object::gc_object_meta_slot(obj as usize);
-    let arguments = crate::object::arguments_mapping_slot(obj);
     let selection = heap_payload_slot_selection_from(header, payload, shape);
     let full = full_trace_active();
     let prototype = crate::object::gc_shape_prototype_edge_slot(shape, full);
@@ -827,9 +826,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
     }
     if let Some(slot) = meta {
         visit(pointer_slot(slot.cast()).with_layout(HeapChildSlotReadKind::Prefix));
-    }
-    if let Some(slot) = arguments {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     match selection {
         HeapPayloadSlotSelection::Empty => {}
