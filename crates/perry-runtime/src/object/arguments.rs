@@ -1,36 +1,22 @@
 //! ECMAScript Arguments objects with ordinary property slots.
 //!
-//! A private allocation tail carries the birth layout and mapped aliases.
-//! It moves and dies with the object; birth needs no metadata allocation.
+//! The object's meta record carries its birth word (length and birth
+//! layout) and its exotic state (mapped aliases): `ObjectMeta::arguments_birth`
+//! and `ObjectMeta::arguments`. Birth allocates that record. The cell holds
+//! property slots only, so `object_inline_capacity` stays the cell-size
+//! formula every ordinary object uses and pays nothing for arguments objects.
 
 use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
 use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
-#[repr(C)]
-struct ArgumentsTail {
-    len: u32,
-    /// Immutable birth layout; the live shape must still equal this identity.
-    birth_shape: LayoutWord,
-    /// TAG_TRUE / TAG_FALSE for unmapped objects; a boxed alias array otherwise.
-    state: u64,
-}
-
-/// Only called on an allocation born by unstamped_arguments_object.
-unsafe fn arguments_tail(obj: *const ObjectHeader) -> *mut ArgumentsTail {
-    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    (header as *mut u8)
-        .add((*header).size as usize - std::mem::size_of::<ArgumentsTail>())
-        .cast()
-}
-
-/// Explicit child edge outside the ordinary property-slot range. The GC
-/// enumerates it even when a property mutation changes the receiver's shape.
-pub(crate) unsafe fn arguments_mapping_slot(obj: *mut ObjectHeader) -> Option<*mut u64> {
-    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    ((*header)._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0)
-        .then(|| &mut (*arguments_tail(obj)).state as *mut u64)
+/// The record holding an arguments object's birth word and state. Only
+/// called on an object that carries `OBJ_FLAG_ARGUMENTS`: the flag is set
+/// after the record is installed, and a meta record is never removed.
+#[inline]
+unsafe fn arguments_record(obj: *const ObjectHeader) -> *mut ObjectMeta {
+    (*obj).meta
 }
 
 const ARGUMENTS_RESTRICTED: u64 = crate::value::TAG_TRUE;
@@ -152,7 +138,7 @@ unsafe fn arguments_state(obj: *const ObjectHeader) -> Option<ArgumentsState> {
     if header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS == 0 {
         return None;
     }
-    match (*arguments_tail(obj)).state {
+    match (*arguments_record(obj)).arguments {
         0 => None,
         ARGUMENTS_RESTRICTED => Some(ArgumentsState::Restricted),
         ARGUMENTS_UNMAPPED => Some(ArgumentsState::Unmapped),
@@ -389,7 +375,7 @@ pub extern "C" fn js_arguments_object_alloc_mapped(
 fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
     let alloc_slots = std::cmp::max(slots as usize, crate::object::INLINE_SLOT_FLOOR);
     let obj = crate::arena::arena_alloc_gc(
-        meta_form_alloc_bytes(alloc_slots) + std::mem::size_of::<ArgumentsTail>(),
+        meta_form_alloc_bytes(alloc_slots),
         8,
         crate::gc::GC_TYPE_OBJECT,
     ) as *mut ObjectHeader;
@@ -397,14 +383,6 @@ fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
         // Arm the existing probe latch before publishing the arguments identity.
         ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
         (*obj).class_id = 0;
-        let header = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-        (*header)._reserved |= crate::gc::OBJ_FLAG_ARGUMENTS;
-        // GC_STORE_AUDIT(INIT): private tail starts pointer-free, before any mint.
-        arguments_tail(obj).write(ArgumentsTail {
-            len: slots - 2,
-            birth_shape: LayoutWord(0),
-            state: ARGUMENTS_UNMAPPED,
-        });
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record.
         *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj)) = std::ptr::null_mut();
@@ -477,6 +455,21 @@ pub(crate) fn arguments_object_alloc_rooted(
     let pair = restricted_callee.then(|| scope.root_raw_mut_ptr(restricted_callee_pair()));
     let slots = len.saturating_add(2);
     let obj = scope.root_raw_mut_ptr(unstamped_arguments_object(slots));
+    // The record is installed before the arguments identity is published and
+    // before the birth stamp (nothing may allocate between the stamp and the
+    // field initialization). `object_meta_ensure` roots the owner itself.
+    unsafe {
+        let meta = crate::object::object_meta_ensure(
+            crate::meta_obj_runtime_born!(obj.get_raw_mut_ptr::<ObjectHeader>()),
+            crate::object::MetaReason::Arguments,
+        );
+        // GC_STORE_AUDIT(INIT): scalar state words of a fresh record.
+        (*meta).arguments = ARGUMENTS_UNMAPPED;
+        (*meta).arguments_birth = 0;
+        let live = obj.get_raw_mut_ptr::<ObjectHeader>();
+        let header = crate::gc::header_from_trusted_user_ptr(live.cast()).cast_mut();
+        (*header)._reserved |= crate::gc::OBJ_FLAG_ARGUMENTS;
+    }
     let cache_index = if len <= 64 {
         Some(len as usize + if restricted_callee { 65 } else { 0 })
     } else {
@@ -532,8 +525,9 @@ pub(crate) fn arguments_object_alloc_rooted(
                         .to_bits()
                 },
             ));
-        (*arguments_tail(obj)).birth_shape =
-            LayoutWord(crate::object::shapes::object_shape_stamp(obj).0);
+        // GC_STORE_AUDIT(INIT): POD birth word (length low, LayoutWord high).
+        (*arguments_record(obj)).arguments_birth = u64::from(slots - 2)
+            | u64::from(crate::object::shapes::object_shape_stamp(obj).0) << 32;
         // Attributes are already in the birth shape. No empty descriptor edit.
         let header = (obj as *mut u8)
             .sub(crate::gc::GC_HEADER_SIZE)
@@ -563,10 +557,11 @@ pub(crate) fn arguments_object_alloc_rooted(
         crate::value::js_nanbox_pointer(map.get_raw_mut_ptr::<ArrayHeader>() as i64).to_bits()
     };
     unsafe {
-        let slot = &mut (*arguments_tail(obj)).state as *mut u64;
-        // GC_STORE_AUDIT(BARRIERED): explicit mapped-alias child edge.
+        let meta = arguments_record(obj);
+        let slot = &mut (*meta).arguments as *mut u64;
+        // GC_STORE_AUDIT(BARRIERED): the meta record's mapped-alias child edge.
         slot.write(state);
-        crate::gc::runtime_write_barrier_slot(obj as usize, slot as usize, state);
+        crate::gc::runtime_write_barrier_slot(meta as usize, slot as usize, state);
     }
     obj
 }
@@ -747,12 +742,23 @@ pub(crate) fn test_arguments_registry_probe_count() -> u64 {
     TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.get())
 }
 
+/// The birth word of an arguments object's meta record as (length, birth
+/// LayoutWord), or `None` when the object has no record.
+#[cfg(test)]
+pub(crate) unsafe fn test_arguments_birth_word(obj: *const ObjectHeader) -> Option<(u32, u32)> {
+    let meta = arguments_record(obj);
+    (!meta.is_null()).then(|| {
+        let word = (*meta).arguments_birth;
+        (word as u32, (word >> 32) as u32)
+    })
+}
+
 /// Exact birth shape proves all indexed properties remain own data slots.
 /// Value stores do not weaken it; deletes, descriptors and prototype edits do.
 unsafe fn born_arguments_len(obj: *const ObjectHeader) -> Option<u32> {
-    let tail = &*arguments_tail(obj);
-    let born = tail.birth_shape;
-    (born != LayoutWord(0) && LayoutWord((*obj).shape_word()) == born).then_some(tail.len)
+    let word = (*arguments_record(obj)).arguments_birth;
+    let born = LayoutWord((word >> 32) as u32);
+    (born != LayoutWord(0) && LayoutWord((*obj).shape_word()) == born).then_some(word as u32)
 }
 
 unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {

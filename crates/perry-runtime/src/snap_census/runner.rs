@@ -767,8 +767,8 @@ struct State {
     /// bound clipped to its key count and leaves the slack slots out.
     /// `PERRY_SNAP_SLACK=0`.
     slack: bool,
-    /// Tail shape rule: an arguments object's private tail
-    /// (`ArgumentsTail`: length, birth ShapeId) carries a second copy of a
+    /// Tail shape rule: an arguments object's birth word in its meta record
+    /// (`ObjectMeta::arguments_birth`: length, birth ShapeId) carries a second copy of a
     /// ShapeId, a creation-order number; it is named by the shape it names,
     /// as the header word is. `PERRY_SNAP_TAILSHAPE=0`.
     tail_shape: bool,
@@ -3970,8 +3970,6 @@ fn write_report(st: &mut State) {
             // whose zero-bound shape hides the floor slots, while a tracking
             // birth in the other run is born at its learned width) is named
             // the same way: the shape never addresses capacity past `live`.
-            // An arguments object keeps a private tail at the allocation end,
-            // so it is never widened.
             let slack_end = if st.slack && ty == crate::gc::GC_TYPE_OBJECT {
                 let base =
                     crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
@@ -3983,10 +3981,7 @@ fn write_report(st: &mut State) {
                     let live = d.live_inline_slot_count as usize;
                     let size = b.size as usize;
                     let widened = size > base + 8 * live
-                        && d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-                        && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
-                            & crate::gc::OBJ_FLAG_ARGUMENTS
-                            == 0;
+                        && d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary;
                     (size == base + 8 * live || widened)
                         .then(|| base + 8 * live.min(d.logical_key_count as usize))
                 })
@@ -4118,15 +4113,14 @@ fn write_report(st: &mut State) {
                 // another id when the env block differs. It hashes as the
                 // shape it names: key list, counts, flags, prototype link,
                 // kind and representation.
-                // An arguments object's tail word (`ArgumentsTail`: the length
-                // in the low half, the birth ShapeId in the high half) is the
-                // same kind of carrier: it hashes as the length and the shape.
+                // An arguments object's birth word (`ObjectMeta::arguments_birth`:
+                // the length in the low half, the birth ShapeId in the high half)
+                // is the same kind of carrier: it hashes as the length and the shape.
                 let tail_word = st.tail_shape
-                    && ty == perry_abi::GC_TYPE_OBJECT
-                    && off - 8 + 16 == b.size as usize
-                    && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
-                        & crate::gc::OBJ_FLAG_ARGUMENTS
-                        != 0;
+                    && ty == crate::gc::GC_TYPE_OBJECT_META
+                    && off - 8
+                        == crate::gc::GC_HEADER_SIZE
+                            + std::mem::offset_of!(crate::object::ObjectMeta, arguments_birth);
                 if tail_word
                     || off - 8 == crate::gc::GC_HEADER_SIZE
                         && (ty == perry_abi::GC_TYPE_OBJECT || ty == perry_abi::GC_TYPE_CLOSURE)
