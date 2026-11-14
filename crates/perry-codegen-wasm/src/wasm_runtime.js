@@ -2246,25 +2246,34 @@ const __memDispatch = {
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
-  // `super.m(args)` in a method of `cls`: the lookup starts at cls's parent, and the
-  // receiver stays `this`. At each class an accessor `get m` comes before a method
-  // `m`: the nearest class that defines either name wins, as on a prototype chain.
-  class_call_super: (obj, cls, mname, args) => {
+  // `super[key]` in a method of `cls`: the lookup starts at cls's parent and the
+  // receiver stays `this`. As on a prototype chain, the nearest class defining an
+  // accessor or a method of that name wins; a setter-only accessor reads as
+  // undefined. Past the class chain the name resolves on Object.prototype.
+  class_super_get: (obj, cls, mname) => {
+    const name = String(mname);
+    const own = (methods, k) => Object.prototype.hasOwnProperty.call(methods, k);
     for (let c = classParentTable[String(cls)] || null; c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
-      if (methods && Object.prototype.hasOwnProperty.call(methods, '__get_' + String(mname))) {
-        const getter = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + String(mname)]);
-        const value = __bitsToJsValue(getter(__jsValueToBits(obj)));
-        if (typeof value === 'function') return __callHostFunction(value, args, obj);
-        return __memDispatch.closure_call_spread(value, args);
+      if (!methods) continue;
+      if (own(methods, '__get_' + name)) {
+        const getter = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
+        return __bitsToJsValue(getter(__jsValueToBits(obj)));
       }
-      if (methods && Object.prototype.hasOwnProperty.call(methods, String(mname))) {
-        const fn = wasmInstance.exports.__indirect_function_table.get(methods[String(mname)]);
-        const padded = __padBigintArgs(fn, 1, args.map(__jsValueToBits));
-        return __bitsToJsValue(fn(__jsValueToBits(obj), ...padded));
-      }
+      if (own(methods, '__set_' + name)) return undefined;
+      if (own(methods, name)) return __classMethodValue(c, name);
     }
-    return undefined;
+    return Object.prototype[name];
+  },
+  // Calls what class_super_get read, after the arguments were evaluated. A compiled
+  // method gets its arguments as Perry values; a non-callable throws, as in JS.
+  class_super_call: (fn, obj, mname, args) => {
+    if (__classMethodFns.has(fn)) return fn.apply(obj, args);
+    if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
+    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') {
+      return __memDispatch.closure_call_spread(fn, args);
+    }
+    throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
   },
 
   // JSON — args are plain JS values
@@ -5202,6 +5211,7 @@ function __hostCallback(value) {
 // `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
 // which call it with an undefined `this`, as JS does for a detached method.
 const __classMethodValues = new Map();
+const __classMethodFns = new WeakSet();
 function __classMethodValue(cls, mname) {
   const key = cls + '\u0000' + mname;
   let fn = __classMethodValues.get(key);
@@ -5214,6 +5224,7 @@ function __classMethodValue(cls, mname) {
     };
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
+    __classMethodFns.add(fn);
     __classMethodValues.set(key, fn);
   }
   return fn;
