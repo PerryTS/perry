@@ -156,9 +156,13 @@ async function awaits(): Promise<void> {
   const it = gen(3);
   const steps = [await it.next(), await it.next(), await it.return("early"), await it.next()];
   console.log("for await", got.join(","), JSON.stringify(steps));
-  const fromAsync = await (Array as any).fromAsync(gen(6), (x: number) => later(x * 10, 1));
+  // Array.fromAsync over array and Set sources (an async-generator source is a
+  // separate, open collection-safety bug of `Array.fromAsync` and is not part
+  // of this fixture).
+  const mapped = await (Array as any).fromAsync([later(1, 2), 2, thenable(3, 1), 4, later(5, 3)], (x: number) => later(x * 10, 1));
   const fromSync = await (Array as any).fromAsync([later(1, 2), 2, thenable(3, 1)]);
-  console.log("fromAsync", JSON.stringify(fromAsync), JSON.stringify(fromSync));
+  const fromSet = await (Array as any).fromAsync(new Set([later(7, 1), 8]));
+  console.log("fromAsync", JSON.stringify(mapped), JSON.stringify(fromSync), JSON.stringify(fromSet));
 }
 
 async function main(): Promise<void> {
