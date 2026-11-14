@@ -1254,3 +1254,32 @@ console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + "
         "1 1 true 2 5 false"
     );
 }
+
+// `fetchWithAuth` / `fetchPostWithAuth` build their headers object between
+// evaluating their arguments; the bridge must receive each argument in its own
+// slot, and the module must validate at all.
+#[test]
+fn fetch_with_auth_passes_url_method_body_and_authorization() {
+    assert_eq!(
+        run_web_source_around(
+            r#"globalThis.fetch = (url, opts) => {
+  console.log(JSON.stringify([url, opts]));
+  return Promise.resolve({ text: () => Promise.resolve("ok") });
+};"#,
+            r#"
+function base(): string { return "http://h/" + String(6 * 7); }
+function tok(): string { return "Bearer " + base().length; }
+fetchWithAuth(base() + "/g", `${tok()}-g`)
+  .then(() => fetchPostWithAuth(base() + "/p", tok(), JSON.stringify({ n: tok() })))
+  .then(() => console.log("done"));
+"#,
+            ""
+        ),
+        concat!(
+            r#"["http://h/42/g",{"headers":{"Authorization":"Bearer 11-g"}}]"#,
+            "\n",
+            r#"["http://h/42/p",{"method":"POST","body":"{\"n\":\"Bearer 11\"}","headers":{"Authorization":"Bearer 11"}}]"#,
+            "\ndone"
+        )
+    );
+}

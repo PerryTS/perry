@@ -118,129 +118,14 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "fetch_with_options", 5);
             }
             Expr::FetchGetWithAuth { url, auth_header } => {
-                self.emit_expr(func, url);
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64)); // method (default GET)
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64)); // body
-                                                                                // Build headers object with Authorization
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall(func, "object_new", 0);
-                let auth_key_id = self
-                    .emitter
-                    .string_map
-                    .get("Authorization")
-                    .copied()
-                    .unwrap_or(0);
-                let auth_key_bits = (STRING_TAG << 48) | (auth_key_id as u64);
-                self.emit_frame_begin(func, 3);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_store_const(func, 1, f64::from_bits(auth_key_bits));
-                self.emit_store_arg(func, 2, auth_header);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 1);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_slot_addr(func, 2);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "object_set", 3);
-                self.emit_frame_begin(func, 4);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 3);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "fetch_with_options", 4);
+                self.emit_fetch_with_auth(func, url, auth_header, None);
             }
             Expr::FetchPostWithAuth {
                 url,
                 auth_header,
                 body,
             } => {
-                self.emit_expr(func, url);
-                // POST method string
-                let post_id = self.emitter.string_map.get("POST").copied().unwrap_or(0);
-                let post_bits = (STRING_TAG << 48) | (post_id as u64);
-                func.instruction(&Instruction::I64Const(post_bits as i64));
-                self.emit_expr(func, body);
-                // Build headers object with Authorization
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall(func, "object_new", 0);
-                let auth_key_id = self
-                    .emitter
-                    .string_map
-                    .get("Authorization")
-                    .copied()
-                    .unwrap_or(0);
-                let auth_key_bits = (STRING_TAG << 48) | (auth_key_id as u64);
-                self.emit_frame_begin(func, 3);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_store_const(func, 1, f64::from_bits(auth_key_bits));
-                self.emit_store_arg(func, 2, auth_header);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 1);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_slot_addr(func, 2);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "object_set", 3);
-                self.emit_frame_begin(func, 4);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 3);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "fetch_with_options", 4);
+                self.emit_fetch_with_auth(func, url, auth_header, Some(body));
             }
             // --- Net stubs ---
             Expr::NetCreateServer { .. }
@@ -366,5 +251,60 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+}
+
+impl<'a> FuncEmitCtx<'a> {
+    /// `fetch_with_options(url, method, body, { Authorization })`, arguments
+    /// evaluated in source order (url, auth header, body). Each value goes to
+    /// its slot as soon as it exists: an argument's own bridge calls open frames
+    /// above this one, so a filled slot survives them, while a value parked in
+    /// `temp_local` or on the operand stack beneath a slot address would not.
+    fn emit_fetch_with_auth(
+        &mut self,
+        func: &mut Function,
+        url: &Expr,
+        auth_header: &Expr,
+        body: Option<&Expr>,
+    ) {
+        let string_bits = |ctx: &Self, s: &str| {
+            let id = ctx.emitter.string_map.get(s).copied().unwrap_or(0);
+            f64::from_bits((STRING_TAG << 48) | (id as u64))
+        };
+        self.emit_frame_begin(func, 4);
+        self.emit_store_arg(func, 0, url);
+        let method = match body {
+            Some(_) => string_bits(self, "POST"),
+            None => f64::from_bits(TAG_UNDEFINED),
+        };
+        self.emit_store_const(func, 1, method);
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall(func, "object_new", 0);
+        self.emit_frame_begin(func, 3);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_store_const(func, 1, string_bits(self, "Authorization"));
+        self.emit_store_arg(func, 2, auth_header);
+        // object_set returns the object: the headers argument.
+        self.emit_memcall(func, "object_set", 3);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 3);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        match body {
+            Some(body) => self.emit_store_arg(func, 2, body),
+            None => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
+        }
+        self.emit_memcall(func, "fetch_with_options", 4);
     }
 }
