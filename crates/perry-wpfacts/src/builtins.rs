@@ -2825,6 +2825,28 @@ fn ns_method_inner(
                 effects::run_function(m, e, call);
             }
         }
+        // A global constructor the realm declares (`Blob`), called as a
+        // value without `new` (`const f = Blob; f(x)`, a method read that
+        // yields it): the call runs the function the global holds, the
+        // thunk whose body the declaration describes (`global_this_blob_thunk`:
+        // its `this` unread, `declared_ctor` names none), or a thunk that
+        // throws before it uses an argument ("requires new") or returns
+        // `undefined` (`global_this_builtin_noop_thunk`). The declared
+        // effects plus `undefined` cover each. A write under the name (now,
+        // or later in the solve: the replay) is the unknown call again.
+        (BuiltinNs::Other, n) if !m.unit_mode && effects::declared_ctor(n).is_some() => {
+            let e = effects::declared_ctor(n).expect("the guard found it");
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom(n);
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, &format!("argument of builtin Other.{n}"));
+                m.cur_this = prev;
+            } else {
+                effects::run_function(m, e, call);
+                ret_prim(m, call, prim::UNDEF);
+            }
+        }
         (
             BuiltinNs::Other,
             "parseInt" | "parseFloat" | "isNaN" | "isFinite" | "encodeURIComponent"

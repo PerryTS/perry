@@ -663,3 +663,105 @@ fn control_r7hold4_assign_from_blob_carries_its_expando() {
     "#;
     assert!(matches!(site(&facts(s), "zz").verdict, Verdict::No(_)));
 }
+
+/// The realm is held: a call of the realm's `Math.sin` read through a value
+/// is no IntrinsicCall (`new_verdicts::intrinsic_call_control_realm_held`).
+fn r7hold5_realm_held(pf: &ProgramFacts) -> bool {
+    pf.sites.iter().any(|s| {
+        s.key == "()"
+            && matches!(&s.verdict, Verdict::No(r) if r.starts_with("intrinsic callee: unknown code holds the realm") || r == "callee set holds ⊤")
+    })
+}
+
+/// R7HOLD5 RED, the r7 shape: `p.getX(1)` (r7.ts, `p` read off an `any`)
+/// whose callee set holds the global `Blob` (call c1126, ns Other), and
+/// GLTFLoader's `new Blob([bufferView], {type: mimeType})`. A call of the
+/// `Blob` value runs `global_this_blob_thunk` (perry-runtime
+/// object/global_this/fetch_globals.rs:305-313; `this` unread), whose effects
+/// the realm declares (global_this_tables.rs:206): parts read by index, each
+/// part bytes or ToString, `options.type` ToString (perry-stdlib
+/// fetch_blob.rs:74-147, 195-202). No unknown code runs: the realm is not held.
+#[test]
+fn red_r7hold5_call_of_blob_value_runs_its_declared_effects() {
+    let s = r#"
+        class V { zz = 1; probe() { return this.zz; } getX(i: number) { return this.zz + i; } }
+        const json: any = JSON.parse(process.argv[2] ?? "{}");
+        const p: any = json.c ? new V() : { getX: Blob };
+        const bufferView = new Uint8Array(4);
+        const blob = new Blob([bufferView], { type: "image/png" });
+        p.getX(1);
+        const f = Math.sin;
+        const y = f(1);
+        console.log(new V().probe(), blob, y);
+    "#;
+    let pf = facts(s);
+    assert!(!r7hold5_realm_held(&pf), "realm held: {}", pf.dump_text());
+}
+
+/// Control (i): a part that is a program object with `toString`: the
+/// coercion runs it with the part as `this` (fetch_blob.rs:144); no hold.
+#[test]
+fn control_r7hold5_blob_part_to_string_runs() {
+    let s = r#"
+        const part = { tag: "x", toString() { return this.tag; } };
+        const g: any = Blob;
+        g([part]);
+        const f = Math.sin;
+        const y = f(1);
+        console.log(y);
+    "#;
+    let pf = facts(s);
+    assert!(!r7hold5_realm_held(&pf), "realm held: {}", pf.dump_text());
+    assert!(!matches!(site(&pf, "tag").verdict, Verdict::No(_)), "{}", pf.dump_text());
+}
+
+/// Control (ii): a parts value with a program `Symbol.iterator`. The runtime
+/// never calls it (fetch_blob.rs:74-108: an array is read by index, any other
+/// value is one part, coerced whole); the declaration's `Iterate`
+/// (global_this_tables.rs:206) is a superset that may run it. So the exact
+/// assertions: no hold, and the iterator's read is not Dead (it may run). Its
+/// verdict is not asserted: the literal's computed key holds its layout.
+#[test]
+fn control_r7hold5_blob_parts_iterator_runs() {
+    let s = r#"
+        const parts = { n: 1, [Symbol.iterator]() { const k = this.n; return [k][Symbol.iterator](); } };
+        const g: any = Blob;
+        g(parts);
+        const f = Math.sin;
+        const y = f(1);
+        console.log(y);
+    "#;
+    let pf = facts(s);
+    assert!(!r7hold5_realm_held(&pf), "realm held: {}", pf.dump_text());
+    assert!(!matches!(site(&pf, "n").verdict, Verdict::Dead), "{}", pf.dump_text());
+}
+
+/// Control (iii): a part unknown code made: its ToString is unknown code,
+/// which holds the realm.
+#[test]
+fn control_r7hold5_blob_part_from_unknown_code_holds() {
+    let s = r#"
+        declare function ext(): any;
+        const g: any = Blob;
+        g([ext()]);
+        const f = Math.sin;
+        const y = f(1);
+        console.log(y);
+    "#;
+    assert!(r7hold5_realm_held(&facts(s)));
+}
+
+/// Control (iv): a global constructor the realm does not declare effects
+/// for (`File`, global_this_tables.rs:207), called as a value: unknown code;
+/// the hold stays.
+#[test]
+fn control_r7hold5_undeclared_ctor_value_call_holds() {
+    let s = r#"
+        const g: any = File;
+        g([1], "n");
+        const f = Math.sin;
+        const y = f(1);
+        console.log(y);
+    "#;
+    assert!(r7hold5_realm_held(&facts(s)));
+}
