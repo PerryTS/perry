@@ -508,6 +508,61 @@ impl Model {
         for (k, (n, o, _)) in v.iter().take(25) {
             eprintln!("perry: wpfacts census maker\t{k}\tctxs={n}\tmakers={}", o.len());
         }
+        // PERRY_WPF_CHAINS=<Tmpl,Tmpl> (diagnostic only): the newest 8
+        // tokens of each named template with their whole maker chain.
+        if let Ok(names) = std::env::var("PERRY_WPF_CHAINS") {
+            let mut vc_of: crate::pts::FxHashMap<CallId, u32> = Default::default();
+            for (&(_, _, vc), &c) in self.sum.made_of.iter() {
+                vc_of.insert(c, vc);
+            }
+            let fname = |call: CallId| -> String {
+                self.calls
+                    .get(call as usize)
+                    .and_then(|cs| self.node_fn.get(cs.ret as usize).copied())
+                    .and_then(|f| self.funcs.get(f as usize).map(|x| x.name.to_string()))
+                    .unwrap_or_else(|| "?".into())
+            };
+            for name in names.split(',') {
+                let ts: Vec<Tok> = (0..self.toks.len() as Tok)
+                    .filter(|&t| matches!(self.toks[t as usize], TokKind::Obj(tm, _) if self.tmpls[tm as usize].display.ends_with(name)))
+                    .collect();
+                eprintln!("perry: wpfacts chains {name} n={}", ts.len());
+                for &t in ts.iter().rev().take(8) {
+                    let mut line = String::new();
+                    let mut x = t;
+                    for _ in 0..64 {
+                        let TokKind::Obj(tm, c) = self.toks[x as usize] else { break };
+                        let tn = self.tmpls[tm as usize].display.rsplit(':').next().unwrap_or("").to_string();
+                        line.push_str(&format!(" t{x}:{tn}@c{c}"));
+                        match (c < crate::summary::BORN).then(|| self.sum.made.get((crate::summary::BORN - 1 - c) as usize).copied()).flatten() {
+                            Some((s, m)) => {
+                                let vc = vc_of.get(&c).copied().unwrap_or(u32::MAX);
+                                line.push_str(&format!("[site c{s} in {} vc={vc} ", fname(s)));
+                                match m {
+                                    crate::summary::Maker::Obj(o, b) => {
+                                        line.push_str(&format!("by{} t{o}] <-", if b { "M" } else { "C" }));
+                                        x = o;
+                                    }
+                                    crate::summary::Maker::Site(z) => {
+                                        line.push_str(&format!("site c{z} in {}]", fname(z)));
+                                        break;
+                                    }
+                                    crate::summary::Maker::Val => {
+                                        line.push_str("val]");
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                line.push_str(&format!("[prog in {}]", fname(c)));
+                                break;
+                            }
+                        }
+                    }
+                    eprintln!("perry: wpfacts chain {line}");
+                }
+            }
+        }
     }
 
     /// The work profile (PERRY_FACTS_PROFILE): phases, steps, rule kinds and
