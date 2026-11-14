@@ -178,3 +178,27 @@ fn dropped_source_refuses_native_member_and_own_length() {
     assert!(none(&at(&pf, "length", false), "OwnLength"));
 }
 
+/// PRIMRECV2 step 2: an undeclared global reads `undefined` (rule G) only
+/// while no unknown code holds the realm; held, unknown code may define the
+/// global key (`globalThis.g = …`), so the call is not Throws.
+#[test]
+fn undeclared_global_under_held_realm_does_not_throw() {
+    let held = one(&format!(
+        "{C}declare const g: any;\ndeclare function hostTake(x: any): void;\nhostTake(0);\nif (d) g.m();\n"
+    ));
+    assert!(none(&at(&held, "m", true), "Throws"));
+    let unheld = one(&format!("{C}declare const g: any;\nif (d) g.m();\n"));
+    assert!(all(&at(&unheld, "m", true), "Throws"));
+}
+
+/// PRIMRECV2 step 2 (three.core.js:60566 shape): `typeof g !== 'undefined'
+/// && g.m()`; the verdict is printed (LITFACT line), not asserted.
+#[test]
+fn typeof_guarded_undeclared_global_verdict() {
+    for hold in ["", "declare function hostTake(x: any): void;\nhostTake(0);\n"] {
+        let pf = one(&format!(
+            "{C}declare const g: any;\n{hold}if (typeof g !== 'undefined') g.m();\n"
+        ));
+        let _ = at(&pf, "m", true);
+    }
+}

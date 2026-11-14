@@ -291,8 +291,13 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
         return true;
     }
-    super::global_object(m, np)
-        && (super::global_function(m, name) || super::effects::declared_function(name).is_some())
+    // The global object is an ordinary extensible object (ECMA-262 19.1)
+    // that unknown code holding the realm holds: its [[Set]] (10.1.9.2)
+    // defines or replaces any key but the non-writable `undefined`, `NaN`
+    // and `Infinity` (19.1.1-19.1.4): a function the realm or the program
+    // declares, and a key nobody declares (rule G reads it as absent,
+    // `undefined`, only while no unknown code holds the realm).
+    super::global_object(m, np) && !matches!(name, "undefined" | "NaN" | "Infinity")
 }
 
 /// Unknown code now holds the realm: the lookups parked past a member it may
