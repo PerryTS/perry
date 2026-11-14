@@ -456,6 +456,26 @@ impl ShapeSlab {
         &AGENT_SHAPE_DIR[0] as *const BandDir as *const u8
     }
 
+    /// The agent's atom index lives at `table` from now on.
+    ///
+    /// Never inlined: a copy of this body in another codegen unit (its caller
+    /// is `string::intern`) names `AGENT_SHAPE_DIR` from outside the unit
+    /// that defines it, which exports the thread-local and turns every access
+    /// to it from local-dynamic into general-dynamic TLS (one more
+    /// instruction at each directory read of the whole runtime).
+    #[inline(never)]
+    pub(crate) fn publish_agent_atoms(table: *const u8) {
+        AGENT_SHAPE_DIR[0].atoms.set(table);
+    }
+
+    /// `table` is being dropped: the directory names it no longer.
+    #[inline(never)]
+    pub(crate) fn retract_agent_atoms(table: *const u8) {
+        if AGENT_SHAPE_DIR[0].atoms.get() == table {
+            AGENT_SHAPE_DIR[0].atoms.set(std::ptr::null());
+        }
+    }
+
     /// The record of ShapeId `id` in the ordinary directory at `dir` (this
     /// thread's [`Self::ordinary_dir_addr`], or `PERRY_EMPTY_SHAPE_DIR`), or
     /// `None` past its pages: the ordinary band of [`Self::agent_record`], for

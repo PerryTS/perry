@@ -145,21 +145,6 @@ pub(crate) fn emit_checked_callee_unbox(ctx: &mut FnCtx<'_>, callee: &str) -> St
     )
 }
 
-/// Shared atomic storage for a site's shape/slot answers. No heap pointer or
-/// validity state is stored, so these zero-filled integer words need no root.
-pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
-    let site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let name = format!(
-        "@{}_read_shape_slots",
-        crate::expr::inline_cache_global_name(ctx, site)
-    );
-    ctx.typed_parse_rodata.push(format!(
-        "{name} = private global [{words} x i64] zeroinitializer, align 8"
-    ));
-    name
-}
-
 #[cfg(test)]
 mod tests {
 
