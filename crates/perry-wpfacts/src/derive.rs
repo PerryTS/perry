@@ -204,6 +204,16 @@ pub enum Verdict {
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
     OwnDataOrAbsent,
+    /// A value call whose callee set is exactly one builtin function object
+    /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
+    /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
+    /// store of another value onto the member it was read from adds that
+    /// value to the callee node. Only while no unknown code exists
+    /// (`!realm_held`): unknown code holds the realm (9.3) and may replace
+    /// the member (the intrinsics' members are writable, 10.4.1 / 17), a
+    /// write the solve does not replay into the read (`realm_hold_tok`).
+    /// Whole-program solves only. `receivers` names the intrinsic.
+    IntrinsicCall,
     No(String),
 }
 
@@ -1508,6 +1518,15 @@ fn judge(
         if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
             return (Vec::new(), false, Verdict::Dead, true, FxHashMap::default());
         }
+        if !m.unit_mode {
+            if let Some(name) = intrinsic_callee(m, toks, prim) {
+                if !m.realm_held {
+                    return (vec![name], false, Verdict::IntrinsicCall, true, FxHashMap::default());
+                }
+                let why = "intrinsic callee: unknown code holds the realm and may replace the member";
+                return (Vec::new(), false, Verdict::No(why.into()), true, FxHashMap::default());
+            }
+        }
         return match callee_set(m, runtime, toks, prim, top_recv) {
             Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
             Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
@@ -2086,6 +2105,21 @@ fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
         })
     };
     empty(m.fields.get(&(op, a))) && empty(m.field_any.get(&op))
+}
+
+/// [`Verdict::IntrinsicCall`]: the callee set is one `BuiltinFn` token of a
+/// named native (closed markers stand for their callers' values beside
+/// them), no ⊤, no primitive. Its name. The caller adds `!realm_held`.
+fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
+    if prim != 0 {
+        return None;
+    }
+    let mut it = toks.iter().copied().filter(|&t| !m.closed_marker(t));
+    let t = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`

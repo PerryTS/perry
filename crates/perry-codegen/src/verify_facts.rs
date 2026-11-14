@@ -37,6 +37,7 @@ pub enum SiteVerdict {
     E0,
     Dead,
     OwnDataOrAbsent,
+    IntrinsicCall,
 }
 impl SiteVerdict {
     pub(crate) fn name(self) -> &'static str {
@@ -48,6 +49,7 @@ impl SiteVerdict {
             Self::E0 => "E0",
             Self::Dead => "Dead",
             Self::OwnDataOrAbsent => "OwnDataOrAbsent",
+            Self::IntrinsicCall => "IntrinsicCall",
         }
     }
     pub(crate) fn slice(self) -> u8 {
@@ -59,6 +61,7 @@ impl SiteVerdict {
             Self::E0 => 5,
             Self::Dead => 6,
             Self::OwnDataOrAbsent => 9,
+            Self::IntrinsicCall => 7,
         }
     }
 }

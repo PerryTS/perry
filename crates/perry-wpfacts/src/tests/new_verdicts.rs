@@ -204,3 +204,44 @@ fn dead_receiver_is_dead_in_whole_mode_and_not_claimed_per_unit() {
         assert!(is(x, "No"), "per unit verdict must be a No(..): {v:?}");
     }
 }
+
+// IntrinsicCall: a value call whose callee is one intrinsic function object,
+// while no unknown code exists.
+#[test]
+fn intrinsic_call_one_builtin_callee() {
+    let src = "const f = Math.sin;\nconst y = f(1);\nconst g = Math.cos;\nconst z = g(2);";
+    all(src, "()", true, "IntrinsicCall");
+}
+
+/// The program stores another function onto the member: the callee set
+/// holds it beside the intrinsic.
+#[test]
+fn intrinsic_call_control_member_replaced() {
+    let src = "if (process.argv[2]) (Math as any).sin = (x: number) => x + 1;\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+}
+
+/// A computed store whose key may be `sin` reaches the member too.
+#[test]
+fn intrinsic_call_control_computed_store() {
+    let src = "const k = process.argv[2];\n(Math as any)[k] = (x: number) => x + 1;\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+}
+
+/// Unknown code exists: it holds the realm and may replace `Math.sin`; the
+/// solve does not replay that write, so no claim.
+#[test]
+fn intrinsic_call_control_realm_held() {
+    let src = "declare function sink(x: any): void;\nsink(0);\n\
+        const f = Math.sin;\nconst y = f(1);";
+    none(src, "()", true, "IntrinsicCall");
+    let pf = one(src);
+    assert!(
+        pf.sites.iter().any(|s| s.key == "()"
+            && matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("intrinsic callee: unknown code holds the realm"))),
+        "{}",
+        pf.dump_text()
+    );
+}
