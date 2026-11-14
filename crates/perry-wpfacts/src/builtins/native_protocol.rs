@@ -1208,8 +1208,10 @@ pub(super) fn native_method(
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
-            m.solver_call(
+            let call2 = m.chain_call(
                 call,
+                0,
+                fl,
                 CallSite {
                     first_arg_fixed: false,
                     this: ThisArg::Tok(origin),
@@ -1219,8 +1221,8 @@ pub(super) fn native_method(
                     site: call2,
                     region: m.thrown,
                 },
+                move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
             );
-            m.cons(fl, Cons::Call { call: call2 });
             ret_prim(m, call, prim::BOOL);
         }
         ("EventEmitter", "off" | "removeListener" | "removeAllListeners" | "setMaxListeners") => {
