@@ -184,10 +184,19 @@ pub(crate) fn collect(
     for s in sites.iter().filter(|s| !s.is_call && s.byte_offset != 0) {
         let why = match s.verdict {
             Verdict::OwnLength | Verdict::NativeMember | Verdict::T0Mono | Verdict::T0Set => None,
+            // No value reaches the base: the read is never evaluated and runs nothing.
+            Verdict::Dead => None,
+            // Fact-unit receivers with no accessor, no escape and the chain proven
+            // absent: OrdinaryGet reads a data slot or undefined, it runs no code.
+            Verdict::OwnDataOrAbsent => None,
+            // A namespace [[Get]] is GetBindingValue: no getter, no trap, unknown code
+            // cannot change it, and a TDZ throw runs no program code.
+            Verdict::NsExport => None,
+            // A value-call verdict, never a named read's: the intrinsic's [[Call]] may
+            // run program code (callbacks, ToPrimitive).
+            Verdict::IntrinsicCall => Some("verdict:other"),
             Verdict::E0 => Some("verdict:guarded"),
             Verdict::No(_) => Some("verdict:none"),
-            // Newer verdicts the quiet rule does not list: not quiet (conservative).
-            Verdict::Dead | Verdict::OwnDataOrAbsent | Verdict::IntrinsicCall | Verdict::NsExport => Some("verdict:other"),
         };
         join(
             reads
