@@ -53,6 +53,7 @@ use wasm_encoder::{
 // `use super::*;` see these names at module scope.
 use closures::{
     collect_closures_from_expr, collect_closures_from_stmts, generator_record_captures,
+    CollectedClosure,
 };
 // `f64_const_bits` is held alive for future use (matches the pre-split
 // `#[allow(dead_code)]` annotation on its original definition).

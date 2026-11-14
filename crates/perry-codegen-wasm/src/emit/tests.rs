@@ -746,3 +746,35 @@ console.log(new E().r);
         "B>A2a\nD>B>A21c\nA5a"
     );
 }
+
+// An accessor on a class in the walk shadows an ancestor's method of that name:
+// `super.m()` calls what B's `get m` returns, not A's `m`.
+#[test]
+fn a_super_method_call_reads_a_shadowing_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { get m(): any { return () => "B.get"; } }
+class C extends B { m(): string { return "C>" + super.m(); } }
+console.log(new C().m());
+"#
+        ),
+        "C>B.get"
+    );
+}
+
+// An arrow inside a class method resolves `super` from the method's class.
+#[test]
+fn a_super_method_call_in_an_arrow_starts_at_the_enclosing_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A2 { m(): string { return "A2"; } }
+class B2 extends A2 { m(): string { const f = () => super.m(); return "B2>" + f(); } }
+console.log(new B2().m());
+"#
+        ),
+        "B2>A2"
+    );
+}

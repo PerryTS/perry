@@ -2247,10 +2247,17 @@ const __memDispatch = {
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
   // `super.m(args)` in a method of `cls`: the lookup starts at cls's parent, and the
-  // receiver stays `this`.
+  // receiver stays `this`. At each class an accessor `get m` comes before a method
+  // `m`: the nearest class that defines either name wins, as on a prototype chain.
   class_call_super: (obj, cls, mname, args) => {
     for (let c = classParentTable[String(cls)] || null; c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
+      if (methods && Object.prototype.hasOwnProperty.call(methods, '__get_' + String(mname))) {
+        const getter = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + String(mname)]);
+        const value = __bitsToJsValue(getter(__jsValueToBits(obj)));
+        if (typeof value === 'function') return __callHostFunction(value, args, obj);
+        return __memDispatch.closure_call_spread(value, args);
+      }
       if (methods && Object.prototype.hasOwnProperty.call(methods, String(mname))) {
         const fn = wasmInstance.exports.__indirect_function_table.get(methods[String(mname)]);
         const padded = __padBigintArgs(fn, 1, args.map(__jsValueToBits));
