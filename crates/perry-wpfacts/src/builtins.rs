@@ -1541,6 +1541,11 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // TypedArrayCreate makes an object with [[TypedArrayName]] (ECMA-262
         // 10.4.5), and a later prototype change adds no internal slot.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            // A view (a typed array, a Node `Buffer`: a Uint8Array, a
+            // DataView) holds [[ViewedArrayBuffer]], never [[ArrayBufferData]]
+            // or [[ArrayBufferMaxByteLength]] (ECMA-262 10.4.5, 23.2.5.1.1
+            // AllocateTypedArray, 25.3.2.1): a buffer method on it throws.
+            TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. } if buffer => true,
             TmplKind::BObj { what: w, .. } => {
                 slot
                     && !matches!(*w, "TypedArray" | "Buffer")
@@ -2127,10 +2132,6 @@ pub(crate) fn enum_free_instance(m: &Model, t: Tok) -> bool {
             if matches!(members::bobj_family(what), Family::Collection | Family::Promise)))
 }
 
-fn is_site_builtin(m: &Model, t: Tok) -> bool {
-    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
-        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
-}
 /// SKINROOT7: a built-in instance on a chain an enumerable-key read walks
 /// whose enumerable own properties are what the program wrote on it, plus,
 /// for a typed array, its elements (the EnumChain arm adds the element
@@ -2159,6 +2160,26 @@ pub(crate) fn enum_free_link_obj(m: &Model, t: Tok) -> bool {
                 })))
 }
 
+/// SKINROOT14: a for-in subject (`for (k in b) b[k]`) that is an
+/// `ArrayBuffer`, `SharedArrayBuffer` or `DataView` has no own property
+/// (ECMA-262 25.1.3.1 AllocateArrayBuffer, 25.2.2.1, 25.3.2.1:
+/// OrdinaryCreateFromConstructor with internal slots only) and the members
+/// of its prototype are non-enumerable (clause 18): `k` is a key the
+/// program wrote on `b` or its chain (14.7.5.9). A typed array is not one
+/// (its indices are enumerable own properties); not a marker.
+pub(crate) fn enum_free_buffer(m: &Model, t: Tok) -> bool {
+    !m.is_marker(t)
+        && matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
+                what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView",
+                ..
+            }))
+}
+
+fn is_site_builtin(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
+}
 
 /// Is `t` an array: an array literal or result (`TmplKind::Arr`), or an
 /// array a builtin makes (`members::box_chain` Array: `Object.keys`, the
