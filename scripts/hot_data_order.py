@@ -71,6 +71,20 @@ SHF_ALLOC, SHF_MERGE, SHT_NOBITS, SHT_RELA, SHT_SYMTAB, SHT_SYMTAB_SHNDX = 0x2, 
 STT_SECTION = 3
 
 
+def target_section_name(name):
+    """The hash-free name of a relocation's target section: a function or
+    data section by its symbol's key, an unnamed or pooled one by its kind
+    (the part before `..L`)."""
+    for prefix in (".text.unlikely.", ".text.hot.", ".text."):
+        if name.startswith(prefix) and len(name) > len(prefix) and not name[len(prefix):].startswith(".L"):
+            return prefix + hto.symbol_key(name[len(prefix):])
+    split = split_name(name)
+    if split and not split[1].startswith(".L"):
+        return f"{split[0]}:{hto.symbol_key(split[1])}"
+    at = name.find("..L")
+    return name[:at] if at >= 0 else name
+
+
 def split_name(name):
     """(kind letter, rest) of an orderable data section name, or None."""
     if not LITERAL.match(name):
@@ -84,7 +98,10 @@ def split_name(name):
 def section_key(name, data, size, relocs):
     """The twin of hot_data_order.rs `section_key`. `relocs` is a list of
     (offset, r_type, addend, target) with target ("S", key) for a named
-    symbol or ("#", digest) for a section symbol."""
+    symbol or ("#", name) for a section symbol, `name` being the target
+    section's hash-free name (`target_section_name`); a section-symbol
+    relocation's addend is left out (it is an offset into a pool that moves
+    with every edit of the pool)."""
     split = split_name(name)
     if split is None:
         return None
@@ -94,11 +111,12 @@ def section_key(name, data, size, relocs):
     stream = bytearray(struct.pack("<Q", size))
     stream += data
     for offset, r_type, addend, target in sorted(relocs, key=lambda r: r[0]):
-        stream += struct.pack("<QIq", offset, r_type, addend)
         if target[0] == "S":
+            stream += struct.pack("<QIq", offset, r_type, addend)
             stream += b"S" + target[1].encode() + b"\0"
         else:
-            stream += b"#" + struct.pack("<Q", target[1])
+            stream += struct.pack("<QI", offset, r_type)
+            stream += b"#" + target[1].encode() + b"\0"
     return f"{kind}:#{fnv(stream):016x}"
 
 
@@ -165,17 +183,13 @@ def elf_data_keys(obj):
             if st_shndx == 0xFFFF:
                 st_shndx = xindex.get(j, 0)
             syms.append((cstr(names_base, st_name) if st_name else "", st_info & 0xF, st_shndx))
-    digest = {}
-
     def target(sym):
         name, typ, shndx = syms[sym] if sym < len(syms) else ("", 0, 0)
         if name and typ != STT_SECTION:
             return ("S", hto.symbol_key(name))
         if 0 < shndx < len(secs):
-            if shndx not in digest:
-                digest[shndx] = fnv(sdata(shndx))
-            return ("#", digest[shndx])
-        return ("#", 0)
+            return ("#", target_section_name(names[shndx]))
+        return ("#", "")
 
     relocs = collections.defaultdict(list)
     for i, s in enumerate(secs):
@@ -481,7 +495,7 @@ KEY_VECTORS = [
     (".rodata.unlikely._RNvNtCsAB_5crate3TAB", b"", 4, [], "r:_RNvNtCs_5crate3TAB"),
     (".rodata..Lanon.066df2a3b4d7718a1445f540d0b35fcf.717", b"length", 6, [], "r:#0cc57c9be00b204b"),
     (".data.rel.ro..Lanon.066df2a3b4d7718a1445f540d0b35fcf.12", b"\0" * 16, 16,
-     [(8, 1, 0, ("S", "js_string_concat")), (0, 1, 3, ("#", 0x1234))], "d:#908e51771dd92062"),
+     [(8, 1, 0, ("S", "js_string_concat")), (0, 1, 3, ("#", ".rodata"))], "d:#b9adc86cf57ea99a"),
     (".rodata", b"x", 1, [], None),
     (".rodata.perry_fn_info_x::y", b"", 1, [], None),
 ]

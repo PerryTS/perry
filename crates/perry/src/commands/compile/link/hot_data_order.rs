@@ -92,11 +92,31 @@ fn split_name(name: &str) -> Option<(char, &str)> {
 }
 
 /// What a relocation of a data section points at: a named symbol (by its
-/// hot-text key) or a section (by the digest of its bytes).
+/// hot-text key) or a section (by [`target_section_name`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Target {
     Symbol(String),
-    Section(u64),
+    Section(String),
+}
+
+/// The hash-free name of a relocation's target section: a function or data
+/// section by its symbol's key, an unnamed or pooled one by its kind (the
+/// part before `..L`). Not its bytes: a constant points into its CGU's string
+/// pool, which changes with every edited string of the CGU.
+fn target_section_name(name: &str) -> String {
+    for prefix in [".text.unlikely.", ".text.hot.", ".text."] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if !rest.is_empty() && !rest.starts_with(".L") {
+                return format!("{prefix}{}", super::hot_text_order::symbol_key(rest));
+            }
+        }
+    }
+    if let Some((kind, rest)) = split_name(name) {
+        if !rest.starts_with(".L") {
+            return format!("{kind}:{}", super::hot_text_order::symbol_key(rest));
+        }
+    }
+    name.find("..L").map_or(name, |at| &name[..at]).to_string()
 }
 
 /// One relocation: offset, ELF type, addend, target.
@@ -105,8 +125,9 @@ pub(super) type Reloc = (u64, u32, i64, Target);
 /// The hash-free identity of a data section (`scripts/hot_data_order.py`
 /// holds the twin). A named section is keyed by its symbol; an unnamed
 /// constant by an FNV-1a digest of its size, its bytes and its relocations
-/// in offset order, each relocation by offset, type, addend and the key of
-/// the symbol (or the digest of the section) it points at.
+/// in offset order: each by offset and type, then a named target by its key
+/// and the addend, a section target by its hash-free name alone (the addend
+/// is an offset into a pool that moves with every edit of the pool).
 pub(super) fn section_key(name: &str, data: &[u8], size: u64, relocs: &[Reloc]) -> Option<String> {
     let (kind, rest) = split_name(name)?;
     if !rest.starts_with(".L") {
@@ -122,18 +143,16 @@ pub(super) fn section_key(name: &str, data: &[u8], size: u64, relocs: &[Reloc]) 
     for (offset, r_type, addend, target) in sorted {
         h = fnv(h, &offset.to_le_bytes());
         h = fnv(h, &r_type.to_le_bytes());
-        h = fnv(h, &addend.to_le_bytes());
-        match target {
+        let (tag, name) = match target {
             Target::Symbol(key) => {
-                h = fnv(h, b"S");
-                h = fnv(h, key.as_bytes());
-                h = fnv(h, b"\0");
+                h = fnv(h, &addend.to_le_bytes());
+                (b"S", key)
             }
-            Target::Section(digest) => {
-                h = fnv(h, b"#");
-                h = fnv(h, &digest.to_le_bytes());
-            }
-        }
+            Target::Section(name) => (b"#", name),
+        };
+        h = fnv(h, tag);
+        h = fnv(h, name.as_bytes());
+        h = fnv(h, b"\0");
     }
     Some(format!("{kind}:#{h:016x}"))
 }
@@ -163,7 +182,7 @@ pub(super) fn archive_sections(archive: &Path, out: &mut Vec<DataSection>) -> Op
 }
 
 fn member_sections(object: &object::File, out: &mut Vec<DataSection>) {
-    let mut digests: HashMap<object::SectionIndex, u64> = HashMap::new();
+    let mut targets: HashMap<object::SectionIndex, String> = HashMap::new();
     for section in object.sections() {
         let SectionFlags::Elf { sh_flags } = section.flags() else {
             continue;
@@ -188,20 +207,25 @@ fn member_sections(object: &object::File, out: &mut Vec<DataSection>) {
                         if !name.is_empty() && symbol.kind() != SymbolKind::Section {
                             Target::Symbol(super::hot_text_order::symbol_key(name))
                         } else if let Some(index) = symbol.section_index() {
-                            Target::Section(*digests.entry(index).or_insert_with(|| {
-                                object
-                                    .section_by_index(index)
-                                    .ok()
-                                    .and_then(|s| s.data().ok())
-                                    .map_or(FNV_OFFSET, |d| fnv(FNV_OFFSET, d))
-                            }))
+                            Target::Section(
+                                targets
+                                    .entry(index)
+                                    .or_insert_with(|| {
+                                        object
+                                            .section_by_index(index)
+                                            .ok()
+                                            .and_then(|s| s.name().ok().map(target_section_name))
+                                            .unwrap_or_default()
+                                    })
+                                    .clone(),
+                            )
                         } else {
-                            Target::Section(0)
+                            Target::Section(String::new())
                         }
                     }
-                    Err(_) => Target::Section(0),
+                    Err(_) => Target::Section(String::new()),
                 },
-                _ => Target::Section(0),
+                _ => Target::Section(String::new()),
             };
             relocs.push((offset, r_type, reloc.addend(), target));
         }
@@ -411,9 +435,9 @@ mod tests {
                 16,
                 vec![
                     (8, 1, 0, Target::Symbol("js_string_concat".into())),
-                    (0, 1, 3, Target::Section(0x1234)),
+                    (0, 1, 3, Target::Section(".rodata".into())),
                 ],
-                Some("d:#908e51771dd92062"),
+                Some("d:#b9adc86cf57ea99a"),
             ),
             (".rodata", b"x", 1, vec![], None),
             (".rodata.perry_fn_info_x::y", b"", 1, vec![], None),
@@ -429,6 +453,23 @@ mod tests {
         assert_eq!(
             section_key(".rodata..Lanon.aaaa.1", b"length", 6, &[]),
             section_key(".rodata..Lanon.bbbb.2", b"length", 6, &[])
+        );
+        // A pointer into a pool: the offset moves when the pool changes, the
+        // key does not.
+        let into_pool = |addend| vec![(0, 1, addend, Target::Section(".rodata".into()))];
+        assert_eq!(
+            section_key(".data.rel.ro..Lanon.a.1", &[0; 8], 8, &into_pool(16)),
+            section_key(".data.rel.ro..Lanon.b.9", &[0; 8], 8, &into_pool(48))
+        );
+        assert_eq!(target_section_name(".rodata..Lanon.abc.5"), ".rodata");
+        assert_eq!(target_section_name(".rodata.str1.1"), "r:str1.1");
+        assert_eq!(
+            target_section_name(".text._RNvCsAB_5crate1f"),
+            ".text._RNvCs_5crate1f"
+        );
+        assert_eq!(
+            target_section_name(".data.rel.ro..Lanon.a.1"),
+            ".data.rel.ro"
         );
         assert_ne!(
             section_key(".rodata..Lanon.aaaa.1", b"length", 6, &[]),
