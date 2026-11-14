@@ -976,7 +976,8 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     if r.is_null() {
         // An exotic receiver whose named own keys live in an ordinary bag
         // answers an own key from that bag first, by the ordinary own arm.
-        // Out of line, so the front keeps to caller-saved registers.
+        // Out of line and cold like the exotic continuation it replaces, so
+        // the ordinary front keeps its layout and caller-saved registers.
         return bag_first_get::<ABSENT>(
             dir,
             obj,
@@ -1179,6 +1180,7 @@ unsafe fn array_named_get<const ABSENT: bool>(
 
 /// The read of an exotic receiver (no ordinary record): its bag's own key
 /// by the ordinary own arm ([`bag_own`]), else the exotic continuation.
+#[cold]
 #[inline(never)]
 unsafe fn bag_first_get<const ABSENT: bool>(
     dir: *const u8,
