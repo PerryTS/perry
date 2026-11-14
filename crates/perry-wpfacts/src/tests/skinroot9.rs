@@ -127,13 +127,6 @@ fn keep_skinroot11_value_two_versions() {
     assert!(k.top || k.funcs >= 1, "{k:?}\n{}", pf.dump_text());
 }
 
-fn whole_cfg(src: &str, cfg: &FactsConfig) -> ProgramFacts {
-    let path = "t.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
-    crate::compute(&[(path, &hir)], cfg)
-}
-
 /// SKINROOT13 stays: the copy reads an ARRAY that is not the loop subject
 /// (`arr[name]` is an ordinary read): its named read `arr["__proto__"]`
 /// finds Object.prototype's accessor, which reads Array.prototype: that
@@ -149,21 +142,23 @@ fn keep_skinroot13_array_ordinary_read_keeps_accessor() {
     );
 }
 
-/// SKINROOT13 stays: with Rule R off (`PERRY_FACTS_FORIN_PATH=0`), a path
-/// subject `o.s` is no enumerable read: the named read is the ordinary one,
-/// accessor included, so src's prototype `other` may become dst's.
+/// SKINROOT13 stays: a path subject `o.s` is an enumerable read only
+/// under F-A's gate; a body that stores into the holder `o` (`o.s = o`)
+/// opens it, so the named read is the ordinary one, accessor included,
+/// and src's prototype `other` may become dst's.
 #[test]
-fn keep_skinroot13_forin_path_off_is_wide() {
+fn keep_skinroot13_forin_path_gate_open_is_wide() {
     let body = prog("dst[name] = o.s[name];", "const o: any = { s: src };")
         .replace("for (const name in src)", "for (const name in o.s)");
     let on = kept(&whole(&body));
-    let off_pf = whole_cfg(&body, &FactsConfig { no_forin_path: true, ..FactsConfig::default() });
-    let off = kept(&off_pf);
+    let open_body = body.replace("dst[name] = o.s[name];", "o.s = o; dst[name] = o.s[name];");
+    let open_pf = whole(&open_body);
+    let open = kept(&open_pf);
     assert!(!on.top && on.funcs == 0, "on {on:?}");
     assert!(
-        off.top || off.objs.iter().any(|o| !on.objs.contains(o)),
-        "on {on:?} off {off:?}\n{}",
-        off_pf.dump_text()
+        open.top || open.objs.iter().any(|o| !on.objs.contains(o)),
+        "on {on:?} open {open:?}\n{}",
+        open_pf.dump_text()
     );
 }
 

@@ -318,6 +318,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         Cons::ProtoKey { .. }
         | Cons::Chain { .. }
         | Cons::EnumChain { .. }
+        | Cons::ForInAcc { .. }
+        | Cons::ForInMeet { .. }
         | Cons::ProtoFrom { .. }
         | Cons::ProtoGiven { .. }
         | Cons::ProtoObjects { .. }

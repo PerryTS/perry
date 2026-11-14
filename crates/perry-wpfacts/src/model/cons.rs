@@ -544,6 +544,22 @@ pub enum Cons {
     /// them (`Model::enum_read_key`); on a link the rule does not cover,
     /// the ordinary read of `key`.
     EnumLoad { key: Key, dst: NodeId },
+    /// F-A (`Gen::path_watch`): the accessor functions a body site of a
+    /// for-in over a path may run (a getter, or a setter for a store) on
+    /// this node's values under `key`, into `probe`.
+    ForInAcc {
+        key: Key,
+        setter: bool,
+        probe: NodeId,
+    },
+    /// F-A: a value of this node that is ⊤ or also in `other` (with
+    /// `other` `NO_NODE`: any value but a built-in function) opens the
+    /// gate: `src` flows into `gate`, whose loads are the ordinary reads.
+    ForInMeet {
+        other: NodeId,
+        src: NodeId,
+        gate: NodeId,
+    },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
@@ -889,6 +905,8 @@ impl Cons {
             Cons::ChainUnion { .. } => "chainunion",
             Cons::EnumChain { .. } => "enumchain",
             Cons::EnumLoad { .. } => "enumload",
+            Cons::ForInAcc { .. } => "forinacc",
+            Cons::ForInMeet { .. } => "forinmeet",
             Cons::ProtoGiven { .. } => "protogiven",
             Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",

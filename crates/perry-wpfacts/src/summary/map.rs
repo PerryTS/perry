@@ -289,6 +289,16 @@ pub fn map_cons(
             of,
             from,
         },
+        ForInAcc { key, setter, probe } => ForInAcc {
+            key,
+            setter,
+            probe: n(probe),
+        },
+        ForInMeet { other, src, gate } => ForInMeet {
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            src: n(src),
+            gate: n(gate),
+        },
         IdxKey { obj, dst, shape } => IdxKey {
             obj,
             dst: n(dst),
@@ -568,6 +578,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxLoad { .. }
             | EnumChain { .. }
             | EnumLoad { .. }
+            | ForInAcc { .. }
+            | ForInMeet { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }
             | IdxOwnKey { .. }

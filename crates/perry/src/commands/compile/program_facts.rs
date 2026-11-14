@@ -190,10 +190,6 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
-        no_forin_path: matches!(
-            std::env::var("PERRY_FACTS_FORIN_PATH").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        ),
         optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()
             == Ok("1"),
         json_positions: std::env::var("PERRY_FACTS_JSON_POSITIONS").as_deref() == Ok("1"),
@@ -1102,10 +1098,6 @@ pub(crate) fn activation(
         ),
         no_guard_presence: matches!(
             std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        ),
-        no_forin_path: matches!(
-            std::env::var("PERRY_FACTS_FORIN_PATH").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()

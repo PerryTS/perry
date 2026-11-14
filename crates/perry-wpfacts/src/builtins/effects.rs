@@ -1042,6 +1042,7 @@ fn run(
         *runs += 1;
         sites.insert(site);
     }
+        let c = &m.calls[call as usize];
     let mut run = Run {
         name: entry.name,
         t,

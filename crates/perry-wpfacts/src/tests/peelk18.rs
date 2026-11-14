@@ -137,22 +137,6 @@ fn control_new_function_escapes() {
     );
 }
 
-/// Rule R off (`no_forin_path`): the re-read of the subject path is a plain
-/// computed read again, which on a parsed array may load an Array method.
-#[test]
-fn control_rule_r_off_escapes() {
-    let cfg = FactsConfig {
-        no_forin_path: true,
-        ..FactsConfig::default()
-    };
-    let pf = whole_cfg(&src(true, GLTF), &cfg);
-    assert!(
-        escape_with_field(&pf, "keptmark").is_some(),
-        "{}",
-        pf.dump_text()
-    );
-}
-
 /// Control: the read names another path than the loop subject.
 #[test]
 fn control_other_path_escapes() {

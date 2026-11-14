@@ -1294,7 +1294,7 @@ impl<'a> Gen<'a> {
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {
                     self.local_copies.insert((fx.module, *id), *src);
                 }
-                if self.forin_path && name.starts_with("__forin_obj_") {
+                if name.starts_with("__forin_obj_") {
                     if let Some(p) = init.as_ref().and_then(super::for_in::subj_path) {
                         self.for_in_paths.insert((fx.module, *id), p);
                     }
@@ -1395,7 +1395,7 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_in_update(false);
                 }
-                let scope = self.enum_scope(fx.module, body);
+                let scope = self.enum_scope(fx, body);
                 let scoped = scope.is_some();
                 if let Some(s) = scope {
                     self.for_in_reads.push(s);

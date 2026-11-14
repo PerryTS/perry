@@ -36,25 +36,16 @@ pub(crate) struct ForIn<'s> {
 pub(crate) enum EnumSubject {
     /// ENUM1 (exact): the local `__forin_obj` copies, never written.
     Local(u32),
-    /// Rule R (optimistic): the loop subject path, re-read in the body.
-    Path(SubjPath),
+    /// F-A (exact): the loop subject path, re-read in the body, with the
+    /// gate of its ordinary read (`Gen::path_watch`).
+    Path(SubjPath, NodeId),
 }
 
-/// Rule R: a side-effect-free loop subject path `x.a.b` or `this.a.b`:
-/// a local or `this`, then one or more static member reads; no call, no
-/// computed member. `root` is `None` for `this`.
-///
-/// Optimistic assumption: at each body read `Q[k]` with `Q` this same path,
-/// `Q` evaluates to the object the for-in iterates, so `k` is one of its
-/// enumerated keys (ECMA-262 14.7.5.9 EnumerateObjectProperties: enumerable
-/// String keys of the object and its chain) and the read never yields a
-/// non-enumerable built-in member (Array.prototype, Object.prototype
-/// methods).
-/// Check-mode obligation: at each such read, `Q` evaluated in the body is
-/// `===` the object being iterated.
-/// TODO(CHECK-FORIN-PATH): no generic per-site claim export exists in
-/// check mode yet (`element_floors` covers `Cons::ElemUndef` only); this
-/// claim is to be exported there when one does.
+/// A side-effect-free loop subject path `x.a.b` or `this.a.b`: a local or
+/// `this`, then one or more static member reads; no call, no computed
+/// member. `root` is `None` for `this`. F-A (`Gen::path_watch`) decides
+/// whether a body read `Q[k]`, `Q` this same path, reads the iterated
+/// object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SubjPath {
     pub(crate) root: Option<u32>,
@@ -387,11 +378,11 @@ impl<'a> Gen<'a> {
     /// in o)` lowers to `__forin_obj = o`), so `o[k]` in the body reads one
     /// of `o`'s enumerable keys.
     ///
-    /// Rule R (optimistic, `FactsConfig::no_forin_path` switches it off):
-    /// for `for (k in P)` with `P` a side-effect-free path (`SubjPath`),
-    /// `P[k]` in the body is that same read. ASSUMPTION: the re-evaluated
-    /// path still names the iterated object.
-    pub(crate) fn enum_scope(&mut self, mi: u32, body: &[Stmt]) -> Option<(u32, u32, EnumSubject)> {
+    /// F-A: for `for (k in P)` with `P` a side-effect-free path
+    /// (`SubjPath`), `P[k]` in the body is that same read until the body
+    /// may change the path (`path_watch`).
+    pub(crate) fn enum_scope(&mut self, fx: &Fx, body: &[Stmt]) -> Option<(u32, u32, EnumSubject)> {
+        let mi = fx.module;
         let f = for_in_shape(body, |k| self.for_in_keys_of.get(&(mi, k)).copied())?;
         let (key, obj) = (f.key, f.obj);
         let src = self.local_copies.get(&(mi, obj)).copied();
@@ -406,10 +397,11 @@ impl<'a> Gen<'a> {
         match (src, path) {
             (Some(src), _) if !w.contains(&src) => Some((mi, key, EnumSubject::Local(src))),
             (None, Some(p)) if p.root.is_none_or(|r| !w.contains(&r)) => {
+                let g = self.path_watch(fx, &f, &p);
                 if std::env::var_os("PERRY_FACTS_FORIN_PATH_COUNT").is_some() {
-                    eprintln!("forin-path: module {mi} key {key} path {p:?}");
+                    eprintln!("forin-path: module {mi} key {key} gate {g:?} path {p:?}");
                 }
-                Some((mi, key, EnumSubject::Path(p)))
+                Some((mi, key, EnumSubject::Path(p, g?)))
             }
             _ => None,
         }
@@ -420,7 +412,159 @@ impl<'a> Gen<'a> {
     pub(crate) fn enum_read(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
         self.enum_subjects(mi, index).any(|s| match s {
             EnumSubject::Local(src) => matches!(object, Expr::LocalGet(l) if l == src),
-            EnumSubject::Path(p) => p.is(object),
+            EnumSubject::Path(p, _) => p.is(object),
+        })
+    }
+
+    /// F-A: the gate of `object[index]` when it is the read of an enclosing
+    /// for-in's path subject (`EnumSubject::Path`).
+    pub(crate) fn enum_gate(&self, mi: u32, object: &Expr, index: &Expr) -> Option<NodeId> {
+        self.enum_subjects(mi, index).find_map(|s| match s {
+            EnumSubject::Path(p, g) if p.is(object) => Some(*g),
+            _ => None,
+        })
+    }
+
+    /// F-A (exact; replaces the optimistic Rule R): `P[k]` in the body of
+    /// `for (k in P)`, `P = r.f1…fn`, `r` an unwritten local or `this`,
+    /// reads the object the loop enumerates (ECMA-262 14.7.5.6
+    /// ForIn/OfHeadEvaluation evaluates `P` once; 14.7.5.9
+    /// EnumerateObjectProperties yields a key only while it names an
+    /// enumerable property; `P[k]` re-evaluates `P`) iff no link `fi`
+    /// changes between the head and the read: the head and every iteration
+    /// before the read run only the body.
+    /// - The body runs no other code (`path_body_pure`): no call, `new`,
+    ///   coercing operator, iterator or computed key that is not `k` or a
+    ///   literal; what remains are reads, stores, deletes and the
+    ///   accessors those may run, all watched here.
+    /// - No store or delete of the body, under `fi` or an unknown key
+    ///   (`__proto__` counts as unknown: it may change what is inherited),
+    ///   has a receiver value that is also a value of the holder
+    ///   `r.f1…f(i-1)` (`Cons::ForInMeet` on both nodes).
+    /// - No read or store of the body, and no link `fi` on its holder, may
+    ///   run a program accessor (`Cons::ForInAcc` into a probe; a built-in
+    ///   accessor runs no program code).
+    /// ⊤ anywhere there opens the gate. The gate only ever opens: the
+    /// ordinary read (`Cons::IdxLoad` with `enumerable: false` on the gate)
+    /// is added, nothing is removed. `None`: the body is not pure, the read
+    /// is the ordinary one.
+    fn path_watch(&mut self, fx: &Fx, f: &ForIn<'_>, p: &SubjPath) -> Option<NodeId> {
+        if !path_body_pure(f.body, f.key) {
+            return None;
+        }
+        let mi = fx.module;
+        // (receiver, key: `None` unknown, 0 read / 1 store / 2 delete)
+        let mut sites: Vec<(&Expr, Option<&str>, u8)> = Vec::new();
+        let mut bad = false;
+        for_each_stmts_expr(f.body, &mut |e| match e {
+            Expr::PropertyGet {
+                object, property, ..
+            } => sites.push((object, Some(property.as_str()), 0)),
+            Expr::PropertySet {
+                object, property, ..
+            } => sites.push((object, Some(property.as_str()), 1)),
+            Expr::IndexGet { object, index, .. } => sites.push((object, lit_key(index), 0)),
+            Expr::IndexSet { object, index, .. } => sites.push((object, lit_key(index), 1)),
+            Expr::PutValueSet {
+                target,
+                key,
+                receiver,
+                ..
+            } => {
+                // OrdinarySet (10.1.9.2) runs `target`'s setters and
+                // writes the data property on `receiver`.
+                sites.push((target, lit_key(key), 1));
+                sites.push((receiver, lit_key(key), 1));
+            }
+            Expr::Delete(t) => match t.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => sites.push((object, Some(property.as_str()), 2)),
+                Expr::IndexGet { object, index, .. } => sites.push((object, lit_key(index), 2)),
+                _ => bad = true,
+            },
+            _ => {}
+        });
+        if bad {
+            return None;
+        }
+        let mut recvs = Vec::with_capacity(sites.len());
+        for (o, key, kind) in sites {
+            recvs.push((self.path_node(fx, o)?, key, kind));
+        }
+        let src = self.local(mi, f.obj);
+        let gate = self.tmp("forin-gate");
+        let probe = self.tmp("forin-acc");
+        self.m.cons(
+            probe,
+            Cons::ForInMeet {
+                other: NO_NODE,
+                src,
+                gate,
+            },
+        );
+        let mut h = match p.root {
+            Some(r) => self.local(mi, r),
+            None => fx.this,
+        };
+        let mut holders = Vec::with_capacity(p.members.len());
+        for m in &p.members {
+            let a = self.m.atom(m);
+            holders.push((h, m.as_str()));
+            self.m.cons(
+                h,
+                Cons::ForInAcc {
+                    key: Key::Named(a),
+                    setter: false,
+                    probe,
+                },
+            );
+            h = self.load(h, Key::Named(a));
+        }
+        for (r, key, kind) in recvs {
+            let k = match key {
+                Some(s) => Key::Named(self.m.atom(s)),
+                None => Key::any(),
+            };
+            if kind != 2 {
+                self.m.cons(
+                    r,
+                    Cons::ForInAcc {
+                        key: k,
+                        setter: kind == 1,
+                        probe,
+                    },
+                );
+            }
+            if kind == 0 {
+                continue;
+            }
+            let key = key.filter(|s| *s != "__proto__");
+            for &(hn, f) in &holders {
+                if key.is_none_or(|s| s == f) {
+                    self.m.cons(r, Cons::ForInMeet { other: hn, src, gate });
+                    self.m.cons(hn, Cons::ForInMeet { other: r, src, gate });
+                }
+            }
+        }
+        Some(gate)
+    }
+
+    /// F-A: the node of a body receiver that is a local, `this` or a static
+    /// member path of one (the same loads the body makes); `None` for any
+    /// other receiver.
+    fn path_node(&mut self, fx: &Fx, e: &Expr) -> Option<NodeId> {
+        Some(match e {
+            Expr::LocalGet(id) => self.local(fx.module, *id),
+            Expr::This => fx.this,
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let o = self.path_node(fx, object)?;
+                let a = self.m.atom(property);
+                self.load(o, Key::Named(a))
+            }
+            _ => return None,
         })
     }
 
@@ -449,7 +593,7 @@ impl<'a> Gen<'a> {
             .last()
             .and_then(|s| match s {
                 EnumSubject::Local(src) => Some(*src),
-                EnumSubject::Path(_) => None,
+                EnumSubject::Path(..) => None,
             });
         match src {
             Some(src) => self.expr(fx, &Expr::LocalGet(src)),
@@ -470,8 +614,8 @@ impl<'a> Gen<'a> {
     /// at the read.
     ///
     /// SKINROOT13: the named read has the read kind of the copy's own read
-    /// `S[k]`. Where that read is enumerable (`enum_read`: ENUM1, or Rule R
-    /// for a path subject), for-in yields `k` only if `k` names an
+    /// `S[k]`. Where that read is enumerable (`enum_read`: ENUM1, or F-A
+    /// for a path subject, with the ordinary read on its gate), for-in yields `k` only if `k` names an
     /// enumerable property on S's chain at that time, and `S[k]` reads that
     /// property unless the body changed it: the named read is the
     /// enumerable read of `"__proto__"` (`Cons::EnumLoad`), which never
@@ -511,12 +655,15 @@ impl<'a> Gen<'a> {
         }
         let s = self.expr(fx, &subj);
         let a = self.m.atom("__proto__");
-        // A path subject is enumerable only under Rule R's premise (same
-        // path, same object); `PERRY_FACTS_FORIN_PATH=0` turns Rule R off,
-        // and with it this read falls back to the ordinary one.
+        // A path subject is enumerable only under F-A (`path_watch`): once
+        // its gate opens (the body may change the path), the ordinary read
+        // of `"__proto__"`, accessor included, too.
         if self.enum_read(fx.module, &subj, key) {
             let dst = self.tmp("enumload");
             self.m.cons(s, Cons::EnumLoad { key: Key::Named(a), dst });
+            if let Some(g) = self.enum_gate(fx.module, &subj, key) {
+                self.m.cons(g, Cons::Load { key: Key::Named(a), dst });
+            }
             return Some(dst);
         }
         Some(self.load(s, Key::Named(a)))
@@ -717,4 +864,50 @@ impl<'a> Gen<'a> {
                 .collect(),
         }
     }
+}
+
+/// F-A: a literal string key.
+fn lit_key(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::String(s) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+/// F-A: the body of a for-in over a path runs no code but its own reads,
+/// stores and deletes (and the accessors those may run, `Gen::path_watch`):
+/// every expression is a literal, a local, `this`, a member read, store or
+/// delete (`PutValueSet` included) whose computed key is the loop key `key` or a string literal, a
+/// conditional, `typeof`, `void`, `!`, `&&`/`||`/`??` or `===`/`!==` (no
+/// ToPrimitive, 7.2.15 IsStrictlyEqual).
+fn path_body_pure(body: &[Stmt], key: u32) -> bool {
+    use perry_hir::{CompareOp, UnaryOp};
+    let ok_index = |i: &Expr| matches!(i, Expr::String(_)) || matches!(i, Expr::LocalGet(l) if *l == key);
+    let mut ok = true;
+    for_each_stmts_expr(body, &mut |e| {
+        ok &= match e {
+            Expr::IndexGet { index, .. } | Expr::IndexSet { index, .. } => ok_index(index),
+            Expr::PutValueSet { key: index, .. } => ok_index(index),
+            Expr::Undefined
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
+            | Expr::LocalGet(_)
+            | Expr::LocalSet(..)
+            | Expr::This
+            | Expr::PropertyGet { .. }
+            | Expr::PropertySet { .. }
+            | Expr::Delete(_)
+            | Expr::Conditional { .. }
+            | Expr::TypeOf(_)
+            | Expr::Void(_)
+            | Expr::Logical { .. } => true,
+            Expr::Compare { op, .. } => matches!(op, CompareOp::Eq | CompareOp::Ne),
+            Expr::Unary { op, .. } => matches!(op, UnaryOp::Not),
+            _ => false,
+        };
+    });
+    ok
 }
