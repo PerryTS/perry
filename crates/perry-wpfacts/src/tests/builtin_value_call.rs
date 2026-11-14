@@ -283,3 +283,28 @@ fn skinhold4_control_lookup_proto_getter_on_a_number_is_the_realm_accessor() {
         (false, false)
     );
 }
+
+/// SKINHOLD5: three.js skin GLTFLoader::parse
+/// `extensionsRequired.indexOf( extensionName )` (`const extensionsRequired
+/// = json.extensionsRequired || []`): the receiver is a JSON value
+/// (`json#2`), the callee set holds `%TypedArray%.prototype.indexOf`.
+/// Called on an object that is no typed array, a `%TypedArray%.prototype`
+/// method throws in ValidateTypedArray (ECMA-262 23.2.4.4) before it reads
+/// `this` or an argument: no unknown code runs, the realm is not held.
+#[test]
+fn red_skinhold5_typed_array_method_on_a_json_value_throws() {
+    assert_eq!(
+        run("json.m = (new Float32Array(2) as any).indexOf; try { console.log(json.m(1)); } catch (e) {}"),
+        (false, false)
+    );
+}
+
+/// SKINHOLD5 control: the same method stored on a typed array runs on it
+/// (the native model): `o` is only compared, nothing is held.
+#[test]
+fn skinhold5_control_typed_array_method_on_a_typed_array_runs() {
+    assert_eq!(
+        run("const ta: any = new Float32Array(2); ta.m = ta.indexOf; console.log(ta.m(o));"),
+        (false, false)
+    );
+}

@@ -1519,12 +1519,21 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         return false;
     }
     match &m.toks[r as usize] {
-        // A builtin object of an undescribed kind (`primbox`) may be one.
+        // A builtin object of an undescribed kind (`primbox`) may be one. A
+        // box its creator makes an ordinary object, an array or a
+        // null-prototype object (`members::box_chain`: a `JSON.parse`
+        // object, a descriptor, an own-keys array) is none: only
+        // TypedArrayCreate makes an object with [[TypedArrayName]] (ECMA-262
+        // 10.4.5), and a later prototype change adds no internal slot.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what: w, .. } => {
                 typed
                     && !matches!(*w, "TypedArray" | "Buffer")
-                    && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
+                    && match members::bobj_family(w) {
+                        Family::Opaque => false,
+                        Family::Box => members::box_chain(w) != members::BoxChain::Unknown,
+                        _ => true,
+                    }
             }
             _ => true,
         },
