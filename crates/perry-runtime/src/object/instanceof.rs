@@ -335,6 +335,8 @@ fn ordinary_has_instance_prototype_walk_rooted(
             || jv.is_bool()
             || jv.is_any_string()
             || jv.is_bigint()
+            // A runtime-internal word is no object and no address.
+            || current.to_bits() & crate::value::TAG_MASK == crate::value::INTERNAL_WORD_TAG
             || (jv.is_number() && value_addr(current) == 0)
             || unsafe { crate::symbol::js_is_symbol(current) != 0 }
         {
