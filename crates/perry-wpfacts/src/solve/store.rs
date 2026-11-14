@@ -596,12 +596,14 @@ impl Model {
             }
             // A `JSON.parse` object: the setter gives it `src`'s objects or
             // null as its prototype (B.2.2.1.2; another primitive does
-            // nothing), which its lookups then read (10.1.8.1).
+            // nothing), which its lookups then read (10.1.8.1). Every such
+            // store gives its value (any of them may run last);
+            // `json_relink` only marks the token as relinked.
             if let TokKind::Obj(tm, _) = self.toks[t as usize] {
                 if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
                     && !self.is_marker(t)
-                    && self.json_relink.insert(t)
                 {
+                    self.json_relink.insert(t);
                     self.given_prototype(t, src);
                 }
             }
