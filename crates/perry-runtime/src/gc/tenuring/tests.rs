@@ -1007,22 +1007,30 @@ fn dying_survivor_cohorts_do_not_lock() {
     // Medium-lived objects: a substantial intake of which only half
     // survives its survivor round. Aging is filtering — the lock must
     // stay out and the occupancy ladder must age from the power-on floor.
-    let mut seen = Vec::new();
-    for _ in 0..6 {
-        retune_after_scavenge(d / 2, d / 2, d / 4);
-        assert!(
-            !PROMOTE_LOCK.with(Cell::get),
-            "50% survival is below the lock's 90% bar"
+    // Default ceiling (2): the cohort keeps aging at 2. Under the previous
+    // ceiling (`PERRY_GC_TENURING_SURVIVALS_MAX=4`) the ladder rises to 3.
+    for (ceiling, expected) in [
+        (OCCUPANCY_MAX_SURVIVALS, [2, 2, 2, 2, 2, 2]),
+        (GC_TENURING_SURVIVALS_MAX, [2, 2, 3, 3, 3, 3]),
+    ] {
+        reset_for_test();
+        let _ceiling = set_occupancy_max_for_test(ceiling);
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            retune_after_scavenge(d / 2, d / 2, d / 4);
+            assert!(
+                !PROMOTE_LOCK.with(Cell::get),
+                "50% survival is below the lock's 90% bar"
+            );
+            seen.push(tenuring_survivals());
+        }
+        assert_eq!(
+            seen, expected,
+            "power-on is the floor now, not the ceiling: after a survivor round \
+                 is measured, the debounced occupancy ladder must keep the dying \
+                 cohort aging rather than claim promote-on-first-copy (ceiling {ceiling})"
         );
-        seen.push(tenuring_survivals());
     }
-    assert_eq!(
-        seen,
-        [2, 2, 3, 3, 3, 3],
-        "power-on is the floor now, not the ceiling: after a survivor round \
-             is measured, the debounced occupancy ladder must keep the dying \
-             cohort aging rather than claim promote-on-first-copy"
-    );
     reset_for_test();
 }
 
