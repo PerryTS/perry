@@ -39,8 +39,9 @@ impl PrivatePlace {
             PrivatePlace::Slot { slot, live } => {
                 super::object_field_at_with_live(object, slot, live).bits()
             }
-            PrivatePlace::Entry { pos } => crate::object::overflow::get(object, pos)
-                .unwrap_or(crate::value::TAG_UNDEFINED),
+            PrivatePlace::Entry { pos } => {
+                crate::object::overflow::get(object, pos).unwrap_or(crate::value::TAG_UNDEFINED)
+            }
         }
     }
 }
