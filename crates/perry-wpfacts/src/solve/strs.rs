@@ -377,14 +377,14 @@ impl Model {
                 return 0;
             }
             let glob = vec![String::new(), s.to_string()];
-            return self.key_shape(Some(KeyShape { globs: vec![glob] }));
+            return self.key_shape(Some(KeyShape { globs: vec![glob], free: Vec::new() }));
         }
         let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
             (Some(p), _) => vec![p.to_string(), String::new()],
             (_, Some(s)) => vec![String::new(), s.to_string()],
             _ => vec![self.atoms[a as usize].clone()],
         };
-        self.key_shape(Some(KeyShape { globs: vec![glob] }))
+        self.key_shape(Some(KeyShape { globs: vec![glob], free: Vec::new() }))
     }
 
     /// Rule M3 for a computed key node: when it holds Strings, each a
@@ -421,9 +421,19 @@ impl Model {
                 out.push((a, self.glob_shape(glob)));
                 continue;
             }
-            // Rule M4: a known suffix reads the names of its glob `*s`
-            // (an exclusion entry's suffix too).
-            if let Some(s) = self.atom_suffix(a).or_else(|| self.atom_excl(a).map(|x| x.1).filter(|s| !s.is_empty())) {
+            // Rule EXCL-KEY (ECMA-262 7.1.19: a String key is itself): an
+            // exclusion entry `X + s`, X free of E, reads exactly the names
+            // that end with `s` after a part free of E's characters (and
+            // the elements and numeric keys only when such a string may be
+            // a Number key). No character excluded and no suffix: any
+            // String (below).
+            if let Some((e, s)) = self.atom_excl(a).filter(|&(e, s)| self.atom_pfx_excl(a).is_none() && (e != 0 || !s.is_empty())) {
+                let s = s.to_string();
+                out.push((a, self.free_shape(e, &s)));
+                continue;
+            }
+            // Rule M4: a known suffix reads the names of its glob `*s`.
+            if let Some(s) = self.atom_suffix(a) {
                 let glob = vec![String::new(), s.to_string()];
                 out.push((a, self.glob_shape(glob)));
                 continue;

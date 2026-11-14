@@ -191,7 +191,7 @@ fn literal_lut_arr_prog(lut: &str, key: &str) -> String {
 fn glob_number_prefix_is_exact() {
     let numeric = |p: &str| {
         crate::model::KeyShape {
-            globs: vec![vec![p.to_string(), String::new()]],
+            globs: vec![vec![p.to_string(), String::new()]], free: Vec::new()
         }
         .may_be_numeric()
     };
