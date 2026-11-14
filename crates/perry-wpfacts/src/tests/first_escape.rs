@@ -409,3 +409,41 @@ fn control_fnctor_typed_array_constructor_is_typed_array() {
     let src = "const ta: any = new Float32Array(4); const r = new ta.constructor(4); r.slice(new V() as any);";
     assert!(!fnctor_v_escapes(src, false));
 }
+
+/// ARRSRC (r7, head 7aac20dd17): the hold token BuiltinFn(Any) in
+/// InterleavedBuffer::clone / BufferAttribute::copy `new this.array.constructor(..)`
+/// is the `.constructor` of a Blob (`builtins/loads.rs` undescribed member,
+/// anyfall `(Opaque, Some("Blob.prototype")) | "constructor"`). The Blob reaches
+/// `.array` exactly: GLTFLoader.js:3188 `new TypedArray(bufferView, ..)` with
+/// TypedArray = WEBGL_COMPONENT_TYPES[json key] = Object (an unknown JSON string
+/// key may be "constructor") returns bufferView (ECMA-262 20.1.1.1), and
+/// bufferView = `buffer.slice(..)` may be a Blob. Blob.prototype.constructor is
+/// %Blob% (WebIDL interface object), so `new` of it is a known construction.
+fn blob_ctor_escapes(ctor: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const b: any = new Blob(["ab"]);
+        const s: any = b.slice(0, 1);
+        const C: any = {ctor};
+        const v = new V();
+        const w: any = new C(["c"], v);
+        console.log(w.size, v.probe());
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+/// RED on 7aac20dd17: the constructor of a Blob is %Blob%; `new Blob(parts,
+/// options)` reads only `type`/`endings` of V (absent on V and its chain), so V
+/// stays proven.
+#[test]
+fn red_arrsrc_new_of_a_blob_constructor_is_known() {
+    assert!(!blob_ctor_escapes("s.constructor"));
+}
+
+/// Control (can fail): an unknown host constructor really is unknown.
+#[test]
+fn control_arrsrc_new_of_a_host_constructor_escapes() {
+    assert!(blob_ctor_escapes("(globalThis as any).hostGet()"));
+}
