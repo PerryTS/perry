@@ -342,7 +342,7 @@ mod tests {
         symbols.sort();
         assert_eq!(
             symbols,
-            ["_js_one", "_js_unlisted", rt.as_str()],
+            [rt.as_str(), "_js_one", "_js_unlisted"],
             "defined text only"
         );
 
