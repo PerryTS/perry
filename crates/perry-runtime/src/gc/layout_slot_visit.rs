@@ -687,6 +687,7 @@ pub(super) unsafe fn visit_gc_rewrite_slots<const DIAGNOSTICS: bool>(
 
 /// The slots the collector traces in `header`'s object, by address: the census
 /// reads a holder's words through the collector's own enumeration.
+#[cfg(perry_gc_instruments)]
 pub(crate) unsafe fn visit_traced_slots(header: *mut GcHeader, mut visit: impl FnMut(usize)) {
     visit_gc_rewrite_slots::<false>(header, |slot| visit(slot.slot as usize));
 }
