@@ -283,13 +283,11 @@ fn gen_throw_passes(
 /// callback is a native that calls back: `a.some(Array.prototype.some, 1)`
 /// calls `some` on `Object(1)`, whose callback is the element again), its
 /// call is the one call of this code position with this many arguments
-/// under the chain's root callback call (`Model::cb_calls`): a call per run
-/// never settles there, since every run makes a new call, whose run on the
+/// under the chain's root (`Model::chain_call`): a call per run never
+/// settles there, since every run makes a new call, whose run on the
 /// receiver its new call boxes (`Object(1)` born at the call, 7.1.18
-/// ToObject) makes a new call again. The root, the callback call of a
-/// program site's native run, stays one call per run. A shared call
-/// receives every run's `this` and arguments (edges into its own nodes)
-/// and its result reaches every run's caller.
+/// ToObject) makes a new call again. Its callee constraint sits on the
+/// shared call's own target node, added once; every run's `cb` flows in.
 #[track_caller]
 pub(super) fn cb_call(
     m: &mut Model,
@@ -298,85 +296,73 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
-    if let Some(&root) = m.cb_root.get(&by) {
-        let key = (root, std::panic::Location::caller(), args.len());
-        let call2 = match m.cb_calls.get(&key) {
-            Some(&c) => c,
-            None => {
-                let frame = m.call_run(root);
-                let th = m.node_l("cb-shared-this");
-                m.nodes[th as usize].frame = frame;
-                let mut a2 = Vec::with_capacity(args.len());
-                for _ in 0..args.len() {
-                    let a = m.node_l("cb-shared-arg");
-                    m.nodes[a as usize].frame = frame;
-                    a2.push(a);
-                }
-                let ret = m.node_l("cb-ret");
-                m.nodes[ret as usize].frame = frame;
-                let c = m.calls.len() as CallId;
-                m.solver_call(
-                    by,
-                    CallSite {
-                        first_arg_fixed: false,
-                        this: ThisArg::Node(th),
-                        args: a2,
-                        spread: vec![],
-                        ret,
-                        site: c,
-                        region: m.thrown,
-                    },
-                );
-                m.cb_calls.insert(key, c);
-                m.cb_root.insert(c, root);
-                c
-            }
-        };
-        let c2 = m.calls[call2 as usize].clone();
-        if let ThisArg::Node(th) = c2.this {
-            match this {
-                ThisArg::Node(n) => m.edge(n, th),
-                ThisArg::Tok(t) => m.add_tok(th, t),
-                ThisArg::Undef => {}
-            }
-        }
-        for (&a, &p) in args.iter().zip(c2.args.iter()) {
-            m.edge(a, p);
-        }
-        m.cons(cb, Cons::Call { call: call2 });
-        return c2.ret;
-    }
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
-    let call2 = m.calls.len() as CallId;
-    m.solver_call(
+    let site = m.calls.len() as CallId;
+    m.chain_call(
         by,
+        0,
+        cb,
         CallSite {
             first_arg_fixed: false,
             this,
             args,
             spread: vec![],
             ret,
-            site: call2,
+            site,
             region: m.thrown,
         },
+        |m, tg, c| m.cons(tg, Cons::Call { call: c }),
     );
-    m.cb_root.insert(call2, call2);
-    m.cons(cb, Cons::Call { call: call2 });
     ret
 }
 
 /// The one call a builtin method makes of member `key` of receiver `t`
 /// (`Array.prototype.toString`'s Invoke(this, "join"), `toLocaleString`'s
-/// of each element), whatever call ran the method: the member, its `this`
-/// and its arguments depend on `t` alone, so every run of the method on `t`
-/// shares it. A call per run never settles when the member is the method
-/// itself (`o.join = Array.prototype.toString`: the method's run on `o` in
-/// the new call makes a new call again). Its `nargs` argument nodes and its
-/// result are of `t`'s run (`fam_home`), as a protocol call's; it is born
-/// at no program site. `true`: made now, the caller adds its callee.
-fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (CallId, bool) {
-    member_call(m, t, key, false, this, nargs)
+/// of each element) while it runs for `by`: the one call of this code
+/// position, key and argument count under the chain's root
+/// (`Model::chain_call`). A call per run (or per receiver a native minted)
+/// never settles when the member is the method itself
+/// (`o.join = Array.prototype.toString`) or a native whose callback call
+/// boxes a new receiver. `target` is the node the member's callee
+/// constraint reads (the receiver); `callee` adds that constraint, once,
+/// on the shared call's own target node. Its argument nodes and result are
+/// the shared call's: every run's caller uses them.
+#[track_caller]
+fn recv_call(
+    m: &mut Model,
+    by: CallId,
+    t: Tok,
+    key: Atom,
+    this: ThisArg,
+    nargs: usize,
+    target: NodeId,
+    callee: impl FnOnce(&mut Model, NodeId, CallId),
+) -> CallId {
+    let home = m.fam_home(t);
+    let mk = |m: &mut Model, l: &'static str| {
+        let n = m.node_l(l);
+        m.nodes[n as usize].frame = home;
+        n
+    };
+    let args = (0..nargs).map(|_| mk(m, "recv-call-arg")).collect();
+    let ret = mk(m, "recv-call-ret");
+    let site = m.calls.len() as CallId;
+    m.chain_call(
+        by,
+        key,
+        target,
+        CallSite {
+            first_arg_fixed: false,
+            this,
+            args,
+            spread: vec![],
+            ret,
+            site,
+            region: m.thrown,
+        },
+        callee,
+    )
 }
 
 /// The one run of the declared getter of key `key` on receiver `t`
@@ -387,6 +373,7 @@ pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
     member_call(m, t, key, true, ThisArg::Tok(t), 0)
 }
 
+#[track_caller]
 fn member_call(
     m: &mut Model,
     t: Tok,
@@ -395,18 +382,17 @@ fn member_call(
     this: ThisArg,
     nargs: usize,
 ) -> (CallId, bool) {
+    let home = m.fam_home(t);
+    let mk = |m: &mut Model, l: &'static str| {
+        let n = m.node_l(l);
+        m.nodes[n as usize].frame = home;
+        n
+    };
     if let Some(&c) = m.recv_calls.get(&(t, key, get)) {
         return (c, false);
     }
-    let home = m.fam_home(t);
-    let mut args = Vec::with_capacity(nargs);
-    for _ in 0..nargs {
-        let a = m.node_l("recv-call-arg");
-        m.nodes[a as usize].frame = home;
-        args.push(a);
-    }
-    let ret = m.node_l("recv-call-ret");
-    m.nodes[ret as usize].frame = home;
+    let args = (0..nargs).map(|_| mk(m, "recv-call-arg")).collect();
+    let ret = mk(m, "recv-call-ret");
     let call = m.calls.len() as CallId;
     m.calls.push(CallSite {
         first_arg_fixed: false,
@@ -594,7 +580,7 @@ pub(crate) fn method_call(
     let ret = m.node_l("method-ret");
     m.nodes[ret as usize].frame = m.call_run(call);
     let site = m.calls.len() as CallId;
-    m.solver_call(
+    let site = m.solver_call(
         call,
         CallSite {
             first_arg_fixed: false,
@@ -1040,18 +1026,17 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
     match name {
         "toString" => {
             let ja = m.atom("join");
-            let (jc, made) = recv_call(m, t, ja, ThisArg::Tok(t), 0);
-            if made {
+            let jc = recv_call(m, call, t, ja, ThisArg::Tok(t), 0, recv, move |m, tg, jc| {
                 let f = m.node_l("array-like-join");
                 m.cons(
-                    recv,
+                    tg,
                     Cons::Load {
                         key: Key::Named(ja),
                         dst: f,
                     },
                 );
                 m.cons(f, Cons::Call { call: jc });
-            }
+            });
             let r = m.calls[jc as usize].ret;
             let ret = m.calls[call as usize].ret;
             m.edge(r, ret);
@@ -1373,10 +1358,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let (nested, made) = recv_call(m, t, a, ThisArg::Node(elems), 2);
-            if made {
+            let nested = recv_call(m, call, t, a, ThisArg::Node(elems), 2, elems, move |m, tg, nested| {
                 m.cons(
-                    elems,
+                    tg,
                     Cons::MCall {
                         key: Key::Named(a),
                         call: nested,
@@ -1391,7 +1375,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                         proto: Protocol::ToPrimitive,
                     },
                 );
-            }
+            });
             let params = m.calls[nested as usize].args.clone();
             for (&x, p) in c.args.iter().zip(params) {
                 m.edge(x, p);
@@ -1688,8 +1672,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             string_methods::to_prim(m, recv, "Date toJSON time");
             let a = m.atom("toISOString");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
+            let nested = m.chain_call(
                 call,
+                0,
+                recv,
                 CallSite {
                     first_arg_fixed: false,
                     this: ThisArg::Node(recv),
@@ -1699,13 +1685,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
+                move |m, tg, nested| m.cons(tg, Cons::MCall {
                     key: Key::Named(a),
                     call: nested,
-                },
+                }),
             );
             ret_prim(m, call, prim::NULL);
         }

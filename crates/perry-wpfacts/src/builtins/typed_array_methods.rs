@@ -263,8 +263,10 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             let a = m.atom("toLocaleString");
             let nested = m.calls.len() as CallId;
             let r = m.node_l("typed-locale-result");
-            m.solver_call(
+            let nested = m.chain_call(
                 call,
+                0,
+                elem,
                 CallSite {
                     first_arg_fixed: false,
                     this: ThisArg::Node(elem),
@@ -274,13 +276,10 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                elem,
-                Cons::MCall {
+                move |m, tg, nested| m.cons(tg, Cons::MCall {
                     key: Key::Named(a),
                     call: nested,
-                },
+                }),
             );
             to_prim(m, r, "typed-array locale element ToString");
             ret_prim(m, call, prim::STR);
@@ -289,8 +288,10 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             // Array.prototype.toString invokes the receiver's join.
             let a = m.atom("join");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
+            let nested = m.chain_call(
                 call,
+                0,
+                recv,
                 CallSite {
                     first_arg_fixed: false,
                     this: ThisArg::Node(recv),
@@ -300,13 +301,10 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
+                move |m, tg, nested| m.cons(tg, Cons::MCall {
                     key: Key::Named(a),
                     call: nested,
-                },
+                }),
             );
             ret_prim(m, call, prim::STR);
         }

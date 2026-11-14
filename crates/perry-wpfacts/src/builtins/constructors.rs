@@ -71,8 +71,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.add_tok(jn, rej);
                 let ret = m.node_l("executor-ret");
                 let call2 = m.calls.len() as CallId;
-                m.solver_call(
+                let call2 = m.chain_call(
                     call,
+                    0,
+                    ex,
                     CallSite {
                         first_arg_fixed: false,
                         this: ThisArg::Undef,
@@ -82,8 +84,8 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         site: call2,
                         region: m.thrown,
                     },
+                    move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
                 );
-                m.cons(ex, Cons::Call { call: call2 });
             }
             ret_tok(m, call, p);
         }

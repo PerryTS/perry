@@ -136,13 +136,16 @@ pub(crate) fn read_only(m: &mut Model, recv: NodeId, key: &str) {
 }
 
 /// A call the builtin makes while it runs: `recv[key](...args)`.
+#[track_caller]
 fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<NodeId>) -> NodeId {
     let a = m.atom(key);
     let ret = m.node_l("builtin-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let call = m.chain_call(
         by,
+        0,
+        recv,
         CallSite {
             first_arg_fixed: false,
             this: ThisArg::Node(recv),
@@ -152,13 +155,10 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             site: call,
             region: m.thrown,
         },
-    );
-    m.cons(
-        recv,
-        Cons::MCall {
+        move |m, tg, call| m.cons(tg, Cons::MCall {
             key: Key::Named(a),
             call,
-        },
+        }),
     );
     ret
 }
@@ -729,12 +729,15 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
 }
 
 /// `Construct(ctor, args)` the builtin makes while it runs.
+#[track_caller]
 fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("builtin-new");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let call = m.chain_call(
         by,
+        0,
+        ctor,
         CallSite {
             first_arg_fixed: false,
             this: ThisArg::Undef,
@@ -744,8 +747,8 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             site: call,
             region: m.thrown,
         },
+        move |m, tg, call| m.cons(tg, Cons::New { call }),
     );
-    m.cons(ctor, Cons::New { call });
     ret
 }
 

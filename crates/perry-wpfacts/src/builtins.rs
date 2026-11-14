@@ -814,9 +814,12 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     let jn = m.node_l("rejecter");
     m.add_tok(jn, rej);
     let ret = m.node_l("then-ret");
+    let then = m.atom("then");
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let call = m.chain_call(
         by,
+        0,
+        v,
         CallSite {
             first_arg_fixed: false,
             this: ThisArg::Node(v),
@@ -826,14 +829,10 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             site: call,
             region: m.thrown,
         },
-    );
-    let then = m.atom("then");
-    m.cons(
-        v,
-        Cons::MCall {
+        move |m, tg, call| m.cons(tg, Cons::MCall {
             key: Key::Named(then),
             call,
-        },
+        }),
     );
 }
 
@@ -3119,10 +3118,12 @@ fn ns_method_inner(
                 let ret = m.calls[call as usize].ret;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
-                for holder in [j, ja] {
+                for (hi, holder) in [j, ja].into_iter().enumerate() {
                     let call2 = m.calls.len() as CallId;
-                    m.solver_call(
+                    let call2 = m.chain_call(
                         call,
+                        hi as u32,
+                        rv,
                         CallSite {
                             first_arg_fixed: false,
                             this: ThisArg::Tok(holder),
@@ -3132,8 +3133,8 @@ fn ns_method_inner(
                             site: call2,
                             region: m.thrown,
                         },
+                        move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
                     );
-                    m.cons(rv, Cons::Call { call: call2 });
                 }
                 m.edge(ret, fa);
                 let fja = m.field_any(ja);
