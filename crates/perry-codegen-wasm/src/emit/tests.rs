@@ -725,3 +725,107 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// `super.m()` runs the parent's `m` on the same receiver, even when the receiver's
+// class overrides `m`, and skips a parent that does not define it.
+#[test]
+fn a_super_method_call_runs_the_parent_implementation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { k = "a"; who(n: number): string { return "A" + n + this.k; } }
+class B extends A { who(n: number): string { return "B>" + super.who(n + 1); } }
+class C extends B { k = "c"; }
+class D extends C { who(n: number): string { return "D>" + super.who(n * 10); } }
+console.log(new B().who(1));
+console.log(new D().who(2));
+class E extends A { r: string; constructor() { super(); this.r = super.who(5); } who(n: number): string { return "E"; } }
+console.log(new E().r);
+"#
+        ),
+        "B>A2a\nD>B>A21c\nA5a"
+    );
+}
+
+// An accessor on a class in the walk shadows an ancestor's method of that name:
+// `super.m()` calls what B's `get m` returns, not A's `m`.
+#[test]
+fn a_super_method_call_reads_a_shadowing_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { get m(): any { return () => "B.get"; } }
+class C extends B { m(): string { return "C>" + super.m(); } }
+console.log(new C().m());
+"#
+        ),
+        "C>B.get"
+    );
+}
+
+// An arrow inside a class method resolves `super` from the method's class.
+#[test]
+fn a_super_method_call_in_an_arrow_starts_at_the_enclosing_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A2 { m(): string { return "A2"; } }
+class B2 extends A2 { m(): string { const f = () => super.m(); return "B2>" + f(); } }
+console.log(new B2().m());
+"#
+        ),
+        "B2>A2"
+    );
+}
+
+// A setter-only accessor on a class in the walk ends the lookup: its read value is
+// undefined, so `super.m()` throws a TypeError instead of reaching an ancestor's `m`.
+#[test]
+fn a_super_method_call_stops_at_a_setter_only_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { set m(v: any) { } }
+class C extends B { m(): string { try { return "C>" + super.m(); } catch (e) { return (e instanceof TypeError) + ""; } } }
+console.log(new C().m());
+"#
+        ),
+        "true"
+    );
+}
+
+// `super.m(args)` reads `super.m` before it evaluates the arguments, as `o.m(args)` does.
+#[test]
+fn a_super_method_call_reads_the_property_before_the_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let state = 0;
+class A { get m(): any { const seen = state; return (x: number) => seen + ":" + x; } }
+class B extends A { m(): any { return super.m(state = 1); } }
+console.log(new B().m());
+"#
+        ),
+        "0:1"
+    );
+}
+
+// A getter that returns a non-callable makes `super.m()` throw a TypeError.
+#[test]
+fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { get n(): any { return null; } get k(): any { return 42; } }
+class B extends A {
+  t(f: () => any): string { try { f(); return "no throw"; } catch (e) { return (e instanceof TypeError) + ""; } }
+  run(): string { return this.t(() => super.n()) + " " + this.t(() => super.k()); }
+}
+console.log(new B().run());
+"#
+        ),
+        "true true"
+    );
+}
