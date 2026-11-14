@@ -169,18 +169,21 @@ fn core_then_rest_equals_one_pass() {
                 reference.undefined.contains(name),
                 "{name} after phase B"
             );
-            if let Some(identity) = BuiltinConstructorIdentity::for_name(name) {
-                let ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
-                assert_ne!(ctor, 0, "{name}");
-                assert_eq!(
-                    crate::value::js_nanbox_get_pointer(f64::from_bits(word)) as usize,
-                    ctor,
-                    "{name}: the global binds the realm's one constructor"
-                );
+            if BuiltinConstructorIdentity::for_name(name).is_some() && word != UNDEFINED {
+                // The realm's one constructor of the family: what the global
+                // binds, what `%name%` answers, and (for every family that
+                // records one: `Buffer` is a host family with cells of its
+                // own) the realm's intrinsic cell.
+                let bound = crate::value::js_nanbox_get_pointer(f64::from_bits(word)) as usize;
+                assert_ne!(bound, 0, "{name}");
                 assert_eq!(
                     crate::value::js_nanbox_get_pointer(builtin_constructor_value(name)) as usize,
-                    ctor
+                    bound,
+                    "{name}: the global binds the realm's one constructor"
                 );
+                let identity = BuiltinConstructorIdentity::for_name(name).unwrap();
+                let cell = crate::array::intrinsic_constructor_addr_if_bound(identity);
+                assert!(cell == bound || (cell == 0 && *name == "Buffer"), "{name}");
             }
         }
     });
