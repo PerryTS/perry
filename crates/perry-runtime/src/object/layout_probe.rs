@@ -1214,7 +1214,10 @@ unsafe fn own_absent<const ABSENT: bool>(
 ///   delete or recorded [[Prototype]]) of a plain body: its own keys are its
 ///   layout's intrinsic `length`, `name` and (a constructor's) `prototype`
 ///   ([`function_own_intrinsic`]) and its bag; then it inherits from
-///   `%Function.prototype%`.
+///   `%Function.prototype%`;
+/// * a plain body on FunctionDictionary with no internal state record
+///   ([`dictionary_function_reads_through`]): its bag answers every own key
+///   but the intrinsic ones, then it inherits from `%Function.prototype%`.
 ///
 /// Everything else declines.
 #[cold]
