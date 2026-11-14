@@ -369,10 +369,21 @@ def main():
     save("canonical-number-negative-correct", status=0)
     if args.canonnum_runtime:
         runtime = str(args.canonnum_runtime.resolve())
-        exe, e = compile_(source, "canonical-number-negative-false", PERRY_RUNTIME_DIR=runtime)
+        # The INT32-boxed word is stored into an F64 array first, so with
+        # array reps on (#14390) the array rep witness reports it before any
+        # consumer reads it. The arm runs with them off, like the older array
+        # arms, to reach the canonical-number witness at the element's
+        # consumers; the default run keeps the array rep witness's report.
+        exe, e = compile_(source, "canonical-number-negative-false", PERRY_RUNTIME_DIR=runtime,
+                          PERRY_FACTS_ARRAY_REPS="0")
         value = report(observe(exe, e))
         assert value["predicate"] == "canonical number", value
         save("canonical-number-negative-false", status=86)
+        exe, e = compile_(source, "canonical-number-negative-false-array-rep",
+                          PERRY_RUNTIME_DIR=runtime)
+        value = report(observe(exe, e))
+        assert value["predicate"] == "array rep", value
+        save("canonical-number-negative-false-array-rep", status=86)
 
     # P3 B4b: a birth stores a proven Number into a raw f64 lane with no
     # number test. The same runtime sabotage hands the birth an INT32-tagged
