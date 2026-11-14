@@ -78,6 +78,10 @@ mod two_phase_tests;
 /// declared place: the complete realm, for the thread's realm when the
 /// program is not compiled for a two-phase realm, and for a global that is
 /// not the thread's own (a `vm` context, an eval realm, the Rust tests).
+// Out of line and listed in the default hot-text order
+// (`hot_text_order.txt`), so that its builtin-definition scope is inlined
+// here and nowhere else, whichever callers the realm has.
+#[inline(never)]
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
     // Every install below is a builtin definition, which arms the own-override
     // guard only on a Map, Set or Date owner (#10697).
@@ -87,10 +91,11 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
 }
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
-#[cold]
 #[inline(never)]
 pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
-    populate_phases(singleton_at_entry, RealmPhases::Core)
+    super::super::own_override::as_builtin_definition(|| {
+        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Core)
+    })
 }
 
 /// Phase B alone, on a realm global phase A populated: the rows it left
@@ -101,13 +106,8 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
 #[cold]
 #[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
-    populate_phases(singleton_at_entry, RealmPhases::Rest)
-}
-
-/// One phase of a two-phase realm, as a builtin definition like the one pass.
-fn populate_phases(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     super::super::own_override::as_builtin_definition(|| {
-        populate_global_this_builtins_inner(singleton_at_entry, phases)
+        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Rest)
     })
 }
 
