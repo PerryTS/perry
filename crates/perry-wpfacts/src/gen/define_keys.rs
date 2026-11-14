@@ -40,6 +40,19 @@ impl ConstInit {
             | Expr::Conditional { .. }
             | Expr::LocalGet(_)
             | Expr::GlobalGet(_) => Some(ConstInit::Value(e.clone())),
+            // A well-known symbol, and ToPropertyKey of one binding: the
+            // object-literal key binding (`js_object_literal_to_property_key`)
+            // of `{ [Symbol.iterator]() {} }` (`Gen::const_wk_symbol_key`).
+            Expr::SymbolFor(_) => Some(ConstInit::Value(e.clone())),
+            Expr::Call { callee, args, .. }
+                if args.len() == 1
+                    && matches!(args[0], Expr::LocalGet(_) | Expr::GlobalGet(_))
+                    && matches!(callee.as_ref(),
+                        Expr::ExternFuncRef { name, .. }
+                            if name == "js_to_property_key" || name == "js_object_literal_to_property_key") =>
+            {
+                Some(ConstInit::Value(e.clone()))
+            }
             _ => None,
         }
     }
@@ -131,6 +144,46 @@ impl<'a> Gen<'a> {
             Const::Undef => "undefined".into(),
             Const::Null => "null".into(),
         })
+    }
+
+    /// A key expression that always is one well-known symbol
+    /// (`Symbol.iterator`: HIR's `@@__perry_wk_<name>` sentinel, through
+    /// immutable bindings and ToPropertyKey, which returns a symbol as it
+    /// is): that symbol's atom spelling. A well-known symbol is itself: it
+    /// names no string member and no string key names it.
+    pub(crate) fn const_wk_symbol_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
+        let mut seen: Vec<Binding> = Vec::new();
+        let mut e = e.clone();
+        loop {
+            let b = match &e {
+                Expr::SymbolFor(n) => {
+                    return match n.as_ref() {
+                        Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(s.clone()),
+                        _ => None,
+                    };
+                }
+                Expr::LocalGet(id) => (mi, false, *id),
+                Expr::GlobalGet(id) => (mi, true, *id),
+                Expr::Call { callee, args, .. }
+                    if args.len() == 1
+                        && matches!(callee.as_ref(),
+                            Expr::ExternFuncRef { name, .. }
+                                if name == "js_to_property_key" || name == "js_object_literal_to_property_key") =>
+                {
+                    e = args[0].clone();
+                    continue;
+                }
+                _ => return None,
+            };
+            if seen.contains(&b) {
+                return None;
+            }
+            seen.push(b);
+            match self.const_inits.get(&b)? {
+                ConstInit::Value(x) => e = x.clone(),
+                ConstInit::Lit(_) => return None,
+            }
+        }
     }
 
     fn const_key_value(&mut self, mi: u32, e: &Expr) -> Option<crate::gen_const::Const> {

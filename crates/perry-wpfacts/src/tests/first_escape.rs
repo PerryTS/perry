@@ -717,12 +717,12 @@ fn control_r7hold5_blob_part_to_string_runs() {
 
 /// Control (ii): a parts value with a program `Symbol.iterator`. The runtime
 /// never calls it (fetch_blob.rs:74-108: an array is read by index, any other
-/// value is one part, coerced whole); the declaration's `Iterate`
-/// (global_this_tables.rs:206) is a superset that may run it. So the exact
-/// assertions: no hold, and the iterator's read is not Dead (it may run). Its
-/// verdict is not asserted: the literal's computed key holds its layout.
+/// value is one part, coerced whole: ToString reads `@@toPrimitive`,
+/// `toString`, `valueOf`, and a well-known-symbol member is none of them).
+/// So: no hold, and the iterator's read is Dead or never lowered (it never
+/// runs).
 #[test]
-fn control_r7hold5_blob_parts_iterator_runs() {
+fn control_r7hold5_blob_parts_iterator_never_runs() {
     let s = r#"
         const parts = { n: 1, [Symbol.iterator]() { const k = this.n; return [k][Symbol.iterator](); } };
         const g: any = Blob;
@@ -733,7 +733,11 @@ fn control_r7hold5_blob_parts_iterator_runs() {
     "#;
     let pf = facts(s);
     assert!(!r7hold5_realm_held(&pf), "realm held: {}", pf.dump_text());
-    assert!(!matches!(site(&pf, "n").verdict, Verdict::Dead), "{}", pf.dump_text());
+    assert!(
+        pf.sites.iter().filter(|x| x.key == "n").all(|x| matches!(x.verdict, Verdict::Dead)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control (iii): a part unknown code made: its ToString is unknown code,
