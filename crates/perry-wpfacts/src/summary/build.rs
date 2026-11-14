@@ -284,7 +284,26 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
                     _ => false,
                 }
         };
-        let own_cons = |n: NodeId| m.nodes[n as usize].cons.iter().all(|c| cache(n, c));
+        // A method the body calls on the literal (`params.shift()`): its
+        // field node binds `this` to the literal and runs per (call,
+        // receiver) for this body's calls only (`Model::bind_via`), with
+        // the raise of the code it may run. A born token's own field binds
+        // the instance's copy of the call the same way on its own lookup:
+        // the binding is the token's, no effect of the body.
+        let bound = |n: NodeId, c: &Cons| match c {
+            Cons::ThisTo { origin } => *origin == t,
+            Cons::BuiltinCallee => m.callee_sites.get(&n).is_some_and(|v| {
+                v.iter()
+                    .all(|&(k, o)| o == t && m.node_fn[m.calls[k as usize].ret as usize] == f)
+            }),
+            _ => false,
+        };
+        let own_cons = |n: NodeId| {
+            let cs = &m.nodes[n as usize].cons;
+            let binds = cs.iter().any(|c| bound(n, c))
+                && cs.iter().all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+            binds || cs.iter().all(|c| cache(n, c))
+        };
         let mut ok = own.iter().all(|&n| own_cons(n));
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();

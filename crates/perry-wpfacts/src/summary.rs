@@ -1317,9 +1317,18 @@ impl Model {
         }
         // Literals born here: one token per (literal, maker object), or one
         // per literal in an instance no object is the context of.
+        // A run's rest array is its own birth too (8.6.3: each call makes a
+        // fresh array), except in a run no site or object is the context
+        // of (the escaped, widened or unknown callers' run): that one is
+        // the template token, which every run's arguments reach (the any
+        // context, `rest_template_any`).
         for &(slot, tm) in &s.births {
             let ctx = self.made_ctx(BORN, lay, vc);
-            let t = self.site_tok(tm, ctx);
+            let tt = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)).copied();
+            let t = match tt {
+                Some(tt) if ctx == BORN && self.rest_param_tmpls.contains(&tm) => tt,
+                _ => self.site_tok(tm, ctx),
+            };
             self.add_tok(base[slot as usize], t);
         }
         for &(a, b) in &s.edges {
@@ -1392,6 +1401,21 @@ impl Model {
     /// Arguments and result of `call` into summarized function token `ft`.
     /// A function with a `this` term binds per receiver (`this_into`), the
     /// others their one instance.
+    /// The any-element node of `f`'s rest template token (gen: the rest
+    /// local's `TokKind::Obj(rest, NO_CTX)`): the rest array of the run no
+    /// site is the context of. Every run's arguments are its elements, so
+    /// what an escaped, widened or unknown caller's run reads holds what
+    /// any call passes (the merged array, as before runs had their own).
+    fn rest_template_any(&mut self, f: FnIdx) -> Option<NodeId> {
+        let r = self.funcs[f as usize].rest?;
+        let mut ts = Vec::new();
+        self.nodes[r as usize].pts.sorted_into(&mut ts);
+        let t = ts
+            .into_iter()
+            .find(|&t| matches!(self.toks[t as usize], TokKind::Obj(tm, NO_CTX) if self.rest_param_tmpls.contains(&tm)))?;
+        Some(self.field_any(t))
+    }
+
     pub(crate) fn bind_summarized(&mut self, call: CallId, ft: Tok) {
         if !self.has_this_term(self.tok_fn(ft)) {
             self.bind_layout(call, ft, None, 0);
@@ -1477,6 +1501,7 @@ impl Model {
         let exact = self.calls[c].spread.is_empty() && !has_arguments;
         let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
         let first = if has_arguments { 0 } else { terms.len() };
+        let merged = (rest != NO_NODE).then(|| self.rest_template_any(f)).flatten();
         if rest != NO_NODE {
             for i in first..nargs {
                 let a = self.calls[c].args[i];
@@ -1485,6 +1510,9 @@ impl Model {
                     None => self.rest_elem_node(rest, Some((i - first) as u32)),
                 };
                 self.edge(a, d);
+                if let Some(m) = merged {
+                    self.edge(a, m);
+                }
             }
         }
         for j in 0..self.calls[c].spread.len() {
@@ -1500,6 +1528,9 @@ impl Model {
             );
             if let Some(fa) = rest_fa {
                 self.edge(elems, fa);
+            }
+            if let Some(m) = merged {
+                self.edge(elems, m);
             }
             for i in 0..terms.len() {
                 if caps[i].is_some() {

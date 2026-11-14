@@ -225,3 +225,79 @@ b.toString = () => (Math.random() > 2 ? '%j' : 'b');
 ";
     assert_ne!(ots(body), crate::Verdict::Dead);
 }
+// DEADFN5: three.core.js funnels every message through
+// `function warn(...params) { const message = 'THREE.' + params.shift(); console.warn(message, ...params); }`.
+// The format is `%`-possible only for a caller whose message has an any-string
+// tail; such a caller passes no further argument, so the formatter consumes
+// nothing there. A caller that passes an object has a literal message without `%`.
+const FUNNEL: &str = "function warn(...params) { const message = 'P.' + params.shift(); console.warn(message, ...params); }
+";
+fn funnel(callers: &str) -> crate::Verdict {
+    verdict_with(&format!("{FUNNEL}{callers}"))
+}
+#[test]
+fn funnel_any_tail_alone_and_literal_with_object_is_dead() {
+    assert_eq!(
+        funnel("warn('a ' + process.env.H);\nwarn('literal no percent', new A());\n"),
+        crate::Verdict::Dead
+    );
+}
+#[test]
+fn funnel_percent_j_with_object_runs() {
+    assert_ne!(funnel("warn('a ' + process.env.H);\nwarn('x %j', new A());\n"), crate::Verdict::Dead);
+}
+#[test]
+fn funnel_any_tail_with_object_runs() {
+    assert_ne!(funnel("warn('literal no percent');\nwarn('a ' + process.env.H, new A());\n"), crate::Verdict::Dead);
+}
+#[test]
+fn funnel_spread_of_unknown_length_runs() {
+    let callers = "const arr = [];
+if (Math.random() > 2) arr.push('a ' + process.env.H);
+arr.push(new A());
+warn(...arr);
+warn('literal no percent');
+";
+    assert_ne!(funnel(callers), crate::Verdict::Dead);
+}
+#[test]
+fn funnel_escaped_warn_runs() {
+    let callers = "warn('a ' + process.env.H);
+warn('literal no percent', new A());
+globalThis.w = warn;
+globalThis.a = new A();
+eval(process.argv[2]);
+";
+    assert_ne!(funnel(callers), crate::Verdict::Dead);
+}
+// DEADFN6 (v): a run's rest array stored where later code writes into it:
+// what the write stores is an element of that run's array (flow-insensitive),
+// so the any-tail run's console call may format the object.
+#[test]
+fn funnel_stored_rest_written_later_runs() {
+    let src = "let saved = [];
+function warn(...params) { saved = params; const message = 'P.' + params.shift(); console.warn(message, ...params); }
+warn('a ' + process.env.H);
+warn('literal no percent');
+saved.push(new A());
+";
+    assert_ne!(verdict_with(src), crate::Verdict::Dead);
+}
+// DEADFN6 (vi): `apply` spreads an array of unknown length into the rest.
+#[test]
+fn funnel_apply_runs() {
+    let callers = "const arr = ['a ' + process.env.H, new A()];
+warn.apply(null, arr);
+warn('literal no percent');
+";
+    assert_ne!(funnel(callers), crate::Verdict::Dead);
+}
+// DEADFN6 (vi): `call` passes its arguments after `this` exactly
+// (20.2.3.3), each `call` site its own run.
+#[test]
+fn funnel_call_per_site_is_dead() {
+    let callers = "warn.call(null, 'a ' + process.env.H);
+warn.call(null, 'literal no percent', new A());
+";
+    assert_eq!(funnel(callers), crate::Verdict::Dead);
+}
