@@ -1951,12 +1951,35 @@ impl Model {
                             })
                     }
                 };
+                // Rule INT-OR-NAN: ToNumber/ToNumeric of an operand with no
+                // fraction (NaN, an infinity, an integer within 2^53) has
+                // none; `x + 1`, `x - 1` and `++`/`--` of one keep it (past
+                // 2^53 a unit step rounds back to 2^53; NaN and the
+                // infinities stay).
+                let frac = !iv.within(Iv::int(-(1i64 << 53), 1i64 << 53))
+                    && match op {
+                        RangeOp::ToNumber => !self.no_frac_number(n, false),
+                        RangeOp::Step(_) => !self.no_frac_number(n, true),
+                        RangeOp::Add | RangeOp::Sub if other != NO_NODE => {
+                            let one = Iv::int(-1, 1);
+                            let (a, b) = if right { (other, n) } else { (n, other) };
+                            let (ia, ib) = (self.range_input(a), self.range_input(b));
+                            !((ib.within(one) && self.no_frac_number(a, true))
+                                || (op == RangeOp::Add && ia.within(one) && self.no_frac_number(b, true)))
+                        }
+                        _ => true,
+                    };
                 let d = &mut self.nodes[dst as usize];
-                let grew = if self.exact_rules {
+                let mut grew = if self.exact_rules {
                     crate::solve::grow_rule_range(d, iv)
                 } else {
                     crate::solve::grow_range(d, iv)
                 };
+                if frac && !d.frac {
+                    d.frac = true;
+                    d.drange = true;
+                    grew = true;
+                }
                 if grew {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {

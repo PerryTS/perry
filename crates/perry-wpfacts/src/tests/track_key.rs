@@ -232,7 +232,6 @@ function generateUUID(): any {{
 const OBJ_READ: &str = "const y: any = h[ p.objectName ]; console.log( y.q );";
 
 #[test]
-#[ignore = "NAMEEXCL open: the ++ operand may be NaN (a builtin function), its interval is top, so its text may hold ."]
 fn unique_name_keeps_exclusion() {
     let v = recv(&prog("u2", "\x27position\x27", UNIQUE, OBJ_READ), "q");
     assert!(v.is_empty(), "{v:?}");
@@ -241,7 +240,7 @@ fn unique_name_keeps_exclusion() {
 }
 
 #[test]
-#[ignore = "NAMEEXCL open: _lut[a] + _lut[b] is 65536 products, rule M3 gives prefix entries 00..ff with any remainder"]
+#[ignore = "NAMEEXCL2 open: _lut[a] + _lut[b] is 65536 products, rule M3 gives prefix entries 00..ff with any remainder (rule PREFIX-AND-FREE, not built)"]
 fn uuid_keeps_exclusion() {
     let pre = format!("{}\nconst id: any = generateUUID();", uuid_pre());
     let v = recv(&prog("id", "\x27position\x27", &pre, OBJ_READ), "q");
@@ -262,7 +261,7 @@ if ( String( t ) === \x27x\x27 ) o.name = unique( String( n ) );
 const NAME_OR_UUID: &str = "( o.name ? o.name : o.uuid )";
 
 #[test]
-#[ignore = "NAMEEXCL open: both above"]
+#[ignore = "NAMEEXCL2 open: the uuid part (uuid_keeps_exclusion)"]
 fn node_name_or_uuid() {
     let pre = name_or_uuid_pre("");
     let v = recv(&prog(NAME_OR_UUID, TAB, &pre, OBJ_READ), "q");
@@ -322,4 +321,14 @@ fn host_number_text_has_no_bracket() {
 fn lower_case_keeps_exclusion() {
     let v = recv(&prog("sanitize( String( n ) ).toLowerCase()", "\x27position\x27", "", OBJ_READ), "q");
     assert!(v.is_empty(), "{v:?}");
+}
+
+// Control (rule INT-OR-NAN): `++` of a value that may be 0.5 may be 1.5,
+// so its text may hold `.`: the key `_1.5` may be read.
+#[test]
+fn step_of_fraction_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}") + " let w: any = String( t ) === \x27a\x27 ? 0.5 : Object;";
+    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ w ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
 }

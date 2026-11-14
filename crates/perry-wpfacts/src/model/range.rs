@@ -92,12 +92,15 @@ pub fn widen(old: Iv, next: Iv) -> Iv {
 pub struct Rg {
     pub num: Iv,
     pub chr: Iv,
+    /// `Node::frac` of the delivered Numbers (rule INT-OR-NAN).
+    pub frac: bool,
 }
 
 impl Rg {
     pub const TOP: Rg = Rg {
         num: Iv::TOP,
         chr: Iv::TOP,
+        frac: true,
     };
 }
 

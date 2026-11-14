@@ -32,6 +32,9 @@ const PLUS_PREFIXES_K: usize = 256;
 const NUM_TEXT_CHARS: &str = "0123456789+-.eNaInfity";
 /// Every character of an integer's text below 10^21, and of a BigInt's.
 const INT_TEXT_CHARS: &str = "0123456789-";
+/// The characters of the text of NaN, an infinity or an integer within
+/// 2^53 (rule INT-OR-NAN).
+const INT_NAN_TEXT_CHARS: &str = "0123456789-NaInfity";
 /// The ASCII letters: the only ASCII characters a case mapping produces
 /// from, or maps to, another code point (Unicode Default Case Conversion:
 /// letters map to letters and combining marks).
@@ -406,6 +409,72 @@ impl Model {
     /// or a BigInt is an exclusion entry of the characters its text never
     /// holds (rule NUM-TEXT). `Object.prototype` (the token is every
     /// builtin prototype) and every other object may be any string.
+    /// Is ToPrimitive of `t` (ECMA-262 7.1.1; hint string, or hint number
+    /// when `number`) a NativeFunction text (`Function.prototype.toString`,
+    /// 20.2.3.5): `t` a callable builtin, no unknown code, and the program
+    /// writes no `@@toPrimitive`, `valueOf` or `toString` on it or on
+    /// `Function.prototype`; for hint number no `@@toPrimitive` or
+    /// `valueOf` on `Object.prototype` either (the `valueOf` that hint
+    /// tries first is inherited from there and returns the function).
+    pub(crate) fn native_fn_text(&mut self, t: Tok, number: bool) -> bool {
+        if self.realm_held || t == TOP || self.is_marker(t) {
+            return false;
+        }
+        let callable = match self.toks[t as usize] {
+            TokKind::BuiltinFn(_) => true,
+            TokKind::Builtin(_) => crate::builtins::surely_callable(self, t),
+            _ => false,
+        };
+        if !callable {
+            return false;
+        }
+        let fp = crate::builtins::native_proto(self, "Function");
+        let keys = [crate::model::WK_TO_PRIMITIVE, "valueOf", "toString"].map(|k| self.atom(k));
+        for &a in &keys {
+            let f = self.field(t, a);
+            let x = &self.nodes[f as usize];
+            if crate::builtins::native_written(self, fp, a) || x.prim != 0 || !x.pts.is_empty() {
+                return false;
+            }
+        }
+        if number {
+            let op = crate::builtins::native_proto(self, "Object");
+            if keys[..2].iter().any(|&a| crate::builtins::native_written(self, op, a)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Rule INT-OR-NAN, ECMA-262 7.1.4 ToNumber (7.1.3 ToNumeric when
+    /// `numeric`: a BigInt stays a BigInt, no Number): every Number `x`
+    /// gives is NaN, an infinity, `-0` or an integer within 2^53. A Number
+    /// by its interval or `Node::frac`; `undefined` is NaN, `null` and the
+    /// booleans 0 or 1, a String by its code interval (`""` or one digit,
+    /// `range::chars_to_number`), a Symbol throws; a builtin function is
+    /// the NaN of its NativeFunction text (`native_fn_text`: the text
+    /// begins with `function`, 7.1.4.1.1 StringToNumber). Anything else:
+    /// false.
+    pub(crate) fn no_frac_number(&mut self, x: NodeId, numeric: bool) -> bool {
+        let (p, toks, rg, frac, cr) = {
+            let nd = &self.nodes[x as usize];
+            (nd.prim, nd.pts.to_sorted(), nd.range, nd.frac, nd.crange)
+        };
+        if p & prim::NUM != 0 && frac && !rg.within(crate::model::Iv::int(-(1i64 << 53), 1i64 << 53)) {
+            return false;
+        }
+        if p & prim::STR != 0 && crate::model::range::chars_to_number(cr).is_top() {
+            return false;
+        }
+        if p & prim::BIGINT != 0 && !numeric {
+            return false;
+        }
+        if p & !prim::ALL != 0 {
+            return false;
+        }
+        toks.into_iter().all(|t| self.native_fn_text(t, true))
+    }
+
     fn excl_parts(&mut self, n: NodeId) -> Option<(Vec<Result<String, (u128, String)>>, bool)> {
         let (p, toks, strs, rg) = {
             let x = &self.nodes[n as usize];
@@ -420,7 +489,14 @@ impl Model {
         // 6.1.6.2.14 BigInt::toString: digits and `-`.
         if p & prim::NUM != 0 {
             let int = !rg.is_empty() && rg.lo >= -(1i64 << 53) && rg.hi <= 1i64 << 53;
-            out.push(Err((!ascii_mask(if int { INT_TEXT_CHARS } else { NUM_TEXT_CHARS }), String::new())));
+            let chars = if int {
+                INT_TEXT_CHARS
+            } else if !self.nodes[n as usize].frac {
+                INT_NAN_TEXT_CHARS
+            } else {
+                NUM_TEXT_CHARS
+            };
+            out.push(Err((!ascii_mask(chars), String::new())));
         }
         if p & prim::BIGINT != 0 {
             out.push(Err((!ascii_mask(INT_TEXT_CHARS), String::new())));
@@ -452,25 +528,9 @@ impl Model {
             if self.realm_held {
                 return None;
             }
-            let fp = crate::builtins::native_proto(self, "Function");
-            let keys = [crate::model::WK_TO_PRIMITIVE, "valueOf", "toString"].map(|k| self.atom(k));
             for t in toks {
-                let native_fn = t != TOP
-                    && !self.is_marker(t)
-                    && match self.toks[t as usize] {
-                        TokKind::BuiltinFn(_) => true,
-                        TokKind::Builtin(_) => crate::builtins::surely_callable(self, t),
-                        _ => false,
-                    };
-                if !native_fn {
+                if !self.native_fn_text(t, false) {
                     return None;
-                }
-                for &a in &keys {
-                    let f = self.field(t, a);
-                    let x = &self.nodes[f as usize];
-                    if crate::builtins::native_written(self, fp, a) || x.prim != 0 || !x.pts.is_empty() {
-                        return None;
-                    }
                 }
             }
             out.push(Err((0, NATIVE_CODE_TAIL.to_string())));
