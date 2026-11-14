@@ -1,8 +1,8 @@
 #!/bin/bash
-# fxi.sh: compile + run + check the inventory fixtures with the instrumented cohort.
+# inv_fixtures.sh: compile + run + check the inventory fixtures with the instrumented cohort.
 # Env: W (worktree), A (instrumented release dir), K (work dir), FXSUM, TAG, JOBS (default "i1 i2 i3").
 export PATH=$HOME/.cargo/bin:/usr/lib/llvm-22/bin:$PATH PERRY_TRAP_CLANG=/usr/bin/clang-22 LLVM_SYS_221_PREFIX=/usr/lib/llvm-22 PERRY_ALLOW_PERRY_FEATURES=1
-K=${K:-/root/IMG1}; W=${W:-$K/w}; A=${A:-$K/target-instr/release}; S=${FXSUM:-$K/fxi.sum}; TAG=${TAG:-good}; mkdir -p $K/T; : > $S
+K=${K:-/tmp/inv-work}; W=${W:-$(git rev-parse --show-toplevel)}; A=${A:-$W/target/release}; S=${FXSUM:-$K/fxi.sum}; TAG=${TAG:-good}; mkdir -p $K/T; : > $S
 for d in ${JOBS:-i1 i2 i3}; do
   F=$K/T/$TAG-$d; rm -rf $F; mkdir -p $F; dir=$W/scripts/snap_inputs/fixtures/inv/$d
   ( cd $dir
