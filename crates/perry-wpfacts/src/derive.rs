@@ -152,6 +152,10 @@ pub struct TemplateFacts {
     /// A class's own statics that hold their definition for the program's
     /// life (FVA 3.4, `constant_statics`), sorted.
     pub statics: Vec<String>,
+    /// The class prototype's own members that are one data property for
+    /// the program's life (ECMA-262 15.7.14, `constant_proto_members`),
+    /// sorted.
+    pub proto_consts: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
@@ -204,6 +208,14 @@ pub enum Verdict {
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
     OwnDataOrAbsent,
+    /// A member read or method call whose receiver node holds only
+    /// `undefined` and/or `null` (no object token but closed markers, no ⊤,
+    /// no other primitive) and left no value out (`dropped`): evaluating the
+    /// member access evaluates its base, then GetValue's ToObject throws a
+    /// TypeError before any property lookup (ECMA-262 13.3.2.1, 6.2.5.5,
+    /// 7.1.18; for a call 13.3.6.1 throws before the arguments are
+    /// evaluated). The site runs (unlike Dead) and names no slot or body.
+    Throws,
     /// A value call whose callee set is exactly one builtin function object
     /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
     /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
@@ -356,6 +368,7 @@ impl TemplateFacts {
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         common_prefix(&mut self.ancestors, &o.ancestors);
         self.statics.retain(|k| o.statics.contains(k));
+        self.proto_consts.retain(|k| o.proto_consts.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.is(&f.key, f.private)) {
@@ -459,6 +472,56 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
             .get(&(tm, a))
             .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
         if m.static_fields.contains(&(tm, a)) || !stored {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// ECMA-262 15.7.14 ClassDefinitionEvaluation: the prototype object of a
+/// class is created with each method of the class body (15.4.4
+/// DefineMethodProperty) and `constructor` (MakeConstructor) as own,
+/// writable, non-enumerable data properties, before any code can reach the
+/// object. The prototype's own members whose read is one own data lookup
+/// for the program's life: the prototype reaches no unknown code (which
+/// could redefine or delete them), carries no HARD operation
+/// (defineProperty, delete), takes no computed-key store and has no
+/// computed member (either may name the key), and the key is no accessor.
+/// A program store of the key is an ordinary [[Set]] on an own writable
+/// data property (10.1.9.2 OrdinarySetWithOwnDescriptor): the key stays a
+/// data property and the store's value joins the field node the read takes.
+/// An object literal's layout is no class (decision 17); each evaluation of
+/// a per-evaluation class is its own prototype (Rule C).
+fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
+    let tpl = &m.tmpls[tm as usize];
+    if tpl.per_evaluation
+        || tpl.has_computed_members
+        || !matches!(tpl.kind, TmplKind::Class { literal_shape: false, .. })
+    {
+        return Vec::new();
+    }
+    let Some(&proto) = m.tok_index.get(&TokKind::Proto(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(proto)
+        || m.hard.contains_key(&proto)
+        || m.field_any.get(&proto).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&proto);
+    let mut out: Vec<String> = Vec::new();
+    for &a in &tpl.proto_members {
+        if tpl.accessor_keys.contains(&a) || accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
             out.push(m.atoms[a as usize].clone());
         }
     }
@@ -1062,6 +1125,7 @@ fn template_facts(
             .collect(),
         fields,
         statics: constant_statics(m, tm),
+        proto_consts: constant_proto_members(m, tm),
         sabotaged: false,
         record: Err(crate::records::Rejected::off()),
         record_elems: Vec::new(),
@@ -1307,6 +1371,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
+        // Throws and a claim naming the TypeError arm of a nullish receiver
+        // (`nullish_arms`) need every value of the sources too.
+        let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
+        if (verdict == Verdict::Throws
+            || (nullish && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
+            && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
+        {
+            verdict = Verdict::No("primitive receiver (a source left a value out)".into());
+        }
         // Design §11.4: a site whose receiver is the `this` of a method of
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
@@ -1452,11 +1525,35 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 /// The receivers of an `OwnLength` read: every token an Array exotic
 /// ([`exact_array`]) or a closed marker (its callers' values are beside
 /// it), every primitive a String, and at least one receiver.
+/// A receiver set of primitives only (every token a closed marker) that
+/// holds `undefined` and/or `null` beside the primitives `rest`: the
+/// operation's own dispatch on the value's kind throws the TypeError for a
+/// nullish value (ECMA-262 13.3.2.1, 7.1.18 ToObject) and runs `rest`'s
+/// family member for the others. `Some((rest, arms))`: the primitive bits
+/// left and the receivers naming the TypeError arms; `None` when no
+/// nullish value flows or an object token sits beside it.
+fn nullish_arms(m: &Model, toks: &[Tok], prim: u16) -> Option<(u16, Vec<String>)> {
+    use crate::model::prim::{NULL, UNDEF};
+    let nn = prim & (NULL | UNDEF);
+    if nn == 0 || !toks.iter().all(|&t| m.closed_marker(t)) {
+        return None;
+    }
+    let mut arms = Vec::new();
+    if nn & UNDEF != 0 {
+        arms.push("primitive:undefined (TypeError)".to_string());
+    }
+    if nn & NULL != 0 {
+        arms.push("primitive:null (TypeError)".to_string());
+    }
+    Some((prim & !nn, arms))
+}
+
 fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    let (prim, arms) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     if prim != 0 && prim != crate::model::prim::STR {
         return None;
     }
-    let mut receivers = Vec::new();
+    let mut receivers = arms;
     for &t in toks {
         if m.closed_marker(t) {
             continue;
@@ -1471,7 +1568,10 @@ fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
     }
     receivers.sort();
     receivers.dedup();
-    (!receivers.is_empty()).then_some(receivers)
+    receivers
+        .iter()
+        .any(|r| !r.ends_with("(TypeError)"))
+        .then_some(receivers)
 }
 
 /// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
@@ -1645,6 +1745,12 @@ fn judge(
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));
+                    // An array the program stores no named key on reads
+                    // `undefined` under a key its chain lacks.
+                    if !s.is_call && array_absent(m, t, key, s.key) {
+                        own_or_absent += 1;
+                        continue;
+                    }
                     verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
                     continue;
                 };
@@ -1742,6 +1848,25 @@ fn judge(
                     }
                 }
             }
+            // A program class's prototype object: the key is one of its own
+            // constant members (15.7.14, `constant_proto_members`). A member
+            // it inherits is not proven here.
+            TokKind::Proto(tm) if by_id.contains_key(tm) => {
+                receivers.push(m.tok_name(t));
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.proto_consts.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant own member of the class prototype (15.7.14)".into(),
+                        ));
+                    }
+                }
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;
@@ -1760,6 +1885,10 @@ fn judge(
         verdict.get_or_insert(Verdict::Dead);
     }
     if none && prim != 0 {
+        use crate::model::prim::{NULL, UNDEF};
+        if prim & !(NULL | UNDEF) == 0 {
+            verdict.get_or_insert(Verdict::Throws);
+        }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     let mut targets = FxHashMap::default();
@@ -1855,7 +1984,8 @@ fn native_member(
 ) -> Result<Vec<String>, Option<String>> {
     use crate::builtins::NativeFamily;
     let mut fam: Option<NativeFamily> = None;
-    let mut receivers = Vec::new();
+    // A nullish value beside one primitive family: its TypeError arm.
+    let (prim, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     let join = |f: NativeFamily, fam: &mut Option<NativeFamily>| match fam {
         None => {
             *fam = Some(f);
@@ -1939,16 +2069,33 @@ fn host_member(
     let name = &m.atoms[s.key as usize];
     let mut receivers = Vec::new();
     let mut native = true;
+    // A builtin namespace or constructor that is no host object (`Math`,
+    // `Promise`, `Array`): the realm's own member, unwritten
+    // (`builtins::ns_native`, BNSRECV).
+    let mut realm_ns = false;
     for &t in toks {
         let TokKind::Builtin(ns) = m.toks[t as usize] else {
             return None;
         };
-        let h = crate::builtins::host_of(ns, name, s.is_call)?;
-        native &= crate::builtins::host_native(m, h, s.key, s.is_call);
-        receivers.push(format!("host:{h:?}"));
+        match crate::builtins::host_of(ns, name, s.is_call) {
+            Some(h) => {
+                native &= crate::builtins::host_native(m, h, s.key, s.is_call);
+                receivers.push(format!("host:{h:?}"));
+            }
+            None if crate::builtins::ns_native(m, t, ns, s.key, s.is_call) => {
+                realm_ns = true;
+                receivers.push(m.tok_name(t));
+            }
+            None => return None,
+        }
     }
     if !native {
         return Some(Err("host member undescribed or written".into()));
+    }
+    // Interpreted code (DEC 150) names every global and may write the key;
+    // no namespace object is a lock holder, so nothing refuses the write.
+    if realm_ns && m.interp_runs {
+        return Some(Err("namespace member: interpreted code may write the key".into()));
     }
     // Unknown code holds the realm (9.3, `realm_held`): a host object's
     // members are writable, and the solve does not replay unknown code's
@@ -2120,6 +2267,54 @@ fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom)
             .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
         && chain_absent(m, t, key, a, false)
         && object_proto_unwritten(m, a)
+}
+
+/// [[Get]] of named key `a` (`key`) on array token `t` gives `undefined`.
+/// `t` is an Array exotic object (`exact_array`, a `TmplKind::Arr` birth)
+/// whose [[Prototype]] is `%Array.prototype%`: its own keys are its indices
+/// and `length` (ECMA-262 10.4.2), any other own key one the program
+/// stores (`fields`; under an unknown key `named_any`, whose values its
+/// named keys read, apart from its elements in `field_any`; another
+/// unit's named stores, `cell_arrs`; an accessor); no `__proto__`
+/// relink, no hard operation and no escape gives unknown code the array. The key is
+/// no index, not `length` and no private name; [[Get]] is OrdinaryGet
+/// (10.1.8.1) and walks `%Array.prototype%` and `%Object.prototype%`,
+/// whose descriptions lack it, and no write reaches either under it
+/// ([`builtin_protos_unwritten`] for the Array family: `%Array.prototype%`
+/// takes named adds, perry-abi lock.rs `add_locked`, so neither interpreted
+/// code nor a held realm may run).
+fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
+        && exact_array(m, t)
+        && key != "length"
+        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !matches!(key, "Infinity" | "NaN")
+        && !m.is_private_atom(a)
+        && !m.optimistic_json_key
+        && holds_nothing(m.fields.get(&(t, a)))
+        && holds_nothing(if m.elems_apart(t) {
+            m.named_any.get(&t)
+        } else {
+            m.field_any.get(&t)
+        })
+        && holds_nothing(m.cell_arrs.get(&t))
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && m.tmpls[tm as usize].accessor_keys.is_empty()
+        && !m.super_relink.contains(&t)
+        && !m.hard.contains_key(&t)
+        && !m.is_escaped(t)
+        && crate::builtins::array_chain_lacks(key)
+        && object_proto_unwritten(m, a)
+        && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), a).is_ok()
 }
 
 /// `%Object.prototype%` holds nothing stored under `a` by the program: no

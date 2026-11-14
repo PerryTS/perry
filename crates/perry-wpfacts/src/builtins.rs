@@ -975,6 +975,13 @@ pub(crate) fn object_proto_lacks(name: &str) -> bool {
     members::member(members::Family::Object, name).is_none()
 }
 
+/// `%Array.prototype%`'s intrinsic description lacks `name`, and so does
+/// `%Object.prototype%`'s, which follows it on an array's chain
+/// (`derive::array_absent`).
+pub(crate) fn array_chain_lacks(name: &str) -> bool {
+    members::member(members::Family::Array, name).is_none()
+}
+
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
 /// stands for every one of them here): a store, an accessor, a delete or a
 /// reach into unmodeled code on it, another unit's such write, or a store
@@ -1021,7 +1028,63 @@ fn intrinsic_unwritten(
     a: Atom,
     miss: NativeMiss,
 ) -> bool {
-    members::locked_read(fam, what, &m.atoms[a as usize]) || intrinsic_miss(m, a, miss)
+    let holder = what.or((fam == Family::Error).then_some("Error"));
+    members::locked_read(fam, what, &m.atoms[a as usize]) || intrinsic_miss_on(m, holder, a, miss)
+}
+
+/// [`intrinsic_miss`] for a lookup that passes the own prototype of builtin
+/// kind `holder` (`TmplKind::BObj::what`, `Array` for an array) before
+/// `Object.prototype`: that prototype is asked under its own identity
+/// (`TokKind::NativeProto`), so a write onto it, or unknown code holding
+/// the realm where the lock admits the store (`realm_replaced`), reaches
+/// this lookup, and `Object.prototype` stays under its lock.
+pub(crate) fn intrinsic_miss_on(
+    m: &mut Model,
+    holder: Option<&str>,
+    a: Atom,
+    miss: NativeMiss,
+) -> bool {
+    if let Some(what) = holder {
+        let np = m.tok(TokKind::native_proto(what));
+        let written = match miss {
+            NativeMiss::Lookup(_, _) => native_accessor_written(m, np, a),
+            _ => native_written(m, np, a),
+        };
+        if written {
+            if !native_protocol::answer_stored(m, np, a, miss.clone()) {
+                return false;
+            }
+        } else {
+            m.native_missing.push((np, a, miss.clone()));
+        }
+    }
+    intrinsic_miss(m, a, miss)
+}
+
+/// The own prototype a lookup on builtin receiver `t` passes before
+/// `Object.prototype`, by its kind: a builtin object's (`BObj::what`), an
+/// array's `Array.prototype`.
+pub(crate) fn chain_holder(m: &Model, t: Tok) -> Option<&'static str> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what, .. } => Some(*what),
+            TmplKind::Arr { .. } => Some("Array"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// DEC 250: is the read of key `a` on the own prototype of builtin kind
+/// `what` final (the lock refuses every store that changes it)? Its image
+/// members on a sealed prototype (`image_locked_prototype`), its family's
+/// locked chain (`members::locked_read`); anything else is not.
+pub(crate) fn proto_read_final(m: &Model, what: &str, a: Atom) -> bool {
+    let name = &m.atoms[a as usize];
+    if let Some(holder) = members::image_locked_prototype(what) {
+        return image_member(m, holder, name);
+    }
+    members::locked_read(members::bobj_family(what), Some(what), name)
 }
 
 /// DEC 250: is the read of named key `a` on the intrinsic chain of builtin
@@ -2449,6 +2512,33 @@ pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool 
         _ => false,
     };
     described && !host_written(m, h, a)
+}
+
+/// BNSRECV: the site verdict's half of `loads::ns_load` on a builtin
+/// namespace or constructor that is no host object. Key `a` of namespace
+/// token `t` reads the realm's own value (ECMA-262 9.3.2 CreateIntrinsics:
+/// an own property the realm gives the object): its native function
+/// (`namespace_native`), a described primitive, or for `prototype` the
+/// family's prototype object, and no write the solve sees reached the key
+/// (`native_written`: a store of the key, a computed-key store, a write
+/// through ⊤). No namespace object is a lock holder (perry-abi lock.rs
+/// `LockHolder`): the runtime admits every replacement, so the caller adds
+/// that no unknown or interpreted code runs. Whole-program solves only.
+pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -> bool {
+    if m.unit_mode || members::is_host(ns) {
+        return false;
+    }
+    let name = &m.atoms[a as usize];
+    if m.native_property(t, name).is_some_and(|p| p.get.is_some()) {
+        return false;
+    }
+    let own = match members::ns_member(ns, name) {
+        Some(Some(Mem::Fn)) => namespace_native(m, t, ns, name).is_some(),
+        Some(Some(Mem::Prim(_))) => !call,
+        Some(Some(Mem::Proto)) => !call && name == "prototype",
+        _ => false,
+    };
+    own && !native_written(m, t, a)
 }
 
 /// A call of member `n` of host `h`: the runtime's own method (`native`)

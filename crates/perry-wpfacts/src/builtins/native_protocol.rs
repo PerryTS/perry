@@ -281,6 +281,17 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if !m.realm_held {
         return false;
     }
+    // A built-in family's own prototype (`Buffer.prototype`,
+    // `%TypedArray%.prototype`, `URL.prototype`, `Error.prototype`, ...; the
+    // holder a lookup on a value of that family passes before
+    // `Object.prototype`, `builtins::intrinsic_miss_on`): unknown code that
+    // holds the realm holds it, and its [[Set]] of `a` succeeds unless the
+    // runtime's lock refuses it (ECMA-262 10.1.9; DEC 250 `final_on`). A
+    // read the lock makes final there stays exact; `Object.prototype`
+    // (`ObjectProto`) is asked under its own lock and never here.
+    if let TokKind::NativeProto(what, _) = &m.toks[np as usize] {
+        return !super::proto_read_final(m, what, a);
+    }
     let TokKind::Builtin(ns) = m.toks[np as usize] else {
         return false;
     };
@@ -291,8 +302,16 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
         return true;
     }
+    // A property of the global object the program owns (`global_user_key`:
+    // `globalThis.gf = f`): the global object is an ordinary object
+    // (ECMA-262 9.1.1.4, its object record) that unknown code holding the
+    // realm holds, so its [[Set]] of `gf` succeeds; a read of `gf` (bare,
+    // or `globalThis.gf`) may find its function. A module's own bindings
+    // live in the module environment record, which no other code reaches.
     super::global_object(m, np)
-        && (super::global_function(m, name) || super::effects::declared_function(name).is_some())
+        && (super::global_function(m, name)
+            || super::effects::declared_function(name).is_some()
+            || super::global_user_key(m, name))
 }
 
 /// Unknown code now holds the realm: the lookups parked past a member it may

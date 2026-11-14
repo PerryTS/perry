@@ -39,6 +39,7 @@ pub enum SiteVerdict {
     OwnDataOrAbsent,
     NsExport,
     IntrinsicCall,
+    Throws,
 }
 impl SiteVerdict {
     pub(crate) fn name(self) -> &'static str {
@@ -52,6 +53,7 @@ impl SiteVerdict {
             Self::OwnDataOrAbsent => "OwnDataOrAbsent",
             Self::NsExport => "NsExport",
             Self::IntrinsicCall => "IntrinsicCall",
+            Self::Throws => "Throws",
         }
     }
     pub(crate) fn slice(self) -> u8 {
@@ -65,6 +67,7 @@ impl SiteVerdict {
             Self::OwnDataOrAbsent => 9,
             Self::NsExport => 8,
             Self::IntrinsicCall => 7,
+            Self::Throws => 10,
         }
     }
 }

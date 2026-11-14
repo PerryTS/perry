@@ -91,3 +91,76 @@ fn console_log_held_later_in_source() {
     let held = m_calls(&body);
     assert!(!mono(&held), "held later in source: {held:?}");
 }
+
+// HOSTHELD2 A: a method of a built-in object whose prototype no
+// `LockHolder` covers (`Buffer.prototype`, `%TypedArray%.prototype`,
+// `ArrayBuffer.prototype`, `DataView.prototype`, `Error.prototype`,
+// `URL.prototype`, `TextEncoder.prototype`): unknown code that holds the
+// realm holds that prototype and may have put its own function under the
+// key (ECMA-262 10.1.9 [[Set]] on an ordinary extensible object).
+const BUF: &str = "const b = Buffer.from(\"x\");\n";
+#[test] fn buffer_write_held() { check(&format!("{BUF}b.write(o as any)")) }
+#[test] fn buffer_includes_held() { check(&format!("{BUF}b.includes(o as any)")) }
+#[test] fn buffer_equals_held() { check(&format!("{BUF}b.equals(o as any)")) }
+#[test] fn typed_array_set_held() { check("new Uint8Array(4).set(o as any)") }
+#[test] fn typed_array_index_of_held() { check("new Uint8Array(4).indexOf(o as any)") }
+#[test] fn array_buffer_slice_held() { check("new ArrayBuffer(4).slice(o as any)") }
+#[test] fn data_view_get_held() { check("new DataView(new ArrayBuffer(4)).getInt8(o as any)") }
+// A receiver perry knows is a URL (`new URL(..)`, a URL-typed local):
+// perry-hir url_date_instance.rs lowers `.toJSON()` / `.toString()` to the
+// href read (`UrlInstanceToJSON`, codegen `js_url_get_href`): no [[Get]] on
+// `URL.prototype`, the arguments are not passed. Nothing unknown code puts
+// there runs: exact in both arms.
+#[test] fn url_to_json_static_exact() { locked("new URL(\"http://a\").toJSON(o as any)") }
+// The same call on a receiver perry does not type: the method is the
+// [[Get]] of `toJSON` on `URL.prototype`, which no `LockHolder` covers.
+#[test] fn url_to_json_held() { check("const u: any = new URL(\"http://a\");\nu.toJSON(o)") }
+#[test] fn url_search_params_held() { check("const p: any = new URLSearchParams(\"a=1\");\np.has(o)") }
+#[test] fn shared_array_buffer_slice_held() { check("new SharedArrayBuffer(4).slice(o as any)") }
+#[test] fn timer_refresh_held() { check("const t: any = setTimeout(() => 0, 0);\nt.refresh(o)") }
+#[test] fn text_encoder_encode_held() { check("new TextEncoder().encode(o as any)") }
+
+/// A locked prototype's image member (DEC 250: a Map's `set`) or a binding
+/// no other code reaches: exact in both arms, the claim stays.
+fn locked(call: &str) {
+    let body = format!("{OBJ}{call};\nconst r = o.m();\n");
+    let free = m_calls(&body);
+    assert!(mono(&free), "free: {call}: {free:?}");
+    let held = m_calls(&format!("{HELD}{body}"));
+    assert!(mono(&held), "held: {call} is not replaceable: {held:?}");
+}
+/// `new Map()` reads the live global binding `Map` (perry-hir
+/// lower/expr_new.rs: global_property_new_dynamic), which unknown code that
+/// holds the realm may replace: the loss is real.
+#[test] fn new_map_set_held() { held_only("new Map().set(1, o)") }
+#[test] fn array_index_of_locked() { locked("[1].indexOf(o as any)") }
+
+// HOSTHELD2 B: a program-owned property of the global object (ECMA-262
+// 9.1.1.4, the object record of the global environment): unknown code that
+// holds the realm holds `globalThis` and may replace it; a call of it may
+// then call unknown code with `o`. A module's own `var`, `function`, `let`,
+// `const` and `class` live in the module environment record (16.2.1.6.4
+// InitializeEnvironment), which no other code reaches.
+const GF: &str = "(globalThis as any).gf = (x: any) => 0;\n";
+#[test] fn global_this_member_held() { held_only(&format!("{GF}(globalThis as any).gf(o)")) }
+#[test] fn global_this_bare_held() { check(&format!("{GF}(gf as any)(o)")) }
+#[test] fn global_this_read_value_held() { check(&format!("{GF}const g = (globalThis as any).gf; g(o)")) }
+#[test] fn module_var_exact() { locked("var gv = (x: any) => 0;\ngv(o)") }
+#[test] fn module_function_exact() { locked("function gd(x: any) { return 0; }\ngd(o)") }
+#[test] fn module_let_exact() { locked("let gl = (x: any) => 0;\ngl(o)") }
+
+// ESCDIFF2: a generator object is its step closure (gen_call.rs
+// `js_iterator_delegate_step`). Its `next` is read along its chain
+// (ECMA-262 10.1.8.1 OrdinaryGet): the generator function's own `prototype`
+// object first (27.3.3.1 / 27.5.3), which is program-owned and reachable from
+// the class: unknown code that holds the realm may have stored any function
+// under `next` there. `g.next(o)` may then hand `o` to unknown code, and the
+// step closure itself reaches unknown code as that call's receiver. The
+// free twin already hands `o` on (the `next` of an `any` generator is not
+// modeled), so the fixture holds the held arm only (`held_only`).
+const GEN: &str = "class P { *[Symbol.iterator]() { yield 1; } }\n(globalThis as any).keep = P;\n";
+
+#[test]
+fn generator_next_through_held_prototype() {
+    held_only(&format!("{GEN}const g: any = new P()[Symbol.iterator]();\ng.next(o)"));
+}
