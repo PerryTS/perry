@@ -32,6 +32,10 @@ const PLUS_PREFIXES_K: usize = 256;
 const NUM_TEXT_CHARS: &str = "0123456789+-.eNaInfity";
 /// Every character of an integer's text below 10^21, and of a BigInt's.
 const INT_TEXT_CHARS: &str = "0123456789-";
+/// The ASCII letters: the only ASCII characters a case mapping produces
+/// from, or maps to, another code point (Unicode Default Case Conversion:
+/// letters map to letters and combining marks).
+const ASCII_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /// The ASCII characters of `s` (bit c for c).
 pub(crate) fn ascii_mask(s: &str) -> u128 {
@@ -229,6 +233,27 @@ impl Model {
                 if self.atom_infix(a).is_some() {
                     out.push(a);
                     continue;
+                }
+                // ECMA-262 22.1.3.28 / .30: no code point maps to an ASCII
+                // character other than a letter, and none of those maps to
+                // something else: X·s keeps X's excluded non-letters.
+                if let Some((e, t)) = self.atom_excl(a) {
+                    let m = if t.is_ascii() {
+                        let t = map(t);
+                        self.excl_atom(e & !ascii_mask(ASCII_LETTERS), &t)
+                    } else {
+                        None
+                    };
+                    match m {
+                        Some(m) => {
+                            out.push(m);
+                            continue;
+                        }
+                        None => {
+                            exact = false;
+                            break;
+                        }
+                    }
                 }
                 let m = match self.atom_prefix(a) {
                     Some(q) if q.is_ascii() => Some(self.prefix_atom(&map(q))),

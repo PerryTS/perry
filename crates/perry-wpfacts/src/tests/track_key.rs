@@ -317,3 +317,9 @@ fn host_number_text_has_no_bracket() {
     assert!(v.is_empty(), "{v:?}");
 }
 
+// toLowerCase keeps the exclusion entry (ECMA-262 22.1.3.28).
+#[test]
+fn lower_case_keeps_exclusion() {
+    let v = recv(&prog("sanitize( String( n ) ).toLowerCase()", "\x27position\x27", "", OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+}
