@@ -168,6 +168,9 @@ mod this_field_loop_tests;
 mod iterator_step_tests;
 
 #[cfg(test)]
+mod typed_for_of_admission_tests;
+
+#[cfg(test)]
 mod wtf8_key_tests;
 
 pub(crate) mod dynamic_eval;

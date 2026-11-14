@@ -1301,15 +1301,8 @@ pub(super) fn lower_stmt_for_of_inner(
     // array's byte-packed storage and yields raw bit reinterpretations.
     // `js_array_clone` (the runtime backing of `ArrayFrom`) detects the
     // typed-array tag and materializes through the per-kind accessor.
-    let is_iterable_typed_array = matches!(
-        &iterable_type,
-        Some(Type::Named(name)) if matches!(name.as_str(),
-            "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
-            | "Uint16Array" | "Int16Array"
-            | "Uint32Array" | "Int32Array"
-            | "Float16Array" | "Float32Array" | "Float64Array"
-        )
-    );
+    let is_iterable_typed_array =
+        crate::lower::for_of_guard::is_numeric_typed_array(iterable_type.as_ref());
     // #321: the for-of desugar reads `__arr.length` / `__arr[i]` and so
     // assumes the iterable is a plain Array. When the receiver's static
     // type can NOT be proven to be an Array — an `any`-typed Map/Set
@@ -1382,12 +1375,10 @@ pub(super) fn lower_stmt_for_of_inner(
             Expr::SetValues(Box::new(arr_expr))
         }
     } else if is_iterable_typed_array {
-        // Iterate the typed array LIVE: the holder keeps the TA's static
-        // type so IndexGet/`.length` route through the typed-array
-        // accessors, and element writes made by the loop body are
-        // observed (test262 *-mutate.js). The previous `Expr::ArrayFrom`
-        // materialization snapshotted the elements up front.
-        arr_expr
+        // Iterate a real typed array LIVE, so element writes made by the
+        // loop body are observed (test262 *-mutate.js); any other value is
+        // drained by its iterator (`for_of_guard::admitted_typed_array_holder`).
+        crate::lower::for_of_guard::admitted_typed_array_holder(ctx, arr_expr, &mut module.init)
     } else if use_lazy_iter {
         // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
         arr_expr
@@ -1413,8 +1404,9 @@ pub(super) fn lower_stmt_for_of_inner(
     } else if let (Some(ref k), Some(ref v)) = (&map_key_type, &map_val_type) {
         Type::Tuple(vec![k.clone(), v.clone()])
     } else if is_iterable_typed_array {
-        // Issue #578: typed-array element values are always Number.
-        Type::Number
+        // Issue #578 binds Numbers only for a real typed array; the holder
+        // may be the drained Array of another iterable.
+        Type::Any
     } else {
         match &iterable_type {
             Some(Type::Array(elem)) => (**elem).clone(),
@@ -1449,9 +1441,8 @@ pub(super) fn lower_stmt_for_of_inner(
         // Holds the iterator object, not an array.
         Type::Any
     } else if is_iterable_typed_array {
-        // Keep the TA's own type so IndexGet/length go through the
-        // typed-array accessors (live reads), not raw Array element loads.
-        iterable_type.clone().unwrap_or(Type::Any)
+        // A typed array or the Array its admission drained.
+        Type::Any
     } else {
         Type::Array(Box::new(elem_type.clone()))
     };
