@@ -607,6 +607,12 @@ fn generate<'a>(
     if cfg.profile && loud {
         g.m.profile = Some(Default::default());
         g.m.prof = Some(Default::default());
+        // PERRY_WPF_PROFTICK=<s> (diagnostic only): interval work report.
+        if let Some(s) = std::env::var("PERRY_WPF_PROFTICK").ok().and_then(|v| v.parse::<u64>().ok()) {
+            if s > 0 {
+                g.m.prof.as_mut().unwrap().tick = Some((std::time::Instant::now(), s, 0));
+            }
+        }
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what

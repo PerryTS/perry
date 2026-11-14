@@ -1455,6 +1455,13 @@ pub struct WorkProfile {
     /// Per declared native (`builtins::effects`): the runs of its
     /// declaration and the source call sites they were for.
     pub natives: FxHashMap<&'static str, (u64, crate::pts::FxHashSet<CallId>)>,
+    /// PERRY_WPF_PROFTICK=<s> (diagnostic only): the interval report every
+    /// s seconds of wall: (start, interval, last report).
+    pub tick: Option<(std::time::Instant, u64, u64)>,
+    /// Rule-kind work (work + attach work) at the last interval report.
+    pub tick_kind: FxHashMap<&'static str, u64>,
+    /// Per node in the interval: (work, pops, delta tokens, pop charge).
+    pub tick_node: FxHashMap<NodeId, (u64, u64, u64, u64)>,
 }
 
 impl WorkProfile {

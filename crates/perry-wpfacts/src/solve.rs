@@ -378,9 +378,20 @@ impl Model {
                 *p.phase.entry(ph).or_default() += w;
             } else {
                 *p.node.entry(at).or_default() += w;
+                if p.tick.is_some() {
+                    p.tick_node.entry(at).or_default().0 += w;
+                }
             }
         }
         p.at = (n, self.work.get(), phase);
+        if let Some((t0, every, last)) = p.tick {
+            let now = t0.elapsed().as_secs();
+            if now >= last + every {
+                p.tick = Some((t0, every, now));
+                self.prof_tick(now);
+            }
+        }
+        let Some(p) = self.prof.as_mut() else { return };
         if self.work.get() >= p.next_curve {
             p.next_curve = (self.work.get() / WorkProfile::STEP + 1) * WorkProfile::STEP;
             let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
@@ -564,6 +575,104 @@ impl Model {
                 }
             }
         }
+    }
+
+    /// PERRY_WPF_PROFTICK (diagnostic only; facts do not depend on it): the
+    /// rule kinds and the popped nodes the work of the last interval went to.
+    fn prof_tick(&mut self, now: u64) {
+        let Some(mut p) = self.prof.take() else { return };
+        let mut ks: Vec<(u64, &'static str)> = Vec::new();
+        for (k, e) in p.kind.iter() {
+            let tot = e.1 + e.3;
+            let prev = p.tick_kind.insert(k, tot).unwrap_or(0);
+            if tot > prev {
+                ks.push((tot - prev, k));
+            }
+        }
+        ks.sort_unstable_by(|a, b| b.cmp(a));
+        let iw: u64 = p.tick_node.values().map(|e| e.0).sum();
+        let ip: u64 = p.tick_node.values().map(|e| e.1).sum();
+        eprintln!(
+            "perry: wpfacts tick t={now} work={} pops={} toks={} wl={} interval node work={iw} pops={ip} kinds={:?}",
+            self.work.get(), self.pops, self.toks.len(), self.wl.len(), &ks[..ks.len().min(8)]
+        );
+        let mut owner: crate::pts::FxHashMap<NodeId, Tok> = Default::default();
+        let (mut big, mut big_cons) = (0usize, 0usize);
+        for (&t, &pn) in self.proto_node.iter() {
+            owner.insert(pn, t);
+            let node = &self.nodes[pn as usize];
+            if node.pts.len() >= 40 {
+                big += 1;
+                big_cons += node.cons.len();
+            }
+        }
+        eprintln!(
+            "perry: wpfacts tick-protos t={now} protos={} with>=40 pts={big} their cons={big_cons}",
+            self.proto_node.len()
+        );
+        let mut ns: Vec<(u64, NodeId, (u64, u64, u64, u64))> =
+            p.tick_node.drain().map(|(n, e)| (e.0, n, e)).collect();
+        ns.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (_, n, (w, pops, dsum, charge)) in ns.into_iter().take(12) {
+            let node = &self.nodes[n as usize];
+            let mut kinds: crate::pts::FxHashMap<&'static str, u32> = Default::default();
+            for c in &node.cons {
+                *kinds.entry(c.kind_name()).or_default() += 1;
+            }
+            let mut kinds: Vec<_> = kinds.into_iter().collect();
+            kinds.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            kinds.truncate(5);
+            let name = self.node_names.get(n as usize).cloned().unwrap_or_default();
+            let some: Vec<String> = node.pts.to_sorted().iter().take(4).map(|&t| self.tok_name(t)).collect();
+            eprintln!(
+                "perry: wpfacts tick-node t={now} #{n} {} name={name:?} work={w} pops={pops} delta={dsum} charge={charge} pts={} top={} prim={:#x} succ={} cons={} kinds={kinds:?} some={some:?}",
+                self.labels[n as usize],
+                node.pts.len(),
+                node.pts.contains_tok(TOP) as u8,
+                node.prim,
+                node.succ.len(),
+                node.cons.len()
+            );
+            if let Some(&t) = owner.get(&n) {
+                let (mut ofs, mut dsts, mut keys, mut froms): (
+                    crate::pts::FxHashSet<Tok>,
+                    crate::pts::FxHashSet<NodeId>,
+                    crate::pts::FxHashSet<String>,
+                    crate::pts::FxHashSet<Tok>,
+                ) = Default::default();
+                let mut of_tm: crate::pts::FxHashMap<String, u32> = Default::default();
+                for c in &node.cons {
+                    match c {
+                        Cons::EnumChain { key, dst, of, from } => {
+                            if ofs.insert(*of) {
+                                let w = match &self.toks[*of as usize] {
+                                    TokKind::Obj(tm, _) => self.tmpls[*tm as usize].display.to_string(),
+                                    _ => self.tok_name(*of),
+                                };
+                                *of_tm.entry(w).or_default() += 1;
+                            }
+                            dsts.insert(*dst);
+                            keys.insert(format!("{key:?}"));
+                            froms.insert(*from);
+                        }
+                        _ => {}
+                    }
+                }
+                let mut of_tm: Vec<_> = of_tm.into_iter().collect();
+                of_tm.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                of_tm.truncate(6);
+                let all: Vec<String> = node.pts.to_sorted().iter().map(|&t| self.tok_name(t)).collect();
+                eprintln!(
+                    "perry: wpfacts tick-owner t={now} #{n} owner={} enumchain of={} dst={} keys={} from={} of_by_tmpl={of_tm:?} pts_all={all:?}",
+                    self.tok_name(t),
+                    ofs.len(),
+                    dsts.len(),
+                    keys.len(),
+                    froms.len()
+                );
+            }
+        }
+        self.prof = Some(p);
     }
 
     /// The work profile (PERRY_FACTS_PROFILE): phases, steps, rule kinds and
@@ -1212,6 +1321,12 @@ impl Model {
             self.charge_work((delta.len() as u64 + 1) * ncons0 as u64);
             if let Some(p) = self.prof.as_mut() {
                 p.step[0] += (delta.len() as u64 + 1) * ncons0 as u64;
+                if p.tick.is_some() {
+                    let e = p.tick_node.entry(n).or_default();
+                    e.1 += 1;
+                    e.2 += delta.len() as u64;
+                    e.3 += (delta.len() as u64 + 1) * ncons0 as u64;
+                }
             }
             if self.profile.is_some() {
                 let e = self.label_work.entry(self.labels[n as usize]).or_default();
