@@ -192,17 +192,6 @@ fn startup_registration_ll(func: &str, triple: Option<&str>) -> String {
     }
 }
 
-/// The functions of the object [`generate_feature_installer_object`] emits,
-/// each in its own `.text.<name>` section. Every program that links the
-/// runtime runs them at start-up (the static constructor, then `js_gc_init`
-/// runs the installers), so the link places them in the hot-text run
-/// (perry `link::hot_text_order`) instead of after the cold runtime text.
-pub const FEATURE_INSTALLER_FUNCTIONS: [&str; 3] = [
-    "perry_register_feature_installers",
-    "perry_runtime_feature_installer",
-    "perry_stdlib_feature_installer",
-];
-
 /// Generate the object that tells the runtime (and perry-stdlib, when linked)
 /// which optional features this program installs.
 ///
