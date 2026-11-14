@@ -1439,7 +1439,10 @@ pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i
 /// the edge carries its tag like every other value and is never a bare
 /// address. Null stays the zero word. Read it back with
 /// [`closure_capture_ref`].
-#[inline]
+///
+/// Out of line, like the `extern "C"` setter it replaces at each call site:
+/// the tag is applied in one body instead of at every site.
+#[inline(never)]
 pub fn closure_set_capture_ref(closure: *mut ClosureHeader, index: u32, addr: i64) {
     let addr = addr as u64 & crate::value::POINTER_MASK;
     let bits = if addr == 0 {
@@ -1453,8 +1456,9 @@ pub fn closure_set_capture_ref(closure: *mut ClosureHeader, index: u32, addr: i6
 /// The address a capture slot written by [`closure_set_capture_ref`] holds:
 /// the payload of a pointer-, string- or bigint-tagged word, 0 for an empty
 /// slot or any other value. An untagged word is returned as it is: a slot
-/// whose writer still stores the bare address.
-#[inline]
+/// whose writer still stores the bare address. Out of line for the same reason
+/// as the setter.
+#[inline(never)]
 pub fn closure_capture_ref(closure: *const ClosureHeader, index: u32) -> i64 {
     let bits = js_closure_get_capture_bits(closure, index);
     let tag = bits & crate::value::TAG_MASK;
