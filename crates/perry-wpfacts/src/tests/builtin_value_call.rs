@@ -197,3 +197,27 @@ fn valcall_probe_unksrc() {
     );
     std::env::remove_var("PERRY_WPF_UNKSRC");
 }
+
+/// SKINHOLD2 (three.js skin, AnimationAction::_update
+/// `propertyMixers[ j ].accumulate( accuIndex, weight )`): one call whose
+/// callee set holds `Object.create` and a callee returning the `Object`
+/// constructor. `Object.create(p, props)` defines `props` only on the object
+/// it creates (ECMA-262 20.1.2.2 steps 2-3, ObjectDefineProperties on `obj`),
+/// never on another callee's result: `Object` is not written.
+#[test]
+fn red_skinhold2_create_props_define_on_the_created_object() {
+    assert_eq!(
+        run("const f: any = process.argv.length > 9 ? function (_p: any, _d: any) { return Object; } : pick(Object.create); const c: any = f(null, { a: { value: 1 } }); console.log(c);"),
+        (false, false)
+    );
+}
+
+/// Control: a defineProperty under an unknown key on a value that may be
+/// the `Object` constructor really writes it: the write stays.
+#[test]
+fn skinhold2_control_define_on_object_constructor_stays() {
+    assert!(
+        run("const t: any = process.argv.length > 9 ? Object : {}; Object.defineProperty(t, process.argv[3] ?? \"q\", { value: 1 }); console.log(t);").0,
+        "a define under an unknown key on a value holding Object writes Object"
+    );
+}

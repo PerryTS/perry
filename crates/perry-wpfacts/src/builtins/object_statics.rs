@@ -238,11 +238,17 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             let r = m.reason("E10 Object.create");
             let t = site_obj_create(m, call);
             create_proto(m, p, t, r);
-            m.add_tok(ret, t);
+            // 20.1.2.2 steps 2-3: the properties are defined on the object
+            // this call creates (ObjectDefineProperties(obj, Properties)),
+            // not on the call's result node, which holds the results of
+            // every other callee of the call too.
+            let obj = node(m, call, "b-create");
+            m.add_tok(obj, t);
+            m.edge(obj, ret);
             if let Some(props) = arg(m, call, 1) {
                 let descs = node(m, call, "b-load");
                 m.cons(props, Cons::Load { key: Key::any(), dst: descs });
-                define_computed(m, call, ret, descs, r);
+                define_computed(m, call, obj, descs, r);
             }
         }
         (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => {
