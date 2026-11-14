@@ -1307,12 +1307,16 @@ impl Model {
     /// of (`builtins::enum_free_ns`): a language namespace or constructor,
     /// or its prototype. Not `ObjectProto` as a receiver (it stands for
     /// every builtin prototype, a host one whose methods are enumerable
-    /// among them), not a builtin function value (a host function may hold
-    /// enumerable data, `fs.realpath.native`).
+    /// among them). A builtin function value only when it is the realm's
+    /// (`builtins::enum_free_fn`, F-B); a host function may hold enumerable
+    /// data, `fs.realpath.native`.
     pub(crate) fn enum_free(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
             TokKind::Builtin(ns) => builtins::enum_free_ns(*ns),
             TokKind::NativeProto(_, ns) => ns.is_some_and(builtins::enum_free_ns),
+            TokKind::BuiltinFn(crate::model::Native::Member { identity, .. }) => {
+                builtins::enum_free_fn(identity)
+            }
             _ => false,
         }
     }

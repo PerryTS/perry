@@ -1957,6 +1957,21 @@ pub(crate) fn builtin_proto_tok(m: &mut Model, ns: BuiltinNs) -> Option<Tok> {
     }
 }
 
+/// F-B: a builtin function value of the realm (its identity rooted at a
+/// language namespace or constructor of `enum_free_ns`: `Object.prototype.
+/// valueOf`, `Math.max`, `%TypedArray%.prototype.indexOf`) has no
+/// enumerable built-in own property: `length` and `name` are made by
+/// SetFunctionLength / SetFunctionName with [[Enumerable]] false (ECMA-262
+/// 10.3.4 CreateBuiltinFunction), a constructor's `prototype` and statics
+/// are non-enumerable data (clause 18: "every other data property ...
+/// [[Enumerable]]: false"). A for-in at such a link visits only what the
+/// program wrote on it. A host function is not one (`fs.realpath.native`
+/// is enumerable data): its root is a module, not a realm namespace.
+pub(crate) fn enum_free_fn(identity: &str) -> bool {
+    let root = identity.split('.').next().unwrap_or(identity);
+    root != identity && ns_by_name(root).is_some_and(enum_free_ns)
+}
+
 /// `dst` ⊇ builtin `ns`'s prototype object as a value (`F.prototype`;
 /// `Object.getPrototypeOf(x)` of a builtin receiver `x`, `chain_ns`): the
 /// collapsed `ObjectProto`, which every builtin receiver's chain reads (so

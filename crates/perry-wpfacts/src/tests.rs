@@ -2140,6 +2140,7 @@ mod object_prototype_method_calls;
 mod spread_from_census;
 mod optimistic_json_key;
 mod peelk18;
+mod skinforin1;
 mod peelk19;
 mod peelk20;
 mod peelk21;
