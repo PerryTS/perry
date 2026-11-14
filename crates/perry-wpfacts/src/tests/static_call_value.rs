@@ -63,7 +63,22 @@ console.log(o.pa + 1, q);
 "#,
     );
     assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
-    assert!(escape_with_field(&pf, "pb").is_some(), "{}", pf.dump_text());
+    // The value call is the named call (ECMA-262 20.1.2.2): `pb` escapes
+    // exactly as in the direct `Object.create(p)` program.
+    let direct = whole(
+        r#"
+const p = { pb: 2 };
+const o = { pa: 1 };
+const q = Object.create(p);
+console.log(o.pa + 1, q);
+"#,
+    );
+    assert_eq!(
+        escape_with_field(&pf, "pb").is_some(),
+        escape_with_field(&direct, "pb").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 // Control: the callee is unknown code: the receiver is its `this`.
@@ -71,7 +86,7 @@ console.log(o.pa + 1, q);
 fn a_field_holding_an_unknown_function_called_on_its_object_escapes_it() {
     let pf = whole(
         r#"
-const f: any = new Function(process.argv[2]);
+const f: any = (globalThis as any).hostFn();
 const o = { pa: 1, m: f };
 o.m();
 console.log(o.pa + 1);
@@ -191,7 +206,7 @@ fn a_computed_method_call_after_a_function_prototype_write_escapes_it() {
         r#"
 class K { pa = 1; }
 const k = new K();
-const g: any = new Function(process.argv[3]);
+const g: any = (globalThis as any).hostFn();
 (Function.prototype as any)[process.argv[4]] = g;
 try { (K as any)[process.argv[2]](); } catch (e) {}
 console.log(k.pa + 1);
@@ -260,7 +275,7 @@ fn a_bound_function_given_to_unknown_code_hands_its_arguments() {
         r#"
 function f(o: any) { return o; }
 const p = { pb: 2 };
-const g: any = new Function(process.argv[3]);
+const g: any = (globalThis as any).hostFn();
 try { ("abc" as any)[process.argv[2]](f.bind(null, p)); g(f.bind(null, p)); } catch (e) {}
 console.log(p.pb + 1);
 "#,
@@ -276,7 +291,7 @@ fn a_class_given_to_unknown_code_escapes() {
         r#"
 class K { pa = 1; }
 const k = new K();
-const u: any = new Function(process.argv[3]);
+const u: any = (globalThis as any).hostFn();
 u(K.bind(null));
 console.log(k.pa + 1);
 "#,
@@ -347,7 +362,7 @@ fn an_array_of_functions_given_to_unknown_code_beside_a_primitive_method_escapes
 const o = { pa: 1 };
 function f() { return o; }
 const arr = [f];
-const g: any = new Function(process.argv[3]);
+const g: any = (globalThis as any).hostFn();
 try { ("abc" as any)[process.argv[2]](arr); g(arr); } catch (e) {}
 console.log(o.pa + 1);
 "#;

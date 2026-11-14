@@ -970,6 +970,10 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
             let ja = m.atom("join");
             let (jc, made) = recv_call(m, t, ja, ThisArg::Tok(t), 0);
             if made {
+                if m.keysnap.is_some() {
+                    let at = m.keysnap_call_pos(call);
+                    eprintln!("KS4 toString-join c{jc} made for call c{call} {at} this tok {t} {}", m.tok_name(t));
+                }
                 let f = m.node_l("array-like-join");
                 m.cons(
                     recv,

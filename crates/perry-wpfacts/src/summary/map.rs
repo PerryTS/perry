@@ -418,6 +418,7 @@ pub fn map_cons(
             right,
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
+        ObjectValue { dst } => ObjectValue { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },

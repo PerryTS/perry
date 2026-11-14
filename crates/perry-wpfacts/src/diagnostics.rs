@@ -1759,6 +1759,12 @@ pub struct KeySnap {
     mod_file: Vec<String>,
     loads: Vec<(String, u32, String, NodeId)>,
     unk: Option<(CallId, Tok, Tok)>,
+    /// HOLDPOS: the source position (module, byte offset) of each load
+    /// destination and call result node; the first arrival of each token in
+    /// each node while the realm is not held (source node, reason, the
+    /// solver code that added it).
+    node_pos: FxHashMap<NodeId, (u32, u32)>,
+    first: FxHashMap<(NodeId, Tok), (NodeId, u32, &'static std::panic::Location<'static>)>,
 }
 
 pub(crate) fn keysnap_plan(g: &mut Gen) {
@@ -1805,7 +1811,17 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
             loads.push((file, off, k, dst));
         }
     }
-    g.m.keysnap = Some(Box::new(KeySnap { nodes, fn_file, call_pos, at_hold: false, at_esc: false, mod_file, loads, unk: None }));
+    let mut node_pos = FxHashMap::default();
+    for &(mi, off, r) in &g.call_results_at {
+        node_pos.entry(r).or_insert((mi, off));
+    }
+    for &(mi, off, _, dst) in &g.load_sites {
+        node_pos.entry(dst).or_insert((mi, off));
+    }
+    g.m.keysnap = Some(Box::new(KeySnap {
+        nodes, fn_file, call_pos, at_hold: false, at_esc: false, mod_file, loads, unk: None,
+        node_pos, first: FxHashMap::default(),
+    }));
 }
 
 impl Model {
@@ -1863,6 +1879,12 @@ impl Model {
             );
         }
         self.keysnap2(&ks);
+        if hold {
+            // An `escape_body` producer names no call: the unknown call whose
+            // receiver escapes is the one `keysnap_note` recorded for `tok`.
+            let unk = ks.unk.filter(|u| Some(u.2) == tok).map(|u| u.0);
+            self.keysnap3(&ks, calls.first().copied().or(unk), tok);
+        }
         eprintln!("KS end");
         self.keysnap = Some(ks);
     }
@@ -2053,6 +2075,260 @@ impl Model {
             }
         } else {
             eprintln!("KS2 call none (no unknown-callee call noted)");
+        }
+    }
+}
+
+impl Model {
+    /// ARRSRC: after the solve, every `new r.constructor(..)` site: the
+    /// token kinds of its receiver `r` (typed-array storage marked).
+    pub(crate) fn keysnap_ctor_recv(&self) {
+        let Some(ks) = self.keysnap.as_ref() else { return };
+        let mut news: FxHashMap<NodeId, CallId> = Default::default();
+        for (n, nd) in self.nodes.iter().enumerate() {
+            for k in nd.cons.iter() {
+                if let Cons::New { call } | Cons::NewProgram { call } = k {
+                    news.insert(n as NodeId, *call);
+                }
+            }
+        }
+        for (r, nd) in self.nodes.iter().enumerate() {
+            for k in nd.cons.iter() {
+                let Cons::Load { key: Key::Named(a), dst } = k else { continue };
+                let Some(call) = news.get(dst) else { continue };
+                if self.atoms[*a as usize] != "constructor" {
+                    continue;
+                }
+                let mut kinds: BTreeMap<String, u32> = Default::default();
+                for t in nd.pts.to_sorted() {
+                    let typed = match &self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => self.tmpls[*tm as usize].kind.typed_storage(),
+                        _ => false,
+                    };
+                    let kd: String = format!("{:?}", self.toks[t as usize]).chars().take_while(|c| c.is_alphanumeric()).collect();
+                    *kinds.entry(if typed { format!("{kd}[typed]") } else { kd }).or_insert(0) += 1;
+                }
+                let kinds: Vec<String> = kinds.iter().map(|(k, c)| format!("{k}={c}")).collect();
+                eprintln!("KSA newctor c{call} recv {} kinds {}", self.ks3_node_pos(ks, r as NodeId), kinds.join(" "));
+            }
+        }
+    }
+
+    /// HOLDPOS: a token arrived in `n` for the first time (only while the
+    /// realm is not held).
+    pub(crate) fn keysnap_arrivals(&mut self, n: NodeId, fresh: &[Tok], at: &'static std::panic::Location<'static>) {
+        let (src, why) = (self.cur_src, self.cur_why);
+        if let Some(ks) = self.keysnap.as_mut() {
+            for &t in fresh {
+                ks.first.entry((n, t)).or_insert((src, why, at));
+            }
+        }
+    }
+
+    /// `keysnap_arrivals` for a set adopted whole by copy delivery
+    /// (`adopt_delivery`): the batch is what is new in `dst`, from `src`.
+    #[cold]
+    #[track_caller]
+    pub(crate) fn keysnap_adopted(&mut self, src: NodeId, dst: NodeId, batch: &crate::delta::Batch) {
+        let at = std::panic::Location::caller();
+        let why = self.cur_why;
+        if let Some(ks) = self.keysnap.as_mut() {
+            for t in batch.each_token() {
+                ks.first.entry((dst, t)).or_insert((src, why, at));
+            }
+        }
+    }
+
+    /// `ks3_call` for a rule that names the call it serves.
+    pub(crate) fn keysnap_call_pos(&mut self, call: CallId) -> String {
+        let Some(ks) = self.keysnap.take() else { return String::new() };
+        let s = self.ks3_call(&ks, call);
+        self.keysnap = Some(ks);
+        s
+    }
+
+    /// The first-arrival chain of `t` back from `n`, up to `hops` nodes.
+    fn ks3_chain(&self, ks: &KeySnap, n: NodeId, t: Tok, hops: usize) {
+        let mut cur = n;
+        for _ in 0..hops {
+            let Some(&(src, why, at)) = ks.first.get(&(cur, t)) else { return };
+            let rs = self.reasons.get(why as usize).map_or("-", |s| s.as_str());
+            let f = at.file();
+            let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
+            if src == NO_NODE {
+                eprintln!("KS3     hop seed into n{cur} reason {rs:?} added at {f}:{}", at.line());
+                return;
+            }
+            eprintln!("KS3     hop {} -> n{cur} | edge {} | reason {rs:?} | added at {f}:{}", self.ks3_node_pos(ks, src), self.ks3_edge(src, cur), at.line());
+            if src == cur {
+                return;
+            }
+            cur = src;
+        }
+    }
+
+    /// `file:line:col (byte off)` of a module byte offset.
+    fn ks3_pos(&self, ks: &KeySnap, mi: u32, off: u32) -> String {
+        let file = ks.mod_file.get(mi as usize).map_or("?", |s| s.as_str());
+        let (line, col) = match std::fs::read(file) {
+            Ok(b) => {
+                let b = &b[..(off as usize).min(b.len())];
+                let line = b.iter().filter(|&&c| c == b'\n').count() + 1;
+                let col = b.len() - b.iter().rposition(|&c| c == b'\n').map_or(0, |p| p + 1) + 1;
+                (line, col)
+            }
+            Err(_) => (0, 0),
+        };
+        format!("{file}:{line}:{col} (byte {off})")
+    }
+
+    fn ks3_node_pos(&self, ks: &KeySnap, n: NodeId) -> String {
+        let f = self.diagnostic_owner(n).unwrap_or(NO_FN);
+        let pos = ks.node_pos.get(&n).map_or("-".to_string(), |&(mi, off)| self.ks3_pos(ks, mi, off));
+        format!("n{n} {} in {} at {pos}", self.labels.get(n as usize).copied().unwrap_or("?"), self.ks2_fn(ks, f))
+    }
+
+    /// The source call a (cloned, templated or solver-made) call stands
+    /// for: `tmpl_of`, `origin`, then `site`, each to an earlier call,
+    /// until one whose result node has a source position.
+    fn ks3_call(&self, ks: &KeySnap, call: CallId) -> String {
+        let mut c = call;
+        let mut chain: Vec<String> = Vec::new();
+        loop {
+            let Some(cs) = self.calls.get(c as usize) else { return format!("c{c} not a call") };
+            if let Some(&(mi, off)) = ks.node_pos.get(&cs.ret) {
+                let f = self.diagnostic_owner(cs.ret).unwrap_or(NO_FN);
+                return format!("source call c{c} via [{}] at {} in {}", chain.join(" "), self.ks3_pos(ks, mi, off), self.ks2_fn(ks, f));
+            }
+            let (next, how) = if let Some(&n) = self.sum.tmpl_of.get(&c) {
+                (n, "tmpl_of")
+            } else if let Some(&n) = self.sum.origin.get(&c) {
+                (n, "origin")
+            } else {
+                (cs.site, "site")
+            };
+            if next >= c {
+                let f = self.diagnostic_owner(cs.ret).unwrap_or(NO_FN);
+                return format!(
+                    "SYNTHESIZED call c{c} via [{}] (no source position; made_root={:?} protocol={} bound_synth={} ctor={} contract_new={}) run in {} ret {}",
+                    chain.join(" "), self.made_root.get(&c), self.protocol_calls.contains(&c), self.bound_synth.contains(&c),
+                    self.ctor_calls.contains(&c), self.contract_new.contains(&c), self.ks2_fn(ks, f), self.ks3_node_pos(ks, cs.ret)
+                );
+            }
+            chain.push(format!("c{c}-{how}->c{next}"));
+            c = next;
+        }
+    }
+
+    /// How `src`'s rules deliver to `dst`: a copy edge, or the constraint
+    /// naming it.
+    fn ks3_edge(&self, src: NodeId, dst: NodeId) -> String {
+        let Some(nd) = self.nodes.get(src as usize) else { return "seed (no source node)".into() };
+        if nd.succ.contains(&dst) {
+            return "copy edge".into();
+        }
+        let pat = [format!(": {dst},"), format!(": {dst} "), format!("({dst})")];
+        for c in nd.cons.iter() {
+            let d = format!("{c:?}");
+            if pat.iter().any(|p| d.contains(p.as_str())) {
+                return d.chars().take(120).collect();
+            }
+        }
+        "rule of the source node (no constraint names the node)".into()
+    }
+
+    /// KS3: the call at the hold, its source position, its callee nodes and
+    /// how their first tokens arrived (one hop).
+    fn keysnap3(&self, ks: &KeySnap, call: Option<CallId>, tok: Option<Tok>) {
+        let Some(c) = call else {
+            eprintln!("KS3 no call at the hold");
+            if let Some(t) = tok {
+                eprintln!("KS3 tok {t} {} name={}", self.ks2_kind(t), self.tok_name(t));
+            }
+            return;
+        };
+        eprintln!("KS3 call c{c} {}", self.ks3_call(ks, c));
+        let mut callee: Vec<(NodeId, String)> = Vec::new();
+        for (n, nd) in self.nodes.iter().enumerate() {
+            for k in nd.cons.iter() {
+                let how = match k {
+                    Cons::Call { call } if *call == c => "Call".to_string(),
+                    Cons::New { call } | Cons::NewProgram { call } if *call == c => "New".to_string(),
+                    Cons::CallThis { call, this } if *call == c => format!("CallThis this={this}"),
+                    Cons::MCall { key, call } if *call == c => format!("MCall(receiver) key={key:?}"),
+                    _ => continue,
+                };
+                callee.push((n as NodeId, how));
+            }
+        }
+        if callee.is_empty() {
+            eprintln!("KS3 no node has a call constraint for c{c}");
+        }
+        // ARRSRC: the hold token's own first arrival leads, then the
+        // receivers of a `.constructor` read feeding the callee: their token
+        // kinds, and the first arrival of the first token of each kind that
+        // is not typed-array storage.
+        if let Some(t) = tok {
+            for (n, how) in callee.iter() {
+                if self.nodes[*n as usize].pts.to_sorted().contains(&t) {
+                    eprintln!("KS3 HOLD tok {t} {} name={} in callee {how} n{n}: first arrival chain", self.ks2_kind(t), self.tok_name(t));
+                    self.ks3_chain(ks, *n, t, 12);
+                }
+            }
+        }
+        for (cn, _) in callee.iter() {
+            for (r, nd) in self.nodes.iter().enumerate() {
+                for k in nd.cons.iter() {
+                    let Cons::Load { key: Key::Named(a), dst } = k else { continue };
+                    if *dst != *cn || self.atoms[*a as usize] != "constructor" {
+                        continue;
+                    }
+                    let r = r as NodeId;
+                    eprintln!("KS3 RECV of .constructor -> n{cn}: {}", self.ks2_node(ks, r));
+                    eprintln!("KS3 RECV   at {}", self.ks3_node_pos(ks, r));
+                    let mut kinds: std::collections::BTreeMap<String, (u32, Option<Tok>)> = Default::default();
+                    for t in self.nodes[r as usize].pts.to_sorted() {
+                        let typed = match &self.toks[t as usize] {
+                            TokKind::Obj(tm, _) => self.tmpls[*tm as usize].kind.typed_storage(),
+                            _ => false,
+                        };
+                        let kd: String = format!("{:?}", self.toks[t as usize]).chars().take_while(|c| c.is_alphanumeric()).collect();
+                        let kd = if typed { format!("{kd}[typed]") } else { kd };
+                        let e = kinds.entry(kd).or_insert((0, None));
+                        e.0 += 1;
+                        if !typed && e.1.is_none() {
+                            e.1 = Some(t);
+                        }
+                    }
+                    for (kd, (cnt, first)) in kinds.iter() {
+                        eprintln!("KS3 RECV   kind {kd} count {cnt}");
+                        if let Some(t) = first {
+                            eprintln!("KS3 RECV   first {kd} tok {t} {} name={}", self.ks2_kind(*t), self.tok_name(*t));
+                            self.ks3_chain(ks, r, *t, 30);
+                        }
+                    }
+                }
+            }
+        }
+        for (n, how) in callee.iter().take(4) {
+            eprintln!("KS3 callee {how} {}", self.ks2_node(ks, *n));
+            eprintln!("KS3   at {}", self.ks3_node_pos(ks, *n));
+            for t in self.nodes[*n as usize].pts.to_sorted().into_iter().take(12) {
+                let first = match ks.first.get(&(*n, t)) {
+                    Some(&(src, why, at)) => {
+                        let rs = self.reasons.get(why as usize).map_or("-", |s| s.as_str());
+                        let f = at.file();
+                        let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
+                        let from = if src == NO_NODE { "seed".to_string() } else { self.ks3_node_pos(ks, src) };
+                        format!("from {from} | edge {} | reason {rs:?} | added at {f}:{}", if src == NO_NODE { "-".into() } else { self.ks3_edge(src, *n) }, at.line())
+                    }
+                    None => "not recorded".into(),
+                };
+                eprintln!("KS3   tok {t} {} name={} first: {first}", self.ks2_kind(t), self.tok_name(t));
+                if t == TOP || matches!(self.toks[t as usize], TokKind::Builtin(_)) || self.tok_name(t).contains("json") {
+                    self.ks3_chain(ks, *n, t, 12);
+                }
+            }
         }
     }
 }

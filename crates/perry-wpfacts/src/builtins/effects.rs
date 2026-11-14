@@ -137,6 +137,9 @@ pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
             let (owner, key) = name.rsplit_once('.')?;
             declared_at(owner, key).filter(|e| !names_this(e.effects))
         })
+        // A global constructor's value (`const C = Blob`, `blob.constructor`:
+        // the token the global name reads) constructs as `new Blob(..)` does.
+        .or_else(|| declared_ctor(name))
         .filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
 }
 

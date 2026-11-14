@@ -250,6 +250,10 @@ impl Model {
             let at = std::panic::Location::caller();
             self.prov_arrivals(n, &mut fresh.iter().copied(), false, at);
         }
+        if self.keysnap.is_some() && !self.realm_held && !fresh.is_empty() {
+            let at = std::panic::Location::caller();
+            self.keysnap_arrivals(n, &fresh, at);
+        }
         self.fresh = fresh;
         self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
@@ -744,6 +748,7 @@ impl Model {
         }
         self.add_top_inner(n, why);
     }
+    #[track_caller]
     fn add_top_inner(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
         if self.explain || self.diagnostic.is_some() {
             let w = why(self);
@@ -2062,6 +2067,7 @@ impl Model {
             } => format!("range {n} {} {other} {dst} {}", op.name(), *right as u8),
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
+            Cons::ObjectValue { dst } => format!("objectvalue {n} {dst}"),
             Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),

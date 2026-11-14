@@ -110,6 +110,16 @@ impl<'a> Gen<'a> {
                     .iter()
                     .map(|x| match x {
                         Expr::String(s) => Some(s.clone()),
+                        // A well-known symbol key (`{ [Symbol.iterator]() {} }`):
+                        // HIR folds it to the runtime's one symbol of that
+                        // name, never a string, so the member is that key.
+                        _ if matches!(
+                            name.as_str(),
+                            "js_object_set_symbol_method" | "js_object_literal_set_computed"
+                        ) =>
+                        {
+                            self.const_wk_symbol_key(fx.module, x)
+                        }
                         _ if matches!(
                             name.as_str(),
                             "js_object_define_getter" | "js_object_define_setter"
@@ -902,6 +912,13 @@ impl<'a> Gen<'a> {
                 };
                 let key = match (name, lit(1)) {
                     ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
+                        Key::Named(self.m.atom(&k))
+                    }
+                    // A well-known symbol is itself: it names no string member
+                    // and no string key names it (`lits` keeps only that key).
+                    ("js_object_set_symbol_method" | "js_object_literal_set_computed", Some(k))
+                        if k.starts_with(crate::builtins::WK_PREFIX) =>
+                    {
                         Key::Named(self.m.atom(&k))
                     }
                     _ => Key::any(),

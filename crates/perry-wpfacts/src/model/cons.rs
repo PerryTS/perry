@@ -694,6 +694,12 @@ pub enum Cons {
     /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its
     /// non-number primitives.
     ArrayLenArg { dst: NodeId },
+    /// The node is the argument of `Object(v)` / `new Object(v)` with
+    /// NewTarget undefined or `Object` itself (ECMA-262 20.1.1.1, ToObject
+    /// 7.1.18): its objects are the result `dst` as themselves, ⊤ stays ⊤
+    /// and a marker stays the caller's value. No primitive is the result:
+    /// each kind's object comes in by its guard (`builtins::object_value_rule`).
+    ObjectValue { dst: NodeId },
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
     ShareBuffer { ta: Tok },
@@ -898,6 +904,7 @@ impl Cons {
             Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
+            Cons::ObjectValue { .. } => "objectvalue",
             Cons::CaseMap { .. } => "casemap",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",

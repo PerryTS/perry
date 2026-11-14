@@ -785,7 +785,7 @@ fn an_extracted_native_call_method_retains_the_string_replace_result() {
 fn cxid3_unknown_code_can_replace_the_json_function_before_a_length_read() {
     let src = r#"
 const ns = JSON;
-new Function("ns", process.argv[2])(ns);
+(globalThis as any).hostTake(ns);
 const value = ns.stringify(0).slice(1);
 console.log(value.length); // DYNAMIC-LENGTH
 "#;

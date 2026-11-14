@@ -265,12 +265,13 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, out);
                 out
             }
+            // `Object(x)` / `new Object(x)` (ECMA-262 20.1.1.1): its
+            // objects born at this site.
             Expr::ObjectCoerce(x) => {
                 let v = self.expr(fx, x);
-                let (_, b) = self.bobj(mi, "Object(prim)");
+                let born = crate::builtins::OBJECT_VALUE_KINDS.map(|(_, what)| self.bobj(mi, what).0);
                 let out = self.tmp("objcoerce");
-                self.m.edge(v, out);
-                self.m.edge(b, out);
+                crate::builtins::object_value_rule(&mut self.m, v, out, born);
                 out
             }
             _ => unreachable!("internal compiler error: expr_rest: not a collections variant"),

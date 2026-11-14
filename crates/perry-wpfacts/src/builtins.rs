@@ -264,10 +264,9 @@ pub fn interpreted_code_runs(m: &mut Model) {
 /// gives nothing to unknown code. The Function constructor converts every
 /// argument to a string first (`toString`/`valueOf` run: the ToPrimitive
 /// protocol), then throws a TypeError (perry-runtime
-/// `js_function_ctor_from_strings_impl`). The other constructors the token
-/// stands for as a function's `constructor` (`%AsyncFunction%`,
-/// `%GeneratorFunction%`, `%AsyncGeneratorFunction%`) run nothing and return
-/// `undefined`, or under `new` an object of the runtime's. Six arguments or
+/// `js_function_ctor_from_strings_impl`), so the call or `new` gives no
+/// value. The token is `%Function%` only (FUNCTION-CTOR-IDENTITY): the other
+/// three are `BuiltinNs::FunctionKindCtor`. Six arguments or
 /// a spread may be the runtime's depd `wrapfunction` shape, which returns a
 /// runtime-made function: that call runs code (true), as does any call with
 /// the interpreter linked. `skip`: leading arguments that are not the
@@ -296,10 +295,10 @@ pub(crate) fn function_ctor_runs_code(
             },
         );
     }
-    if construct {
-        m.add_top(c.ret, |_| "result: new of a function constructor".into());
-    }
-    m.add_prim(c.ret, prim::UNDEF);
+    // FUNCTION-CTOR-IDENTITY: the token is %Function% only; without the
+    // interpreter its call and its `new` throw a TypeError after the
+    // conversions (refuse_dynamic_function): the result gets no value.
+    let _ = construct;
     false
 }
 
@@ -589,6 +588,50 @@ fn site_tmpl_born(
     // through relays, protocol touches) share their origin's template.
     let site = m.calls[call as usize].site;
     let tm = site_template(m, site, what, hole_free, plain);
+    let ctx = m.birth_ctx(call);
+    m.site_tok(tm, ctx)
+}
+
+/// The object `Object.create(proto)` called as a value makes at `call`
+/// (ECMA-262 20.1.2.2): one `ObjCreate` template per source call site, as the
+/// named call has one per site; its [[Prototype]] is set by the caller.
+fn site_obj_create(m: &mut Model, call: CallId) -> Tok {
+    let site = m.calls[call as usize].site;
+    let key = (site, "Object.create", false);
+    let tm = if let Some(&t) = m.site_tmpls.get(&key) {
+        m.tmpl_of(t).expect("site template")
+    } else {
+        let tm = m.tmpls.len() as TmplId;
+        m.tmpls.push(Template {
+            kind: TmplKind::ObjCreate {
+                module: u32::MAX,
+                site,
+            },
+            display: format!("Object.create@call{site}"),
+            birth_keys: vec![],
+            definite: vec![],
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: vec![],
+            has_computed_members: true,
+            field_init: None,
+            proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = m.tok(TokKind::Obj(tm, NO_CTX));
+        m.site_tmpls.insert(key, t);
+        tm
+    };
     let ctx = m.birth_ctx(call);
     m.site_tok(tm, ctx)
 }
@@ -1252,6 +1295,10 @@ fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<us
         Some(w) if members::box_chain(w) == members::BoxChain::Object => {
             m.declarations.family(Family::Object, m)
         }
+        // The ordinary object `Object()` makes of `undefined` or `null`
+        // (20.1.1.1 step 2: OrdinaryObjectCreate(%Object.prototype%)): its
+        // members are `Object.prototype`s, as an object literals (`None`).
+        Some("Object(empty)") => m.declarations.family(Family::Object, m),
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }
@@ -1343,6 +1390,24 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
     // (`AbortController.prototype`): a method whose effects it declares
     // (`effects::declared_at`); any other member stays opaque.
     if let Some(w) = what.filter(|w| w.ends_with(".prototype")) {
+        if let Some(at) = proto_inherit(what, name) {
+            // Rule PROTO-INHERIT: the member the realm chain finds past `w`,
+            // on the prototype `at` that owns it: `Object.prototype`'s own
+            // model (the token `({}).hasOwnProperty` reads), or a method
+            // whose effects `at` declares.
+            let identity = if at == "Object.prototype" {
+                let object = m.declarations.family(Family::Object, m)?;
+                m.declarations.property(object, name, m)?.native?
+            } else {
+                effects::declared_at(at, name)?;
+                let h = m.declarations.named(at, m)?;
+                m.declarations.property(h, name, m)?.native?
+            };
+            return Some(Native::Member {
+                identity,
+                holder: None,
+            });
+        }
         effects::declared_at(w, name)?;
         let identity = m
             .declarations
@@ -1384,6 +1449,23 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
         identity,
         holder: None,
     })
+}
+
+/// Rule PROTO-INHERIT (ECMA-262 10.1.8.1 OrdinaryGet; the runtime's realm
+/// image): a named key that a runtime-declared prototype `what`
+/// (`Blob.prototype`) does not own is the realm chain's, read on the first
+/// [[Prototype]] the realm declares owning it (each link from the realm,
+/// `RealmEntry::proto`, never an assumed `Object.prototype`): that
+/// prototype's name. `None`: `what` is no realm-declared prototype, owns
+/// the key, or no link of its chain has it (an absent key stays as before).
+pub(super) fn proto_inherit(what: Option<&str>, name: &str) -> Option<&'static str> {
+    let w = what.filter(|w| w.ends_with(".prototype"))?;
+    let start = members::realm_entry(w)
+        .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)?;
+    match members::realm_chain_find(start, name) {
+        members::RealmFind::Own(_, at) if at.name != start.name => Some(at.name),
+        _ => None,
+    }
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -1511,9 +1593,25 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 /// array); a `TypedArray`/`Buffer` object, an undescribed (`Box`/`Opaque`
 /// family) builtin object, a marker or an unknown value may have it. The
 /// runtime's check: `typed_array_proto_thunks.rs` `ta_receiver_or_throw`.
+///
+/// An `ArrayBuffer.prototype` method (`what` `ArrayBuffer`: `slice`,
+/// `resize`, `transfer`, `transferToFixedLength`) starts with
+/// RequireInternalSlot(this, [[ArrayBufferData]]) or
+/// [[ArrayBufferMaxByteLength]] and IsSharedArrayBuffer (ECMA-262 25.1.6.6
+/// step 2, 25.1.6.7 step 2, 25.1.6.8, 25.1.6.9): a TypeError before `this`'s
+/// properties or an argument are read. The slot is missing from every
+/// object no ArrayBuffer constructor made, exactly the objects the typed
+/// arm above lists; a buffer kind (`ArrayBuffer`, `SharedArrayBuffer`,
+/// `TypedArray`, `Buffer`, `DataView`), an undescribed builtin object, a
+/// marker or an unknown value may have it. The runtime's check:
+/// `global_this/typed_array.rs` `array_buffer_receiver_addr` (`slice`,
+/// `array_buffer_method`).
 pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) -> bool {
     let typed = fam == Family::Opaque && what == Some("TypedArray");
-    if !(typed || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
+    let buffer = fam == Family::Opaque && what == Some("ArrayBuffer");
+    if !(typed
+        || buffer
+        || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
         || m.is_marker(r)
     {
         return false;
@@ -1522,14 +1620,19 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // A builtin object of an undescribed kind (`primbox`) may be one.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what: w, .. } => {
-                typed
-                    && !matches!(*w, "TypedArray" | "Buffer")
+                (typed || buffer)
+                    && !matches!(
+                        *w,
+                        "TypedArray" | "Buffer" | "DataView" | "ArrayBuffer" | "SharedArrayBuffer"
+                    )
                     && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
             }
             _ => true,
         },
         TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => typed,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => {
+            typed || buffer
+        }
         _ => false,
     }
 }
@@ -1726,6 +1829,7 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Number
         | BuiltinNs::BigInt
         | BuiltinNs::String
+        | BuiltinNs::FunctionKindCtor
         | BuiltinNs::Boolean
         | BuiltinNs::Function
         | BuiltinNs::Map
@@ -1767,9 +1871,26 @@ pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
 /// what the program stored on it (its fields, `Model::load_from`)? A RegExp
 /// object owns only `lastIndex`, defined `[[Enumerable]]: false` (ECMA-262
 /// 22.2.3.1 RegExpAlloc); a Promise owns none (27.2.3.1, 27.2.4.7: internal
-/// slots only).
+/// slots only); nor does the ordinary object `Object()` of `undefined` or
+/// `null` makes (`Object(empty)`, 20.1.1.1: OrdinaryObjectCreate) or a
+/// Number, Boolean, Symbol or BigInt wrapper (21.1.1.1, 20.3.1.1, 20.4.1,
+/// 21.2.1, 7.1.18: an internal slot only). A String wrapper owns its index
+/// keys (10.4.3.5): not one of these. An ArrayBuffer or SharedArrayBuffer
+/// owns none either (25.1.3.1 AllocateArrayBuffer, 25.2.2.1: internal slots
+/// only).
 pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
-    matches!(what, "RegExp" | "Promise")
+    matches!(
+        what,
+        "RegExp"
+            | "Promise"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "Object(empty)"
+            | "BoxedNumber"
+            | "BoxedBoolean"
+            | "BoxedSymbol"
+            | "BoxedBigInt"
+    )
 }
 
 /// Does the realm's constructor create a builtin object of kind `what` with
@@ -1793,6 +1914,22 @@ pub(crate) fn realm_born_without_own_props(what: &str) -> bool {
             | "WeakRef"
             | "FinalizationRegistry"
     )
+}
+
+/// Is a builtin object of kind `what` one perry's runtime makes as a native
+/// handle: the Blob a realm operation makes (`fresh(Blob.prototype)`:
+/// `Response.prototype.blob()`'s fulfillment, `Blob.prototype.slice()`)?
+/// Its value is a registry handle, with neither a shape nor own slots
+/// (perry-runtime object/global_this/fetch_globals.rs:505-507); its typed
+/// surface (`size`, `type`) is not own (Blob.prototype holds only methods,
+/// installed `enumerable: false`: proto_methods.rs:1633-1645,
+/// install_static.rs:890-901). It owns no enumerable property but what the
+/// program stores on it (object/field_get_set/enumeration.rs:203-222), and
+/// a copy of its own properties copies at most those (`Object.assign` and
+/// spread skip a handle source: object/assign.rs:779-792, alloc.rs:1197).
+/// A copy of its own enumerable properties reads only its fields.
+pub(crate) fn realm_handle_without_own_props(what: &str) -> bool {
+    what == "Blob.prototype"
 }
 
 /// A builtin object whose template is a container the model fills
@@ -2709,6 +2846,28 @@ fn ns_method_inner(
                 effects::run_function(m, e, call);
             }
         }
+        // A global constructor the realm declares (`Blob`), called as a
+        // value without `new` (`const f = Blob; f(x)`, a method read that
+        // yields it): the call runs the function the global holds, the
+        // thunk whose body the declaration describes (`global_this_blob_thunk`:
+        // its `this` unread, `declared_ctor` names none), or a thunk that
+        // throws before it uses an argument ("requires new") or returns
+        // `undefined` (`global_this_builtin_noop_thunk`). The declared
+        // effects plus `undefined` cover each. A write under the name (now,
+        // or later in the solve: the replay) is the unknown call again.
+        (BuiltinNs::Other, n) if !m.unit_mode && effects::declared_ctor(n).is_some() => {
+            let e = effects::declared_ctor(n).expect("the guard found it");
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom(n);
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, &format!("argument of builtin Other.{n}"));
+                m.cur_this = prev;
+            } else {
+                effects::run_function(m, e, call);
+                ret_prim(m, call, prim::UNDEF);
+            }
+        }
         (
             BuiltinNs::Other,
             "parseInt" | "parseFloat" | "isNaN" | "isFinite" | "encodeURIComponent"
@@ -3381,6 +3540,12 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
+        // %AsyncFunction% & co.: the runtime's no-op thunk reads no argument
+        // and returns `undefined` (fetch_globals.rs global_this_builtin_noop_thunk).
+        BuiltinNs::FunctionKindCtor => {
+            let ret = m.calls[call as usize].ret;
+            m.add_prim(ret, prim::UNDEF);
+        }
         BuiltinNs::Error
         | BuiltinNs::NativeError(_)
         | BuiltinNs::AggregateError
@@ -3404,22 +3569,21 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Boolean => ret_prim(m, call, prim::BOOL),
         BuiltinNs::String | BuiltinNs::Number | BuiltinNs::BigInt | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
-            let p = match ns {
+            // The call form gives one primitive kind (NewTarget undefined):
+            // `String(v)` a String (22.1.1.1), `Number(v)` a Number
+            // (21.1.1.1), `BigInt(v)` a BigInt (21.2.1.1), `Boolean(v)` a
+            // Boolean (20.3.1.1), `Symbol(d)` a Symbol (20.4.1.1; `d` gets
+            // ToString when not `undefined`).
+            let kind = match ns {
                 BuiltinNs::String => prim::STR,
                 BuiltinNs::Number => prim::NUM,
                 BuiltinNs::BigInt => prim::BIGINT,
+                BuiltinNs::Boolean => prim::BOOL,
                 _ => prim::SYMBOL,
             };
-            ret_prim(m, call, p);
+            ret_prim(m, call, kind);
         }
-        BuiltinNs::Object => {
-            let c = m.calls[call as usize].clone();
-            for &a in &c.args {
-                m.edge(a, c.ret);
-            }
-            let o = site_tmpl(m, call, "Object()");
-            ret_tok(m, call, o);
-        }
+        BuiltinNs::Object => object_value(m, call),
         BuiltinNs::Array => {
             let arr = site_new_array(m, call);
             let fa = m.field_any(arr);
@@ -3435,6 +3599,64 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, arr);
         }
         _ => unknown_method(m, call, &format!("call of builtin {ns:?}")),
+    }
+}
+
+/// `Object(v)` / `new Object(v)` with NewTarget undefined or `Object`
+/// itself (ECMA-262 20.1.1.1; a class extending `Object` constructs through
+/// its `super()` call, not here), modelled at `call`: no argument gives a new
+/// ordinary object with no own property; a first argument gives what
+/// `object_value_rule` says, its objects born at the call. A spread argument
+/// list leaves the first value unnamed: the opaque `Object()` object.
+pub(crate) fn object_value(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if !c.spread.is_empty() {
+        let o = site_tmpl(m, call, "Object()");
+        ret_tok(m, call, o);
+        return;
+    }
+    match c.args.first() {
+        None => {
+            let o = site_tmpl(m, call, "Object(empty)");
+            ret_tok(m, call, o);
+        }
+        Some(&a) => {
+            let born = OBJECT_VALUE_KINDS.map(|(_, what)| site_tmpl(m, call, what));
+            object_value_rule(m, a, c.ret, born);
+        }
+    }
+}
+
+/// The guard test of each primitive kind of `v` in `Object(v)` and the
+/// object it gives (20.1.1.1, ToObject 7.1.18): `undefined`/`null` give
+/// OrdinaryObjectCreate(%Object.prototype%), an ordinary object with no own
+/// property (`Object(empty)`, family `Object`); every other kind its
+/// wrapper (22.1.1.1 String exotic object, 21.1.1.1, 20.3.1.1, 21.2.1,
+/// 20.4.1).
+pub(crate) const OBJECT_VALUE_KINDS: [(u8, &str); 6] = [
+    (guard::NULLISH, "Object(empty)"),
+    (guard::BOXED_NUM, "BoxedNumber"),
+    (guard::BOXED_STR, "BoxedString"),
+    (guard::BOXED_BOOL, "BoxedBoolean"),
+    (guard::BOXED_BIGINT, "BoxedBigInt"),
+    (guard::BOXED_SYMBOL, "BoxedSymbol"),
+];
+
+/// `dst` = `Object(arg)` (20.1.1.1): `arg`'s objects as themselves, ⊤ as
+/// ⊤ (`Cons::ObjectValue`), and for each primitive kind `arg` may hold the
+/// object `born` holds for it, in `OBJECT_VALUE_KINDS` order (a guard on
+/// `arg`). A String wrapper's index properties are the characters of its
+/// string (10.4.3.5).
+pub(crate) fn object_value_rule(m: &mut Model, arg: NodeId, dst: NodeId, born: [Tok; 6]) {
+    m.cons(arg, Cons::ObjectValue { dst });
+    for (&(test, what), t) in OBJECT_VALUE_KINDS.iter().zip(born) {
+        if what == "BoxedString" {
+            let chars = m.num_fields(t);
+            m.add_prim(chars, prim::STR);
+        }
+        let from = m.node_l("object-value");
+        m.add_tok(from, t);
+        m.cons(arg, Cons::Guard { test, from, dst });
     }
 }
 

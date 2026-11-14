@@ -2086,6 +2086,11 @@ impl Model {
                     self.add_prim(num, k);
                 }
             }
+            Cons::ObjectValue { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+            }
             Cons::ArrayLenArg { dst } => {
                 self.add_tokens(dst, toks, prim & !prim::NUM);
             }

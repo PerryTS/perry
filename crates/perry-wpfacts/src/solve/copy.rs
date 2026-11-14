@@ -271,6 +271,11 @@ impl Model {
             self.prov_arrivals(dst, &mut batch.each_token(), true, at);
             self.cur_src = saved;
         }
+        if self.keysnap.is_some() && !self.realm_held {
+            // HOLDPOS: an adopted set records its new members first-arrival
+            // from `src`, as `add_tokens_s` records them for a merged set.
+            self.keysnap_adopted(src, dst, batch);
+        }
         let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
         self.sets.release(old);

@@ -398,7 +398,27 @@ impl Model {
             self.store_into(d, Key::Named(a), f, site);
         }
         let fa_s = self.field_any(s);
-        self.edge(fa_s, fa_d);
+        // An Array's (an arguments object's) elements are its own
+        // properties under array-index keys (ECMA-262 10.4.2, 10.4.4):
+        // the copy stores them under those keys (7.3.25), whose ToString is
+        // digits, never a non-numeric name: the target's elements or its
+        // numeric range, as a Number-only key store writes
+        // (`store_into`). Its values under keys no store named
+        // (`named_any`, `any_key_node`) may have any name.
+        let arr_s = matches!(self.toks[s as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. } | TmplKind::Args { .. }))
+            && !self.is_marker(s);
+        if !opaque && arr_s {
+            let na_s = self.named_any(s);
+            self.edge(na_s, fa_d);
+            let num_d = match self.is_elem_array(d) {
+                true => self.field_any(d),
+                false => self.numeric_field(d),
+            };
+            self.edge(fa_s, num_d);
+        } else {
+            self.edge(fa_s, fa_d);
+        }
         // A key of the source the model does not name (computed, symbol) is
         // a [[Set]] of some key on the target, as a named one is
         // (`store_into`): the setters on the target's chain run with the
@@ -663,6 +683,7 @@ impl Model {
                     (site != u32::MAX && builtins::own_values_filled(what))
                         || builtins::realm_object_own_props_unenumerable(what)
                         || (site != u32::MAX && builtins::realm_born_without_own_props(what))
+                        || (site != u32::MAX && builtins::realm_handle_without_own_props(what))
                         || (site != u32::MAX && self.typed_array_elements(t))
                 }
                 _ => true,

@@ -128,6 +128,10 @@ pub mod guard {
     pub const IS_STR: u8 = 18;
     pub const IS_NUM: u8 = 19;
     pub const IS_NULL: u8 = 20;
+    /// A BigInt / a Symbol: the wrapper kinds `BOXED_OTHER` joins, one each
+    /// (`Object(v)`, 21.2.1, 20.4.1).
+    pub const BOXED_BIGINT: u8 = 21;
+    pub const BOXED_SYMBOL: u8 = 22;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -157,6 +161,8 @@ pub mod guard {
             IS_STR => p::STR,
             IS_NUM => p::NUM,
             IS_NULL => p::NULL,
+            BOXED_BIGINT => p::BIGINT,
+            BOXED_SYMBOL => p::SYMBOL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -249,7 +255,17 @@ pub enum BuiltinNs {
     BigInt,
     String,
     Boolean,
+    /// `%Function%` (ECMA-262 20.2.1): the global `Function` and the
+    /// `constructor` of every ordinary or builtin function and class
+    /// (`%Function.prototype%.constructor`, 20.2.3.2).
     Function,
+    /// `%AsyncFunction%`, `%GeneratorFunction%`, `%AsyncGeneratorFunction%`
+    /// (27.7.1, 27.3.1, 27.4.1): the `constructor` of an async, generator or
+    /// async-generator function value (27.7.3.1, 27.3.3.1, 27.4.3.1), one
+    /// token for the three. In perry's runtime each is a closure over the
+    /// no-op thunk: a call runs nothing and returns `undefined`; `new` makes an
+    /// ordinary object of the runtime's (construct.rs, generic path).
+    FunctionKindCtor,
     /// `Map`: `new` builds a collection of the entries' contents.
     Map,
     /// `Set`: `new` builds a collection of the values.
