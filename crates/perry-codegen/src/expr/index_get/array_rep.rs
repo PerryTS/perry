@@ -294,6 +294,11 @@ pub(in crate::expr) fn witness_read(
         let inside = ctx.block().icmp_ult(I32, idx, &length);
         branch(ctx, &inside, "arep.verify_claimed", &miss_l);
     }
+    if read.kept.is_some() {
+        // The in-bounds read: the key is below this Array's length now.
+        let inside = ctx.block().icmp_ult(I32, idx, &length);
+        branch(ctx, &inside, "arep.verify_kept", &miss_l);
+    }
     // The slot, when the store holds it. A claimed read's key names one.
     let stored = ctx.block().icmp_ult(I32, idx, &capacity);
     let unstored_l = if claimed { &miss_l } else { &next_l };
@@ -311,7 +316,7 @@ pub(in crate::expr) fn witness_read(
     let must_hole = past;
     // A dense Array of fixed length has no hole below its own length, which
     // such a key was just tested against.
-    let no_hole = if claimed || read.below_length && r.dense && r.fixed {
+    let no_hole = if claimed || read.kept == Some(true) || read.below_length && r.dense && r.fixed {
         "true".to_string()
     } else if r.dense {
         below

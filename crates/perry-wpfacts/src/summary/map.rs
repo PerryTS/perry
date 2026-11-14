@@ -265,10 +265,16 @@ pub fn map_cons(
             expected,
             reason,
         },
-        IdxLoad { idx, dst, shape } => IdxLoad {
+        IdxLoad {
+            idx,
+            dst,
+            shape,
+            kept,
+        } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
+            kept,
         },
         IdxKey { obj, dst, shape } => IdxKey {
             obj,

@@ -1270,9 +1270,14 @@ impl Model {
                     }
                 }
             }
-            Cons::IdxLoad { idx, dst, shape } => {
+            Cons::IdxLoad {
+                idx,
+                dst,
+                shape,
+                kept,
+            } => {
                 for &t in toks {
-                    self.idx_load_tok(idx, t, dst, shape);
+                    self.idx_load_tok(idx, t, dst, shape, kept);
                 }
             }
             Cons::ElemUndef { obj, key, dst } => self.elem_undef(obj, key, dst),
