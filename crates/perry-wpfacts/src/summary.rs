@@ -484,9 +484,18 @@ impl Model {
         cs: CallSite,
         callee: impl FnOnce(&mut Self, NodeId, CallId),
     ) -> CallId {
-        let root = self.made_root.get(&by).copied().unwrap_or(by);
-        let undef = matches!(cs.this, crate::model::ThisArg::Undef);
         let loc = std::panic::Location::caller();
+        let Some(&root) = self.chain_root.get(&by) else {
+            // A program calls native run: its call is the runs own
+            // (its own this, arguments, result and callee), as a program
+            // call site makes one call per callee it reaches; only the
+            // calls made below it share keys.
+            let id = self.solver_call_raw(by, cs);
+            self.chain_root.insert(id, id);
+            callee(self, target, id);
+            return id;
+        };
+        let undef = matches!(cs.this, crate::model::ThisArg::Undef);
         let k = (root, loc, disc, cs.args.len() as u32, cs.spread.len() as u32, undef);
         let (c, tg, made) = match self.chain_calls.get(&k) {
             Some(&(c, tg)) => (c, tg, false),
@@ -545,6 +554,9 @@ impl Model {
         self.solver_made += 1;
         let root = self.made_root.get(&by).copied().unwrap_or(by);
         self.made_root.insert(id, root);
+        if let Some(&r) = self.chain_root.get(&by) {
+            self.chain_root.insert(id, r);
+        }
         if !self.sum.ready && self.diagnostic.is_some() {
             // Dump only: a call made before the summaries counts as a
             // program call (`origin_of` never reads it); the dump still
