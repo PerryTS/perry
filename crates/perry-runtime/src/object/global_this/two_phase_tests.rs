@@ -36,11 +36,11 @@ fn layout_word(global: *mut ObjectHeader) -> u32 {
 }
 
 /// What a realm populated in one pass (main's behaviour) looks like: the
-/// global's own names, its layout word, and which declared slots stay
-/// `undefined` in this build (a hook that is not installed).
+/// global's own names in order, and which declared slots stay `undefined` in
+/// this build (a hook that is not installed). (Its layout word is not
+/// comparable across threads: each agent mints its own shape ids.)
 struct OnePass {
     names: Vec<String>,
-    word: u32,
     undefined: Vec<&'static str>,
 }
 
@@ -53,7 +53,6 @@ fn one_pass() -> OnePass {
             assert!(fetch_globals::realm_is_complete());
             OnePass {
                 names: own_names(value),
-                word: layout_word(global),
                 undefined: REALM_CORE_GLOBALS
                     .iter()
                     .chain(REALM_REST_GLOBALS)
@@ -123,7 +122,7 @@ fn core_then_rest_equals_one_pass() {
         let global = global_ptr(value);
         assert!(global_this_is_materialized());
         assert!(!fetch_globals::realm_is_complete());
-        assert_eq!(layout_word(global), reference.word, "before phase B");
+        let word = layout_word(global);
         assert_eq!(own_names(value), reference.names, "before phase B");
         for name in REALM_REST_GLOBALS {
             assert_eq!(slot_word(global, name), REALM_UNBOUND_POISON, "{name}");
@@ -152,7 +151,11 @@ fn core_then_rest_equals_one_pass() {
         assert_eq!(js_get_global_this().to_bits(), value.to_bits());
         assert!(fetch_globals::realm_is_complete());
         let global = global_ptr(js_get_global_this());
-        assert_eq!(layout_word(global), reference.word, "after phase B");
+        assert_eq!(
+            layout_word(global),
+            word,
+            "phase B adds no key: one layout word"
+        );
         assert_eq!(
             own_names(js_get_global_this()),
             reference.names,

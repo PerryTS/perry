@@ -133,6 +133,7 @@ pub const REALM_CORE_GLOBALS: &[&str] = &[
     "DisposableStack",
     "AsyncDisposableStack",
     "SuppressedError",
+    "Iterator",
     "Buffer",
     "eval",
     "fetch",
