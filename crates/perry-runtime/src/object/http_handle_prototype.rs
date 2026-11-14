@@ -203,3 +203,24 @@ pub(crate) fn constructor_or_stub(dispatched: f64) -> JSValue {
         JSValue::from_bits(super::null_stub_value().to_bits())
     }
 }
+
+#[cfg(test)]
+mod stream_method_probe_tests {
+    unsafe extern "C" fn no_http_handle(_handle: i64) -> u8 {
+        0
+    }
+
+    /// The stream comparison is linked by the registration of the http
+    /// server handle classifier, the only way `field` gets past `kind_of`:
+    /// a registered classifier always finds the slot filled.
+    #[test]
+    fn registering_the_handle_classifier_fills_the_stream_method_slot() {
+        unsafe {
+            super::super::class_handles::js_register_http_server_handle_kind_probe(no_http_handle)
+        };
+        let probe = super::IS_BUILTIN_STREAM_METHOD
+            .peek()
+            .expect("the classifier registration fills the slot");
+        assert!(!probe(f64::from_bits(crate::value::TAG_UNDEFINED), "on"));
+    }
+}
