@@ -724,6 +724,12 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
         let bag = crate::closure::props::bag_of(object as usize);
         return (!bag.is_null()).then_some(bag);
     }
+    // An Array subclass instance keeps its private elements in the array's
+    // named-property object, which growth carries to the new head.
+    if crate::gc_type_is_array!(header.obj_type) {
+        let bag = crate::array::array_property_bag(object as *const crate::array::ArrayHeader);
+        return (!bag.is_null()).then_some(bag);
+    }
     if crate::object::exotic_expando::exotic_kind_of_gc_type(header.obj_type).is_some() {
         let bag = crate::object::exotic_expando::property_bag(object as usize);
         return (!bag.is_null()).then_some(bag);
@@ -734,8 +740,8 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
 }
 
 /// [`private_element_holder`] for a definition (a private field, or the
-/// class brand of its private methods): a function, exotic cell or native
-/// handle gets its property bag allocated on the first private element, as
+/// class brand of its private methods): a function, array, exotic cell or
+/// native handle gets its property bag allocated on the first private element, as
 /// on the first named property. May allocate; callers root `value` and read the holder
 /// only after this returns.
 ///
@@ -754,6 +760,10 @@ unsafe fn private_element_holder_for_definition(value: f64) -> Option<*mut Objec
         let addr = boxed.as_pointer::<ObjectHeader>() as usize;
         if crate::closure::is_closure_ptr(addr) {
             crate::closure::props::bag_ensure(addr);
+        } else if crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
+        {
+            crate::array::array_property_bag_ensure(addr as *mut crate::array::ArrayHeader);
         } else if crate::object::exotic_expando::exotic_expando_kind(addr).is_some() {
             crate::object::exotic_expando::property_bag_ensure(addr);
         }
