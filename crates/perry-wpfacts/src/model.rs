@@ -187,6 +187,8 @@ pub mod prim {
     /// An i32-ranged number (only a subset of NUM; slice 1 never proves it,
     /// the bit exists so the dump format is stable for slice 3).
     pub const ALL: u16 = NUM | STR | BOOL | NULL | UNDEF | BIGINT | SYMBOL;
+    /// The primitives of JSON text (ECMA-262 25.5.1, 25.5.1 ParseJSON).
+    pub const JSON: u16 = NUM | STR | BOOL | NULL;
 
     pub fn name(bits: u16) -> String {
         let mut v = Vec::new();

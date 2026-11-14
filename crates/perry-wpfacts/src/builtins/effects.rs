@@ -758,10 +758,12 @@ impl Run {
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
                 let positions = m.json_positions;
-                let (j, ja) = crate::builtins::json_value(m, self.call, positions);
+                let (j, ja) = crate::builtins::json_value(m, self.call, positions, false);
                 m.add_tok(n, j);
                 m.add_tok(n, ja);
-                m.add_prim(n, prim::ALL);
+                // JSON text holds no other primitive (ECMA-262 25.5.1);
+                // the operand takes no reviver.
+                m.add_prim(n, prim::JSON);
                 n
             }
             // What unknown code hands back: the declaration escaped the

@@ -64,7 +64,8 @@ impl Model {
         };
         self.add_tok(n, o);
         self.add_tok(n, a);
-        self.add_prim(n, prim::ALL);
+        // Positions are on only without a reviver (25.5.1 ParseJSON).
+        self.add_prim(n, prim::JSON);
     }
 
     fn json_birth(&mut self, key: (Tok, JsonStep)) -> (Tok, Tok) {

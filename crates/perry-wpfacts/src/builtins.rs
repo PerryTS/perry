@@ -2157,7 +2157,10 @@ pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 ///
 /// `positions`: the objects are position classes (`solve::json_pos`); a
 /// reviver parse keeps one object token for the whole tree.
-pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, Tok) {
+/// Without a reviver the primitives are strings, numbers, booleans and
+/// null (25.5.1 ParseJSON: JSON text has no other value); a reviver's
+/// results are any value (25.5.1.1 InternalizeJSONProperty).
+pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool, reviver: bool) -> (Tok, Tok) {
     let j = site_tmpl(m, call, "json");
     let ja = site_tmpl(m, call, "Array");
     if positions {
@@ -2165,8 +2168,9 @@ pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, 
         return (j, ja);
     }
     let fa = m.field_any(j);
+    let vals = if reviver { prim::ALL } else { prim::JSON };
     for f in [fa, m.field_any(ja)] {
-        m.add_prim(f, prim::ALL);
+        m.add_prim(f, vals);
         m.add_tok(f, j);
         m.add_tok(f, ja);
     }
@@ -2900,11 +2904,11 @@ fn ns_method_inner(
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             let reviver = arg(m, call, 1).is_some();
             let positions = !reviver && m.json_positions;
-            let (j, ja) = json_value(m, call, positions);
+            let (j, ja) = json_value(m, call, positions, reviver);
             let fa = m.field_any(j);
             ret_tok(m, call, j);
             ret_tok(m, call, ja);
-            ret_prim(m, call, prim::ALL);
+            ret_prim(m, call, if reviver { prim::ALL } else { prim::JSON });
             if let Some(rv) = arg(m, call, 1) {
                 // reviver(key, value) with `this` = the holder, an object
                 // or an array

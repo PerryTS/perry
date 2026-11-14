@@ -163,6 +163,9 @@ impl<'a> Gen<'a> {
             self.m.add_prim(afa, prim::NUM);
             return self.tok_node(at);
         }
+        // JSON text holds strings, numbers, booleans and null and no other
+        // primitive (ECMA-262 25.5.1); a reviver's results reach the tree
+        // by their own stores (`Expr::JsonParseReviver`).
         let (t, n) = self.bobj(mi, "json");
         let arr = self.new_arr_template(mi, "json");
         let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
@@ -171,21 +174,21 @@ impl<'a> Gen<'a> {
             let out = self.tmp("json");
             self.m.edge(n, out);
             self.m.add_tok(out, at);
-            self.m.add_prim(out, prim::ALL);
+            self.m.add_prim(out, prim::JSON);
             return out;
         }
         let fa = self.m.field_any(t);
-        self.m.add_prim(fa, prim::ALL);
+        self.m.add_prim(fa, prim::JSON);
         self.m.add_tok(fa, t);
         let afa = self.m.field_any(at);
-        self.m.add_prim(afa, prim::ALL);
+        self.m.add_prim(afa, prim::JSON);
         self.m.add_tok(afa, t);
         self.m.add_tok(afa, at);
         self.m.add_tok(fa, at);
         let out = self.tmp("json");
         self.m.edge(n, out);
         self.m.add_tok(out, at);
-        self.m.add_prim(out, prim::ALL);
+        self.m.add_prim(out, prim::JSON);
         out
     }
 
