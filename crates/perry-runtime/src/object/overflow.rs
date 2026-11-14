@@ -28,6 +28,29 @@ pub(crate) struct Table {
 
 const SLOT_REF: u64 = 1 << 8;
 
+const _: () = assert!(
+    std::mem::offset_of!(Table, summary) == crate::codegen_abi::OVERFLOW_TABLE_SUMMARY_OFFSET
+);
+const _: () = assert!(
+    std::mem::offset_of!(super::ObjectMeta, overflow)
+        == crate::codegen_abi::OBJECT_META_OVERFLOW_OFFSET
+);
+const _: () = assert!(
+    std::mem::offset_of!(super::ObjectMeta, flags) == crate::codegen_abi::OBJECT_META_FLAGS_OFFSET
+);
+const _: () = assert!(
+    (super::key_attrs::SUMMARY_BLOCKS_STORE | super::key_attrs::SUMMARY_PRIVATE) as u32
+        == crate::codegen_abi::OVERFLOW_SUMMARY_BLOCKS_PLAIN_STORE
+);
+const _: () = assert!(
+    (super::OBJECT_META_FLAG_IS_PROTOTYPE
+        | super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+        | super::OBJECT_META_FLAG_NATIVE_ALIAS
+        | super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC)
+        & !crate::codegen_abi::OBJECT_META_STATE_FLAGS
+        == 0
+);
+
 /// Keys a receiver may add one at a time, its list unique to it, before its
 /// overflow takes over (`canonical_keys::take_unique_run`).
 pub(crate) const UNIQUE_RUN_TO_OVERFLOW: u32 = 1024;
@@ -185,6 +208,14 @@ unsafe fn place(t: *mut Table, slot: u32) {
 
 /// [`find`] with the key's hash supplied by the caller (the probe's
 /// compile-time atom hash, `layout_probe.rs`), so no key header is read.
+///
+/// This is the lookup of every caller that is not a probe front, and it is
+/// the body those callers were compiled with before the fronts got
+/// [`find_hashed_with`]: a table of fewer than 8 entries is scanned. The
+/// lookup is inlined into `layout_probe::probe_has` and the other walks, and
+/// a different body there moves their register allocation: with the fronts'
+/// body `probe_has` reloaded one spilled register on its path for a receiver
+/// with no table at all (one instruction per `for-in` key).
 #[inline]
 pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option<u32> {
     if (*t).length < 8 {
@@ -210,6 +241,98 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         }
         p = (p + 1) & mask;
     }
+}
+
+/// [`find_hashed`] for a probe front that answers a table hit itself, in its
+/// caller's body: the index answers whenever the table has one, and the hash
+/// is asked for only then.
+#[inline(always)]
+pub(crate) unsafe fn find_hashed_with(
+    t: *const Table,
+    key: u64,
+    hash: impl FnOnce() -> u64,
+) -> Option<u32> {
+    // A table too small to carry an index is scanned, newest entry first.
+    // Every other table answers from its index, which every insert places
+    // (`place`: the newest entry of a key, never a private name).
+    if (*t).index_capacity == 0 {
+        let keys = keys_ptr(t);
+        let mut i = (*t).length;
+        while i > 0 {
+            i -= 1;
+            if *keys.add(i as usize) == key {
+                return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
+            }
+        }
+        return None;
+    }
+    let mask = (*t).index_capacity as usize - 1;
+    let mut p = hash() as usize & mask;
+    loop {
+        let i = *index(t).add(p);
+        if i == EMPTY {
+            return None;
+        }
+        if *key_at(t, i) == key {
+            return Some(i);
+        }
+        p = (p + 1) & mask;
+    }
+}
+
+/// The value of found data entry `i` when one load answers it: the value
+/// word the table holds, or the word of the fixed inline slot the entry
+/// refers to (a layout key of a receiver that also has a table). `None`
+/// leaves the entry to [`get_found_from_record`], which gives the same
+/// answer for both of these: an accessor pair, a fixed slot past `live`
+/// (the spill), and the two slot words that are not their own value (the
+/// null pointer word, an I32 lane's word).
+///
+/// # Safety
+/// `i` is a successful lookup in this live, unmodified `t` of `obj`, and
+/// `live` the live inline-slot bound of `obj`'s current record.
+#[inline(always)]
+pub(crate) unsafe fn found_data_word(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    i: u32,
+    live: u32,
+) -> Option<u64> {
+    let attrs = *attrs_at(t, i);
+    if attrs & super::key_attrs::ENTRY_ACCESSOR_MASK as u64 != 0 {
+        return None;
+    }
+    if attrs & SLOT_REF == 0 {
+        return Some(*value_at(t, i));
+    }
+    let fixed = *value_at(t, i) as u32;
+    if fixed >= live {
+        return None;
+    }
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let w = *fields.add(fixed as usize);
+    (w != crate::value::POINTER_TAG && !crate::layout_slot::is_i32_word(w)).then_some(w)
+}
+
+/// Does found entry `i` hold its own value word (no fixed-slot reference)?
+///
+/// # Safety
+/// As [`own_data_value`].
+#[inline(always)]
+pub(crate) unsafe fn holds_own_value(t: *const Table, i: u32) -> bool {
+    *attrs_at(t, i) & SLOT_REF == 0
+}
+
+/// [`own_data_value`] for a store: the entry is also writable
+/// ([`plain_writable_value`] of a found entry).
+///
+/// # Safety
+/// As [`own_data_value`].
+#[inline(always)]
+pub(crate) unsafe fn own_writable_value(t: *const Table, i: u32) -> Option<*mut u64> {
+    let attrs = *attrs_at(t, i);
+    (attrs & SLOT_REF == 0 && super::key_attrs::entry_is_plain_writable_data(attrs as u8))
+        .then(|| value_at(t, i))
 }
 
 pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
@@ -866,7 +989,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     }
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     // An exotic read receiver (`process.env`) answers for keys its table does
-    // not hold, as `layout_probe::owned_get` declines it for reads.
+    // not hold, as the read probe's table front declines it for reads.
     let conclusive = (*meta).elements == 0
         && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         && super::object_is_regular(obj)

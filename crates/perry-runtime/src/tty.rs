@@ -121,7 +121,8 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
             crate::effect!(host_read, tty);
             unsafe {
                 let mut ws: libc::winsize = std::mem::zeroed();
-                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0
+                {
                     Some((ws.ws_col as i32, ws.ws_row as i32))
                 } else {
                     None
