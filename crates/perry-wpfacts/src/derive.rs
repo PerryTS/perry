@@ -1713,7 +1713,9 @@ fn judge(
                         own_or_absent += 1;
                         continue;
                     }
-                    verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
+                    verdict.get_or_insert_with(|| {
+                        Verdict::No(not_unit_why(m, t, key, s.key, s.is_call))
+                    });
                     continue;
                 };
                 receivers.push(tf.display.clone());
@@ -2222,6 +2224,26 @@ fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && own_data_or_absent_tok(m, t, key, a)
 }
 
+/// The reason of a receiver token without layout facts that no
+/// template-free rule admits: for a `JSON.parse` object the first failing
+/// condition of [`own_data_or_absent_tok`].
+fn not_unit_why(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> String {
+    let base = "receiver is not a fact unit";
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return base.into();
+    };
+    match &m.tmpls[tm as usize].kind {
+        TmplKind::BObj { what: "json", .. } if call => format!("{base} (json: a call)"),
+        TmplKind::BObj { what: "json", .. } if m.is_marker(t) => format!("{base} (json: marker)"),
+        TmplKind::BObj { what: "json", .. } => match own_data_or_absent_why(m, t, key, a) {
+            Err(why) => format!("{base} (json: {why})"),
+            Ok(()) => format!("{base} (json)"),
+        },
+        TmplKind::BObj { what, .. } => format!("{base} (builtin {what})"),
+        _ => base.into(),
+    }
+}
+
 /// The primitives beside the objects of a read or call (`judge`):
 /// `undefined`/`null` name the operation's TypeError arm (6.2.5.5,
 /// 7.1.18); for a read each String, Number or Boolean is `family_absent`
@@ -2275,16 +2297,41 @@ fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom)
 
 /// The token conditions of [`own_data_or_absent`] (no layout needed).
 fn own_data_or_absent_tok(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
-    !m.optimistic_json_key
-        && !m.super_relink.contains(&t)
-        && !m.is_escaped(t)
-        && !m.hard.contains_key(&t)
-        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
-        && m
-            .tmpl_of(t)
-            .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
-        && chain_absent(m, t, key, a, false)
-        && object_proto_unwritten(m, a)
+    own_data_or_absent_why(m, t, key, a).is_ok()
+}
+
+/// [`own_data_or_absent_tok`]'s conditions in order; `Err` names the
+/// first that fails (the reason text of a refused site).
+fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), String> {
+    if m.optimistic_json_key {
+        return Err("optimistic JSON-key rule on".into());
+    }
+    if m.super_relink.contains(&t) {
+        return Err("__proto__ relink".into());
+    }
+    if m.is_escaped(t) {
+        let why = m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone());
+        return Err(format!("escape: {}", why.unwrap_or_default()));
+    }
+    if let Some((k, r)) = m.hard.get(&t) {
+        return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));
+    }
+    if let Some(k) = m.accessor_keys.get(&t).filter(|k| !k.is_empty()) {
+        return Err(format!("accessor keys on the token ({})", k.len()));
+    }
+    if !m
+        .tmpl_of(t)
+        .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
+    {
+        return Err("accessor keys on the template".into());
+    }
+    if !chain_absent(m, t, key, a, false) {
+        return Err("the chain has the key".into());
+    }
+    if !object_proto_unwritten(m, a) {
+        return Err("a write of the key on Object.prototype".into());
+    }
+    Ok(())
 }
 
 /// [[Get]] of named key `a` (`key`) on array token `t` gives `undefined`.
