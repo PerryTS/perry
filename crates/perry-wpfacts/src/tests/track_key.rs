@@ -240,7 +240,6 @@ fn unique_name_keeps_exclusion() {
 }
 
 #[test]
-#[ignore = "NAMEEXCL2 open: _lut[a] + _lut[b] is 65536 products, rule M3 gives prefix entries 00..ff with any remainder (rule PREFIX-AND-FREE, not built)"]
 fn uuid_keeps_exclusion() {
     let pre = format!("{}\nconst id: any = generateUUID();", uuid_pre());
     let v = recv(&prog("id", "\x27position\x27", &pre, OBJ_READ), "q");
@@ -261,7 +260,7 @@ if ( String( t ) === \x27x\x27 ) o.name = unique( String( n ) );
 const NAME_OR_UUID: &str = "( o.name ? o.name : o.uuid )";
 
 #[test]
-#[ignore = "NAMEEXCL2 open: the uuid part (uuid_keeps_exclusion)"]
+#[ignore = "NAMEEXCL3 open: a field holding '' beside the uuid, with the table read as property part ('position' is green); local probe ( t ? '' : o.uuid ) with TAB is red too"]
 fn node_name_or_uuid() {
     let pre = name_or_uuid_pre("");
     let v = recv(&prog(NAME_OR_UUID, TAB, &pre, OBJ_READ), "q");
@@ -329,6 +328,47 @@ fn lower_case_keeps_exclusion() {
 fn step_of_fraction_may_hold_dot() {
     let pre = DOT_KEYS.replace("{{}}", "{}") + " let w: any = String( t ) === \x27a\x27 ? 0.5 : Object;";
     let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ w ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+
+// Controls (rule PREFIX-AND-FREE). A truncated product whose right operand
+// may hold `.` keeps no exclusion of `.`: the node part may be `00.ctl`,
+// so objectName may be `ctl`.
+#[test]
+fn truncated_product_with_dot_keeps_no_dot_exclusion() {
+    let pre = format!(
+        "{}\nconst sfx: any = String( t ) === \x27a\x27 ? \x27.ctl\x27 : \x2700\x27;
+const d0: any = Math.random() * 255 | 0;
+const dn: any = _lut[ d0 & 0xff ] + sfx;",
+        uuid_pre()
+    );
+    let v = recv(&prog("dn", "\x27position\x27", &pre, OBJ_READ), "q");
+    assert!(v.iter().any(|x| x == "B"), "{v:?}");
+}
+
+// A key made by a truncated product is read by its prefix as before: it
+// never names a field whose name lacks the prefix.
+#[test]
+fn truncated_product_key_keeps_its_prefix() {
+    let pre = format!(
+        "{}\nconst g: any = {{}}; g[ \x27zz\x27 ] = new A(); g[ \x2700ff\x27 ] = new S();
+const d0: any = Math.random() * 255 | 0;
+const d1: any = Math.random() * 255 | 0;",
+        uuid_pre()
+    );
+    let tail = "const z: any = g[ _lut[ d0 & 0xff ] + _lut[ d1 & 0xff ] ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert_eq!(v, vec!["S".to_string()], "{v:?}");
+}
+
+// Control (Step rule, member `++`): a field also written with 0.5 may be
+// 1.5 after `++`, so its text may hold `.`: the key `_1.5` may be read.
+#[test]
+fn member_step_of_fraction_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}")
+        + " class P { p: any = 0; } const op: any = new P(); if ( String( t ) === \x27a\x27 ) op.p = 0.5;";
+    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ op.p ) ]; console.log( z.p );";
     let v = recv(&prog(SAN, TAB, &pre, tail), "p");
     assert!(v.iter().any(|x| x == "A"), "{v:?}");
 }
