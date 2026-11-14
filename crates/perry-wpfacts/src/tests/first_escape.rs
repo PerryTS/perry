@@ -884,12 +884,35 @@ fn red_r7hold9_blob_part_next_is_not_called_on_the_iterable() {
     assert!(!r7hold9_blob_part_escapes("{ next: u, w }"));
 }
 
-/// Control: `x`'s own `@@iterator` returns `{ next: u, w }`: the runtime
-/// calls `u` with that iterator as `this`, so `w` reaches unknown code.
+/// R7HOLD10: `x`'s own `@@iterator` returns `{ next: u, w }`. The
+/// runtime never runs the iteration protocol on Blob parts: `js_blob_new`
+/// (perry-stdlib fetch_blob.rs `append_blob_parts`) reads an Array's
+/// elements by index (`js_array_get`) and takes any other value as ONE part
+/// (`append_one_blob_part`: a Blob's or buffer's bytes, else ToString). So
+/// neither `@@iterator` nor `u` is called and `w` stays local.
 #[test]
-fn control_r7hold9_blob_part_iterator_next_is_called() {
-    assert!(r7hold9_blob_part_escapes(
+fn red_r7hold10_blob_part_iterator_is_never_called() {
+    assert!(!r7hold9_blob_part_escapes(
         "{ [Symbol.iterator]() { return { next: u, w }; } }"
+    ));
+}
+
+/// Control: an element of an Array part is converted by ToString
+/// (`append_one_blob_part`, declared `coerce(elems(arg(0)), ToPrimitive)`):
+/// its `toString` runs and hands `w` to unknown code.
+#[test]
+fn control_r7hold10_blob_array_element_to_string_runs() {
+    assert!(r7hold9_blob_part_escapes(
+        r#"[{ toString() { u(w); return "p"; } }]"#
+    ));
+}
+
+/// Control: a non-array part is converted by ToString as one part: its
+/// own `toString` runs and hands `w` to unknown code.
+#[test]
+fn control_r7hold10_blob_single_part_to_string_runs() {
+    assert!(r7hold9_blob_part_escapes(
+        r#"{ toString() { u(w); return "p"; } }"#
     ));
 }
 

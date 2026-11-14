@@ -169,8 +169,8 @@ fn an_undeclared_event_method_sees_detail() {
 
 /// Red on main: every argument of `new Blob` escaped (the unknown
 /// constructor), `this` with it (GLTFLoader's `new Blob([bufferView])`
-/// shape). The constructor iterates its parts and converts each one that is
-/// not bytes to a string; it reads the options' `type` and `endings`.
+/// shape). The constructor reads its Array of parts by index and converts
+/// each one that is not bytes to a string; it reads the options' `type` and `endings`.
 #[test]
 fn blob_parts_keep_this() {
     let src = program("", "new Blob([this, \"x\"], { type: \"text/plain\" });");
@@ -190,15 +190,18 @@ fn the_blob_part_to_string_runs() {
     assert!(admits_w(&pf, &src), "{}", verdicts(&pf, &src));
 }
 
-/// Control: the parts' iterator runs.
+/// The parts' iterator never runs: the runtime reads an Array part list by
+/// index and takes any other value as one part (perry-stdlib fetch_blob.rs
+/// `append_blob_parts`), converted by ToString: `Object.prototype.toString`
+/// here, which calls nothing of the program.
 #[test]
-fn the_blob_parts_iterator_runs() {
+fn the_blob_parts_iterator_never_runs() {
     let src = program(
         "",
         "new Blob({ [Symbol.iterator]() { self.v = new W(2); return [][Symbol.iterator](); } } as any);",
     );
     let pf = facts(&src);
-    assert!(admits_w(&pf, &src), "{}", verdicts(&pf, &src));
+    assert!(!admits_w(&pf, &src), "{}", verdicts(&pf, &src));
 }
 
 /// Control: the options' `type` getter runs.
