@@ -72,12 +72,29 @@ fn a_spread_of_an_own_keys_array_copies_its_values() {
     assert!(verdicts("Object.keys(obj)", "{ a: obj, ...src }").1);
 }
 
-/// Sabotage twin: a Date's own properties are not in the model (nor a
-/// Map's, a typed array's …): the copy stays ⊤.
+/// Sabotage twin: an Error's own properties are not in the model (nor a
+/// URLSearchParams object's): the copy stays ⊤.
 #[test]
 fn a_spread_of_an_unmodelled_builtin_object_stays_unproven() {
-    assert!(!verdicts("new Date()", "{ a: obj, ...src }").1);
-    assert!(!verdicts("new Map()", "Object.assign({ a: obj }, src)").1);
+    assert!(!verdicts("new Error(\"e\")", "{ a: obj, ...src }").1);
+    assert!(!verdicts("new URLSearchParams()", "Object.assign({ a: obj }, src)").1);
+}
+
+/// A Date or a Map is born with no own property (ECMA-262 21.4.2.1,
+/// 24.1.1.1): a copy of it adds no key, so nothing is called with `obj`.
+#[test]
+fn a_spread_of_an_object_born_without_own_props_adds_no_key() {
+    assert!(verdicts("new Date()", "{ a: obj, ...src }").1);
+    assert!(verdicts("new Map()", "Object.assign({ a: obj }, src)").1);
+}
+
+/// Sabotage twin: a program store on a Date is an own enumerable property
+/// and is copied: the host function stored under `cb` is called with `obj`.
+#[test]
+fn a_program_store_on_an_object_born_without_own_props_is_copied() {
+    let d = "(() => { const d: any = new Date(); d.cb = (x: any) => (globalThis as any).hostTake(x); return d; })()";
+    assert!(!verdicts(d, "{ a: obj, ...src }").1);
+    assert!(!verdicts(d, "Object.assign({ a: obj }, src)").1);
 }
 
 /// Sabotage twin: a value from unknown code.
