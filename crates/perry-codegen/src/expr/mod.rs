@@ -3384,6 +3384,7 @@ mod fs_await;
 mod hit_path_tests;
 pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
+pub(crate) mod booleans;
 pub(crate) mod held_len;
 #[cfg(test)]
 mod index_get_claim_tests;
@@ -3394,7 +3395,6 @@ pub(crate) mod int32_shadow;
 pub(crate) mod int_product;
 #[cfg(test)]
 mod kind_entry_selection_tests;
-pub(crate) mod booleans;
 pub(crate) mod literal_strings;
 #[cfg(test)]
 mod map_entry_fusion_tests;
