@@ -171,7 +171,7 @@ async function streams(): Promise<void> {
     return x;
   };
   console.log("map", JSON.stringify(await source().map(async (x: number) => (await slow(x)) * 2).toArray()));
-  console.log("filter", JSON.stringify(await source().filter(async (x: number) => (await slow(x)) % 2 === 0).toArray()));
+  console.log("filter", JSON.stringify(await source().map(slow).filter((x: number) => x % 2 === 0).toArray()));
   console.log("reduce", await source().reduce(async (acc: number, x: number) => acc + (await slow(x)), 0));
   console.log("some/every/find", await source().some((x: number) => x > 7), await source().every((x: number) => x > 1), await source().find((x: number) => x > 4));
   console.log("take/drop/flatMap", JSON.stringify(await source().drop(2).take(3).flatMap((x: number) => [x, -x]).toArray()));
