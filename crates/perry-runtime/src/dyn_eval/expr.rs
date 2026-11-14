@@ -901,10 +901,12 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                 ast::MemberProp::PrivateName(_) => throw_unsupported("private method call"),
             }
         }
-        // Plain call: resolve the callee value, dispatch with this=undefined.
+        // Plain call: resolve the callee value, dispatch with this=undefined,
+        // or the binding object when a `with` environment resolved it.
         other => {
-            let callee_value = eval_call_callee(ctx, other, env_idx);
+            let (callee_value, this) = eval_call_callee(ctx, other, env_idx);
             let callee_idx = root_push(callee_value);
+            let this_idx = root_push(this);
             let codegen_blocked =
                 !ctx.strings_allowed && is_string_codegen_callee(ctx, root_get(callee_idx));
             let args = eval_args(ctx, &c.args, env_idx);
@@ -913,7 +915,7 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     "Code generation from strings disallowed for this context",
                 );
             }
-            let result = call_with_args(root_get(callee_idx), bridge::undefined(), &args);
+            let result = call_with_args(root_get(callee_idx), root_get(this_idx), &args);
             roots_truncate(callee_idx);
             result
         }
@@ -923,16 +925,16 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
 /// Resolve a non-member callee. Identifier callees get targeted fallbacks for
 /// a few universal globals in case the compiled binary's `globalThis` bag
 /// doesn't carry them as callable values.
-fn eval_call_callee(ctx: &Ctx, e: &ast::Expr, env_idx: usize) -> f64 {
+fn eval_call_callee(ctx: &Ctx, e: &ast::Expr, env_idx: usize) -> (f64, f64) {
     if let ast::Expr::Ident(i) = e {
         let name: &str = &i.sym;
-        if let Some(v) = env::lookup(root_get(env_idx), name) {
-            return v;
+        if let Some(resolved) = env::lookup_with_this(root_get(env_idx), name) {
+            return resolved;
         }
         let global =
             bridge::global_lookup(root_get(ctx.global_idx), root_get(ctx.intrinsics_idx), name);
         if !bridge::is_undefined(global) {
-            return global;
+            return (global, bridge::undefined());
         }
         // The generated-code corpus leans on these; if the global bag lacks
         // them as first-class closures, give the interpreter native
@@ -947,7 +949,7 @@ fn eval_call_callee(ctx: &Ctx, e: &ast::Expr, env_idx: usize) -> f64 {
             _ => bridge::throw_reference_error(&format!("{name} is not defined")),
         }
     } else {
-        eval_expr(ctx, e, env_idx)
+        (eval_expr(ctx, e, env_idx), bridge::undefined())
     }
 }
 
