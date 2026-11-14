@@ -1054,6 +1054,7 @@ impl Model {
                 // reads and writes by a constant or a known prefix.
                 &[x] if self.atom_infix(x).is_none()
                     && self.atom_suffix(x).is_none()
+                    && self.atom_excl(x).is_none()
                     && (self.atom_prefix(x).is_none()
                     || s.switch.as_ref().is_some_and(|w| w.1.is_empty())) => x,
                 _ => NO_VAL,

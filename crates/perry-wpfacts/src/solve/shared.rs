@@ -14,7 +14,7 @@ impl Model {
             TokKind::ObjectProto => Some(Shared::ObjectProto),
             TokKind::Builtin(ns) => Some(Shared::Builtin(*ns)),
             TokKind::BuiltinFn(_) => Some(Shared::BuiltinFn),
-            TokKind::NativeProto(n) => Some(Shared::NativeProto(n.clone())),
+            TokKind::NativeProto(n, ..) => Some(Shared::NativeProto(n.clone())),
             _ => None,
         }
     }
@@ -26,7 +26,7 @@ impl Model {
             Shared::ObjectProto => self.tok(TokKind::ObjectProto),
             Shared::Builtin(ns) => self.tok(TokKind::Builtin(*ns)),
             Shared::BuiltinFn => self.tok(TokKind::BuiltinFn(crate::model::Native::Any)),
-            Shared::NativeProto(n) => self.tok(TokKind::NativeProto(n.clone())),
+            Shared::NativeProto(n) => self.tok(TokKind::native_proto(n)),
         }
     }
 
@@ -140,7 +140,7 @@ impl Model {
                 if matches!(s, Shared::ObjectProto) {
                     self.note_fnproto_write(t, None, what);
                 }
-                if matches!(s, Shared::ObjectProto | Shared::NativeProto(_)) {
+                if matches!(s, Shared::ObjectProto | Shared::NativeProto(..)) {
                     builtins::note_native_write(self, t, None, what);
                 }
                 if builtins::global_object(self, t) {

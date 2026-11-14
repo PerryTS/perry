@@ -16,7 +16,22 @@ pub(crate) const INFIX_MARK: &str = "\u{1}infix\u{1}";
 /// The spelling of a rule-M4 suffix entry, `SUFFIX_MARK` + `s`: "a String
 /// that ends with `s`" (`s` not empty).
 pub(crate) const SUFFIX_MARK: &str = "\u{1}suffix\u{1}";
+
+/// The end of every NativeFunction text perry's runtime prints for a
+/// builtin function (`function_source_for_func_ptr`, the class and closure
+/// forms): `function NAME() { [native code] }` (ECMA-262 20.2.3.5).
+pub(crate) const NATIVE_CODE_TAIL: &str = "[native code] }";
+/// The spelling of an exclusion entry, `EXCL_MARK` + 32 hex digits (a set
+/// E of ASCII characters, bit c for c) + `\u{1}` + `s`: "a String `X + s`
+/// where X holds no character of E" (`s` may be empty; it may hold E's
+/// characters).
+pub(crate) const EXCL_MARK: &str = "\u{1}excl\u{1}";
 const PLUS_PREFIXES_K: usize = 256;
+
+/// The ASCII characters of `s` (bit c for c).
+pub(crate) fn ascii_mask(s: &str) -> u128 {
+    s.chars().filter(|c| c.is_ascii()).fold(0, |m, c| m | 1u128 << c as u32)
+}
 
 impl Model {
     /// The interned set of `atoms` (sorted, distinct; `STRS_TOP` past
@@ -130,6 +145,22 @@ impl Model {
         self.atoms[a as usize].strip_prefix(SUFFIX_MARK)
     }
 
+    /// The exclusion entry of `e` and `s`; with no excluded character a
+    /// suffix entry (`None` for `s` empty: any string).
+    pub(crate) fn excl_atom(&mut self, e: u128, s: &str) -> Option<Atom> {
+        if e == 0 {
+            return (!s.is_empty()).then(|| self.suffix_atom(s));
+        }
+        Some(self.atom(&format!("{EXCL_MARK}{e:032x}\u{1}{s}")))
+    }
+
+    /// The excluded set and the known suffix of an exclusion entry.
+    pub(crate) fn atom_excl(&self, a: Atom) -> Option<(u128, &str)> {
+        let r = self.atoms[a as usize].strip_prefix(EXCL_MARK)?;
+        let e = u128::from_str_radix(r.get(..32)?, 16).ok()?;
+        Some((e, r.get(33..)?))
+    }
+
     /// The character an infix entry stands for (`None`: no infix entry).
     pub(crate) fn atom_infix(&self, a: Atom) -> Option<char> {
         self.atoms[a as usize].strip_prefix(INFIX_MARK).and_then(|r| r.chars().next())
@@ -147,7 +178,11 @@ impl Model {
         if let Some(c) = self.atom_infix(a) {
             return Some(c);
         }
-        let t = self.atom_prefix(a).or_else(|| self.atom_suffix(a)).unwrap_or(&self.atoms[a as usize]);
+        let t = self
+            .atom_prefix(a)
+            .or_else(|| self.atom_suffix(a))
+            .or_else(|| self.atom_excl(a).map(|x| x.1))
+            .unwrap_or(&self.atoms[a as usize]);
         t.chars().find(|&c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '_' && c != '$')
     }
 
@@ -229,6 +264,13 @@ impl Model {
             // Rule K7: as a store key an infix entry is any key.
             return 0;
         }
+        if let Some((_, s)) = self.atom_excl(a) {
+            if s.is_empty() {
+                return 0;
+            }
+            let glob = vec![String::new(), s.to_string()];
+            return self.key_shape(Some(KeyShape { globs: vec![glob] }));
+        }
         let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
             (Some(p), _) => vec![p.to_string(), String::new()],
             (_, Some(s)) => vec![String::new(), s.to_string()],
@@ -271,8 +313,9 @@ impl Model {
                 out.push((a, self.glob_shape(glob)));
                 continue;
             }
-            // Rule M4: a known suffix reads the names of its glob `*s`.
-            if let Some(s) = self.atom_suffix(a) {
+            // Rule M4: a known suffix reads the names of its glob `*s`
+            // (an exclusion entry's suffix too).
+            if let Some(s) = self.atom_suffix(a).or_else(|| self.atom_excl(a).map(|x| x.1).filter(|s| !s.is_empty())) {
                 let glob = vec![String::new(), s.to_string()];
                 out.push((a, self.glob_shape(glob)));
                 continue;
@@ -292,23 +335,209 @@ impl Model {
     /// operand that may be no String (a Number, an object's ToPrimitive)
     /// while the result may be a String gives any string. Prefixes are
     /// only made from constants, never extended, so loops end.
-    pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+    ///
+    /// `.1`: the result used a text that holds only while no unknown code
+    /// exists (rule M8's builtin-function form, `excl_parts`).
+    pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> (StrSet, bool) {
         if let Some(s) = self.plus_const(l, r) {
-            return s;
+            return (s, false);
         }
         let m3 = self.plus_strs_m3(l, r);
         if m3 != STRS_TOP {
-            return m3;
+            return (m3, false);
+        }
+        if let Some(s) = self.excl_plus(l, r) {
+            return s;
         }
         if let Some(s) = self.suffix_strs(r) {
-            return s;
+            return (s, false);
         }
         // Rule K7, 13.15.3: when one operand is String-only, the result is
         // the concatenation of both ToStrings, so it holds every character
         // that operand surely holds.
         match self.infix_strs(l).or_else(|| self.infix_strs(r)) {
-            Some(s) => s,
-            None => STRS_TOP,
+            Some(s) => (s, false),
+            None => (STRS_TOP, false),
+        }
+    }
+
+    /// The values of `n` as concatenation parts (ECMA-262 13.15.3 step 4:
+    /// each operand's ToString, 7.1.17): each constant (`Ok`) or exclusion
+    /// entry (`Err((E, s))`; a suffix entry is one with nothing excluded);
+    /// `None` when one value's text may be any string. `undefined`, `null`
+    /// and the booleans are their constant texts; a Symbol throws (no
+    /// text). A builtin function is ToPrimitive (7.1.1: no @@toPrimitive,
+    /// `Object.prototype.valueOf` gives the object, then
+    /// `Function.prototype.toString`, 20.2.3.5): a NativeFunction text,
+    /// which perry's runtime always spells ending in `[native code] }`,
+    /// while no unknown code exists and the program writes none of those
+    /// keys on it or the prototypes; `.1` says such a form was used (it
+    /// is any string once the realm is held, `realm_str_dsts`). A Number,
+    /// a BigInt, `Object.prototype` (the token is every builtin prototype)
+    /// and every other object may be any string.
+    fn excl_parts(&mut self, n: NodeId) -> Option<(Vec<Result<String, (u128, String)>>, bool)> {
+        let (p, toks, strs) = {
+            let x = &self.nodes[n as usize];
+            (x.prim, x.pts.to_sorted(), x.strs)
+        };
+        if p & (prim::NUM | prim::BIGINT) != 0 {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut gated = false;
+        if p & prim::STR != 0 {
+            if strs < STRS_SET0 {
+                return None;
+            }
+            for &a in self.str_atoms(strs) {
+                match self.atom_excl(a).or_else(|| self.atom_suffix(a).map(|s| (0, s))) {
+                    Some((e, s)) => out.push(Err((e, s.to_string()))),
+                    None if self.atom_is_mark(a) => return None,
+                    None => out.push(Ok(self.atoms[a as usize].clone())),
+                }
+            }
+        }
+        for (bit, text) in [
+            (prim::UNDEF, "undefined"),
+            (prim::NULL, "null"),
+            (prim::TRUE, "true"),
+            (prim::FALSE, "false"),
+        ] {
+            if p & bit != 0 {
+                out.push(Ok(text.to_string()));
+            }
+        }
+        if !toks.is_empty() {
+            if self.realm_held {
+                return None;
+            }
+            let fp = crate::builtins::native_proto(self, "Function");
+            let keys = [crate::model::WK_TO_PRIMITIVE, "valueOf", "toString"].map(|k| self.atom(k));
+            for t in toks {
+                let native_fn = t != TOP
+                    && !self.is_marker(t)
+                    && match self.toks[t as usize] {
+                        TokKind::BuiltinFn(_) => true,
+                        TokKind::Builtin(_) => crate::builtins::surely_callable(self, t),
+                        _ => false,
+                    };
+                if !native_fn {
+                    return None;
+                }
+                for &a in &keys {
+                    let f = self.field(t, a);
+                    let x = &self.nodes[f as usize];
+                    if crate::builtins::native_written(self, fp, a) || x.prim != 0 || !x.pts.is_empty() {
+                        return None;
+                    }
+                }
+            }
+            out.push(Err((0, NATIVE_CODE_TAIL.to_string())));
+            gated = true;
+        }
+        Some((out, gated))
+    }
+
+    /// Rule M8, ECMA-262 13.15.3 (two Strings give their concatenation):
+    /// with an exclusion entry on either side and only constants and
+    /// exclusion entries on both, `X·s + t` is `X·(s t)`; `c + X·s` is
+    /// `(c X)·s`, whose head holds no character of E that `c` lacks;
+    /// `X1·s1 + X2·s2` is `(X1 s1 X2)·s2`, whose head holds no character
+    /// excluded on both sides and absent from `s1`. Exact for the first,
+    /// a superset for the others. Suffixes grow only from a left entry
+    /// with an empty suffix or from the left operand's one value (a node
+    /// holds one value alone during one stretch at most, sets only grow),
+    /// so loops end; two constants are rule M5's.
+    fn excl_plus(&mut self, l: NodeId, r: NodeId) -> Option<(StrSet, bool)> {
+        let (lp, lg) = self.excl_parts(l)?;
+        let (rp, rg) = self.excl_parts(r)?;
+        if lp.iter().chain(&rp).all(|p| p.is_ok()) {
+            return None;
+        }
+        let alone = lp.len() == 1;
+        let mut out = Vec::new();
+        for a in &lp {
+            for b in &rp {
+                let at = match (a, b) {
+                    (Err((e, s)), Ok(t)) if s.is_empty() || alone => self.excl_atom(*e, &format!("{s}{t}")),
+                    (Ok(c), Err((e, s))) => self.excl_atom(e & !ascii_mask(c), s),
+                    (Err((e1, s1)), Err((e2, s2))) => self.excl_atom(e1 & e2 & !ascii_mask(s1), s2),
+                    _ => None,
+                };
+                out.push(at?);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some((self.str_set(&out), lg || rg))
+    }
+
+    /// Is `t` an object of the RegExp family (a literal's or a
+    /// constructor's)?
+    fn is_regexp_tok(&self, t: Tok) -> bool {
+        t != TOP
+            && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "RegExp", .. }))
+    }
+
+    /// Rule M9, ECMA-262 22.2.6.11 RegExp.prototype[@@replace] with a
+    /// global regex `t` whose pattern is one class (or character) C and a
+    /// String replacement `r` with no `$` (GetSubstitution is `r` itself)
+    /// and no ASCII character of C: every match is one C character, and
+    /// each one is replaced, so the result holds no ASCII character of C
+    /// (an exclusion entry). Only while no unknown code exists and nothing
+    /// writes what @@replace reads (`REGEXP_REPLACE_READS`) on
+    /// RegExp.prototype or `t`; else any string. `None` while an operand
+    /// holds no value yet.
+    pub(crate) fn class_replace_strs(&mut self, t: Tok, repl: NodeId) -> Option<StrSet> {
+        let empty = |m: &Self, n: NodeId| {
+            let x = &m.nodes[n as usize];
+            x.prim == 0 && x.pts.is_empty()
+        };
+        if empty(self, repl) {
+            return None;
+        }
+        if self.realm_held {
+            return Some(STRS_TOP);
+        }
+        let lit = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => self.regexp_class_of.get(&tm).copied(),
+            _ => None,
+        };
+        let mask = match (lit, self.regexp_ctor_args.get(&t).copied()) {
+            (Some(mk), _) => mk,
+            (None, Some((p, f))) => {
+                if empty(self, p) || empty(self, f) {
+                    return None;
+                }
+                let (Some(pa), Some(fa)) = (self.one_str_const(p), self.one_str_const(f)) else {
+                    return Some(STRS_TOP);
+                };
+                let (ps, fs) = (self.atoms[pa as usize].clone(), self.atoms[fa as usize].clone());
+                match crate::builtins::regex_tail::global_class(&ps, &fs) {
+                    Some(mk) => mk,
+                    None => return Some(STRS_TOP),
+                }
+            }
+            _ => return Some(STRS_TOP),
+        };
+        let np = crate::builtins::native_proto(self, "RegExp");
+        for key in crate::builtins::string_methods::REGEXP_REPLACE_READS {
+            let a = self.atom(key);
+            let f = self.field(t, a);
+            if crate::builtins::native_written(self, np, a) || !empty(self, f) {
+                return Some(STRS_TOP);
+            }
+        }
+        let Some(r) = self.one_str_const(repl).map(|a| self.atoms[a as usize].clone()) else {
+            return Some(STRS_TOP);
+        };
+        if r.contains('$') || ascii_mask(&r) & mask != 0 {
+            return Some(STRS_TOP);
+        }
+        match self.excl_atom(mask, "") {
+            Some(a) => Some(self.str_set(&[a])),
+            None => Some(STRS_TOP),
         }
     }
 
@@ -324,6 +553,9 @@ impl Model {
         for a in self.str_atoms(node.strs).to_vec() {
             if self.atom_suffix(a).is_some() {
                 out.push(a);
+            } else if let Some((_, s)) = self.atom_excl(a).filter(|x| !x.1.is_empty()) {
+                let s = s.to_string();
+                out.push(self.suffix_atom(&s));
             } else if self.atom_is_mark(a) || self.atoms[a as usize].is_empty() {
                 return None;
             } else {
@@ -385,6 +617,12 @@ impl Model {
             let x = &self.nodes[n as usize];
             x.prim == 0 && x.pts.is_empty()
         }) {
+            return None;
+        }
+        // Step 2: a search value of RegExp objects only is their
+        // @@replace's call (rule M9, `sym_call`), not this rule's.
+        let sx = &self.nodes[search as usize];
+        if sx.prim == 0 && sx.pts.to_sorted().into_iter().all(|t| self.is_regexp_tok(t)) {
             return None;
         }
         // Step 1 RequireObjectCoercible: an undefined or null receiver
@@ -457,7 +695,9 @@ impl Model {
         for &a in self.str_atoms(rs) {
             let t = match self.atom_prefix(a) {
                 Some(p) => p.to_string(),
-                None if self.atom_infix(a).is_some() || self.atom_suffix(a).is_some() => String::new(),
+                None if self.atom_infix(a).is_some() || self.atom_suffix(a).is_some() || self.atom_excl(a).is_some() => {
+                    String::new()
+                }
                 None => self.atoms[a as usize].clone(),
             };
             tails.push(t);
@@ -468,8 +708,8 @@ impl Model {
         }
         let mut out: Vec<Atom> = Vec::new();
         for a in left {
-            // A left suffix entry: the result's start is unknown.
-            if self.atom_suffix(a).is_some() {
+            // A left suffix or exclusion entry: the result's start is unknown.
+            if self.atom_suffix(a).is_some() || self.atom_excl(a).is_some() {
                 return STRS_TOP;
             }
             if self.atom_is_mark(a) {

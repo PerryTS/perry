@@ -150,6 +150,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // operand of one String constant and no flags operand is the
             // object's [[OriginalSource]] with flags "", as a literal's
             // (`Cons::RegExpPattern`, `Model::regexp_pattern`).
+            // Rule M9: both operands, for a global one-class pattern.
+            if let (Some(&p), Some(&f)) = (c.args.first(), c.args.get(1)) {
+                m.regexp_ctor_args.insert(o, (p, f));
+            }
             if let (Some(&p), None) = (c.args.first(), c.args.get(1)) {
                 m.regexp_ctor_toks.insert(o);
                 m.cons(p, Cons::RegExpPattern { tok: o });

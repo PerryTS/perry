@@ -344,8 +344,18 @@ pub enum TokKind {
     /// A module's namespace / `module.exports` object.
     ModNs(u32),
     /// The prototype of a native parent class (`extends EventEmitter`),
-    /// whose methods have summaries in `builtins.rs`.
-    NativeProto(String),
+    /// whose methods have summaries in `builtins.rs`. The second field is
+    /// the namespace the name declares (`builtins::ns_by_name`), a function
+    /// of the name taken once when the token is minted
+    /// ([`TokKind::native_proto`]).
+    NativeProto(String, Option<BuiltinNs>),
+}
+
+impl TokKind {
+    /// The [`TokKind::NativeProto`] of native `name`.
+    pub(crate) fn native_proto(name: &str) -> TokKind {
+        TokKind::NativeProto(name.to_string(), crate::builtins::ns_by_name(name))
+    }
 }
 
 pub use crate::builtins::Family;
@@ -1795,6 +1805,15 @@ pub struct Model {
     /// flags; the `exec` records (and inputs) waiting for an undecided P,
     /// and those records.
     pub(crate) regexp_ctor_toks: crate::pts::FxHashSet<Tok>,
+    /// Rule M9: the ASCII characters of a regex literal's one class when
+    /// its flags are `g` (and `d`) only (`regex_tail::global_class`).
+    pub(crate) regexp_class_of: crate::pts::FxHashMap<TmplId, u128>,
+    /// Rule M9: the pattern and flags operands of `new RegExp(P, F)`.
+    pub(crate) regexp_ctor_args: crate::pts::FxHashMap<Tok, (NodeId, NodeId)>,
+    /// Nodes given a String form that holds only while no unknown code
+    /// exists (`realm_held`): any string once it does
+    /// (`Model::realm_widen_strs`).
+    pub(crate) realm_str_dsts: Vec<NodeId>,
     pub(crate) regexp_pending: crate::pts::FxHashMap<Tok, Vec<(Tok, NodeId)>>,
     pub(crate) regexp_pending_recs: crate::pts::FxHashSet<Tok>,
     /// Rule M8: each regex literal template whose `source` is its pattern
@@ -2213,6 +2232,9 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// `PERRY_WPF_KEYREAD=1` only (`diagnostics::keysnap_plan`): the nodes
+    /// snapshotted when the realm is first held; `None` otherwise.
+    pub keysnap: Option<Box<crate::diagnostics::KeySnap>>,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in
@@ -2295,7 +2317,8 @@ pub struct Model {
     /// per (target, key): the target is the prototype's own token,
     /// `ObjectProto` (a global native's prototype collapses into it) or ⊤ (a
     /// native module's values, interpreted code); key `None`: every key.
-    pub native_writes: FxHashMap<(Tok, Option<Atom>), NativeWrite>,
+    /// Ordered by target, so the writes on one token are one range.
+    pub native_writes: std::collections::BTreeMap<(Tok, Option<Atom>), NativeWrite>,
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,

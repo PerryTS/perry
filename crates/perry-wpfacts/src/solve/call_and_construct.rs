@@ -82,6 +82,9 @@ impl Model {
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
+                if self.keysnap.is_some() {
+                    self.keysnap_note(call, t, x);
+                }
                 self.escape(x, r);
             }
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
@@ -124,7 +127,7 @@ impl Model {
             TokKind::Obj(_, _)
             | TokKind::Proto(_)
             | TokKind::ObjectProto
-            | TokKind::NativeProto(_)
+            | TokKind::NativeProto(..)
             | TokKind::ModNs(_) => {
                 // Not callable (TypeError) — unless it is a builtin object
                 // that is a function (Proxy over a function etc., ⊤ anyway).
@@ -244,6 +247,9 @@ impl Model {
         // Unknown code runs, handed values or not: it holds the realm.
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            if self.keysnap.is_some() {
+                self.keysnap_at(true, "unknown callee (unknown_callee_args)", Some(call), r, Some(t));
+            }
             self.hold_realm(r);
         }
         // −0 tolerance: unknown code receives the arguments.
@@ -747,6 +753,9 @@ impl Model {
                 }
                 if !self.realm_held {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+                    if self.keysnap.is_some() {
+                        self.keysnap_at(true, "new of an unknown constructor (construct)", Some(call), r, Some(t));
+                    }
                     self.hold_realm(r);
                 }
                 let r = self.reason("passed to `new` of an unknown constructor");

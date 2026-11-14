@@ -5,7 +5,7 @@ use super::*;
 
 /// Prototype token of a native parent class (`extends EventEmitter`).
 pub fn native_proto(m: &mut Model, name: &str) -> Tok {
-    m.tok(TokKind::NativeProto(name.to_string()))
+    m.tok(TokKind::native_proto(name))
 }
 
 /// Native parents with a summary (owner decision 135.5).
@@ -190,8 +190,8 @@ fn written_by(
     let has = |t: Tok, k: Option<Atom>| m.native_writes.get(&(t, k)).is_some_and(counts);
     let any_on = |t: Tok, keyed: &dyn Fn(Option<Atom>) -> bool| {
         m.native_writes
-            .iter()
-            .any(|(&(w, k), x)| w == t && counts(x) && keyed(k))
+            .range((t, None)..=(t, Some(Atom::MAX)))
+            .any(|(&(_, k), x)| counts(x) && keyed(k))
     };
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
@@ -232,7 +232,7 @@ fn written_by(
     let is_global = super::global_object(m, np);
     // Taken last: a name match, after the cheap tests of the write.
     let global = || match &m.toks[np as usize] {
-        TokKind::NativeProto(n) => ns_by_name(n).is_some(),
+        TokKind::NativeProto(_, ns) => ns.is_some(),
         _ => is_global,
     };
     let other_global = |t: Tok| {
@@ -281,7 +281,7 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
         return false;
     };
     m.census_native_read(np, a, miss.clone());
-    let TokKind::NativeProto(native) = &m.toks[np as usize] else {
+    let TokKind::NativeProto(native, ..) = &m.toks[np as usize] else {
         return false;
     };
     let name = m.atoms[a as usize].as_str();
@@ -366,7 +366,7 @@ fn note_write(
     if t != TOP
         && !matches!(
             m.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..) | TokKind::Builtin(_)
         )
     {
         return;
@@ -1220,7 +1220,7 @@ pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
 }
 pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
     match &m.toks[np as usize] {
-        TokKind::NativeProto(n) => ns_by_name(n).is_some(),
+        TokKind::NativeProto(_, ns) => ns.is_some(),
         _ => super::global_object(m, np),
     }
 }

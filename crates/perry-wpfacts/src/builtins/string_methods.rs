@@ -549,6 +549,13 @@ fn exec_captures(m: &mut Model, t: Tok, rec: Tok, input: Option<NodeId>) {
 /// its argument. `@@split` constructs its splitter through the species
 /// constructor and runs that splitter's `exec`; `@@matchAll` keeps the
 /// generic summary.
+/// What `RegExp.prototype[@@replace]` reads of the regex besides its
+/// match state (22.2.6.11 steps 5-8 `flags`, 22.2.7.1 RegExpExec `exec`;
+/// 22.2.6.4 the `flags` getter reads the flag accessors).
+pub(crate) const REGEXP_REPLACE_READS: [&str; 10] = [
+    "exec", "flags", "global", "hasIndices", "ignoreCase", "multiline", "dotAll", "unicode", "unicodeSets", "sticky",
+];
+
 pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
     let c = m.calls[call as usize].clone();
     let recv = m.node_l("regexp");
@@ -576,6 +583,21 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             if name == "@@__perry_wk_replace" {
                 if let Some(&rv) = c.args.get(1) {
                     replace_value(m, call, rv);
+                    // Rule M9 (`Model::class_replace_strs`): every value the
+                    // result depends on runs it again.
+                    let k = Cons::ClassReplace { dst: c.ret, tok: t, repl: rv };
+                    let mut on = vec![rv];
+                    if let Some(&(p, f)) = m.regexp_ctor_args.get(&t) {
+                        on.extend([p, f]);
+                    }
+                    for key in REGEXP_REPLACE_READS {
+                        let a = m.atom(key);
+                        on.push(m.field(t, a));
+                    }
+                    for x in on {
+                        m.cons(x, k);
+                    }
+                    return;
                 }
             }
         }

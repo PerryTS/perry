@@ -110,7 +110,7 @@ impl Model {
         if !self.nodes[n as usize].enum_key {
             self.nodes[n as usize].enum_key = true;
             if super::own_read::enum_diag()
-                && matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(_))
+                && matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(..))
             {
                 static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 if SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 6 {
@@ -657,7 +657,7 @@ impl Model {
             TokKind::BuiltinFn(Native::Member { identity, .. }) => {
                 builtins::realm_function_own_props_unenumerable(identity)
             }
-            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => false,
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::NativeProto(..) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
                     (site != u32::MAX && builtins::own_values_filled(what))

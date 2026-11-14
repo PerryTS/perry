@@ -1220,7 +1220,7 @@ impl Model {
                     None => self.add_tok(n, objproto),
                 },
             },
-            TokKind::NativeProto(_) => self.add_tok(n, objproto),
+            TokKind::NativeProto(..) => self.add_tok(n, objproto),
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
@@ -2042,6 +2042,7 @@ impl Model {
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
             Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
+            Cons::ClassReplace { dst, .. } => format!("classreplace {n} {dst}"),
             Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),
             Cons::ViewedBuffer { view, fresh, share } => {
                 format!("viewedbuffer {n} {view} {fresh:?} {share}")

@@ -674,6 +674,12 @@ pub enum Cons {
         search: NodeId,
         repl: NodeId,
     },
+    /// Rule M9: the node is the replacement (or the pattern or flags
+    /// operand, or an own `exec`/flag field) of a `RegExp.prototype
+    /// [@@replace]` call on `tok` (22.2.6.11): `dst` holds a String, an
+    /// exclusion entry when `tok` is a global one-class pattern
+    /// (`Model::class_replace_strs`).
+    ClassReplace { dst: NodeId, tok: Tok, repl: NodeId },
     /// Rule M7: the node is the pattern operand of the `new RegExp(P)` that
     /// made `tok` (`Model::regexp_pattern`).
     RegExpPattern { tok: Tok },
@@ -774,6 +780,7 @@ impl Cons {
                 | Cons::CaseMap { .. }
                 | Cons::Captures { .. }
                 | Cons::StrReplace { .. }
+                | Cons::ClassReplace { .. }
                 | Cons::RegExpPattern { .. }
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
@@ -912,6 +919,7 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::Captures { .. } => "captures",
             Cons::StrReplace { .. } => "strreplace",
+            Cons::ClassReplace { .. } => "classreplace",
             Cons::RegExpPattern { .. } => "regexppattern",
             Cons::ViewedBuffer { .. } => "viewedbuffer",
             Cons::ThisTo { .. } => "thisto",

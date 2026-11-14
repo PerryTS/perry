@@ -52,7 +52,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         | TokKind::Builtin(_)
         | TokKind::BuiltinFn(_)
         | TokKind::ModNs(_)
-        | TokKind::NativeProto(_) => {
+        | TokKind::NativeProto(..) => {
             // E20: stored where the runtime / unmodeled code reads it.
             if m.explain && !m.shared_replay {
                 let kn = match _key {
@@ -574,7 +574,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 }
             }
         },
-        TokKind::NativeProto(_) => {}
+        TokKind::NativeProto(..) => {}
         // `Object.prototype`'s own members are its methods: called on it
         // they run with it as the receiver (the chain walk starts past it,
         // at its null prototype, and finds none of them).
@@ -769,7 +769,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             }
             _ => {}
         },
-        TokKind::NativeProto(name_of) => native_method(m, p, &name_of, origin, &name, call),
+        TokKind::NativeProto(name_of, ..) => native_method(m, p, &name_of, origin, &name, call),
         _ => {}
     }
 }

@@ -190,7 +190,7 @@ pub(crate) fn lookup_native_descriptor(
             }
             None
         }
-        TokKind::NativeProto(ref n) => ns_by_name(n)
+        TokKind::NativeProto(_, ns) => ns
             .and_then(loads::proto_family)
             .map(|(f, _, _)| f)
             .or(Some(Family::Opaque)),
@@ -246,7 +246,7 @@ fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, set
         }
         TokKind::ObjectProto => Some(seed_family(m, origin).unwrap_or(Family::Object)),
         TokKind::BuiltinFn(_) => Some(Family::Function),
-        TokKind::NativeProto(ref n) => Some(
+        TokKind::NativeProto(ref n, ..) => Some(
             ns_by_name(n)
                 .and_then(loads::proto_family)
                 .map(|(f, _, _)| f)

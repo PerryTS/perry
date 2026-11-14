@@ -218,6 +218,7 @@ impl Model {
             return;
         }
         self.realm_held = true;
+        self.realm_widen_strs();
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
         hs.extend((0..self.toks.len() as Tok).filter(|&t| {
             matches!(self.toks[t as usize], TokKind::Builtin(_))
@@ -227,6 +228,14 @@ impl Model {
         hs.dedup();
         for h in hs {
             self.realm_hold_tok(h, Some(reason));
+        }
+    }
+
+    /// Unknown code exists: every String form that held only while it did
+    /// not (rule M9's exclusion entries; `realm_str_dsts`) is any string.
+    pub(crate) fn realm_widen_strs(&mut self) {
+        for d in std::mem::take(&mut self.realm_str_dsts) {
+            self.add_s(d, &[], prim::STR, STRS_TOP);
         }
     }
 
@@ -266,7 +275,11 @@ impl Model {
                 crate::unksrc::held("interp", "interpreted code runs", u32::MAX, u32::MAX);
             }
         }
+        if self.keysnap.is_some() && !self.realm_held {
+            self.keysnap_at(true, "interpreted code (builtin_fields_interp)", None, u32::MAX, None);
+        }
         self.realm_held = true;
+        self.realm_widen_strs();
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
         hs.extend((0..self.toks.len() as Tok).filter(|&t| {
             matches!(self.toks[t as usize], TokKind::Builtin(_))

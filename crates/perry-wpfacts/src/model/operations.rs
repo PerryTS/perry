@@ -388,7 +388,7 @@ impl Model {
             },
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
-            TokKind::NativeProto(n) => format!("native:{n}"),
+            TokKind::NativeProto(n, ..) => format!("native:{n}"),
         }
     }
 
@@ -401,7 +401,7 @@ impl Model {
                 TokKind::ObjectProto
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn(_)
-                | TokKind::NativeProto(_) => {
+                | TokKind::NativeProto(..) => {
                     if self.field_any.contains_key(&t) {
                         Some(None)
                     } else {
@@ -483,7 +483,7 @@ impl Model {
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
                 TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
-                TokKind::NativeProto(n) => format!("nativeproto {n}"),
+                TokKind::NativeProto(n, ..) => format!("nativeproto {n}"),
             };
             out.push(format!("M tok {i} {d}"));
         }

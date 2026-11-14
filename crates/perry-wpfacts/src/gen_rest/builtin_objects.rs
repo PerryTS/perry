@@ -712,6 +712,9 @@ impl<'a> Gen<'a> {
                     if crate::builtins::regex_tail::source_is_pattern(pattern) {
                         self.m.regexp_source_of.insert(tm, pattern.to_string());
                     }
+                    if let Some(mk) = crate::builtins::regex_tail::global_class(pattern, flags) {
+                        self.m.regexp_class_of.insert(tm, mk);
+                    }
                 }
                 if let (&TokKind::Obj(tm, _), Some(tail)) =
                     (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
@@ -741,11 +744,15 @@ impl<'a> Gen<'a> {
                 read_prim(&mut self.m, p, "source", "RegExp pattern source ToString");
                 read_prim(&mut self.m, p, "flags", "RegExp pattern flags ToString");
                 to_prim(&mut self.m, p, "RegExp pattern ToString");
-                if let Some(f) = flags {
-                    let f = self.expr(fx, f);
+                let fnode = flags.as_ref().map(|f| self.expr(fx, f));
+                if let Some(f) = fnode {
                     to_prim(&mut self.m, f, "RegExp flags ToString");
                 }
                 let (t, out) = self.bobj(mi, "RegExp");
+                // Rule M9: both operands, for a global one-class pattern.
+                if let Some(f) = fnode {
+                    self.m.regexp_ctor_args.insert(t, (p, f));
+                }
                 // Rule M7 (22.2.3.2 RegExpInitialize): a pattern of one String
                 // constant and no flags operand is the object's
                 // [[OriginalSource]] with flags "", as a literal's

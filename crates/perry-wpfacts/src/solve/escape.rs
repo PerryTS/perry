@@ -55,6 +55,10 @@ impl Model {
                 crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
             }
         }
+        if self.keysnap.is_some() && !self.realm_held {
+            self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
+            self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));
+        }
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             self.hold_realm(r);
@@ -199,7 +203,7 @@ impl Model {
         }
         if matches!(
             self.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..)
         ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -258,7 +262,7 @@ impl Model {
         if !builtins::builtin_function(self, t)
             && matches!(
                 self.toks[t as usize],
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_)
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(..)
             )
         {
             // Handed to unknown code (not reached along a chain): the

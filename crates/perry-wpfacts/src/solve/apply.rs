@@ -974,7 +974,7 @@ impl Model {
                 for &q in toks {
                     if matches!(
                         self.toks[q as usize],
-                        TokKind::ObjectProto | TokKind::NativeProto(_)
+                        TokKind::ObjectProto | TokKind::NativeProto(..)
                     ) {
                         self.with_native(call, |m| builtins::proto_method(m, q, origin, key, call));
                     }
@@ -1364,7 +1364,7 @@ impl Model {
                             ChainAct::Store(_) => {}
                         },
                         TokKind::ObjectProto
-                        | TokKind::NativeProto(_)
+                        | TokKind::NativeProto(..)
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn(_) => {
                             self.with_b(|m| builtins::plain_key(m, origin, act));
@@ -1399,7 +1399,7 @@ impl Model {
                         // no iterator slots (it throws, 23.1.5.2.1, 27.5.3.3),
                         // yet stepped as an opaque call that escapes `v`.
                         TokKind::ObjectProto
-                        | TokKind::NativeProto(_)
+                        | TokKind::NativeProto(..)
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn(_) => {}
                         TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
@@ -2036,11 +2036,14 @@ impl Model {
                     // Rule M3: the result's strings are the pair's
                     // (`plus_strs`); nothing while one operand holds no
                     // value yet (its own rule adds them when it does).
-                    let strs = match (other, right) {
-                        (NO_NODE, _) => STRS_TOP,
+                    let (strs, gated) = match (other, right) {
+                        (NO_NODE, _) => (STRS_TOP, false),
                         (o, false) => self.plus_strs(n, o),
                         (o, true) => self.plus_strs(o, n),
                     };
+                    if gated && strs != STRS_TOP {
+                        self.realm_str_dsts.push(str);
+                    }
                     if strs != STRS_NONE {
                         self.add_s(str, &[], s, strs);
                     }
@@ -2090,6 +2093,16 @@ impl Model {
                 repl,
             } => {
                 if let Some(s) = self.replace_strs(recv, search, repl) {
+                    self.add_s(dst, &[], prim::STR, s);
+                }
+            }
+            // Rule M9: RegExp.prototype[@@replace] of a global one-class
+            // pattern.
+            Cons::ClassReplace { dst, tok, repl } => {
+                if let Some(s) = self.class_replace_strs(tok, repl) {
+                    if s != STRS_TOP {
+                        self.realm_str_dsts.push(dst);
+                    }
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
