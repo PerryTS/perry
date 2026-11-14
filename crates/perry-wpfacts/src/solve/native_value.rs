@@ -65,7 +65,7 @@ impl Model {
             };
             if self.bind_done.insert((call, t, r.unwrap_or(u32::MAX - 8))) {
                 self.diagnostic_callee(call, t);
-                self.with_b(|m| builtins::realm_accessor_call(m, r, call));
+                self.with_b(|m| builtins::realm_accessor_call(m, identity, r, call));
             }
             return true;
         }
