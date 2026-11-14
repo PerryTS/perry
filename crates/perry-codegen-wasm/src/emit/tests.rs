@@ -783,3 +783,21 @@ console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof 
         "2\ntrue true false false false"
     );
 }
+
+// `new` on a class value yields what [[Construct]] yields: the instance, unless the
+// constructor returns an object. A bare `return;` keeps the initialized instance.
+#[test]
+fn a_class_value_constructor_returning_no_object_yields_the_instance() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
+class O { v = 1; constructor() { return { v: 5 } as any; } }
+const EE: any = E, OO: any = O;
+const e = new EE(1);
+console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
+"#
+        ),
+        "1 1 true 2 5 false"
+    );
+}
