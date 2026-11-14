@@ -377,3 +377,59 @@ function warn(...params) { params = enh(params); const message = 'P.' + params.s
 ";
     assert_ne!(verdict_with(&format!("{src}{TWO_CALLERS}")), crate::Verdict::Dead);
 }
+// DEADFN16: the r2 shape. A console request that may consume an object
+// (`Protocol::Inspect`/`Json`: toJSON among the keys) must activate the
+// object's toJSON wherever the class chain holds it.
+const INH: &str = "class B { toJSON() { return this.w.z; } }
+class A extends B { constructor() { super(); this.v = 1; } }
+";
+#[test]
+fn dfn16_inherited_to_json_under_percent_j_runs() {
+    assert_ne!(verdict_of(&format!("{INH}console.warn(\"%j\", new A());\n")), crate::Verdict::Dead);
+}
+const ENH16: &str = "function enh(params) { const m = params[0]; if (typeof m === \"string\" && m.startsWith(\"TSL:\")) { params[1] = \"no trace\"; } return params; }
+function warn(...params) { params = enh(params); const message = \"P.\" + params.shift(); console.warn(message, ...params); }
+function error(...params) { params = enh(params); const message = \"P.\" + params.shift(); console.error(message, ...params); }
+";
+#[test]
+fn dfn16_enhanced_funnel_any_tail_with_object_runs() {
+    assert_ne!(verdict_of(&format!("{INH}{ENH16}warn(\"literal\");\nerror(\"a \" + process.env.H, new A());\n")), crate::Verdict::Dead);
+}
+#[test]
+fn dfn16_enhanced_funnel_any_tail_with_object_in_warn_runs() {
+    assert_ne!(verdict_of(&format!("{INH}{ENH16}error(\"literal\", new A());\nwarn(\"a \" + process.env.H, new A());\n")), crate::Verdict::Dead);
+}
+#[test]
+fn dfn16_enhanced_spread_percent_j_runs() {
+    assert_ne!(verdict_of(&format!("{INH}{ENH16}function f(...p) {{ p = enh(p); console.warn(\"%j\", ...p); }}\nf(new A());\n")), crate::Verdict::Dead);
+}
+// DEADFN18: the r2 state, an ACTIVE toJSON whose sites are Dead. The
+// activation pass walks the shared `enh` once for both funnels, so `error`
+// may build a `%` message from the tail `warn` passes, and its console
+// request on the A instance activates B::toJSON; the final solve runs `enh`
+// per call site (each message exact, no `%`), so no request reaches it.
+// Beside it in the same module, `console.log("%j", c)` does reach C::toJSON.
+fn site_verdict(src: &str, key: &str) -> Option<crate::Verdict> {
+    let h = hirs(&[("a", src)]);
+    let pf = run(&h, false);
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    pf.sites
+        .iter()
+        .find(|s| s.module == mi && s.key == key && !s.is_call)
+        .map(|s| s.verdict.clone())
+}
+const DFN18: &str = "class C { constructor() { this.v = 2; } toJSON() { return this.w.y; } }
+warn(\"a \" + process.env.H);
+error(\"Object3D.add: object can not be added as a child of itself.\", new A());
+console.log(\"%j\", new C());
+";
+#[test]
+fn dfn18_active_to_json_without_a_final_request_is_dead_beside_percent_j() {
+    let src = format!("{INH}{ENH16}{DFN18}");
+    // Walked (active) and Dead: the funnel's only request was the
+    // activation pass's merged one.
+    assert_eq!(site_verdict(&src, "z"), Some(crate::Verdict::Dead));
+    // `%j` really calls C::toJSON (util.format `%j`: JSON.stringify).
+    let y = site_verdict(&src, "y");
+    assert!(y.is_some() && y != Some(crate::Verdict::Dead), "{y:?}");
+}
