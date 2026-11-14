@@ -1623,6 +1623,15 @@ fn judge(
                     verdict.get_or_insert(Verdict::No("per class evaluation".into()));
                     continue;
                 }
+                // NAMED-DATA-DEFINE: the defined key carries the
+                // descriptor's attributes; a store to it may fail and a read
+                // is not claimed as a plain slot.
+                if m.defined_data.contains(&(t, s.key)) {
+                    verdict.get_or_insert(Verdict::No(
+                        "E5 key defined by a data descriptor (its attributes)".into(),
+                    ));
+                    continue;
+                }
                 if !tf.prefix_stable {
                     if !s.is_call {
                         if let Some(slot) = private_own_slot(m, tf, t, key, s.key) {

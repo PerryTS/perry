@@ -3,9 +3,9 @@
 //! `this.uuid = generateUUID()`; `bindingsByRoot[ root.uuid ]` at 55213).
 //! ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3: a data descriptor under the named
 //! key P creates or changes P alone, to [[Value]]: no other key is written,
-//! no accessor is installed. The object stays HARD (the runtime locks every
-//! defineProperty target), but its any-key field gets no "any value" seed
-//! from such a definition; any other HARD mark still seeds it, in either
+//! no accessor is installed. The object's other keys stay as they were
+//! (NAMED-DATA-DEFINE: not HARD, the defined key's own sites stay open), and
+//! its any-key field gets no "any value" seed from such a definition; any other HARD mark still seeds it, in either
 //! order. Controls: an unknown key, a delete under an unknown key (after
 //! and before the definition), an unknown descriptor, a named accessor;
 //! a descriptor from `JSON.parse` defines data.
@@ -72,11 +72,14 @@ fn named_data_define_reads_no_builtin_member() {
 #[test]
 fn named_data_define_keeps_field_values() {
     let pf = facts(&prog("", NAMED, ""));
-    // `uuid: string;` is a class field: undefined from birth until the
-    // constructor's store.
-    assert_eq!(prims(&pf, "length"), prim::STR | prim::UNDEF, "uuid");
-    // `id` is no birth key: a read may miss it (undefined), never more.
-    assert_eq!(prims(&pf, "toFixed"), prim::NUM | prim::UNDEF, "id");
+    // `uuid: string;` is a class field, undefined from birth until the
+    // constructor's store; the definition neither leaks `this` nor runs
+    // program code, and every read of `a.uuid` follows `new A()`: STR alone.
+    assert_eq!(prims(&pf, "length"), prim::STR, "uuid");
+    // The constructor defines `id` before any program code runs on `this`,
+    // in birth order (the family layout's `Defined` slot): every read of
+    // `a.id` after `new A()` sees the number `n++`, never undefined.
+    assert_eq!(prims(&pf, "toFixed"), prim::NUM, "id");
 }
 
 #[test]

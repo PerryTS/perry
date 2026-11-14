@@ -1,8 +1,8 @@
 //! FVA 4.3a: `Object.defineProperty(o, k, { get/set })` with a constant key
 //! and an accessor descriptor is an accessor key k on o's layout holding the
 //! getter, not E5 HARD, when the layout does not hold k as data. A key it
-//! holds as data, a class instance, an unknown key or a data descriptor
-//! stays E5.
+//! holds as data, a class instance or an unknown key stays E5; a data
+//! descriptor under a constant key opens that key alone (NAMED-DATA-DEFINE).
 
 use super::*;
 
@@ -80,17 +80,42 @@ fn a_key_the_layout_holds_as_data_stays_hard() {
 }
 
 #[test]
-fn a_data_descriptor_or_an_unknown_key_stays_hard() {
-    for define in [
-        r#"Object.defineProperty(m, "v", { value: 1 });"#,
-        r#"Object.defineProperty(m, String(Math.random()), { get: () => 1 });"#,
-    ] {
-        let pf = facts(&format!(
-            "const m: any = {{ tag: 2 }}; {define} function rd(o: any) {{ return o.tag; }} console.log(rd(m));"
-        ));
-        let t = lit(&pf, "tag");
-        assert!(t.hard.is_some(), "{define}\n{}", pf.dump_text());
-    }
+fn an_unknown_key_stays_hard() {
+    // An accessor under an unknown key may install a getter under any key
+    // (ECMA-262 20.1.2.4 with ToPropertyKey of an unknown value): HARD.
+    let pf = facts(
+        r#"const m: any = { tag: 2 }; Object.defineProperty(m, String(Math.random()), { get: () => 1 }); function rd(o: any) { return o.tag; } console.log(rd(m));"#,
+    );
+    let t = lit(&pf, "tag");
+    assert!(t.hard.is_some(), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_named_data_descriptor_opens_its_key_alone() {
+    // Rule NAMED-DATA-DEFINE: a data descriptor under the constant key "v"
+    // creates or changes "v" alone (ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3):
+    // the layout is not HARD, `tag` is still one load, the read of `v`
+    // stays open (its attributes are the descriptor's).
+    let pf = facts(
+        r#"const m: any = { tag: 2 }; Object.defineProperty(m, "v", { value: 1 }); function rd(o: any) { return o.tag; } console.log(rd(m), m.v);"#,
+    );
+    let t = lit(&pf, "tag");
+    assert!(t.hard.is_none(), "{}", pf.dump_text());
+    let tag = site(&pf, "tag");
+    assert!(!tag.is_empty(), "{}", pf.dump_text());
+    assert!(
+        tag.iter().all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)),
+        "{}",
+        pf.dump_text()
+    );
+    let v = site(&pf, "v");
+    assert!(!v.is_empty(), "{}", pf.dump_text());
+    assert!(
+        v.iter().all(|s| s.verdict
+            == Verdict::No("E5 key defined by a data descriptor (its attributes)".into())),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]

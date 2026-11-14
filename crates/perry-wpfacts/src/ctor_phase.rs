@@ -46,8 +46,13 @@ struct St {
     assigned: BTreeSet<String>,
 }
 
+/// The program's literal-shape classes (`{k: v}` lowers to `new
+/// __AnonShape_N(v, ...)`), by name: their field names in order.
+pub type Shapes = std::rc::Rc<std::collections::HashMap<String, Vec<String>>>;
+
 struct W {
     ph: CtorPhase,
+    shapes: Shapes,
     /// The class's own plain methods: reading one runs no code.
     methods: BTreeSet<String>,
     late: BTreeSet<String>,
@@ -55,7 +60,7 @@ struct W {
     exits: Vec<BTreeSet<String>>,
 }
 
-pub fn analyze(c: &Class) -> CtorPhase {
+pub fn analyze(c: &Class, shapes: &Shapes) -> CtorPhase {
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
         .iter()
@@ -75,7 +80,7 @@ pub fn analyze(c: &Class) -> CtorPhase {
         Some(ctor) => (&ctor.params, &ctor.body),
         None => (&[], &[]),
     };
-    let mut ph = analyze_body(&fields, methods.clone(), params, body);
+    let mut ph = analyze_body(&fields, methods.clone(), params, body, shapes.clone());
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -83,18 +88,18 @@ pub fn analyze(c: &Class) -> CtorPhase {
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(&valued, methods, params, body).definite;
+    ph.stored = analyze_body(&valued, methods, params, body, shapes.clone()).definite;
     ph
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
 pub fn analyze_fn(f: &perry_hir::Function) -> CtorPhase {
-    analyze_body(&[], BTreeSet::new(), &f.params, &f.body)
+    analyze_body(&[], BTreeSet::new(), &f.params, &f.body, Shapes::default())
 }
 
 /// Same for a closure body used as a constructor.
 pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase {
-    analyze_body(&[], BTreeSet::new(), params, body)
+    analyze_body(&[], BTreeSet::new(), params, body, Shapes::default())
 }
 
 fn analyze_body(
@@ -102,9 +107,11 @@ fn analyze_body(
     methods: BTreeSet<String>,
     params: &[perry_hir::Param],
     body: &[Stmt],
+    shapes: Shapes,
 ) -> CtorPhase {
     let mut w = W {
         ph: CtorPhase::default(),
+        shapes,
         methods,
         late: BTreeSet::new(),
         read_before: BTreeSet::new(),
@@ -360,6 +367,23 @@ impl W {
                     self.store(st, e, k);
                 }
             }
+            // `Object.defineProperty(this, "k", L)`, L a literal data
+            // descriptor (keys within value/writable/enumerable/configurable,
+            // flags literal booleans) that never names `this`: the builtin
+            // defines `k` on the receiver and hands it to no code (ECMA-262
+            // 20.1.2.4, 6.2.6.5 on the literal, 10.1.6.3). `k` joins the
+            // birth order where it is defined, as the layout family places a
+            // `Defined` key (perry-codegen `layout_families::define_stores`).
+            Expr::ObjectDefineProperty(target, key, desc)
+                if matches!(target.as_ref(), Expr::This)
+                    && matches!(key.as_ref(), Expr::String(k) if k.parse::<u32>().is_err())
+                    && literal_data_descriptor(desc, &self.shapes) =>
+            {
+                self.expr(st, desc);
+                if let Expr::String(k) = key.as_ref() {
+                    self.store(st, e, k);
+                }
+            }
             Expr::PropertyUpdate {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
@@ -390,6 +414,29 @@ impl W {
             }
         }
     }
+}
+
+/// `d` is an object literal data descriptor: its keys are within
+/// value/writable/enumerable/configurable, each flag a literal boolean, and
+/// no value names `this`.
+fn literal_data_descriptor(d: &Expr, shapes: &Shapes) -> bool {
+    let fields: Vec<(&str, &Expr)> = match d {
+        Expr::Object(fields) => fields.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+        Expr::New {
+            class_name, args, ..
+        } => match shapes.get(class_name.as_str()) {
+            Some(names) if names.len() == args.len() => {
+                names.iter().map(|k| k.as_str()).zip(args.iter()).collect()
+            }
+            _ => return false,
+        },
+        _ => return false,
+    };
+    fields.iter().all(|&(k, v)| match k {
+        "value" => !body_mentions_this(&[Stmt::Expr(v.clone())]),
+        "writable" | "enumerable" | "configurable" => matches!(v, Expr::Bool(_)),
+        _ => false,
+    })
 }
 
 pub(crate) fn body_mentions_this(body: &[Stmt]) -> bool {

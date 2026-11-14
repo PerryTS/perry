@@ -1921,6 +1921,14 @@ pub struct Model {
     /// computed when an ordered-writer check first asks (`derive`).
     pub eval_reach: FxHashMap<u32, Vec<u64>>,
     pub adds_keys: FxHashMap<TmplId, u32>,
+    /// Keys a data descriptor defines under a constant name on a program
+    /// instance (rule NAMED-DATA-DEFINE, ECMA-262 20.1.2.4 -> 7.3.8 ->
+    /// 10.1.6.3): that key alone is created or changed, with the
+    /// descriptor's attributes; the instance's other keys keep their facts.
+    /// The key's own sites stay open (`derive`): a later `[[Set]]` of a
+    /// non-writable key fails (10.1.9.2 step 2.a), and its attributes are not
+    /// a plain slot's.
+    pub defined_data: crate::pts::FxHashSet<(Tok, Atom)>,
     /// The part of `adds_keys` that came from a named store of a key the
     /// template did not list as a birth key when the store was seen
     /// (`(template, key) -> stores`). A class whose parent is the value of

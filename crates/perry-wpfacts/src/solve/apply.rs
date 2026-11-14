@@ -779,6 +779,21 @@ impl Model {
                                 ks.push(key);
                             }
                         }
+                        // Rule NAMED-DATA-DEFINE: a data descriptor under a
+                        // constant key on a program instance creates or
+                        // changes that one own property and no other
+                        // (ECMA-262 20.1.2.4 -> 7.3.8 DefinePropertyOrThrow
+                        // -> 10.1.6.3 ValidateAndApplyPropertyDescriptor).
+                        // The value reaches the field by the producer's
+                        // `Cons::Store` (an add after birth when the key is
+                        // no birth key, as `this.k = v`); get/set halves a
+                        // descriptor may still name install by its
+                        // `Cons::Accessor`. The key itself keeps its sites
+                        // open (`defined_data`): its attributes are the
+                        // descriptor's.
+                        TokKind::Obj(..) if data && !self.is_marker(t) => {
+                            self.defined_data.insert((t, key));
+                        }
                         // A data descriptor under this NAMED key writes that
                         // key alone (rule D1): HARD, no unknown write of any
                         // other field (`mark_hard_as`).

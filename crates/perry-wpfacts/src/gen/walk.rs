@@ -39,10 +39,17 @@ impl<'a> Gen<'a> {
             .collect();
         self.m.eval_deps = (0..modules.len()).map(|mi| self.eval_deps_of(mi)).collect();
         // Constructor phase analysis first (needs every class).
+        let shapes: crate::ctor_phase::Shapes = std::rc::Rc::new(
+            (0..modules.len())
+                .flat_map(|mi| self.classes_of(mi))
+                .filter(|c| c.is_literal_shape() && c.fields.iter().all(|f| f.key_expr.is_none()))
+                .map(|c| (c.name.clone(), c.fields.iter().map(|f| f.name.clone()).collect()))
+                .collect(),
+        );
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
-                let ph = crate::ctor_phase::analyze(c);
+                let ph = crate::ctor_phase::analyze(c, &shapes);
                 self.ctor_phase.insert(tm, ph);
             }
         }
