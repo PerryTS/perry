@@ -934,6 +934,26 @@ fn realm_mem(p: &RealmOwn) -> Option<Mem> {
     })
 }
 
+/// Does a function object the realm declares (a builtin function or
+/// constructor: `get [Symbol.species]` on Array, Map, ...; the host
+/// constructors' statics such as `EventEmitter.defaultMaxListeners`) own an
+/// accessor under the key atoms spell `name` (`None`: under any key)?
+pub(super) fn realm_fn_own_accessor(name: Option<&str>) -> bool {
+    crate::native_effects::realm()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                RealmKind::Constructor | RealmKind::Function | RealmKind::Method
+            )
+        })
+        .flat_map(|e| e.own.iter())
+        .any(|p| {
+            matches!(p.value, RealmOwnValue::Accessor { .. })
+                && name.is_none_or(|n| realm_key_is(p, n))
+        })
+}
+
 fn returns_receiver(e: &RealmEntry) -> bool {
     matches!(e.effects, [RealmEffect::Returns(RealmOperand::Slot(s))]
         if s.root == RealmSlotRoot::This && s.steps.is_empty())

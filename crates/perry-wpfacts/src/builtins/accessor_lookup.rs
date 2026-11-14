@@ -194,9 +194,19 @@ pub(crate) fn lookup_native_descriptor(
     let name = m.atoms[a as usize].clone();
     let family = match m.toks[holder as usize] {
         TokKind::ObjectProto => Some(seed_family(m, origin).unwrap_or(Family::Object)),
+        // The one object that holds the own fields of every builtin function
+        // (`Shared::BuiltinFn`): its answer is the join over them. A builtin
+        // function's own properties are the data properties `length`,
+        // `name` and `prototype` (10.3 CreateBuiltinFunction) and the
+        // accessors the realm declares on it (`get [Symbol.species]`, the
+        // host constructors' statics: `members::realm_fn_own_accessor`);
+        // its chain is `Function.prototype`'s (`Family::Function`: the
+        // `caller`/`arguments` accessors, then `Object.prototype`).
         TokKind::BuiltinFn(Native::Any) => {
-            m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
-            None
+            if members::realm_fn_own_accessor(Some(&name)) {
+                realm_accessor_into(m, dst);
+            }
+            Some(Family::Function)
         }
         TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::Builtin(ns) => {
@@ -259,11 +269,12 @@ fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, set
     // (DECISIONS 217, `is_proto_key`), so `Object.prototype` holds none; a
     // primitive member may be an accessor (`Map.prototype.size`); a family
     // without a member table or a namespace may hold any.
+    // The shared field object of the builtin functions (`Shared::BuiltinFn`)
+    // answers as every builtin function does: `Family::Function` has
+    // primitive members, so the realm accessors join below, and they are
+    // the values of the accessors the realm declares on builtin functions
+    // (`members::realm_fn_own_accessor`).
     let family = match m.toks[holder as usize] {
-        TokKind::BuiltinFn(Native::Any) => {
-            m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
-            return;
-        }
         TokKind::ObjectProto => Some(seed_family(m, origin).unwrap_or(Family::Object)),
         TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::NativeProto(ref n, ..) => Some(
