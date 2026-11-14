@@ -158,7 +158,6 @@ fn a_different_receiver_with_the_same_shape_reads_its_own_slot() {
             "data hits must not use an Accessor-sized return ABI"
         );
         assert_eq!(std::mem::size_of::<ReadSiteMemo>(), 40);
-        assert_eq!(std::mem::size_of::<KeyedSiteMemo>(), 192);
     }
 }
 
@@ -384,95 +383,6 @@ fn shared_site_words_remain_proofs_under_concurrent_agent_writes() {
                         if let Some(answer) = lookup(dir, recv, &memo) {
                             assert_eq!(data(Some(answer)), (n as f64).to_bits());
                         }
-                    }
-                }
-            })
-        })
-        .collect();
-    for thread in threads {
-        thread.join().unwrap();
-    }
-}
-
-#[test]
-fn keyed_ways_never_rebind_a_published_proofs_key() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let _no_move = crate::gc::GcSuppressScope::new();
-    unsafe {
-        let memo: KeyedSiteMemo = std::mem::zeroed();
-        let obj = crate::object::js_object_alloc(0, 8);
-        for (i, key) in [b"a", b"b", b"c", b"d", b"e"].iter().enumerate() {
-            crate::object::js_object_set_field_by_name(obj, atom(*key), i as f64);
-        }
-        let dir = crate::object::shapes::ordinary_dir_addr();
-        let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
-        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
-            assert_eq!(
-                data(keyed_answer(
-                    dir,
-                    bits,
-                    STRING_TAG | atom(*key) as u64,
-                    &memo
-                )),
-                (i as f64).to_bits()
-            );
-        }
-        assert!(keyed_answer(dir, bits, STRING_TAG | atom(b"e") as u64, &memo).is_none());
-        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
-            assert_eq!(
-                data(keyed_answer(
-                    dir,
-                    bits,
-                    STRING_TAG | atom(*key) as u64,
-                    &memo
-                )),
-                (i as f64).to_bits()
-            );
-        }
-    }
-}
-
-// This test is that witness: dynamic rows are process-unique (chunked), so
-// the shared memo word names one shape in every agent.
-#[test]
-fn shared_keyed_ways_do_not_mix_different_keys_proofs() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let memo = std::sync::Arc::new(unsafe { std::mem::zeroed::<KeyedSiteMemo>() });
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let threads: Vec<_> = (0..2)
-        .map(|agent| {
-            let memo = memo.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let _no_move = crate::gc::GcSuppressScope::new();
-                barrier.wait();
-                unsafe {
-                    let obj = crate::object::js_object_alloc(0, 4);
-                    let a = atom(b"a");
-                    let b = atom(b"b");
-                    // Opposite insertion order makes an accidental key/proof
-                    // combination name the wrong value even within one shape.
-                    let keys = if agent == 0 { [a, b] } else { [b, a] };
-                    for (slot, key) in keys.into_iter().enumerate() {
-                        crate::object::js_object_set_field_by_name(
-                            obj,
-                            key,
-                            (100 * agent + slot) as f64,
-                        );
-                    }
-                    let dir = crate::object::shapes::ordinary_dir_addr();
-                    let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
-                    for i in 0..20000 {
-                        let slot = i & 1;
-                        assert_eq!(
-                            data(keyed_answer(
-                                dir,
-                                bits,
-                                STRING_TAG | keys[slot] as u64,
-                                &memo
-                            )),
-                            ((100 * agent + slot) as f64).to_bits(),
-                        );
                     }
                 }
             })

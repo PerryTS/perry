@@ -672,6 +672,17 @@ fn booleans_switch_is_a_cache_input() {
     );
 }
 
+/// In-bounds reads: the switch changes which reads may yield `undefined`
+/// and which reads lose their bound and hole tests, so `=0` must never
+/// reuse an `=1` object.
+#[test]
+fn inbounds_read_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_INBOUNDS_READ"),
+        "PERRY_FACTS_INBOUNDS_READ must key the compile caches"
+    );
+}
+
 /// In-bounds index stores: the switch changes which Arrays iterate without
 /// `undefined`, and with it the exported reps and typed signatures, so `=0`
 /// must never reuse an `=1` object.
@@ -702,6 +713,20 @@ fn signed_index_switch_is_a_cache_input() {
         COMPILE_ENV_VARS.contains(&"PERRY_SIG_SIGNED_INDEX"),
         "PERRY_SIG_SIGNED_INDEX must key the compile caches"
     );
+}
+
+/// The number-index switch decides whether a method with an F64 index
+/// parameter gets a typed body in place of its index clones, and its
+/// companion how `a[k] ?? <int32>` is lowered for a Number key, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn number_index_switches_are_cache_inputs() {
+    for name in ["PERRY_SIG_NUMBER_INDEX", "PERRY_REST_DEFAULT_NUMBER_KEY"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
 }
 
 /// The local-range switch decides whether codegen's range proofs read the

@@ -318,7 +318,9 @@ impl Model {
                 "NewTargetHard reason={:?}",
                 self.reasons.get(reason as usize)
             ),
-            Cons::IdxLoad { idx, dst, shape } => {
+            Cons::IdxLoad {
+                idx, dst, shape, ..
+            } => {
                 format!(
                     "IdxLoad idx={:?} dst={:?} shape={:?}",
                     idx,

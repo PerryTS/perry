@@ -25,7 +25,14 @@ impl Model {
         self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..))
     }
     /// `Cons::IdxLoad` for one object token `t`.
-    pub(super) fn idx_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
+    pub(super) fn idx_load_tok(
+        &mut self,
+        idx: NodeId,
+        t: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+        kept: bool,
+    ) {
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
         if let Some(&a) = self.key_nodes.get(&idx) {
             self.load_from(t, t, Key::Named(a), dst);
@@ -47,21 +54,30 @@ impl Model {
         // past its end only (`Cons::ElemUndef`, watching the key and the
         // length); below it, an element or a hole (`hole`).
         let watched = self.elem_undef_watched(t);
-        if !watched {
+        // The in-bounds read (`gen/in_bounds.rs`): the key was below the
+        // length of an Array that only grows, so the read is past its end
+        // only under a key that is no index (`Model::kept_read`).
+        let kept = kept && self.kept_read(t);
+        if !watched && !kept {
             self.add_prim(dst, prim::UNDEF);
         }
         if self.idx_done.insert((idx, t, dst, 0)) {
-            if watched {
+            if watched || kept {
                 let h = self.hole(t);
                 self.edge(h, dst);
-                let len = self.arr_len(t);
                 let c = Cons::ElemUndef {
                     obj: t,
                     key: idx,
                     dst,
                 };
+                if kept {
+                    self.kept_reads.entry(t).or_default().push((idx, dst));
+                }
                 self.cons(idx, c);
-                self.cons(len, c);
+                if watched {
+                    let len = self.arr_len(t);
+                    self.cons(len, c);
+                }
             }
             self.plain_key(t, ChainAct::Load(dst));
             self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
@@ -91,7 +107,7 @@ impl Model {
     /// `Cons::IdxOwnLoad` for one object token `t`.
     pub(super) fn idx_own_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
         if !self.own_read_obj(t) {
-            return self.idx_load_tok(idx, t, dst, shape);
+            return self.idx_load_tok(idx, t, dst, shape, false);
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
@@ -264,7 +280,15 @@ impl Model {
     fn own_gate(&mut self, obj: NodeId, idx: NodeId, dst: NodeId, shape: KeyShapeId) {
         if self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
-            self.cons(obj, Cons::IdxLoad { idx, dst, shape });
+            self.cons(
+                obj,
+                Cons::IdxLoad {
+                    idx,
+                    dst,
+                    shape,
+                    kept: false,
+                },
+            );
         }
     }
 }
