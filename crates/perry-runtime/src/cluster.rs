@@ -758,9 +758,10 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     // The export declaration owns EventEmitter and its statics (no events
-    // attach hook is installed by a cluster-only program); it is read through
-    // the slot the events install fills (`js_nm_install_cluster` runs it).
-    let event_emitter = crate::stream_hooks::event_emitter_constructor_value("EventEmitter");
+    // attach hook is installed by a cluster-only program). Named directly:
+    // only the cluster `Worker` export reaches this, and a synthetic cluster
+    // module reads its static exports before it runs `js_nm_install_cluster`.
+    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
