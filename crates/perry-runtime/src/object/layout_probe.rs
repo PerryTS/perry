@@ -1359,13 +1359,14 @@ unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
             // identity (`%Function.prototype%` until a link moves it).
             // A bound function's intrinsic `name` and `length` are its
             // target's, not static data of a body: those keys decline.
-            (
-                (*c).props as *const ObjectHeader,
-                plain
-                    .then(|| crate::object::shapes::shape_proto_id((*c).shape_id))
-                    .flatten(),
-                plain,
-            )
+            let proto = if plain {
+                crate::object::shapes::shape_proto_id((*c).shape_id)
+            } else if dictionary_function_reads_through(c, hash) {
+                Some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION)
+            } else {
+                None
+            };
+            ((*c).props as *const ObjectHeader, proto, plain)
         }
         _ => return hole(),
     };
@@ -1459,6 +1460,47 @@ unsafe fn bound_on_described_shape(c: *const crate::closure::ClosureHeader, hash
         && (*info).code == crate::closure::BOUND_FUNCTION_FUNC_PTR
         && (*c).shape_id != crate::closure::shape::function_dictionary_shape()
         && !matches!(hash, NAME | LENGTH | PROTOTYPE)
+}
+
+/// Does a read of `c` for the key hashed `hash`, once its bag proved the key
+/// absent, continue at `%Function.prototype%`? True for a plain function body
+/// on FunctionDictionary only because its bag holds an accessor
+/// (`Array[Symbol.species]`): its own string keys, accessors included, are
+/// its bag's, and with no internal state record it has no recorded
+/// [[Prototype]] and no deleted marker. The synthesized intrinsic `name`,
+/// `length` and `prototype`, and the perf_hooks `supportedEntryTypes`
+/// static the complete read synthesizes, decline (#12720).
+///
+/// # Safety
+/// `c` is a live closure cell.
+#[inline(never)]
+unsafe fn dictionary_function_reads_through(
+    c: *const crate::closure::ClosureHeader,
+    hash: u64,
+) -> bool {
+    use crate::object::runtime_layouts::atom_hash as h;
+    const NAME: u64 = h(b"name");
+    const LENGTH: u64 = h(b"length");
+    const PROTOTYPE: u64 = h(b"prototype");
+    const SUPPORTED_ENTRY_TYPES: u64 = h(b"supportedEntryTypes");
+    let info = (*c).info;
+    if info.is_null()
+        || (*c).props.is_null()
+        || (*c).shape_id != crate::closure::shape::function_dictionary_shape()
+        || crate::closure::shape::is_class_info(info)
+        || matches!(hash, NAME | LENGTH | PROTOTYPE | SUPPORTED_ENTRY_TYPES)
+    {
+        return false;
+    }
+    let code = (*info).code;
+    code != crate::closure::BOUND_FUNCTION_FUNC_PTR
+        && code != crate::closure::BOUND_METHOD_FUNC_PTR
+        && (*info).flags
+            & (crate::closure::FN_ASYNC
+                | crate::closure::FN_GENERATOR
+                | crate::closure::FN_ASYNC_GENERATOR)
+            == 0
+        && !crate::closure::props::has_state(c as usize)
 }
 
 /// [`chain_from`] from an exotic receiver's builtin prototype `next`: there
