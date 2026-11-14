@@ -257,6 +257,8 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
 
 // Read the realm intrinsic through the same private slot machinery as matcher
 // data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
+// Inlined into its one caller (`prepare_shape`), as it always was.
+#[inline(always)]
 pub(crate) fn intrinsic_prototype() -> f64 {
     // `RegExp` is a phase-A family: the realm's core holds its private slot.
     let global = crate::object::realm_core();
