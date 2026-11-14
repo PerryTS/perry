@@ -8,6 +8,21 @@ use super::*;
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_objects(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
+            // `super[key](args)` in an object-literal method: `home` is the literal, and
+            // the lookup starts at its [[Prototype]]. A class method's home is its class.
+            Expr::ObjectSuperMethodCall {
+                home,
+                key,
+                receiver,
+                args,
+            } if self.current_class.is_none() => {
+                self.emit_frame_begin(func, 4);
+                self.emit_store_arg(func, 0, home);
+                self.emit_store_arg(func, 1, key);
+                self.emit_store_arg(func, 2, receiver);
+                self.emit_store_arg(func, 3, &Expr::Array(args.clone(), None));
+                self.emit_memcall(func, "object_super_call", 4);
+            }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "object_new", 0);
