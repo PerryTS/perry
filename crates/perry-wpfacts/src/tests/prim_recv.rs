@@ -111,13 +111,15 @@ fn control_object_with_own_member_beside_string_and_undefined() {
 }
 
 #[test]
-fn control_absent_key_on_string_or_undefined() {
+fn absent_key_on_string_or_undefined_read_claimed_call_open() {
     let pf = one(&format!(
         "{C}const s: any = c ? \"ab\" : undefined;\nconsole.log(s.isColor, s.getHex());\n"
     ));
-    for k in [at(&pf, "isColor", false), at(&pf, "getHex", true)] {
-        assert!(none(&k, "NativeMember") && none(&k, "Throws") && none(&k, "OwnDataOrAbsent"), "{k:?}");
-    }
+    // Shape A (PRIMRECV3): the read is the absent claim with the TypeError
+    // arm; the call stays open (Throws is before any property lookup).
+    assert!(all(&at(&pf, "isColor", false), "OwnDataOrAbsent"));
+    let k = at(&pf, "getHex", true);
+    assert!(none(&k, "NativeMember") && none(&k, "Throws") && none(&k, "OwnDataOrAbsent"), "{k:?}");
 }
 
 #[test]
@@ -201,4 +203,121 @@ fn typeof_guarded_undeclared_global_verdict() {
         ));
         let _ = at(&pf, "m", true);
     }
+}
+
+// ---------------------------------------------------------------- PRIMRECV3
+
+/// PRIMRECV3 step 1: `get RegExp.prototype.source` (ECMA-262 22.2.6.13) of a
+/// RegExp object reads its [[OriginalSource]] slot (EscapeRegExpPattern):
+/// always a String. `RegExp.prototype`'s `source` is an image member, which
+/// the lock refuses to every mutation, so the getter is the one that runs.
+#[test]
+#[ignore = "PRIMRECV3 step 1 open: load_from seeds undefined for a key no sure own data holds (solve/lookup.rs `!present` arm) before the RegExp getter's String"]
+fn regexp_source_of_a_regexp_object_is_a_string() {
+    let exact = |pf: &ProgramFacts| {
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "replace")
+            .all(|s| s.receivers == vec!["primitive:string".to_string()])
+    };
+    let pf = one(&format!(
+        "{C}const r = c ? /a/ : /b+/;\nconsole.log(r.source.replace(\"a\", \"b\"));\n"
+    ));
+    assert!(all(&at(&pf, "replace", true), "NativeMember") && exact(&pf));
+    let pf = one(&format!(
+        "{C}function mk(p: string) {{ return new RegExp(p, \"g\"); }}\n\
+         const r = c ? mk(\"a\") : mk(\"b\");\nconsole.log(r.source.replace(\"a\", \"b\"));\n"
+    ));
+    assert!(all(&at(&pf, "replace", true), "NativeMember") && exact(&pf));
+}
+
+/// Control: the receiver may be `%RegExp.prototype%` itself, which has no
+/// [[OriginalSource]] (22.2.6.13 step 3): not this rule.
+#[test]
+fn control_regexp_source_of_the_prototype_itself() {
+    let pf = one(&format!(
+        "{C}const r: any = c ? /a/ : RegExp.prototype;\nconsole.log(r.source.replace(\"a\", \"b\"));\n"
+    ));
+    assert!(none(&at(&pf, "replace", true), "NativeMember"));
+}
+
+/// Control: an own `source` (a literal beside it, or one defined on the
+/// RegExp object) is what the read finds, not the getter.
+#[test]
+fn control_own_source_is_not_the_getter() {
+    let pf = one(&format!(
+        "{C}const r: any = c ? /a/ : {{ source: 1 }};\nconsole.log(r.source.replace(\"a\", \"b\"));\n"
+    ));
+    assert!(none(&at(&pf, "replace", true), "NativeMember"));
+    let pf = one(&format!(
+        "{C}const r: any = /a/;\nObject.defineProperty(r, \"source\", {{ value: 1 }});\n\
+         console.log(r.source.replace(\"a\", \"b\"));\n"
+    ));
+    assert!(none(&at(&pf, "replace", true), "NativeMember"));
+}
+
+const HOLD: &str = "declare function hostTake(x: any): void;\nhostTake(0);\n";
+
+/// Shape A: a key no family prototype of the primitives (nor
+/// `%Object.prototype%`) holds and the program never writes there:
+/// GetV's ToObject wrapper owns no such key (a String wrapper owns its
+/// indices and `length` only, 10.4.3), so OrdinaryGet gives `undefined`.
+#[test]
+fn a_absent_key_on_strings() {
+    let pf = one(&format!("{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"));
+    assert!(all(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
+}
+
+#[test]
+fn a_absent_key_across_three_families() {
+    let pf = one(&format!(
+        "{C}const x: any = c ? \"a\" : d ? 1 : true;\nconsole.log(x.isStackTrace);\n"
+    ));
+    assert!(all(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
+}
+
+/// Nullish beside the primitives: the TypeError arm is named.
+#[test]
+fn a_absent_key_beside_nullish_names_the_type_error_arm() {
+    let pf = one(&format!("{C}const s: any = c ? \"a\" : undefined;\nconsole.log(s.isStackTrace);\n"));
+    assert!(all(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
+    assert!(pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "isStackTrace")
+        .all(|s| s.receivers.iter().any(|r| r.ends_with("(TypeError)"))));
+}
+
+#[test]
+fn control_absent_key_held_realm() {
+    let pf = one(&format!("{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"));
+    assert!(none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
+}
+
+#[test]
+fn control_absent_key_written_on_a_prototype() {
+    for w in ["(String.prototype as any).isStackTrace = 1;", "(Object.prototype as any).isStackTrace = 1;"] {
+        let pf = one(&format!(
+            "{C}{w}\nconst s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
+        ));
+        assert!(none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"), "{w}");
+    }
+}
+
+#[test]
+fn control_absent_shape_needs_an_absent_key() {
+    // `length` of a String, an index, and a member of the chain.
+    let pf = one(&format!(
+        "{C}const x: any = c ? \"a\" : 1;\nconsole.log(x.length, x[0], x.toString);\n"
+    ));
+    assert!(none(&at(&pf, "length", false), "OwnDataOrAbsent"));
+    assert!(none(&at(&pf, "toString", false), "OwnDataOrAbsent"));
+}
+
+/// A call of an absent member: printed, left open (Throws names a TypeError
+/// before any property lookup; this one is after the arguments).
+#[test]
+fn a_call_of_an_absent_member_verdict() {
+    let pf = one(&format!("{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.getLocation(1));\n"));
+    assert!(none(&at(&pf, "getLocation", true), "Throws"));
 }

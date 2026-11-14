@@ -864,6 +864,10 @@ pub(crate) enum NativeFamily {
     /// Native Promise objects (`TmplKind::BObj { what: "Promise" }`, made
     /// by the realm: their [[Prototype]] is `%Promise.prototype%`).
     Promise,
+    /// Primitive Booleans: a member is `%Boolean.prototype%`'s (7.3.2 GetV;
+    /// a Boolean wrapper owns no property, 20.3.4). Only the absent-key
+    /// claim (`derive::family_absent`) is over it; no NativeMember.
+    Bool,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -882,6 +886,7 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::RegExp => regexp_slot_getter(name).map(Mem::Prim),
         NativeFamily::Num => members::intrinsic_member(Family::Num, name),
         NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
+        NativeFamily::Bool => members::intrinsic_member(Family::Bool, name),
     };
     match mem {
         Some(Mem::Fn) => true,
@@ -935,8 +940,15 @@ pub(crate) fn object_proto_lacks(name: &str) -> bool {
 /// `%Array.prototype%`'s intrinsic description lacks `name`, and so does
 /// `%Object.prototype%`'s, which follows it on an array's chain
 /// (`derive::array_absent`).
-pub(crate) fn array_chain_lacks(name: &str) -> bool {
-    members::member(members::Family::Array, name).is_none()
+pub(crate) fn family_chain_lacks(fam: NativeFamily, name: &str) -> bool {
+    let f = match fam {
+        NativeFamily::Array => members::Family::Array,
+        NativeFamily::Str => members::Family::Str,
+        NativeFamily::Num => members::Family::Num,
+        NativeFamily::Bool => members::Family::Bool,
+        _ => return false,
+    };
+    members::member(f, name).is_none()
 }
 
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
@@ -1198,6 +1210,7 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         NativeFamily::Buffer => false,
         NativeFamily::Num => members::locked_read(Family::Num, None, name),
         NativeFamily::Promise => members::locked_read(Family::Promise, None, name),
+        NativeFamily::Bool => members::locked_read(Family::Bool, None, name),
     }
 }
 

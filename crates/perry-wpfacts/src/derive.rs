@@ -203,6 +203,11 @@ pub enum Verdict {
     /// key (the `absent_key` walk over the chain): OrdinaryGet (ECMA-262
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
+    /// Also over an Array exotic object (`array_absent`) and over String,
+    /// Number and Boolean primitives (`prim_absent`: GetV's wrapper, 7.3.2)
+    /// whose families' chains lack a key nothing writes there
+    /// (`family_absent`); `undefined`/`null` beside the primitives are
+    /// named as their TypeError arm (the read's own type dispatch).
     OwnDataOrAbsent,
     /// A member read or method call whose receiver node holds only
     /// `undefined` and/or `null` (no object token but closed markers, no ⊤,
@@ -1324,7 +1329,10 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let only_prims = prim != 0 && toks.iter().all(|&t| m.closed_marker(t));
         if (verdict == Verdict::Throws
             || ((nullish || only_prims)
-                && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
+                && matches!(
+                    verdict,
+                    Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
+                )))
             && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -1819,6 +1827,12 @@ fn judge(
         if prim & !(NULL | UNDEF) == 0 {
             verdict.get_or_insert(Verdict::Throws);
         }
+        if !s.is_call {
+            if let Some(r) = prim_absent(m, key, s.key, toks, prim) {
+                receivers.extend(r);
+                verdict.get_or_insert(Verdict::OwnDataOrAbsent);
+            }
+        }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     let mut targets = FxHashMap::default();
@@ -2209,10 +2223,6 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
         && exact_array(m, t)
         && key != "length"
-        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
-        && !matches!(key, "Infinity" | "NaN")
-        && !m.is_private_atom(a)
-        && !m.optimistic_json_key
         && holds_nothing(m.fields.get(&(t, a)))
         && holds_nothing(if m.elems_apart(t) {
             m.named_any.get(&t)
@@ -2225,9 +2235,60 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && !m.super_relink.contains(&t)
         && !m.hard.contains_key(&t)
         && !m.is_escaped(t)
-        && crate::builtins::array_chain_lacks(key)
+        && family_absent(m, crate::builtins::NativeFamily::Array, key, a)
+}
+
+/// Key `a` (`key`) is absent on every value of family `fam` (an Array
+/// exotic object `array_absent` admits, a String, Number or Boolean
+/// primitive): no own key of such a value (an array's indices and
+/// `length`, a String wrapper's indices and `length`, 10.4.2, 10.4.3; a
+/// Number or Boolean wrapper owns none), the family's intrinsic chain to
+/// `%Object.prototype%` lacks it, and nothing writes it there (the
+/// program, a store through ⊤, interpreted code, unknown code holding the
+/// realm: `builtin_protos_unwritten`). OrdinaryGet (10.1.8.1), for a
+/// primitive on GetV's ToObject wrapper (7.3.2), gives `undefined`.
+fn family_absent(m: &Model, fam: crate::builtins::NativeFamily, key: &str, a: Atom) -> bool {
+    key != "length"
+        && key != "__proto__"
+        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !matches!(key, "Infinity" | "NaN")
+        && !m.is_private_atom(a)
+        && !m.optimistic_json_key
+        && crate::builtins::family_chain_lacks(fam, key)
         && object_proto_unwritten(m, a)
-        && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), a).is_ok()
+        && builtin_protos_unwritten(m, Some(fam), a).is_ok()
+}
+
+/// Shape A: a named read whose receiver set holds only primitives (no
+/// token but closed markers), each of the String, Number and Boolean
+/// families with `family_absent`, `undefined`/`null` beside them naming
+/// their TypeError arm (`nullish_arms`: the read's own dispatch on the
+/// value's kind throws for them, 6.2.5.5, 7.1.18). The receivers.
+fn prim_absent(m: &Model, key: &str, a: Atom, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    use crate::builtins::NativeFamily as F;
+    use crate::model::prim::{BOOL, NUM, STR};
+    if !toks.iter().all(|&t| m.closed_marker(t)) {
+        return None;
+    }
+    let (rest, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
+    if rest == 0 || rest & !(STR | NUM | BOOL) != 0 {
+        return None;
+    }
+    for (bit, fam, name) in [
+        (STR, F::Str, "primitive:string"),
+        (NUM, F::Num, "primitive:number"),
+        (BOOL, F::Bool, "primitive:boolean"),
+    ] {
+        if rest & bit == 0 {
+            continue;
+        }
+        if !family_absent(m, fam, key, a) {
+            return None;
+        }
+        receivers.push(name.to_string());
+    }
+    receivers.sort();
+    Some(receivers)
 }
 
 /// `%Object.prototype%` holds nothing stored under `a` by the program: no
@@ -2300,7 +2361,7 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
     match fam {
         // A primitive owns no property ToObject's wrapper would not get
         // from its prototype (a Number wrapper owns no string key).
-        NativeFamily::Str | NativeFamily::Num => true,
+        NativeFamily::Str | NativeFamily::Num | NativeFamily::Bool => true,
         // `__proto__` (or a computed key that may be it) stored into it.
         NativeFamily::Array if m.super_relink.contains(&t) => false,
         NativeFamily::Array => match m.fields.get(&(t, a)) {
