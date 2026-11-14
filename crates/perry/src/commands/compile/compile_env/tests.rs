@@ -663,6 +663,16 @@ fn slice_births_switch_is_a_cache_input() {
     );
 }
 
+/// Booleans: the switch changes how the truthiness of a proven Boolean is
+/// lowered, so `=0` must never reuse an `=1` object.
+#[test]
+fn booleans_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_BOOLEANS"),
+        "PERRY_FACTS_BOOLEANS must key the compile caches"
+    );
+}
+
 /// In-bounds index stores: the switch changes which Arrays iterate without
 /// `undefined`, and with it the exported reps and typed signatures, so `=0`
 /// must never reuse an `=1` object.

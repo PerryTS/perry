@@ -401,6 +401,10 @@ pub struct ElisionFacts {
     /// born shared, never appended to in place, so a copy of one needs no
     /// string demote (`expr::literal_strings`).
     pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose every value is `true` or `false` (wpfacts
+    /// `BindingFacts::booleans`): the truthiness of a read is one compare
+    /// (`expr::booleans`).
+    pub boolean_locals: std::collections::BTreeSet<u32>,
     /// Locals whose every String is the string pool's one String of its
     /// spelling (wpfacts `BindingFacts::literal_atoms`): `x === "lit"` is
     /// one pointer compare (`expr::literal_atoms`).
@@ -430,6 +434,10 @@ pub struct ElisionFacts {
     /// such Strings into (wpfacts `FieldFacts::literal_strings`,
     /// `FieldProof::literal_strings`).
     pub literal_string_fields: std::collections::BTreeSet<(u32, String)>,
+    /// Class fields (class id, key) every store of the program puts only
+    /// Booleans into (wpfacts `FieldFacts::booleans`,
+    /// `FieldProof::booleans`).
+    pub boolean_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class fields (class id, key) whose every String is the string
     /// pool's one String of its spelling (wpfacts
     /// `FieldFacts::literal_atoms`, `FieldProof::literal_atoms`).
@@ -623,6 +631,7 @@ impl ElisionFacts {
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
+            && self.boolean_locals.is_empty()
             && self.literal_atom_locals.is_empty()
             && self.stable_length_locals.is_empty()
             && self.named_length_locals.is_empty()

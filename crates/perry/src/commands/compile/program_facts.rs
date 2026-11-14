@@ -811,6 +811,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.literal_strings {
                 out.literal_string_locals.insert(*id);
             }
+            if b.booleans {
+                out.boolean_locals.insert(*id);
+            }
             if b.literal_atoms {
                 out.literal_atom_locals.insert(*id);
             }
@@ -907,6 +910,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 // Interpreted code can store any string.
                 if f.literal_strings && !interp {
                     out.literal_string_fields.insert((cid, f.key.clone()));
+                }
+                // Interpreted code can store anything.
+                if f.booleans && !interp {
+                    out.boolean_fields.insert((cid, f.key.clone()));
                 }
                 if f.literal_atoms && !interp {
                     out.literal_atom_fields.insert((cid, f.key.clone()));

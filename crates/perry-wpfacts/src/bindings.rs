@@ -405,6 +405,9 @@ pub struct BindingFacts {
     /// program string literal (`literal_strings`): born shared, never
     /// appended to in place.
     pub literal_strings: bool,
+    /// Every value it holds is `true` or `false` (`booleans`): the slot's
+    /// word is `TAG_TRUE` or `TAG_FALSE`.
+    pub booleans: bool,
     /// `literal_strings`, and every such literal is one the string pool
     /// atomises (`literal_strings::atoms`): each String it holds is the
     /// pool's one String of its spelling.
@@ -903,6 +906,7 @@ fn facts_of(g: &Gen, nodes: &[NodeId]) -> BindingFacts {
     out.bodies = bodies_with_contracts(g, nodes);
     out.class_object = class_object_of(m, nodes);
     out.literal_strings = crate::literal_strings::holds(m, nodes);
+    out.booleans = crate::booleans::holds(m, nodes);
     out.literal_atoms = out.literal_strings && crate::literal_strings::atoms(m, nodes);
     out.rep = match arr_rep(m, nodes) {
         Some(r) => Rep::Arr(r),

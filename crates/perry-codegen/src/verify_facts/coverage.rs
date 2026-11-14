@@ -62,6 +62,8 @@ pub(crate) enum Fact {
     /// A call's result kinds (wpfacts `call_kinds`): a string operand.
     CallKinds,
     LiteralString,
+    /// A local or a field holds only Booleans (wpfacts `booleans`).
+    Boolean,
     /// A local or a field holds, as Strings, only pool atoms (wpfacts
     /// `literal_strings::atoms`).
     LiteralAtom,
@@ -139,6 +141,7 @@ impl Fact {
             Self::WideKey => "wide key",
             Self::CallKinds => "call kinds",
             Self::LiteralString => "literal string",
+            Self::Boolean => "boolean",
             Self::LiteralAtom => "literal atom",
             Self::HeldLength => "held length",
             Self::NamedLength => "named length",
