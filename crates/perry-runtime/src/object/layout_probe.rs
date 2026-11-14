@@ -931,19 +931,14 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     // here, with no frame: its own value word, or the word of the fixed
     // inline slot it refers to. An accessor pair, a spilled fixed slot and
     // a miss are tails.
-    let Some(entry) =
-        crate::object::overflow::find_hashed_with(table, key_bits, || {
-            site_key_hash::<LAZY_HASH>(key_bits, hash)
-        })
-    else {
+    let Some(entry) = crate::object::overflow::find_hashed_with(table, key_bits, || {
+        site_key_hash::<LAZY_HASH>(key_bits, hash)
+    }) else {
         return owned_miss::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
     };
-    let Some(word) = crate::object::overflow::found_data_word(
-        table,
-        obj,
-        entry,
-        (*r).live_inline_slot_count,
-    ) else {
+    let Some(word) =
+        crate::object::overflow::found_data_word(table, obj, entry, (*r).live_inline_slot_count)
+    else {
         return owned_found::<ABSENT>(table, obj, entry, r, key_bits);
     };
     let value = f64::from_bits(word);
