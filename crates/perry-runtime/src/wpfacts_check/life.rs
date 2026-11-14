@@ -59,6 +59,9 @@ pub(super) struct Table {
     bets_reported: std::collections::HashSet<u64>,
     /// `collection_count` the table is in sync with.
     synced: u64,
+    /// A synchronous full ran its marks through `life_measure::full_marked`
+    /// (an observed collection: it neither moves nor reuses a young claim's object).
+    pub(super) full_pending: bool,
 }
 
 /// Run totals, printed at exit (`PERRY_VERIFY_FACTS_LIFE_REPORT`): plain
@@ -94,6 +97,47 @@ pub(super) fn with<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
 /// The first death of the run installs the table and the collector hooks:
 /// only these check-build entries reach it, so a release program references
 /// no installer.
+/// The ONE predicate of "alive at a boundary" that a synchronous full decides,
+/// shared by the lifetime probes (`life_measure.rs`) and the regions
+/// (`life_regions.rs`): the full's mark (or a pin) on the object at user
+/// address `addr`. Read between the full's mark propagation and its sweep.
+pub(super) fn full_alive(addr: usize) -> bool {
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 }
+}
+
+/// Does a probe minor's reach decide "alive at the boundary" by itself? Only
+/// when the walk reached the object from a root (`holder` 0..=3: frame, outer
+/// frame, shadow stack, global; the order of both probes' holder columns). A
+/// minor treats every old object as alive, so a reach through the remembered
+/// set (4), another object (5) or an unnamed phase (6) may come from a dead,
+/// not yet collected old object (LIFE I3f): the probe confirms it with a
+/// synchronous full (`full_alive`). The ONE predicate of both probes.
+/// `PERRY_FACTS_SABOTAGE=lifeminor` (negative control) keeps every minor verdict.
+pub(super) fn minor_decides(holder: u8) -> bool {
+    static SABOTAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    holder <= 3
+        || *SABOTAGE
+            .get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifeminor"))
+}
+
+/// Is the object at user address `addr` private key/attribute storage of a
+/// shape (`GC_FLAG_SHAPE_SHARED`, gc/types.rs)? Engine metadata, never a JS
+/// value: the shape table re-mints such a list after a full pruned its shape
+/// and its carrier gate holds the list while no JS reference exists (LIFE I3d),
+/// so it is never part of a region's inside set. A census birth of compiled
+/// code (a lifetime sample) is a JS value and never such storage.
+/// `PERRY_FACTS_SABOTAGE=lifemeta` (negative control) counts it as a JS value.
+pub(super) fn engine_metadata(addr: usize) -> bool {
+    static SABOTAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *SABOTAGE.get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifemeta"))
+    {
+        return false;
+    }
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    unsafe { (*header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 }
+}
+
 pub(super) fn ensure() {
     if TABLE.with(|t| t.borrow().is_none()) {
         install();
@@ -113,6 +157,11 @@ fn young_addr(bits: u64) -> Option<usize> {
 /// may be freed and its address reused, so the table is dropped.
 pub(super) fn sync(t: &mut Table) {
     let now = crate::gc::diagnostic_hooks::life_collection_count();
+    if now == t.synced + 1 && std::mem::take(&mut t.full_pending) {
+        t.synced = now;
+        return;
+    }
+    t.full_pending = false;
     if now != t.synced {
         bump(&totals::DROPPED_UNOBSERVED, t.claims.len() as u64);
         let probes: Vec<u32> = t
@@ -149,6 +198,7 @@ fn install() {
 
 /// A copied minor starts: every claim is a from-space object.
 fn before_minor() {
+    super::life_regions::before_minor();
     let _ = with(|t| {
         sync(t);
         // A minor neither reaches nor frees an object outside the nursery
@@ -163,6 +213,7 @@ fn before_minor() {
 
 /// The copied minor ended: every claim it did not reach is freed.
 fn after_minor() {
+    super::life_regions::after_minor();
     let _ = with(|t| {
         bump(&totals::CHECKED_MINORS, 1);
         let died: Vec<u32> = t
@@ -183,6 +234,7 @@ fn after_minor() {
 
 /// The copied minor reached the object at `old` (now at `new`).
 fn reached(old: usize, new: usize) {
+    super::life_regions::reached(old, new);
     let hit = with(|t| {
         let c = t.from.remove(&old)?;
         match c.state {
@@ -238,7 +290,9 @@ fn report(
         Some(p) => line.push_str(&format!("\"{p}\"")),
         None => line.push_str("null"),
     }
-    if let Some((function, ip, slot)) = frame.filter(|_| phase.is_some_and(|p| p.contains("native"))) {
+    if let Some((function, ip, slot)) =
+        frame.filter(|_| phase.is_some_and(|p| p.contains("native")))
+    {
         line.push_str(&format!(
             ",\"frame\":{{\"function\":\"{}\",\"function_address\":{function},\"ip\":{ip},\"slot\":{slot}}}",
             symbol(function)
@@ -275,6 +329,7 @@ fn site_identity(metadata: &[u8]) -> u64 {
     h.finish()
 }
 
+#[cfg(unix)]
 fn symbol(addr: usize) -> String {
     unsafe {
         let mut info: libc::Dl_info = std::mem::zeroed();
@@ -287,13 +342,24 @@ fn symbol(addr: usize) -> String {
     "?".to_string()
 }
 
+/// `dladdr` is POSIX; elsewhere every address is the unknown symbol.
+#[cfg(not(unix))]
+fn symbol(_addr: usize) -> String {
+    "?".to_string()
+}
+
 fn write_stderr(mut rest: &[u8]) {
     while !rest.is_empty() {
-        let n = unsafe { libc::write(2, rest.as_ptr().cast(), rest.len().min(i32::MAX as usize) as _) };
+        let n = unsafe {
+            libc::write(
+                2,
+                rest.as_ptr().cast(),
+                rest.len().min(i32::MAX as usize) as _,
+            )
+        };
         if n > 0 {
             rest = &rest[n as usize..];
-        } else if n < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
         {
             continue;
         } else {
@@ -340,7 +406,13 @@ fn die(addr: Option<usize>, site: i64, len: i64, every: i64) {
 /// A `frame` local's object dies (`kind` 0: an unset slot is a binding
 /// that was never born on this path).
 #[no_mangle]
-pub extern "C" fn perry_verify_facts_life_dead(bits: i64, kind: i64, every: i64, site: i64, len: i64) {
+pub extern "C" fn perry_verify_facts_life_dead(
+    bits: i64,
+    kind: i64,
+    every: i64,
+    site: i64,
+    len: i64,
+) {
     ensure();
     let bits = bits as u64;
     let addr = young_addr(bits);
@@ -394,7 +466,11 @@ pub extern "C" fn perry_verify_facts_life_arg_dead(token: i64, every: i64, site:
         sync(t);
         let addr = t.tokens.remove(&(token as u64));
         match addr {
-            Some(a) if t.claims.get(&a).is_some_and(|c| c.state == State::Pending(token as u64)) => {
+            Some(a)
+                if t.claims
+                    .get(&a)
+                    .is_some_and(|c| c.state == State::Pending(token as u64)) =>
+            {
                 t.claims.remove(&a);
                 Some(a)
             }

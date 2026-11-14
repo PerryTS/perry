@@ -5,11 +5,11 @@ pub(crate) fn value_bits_are_numeric(value_bits: u64) -> bool {
 
 #[inline]
 pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
-    // An INT32 number (a `C.prototype` ref word, bit 32 set, is not one and is
-    // refused by the tag-band check below).
-    if (value_bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
-        let lower = (value_bits & crate::value::INT32_MASK) as u32;
-        return Some((lower as i32) as f64);
+    // An I32 slot word (`layout_slot`): this also classifies raw slot words,
+    // and an at-rest Array's slots hold them. No JS value is one (P3 B4b);
+    // every other internal word is refused by the tag-band check below.
+    if crate::layout_slot::is_i32_word(value_bits) {
+        return Some((value_bits as u32 as i32) as f64);
     }
     let upper = value_bits >> 48;
     if (0x7FF9..=0x7FFF).contains(&upper) || upper == (crate::value::HANDLE_TAG >> 48) {

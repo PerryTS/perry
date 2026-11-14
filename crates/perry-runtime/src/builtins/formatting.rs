@@ -26,16 +26,16 @@ pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
     js_boxed_symbol_new,
 };
+mod array_layout;
 mod collections;
 mod identity_equality;
 mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
-mod array_layout;
 pub(crate) use util_format::install_json_format;
 mod value_repr;
-pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
+pub(crate) use value_repr::is_array_hole;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 pub use util_format::{js_util_format, js_util_format_with_options, js_util_inspect};
@@ -773,7 +773,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                             );
                         }
                         let rendered = format_jsvalue(elem, depth + 1);
-                        let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                        let numeric = value_repr::entry_is_numeric(elem);
                         value_repr::ArrayEntry::new(rendered, numeric)
                     });
                     if inspect_show_hidden() {
@@ -829,10 +829,6 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     "[object Object]".to_string()
                 }
             }
-        } else if jsval.is_int32() {
-            // Shares its tag with a class reference; `int32_or_class_repr` is
-            // the only place that decides which one these bits are (#9415).
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             // A hole that escaped its array. `js_array_get_f64` normalizes one
             // to `undefined`, so that is what it must display as — not the
@@ -1542,7 +1538,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // `{ h: [ NaN, NaN, NaN ] }`.
                         let mut parts = value_repr::array_entries(maybe_arr, |elem| {
                             let rendered = format_jsvalue_for_json(elem, depth + 1);
-                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                            let numeric = value_repr::entry_is_numeric(elem);
                             value_repr::ArrayEntry::new(rendered, numeric)
                         });
                         // #9463: the `showHidden` tail belongs on nested arrays
@@ -1601,8 +1597,6 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     }
                 }
             }
-        } else if jsval.is_int32() {
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             "undefined".to_string()
         } else {
@@ -1687,19 +1681,6 @@ mod inspect_property_key_tests;
 
 #[cfg(test)]
 mod internal_key_hiding_tests;
-
-#[inline]
-fn looks_like_raw_heap_pointer(value: f64) -> bool {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        return false;
-    }
-    let addr = bits as usize;
-    // Compare in u64 so the 2^47 upper bound stays in range on 32-bit targets
-    // (arm64_32 watchOS, wasm32), where it's a no-op — no addresses that high.
-    (0x1000..0x8000_0000_0000u64).contains(&(addr as u64))
-        && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
-}
 
 mod deep_equal;
 pub use deep_equal::*;

@@ -39,7 +39,15 @@ const CALLER: usize = 2;
 const TURN: usize = 3;
 const DONE: u8 = 4;
 const BOUNDARIES: [&str; 6] = ["iteration", "return", "caller", "turn", "dyn", "dyn2"];
-const HOLDERS: [&str; 7] = ["frame", "outer_frame", "shadow", "global", "remembered", "object", "other"];
+const HOLDERS: [&str; 7] = [
+    "frame",
+    "outer_frame",
+    "shadow",
+    "global",
+    "remembered",
+    "object",
+    "other",
+];
 
 #[derive(Default, Clone, Copy)]
 struct Bnd {
@@ -135,6 +143,14 @@ pub(super) struct Measure {
     /// During the turn's full: the old samples it decides.
     full: Vec<(u32, u32)>,
     full_seen: bool,
+    /// During a probe's confirming full: the samples its minor reached only
+    /// through the remembered set or another object (`life::minor_decides`).
+    confirm: Vec<(u32, u32)>,
+    confirm_fulls: u64,
+    /// Confirmed samples by the full's verdict: alive, dead, unresolved (full not observed).
+    confirm_alive: u64,
+    confirm_dead: u64,
+    confirm_unres: u64,
     births_at_write: u64,
     births: u64,
     keep_roots: Vec<Box<u64>>,
@@ -191,7 +207,9 @@ impl Measure {
     }
 
     fn live(&self, (i, g): (u32, u32)) -> bool {
-        self.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE)
+        self.samples
+            .get(i as usize)
+            .is_some_and(|s| s.gen == g && s.next != DONE)
     }
 
     fn bnd(&mut self, i: u32, b: usize) -> (&mut Bnd, Sample) {
@@ -378,14 +396,14 @@ fn pop_top(late: bool) {
     .flatten() else {
         // No activation: the dynamic boundaries alone.
         if !dyn_keys.is_empty() {
-            let ran = probe(&[], 0, late, dyn_young);
+            let ran = probe(&[], &dyn_keys, 0, late, dyn_young);
             settle_loops(&dyn_keys, ran);
         }
         return;
     };
     // One collection decides the return (and the iteration) of this
     // activation's samples and the dynamic boundaries ending with it.
-    let ran = probe(&pend, fp, late, dyn_young);
+    let ran = probe(&pend, &dyn_keys, fp, late, dyn_young);
     settle_loops(&dyn_keys, ran);
     let _ = table(|t| {
         let m = &mut t.measure;
@@ -422,7 +440,7 @@ fn end_loops(k: usize) {
     if keys.is_empty() {
         return;
     }
-    let ran = probe(&[], fp, false, young);
+    let ran = probe(&[], &keys, fp, false, young);
     settle_loops(&keys, ran);
 }
 
@@ -470,7 +488,9 @@ fn take_loops(k: usize) -> (Vec<(u32, u32, u8)>, usize, usize) {
 }
 
 fn dyn_live(m: &Measure, &(i, g, bit): &(u32, u32, u8)) -> bool {
-    m.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
+    m.samples
+        .get(i as usize)
+        .is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
 }
 
 /// After the collection (`ran`: `Some(true)` when it ran): a dynamic sample
@@ -502,7 +522,18 @@ fn settle_loops(keys: &[(u32, u32, u8)], ran: Option<bool>) {
 /// Decides the pending samples `keys` at a boundary of the activation at
 /// frame `fp`: old ones are unresolved (except at turn), young ones go
 /// through one forced copied minor. After it, a sample still live was reached.
-fn probe(keys: &[(u32, u32)], fp: usize, late: bool, extra: usize) -> Option<bool> {
+///
+/// A sample the minor reached only through the remembered set or another
+/// object is not decided by that reach (`life::minor_decides`): one
+/// synchronous full at the same point, shared by all of them, decides it
+/// (marked: alive; unmarked: dead; full not observed: unresolved).
+fn probe(
+    keys: &[(u32, u32)],
+    dyn_keys: &[(u32, u32, u8)],
+    fp: usize,
+    late: bool,
+    extra: usize,
+) -> Option<bool> {
     let young = table(|t| {
         let m = &mut t.measure;
         let mut young = 0;
@@ -538,7 +569,6 @@ fn probe(keys: &[(u32, u32)], fp: usize, late: bool, extra: usize) -> Option<boo
         let m = &mut t.measure;
         m.in_probe = false;
         m.probe_minors += 1;
-        m.probe_ns += began.elapsed().as_nanos() as u64;
         if !ran {
             for &k in keys {
                 if m.live(k) && !m.samples[k.0 as usize].old {
@@ -546,9 +576,62 @@ fn probe(keys: &[(u32, u32)], fp: usize, late: bool, extra: usize) -> Option<boo
                 }
             }
         }
+    });
+    if ran {
+        confirm(keys, dyn_keys, late);
+    }
+    let _ = with(|t| {
+        let m = &mut t.measure;
+        m.probe_ns += began.elapsed().as_nanos() as u64;
         budget(m);
     });
     Some(ran)
+}
+
+/// The confirming full of a probe (see `probe`).
+fn confirm(keys: &[(u32, u32)], dyn_keys: &[(u32, u32, u8)], late: bool) {
+    let n = with(|t| {
+        let m = &mut t.measure;
+        let mut weak: Vec<(u32, u32)> = Vec::new();
+        let reached_weak = |m: &Measure, (i, g): (u32, u32)| {
+            m.live((i, g)) && {
+                let s = &m.samples[i as usize];
+                s.reached && !super::life::minor_decides(s.holder)
+            }
+        };
+        for &k in keys {
+            if reached_weak(m, k) && !weak.contains(&k) {
+                weak.push(k);
+            }
+        }
+        for k in dyn_keys {
+            let k2 = (k.0, k.1);
+            if dyn_live(m, k) && reached_weak(m, k2) && !weak.contains(&k2) {
+                weak.push(k2);
+            }
+        }
+        let n = weak.len();
+        if n > 0 {
+            m.confirm = weak;
+            m.confirm_fulls += 1;
+            m.probe_late = late;
+        }
+        n
+    })
+    .unwrap_or(0);
+    if n == 0 {
+        return;
+    }
+    crate::gc::life_collect_full();
+    let _ = with(|t| {
+        let m = &mut t.measure;
+        for k in std::mem::take(&mut m.confirm) {
+            if m.live(k) {
+                m.confirm_unres += 1;
+                m.unresolved_from(k.0, false);
+            }
+        }
+    });
 }
 
 /// The probe budget: probe time may not exceed 4x mutator time; over it,
@@ -569,7 +652,9 @@ fn budget(m: &mut Measure) {
 pub(super) fn reached(t: &mut Table, i: u32, new: usize) {
     let in_probe = t.measure.in_probe;
     let fp = t.measure.probe_fp;
-    let Some(s) = t.measure.samples.get_mut(i as usize) else { return };
+    let Some(s) = t.measure.samples.get_mut(i as usize) else {
+        return;
+    };
     s.addr = new;
     if !crate::arena::pointer_in_nursery(new) {
         s.old = true;
@@ -622,8 +707,26 @@ pub(super) fn dropped(t: &mut Table, i: u32) {
 /// from its next boundary on; in the turn's own full, a marked one waiting
 /// for the turn is alive at it.
 pub(super) fn full_marked() {
+    super::life_regions::full_marked();
     let _ = with(|t| {
+        t.full_pending = true;
         let m = &mut t.measure;
+        // A probe's confirming full: its weakly reached samples, young or old.
+        let late = m.probe_late;
+        for (i, g) in std::mem::take(&mut m.confirm) {
+            if !m.live((i, g)) {
+                continue;
+            }
+            let addr = m.samples[i as usize].addr;
+            if super::life::full_alive(addr) {
+                m.confirm_alive += 1;
+            } else {
+                m.confirm_dead += 1;
+                m.dead_from(i, late);
+                // Its claim leaves the table (the index is reused).
+                t.claims.remove(&addr);
+            }
+        }
         let turn_full = !m.full.is_empty();
         m.full_seen = true;
         m.full.clear();
@@ -632,8 +735,7 @@ pub(super) fn full_marked() {
             if s.next == DONE || !s.old {
                 continue;
             }
-            let header = (s.addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let marked = unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 };
+            let marked = super::life::full_alive(s.addr);
             if !marked {
                 m.dead_from(i, false);
             } else if turn_full && s.next as usize == TURN {
@@ -652,12 +754,22 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     if crate::arena::alloc_life::on() {
         crate::arena::alloc_life::birth(bits as u64);
     }
+    if super::life_regions::on() {
+        // LIFE I3: regions replace the per-birth probes.
+        if keep() {
+            super::life_regions::keep_birth(bits as u64);
+        }
+        return;
+    }
     let bits = bits as u64;
     let sampled = table(|t| {
         let m = &mut t.measure;
         if m.births == 0 {
             // `PERRY_LIFE_MEASURE_SHIFT=k`: start every site at rate 2^-k more.
-            m.global_shift = knob("PERRY_LIFE_MEASURE_SHIFT").and_then(|v| v.parse().ok()).unwrap_or(0).min(16);
+            m.global_shift = knob("PERRY_LIFE_MEASURE_SHIFT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+                .min(16);
         }
         m.births += 1;
         let rand = m.next_rand();
@@ -669,10 +781,20 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
             return None;
         }
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let bytes = unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size } as u64;
+        let bytes =
+            unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size }
+                as u64;
         s.bytes += bytes;
-        let own = if s.sampled < 32 { 0 } else { 64 - (s.sampled / 32).leading_zeros() };
-        let shift = if rate_one() { 0 } else { (own + global).min(16) };
+        let own = if s.sampled < 32 {
+            0
+        } else {
+            64 - (s.sampled / 32).leading_zeros()
+        };
+        let shift = if rate_one() {
+            0
+        } else {
+            (own + global).min(16)
+        };
         if rand & ((1u64 << shift) - 1) != 0 {
             return None;
         }
@@ -680,7 +802,9 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
         Some((addr, bytes, (1u64 << shift) as f64))
     })
     .flatten();
-    let Some((addr, bytes, w)) = sampled else { return };
+    let Some((addr, bytes, w)) = sampled else {
+        return;
+    };
     // No probe here: the birth's value is not rooted across this call, so
     // the hook must not collect. Activations a throw left on top (frames
     // deeper than this one) are skipped; the next hook that may collect
@@ -738,7 +862,14 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
                 m.unresolved_from(i, true);
             }
         } else {
-            t.claims.insert(addr, Claim { site: 0, len: 0, state: State::Probe(i) });
+            t.claims.insert(
+                addr,
+                Claim {
+                    site: 0,
+                    len: 0,
+                    state: State::Probe(i),
+                },
+            );
         }
         if keep() {
             let slot = Box::new(bits);
@@ -752,13 +883,20 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_enter(body: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::enter(body as u64, fp);
+    }
     // No probe here (the body's arguments are not rooted across this call):
     // activations a throw left deeper than this frame stay below the new one
     // and are popped, late, by the next hook of a shallower frame. An inlined
     // body enters in its caller's frame (same fp), nested in its activation.
     let _ = table(|t| {
         t.measure.exits.entry(body as u64).or_default()[0] += 1;
-        t.measure.acts.push(Act { fp, body: body as u64, pend: Vec::new() })
+        t.measure.acts.push(Act {
+            fp,
+            body: body as u64,
+            pend: Vec::new(),
+        })
     });
 }
 
@@ -766,6 +904,9 @@ pub extern "C" fn perry_life_enter(body: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_return() {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::ret(fp);
+    }
     pop_deeper(fp);
     let top = table(|t| t.measure.acts.last().filter(|a| a.fp == fp).map(|a| a.body)).flatten();
     if let Some(body) = top {
@@ -787,10 +928,18 @@ pub extern "C" fn perry_life_depth() -> i64 {
 #[inline(never)]
 pub extern "C" fn perry_life_loop(id: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::loop_start(id as u64, fp);
+    }
     let _ = table(|t| {
         let m = &mut t.measure;
         let act = m.acts.iter().rposition(|a| a.fp >= fp).map_or(0, |i| i + 1);
-        m.loops.push(LoopIt { act, fp, id: id as u64, pend: Vec::new() });
+        m.loops.push(LoopIt {
+            act,
+            fp,
+            id: id as u64,
+            pend: Vec::new(),
+        });
     });
 }
 
@@ -803,6 +952,9 @@ pub extern "C" fn perry_life_loop(id: i64) {
 pub extern "C" fn perry_life_catch(depth: i64) {
     let loops = (depth as u64 >> 32) as usize;
     let depth = (depth as u64 & 0xFFFF_FFFF) as usize;
+    if super::life_regions::on() {
+        super::life_regions::catch(depth, loops, caller_fp());
+    }
     while table(|t| t.measure.acts.len() > depth) == Some(true) {
         let _ = table(|t| late(t, 2));
         pop_top(true);
@@ -815,6 +967,9 @@ pub extern "C" fn perry_life_catch(depth: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_iter(loop_id: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::iter(loop_id as u64, fp);
+    }
     pop_deeper(fp);
     // The dynamic boundary: this loop's iteration in progress in this frame
     // ends (with any inner one a labelled jump or stale frame left above it).
@@ -846,7 +1001,9 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
         };
         let mut hit = Vec::new();
         list.retain(|&(i, g)| {
-            let Some(s) = m.samples.get(i as usize) else { return false };
+            let Some(s) = m.samples.get(i as usize) else {
+                return false;
+            };
             if s.gen != g || s.next == DONE {
                 return false;
             }
@@ -861,7 +1018,7 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
     .unwrap_or_default();
     // One collection decides this iteration's own-function samples and the
     // dynamic boundaries ending here.
-    let ran = probe(&keys, fp, false, dyn_young);
+    let ran = probe(&keys, &dyn_keys, fp, false, dyn_young);
     settle_loops(&dyn_keys, ran);
     if keys.is_empty() {
         return;
@@ -883,6 +1040,9 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_turn() {
+    if super::life_regions::on() {
+        super::life_regions::turn();
+    }
     // The JS stack is unwound: every activation still listed returned.
     while table(|t| !t.measure.acts.is_empty()) == Some(true) {
         let _ = table(|t| late(t, 4));
@@ -891,7 +1051,7 @@ pub extern "C" fn perry_life_turn() {
     end_loops(0);
     // Iteration-pending samples with no activation: the turn ended their loop.
     let root = table(|t| std::mem::take(&mut t.measure.root)).unwrap_or_default();
-    probe(&root, 0, true, 0);
+    probe(&root, &[], 0, true, 0);
     let _ = table(|t| {
         let m = &mut t.measure;
         for &k in &root {
@@ -903,7 +1063,7 @@ pub extern "C" fn perry_life_turn() {
         }
     });
     let turn = table(|t| std::mem::take(&mut t.measure.turn)).unwrap_or_default();
-    probe(&turn, 0, false, 0);
+    probe(&turn, &[], 0, false, 0);
     let old = table(|t| {
         let m = &mut t.measure;
         let mut old = Vec::new();
@@ -949,7 +1109,9 @@ fn write(t: &mut Table) {
         return;
     }
     m.births_at_write = m.births;
-    let Some(path) = knob("PERRY_LIFE_MEASURE").filter(|p| p != "1") else { return };
+    let Some(path) = knob("PERRY_LIFE_MEASURE").filter(|p| p != "1") else {
+        return;
+    };
     let mut out = String::from("site\tbirths\tbytes\tunborn\tsampled\tboundary\tsamples\talive\talive_w\tdead_w\talive_bytes_w\tdead_bytes_w\tlate\tunresolved");
     for h in HOLDERS {
         out.push_str(&format!("\t{h}"));
@@ -966,8 +1128,18 @@ fn write(t: &mut Table) {
             let d = if b < 4 { &s.b[b] } else { &s.d[b - 4] };
             out.push_str(&format!(
                 "{id}\t{}\t{}\t{}\t{}\t{name}\t{}\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}\t{}\t{}",
-                s.births, s.bytes, s.unborn, s.sampled, d.samples, d.alive, d.alive_w, d.dead_w,
-                d.alive_bytes_w, d.dead_bytes_w, d.late, d.unresolved
+                s.births,
+                s.bytes,
+                s.unborn,
+                s.sampled,
+                d.samples,
+                d.alive,
+                d.alive_w,
+                d.dead_w,
+                d.alive_bytes_w,
+                d.dead_bytes_w,
+                d.late,
+                d.unresolved
             ));
             for h in d.holders {
                 out.push_str(&format!("\t{h}"));
@@ -978,14 +1150,18 @@ fn write(t: &mut Table) {
     let (arena, large) = crate::arena::allocation_totals();
     let elapsed = m.start.map_or(0, |s| s.elapsed().as_nanos() as u64);
     out.push_str(&format!(
-        "#totals\tsite_births={births}\tsite_bytes={bytes}\tarena_bytes={arena}\tlarge_bytes={large}\tprobes={}\tprobe_minors={}\tturn_fulls={}\tlate_pops={}\tdyn_probes={}\tprobe_ns={}\telapsed_ns={elapsed}\tglobal_shift={}\tpending={}\n",
+        "#totals\tsite_births={births}\tsite_bytes={bytes}\tarena_bytes={arena}\tlarge_bytes={large}\tprobes={}\tprobe_minors={}\tturn_fulls={}\tlate_pops={}\tdyn_probes={}\tprobe_ns={}\telapsed_ns={elapsed}\tglobal_shift={}\tpending={}\tconfirm_fulls={}\tconfirm_alive={}\tconfirm_dead={}\tconfirm_unres={}\n",
         m.probes, m.probe_minors, m.turn_fulls, m.late_pops, m.dyn_probes, m.probe_ns, m.global_shift,
-        m.samples.iter().filter(|s| s.next != DONE).count()
+        m.samples.iter().filter(|s| s.next != DONE).count(),
+        m.confirm_fulls, m.confirm_alive, m.confirm_dead, m.confirm_unres
     ));
     let mut bodies: Vec<_> = m.exits.iter().collect();
     bodies.sort_unstable_by_key(|(id, _)| **id);
     for (id, e) in bodies {
-        out.push_str(&format!("#body\t{id}\t{}\t{}\t{}\t{}\t{}\n", e[0], e[1], e[2], e[3], e[4]));
+        out.push_str(&format!(
+            "#body\t{id}\t{}\t{}\t{}\t{}\t{}\n",
+            e[0], e[1], e[2], e[3], e[4]
+        ));
     }
     let _ = std::fs::write(path, out);
 }

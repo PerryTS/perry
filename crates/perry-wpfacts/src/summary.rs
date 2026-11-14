@@ -276,6 +276,7 @@ impl Model {
                 | Cons::NotNullish { dst }
                 | Cons::Fulfil { dst }
                 | Cons::Falsy { dst }
+                | Cons::Objects { dst }
                 | Cons::NotUndefined { dst }
                 // The gate of an own-only read runs where the read does.
                 | Cons::OwnGate { dst, .. } => Some(dst),

@@ -93,6 +93,12 @@ impl MutableRegisteredRootScanState {
                 None => None,
             };
             let previous = visitor.set_root_source_stats(stats);
+            #[cfg(perry_gc_instruments)]
+            super::super::life_why::root_fn(
+                entry
+                    .budgeted_scanner
+                    .map_or(entry.scanner as usize, |f| f as usize),
+            );
             let done = if let Some(scanner) = entry.budgeted_scanner {
                 let state = self.scanner_states[self.scanner_cursor]
                     .as_deref_mut()

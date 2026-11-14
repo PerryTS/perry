@@ -1364,4 +1364,3 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 
 #[cfg(test)]
 mod tests;
-

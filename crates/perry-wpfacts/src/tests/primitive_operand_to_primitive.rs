@@ -19,7 +19,11 @@ fn check_site(src: &str, marker: &str, key: &str, proven: bool) -> Result<(), St
     }
     for s in sites {
         if !matches!(s.verdict, Verdict::No(_)) != proven {
-            return Err(format!("{marker}/{key}: {:?}\n{}", s.verdict, pf.dump_text()));
+            return Err(format!(
+                "{marker}/{key}: {:?}\n{}",
+                s.verdict,
+                pf.dump_text()
+            ));
         }
     }
     Ok(())

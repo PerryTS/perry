@@ -8,7 +8,7 @@
 //! | `00` | [`REP_ANY`] | the slot holds a NaN-boxed value |
 //! | `01` | [`REP_F64`] | the slot holds a JS Number as raw IEEE bits: never in the tag band, any NaN canonical, an INT32 box stored as a double |
 //! | `10` | [`REP_F64_DEPRECATED`] | the same invariant as `F64` for the objects that still carry the shape; the lineage has generalized the slot. A learned fact, never identity |
-//! | `11` | [`REP_SPECIAL`] | a shape-owned side fact selects ConstFn (the slot is a closure of one static body); a `11` lane outside the ConstFn mask is I32 (I32 at rest, PR C: the slot holds an I32 word `INT32_TAG \| (u32)v`, `layout_slot`) |
+//! | `11` | [`REP_SPECIAL`] | a shape-owned side fact selects ConstFn (the slot is a closure of one static body); a `11` lane outside the ConstFn mask is I32 (I32 at rest, PR C: the slot holds an I32 word `INTERNAL_WORD_TAG \| (u32)v`, `layout_slot`) |
 //!
 //! A slot at or past [`REP_SLOTS`], and every spill slot, is `Any`.
 //!
@@ -104,7 +104,7 @@ pub(crate) fn special_lane_slots(rep: u64) -> u32 {
 
 /// I32 at rest (representation RFC §10.7, PR C): the `11` lanes the shape's
 /// ConstFn mask does not name, one bit per slot. Each such slot holds an I32
-/// word `INT32_TAG | (u32)v` for every object carrying the shape: never a
+/// word `INTERNAL_WORD_TAG | (u32)v` for every object carrying the shape: never a
 /// pointer (the `0x7FFE` band), so the collector skips it like any
 /// represented lane, and read and written as a JS value only through the
 /// layout accessor (`crate::layout_slot`). The mask is derived from the two
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn a_number_is_stored_as_its_canonical_double_and_a_tag_is_refused() {
-        let int32 = crate::value::INT32_TAG | 7;
+        let int32 = crate::value::INTERNAL_WORD_TAG | 7;
         assert_eq!(f64_slot_bits(int32), Some(7.0f64.to_bits()));
         assert_eq!(f64_slot_bits(1.5f64.to_bits()), Some(1.5f64.to_bits()));
         assert_eq!(

@@ -376,7 +376,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "typedarray",
         requires: &[],
         holders: BYTE_HOLDERS,
-        members: &[],
+        // `process.stdin` hands its chunks to listeners as Buffers.
+        members: &["process.stdin"],
         modules: &[
             "better-sqlite3",
             "buffer",
@@ -400,18 +401,31 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "perry/thread",
             "pg",
             "process",
+            // readline and repl write to and read from the streams they are
+            // given; `sea.getAsset` answers an ArrayBuffer.
+            "readline",
+            "readline/promises",
+            "repl",
+            "sea",
             "sqlite",
             "stream",
             "stream/consumers",
             "stream/promises",
             "stream/web",
             "string_decoder",
+            // The test runner's event stream and the reporters are streams.
+            "test",
+            "test/reporters",
             "tls",
             "tty",
             "tursodb",
+            // `url.fileURLToPathBuffer` answers a Buffer.
+            "url",
             "util.types",
             "util/types",
             "v8",
+            // `vm.Script` and `vm.compileFunction` produce cached data.
+            "vm",
             "worker_threads",
             "ws",
             "zlib",
@@ -653,7 +667,6 @@ pub const CORE_MODULES: &[&str] = &[
     "perry/system",
     "punycode",
     "querystring",
-    "sea",
     "sys",
     "timers",
     "timers/promises",
@@ -889,6 +902,19 @@ mod tests {
             0
         );
         assert_eq!(of("node:path.posix.join"), 0);
+        // A module only the typed-array row names is of that family alone.
+        assert_eq!(of("node:sea.getAsset"), family_bit("typedarray"));
+        assert_eq!(
+            of("node:url.fileURLToPathBuffer"),
+            family_bit("typedarray") | family_bit("url_engine")
+        );
+        // `BigInt.asIntN` / `asUintN` convert with `bigint_coerce` (no
+        // typed-array group), so they are of the bigint family alone.
+        assert_eq!(of("BigInt.asIntN"), family_bit("bigint"));
+        assert_eq!(of("BigInt.asUintN.length") & family_bit("typedarray"), 0);
+        assert_eq!(of("BigInt.prototype.toString"), family_bit("bigint"));
+        assert_ne!(of("process.stdin.on") & family_bit("typedarray"), 0);
+        assert_eq!(of("process.stdout.write") & family_bit("typedarray"), 0);
         assert_eq!(entry_families("NoSuchHolder.x"), None);
         assert_eq!(entry_families("node:no-such-module.x"), None);
         assert_eq!(entry_root("Buffer[\"@@species\"].<get>"), "Buffer");

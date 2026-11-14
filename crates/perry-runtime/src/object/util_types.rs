@@ -46,8 +46,6 @@ fn pointer_addr(value: f64) -> Option<usize> {
     let v = JSValue::from_bits(bits);
     if v.is_pointer() {
         Some((bits & crate::value::POINTER_MASK) as usize)
-    } else if bits > 0x10000 && (bits >> 48) == 0 {
-        Some(bits as usize)
     } else {
         None
     }

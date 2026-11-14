@@ -1801,15 +1801,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // Same materialization fix as the module-init lowering path —
             // wrap in `Expr::ArrayFrom` so iteration sees the byte values
             // not the byte buffer reinterpreted as f64s.
-            let is_iterable_typed_array = matches!(
-                &iterable_type,
-                Some(Type::Named(name)) if matches!(name.as_str(),
-                    "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
-                    | "Uint16Array" | "Int16Array"
-                    | "Uint32Array" | "Int32Array"
-                    | "Float16Array" | "Float32Array" | "Float64Array"
-                )
-            );
+            let is_iterable_typed_array =
+                crate::lower::for_of_guard::is_numeric_typed_array(iterable_type.as_ref());
             // #321: when the receiver's static type can NOT be proven to
             // be a plain Array — an `any`-typed Map/Set (effect's
             // `for (const [tag, s] of that.unsafeMap)`, where `that` is an
@@ -1857,11 +1850,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     Expr::SetValues(Box::new(arr_expr))
                 }
             } else if is_iterable_typed_array {
-                // Iterate the typed array LIVE (holder keeps the TA type so
-                // IndexGet/.length use the typed-array accessors) — body
-                // writes like `ta[1] = 64` must be observed mid-loop.
+                // A real typed array LIVE (body writes like `ta[1] = 64` are
+                // observed mid-loop), any other value drained by its iterator.
                 // Mirrors the module-init path in stmt_loops.rs.
-                arr_expr
+                crate::lower::for_of_guard::admitted_typed_array_holder(ctx, arr_expr, &mut result)
             } else if use_lazy_iter {
                 arr_expr
             } else if is_string_iter {
@@ -1937,9 +1929,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             } else if use_lazy_iter {
                 Type::Any // holds the iterator, not an array
             } else if is_iterable_typed_array {
-                // Keep the TA's own type so IndexGet/.length route through
-                // the typed-array accessors (live reads).
-                iterable_type.clone().unwrap_or(Type::Any)
+                Type::Any // a typed array or the Array its admission drained
             } else if let Some(ref elem) = inferred_elem_type {
                 Type::Array(Box::new(elem.clone()))
             } else {
@@ -1948,8 +1938,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let item_hir_type = if is_string_iter {
                 Type::String
             } else if is_iterable_typed_array {
-                // Issue #578: typed-array element values are always Number.
-                Type::Number
+                Type::Any // Numbers only when the admission held
             } else if let Some(elem) = inferred_elem_type {
                 elem
             } else {

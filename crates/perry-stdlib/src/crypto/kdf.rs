@@ -1110,11 +1110,7 @@ fn scrypt_numeric_value(value: JSValue, name: &str, max: u64) -> u64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else {
-        value.as_number()
-    };
+    let number = value.as_number();
     if !number.is_finite() || number.fract() != 0.0 {
         let message = format!(
             "The value of \"{name}\" is out of range. It must be an integer. Received {}",

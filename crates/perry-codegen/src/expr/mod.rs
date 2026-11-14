@@ -81,10 +81,10 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
-pub(crate) mod record_witness;
 pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
+pub(crate) mod record_witness;
 
 /// `PERRY_SITE_STATS=1`: one stderr line `PERRY_SITE <kind>` per lowered
 /// named-read site, for the step-5 site census (case 1 / case 2 / probe).
@@ -100,8 +100,8 @@ mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
-pub(crate) mod family_slot;
 pub(crate) mod facts_string;
+pub(crate) mod family_slot;
 pub(crate) mod fill_birth;
 #[cfg(test)]
 mod fill_birth_tests;
@@ -110,10 +110,10 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
-pub(crate) mod snap_argv_site;
-pub(crate) mod snap_compare_site;
 pub(crate) mod rest_elems;
 pub(crate) mod rest_fields;
+pub(crate) mod snap_argv_site;
+pub(crate) mod snap_compare_site;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -188,7 +188,8 @@ pub(crate) use helpers::{
     emit_string_addref_if_heap_string, expr_has_numeric_pointer_free_array_layout,
     expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
-    store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
+    store_needs_string_addref, unbox_ffi_str_arg, unbox_pointer_or_null, unbox_str_handle,
+    unbox_to_i64,
 };
 pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
@@ -3383,17 +3384,17 @@ mod fs_await;
 mod hit_path_tests;
 pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
+pub(crate) mod held_len;
 #[cfg(test)]
 mod index_get_claim_tests;
 pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
-pub(crate) mod held_len;
 pub(crate) mod int_product;
-pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
@@ -3432,8 +3433,8 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
-mod index_set_rep;
 mod index_set_packed_loop;
+mod index_set_rep;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
@@ -3463,9 +3464,9 @@ mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
-pub(crate) mod short_string;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
+pub(crate) mod short_string;
 pub(crate) use named_accessor::contained_number_get;
 pub(crate) mod checked_super;
 pub(crate) mod proxy_reflect;

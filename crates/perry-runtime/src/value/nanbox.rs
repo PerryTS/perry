@@ -254,17 +254,21 @@ pub extern "C" fn js_nanbox_is_pointer(value: f64) -> i32 {
     }
 }
 
-/// Extract a pointer from a NaN-boxed f64 value.
-/// Also handles raw pointer bits (bitcast from i64) for backward compatibility.
-/// Handles POINTER_TAG, STRING_TAG, BIGINT_TAG, JS_HANDLE_TAG and HANDLE_TAG.
-/// Returns the pointer as i64.
+/// The 48-bit payload of a NaN-boxed pointer VALUE: POINTER_TAG, STRING_TAG,
+/// BIGINT_TAG, JS_HANDLE_TAG and HANDLE_TAG. Every other word answers 0.
+///
+/// In a value word an object carries its tag. A word whose top 16 bits are
+/// clear is a Number (a denormal double or +0), never an address: no test can
+/// tell the Number whose bits equal a live object's start from that object, so
+/// this decoder does not look. A word the runtime stored itself as a raw
+/// address (a `js_closure_set_capture_ptr` slot, a shape's keys word) is not a
+/// value: its reader takes the word as the address it is and does not come
+/// here.
 #[no_mangle]
 pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     let bits = value.to_bits();
-    // POINTER, STRING, BIGINT, JS_HANDLE (V8 / UI widget handles) and
-    // HANDLE_TAG (native registry ids) carry a 48-bit payload. Decided on
-    // the top 16 bits so every inlined copy compares small immediates
-    // rather than materializing each 64-bit tag.
+    // Decided on the top 16 bits so every inlined copy compares small
+    // immediates rather than materializing each 64-bit tag.
     const BIGINT: u64 = BIGINT_TAG >> 48;
     const V8_HANDLE: u64 = JS_HANDLE_TAG >> 48;
     const POINTER: u64 = POINTER_TAG >> 48;
@@ -272,11 +276,6 @@ pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     const HANDLE: u64 = crate::value::HANDLE_TAG >> 48;
     if matches!(bits >> 48, BIGINT | V8_HANDLE | POINTER | STRING | HANDLE) {
         return (bits & POINTER_MASK) as i64;
-    }
-    let top = bits >> 48;
-    // Raw pointer bits (bitcast from i64) for backward compatibility.
-    if top == 0 && bits != 0 {
-        return bits as i64;
     }
     0
 }
@@ -292,10 +291,10 @@ pub extern "C" fn js_nanbox_get_string_pointer(value: f64) -> i64 {
     }
 }
 
-/// Extract a string pointer from an f64 value that may be either:
-/// 1. A properly NaN-boxed string (with STRING_TAG)
-/// 2. A raw pointer bitcast to f64 (for locally-created strings)
-/// This unified function handles both cases for function parameters.
+/// Extract a string pointer from a value: a STRING_TAG string's header, an
+/// SSO string materialized onto the heap, a POINTER_TAG payload, the string
+/// form of a Number (also of a denormal whose bits look like an address: it is
+/// converted, never read as a header), and 0 for any other word.
 // Keep SSO materialization and numeric conversion in one shared entry. LTO
 // otherwise duplicates their allocating arms into unrelated callers when a
 // runtime call graph changes (including bound-function metadata reads).
@@ -330,22 +329,9 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
         return (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
     }
 
-    // Raw pointer fallback: only accept values that look like valid heap pointers.
-    // Must be non-NaN, non-zero, within 48-bit address space, AND at least 4-byte aligned.
-    // The alignment check prevents subnormal f64 numbers like 2.16e-314 (bits=0x1100000003)
-    // from being misidentified as pointers.
-    if !value.is_nan() && bits != 0 && bits < 0x0001_0000_0000_0000 {
-        // Must be at least 4-byte aligned (StringHeader starts with u32 length)
-        // and above minimum heap address
-        if (bits & 0x3) == 0 && bits >= 0x10000 {
-            return bits as i64;
-        }
-    }
-
     // For numeric values used as property keys (e.g., obj[pool.id], obj[Direction.Up]),
     // convert the number to a string representation.
-    // Note: 0.0 (bits == 0) is a valid number that should produce "0", so we must
-    // NOT skip it. The bits != 0 guard above is only for the raw-pointer fallback.
+    // 0.0 (bits == 0) is a valid number that produces "0".
     if !value.is_nan() {
         let s = crate::string::js_number_to_string(value);
         if !s.is_null() {
@@ -387,19 +373,11 @@ pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
         let pb = js_get_string_pointer_unified(b) as *const crate::string::StringHeader;
         return crate::string::js_string_equals(pa, pb);
     }
-    let a_numeric = av.is_number() || av.is_int32();
-    let b_numeric = bv.is_number() || bv.is_int32();
+    let a_numeric = av.is_number();
+    let b_numeric = bv.is_number();
     if a_numeric && b_numeric {
-        let an = if av.is_int32() {
-            av.as_int32() as f64
-        } else {
-            f64::from_bits(av.bits())
-        };
-        let bn = if bv.is_int32() {
-            bv.as_int32() as f64
-        } else {
-            f64::from_bits(bv.bits())
-        };
+        let an = f64::from_bits(av.bits());
+        let bn = f64::from_bits(bv.bits());
         return (an == bn) as i32;
     }
     (a.to_bits() == b.to_bits()) as i32

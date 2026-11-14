@@ -353,9 +353,6 @@ pub(super) unsafe fn json_property_list_key(elem: f64) -> Option<String> {
         return str_from_header(str_ptr).map(|s| s.to_string());
     }
     let jsval = JSValue::from_bits(bits);
-    if jsval.is_int32() {
-        return Some(jsval.as_int32().to_string());
-    }
     if jsval.is_number() {
         let p = crate::string::js_number_to_string(elem);
         return str_from_header(p).map(|s| s.to_string());

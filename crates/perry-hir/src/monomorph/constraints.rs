@@ -365,7 +365,10 @@ mod tests {
     #[test]
     fn constraint_accepts_a_type_parameter_argument() {
         let array_of_numbers = Type::Array(Box::new(Type::Number));
-        assert!(check(Type::TypeVar("F".to_string()), array_of_numbers.clone()));
+        assert!(check(
+            Type::TypeVar("F".to_string()),
+            array_of_numbers.clone()
+        ));
         assert!(check(Type::TypeVar("F".to_string()), Type::String));
     }
 

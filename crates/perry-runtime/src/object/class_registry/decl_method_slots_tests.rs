@@ -136,10 +136,10 @@ fn ordinary_four_capture_closure_has_no_declaration_body() {
             f,
             &[
                 home.to_bits(),
-                crate::value::INT32_TAG
+                crate::value::INTERNAL_WORD_TAG
                     | crate::object::native_module::CLASS_PROTOTYPE_REF_FLAG
                     | 123,
-                crate::value::INT32_TAG
+                crate::value::INTERNAL_WORD_TAG
                     | crate::object::native_module::CLASS_PROTOTYPE_REF_FLAG
                     | 456,
                 0.0f64.to_bits(),

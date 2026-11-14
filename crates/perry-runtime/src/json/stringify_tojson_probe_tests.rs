@@ -799,11 +799,7 @@ fn a_declared_class_instance_without_to_json_is_answered_from_its_holders() {
     declared_class_with_prototype(base, "m", None);
     declared_class_with_prototype(derived, "n", Some(base));
     let instance = crate::object::js_object_alloc(derived, 0);
-    crate::object::js_object_set_field_by_name(
-        instance,
-        crate::string::canonical_key(b"a"),
-        1.0,
-    );
+    crate::object::js_object_set_field_by_name(instance, crate::string::canonical_key(b"a"), 1.0);
     let ptr = instance as *const u8;
     unsafe {
         assert!(super::class_chain_may_have_to_json((*instance).class_id));

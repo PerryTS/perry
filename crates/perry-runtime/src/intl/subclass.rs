@@ -211,7 +211,6 @@ pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
         if jv.is_null()
             || jv.is_undefined()
             || jv.is_bool()
-            || jv.is_int32()
             || jv.is_any_string()
             || jv.is_bigint()
             || unsafe { crate::symbol::js_is_symbol(value) != 0 }

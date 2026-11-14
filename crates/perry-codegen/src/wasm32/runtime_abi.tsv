@@ -3640,6 +3640,7 @@ js_run_module_init_guarded	void	i64,i64
 js_run_stdlib_pump	void	
 js_runtime_component_io_ops	ptr	
 js_runtime_describe_received	f64	f64
+js_runtime_families_never	void	i64,ptr
 js_runtime_init	void	
 js_runtime_install_async_hooks	void	
 js_runtime_install_bigint	void	
@@ -4350,6 +4351,7 @@ js_typed_array_find_index	f64	ptr,ptr
 js_typed_array_find_last	f64	ptr,ptr
 js_typed_array_find_last_index	f64	ptr,ptr
 js_typed_array_for_each	f64	ptr,ptr
+js_typed_array_for_of_admits	f64	f64
 js_typed_array_get	f64	ptr,i32s
 js_typed_array_index_get_dynamic	f64	ptr,f64
 js_typed_array_index_set_dynamic	f64	ptr,f64,f64

@@ -145,6 +145,7 @@ impl Model {
             Cons::Fulfil { dst } => format!("Fulfil dst={:?}", dst),
             Cons::Falsy { dst } => format!("Falsy dst={:?}", dst),
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
+            Cons::Objects { dst } => format!("Objects dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(
                 "Hard kind={:?} reason={:?}",
                 kind,

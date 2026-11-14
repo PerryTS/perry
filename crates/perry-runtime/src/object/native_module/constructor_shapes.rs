@@ -950,12 +950,7 @@ extern "C" fn default_max_listeners_set(
     value: f64,
 ) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    let value = if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    };
-    if (!js.is_number() && !js.is_int32()) || value.is_nan() || value < 0.0 {
+    if !js.is_number() || value.is_nan() || value < 0.0 {
         crate::fs::validate::throw_range_error_with_code(
             "The value of defaultMaxListeners is out of range. It must be a non-negative number.",
         );

@@ -12,6 +12,7 @@ pub(super) fn add_link_args(
     direct_apple: bool,
     xlinker_apple: bool,
     runtime_archives: &[&Path],
+    lld: bool,
     verbose: u8,
 ) -> Result<()> {
     let dir = cache.join("function-order");
@@ -26,7 +27,7 @@ pub(super) fn add_link_args(
                 // The runtime's default hot-text order, with the same JS
                 // text rule; without it, the rule alone as before.
                 if let Some(script) =
-                    super::hot_text_order::link_script(cache, runtime_archives, verbose)
+                    super::hot_text_order::link_script(cache, runtime_archives, lld, verbose)
                 {
                     cmd.arg(format!("-Wl,-T,{}", script.display()));
                     return Ok(());

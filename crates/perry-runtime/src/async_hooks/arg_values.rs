@@ -104,9 +104,7 @@ const MAX_SAFE_JS_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 fn trigger_async_id_value(value: f64) -> Option<u64> {
     let jv = JSValue::from_bits(value.to_bits());
-    let id = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else if jv.is_number() {
+    let id = if jv.is_number() {
         jv.as_number()
     } else {
         return None;
@@ -138,9 +136,6 @@ fn render_invalid_trigger_async_id(value: f64) -> String {
     }
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         return symbol_to_string(value);
-    }
-    if jv.is_int32() {
-        return jv.as_int32().to_string();
     }
     if jv.is_number() {
         return format_js_number_for_error(jv.as_number());
@@ -176,7 +171,7 @@ pub(super) fn trigger_id_from_options(options: f64) -> u64 {
     if options_value.is_undefined() {
         return execution_async_id_u64();
     }
-    if options_value.is_int32() || options_value.is_number() {
+    if options_value.is_number() {
         return trigger_async_id_or_throw(options);
     }
     if options_value.is_null() {
@@ -218,9 +213,6 @@ fn render_apply_value(value: f64) -> String {
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         return symbol_to_string(value);
     }
-    if jv.is_int32() {
-        return jv.as_int32().to_string();
-    }
     if jv.is_number() {
         return format_js_number_for_error(jv.as_number());
     }
@@ -245,7 +237,7 @@ fn describe_apply_type(value: f64) -> &'static str {
         "a string"
     } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         "a symbol"
-    } else if jv.is_int32() || jv.is_number() {
+    } else if jv.is_number() {
         "a number"
     } else {
         "an object"

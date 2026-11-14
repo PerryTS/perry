@@ -3,7 +3,7 @@
 //!
 //! A class constructor value is its class FUNCTION OBJECT, and nothing else:
 //! an INT32 word is always a number, also when it equals a registered class
-//! id (#11414: the INT32 immediate `INT32_TAG | class_id` that once named a
+//! id (#11414: the INT32 immediate `INTERNAL_WORD_TAG | class_id` that once named a
 //! class is gone; it was bit-identical to that number). The function object
 //! is a `GC_TYPE_CLOSURE` cell whose code pointer is
 //!   [`js_class_constructor_called`] (its [[Call]], which throws), whose
@@ -392,7 +392,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // once `class_decl_prototype_link_store` installs a pointer there
         // through the slot barrier.
         // GC_STORE_AUDIT(INIT): fresh class function object; no pointer yet.
-        std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
+        std::ptr::write(captures, crate::value::INTERNAL_WORD_TAG | class_id as u64);
         std::ptr::write(
             captures.add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE),
             crate::value::TAG_UNDEFINED,
@@ -401,10 +401,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
             crate::value::TAG_UNDEFINED,
         );
-        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INT32_TAG encoding numeric zero; no pointer payload, before class function publication.
+        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INTERNAL_WORD_TAG encoding numeric zero; no pointer payload, before class function publication.
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
-            crate::value::INT32_TAG,
+            crate::value::INTERNAL_WORD_TAG,
         );
         // Born old AND pinned: the address is the class's identity for the
         // agent's life (compiled code keeps it in registers and allocas, the

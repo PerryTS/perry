@@ -37,7 +37,12 @@ pub struct RecordArrayHeader {
     pub elems: *mut u64,
 }
 
-const _: () = assert!(std::mem::size_of::<RecordArrayHeader>() == 24);
+// Four u32 counts, then the buffer pointer with no padding: 24 bytes on 64-bit
+// targets, 20 on wasm32. Compiled code reaches the head only through the
+// `js_record_array_*` entries and the GC through `elems_slot`, so only the
+// field order is fixed, not the pointer width.
+const _: () =
+    assert!(std::mem::size_of::<RecordArrayHeader>() == 16 + std::mem::size_of::<*mut u64>());
 const _: () = assert!(std::mem::offset_of!(RecordArrayHeader, capacity) == 4);
 const _: () = assert!(std::mem::offset_of!(RecordArrayHeader, elems) == 16);
 

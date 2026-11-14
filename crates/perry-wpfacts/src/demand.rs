@@ -140,6 +140,7 @@ pub(crate) fn solve(m: &mut Model) {
                     | Cons::Defined { dst }
                     | Cons::NotUndefined { dst }
                     | Cons::Falsy { dst }
+                    | Cons::Objects { dst }
                         if filters =>
                     {
                         f(src, *dst)

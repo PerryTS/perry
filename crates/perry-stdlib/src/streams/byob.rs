@@ -280,7 +280,10 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
     };
     if s.reader_handle.is_some() {
         drop(g);
-        throw_type_error_with_code("Invalid state: ReadableStream is locked", "ERR_INVALID_STATE");
+        throw_type_error_with_code(
+            "Invalid state: ReadableStream is locked",
+            "ERR_INVALID_STATE",
+        );
     }
     let reader_id = next_stream_id();
     let closed_p = internal_promise();
@@ -622,7 +625,10 @@ pub(super) unsafe fn close_pending_byob(stream_id: usize) {
     for pending in drained {
         let (class, elem_size) = match view_info(pending.view_bits) {
             Some(info) => (info.class, info.elem_size),
-            None => (ViewClass::Bytes(perry_runtime::buffer::bytes::Brand::Uint8Array), 1),
+            None => (
+                ViewClass::Bytes(perry_runtime::buffer::bytes::Brand::Uint8Array),
+                1,
+            ),
         };
         let empty = alloc_view_of_kind(class, elem_size, &[]);
         let result = build_iter_result(empty, true);

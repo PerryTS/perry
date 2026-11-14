@@ -114,6 +114,26 @@ crate::perry_thread_local! {
     static RNG: Cell<u64> = const { Cell::new(0x9E37_79B9_7F4A_7C15) };
 }
 
+/// LIFE I3e: shape key/attribute storage stamped `GC_FLAG_SHAPE_SHARED`
+/// (count, bytes), counted when the flag is first set on a header.
+static SHAPE_SHARED: [std::sync::atomic::AtomicU64; 2] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+/// LIFE I3e: `header` is about to be stamped `GC_FLAG_SHAPE_SHARED` (key or
+/// attribute storage of a shape); counted once per header, with its size.
+pub(crate) fn shape_shared(header: *const crate::gc::GcHeader) {
+    if !on() {
+        return;
+    }
+    let (flags, size) = unsafe { ((*header).gc_flags, (*header).size) };
+    if flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0 {
+        SHAPE_SHARED[0].fetch_add(1, Ordering::Relaxed);
+        SHAPE_SHARED[1].fetch_add(size as u64, Ordering::Relaxed);
+    }
+}
+
 #[inline(always)]
 pub(crate) fn on() -> bool {
     ON.load(Ordering::Relaxed)
@@ -121,7 +141,13 @@ pub(crate) fn on() -> bool {
 
 /// `PERRY_LIFE_ALLOC=<path>`: on, with the sampling interval (bytes).
 pub(crate) fn init_from_env() -> usize {
-    let Some(path) = std::env::var("PERRY_LIFE_ALLOC").ok().filter(|p| !p.is_empty()) else {
+    // LIFE I3: the region measurement numbers objects at the census's event,
+    // so it arms the census (no census file unless `PERRY_LIFE_ALLOC` names one).
+    let path = std::env::var("PERRY_LIFE_ALLOC")
+        .ok()
+        .filter(|p| !p.is_empty());
+    let Some(path) = path.or_else(|| crate::wpfacts_check::life_regions_on().then(String::new))
+    else {
         return 0;
     };
     let interval = std::env::var("PERRY_LIFE_ALLOC_SAMPLE")
@@ -192,6 +218,10 @@ fn settle(s: &mut State, state: u8, x: Sample) {
 /// An object allocated in this epoch, at user address `addr`. An entry
 /// already there is an object that died unclaimed (its slot was reused).
 fn enter(s: &mut State, addr: usize, x: Sample) {
+    // LIFE I3: the same event numbers the object for the region measurement.
+    if crate::wpfacts_check::life_regions_on() {
+        crate::wpfacts_check::life_regions_born(addr, x.bytes, x.n);
+    }
     if let Some(old) = s.epoch.insert(addr, x) {
         settle(s, UNCOVERED, old);
     }
@@ -223,7 +253,16 @@ pub(crate) fn runtime(total: usize, t: u8) {
             }
             drop_pending(s, x);
         }
-        s.pending = Some((total, Sample { inline: false, t, bytes: total as u32, n, pcs }));
+        s.pending = Some((
+            total,
+            Sample {
+                inline: false,
+                t,
+                bytes: total as u32,
+                n,
+                pcs,
+            },
+        ));
     });
 }
 
@@ -267,7 +306,9 @@ pub(crate) fn flush_slow() {
 }
 
 fn flush(s: &mut State) {
-    let Some((addr, size, n, pcs)) = s.slow.take() else { return };
+    let Some((addr, size, n, pcs)) = s.slow.take() else {
+        return;
+    };
     if addr == 0 {
         return;
     }
@@ -283,7 +324,17 @@ fn flush(s: &mut State) {
     let k = (t as usize).min(TYPES - 1);
     s.inline[k][0] += 1;
     s.inline[k][1] += total as u64;
-    enter(s, addr + crate::gc::GC_HEADER_SIZE, Sample { inline: true, t, bytes: total as u32, n, pcs });
+    enter(
+        s,
+        addr + crate::gc::GC_HEADER_SIZE,
+        Sample {
+            inline: true,
+            t,
+            bytes: total as u32,
+            n,
+            pcs,
+        },
+    );
 }
 
 /// A fresh old-generation (or collecting-holder) header: noted when the
@@ -302,13 +353,26 @@ pub(crate) fn old_birth(header: usize, total: usize, t: u8) {
         s.runtime[k][1] += total as u64;
         s.unnoted[k][0] += 1;
         s.unnoted[k][1] += total as u64;
-        enter(s, header + crate::gc::GC_HEADER_SIZE, Sample { inline: false, t, bytes: total as u32, n, pcs });
+        enter(
+            s,
+            header + crate::gc::GC_HEADER_SIZE,
+            Sample {
+                inline: false,
+                t,
+                bytes: total as u32,
+                n,
+                pcs,
+            },
+        );
     });
 }
 
 /// The old-page defragmentation moved an object (its new home went through
 /// [`old_birth`]): a move, not a birth.
-pub(crate) fn evacuated(total: usize, t: u8) {
+pub(crate) fn evacuated(total: usize, t: u8, old: usize, new: usize) {
+    if crate::wpfacts_check::life_regions_on() {
+        crate::wpfacts_check::life_regions_evacuated(old, new, total as u32);
+    }
     let _ = with(|s| {
         let k = (t as usize).min(TYPES - 1);
         s.runtime[k][0] = s.runtime[k][0].saturating_sub(1);
@@ -376,20 +440,39 @@ fn walk_inline(data: *mut u8, from: usize, to: usize, at_birth: bool) {
             }
             break;
         }
-        objs.push((data as usize + aligned + crate::gc::GC_HEADER_SIZE, total, t, draw(total)));
+        objs.push((
+            data as usize + aligned + crate::gc::GC_HEADER_SIZE,
+            total,
+            t,
+            draw(total),
+        ));
         offset = aligned + total;
     }
-    let pcs = if objs.iter().any(|o| o.3 != 0) { capture() } else { [0usize; DEPTH] };
+    let pcs = if objs.iter().any(|o| o.3 != 0) {
+        capture()
+    } else {
+        [0usize; DEPTH]
+    };
     let _ = with(|s| {
         flush(s);
-        s.walked = if at_birth { (data as usize, offset.min(to)) } else { (0, 0) };
+        s.walked = if at_birth {
+            (data as usize, offset.min(to))
+        } else {
+            (0, 0)
+        };
         s.walk_breaks += breaks;
         s.walk_bytes_lost += lost;
         for (addr, total, t, n) in objs {
             let k = (t as usize).min(TYPES - 1);
             s.inline[k][0] += 1;
             s.inline[k][1] += total as u64;
-            let x = Sample { inline: true, t, bytes: total as u32, n, pcs: if n != 0 { pcs } else { [0; DEPTH] } };
+            let x = Sample {
+                inline: true,
+                t,
+                bytes: total as u32,
+                n,
+                pcs: if n != 0 { pcs } else { [0; DEPTH] },
+            };
             enter(s, addr, x);
         }
     });
@@ -405,7 +488,9 @@ fn walk_pending_inline(at_birth: bool) {
             return;
         }
         let arena = &*super::hot_arena();
-        let Some(b) = arena.blocks.get(arena.current) else { return };
+        let Some(b) = arena.blocks.get(arena.current) else {
+            return;
+        };
         if b.data != st.data || st.offset <= b.offset {
             return;
         }
@@ -471,10 +556,25 @@ fn type_name(t: usize) -> String {
     crate::gc::gc_type_info(t as u8).map_or_else(|| format!("type{t}"), |i| i.name.to_string())
 }
 
+/// LIFE I3: a region hook's point: every object allocated so far has been
+/// seen (the inline slow call flushed, the pending inline burst walked).
+pub(crate) fn sync_point() {
+    if on() {
+        flush_slow();
+        walk_pending_inline(true);
+    }
+}
+
+/// The byte-sample interval.
+pub(crate) fn interval() -> usize {
+    INTERVAL.load(Ordering::Relaxed)
+}
+
 /// Process exit: write the TSV.
 pub(crate) fn write() {
     flush_slow();
     walk_pending_inline(false);
+    crate::wpfacts_check::life_regions_exit();
     minor();
     let base = image_base();
     let (arena, large) = super::allocation_totals();
@@ -497,9 +597,19 @@ pub(crate) fn write() {
             "#arenas\tyoung={}\told={}\tlonglived={}\tsurvivor0={}\tsurvivor1={}\tyoung_large_flag={}\told_large_flag={}\tarmed_arena_bytes={}\trefused_bytes={}\tevacuated_bytes={}\n",
             by[0].0, by[1].0, by[2].0, by[3].0, by[4].0, by[0].1, by[1].1, s.armed_arena_bytes, s.refused, s.evacuated
         ));
+        out.push_str(&format!(
+            "#shape_shared\tobjects={}\tbytes={}\n",
+            SHAPE_SHARED[0].load(Ordering::Relaxed),
+            SHAPE_SHARED[1].load(Ordering::Relaxed)
+        ));
         for t in 0..TYPES {
             if s.unnoted[t][0] != 0 {
-                out.push_str(&format!("#unnoted\t{}\t{}\t{}\n", type_name(t), s.unnoted[t][0], s.unnoted[t][1]));
+                out.push_str(&format!(
+                    "#unnoted\t{}\t{}\t{}\n",
+                    type_name(t),
+                    s.unnoted[t][0],
+                    s.unnoted[t][1]
+                ));
             }
         }
         for t in 0..TYPES {
@@ -509,7 +619,13 @@ pub(crate) fn write() {
             }
             out.push_str(&format!(
                 "#type\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                type_name(t), r[0], r[1], i[0], i[1], c[0], c[1]
+                type_name(t),
+                r[0],
+                r[1],
+                i[0],
+                i[1],
+                c[0],
+                c[1]
             ));
         }
         let names = ["covered", "uncovered", "unplaced"];
@@ -527,7 +643,9 @@ pub(crate) fn write() {
             }
             out.push('\n');
         }
-        let _ = std::fs::write(&s.path, out);
+        if !s.path.is_empty() {
+            let _ = std::fs::write(&s.path, out);
+        }
     });
 }
 
@@ -550,6 +668,7 @@ fn arena_lines(s: &State) -> String {
     )
 }
 
+#[cfg(unix)]
 fn image_base() -> usize {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
     let f = write as fn() as *const libc::c_void;
@@ -557,4 +676,10 @@ fn image_base() -> usize {
         return 0;
     }
     info.dli_fbase as usize
+}
+
+/// `dladdr` is POSIX; elsewhere the dump records the unknown base, 0.
+#[cfg(not(unix))]
+fn image_base() -> usize {
+    0
 }

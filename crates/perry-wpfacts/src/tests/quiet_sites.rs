@@ -121,7 +121,11 @@ fn an_element_site_of_plain_arrays_under_a_number_key_is_quiet() {
     // decided on them and not withheld for want of a representation.
     assert!(matches!(s.local("plain", "arr").rep, Rep::Arr(_)));
     assert!(matches!(s.local("plain", "out").rep, Rep::Arr(_)));
-    assert!(s.element("arr[i] + 1"), "{}", s.line("element", "arr[i] + 1"));
+    assert!(
+        s.element("arr[i] + 1"),
+        "{}",
+        s.line("element", "arr[i] + 1")
+    );
     assert!(s.element("out[i] = "), "{}", s.line("element", "out[i] = "));
     // The value read from an Array of Numbers is a primitive.
     assert!(s.mb().primitive_elements.contains(&at("arr[i] + 1")));
@@ -133,7 +137,10 @@ fn an_array_with_an_accessor_defined_on_it_is_not_quiet() {
     // The receiver holds an Array, and the refusal names the definition.
     assert!(s.local("accessor", "ys").other);
     assert!(!s.element("ys[i] = 1"));
-    assert_eq!(s.line("element", "ys[i] = 1"), "refused=receiver:defined-key");
+    assert_eq!(
+        s.line("element", "ys[i] = 1"),
+        "refused=receiver:defined-key"
+    );
 }
 
 #[test]
@@ -187,8 +194,5 @@ fn the_negative_control_claims_every_site() {
     assert!(s.element("q[\"w\"] = 1"));
     assert!(s.element("ys[i] = 1"));
     assert!(s.element("m[k]"));
-    assert!(s
-        .mb()
-        .quiet_reads
-        .contains(&(at("p.g;"), "g".to_string())));
+    assert!(s.mb().quiet_reads.contains(&(at("p.g;"), "g".to_string())));
 }

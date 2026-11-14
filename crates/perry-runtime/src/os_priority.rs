@@ -33,9 +33,7 @@ fn js_value_to_i32(value: f64, name: &str, default: Option<i32>) -> i32 {
         throw_os_type_error(format!("The \"{name}\" argument must be of type number"));
     }
 
-    let number = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else if js_value.is_number() {
+    let number = if js_value.is_number() {
         js_value.as_number()
     } else {
         throw_os_type_error(format!("The \"{name}\" argument must be of type number"));

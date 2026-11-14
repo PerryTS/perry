@@ -451,6 +451,18 @@ pub(crate) fn birth_user(user: usize, size: usize) {
     let _ = (user, size);
 }
 
+/// A born object was cut to `new_total` bytes in place (its tail became a
+/// dead header): the census records the new size. Empty in default archives.
+#[inline(always)]
+pub(crate) fn resize(header: *const u8, new_total: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::resize(header as usize, new_total);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (header, new_total);
+}
+
 /// While the census runs, compiled code must allocate through the runtime
 /// (every birth is logged), so the inline bump bound is closed.
 #[inline(always)]
@@ -869,7 +881,11 @@ pub(crate) fn pc_check(pcs: &[usize], js_text: (usize, usize)) {
         let _scope = runner::input_record::Scope::enter();
         runner::input_event(
             "stack.pc_check",
-            format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
+            format!(
+                "exec={};out={out};n={};text={lo:x}-{hi:x}",
+                exec as u8,
+                pcs.len()
+            ),
         );
         runner::runtime_pcs(pcs, js_text);
     }
@@ -966,7 +982,11 @@ pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
 macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
 #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
 #[macro_export]
-macro_rules! census_inputs { ($($code:tt)*) => {}; }
+macro_rules! census_inputs {
+    ($($code:tt)*) => {};
+}
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn record_scope() -> impl Drop { runner::input_record::Scope::enter() }
+pub(crate) fn record_scope() -> impl Drop {
+    runner::input_record::Scope::enter()
+}

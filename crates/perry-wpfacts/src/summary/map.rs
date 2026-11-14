@@ -120,13 +120,17 @@ pub fn map_cons(
         Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
+        Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
             reason,
         },
         RequireSpec { call } => RequireSpec { call: k(call) },
-        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
+        TopIfTop { dst, reason } => TopIfTop {
+            dst: n(dst),
+            reason,
+        },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -480,6 +484,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NotNullish { .. }
             | Fulfil { .. }
             | Falsy { .. }
+            | Objects { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }

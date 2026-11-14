@@ -95,11 +95,6 @@ fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
 }
 
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
-    let bits = value.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < u32::MAX as f64 {
         Some(value as u32)
     } else {
@@ -108,11 +103,6 @@ fn numeric_key_u32_index(value: f64) -> Option<u32> {
 }
 
 fn numeric_key_i32_index(value: f64) -> Option<i32> {
-    let bits = value.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {

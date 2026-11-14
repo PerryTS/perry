@@ -882,8 +882,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     let minor = field_of(req.get_nanbox_f64(), b"httpVersionMinor");
     let below_one = |v: f64| {
         let j = JSValue::from_bits(v.to_bits());
-        (j.is_int32() && j.as_int32() < 1)
-            || (j.is_number() && !j.is_int32() && j.as_number() < 1.0)
+        j.is_number() && j.as_number() < 1.0
     };
     if below_one(major) || below_one(minor) {
         let headers = field_of(req.get_nanbox_f64(), b"headers");
@@ -1058,9 +1057,14 @@ mod tests {
             let req = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
             let res = super::js_node_http_server_response_birth(proto, req);
             let obj = (res.to_bits() & POINTER_MASK) as usize;
-            assert!(on_layout(obj), "a pristine birth is born on the response layout");
+            assert!(
+                on_layout(obj),
+                "a pristine birth is born on the response layout"
+            );
             let word = (*(obj as *const ObjectHeader)).parent_class_id;
-            assert!(crate::native_payload::attach_to_object(res, &FAMILY, 7u64, 0));
+            assert!(crate::native_payload::attach_to_object(
+                res, &FAMILY, 7u64, 0
+            ));
             assert_eq!(
                 (*(obj as *const ObjectHeader)).parent_class_id,
                 word,

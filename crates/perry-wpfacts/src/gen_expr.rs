@@ -70,9 +70,10 @@ impl<'a> Gen<'a> {
     ) -> Option<NodeId> {
         let e = crate::builtins::declared_member(member)?;
         let args = args.iter().map(|a| self.expr(fx, a)).collect();
-        let t = self
-            .m
-            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name, holder: None }));
+        let t = self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity: e.name,
+            holder: None,
+        }));
         let callee = self.tok_node(t);
         let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
         self.m.cons(callee, Cons::Call { call });
@@ -93,7 +94,10 @@ impl<'a> Gen<'a> {
                 .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
                 .map(|e| e.name)
         })?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        })))
     }
 
     /// Operands only ever read as primitives by the runtime: objects get the
@@ -1098,11 +1102,15 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                if let (Expr::Array(v, _), Expr::String(_), Expr::PutValueSet { element_offset, .. }) =
-                    (value.as_ref(), key.as_ref(), e)
+                if let (
+                    Expr::Array(v, _),
+                    Expr::String(_),
+                    Expr::PutValueSet { element_offset, .. },
+                ) = (value.as_ref(), key.as_ref(), e)
                 {
                     if *element_offset != 0 && v.is_empty() {
-                        self.direct_arr = Some(crate::records::ArrBirth::Store(mi, *element_offset));
+                        self.direct_arr =
+                            Some(crate::records::ArrBirth::Store(mi, *element_offset));
                     }
                 }
                 let v = self.expr_zs(fx, value);
@@ -1517,8 +1525,13 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::ObjectAssign { target, sources } => {
-                // E4: a writer of every key the sources can carry.
-                let t = self.expr(fx, target);
+                // E4: a writer of every key the sources can carry. The
+                // result, and what the sources copy into, is ToObject(target)
+                // (ECMA-262 20.1.2.1 step 1): never a primitive.
+                let target = self.expr(fx, target);
+                let (wrapper, w) = self.bobj(mi, "Object(prim)");
+                let t = self.tmp("to-object");
+                crate::builtins::to_object_into(&mut self.m, target, wrapper, w, t);
                 for s in sources {
                     let sv = self.expr(fx, s);
                     let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);

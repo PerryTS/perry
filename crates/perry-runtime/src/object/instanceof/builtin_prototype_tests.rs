@@ -155,19 +155,23 @@ fn callable_values_follow_the_live_function_prototype_for_object_instanceof() {
         );
     }
 
-    crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_prototype_of(
-        function_prototype.get_nanbox_f64(),
-        f64::from_bits(crate::value::TAG_NULL),
-    ));
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_set_prototype_of(
+            function_prototype.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        )
+    });
     let null_link_results = [
         js_instanceof(ordinary.get_nanbox_f64(), 0xFFFF0050).to_bits(),
         js_instanceof(arrow.get_nanbox_f64(), 0xFFFF0050).to_bits(),
     ];
 
-    crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_prototype_of(
-        function_prototype.get_nanbox_f64(),
-        original_parent.get_nanbox_f64(),
-    ));
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_set_prototype_of(
+            function_prototype.get_nanbox_f64(),
+            original_parent.get_nanbox_f64(),
+        )
+    });
     let restored_results = [
         js_instanceof(ordinary.get_nanbox_f64(), 0xFFFF0050).to_bits(),
         js_instanceof(arrow.get_nanbox_f64(), 0xFFFF0050).to_bits(),
@@ -202,12 +206,14 @@ fn callable_values_follow_the_live_function_prototype_for_object_instanceof() {
         crate::value::TAG_NULL,
     )));
     let prototype_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
-        crate::value::js_nanbox_get_pointer(custom_constructor.get_nanbox_f64())
-            as *mut ObjectHeader,
-        prototype_key,
-        custom_prototype.get_nanbox_f64(),
-    ));
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(custom_constructor.get_nanbox_f64())
+                as *mut ObjectHeader,
+            prototype_key,
+            custom_prototype.get_nanbox_f64(),
+        )
+    });
     assert_eq!(
         super::static_dispatch::instanceof_with_constructor(
             ordinary.get_nanbox_f64(),
@@ -223,10 +229,12 @@ fn callable_values_follow_the_live_function_prototype_for_object_instanceof() {
         crate::value::TAG_TRUE,
         "the static Object path should target intrinsic Object.prototype"
     );
-    crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_prototype_of(
-        ordinary.get_nanbox_f64(),
-        custom_prototype.get_nanbox_f64(),
-    ));
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_set_prototype_of(
+            ordinary.get_nanbox_f64(),
+            custom_prototype.get_nanbox_f64(),
+        )
+    });
     assert_eq!(
         super::static_dispatch::instanceof_with_constructor(
             ordinary.get_nanbox_f64(),
