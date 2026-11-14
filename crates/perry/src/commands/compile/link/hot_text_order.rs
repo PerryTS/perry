@@ -250,21 +250,22 @@ fn script(placement: &Placement, lld: bool) -> String {
     out
 }
 
-/// The start-up functions of the objects perry generates for the program
-/// itself (not the runtime archives the list resolves against): the feature
-/// installer object's functions (`perry_codegen::stubs`) and each module's
-/// string-pool initializers (`__perry_prepare_literals_<module>`,
-/// `__perry_init_strings_<module>` and its chunks, `codegen::string_pool`).
-/// Every program runs them once before user code; they open the hot run.
-fn startup_sections() -> Vec<String> {
-    perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS
-        .iter()
-        .map(|name| format!(".text.{name}"))
-        .chain([
-            ".text.__perry_prepare_literals_*".to_string(),
-            ".text.__perry_init_strings_*".to_string(),
-        ])
-        .collect()
+/// The text of the program's own objects (the staging directory every
+/// object of a linking compile is written to: module init, the string-pool
+/// initializers, the feature-installer object, export wrappers; the JS
+/// function bodies are in `perry_js_text`) and of the C start files (`_start`
+/// and the init-array helpers). It runs at every start-up and sits behind the
+/// cold runtime text otherwise, where it maps a 64 KiB window of its own; at
+/// the front of the hot run it shares the windows start-up touches anyway.
+fn startup_rules() -> Vec<String> {
+    vec![
+        "*crt1.o(.text .text.*)".to_string(),
+        "*crtbegin*.o(.text .text.*)".to_string(),
+        format!(
+            "*{}*(.text .text.*)",
+            super::super::object_staging::STAGING_PREFIX
+        ),
+    ]
 }
 
 /// The text rules: one `.text` rule that takes the placed sections, in
@@ -285,8 +286,8 @@ fn text_rules(placement: &Placement, lld: bool) -> String {
     );
     // The program's own objects run these once at every start-up; behind the
     // cold runtime text they would map a 64 KiB window of their own.
-    for section in startup_sections() {
-        out.push_str(&format!("  *({section})\n"));
+    for rule in startup_rules() {
+        out.push_str(&format!("  {rule}\n"));
     }
     for section in &placement.sections {
         out.push_str("  *(");
@@ -569,17 +570,12 @@ mod tests {
         assert!(two < one, "{script}");
         assert!(script.find("__perry_rt_hot_text_start").unwrap() < two);
         assert!(script.find("__perry_rt_hot_text_end").unwrap() > one);
-        // The generated installer object's functions open the run.
+        // The program's own objects and the C start files open the run.
         for text in [&lld, &script] {
-            let installers = text
-                .find("*(.text.perry_register_feature_installers)")
-                .unwrap();
-            assert!(text.find("__perry_rt_hot_text_start").unwrap() < installers);
-            assert!(installers < text.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap());
-            for section in startup_sections() {
-                assert!(text.contains(&format!("*({section})\n")), "{text}");
-            }
-            assert!(text.contains("*(.text.__perry_init_strings_*)\n"), "{text}");
+            let program = text.find("*perry-objs-*(.text .text.*)\n").unwrap();
+            assert!(text.find("__perry_rt_hot_text_start").unwrap() < program);
+            assert!(program < text.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap());
+            assert!(text.find("*crt1.o(.text .text.*)\n").unwrap() < program);
         }
     }
 
