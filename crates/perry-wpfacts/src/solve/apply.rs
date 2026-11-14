@@ -1521,8 +1521,15 @@ impl Model {
                 {
                     let key = self.elem_key();
                     self.builtin_field_use(obj, key, ChainAct::Load(dst));
-                    let f = self.num_fields(obj);
-                    self.edge(f, dst);
+                    if self.typed_array_number_key(obj, prim, named) {
+                        // Rule TYPED-ELEM (`typed_array_number_key`): the
+                        // element, a Number (BigInt) or `undefined`.
+                        let p = self.typed_array_elem_prim(obj);
+                        self.add_prim(dst, p | prim::UNDEF);
+                    } else {
+                        let f = self.num_fields(obj);
+                        self.edge(f, dst);
+                    }
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key,
                 // also beside Strings read per entry (rule K8).
@@ -1610,8 +1617,12 @@ impl Model {
                 {
                     let key = self.elem_key();
                     self.builtin_field_use(obj, key, ChainAct::Call(call));
-                    let own = self.num_fields(obj);
-                    self.bind_via(own, call, obj);
+                    // Rule TYPED-ELEM: the callee is an element, a Number
+                    // (BigInt) or `undefined`, no function.
+                    if !self.typed_array_number_key(obj, prim, named) {
+                        let own = self.num_fields(obj);
+                        self.bind_via(own, call, obj);
+                    }
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named && obj != TOP {
