@@ -148,6 +148,7 @@ crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs
 // `populate_rows` specialized for `RealmPhases::Both`, so no row tests a
 // phase: the code of the population as it was before the realm had phases.
 #[optimize(size)]
+#[inline(never)]
 fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     populate_rows(singleton_at_entry, RealmPhases::Both)
 }

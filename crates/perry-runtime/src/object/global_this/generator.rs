@@ -153,9 +153,11 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// write, delete or relink of it sets its own shadow bit, so an unshadowed
 /// word proves it still holds only the runtime's definitions over
 /// `%Function.prototype%` ([`function_kind_prototype_unwritten`]).
-// Inlined into the population (its one-pass copy and its phase copy), as it was
-// when the population was its only caller.
-#[inline(always)]
+// Out of line and size-optimized, like the once-per-realm population that
+// calls it (from its one-pass copy and from its phase copy); listed in the
+// default hot-text order.
+#[optimize(size)]
+#[inline(never)]
 pub(crate) fn wire_function_intrinsic_parents() {
     for (ctor_slot, proto_slot, serial) in [
         (
