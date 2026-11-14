@@ -93,17 +93,19 @@ fn navigator_language() -> String {
                 .unwrap_or_else(|| "en-US".to_string())
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, locale);
-        std::env::var("LC_ALL")
-            .ok()
-            .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
-            .or_else(|| std::env::var("LANG").ok())
-            .as_deref()
-            .and_then(normalize_navigator_locale)
-            .unwrap_or_else(|| "en-US".to_string())
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, locale);
+            std::env::var("LC_ALL")
+                .ok()
+                .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
+                .or_else(|| std::env::var("LANG").ok())
+                .as_deref()
+                .and_then(normalize_navigator_locale)
+                .unwrap_or_else(|| "en-US".to_string())
+        }
     }
 }
 
@@ -271,9 +273,12 @@ fn available_parallelism() -> f64 {
     }
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        std::thread::available_parallelism()
-            .map(|n| n.get() as f64)
-            .unwrap_or(1.0)
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            std::thread::available_parallelism()
+                .map(|n| n.get() as f64)
+                .unwrap_or(1.0)
+        }
     }
 }
 
