@@ -206,7 +206,7 @@ function buildImports() {
       math_log: (x) => Math.log(x),
       date_now: () => Date.now(),
       js_typeof: (val) => {
-        const t = typeof toJsValue(val);
+        const t = __typeOf(toJsValue(val));
         stringTable.push(t);
         return nanboxString(stringTable.length - 1);
       },
@@ -496,8 +496,7 @@ function buildImports() {
 
       // closure_new(func_table_idx, capture_count) -> handle
       closure_new: (funcIdx, captureCount) => {
-        const closure = { funcIdx: funcIdx, captures: new Array(captureCount | 0) };
-        return nanboxPointer(allocHandle(closure));
+        return nanboxPointer(allocHandle(__newClosure(funcIdx, captureCount)));
       },
       // closure_set_capture(handle, idx, value) -> handle (chaining)
       // value is NaN-boxed f64 — convert to BigInt for WASM i64 ABI
@@ -1628,6 +1627,38 @@ function wrapImportsForI64(imports) {
   return wrapped;
 }
 
+// A Perry closure is a `{funcIdx, captures}` record, not a JS function. This set marks
+// the records closure_new makes, so `typeof` and a call through an object property
+// (`o.h()`) can tell a closure from a plain object that merely has those keys.
+const __perryClosures = new WeakSet();
+// The function expressions whose body reads its own `this`. Called as a method,
+// one receives the receiver through `closure_this`, which its body calls first.
+const __receiverClosures = new WeakSet();
+let __closureReceiver;
+function __newClosure(funcIdx, captureCount, receivesThis) {
+  const closure = { funcIdx: funcIdx, captures: new Array(captureCount | 0) };
+  __perryClosures.add(closure);
+  if (receivesThis) __receiverClosures.add(closure);
+  return closure;
+}
+function __isPerryClosure(v) {
+  return __perryClosures.has(v);
+}
+// `receiver.m(...args)` where `m` is a Perry closure. Only a closure that takes
+// the receiver gets it, and it is cleared after the call either way, so no other
+// closure's `closure_this` can see it.
+function __callClosureMethod(closure, receiver, args) {
+  if (__receiverClosures.has(closure)) __closureReceiver = receiver;
+  try {
+    return __memDispatch.closure_call_spread(closure, args);
+  } finally {
+    __closureReceiver = undefined;
+  }
+}
+function __typeOf(v) {
+  return __isPerryClosure(v) ? 'function' : typeof v;
+}
+
 // Class method/static/parent tables
 const classMethodTable = {};
 const classStaticTable = {};
@@ -1847,7 +1878,7 @@ const __memDispatch = {
   math_clz32: (x) => Math.clz32(x),
   math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
-  js_typeof: (val) => typeof val,
+  js_typeof: (val) => __typeOf(val),
   parse_int: (val) => parseInt(String(val), 10),
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
@@ -1969,7 +2000,12 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount) => ({ funcIdx: funcIdx, captures: new Array(captureCount | 0) }),
+  closure_new: (funcIdx, captureCount, receivesThis) => __newClosure(funcIdx, captureCount, receivesThis),
+  closure_this: () => {
+    const receiver = __closureReceiver;
+    __closureReceiver = undefined;
+    return receiver;
+  },
   closure_set_capture: (closure, idx, value) => {
     if (closure) closure.captures[idx | 0] = __jsValueToBits(value);
     return closure;
@@ -5233,6 +5269,11 @@ function __jsMethodInvoke(ref, args) {
     __memDispatch.propagate_exception(true);
     return result;
   }
+  if (__isPerryClosure(ref.f)) {
+    const result = __callClosureMethod(ref.f, ref.r, args);
+    __memDispatch.propagate_exception(true);
+    return result;
+  }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   return ref.f.apply(ref.r, args);
 }
@@ -5286,6 +5327,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       const method = objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
+      if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
     } catch (error) {
       if (tryDepth === 0) throw error;
       currentException = error;

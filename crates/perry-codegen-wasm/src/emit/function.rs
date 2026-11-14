@@ -128,8 +128,9 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
+        this: ClosureThis,
     ) -> Function {
-        // Closure parameters: captures first, then declared params
+        // Closure parameters: captures, the captured `this`, then declared params
         let mut local_map = BTreeMap::new();
         let mut param_idx = 0u32;
         for cap in captures {
@@ -138,6 +139,10 @@ impl WasmModuleEmitter {
         }
         for cap in mutable_captures {
             local_map.insert(*cap, param_idx);
+            param_idx += 1;
+        }
+        let captured_this = param_idx;
+        if this == ClosureThis::Captured {
             param_idx += 1;
         }
         for param in params {
@@ -149,6 +154,10 @@ impl WasmModuleEmitter {
         let mut extra_locals = 0u32;
         collect_param_locals(params, &mut local_map, &mut extra_locals, param_idx);
         collect_locals(body, &mut local_map, &mut extra_locals, param_idx);
+        let receiver = param_idx + extra_locals;
+        if this == ClosureThis::Receiver {
+            extra_locals += 1;
+        }
 
         let temp_local_idx = param_idx + extra_locals;
         let temp_i32_idx = temp_local_idx + 3;
@@ -156,6 +165,18 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        match this {
+            ClosureThis::None => {}
+            ClosureThis::Captured => ctx.this_local = captured_this,
+            ClosureThis::Receiver => {
+                // Before anything else runs: the runtime clears the receiver once
+                // this call starts.
+                ctx.emit_frame_begin(&mut func, 0);
+                ctx.emit_memcall(&mut func, "closure_this", 0);
+                func.instruction(&Instruction::LocalSet(receiver));
+                ctx.this_local = receiver;
+            }
+        }
         ctx.emit_box_params(&mut func, params);
         // A captured cell already exists; a `let` of it in the body (a lowered
         // generator re-declares its locals per state) fills that cell.
