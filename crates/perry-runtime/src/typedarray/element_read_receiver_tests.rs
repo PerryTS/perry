@@ -496,13 +496,12 @@ fn js_typed_array_set_dispatches_a_uint8array_buffer_owner() {
     // Function inlining can specialize an `any` helper at a Uint8Array call
     // site and emit this generic typed-array setter. The receiver remains a
     // BufferHeader, so the setter must dispatch instead of assuming the +16
-    // TypedArrayHeader data offset. Keep the value NaN-boxed to match the
-    // erased `any` parameter ABI that exposed the release blocker.
+    // TypedArrayHeader data offset. The values are Numbers as the erased `any`
+    // parameter ABI passes them: plain doubles (P3 B4b).
     let buf = crate::buffer::js_uint8array_alloc(2);
     let recv = ((buf as u64) & POINTER_MASK) as *mut TypedArrayHeader;
-    let boxed_257 = f64::from_bits(crate::value::INTERNAL_WORD_TAG | 257);
-    let boxed_minus_one =
-        f64::from_bits(crate::value::INTERNAL_WORD_TAG | u64::from((-1_i32) as u32));
+    let boxed_257 = 257.0;
+    let boxed_minus_one = -1.0;
 
     js_typed_array_set(recv, 0, boxed_257);
     js_typed_array_set(recv, 1, boxed_minus_one);

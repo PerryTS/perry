@@ -89,7 +89,15 @@ fn instanceof_lhs_is_primitive(value: f64) -> bool {
     if jv.is_number() {
         return true;
     }
-    jv.is_undefined() || jv.is_null() || jv.is_bool() || jv.is_any_string() || jv.is_bigint()
+    jv.is_undefined()
+        || jv.is_null()
+        || jv.is_bool()
+        || jv.is_any_string()
+        || jv.is_bigint()
+        // A runtime-internal word that names no class is no object: the walk
+        // answers false for it and never reads it as an address.
+        || (bits & crate::value::TAG_MASK == crate::value::INTERNAL_WORD_TAG
+            && class_ref_id(value).is_none())
 }
 
 /// Candidate heap address of an `instanceof` operand; 0 for every primitive.
@@ -859,7 +867,7 @@ mod null_lhs_tests {
             f64::from_bits(crate::value::TAG_UNDEFINED),
             f64::from_bits(crate::value::TAG_NULL),
             f64::from_bits(crate::value::TAG_TRUE),
-            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5), // int32 5
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5), // an internal word
             f64::from_bits(crate::value::STRING_TAG | 0x1000),   // string tag (addr never deref'd)
             f64::from_bits(crate::value::BIGINT_TAG | 0x1000),   // bigint tag (addr never deref'd)
             // #10479: inline SSO strings ("uri", "a") and a synthetic class ref.
@@ -985,7 +993,7 @@ mod primitive_lhs_native_brand_tests_11261 {
             f64::from_bits(crate::value::STRING_TAG | 0x1000),
             f64::from_bits(crate::value::SHORT_STRING_TAG | 0x0300_0069_7275),
             f64::from_bits(crate::value::BIGINT_TAG | 0x1000),
-            // An INT32 payload that is not a registered class id.
+            // An internal word whose payload is no registered class id.
             f64::from_bits(crate::value::INTERNAL_WORD_TAG | 0x7654_3210),
             0.0,
             -0.0,
