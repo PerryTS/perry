@@ -148,3 +148,19 @@ const GF: &str = "(globalThis as any).gf = (x: any) => 0;\n";
 #[test] fn module_var_exact() { locked("var gv = (x: any) => 0;\ngv(o)") }
 #[test] fn module_function_exact() { locked("function gd(x: any) { return 0; }\ngd(o)") }
 #[test] fn module_let_exact() { locked("let gl = (x: any) => 0;\ngl(o)") }
+
+// ESCDIFF2: a generator object is its step closure (gen_call.rs
+// `js_iterator_delegate_step`). Its `next` is read along its chain
+// (ECMA-262 10.1.8.1 OrdinaryGet): the generator function's own `prototype`
+// object first (27.3.3.1 / 27.5.3), which is program-owned and reachable from
+// the class: unknown code that holds the realm may have stored any function
+// under `next` there. `g.next(o)` may then hand `o` to unknown code, and the
+// step closure itself reaches unknown code as that call's receiver. The
+// free twin already hands `o` on (the `next` of an `any` generator is not
+// modeled), so the fixture holds the held arm only (`held_only`).
+const GEN: &str = "class P { *[Symbol.iterator]() { yield 1; } }\n(globalThis as any).keep = P;\n";
+
+#[test]
+fn generator_next_through_held_prototype() {
+    held_only(&format!("{GEN}const g: any = new P()[Symbol.iterator]();\ng.next(o)"));
+}
