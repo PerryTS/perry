@@ -257,6 +257,8 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
 /// phase B of a two-phase realm has born it and before the realm global's
 /// slot names its constructor: the realm seal ran at the end of phase A and
 /// skipped it (its slot was unbound). No-op for any other family.
+#[cold]
+#[inline(never)]
 pub(crate) fn seal_realm_family_of(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) {

@@ -284,10 +284,10 @@ fn realm_intrinsic_addr(
 ) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::realm_is_complete() {
-        if crate::codegen_abi::realm_rest_global(identity.name()) {
+        if crate::object::realm_two_phase() {
+            run_phase_of(identity);
+        } else {
             crate::object::js_get_global_this();
-        } else if !crate::object::global_this_is_materialized() {
-            crate::object::js_get_global_core();
         }
         addr = cell.get();
     }
@@ -301,6 +301,20 @@ fn realm_intrinsic_addr(
         }
     }
     heal_prototype_addr(cell, addr)
+}
+
+/// A two-phase realm that is not complete: run the phase that binds
+/// `identity`'s family. Phase B through the full entry (which leaves the
+/// realm as it is when the asker is phase A itself); the core when this
+/// thread has no realm yet.
+#[cold]
+#[inline(never)]
+fn run_phase_of(identity: crate::object::BuiltinConstructorIdentity) {
+    if crate::codegen_abi::realm_rest_global(identity.name()) {
+        crate::object::js_get_global_this();
+    } else if !crate::object::global_this_is_materialized() {
+        crate::object::js_get_global_core();
+    }
 }
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).

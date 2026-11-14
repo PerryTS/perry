@@ -170,6 +170,7 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
 /// # Safety
 /// `bits` is the namespace's live value (or no pointer), under the caller's
 /// no-move scope.
+#[inline(always)]
 unsafe fn seal_namespace(i: usize, bits: u64) {
     let name = crate::codegen_abi::BUILTIN_NAMESPACES[i];
     // A constructor without statics has no bag yet: give it one, so
@@ -202,6 +203,8 @@ unsafe fn seal_namespace(i: usize, bits: u64) {
 /// two-phase realm, whose namespaces the realm seal (phase A) did not see.
 /// No-op for a name that is no builtin namespace. The caller is the
 /// population (a builtin definition, in its no-move window).
+#[cold]
+#[inline(never)]
 pub(crate) fn seal_namespace_value(name: &str, bits: u64) {
     if let Some(i) = crate::codegen_abi::BUILTIN_NAMESPACES
         .iter()
