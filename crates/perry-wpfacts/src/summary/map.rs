@@ -419,6 +419,7 @@ pub fn map_cons(
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
+        ConsoleFormat { reason, agg } => ConsoleFormat { reason, agg: n(agg) },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },
         StrReplace {
@@ -476,6 +477,7 @@ pub fn map_cons(
 
 pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
     CallSite {
+        first_arg_fixed: c.first_arg_fixed,
         this: match c.this {
             ThisArg::Node(x) => ThisArg::Node(n(x)),
             ThisArg::Tok(t) => ThisArg::Tok(t),

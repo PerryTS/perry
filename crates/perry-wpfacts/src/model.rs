@@ -757,6 +757,10 @@ pub struct CallSite {
     pub args: Vec<NodeId>,
     /// Spread argument arrays: their elements may land in any parameter.
     pub spread: Vec<NodeId>,
+    /// No spread precedes `args[0]`: it is the call's first argument
+    /// (`f(x, ...s)`). False where generation did not see the argument
+    /// list; a call without a spread has its first argument fixed anyway.
+    pub first_arg_fixed: bool,
     pub ret: NodeId,
     pub site: SiteId,
     /// The throw region the call runs in (DESIGN SEEDE section 8): what the

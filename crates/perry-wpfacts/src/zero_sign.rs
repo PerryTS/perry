@@ -155,6 +155,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::LenPermuted { .. }
         | Cons::ArrayLenArg { .. }
         | Cons::CaseMap { .. }
+        | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. }
         | Cons::Identity { .. }
         | Cons::Hard { .. }

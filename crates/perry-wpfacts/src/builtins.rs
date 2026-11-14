@@ -818,6 +818,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     m.solver_call(
         by,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Node(v),
             args: vec![rn, jn],
             spread: vec![],
@@ -2377,31 +2378,69 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     ret_prim(m, call, prim::BOOL);
 }
 
-/// A console method formats its arguments (perry-runtime
-/// formatting/util_format.rs; Node util.formatWithOptions): the first is the
-/// format string or a value it shows (`Protocol::InspectShown`); a later one
-/// a format specifier may consume (`Protocol::Inspect`). A spread hands it
-/// the elements, which the call site iterated, at any position.
-fn console_args(m: &mut Model, call: CallId) {
+/// A console method's arguments. `log`, `info`, `debug`, `error`, `warn`
+/// and `trace` print `js_util_format` of them (perry-runtime
+/// builtins/console.rs, formatting/util_format.rs; Node
+/// util.formatWithOptions): every value is shown (`Protocol::InspectShown`,
+/// `format_jsvalue`: the `[util.inspect.custom]` hook only). The specifiers
+/// (`%s` ToPrimitive, `%d` `%i` `%f` ToNumber, `%j` JSON.stringify, `%o`
+/// `%O` inspect, `%c`) are parsed only in a String first argument and only
+/// at a `%`, and they consume only later arguments: those take
+/// `Protocol::Inspect` once a value that may be the first may hold a String
+/// with `%` (rule CONSOLE-PCT, `Cons::ConsoleFormat`). The first argument is
+/// `args[0]` when no spread precedes it (`CallSite::first_arg_fixed`); else
+/// a spread's elements may be the first as well as later ones. Every other
+/// method keeps `Protocol::Inspect` on each argument but a lone first one.
+fn console_args(m: &mut Model, call: CallId, name: &str) {
     let c = m.calls[call as usize].clone();
     let r = m.reason("console argument (formatted by the runtime)");
     let ek = m.elem_key();
-    let mut shown: Vec<(NodeId, Protocol)> = c
-        .args
-        .iter()
-        .enumerate()
-        .map(|(i, &a)| {
-            let first = i == 0 && c.spread.is_empty();
-            (a, if first { Protocol::InspectShown } else { Protocol::Inspect })
-        })
-        .collect();
+    let mut elems = Vec::new();
     for &s in &c.spread {
         let dst = m.node_l("console-spread-elems");
         m.cons(s, Cons::Load { key: ek, dst });
-        shown.push((dst, Protocol::Inspect));
+        elems.push(dst);
     }
-    for (a, proto) in shown {
-        m.cons(a, Cons::Implicit { reason: r, proto });
+    if !matches!(name, "log" | "info" | "debug" | "error" | "warn" | "trace") {
+        for (i, &a) in c.args.iter().enumerate() {
+            let first = i == 0 && c.spread.is_empty();
+            let proto = if first { Protocol::InspectShown } else { Protocol::Inspect };
+            m.cons(a, Cons::Implicit { reason: r, proto });
+        }
+        for &d in &elems {
+            m.cons(d, Cons::Implicit { reason: r, proto: Protocol::Inspect });
+        }
+        ret_prim(m, call, prim::UNDEF);
+        return;
+    }
+    let fixed = c.first_arg_fixed || c.spread.is_empty();
+    let mut firsts = Vec::new();
+    let mut later = Vec::new();
+    for (i, &a) in c.args.iter().enumerate() {
+        if i == 0 {
+            firsts.push(a);
+        }
+        if i > 0 || !fixed {
+            later.push(a);
+        }
+    }
+    for &d in &elems {
+        if !fixed {
+            firsts.push(d);
+        }
+        later.push(d);
+    }
+    for &a in c.args.iter().chain(&elems) {
+        m.cons(a, Cons::Implicit { reason: r, proto: Protocol::InspectShown });
+    }
+    if !later.is_empty() {
+        let agg = m.node_l("console-consumable");
+        for &a in &later {
+            m.edge(a, agg);
+        }
+        for &f in &firsts {
+            m.cons(f, Cons::ConsoleFormat { reason: r, agg });
+        }
     }
     ret_prim(m, call, prim::UNDEF);
 }
@@ -2448,7 +2487,7 @@ fn ns_method_inner(
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
         {
-            host_call(m, BuiltinNs::Console, n, n, call, |m| console_args(m, call))
+            host_call(m, BuiltinNs::Console, n, n, call, |m| console_args(m, call, n))
         }
         // A stream method: the runtime's own, which hands its receiver to no
         // one; a listener it registers is called by the runtime (escaped).
@@ -2687,6 +2726,7 @@ fn ns_method_inner(
                         (crate::summary::MK_FROM_MAP, 0, 0),
                         Some(f),
                         CallSite {
+                            first_arg_fixed: false,
                             this: ThisArg::Undef,
                             args: vec![fa, num],
                             spread: vec![],
@@ -2724,6 +2764,7 @@ fn ns_method_inner(
                     (crate::summary::MK_FROM_CONSTRUCT, 0, 0),
                     Some(this),
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args: vec![len],
                         spread: vec![],
@@ -2779,6 +2820,7 @@ fn ns_method_inner(
                     m.solver_call(
                         call,
                         CallSite {
+                            first_arg_fixed: false,
                             this: ThisArg::Tok(holder),
                             args: vec![s, fa],
                             spread: vec![],

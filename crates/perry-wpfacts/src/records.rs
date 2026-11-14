@@ -266,7 +266,9 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. } => Allowed,
+        | Cons::Raise { .. }
+        // It reads the node's Strings only (rule CONSOLE-PCT).
+        | Cons::ConsoleFormat { .. } => Allowed,
         // Arithmetic and coercion: ToPrimitive on the record.
         Cons::Implicit { proto, .. } if sanctioned(*proto) => Allowed,
         Cons::Implicit { proto, .. } => Reject(R5Protocol(proto.name().into())),
@@ -1867,7 +1869,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Raise { .. }
                 | Cons::ArgInto { .. }
                 | Cons::Arith { .. }
-                | Cons::Plus { .. } => continue,
+                | Cons::Plus { .. }
+                | Cons::ConsoleFormat { .. } => continue,
                 Cons::Implicit { proto, .. } if sanctioned(*proto) => continue,
                 Cons::Store { .. }
                 | Cons::DeleteKey { .. }

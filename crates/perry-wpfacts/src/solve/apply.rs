@@ -2018,6 +2018,17 @@ impl Model {
                 }
             }
             // Rule K7: the case map of the receiver keeps its infix entries.
+            // Rule CONSOLE-PCT: a first argument that may hold `%` lets the
+            // specifiers consume the later arguments.
+            Cons::ConsoleFormat { reason, agg } => {
+                let fired = self.nodes[agg as usize]
+                    .cons
+                    .iter()
+                    .any(|c| matches!(c, Cons::Implicit { proto: Protocol::Inspect, .. }));
+                if !fired && self.may_hold_percent(n) {
+                    self.cons(agg, Cons::Implicit { reason, proto: Protocol::Inspect });
+                }
+            }
             Cons::CaseMap { dst, upper } => {
                 let strs = self.case_map_strs(n, upper);
                 self.add_s(dst, &[], prim::STR, strs);

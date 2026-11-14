@@ -1809,6 +1809,7 @@ impl Model {
         let arg = args[0];
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Tok(t),
             args,
             spread: vec![],
@@ -2063,6 +2064,7 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
+            Cons::ConsoleFormat { reason, agg } => format!("consolefmt {n} {reason} {agg}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),

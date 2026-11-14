@@ -117,6 +117,7 @@ mod escaped_beside_top;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
+mod dead_fn;
 mod export_star;
 mod field_array_push;
 mod first_store_order;

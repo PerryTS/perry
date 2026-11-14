@@ -328,6 +328,38 @@ impl Model {
 
     /// May the set hold a string that is no constant of it (⊤, or a known
     /// prefix)? Every reader of constants asks this, not `== STRS_TOP`.
+    /// Rule CONSOLE-PCT: may `n` hold a String that contains `%`, the one
+    /// character `js_util_format` parses a specifier at? ⊤ and a bare
+    /// marker may be any String; else each string entry: a constant by its
+    /// text, an exclusion entry (also of a prefix-and-free one) unless `%`
+    /// is excluded and its known texts hold none, every other entry (a
+    /// prefix, infix or suffix: its unknown part is any text) may.
+    pub(crate) fn may_hold_percent(&self, n: NodeId) -> bool {
+        let node = &self.nodes[n as usize];
+        if node.pts.to_sorted().into_iter().any(|t| t == TOP || self.bare_marker(t)) {
+            return true;
+        }
+        if node.prim & prim::STR == 0 {
+            return false;
+        }
+        if node.strs < STRS_SET0 {
+            return true;
+        }
+        let pct = 1u128 << b'%';
+        self.str_atoms(node.strs).iter().any(|&a| {
+            if !self.atom_is_mark(a) {
+                return self.atoms[a as usize].contains('%');
+            }
+            if let Some((p, e, s)) = self.atom_pfx_excl(a) {
+                return p.contains('%') || e & pct == 0 || s.contains('%');
+            }
+            match self.atom_excl(a) {
+                Some((e, s)) => e & pct == 0 || s.contains('%'),
+                None => true,
+            }
+        })
+    }
+
     pub(crate) fn strs_any(&self, s: StrSet) -> bool {
         s == STRS_TOP || self.str_atoms(s).iter().any(|&a| self.atom_is_mark(a))
     }

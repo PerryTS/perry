@@ -864,6 +864,7 @@ pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -
             let call2 = m.solver_call(
                 call,
                 crate::model::CallSite {
+                    first_arg_fixed: false,
                     this: crate::model::ThisArg::Node(this),
                     ..c
                 },
@@ -1148,6 +1149,7 @@ pub(super) fn native_method(
             m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Tok(origin),
                     args: c.args.iter().skip(1).copied().collect(),
                     spread: c.spread.clone(),

@@ -456,6 +456,7 @@ fn token_receiver_remains_an_explicit_call_input() {
         let callee = m.node_l("callee");
         let ret = m.funcs[0].ret;
         m.calls.push(crate::model::CallSite {
+            first_arg_fixed: false,
             this: crate::model::ThisArg::Tok(value),
             args: vec![],
             spread: vec![],

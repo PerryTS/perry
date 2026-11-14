@@ -473,6 +473,7 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
+            Cons::ConsoleFormat { reason, agg } => format!("ConsoleFormat reason={reason} agg={:?}", agg),
             Cons::BoundCall { reason, bound } => format!(
                 "BoundCall reason={:?} bound={:?}",
                 self.reasons.get(reason as usize),

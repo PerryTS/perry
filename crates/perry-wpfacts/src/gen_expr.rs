@@ -47,6 +47,7 @@ impl<'a> Gen<'a> {
             d.source_calls.insert(id);
         }
         self.m.calls.push(CallSite {
+            first_arg_fixed: false,
             this,
             args,
             spread,
@@ -1772,8 +1773,20 @@ impl<'a> Gen<'a> {
             }
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
-                let _ = (&a, &s);
-                self.call_with(fx, callee, a, s, (0, 0))
+                // The calls made from this argument list hold its spread
+                // nodes (fresh above): their `args[0]` is the first argument
+                // unless a spread leads the list.
+                let lead = matches!(args.first(), Some(CallArg::Spread(_)));
+                let (c0, spreads) = (self.m.calls.len(), s.clone());
+                let ret = self.call_with(fx, callee, a, s, (0, 0));
+                if !lead {
+                    for c in &mut self.m.calls[c0..] {
+                        if c.spread == spreads {
+                            c.first_arg_fixed = true;
+                        }
+                    }
+                }
+                ret
             }
             Expr::FuncRef(id) if self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) => {
                 let name = &self.view.expect("view").foreign_funcs[id];

@@ -661,6 +661,13 @@ pub enum Cons {
     /// (ECMA-262 22.1.3.28 / .29, `upper`: `toUpperCase`): `dst` holds a
     /// String, the receiver's entries case-mapped (`Model::case_map_strs`).
     CaseMap { dst: NodeId, upper: bool },
+    /// Rule CONSOLE-PCT: the node may be the first argument of a console
+    /// method that formats (`builtins::console_args`). `js_util_format`
+    /// parses a specifier only in a String first argument and only at a
+    /// `%`: once the node may hold a String with `%`
+    /// (`Model::may_hold_percent`), `agg`, which holds every argument a
+    /// specifier may consume, takes `Protocol::Inspect` with `reason`.
+    ConsoleFormat { reason: u32, agg: NodeId },
     /// Rule RT: the node is the input of an `exec` of the regex literal of
     /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
     /// derived groups hold the captures (`Model::capture_strs`).
@@ -778,6 +785,7 @@ impl Cons {
                 | Cons::Plus { .. }
                 | Cons::IdxKey { .. }
                 | Cons::CaseMap { .. }
+                | Cons::ConsoleFormat { .. }
                 | Cons::Captures { .. }
                 | Cons::StrReplace { .. }
                 | Cons::ClassReplace { .. }
@@ -899,6 +907,7 @@ impl Cons {
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::CaseMap { .. } => "casemap",
+            Cons::ConsoleFormat { .. } => "consolefmt",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ElemUndef { .. } => "elemundef",
