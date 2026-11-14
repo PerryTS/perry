@@ -301,3 +301,31 @@ warn.call(null, 'literal no percent', new A());
 ";
     assert_eq!(funnel(callers), crate::Verdict::Dead);
 }
+// DEADFN8: three.core.js `warn` reassigns its rest array through
+// `params = enhanceLogMessage(params)`, a function that may store into its
+// parameter and returns it. Each run of `warn` gets back its own array.
+const ENH: &str = "function enh(p) { if (process.env.T) { p[0] = 'x ' + p[0]; } return p; }
+function warn(...params) { params = enh(params); const message = 'P.' + params.shift(); console.warn(message, ...params); }
+";
+const TWO_CALLERS: &str = "warn('a ' + process.env.H);\nwarn('literal no percent', new A());\n";
+#[test]
+fn funnel_through_identity_enhancer_is_dead() {
+    assert_eq!(verdict_with(&format!("{ENH}{TWO_CALLERS}")), crate::Verdict::Dead);
+}
+// (i) The enhancer returns another call's array (a module variable).
+#[test]
+fn funnel_enhancer_returning_saved_array_runs() {
+    let src = "let saved = [];
+function enh(p) { const r = saved; saved = p; return r; }
+function warn(...params) { params = enh(params); const message = 'P.' + params.shift(); console.warn(message, ...params); }
+";
+    assert_ne!(verdict_with(&format!("{src}{TWO_CALLERS}")), crate::Verdict::Dead);
+}
+// (ii) The enhancer stores a string that may hold `%` into the first element.
+#[test]
+fn funnel_enhancer_storing_unknown_string_runs() {
+    let src = "function enh(p) { if (process.env.T) { p[0] = process.env.H; } return p; }
+function warn(...params) { params = enh(params); const message = 'P.' + params.shift(); console.warn(message, ...params); }
+";
+    assert_ne!(verdict_with(&format!("{src}{TWO_CALLERS}")), crate::Verdict::Dead);
+}

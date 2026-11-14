@@ -608,6 +608,18 @@ fn plan(
     //    is plain nodes for every other summary).
     let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
     let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
+    // The computed stores into each object node (`Cons::StoreIndexed` on
+    // the key, by its `o`): the hole marks they derive on the object
+    // (`IndexHole`, `IndexKept`) are relays a run rebuilds from its own
+    // copy of the store.
+    let mut indexed_into: FxHashMap<NodeId, Vec<(NodeId, u32)>> = FxHashMap::default();
+    for (x, nd) in m.nodes.iter().enumerate() {
+        for (i, c) in nd.cons.iter().enumerate() {
+            if let Cons::StoreIndexed { o, .. } = *c {
+                indexed_into.entry(o).or_default().push((x as NodeId, i as u32));
+            }
+        }
+    }
     loop {
         let mut dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
         for &f in &fs {
@@ -662,6 +674,18 @@ fn plan(
                     return;
                 }
                 match disposition(m, lex, &dof, &oset, f, h, c) {
+                    // A hole mark the body's own computed store derived on
+                    // its object: each run's copy of that store derives it
+                    // on the run's copy of the object from the run's own key
+                    // (`Cons::StoreIndexed` in `solve/apply.rs`).
+                    Ok(true)
+                        if matches!(c, Cons::IndexHole | Cons::IndexKept)
+                            && indexed_into.get(&h).is_some_and(|v| {
+                                v.iter().any(|&(x, j)| {
+                                    let sc = &m.nodes[x as usize].cons[j as usize];
+                                    disposition(m, lex, &dof, &oset, f, x, sc) == Ok(true)
+                                })
+                            }) => {}
                     Ok(true) => {
                         if !gen_kind(c) {
                             *bad = true;
