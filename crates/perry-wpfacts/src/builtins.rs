@@ -2582,10 +2582,18 @@ fn ns_method_inner(
             };
             ret_prim(m, call, p);
         }
+        // EnumerableOwnProperties(key) and GetOwnPropertyKeys(string) are
+        // Strings, GetOwnPropertyKeys(symbol) Symbols (ECMA-262 20.1.2.18,
+        // 20.1.2.10, 20.1.2.11; a Proxy's `ownKeys` result is filtered by
+        // type, 10.5.11).
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
             let pb = site_tmpl(m, call, "keys");
             let fa = m.field_any(pb);
-            m.add_prim(fa, prim::STR | prim::SYMBOL);
+            let p = match name {
+                "getOwnPropertySymbols" => prim::SYMBOL,
+                _ => prim::STR,
+            };
+            m.add_prim(fa, p);
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {

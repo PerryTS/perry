@@ -403,7 +403,14 @@ impl<'a> Gen<'a> {
                 );
                 let (t, n) = self.bobj(mi, "arraybox");
                 let fa = self.m.field_any(t);
-                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
+                // Symbols; 28.1.11 Reflect.ownKeys: both.
+                let p = match e {
+                    Expr::ObjectGetOwnPropertySymbols(..) => prim::SYMBOL,
+                    Expr::ReflectOwnKeys(..) => prim::STR | prim::SYMBOL,
+                    _ => prim::STR,
+                };
+                self.m.add_prim(fa, p);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
