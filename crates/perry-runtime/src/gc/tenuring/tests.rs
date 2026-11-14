@@ -239,9 +239,13 @@ fn target_formula_matches_projected_occupancy() {
     assert_eq!(compute_target_survivals(16 * MB, MB), 1); // retain-like
 }
 
+/// The ladder's climb, under `PERRY_GC_TENURING_SURVIVALS_MAX=4` (the
+/// previous default). The default ceiling of 2 is covered by
+/// `default_ceiling_holds_the_occupancy_rule_at_two`.
 #[test]
 fn drops_immediately_and_rises_debounced() {
     reset_for_test();
+    let _climb = set_occupancy_max_for_test(GC_TENURING_SURVIVALS_MAX);
     let desired = desired_survivor_bytes();
     // Power-on is the FLOOR now, not the ceiling (startup follow-up): the
     // ladder may not claim a lifetime in either direction without evidence.
@@ -406,6 +410,9 @@ fn occupancy_alone_never_claims_promote_on_first_copy_but_the_lock_still_can() {
 #[test]
 fn occupancy_may_not_claim_the_ceiling_before_any_round_is_measured() {
     reset_for_test();
+    // Phase 2 needs a ceiling above the floor to tell "gated" from "capped":
+    // run under `PERRY_GC_TENURING_SURVIVALS_MAX=4`, the previous default.
+    let _climb = set_occupancy_max_for_test(GC_TENURING_SURVIVALS_MAX);
     let d = desired_survivor_bytes();
 
     // Precondition: the ARITHMETIC still says "ceiling" for a startup-sized
@@ -490,6 +497,10 @@ fn a_cohort_that_dies_in_its_round_holds_at_the_occupancy_floor() {
 #[test]
 fn survival_rate_lock_breaks_a_saturated_pipeline() {
     reset_for_test();
+    // Ends with the ladder's climb after the unlock: the previous default,
+    // `PERRY_GC_TENURING_SURVIVALS_MAX=4`. The lock half is the same under the
+    // default ceiling (`the_default_ceiling_keeps_the_survival_rate_lock`).
+    let _climb = set_occupancy_max_for_test(GC_TENURING_SURVIVALS_MAX);
     let d = desired_survivor_bytes();
     // tree.ts steady state: influx sits JUST under desired (occupancy
     // alone settles at S=2), the survivor space holds 3 cohorts, and
@@ -522,6 +533,89 @@ fn survival_rate_lock_breaks_a_saturated_pipeline() {
         retune_after_scavenge(0, 0, 0);
     }
     assert_eq!(tenuring_survivals(), 4);
+    reset_for_test();
+}
+
+/// Default ceiling (`OCCUPANCY_MAX_SURVIVALS`, 2): with a survivor round
+/// measured and the influx quiet, the formula says 4 but the occupancy rule
+/// stays at 2 on every cycle. Sabotage: drop the `.min(occupancy_max_survivals())`
+/// in `retune_after_scavenge` and this reports 3, then 4.
+#[test]
+fn default_ceiling_holds_the_occupancy_rule_at_two() {
+    reset_for_test();
+    let d = desired_survivor_bytes();
+    assert_eq!(OCCUPANCY_MAX_SURVIVALS, 2);
+    assert_eq!(occupancy_max_survivals(), OCCUPANCY_MAX_SURVIVALS);
+    // A measured survivor round whose cohort dies (no lock).
+    retune_after_scavenge(d / 64, 3 * d, 0);
+    retune_after_scavenge(d / 64, 3 * d, 0);
+    assert!(SURVIVOR_ROUND_MEASURED.with(Cell::get));
+    assert_eq!(
+        compute_target_survivals(d / 64, d),
+        GC_TENURING_SURVIVALS_MAX,
+        "precondition: the formula still computes the ceiling; the cap is at the callsite"
+    );
+    for _ in 0..12 {
+        retune_after_scavenge(d / 64, 0, 0);
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MAX_SURVIVALS);
+    }
+    assert!(!PROMOTE_LOCK.with(Cell::get));
+    // The same readings under the previous ceiling climb: the cap, not the
+    // readings, is what holds the default at 2.
+    let _climb = set_occupancy_max_for_test(GC_TENURING_SURVIVALS_MAX);
+    for _ in 0..6 {
+        retune_after_scavenge(d / 64, 0, 0);
+    }
+    assert_eq!(tenuring_survivals(), GC_TENURING_SURVIVALS_MAX);
+    reset_for_test();
+}
+
+/// The default ceiling bounds the occupancy rule only: the survival-rate lock
+/// still reaches 1, holds, and unlocks to 2, where the default then stays.
+#[test]
+fn the_default_ceiling_keeps_the_survival_rate_lock() {
+    reset_for_test();
+    let d = desired_survivor_bytes();
+    let influx = d - 64;
+    retune_after_scavenge(influx, 3 * d, 3 * d);
+    assert_eq!(tenuring_survivals(), 2);
+    retune_after_scavenge(influx, 3 * d, 3 * d);
+    assert_eq!(tenuring_survivals(), 1, "the lock is not capped");
+    assert!(PROMOTE_LOCK.with(Cell::get));
+    for _ in 0..5 {
+        retune_after_scavenge(influx, 0, 0);
+        assert_eq!(tenuring_survivals(), 1);
+    }
+    retune_after_scavenge(0, 0, 0);
+    assert_eq!(tenuring_survivals(), 1);
+    retune_after_scavenge(0, 0, 0);
+    assert_eq!(tenuring_survivals(), 2, "unlock resumes at 2");
+    for _ in 0..6 {
+        retune_after_scavenge(0, 0, 0);
+        assert_eq!(
+            tenuring_survivals(),
+            2,
+            "and the default ceiling holds it there"
+        );
+    }
+    reset_for_test();
+}
+
+/// `PERRY_GC_TENURING_SURVIVALS_MAX` values are clamped into the occupancy
+/// rule's range; the explicit pin still overrides the ceiling.
+#[test]
+fn occupancy_ceiling_is_clamped_and_the_pin_still_wins() {
+    assert_eq!(clamped_occupancy_max(0), OCCUPANCY_MIN_SURVIVALS);
+    assert_eq!(clamped_occupancy_max(1), OCCUPANCY_MIN_SURVIVALS);
+    assert_eq!(clamped_occupancy_max(2), 2);
+    assert_eq!(clamped_occupancy_max(3), 3);
+    assert_eq!(clamped_occupancy_max(4), 4);
+    assert_eq!(clamped_occupancy_max(u8::MAX), GC_TENURING_SURVIVALS_MAX);
+    reset_for_test();
+    let _ceiling = set_occupancy_max_for_test(2);
+    let _pin = set_env_pin_for_test(3);
+    assert_eq!(tenuring_survivals(), 3);
+    assert_eq!(PromotionPolicy::snapshot().survivals(), 3);
     reset_for_test();
 }
 
