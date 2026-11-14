@@ -2308,6 +2308,10 @@ pub struct Model {
     /// The value: (the call, its own target node, which every run's
     /// callee node flows into and the callee constraint sits on).
     pub chain_calls: FxHashMap<(CallId, &'static std::panic::Location<'static>, u32, u32, u32, bool), (CallId, NodeId)>,
+    /// A call -> the root-level native-made call it descends from (the call
+    /// a native made while it ran for a call that is not itself under such
+    /// a root): the chain root of `chain_calls`' keys.
+    pub chain_root: FxHashMap<CallId, CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
