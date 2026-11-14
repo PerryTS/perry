@@ -692,7 +692,8 @@ pub(super) fn bobj_family(what: &str) -> Family {
         }
         "Promise" => Family::Promise,
         "Error" => Family::Error,
-        "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
+        "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions"
+        | "Object(empty)" => {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"

@@ -279,10 +279,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::Array => call_builtin_ns(m, ns, call),
-        BuiltinNs::Object => {
-            let o = site_tmpl(m, call, "Object()");
-            ret_tok(m, call, o);
-        }
+        BuiltinNs::Object => object_value(m, call),
         _ => {
             implicit_args(m, call, "builtin constructor argument", Protocol::Any);
             let o = site_tmpl(m, call, "builtin");

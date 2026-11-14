@@ -1169,6 +1169,10 @@ fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<us
         Some(w) if members::box_chain(w) == members::BoxChain::Object => {
             m.declarations.family(Family::Object, m)
         }
+        // The ordinary object `Object()` makes of `undefined` or `null`
+        // (20.1.1.1 step 2: OrdinaryObjectCreate(%Object.prototype%)): its
+        // members are `Object.prototype`s, as an object literals (`None`).
+        Some("Object(empty)") => m.declarations.family(Family::Object, m),
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }
@@ -1684,9 +1688,26 @@ pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
 /// what the program stored on it (its fields, `Model::load_from`)? A RegExp
 /// object owns only `lastIndex`, defined `[[Enumerable]]: false` (ECMA-262
 /// 22.2.3.1 RegExpAlloc); a Promise owns none (27.2.3.1, 27.2.4.7: internal
-/// slots only).
+/// slots only); nor does the ordinary object `Object()` of `undefined` or
+/// `null` makes (`Object(empty)`, 20.1.1.1: OrdinaryObjectCreate) or a
+/// Number, Boolean, Symbol or BigInt wrapper (21.1.1.1, 20.3.1.1, 20.4.1,
+/// 21.2.1, 7.1.18: an internal slot only). A String wrapper owns its index
+/// keys (10.4.3.5): not one of these. An ArrayBuffer or SharedArrayBuffer
+/// owns none either (25.1.3.1 AllocateArrayBuffer, 25.2.2.1: internal slots
+/// only).
 pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
-    matches!(what, "RegExp" | "Promise")
+    matches!(
+        what,
+        "RegExp"
+            | "Promise"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "Object(empty)"
+            | "BoxedNumber"
+            | "BoxedBoolean"
+            | "BoxedSymbol"
+            | "BoxedBigInt"
+    )
 }
 
 /// A builtin object whose template is a container the model fills
@@ -3195,14 +3216,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
-        BuiltinNs::Object => {
-            let c = m.calls[call as usize].clone();
-            for &a in &c.args {
-                m.edge(a, c.ret);
-            }
-            let o = site_tmpl(m, call, "Object()");
-            ret_tok(m, call, o);
-        }
+        BuiltinNs::Object => object_value(m, call),
         BuiltinNs::Array => {
             let arr = site_new_array(m, call);
             let fa = m.field_any(arr);
@@ -3218,6 +3232,64 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, arr);
         }
         _ => unknown_method(m, call, &format!("call of builtin {ns:?}")),
+    }
+}
+
+/// `Object(v)` / `new Object(v)` with NewTarget undefined or `Object`
+/// itself (ECMA-262 20.1.1.1; a class extending `Object` constructs through
+/// its `super()` call, not here), modelled at `call`: no argument gives a new
+/// ordinary object with no own property; a first argument gives what
+/// `object_value_rule` says, its objects born at the call. A spread argument
+/// list leaves the first value unnamed: the opaque `Object()` object.
+pub(crate) fn object_value(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if !c.spread.is_empty() {
+        let o = site_tmpl(m, call, "Object()");
+        ret_tok(m, call, o);
+        return;
+    }
+    match c.args.first() {
+        None => {
+            let o = site_tmpl(m, call, "Object(empty)");
+            ret_tok(m, call, o);
+        }
+        Some(&a) => {
+            let born = OBJECT_VALUE_KINDS.map(|(_, what)| site_tmpl(m, call, what));
+            object_value_rule(m, a, c.ret, born);
+        }
+    }
+}
+
+/// The guard test of each primitive kind of `v` in `Object(v)` and the
+/// object it gives (20.1.1.1, ToObject 7.1.18): `undefined`/`null` give
+/// OrdinaryObjectCreate(%Object.prototype%), an ordinary object with no own
+/// property (`Object(empty)`, family `Object`); every other kind its
+/// wrapper (22.1.1.1 String exotic object, 21.1.1.1, 20.3.1.1, 21.2.1,
+/// 20.4.1).
+pub(crate) const OBJECT_VALUE_KINDS: [(u8, &str); 6] = [
+    (guard::NULLISH, "Object(empty)"),
+    (guard::BOXED_NUM, "BoxedNumber"),
+    (guard::BOXED_STR, "BoxedString"),
+    (guard::BOXED_BOOL, "BoxedBoolean"),
+    (guard::BOXED_BIGINT, "BoxedBigInt"),
+    (guard::BOXED_SYMBOL, "BoxedSymbol"),
+];
+
+/// `dst` = `Object(arg)` (20.1.1.1): `arg`'s objects as themselves, ⊤ as
+/// ⊤ (`Cons::ObjectValue`), and for each primitive kind `arg` may hold the
+/// object `born` holds for it, in `OBJECT_VALUE_KINDS` order (a guard on
+/// `arg`). A String wrapper's index properties are the characters of its
+/// string (10.4.3.5).
+pub(crate) fn object_value_rule(m: &mut Model, arg: NodeId, dst: NodeId, born: [Tok; 6]) {
+    m.cons(arg, Cons::ObjectValue { dst });
+    for (&(test, what), t) in OBJECT_VALUE_KINDS.iter().zip(born) {
+        if what == "BoxedString" {
+            let chars = m.num_fields(t);
+            m.add_prim(chars, prim::STR);
+        }
+        let from = m.node_l("object-value");
+        m.add_tok(from, t);
+        m.cons(arg, Cons::Guard { test, from, dst });
     }
 }
 

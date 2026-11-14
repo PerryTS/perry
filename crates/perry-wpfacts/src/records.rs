@@ -288,6 +288,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
             Reject(R2Write("[index]".into()))
         }
         Cons::ArrayLenArg { .. } => Reject(R5StoreHeap("Array(x)".into())),
+        // `Object(x)` returns an object argument as itself (20.1.1.1).
+        Cons::ObjectValue { .. } => Reject(R5StoreHeap("Object(x)".into())),
         // A record used as a property key: ToPropertyKey.
         Cons::IdxKey { .. }
         | Cons::IdxOwnKey { .. }

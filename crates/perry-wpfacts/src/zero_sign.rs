@@ -253,7 +253,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ContractThis { .. }
         | Cons::OverrideThis { .. }
         | Cons::TopIfAny { .. }
-        | Cons::RequireSpec { .. } => Use::Observe,
+        | Cons::RequireSpec { .. }
+        | Cons::ObjectValue { .. } => Use::Observe,
     }
 }
 
