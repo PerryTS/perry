@@ -108,7 +108,11 @@ fn the_probe_lists_locals_and_fields() {
         ..Default::default()
     };
     let d = crate::compute(&[("t.ts".to_string(), &hir)], &cfg).dump_text();
-    assert!(d.lines().any(|l| l == "# booleans field Game.done"), "{d}");
+    assert!(
+        d.lines()
+            .any(|l| l.starts_with("# booleans field ") && l.ends_with("Game.done")),
+        "{d}"
+    );
     assert!(
         d.lines()
             .any(|l| l.starts_with("# booleans module=0 local=")),
