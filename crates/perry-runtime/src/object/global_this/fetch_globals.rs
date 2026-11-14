@@ -12,23 +12,16 @@ crate::perry_thread_local! {
     static THREAD_GLOBAL_THIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-crate::perry_thread_local! {
-    /// The same word as `THREAD_GLOBAL_THIS` from the moment this thread's
-    /// realm is COMPLETE: its global's population has run both phases, or is
-    /// running them back to back. 0 before that. The population has two
-    /// phases (`populate::populate_realm_core`, then `populate::populate_realm_rest`);
-    /// [`js_get_global_this`] promises the complete realm and reads this cell.
-    static THREAD_GLOBAL_COMPLETE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
 /// Is THIS thread's realm complete: every declared slot of its global bound,
 /// or being bound by the population that is running? The predicate of the
-/// cold by-name readers; never materializes anything. While the two phases
-/// run back to back it is true from the global's allocation, exactly as
-/// [`global_this_is_materialized`] is.
+/// cold by-name readers; never materializes anything. The population has two
+/// phases (`populate::populate_realm_core`, then
+/// `populate::populate_realm_rest`); while they run back to back the realm is
+/// complete from its global's allocation, so this is
+/// [`global_this_is_materialized`].
 #[allow(dead_code)] // the by-name readers ask it once a row is in the second phase
 pub(crate) fn realm_is_complete() -> bool {
-    THREAD_GLOBAL_COMPLETE.with(|c| c.get()) != 0
+    THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }
 
 #[cfg(test)]
@@ -127,7 +120,6 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
 /// after the first phase; the caller holds the bootstrap's no-move window.
 fn complete_realm() {
     let global = THREAD_GLOBAL_THIS.with(|c| c.get());
-    debug_assert_eq!(global, THREAD_GLOBAL_COMPLETE.with(|c| c.get()));
     populate_realm_rest(
         crate::value::js_nanbox_get_pointer(f64::from_bits(global)) as *mut ObjectHeader
     );
@@ -136,7 +128,7 @@ fn complete_realm() {
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
-    let mine = THREAD_GLOBAL_COMPLETE.with(|c| c.get());
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
     if mine != 0 {
         return f64::from_bits(mine);
     }
@@ -182,12 +174,6 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
     let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(cache_slot as i64);
-    // The two phases run back to back: the realm counts as complete from its
-    // allocation, as it always did. The cell is a second copy of the tagged
-    // word, so it is registered (marked and rewritten) like the first.
-    THREAD_GLOBAL_COMPLETE.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
-    let complete_slot = THREAD_GLOBAL_COMPLETE.with(|c| c.as_ptr() as usize);
-    crate::gc::js_gc_register_global_root(complete_slot as i64);
     // Publish to the process-global GC-root slot so this thread's collector marks
     // it (the unit-test harness runs tests sequentially, so the slot always holds
     // the running thread's global). `GLOBAL_THIS_READY` is toggled around
