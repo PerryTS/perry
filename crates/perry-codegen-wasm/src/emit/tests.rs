@@ -578,6 +578,28 @@ try {
     );
 }
 
+// An async body is emitted as JavaScript, and every `JSON.stringify` reaches it as
+// `JsonStringifyFull`: a request body built there must be the JSON text, and the
+// replacer and space arguments must apply.
+#[test]
+fn async_body_json_stringify_feeds_a_request_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function tok(): string { return "Bearer " + String(6 * 7); }
+async function f(obj: any): Promise<string> {
+  const req = new Request("http://127.0.0.1/x", { method: "POST", body: JSON.stringify(obj) });
+  const pretty = JSON.stringify([1], null, 2);
+  const keys = JSON.stringify(obj, ["a", "t"]);
+  return (await req.text()) + " " + pretty.length + " " + keys;
+}
+f({ a: 1, b: [2, 3], t: tok() }).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        r#"{"a":1,"b":[2,3],"t":"Bearer 42"} 7 {"a":1,"t":"Bearer 42"}"#
+    );
+}
+
 // `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
 // user instance throws TypeError instead of reaching the bridge fallback.
 #[test]
