@@ -1169,7 +1169,7 @@ extern "C" fn readable_pull_microtask(
     unsafe {
         let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
         let stream_id = f64::from_bits(stream_bits) as usize;
-        let cb = js_closure_get_capture_ptr(closure, 1);
+        let cb = perry_runtime::closure::closure_capture_ref(closure, 1);
         let pull_returns_byte_chunk = js_closure_get_capture_ptr(closure, 2) != 0;
         let should_pull = {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -1361,7 +1361,7 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
         3,
     );
     js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
-    js_closure_set_capture_ptr(pull, 1, cb);
+    perry_runtime::closure::closure_set_capture_ref(pull, 1, cb);
     perry_runtime::closure::closure_set_capture_word(
         pull,
         2,
@@ -2325,7 +2325,7 @@ extern "C" fn readable_from_chunk_fulfilled(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     unsafe {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise = scope.root_raw_mut_ptr(promise);
@@ -2343,7 +2343,7 @@ extern "C" fn readable_from_chunk_rejected(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     js_promise_reject(promise, reason);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -2393,12 +2393,12 @@ unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
             let reject =
                 js_closure_alloc(perry_runtime::fn_info!(readable_from_chunk_rejected, 1), 1);
             let reject = scope.root_raw_mut_ptr(reject);
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 fulfill.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,
             );
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 reject.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,

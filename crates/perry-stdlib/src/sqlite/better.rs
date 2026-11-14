@@ -490,14 +490,12 @@ pub(crate) unsafe extern "C" fn sqlite_tx_wrapper(
     _this: perry_runtime::closure::JsThis,
     arg0: f64,
 ) -> f64 {
-    use perry_runtime::closure::{
-        js_closure_call1, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    };
+    use perry_runtime::closure::{js_closure_call1, js_closure_get_capture_f64};
 
     let db_handle_f64 = js_closure_get_capture_f64(wrapper_closure, 0);
     let db_handle = db_handle_f64 as i64;
-    let original_closure =
-        js_closure_get_capture_ptr(wrapper_closure, 1) as *const perry_runtime::ClosureHeader;
+    let original_closure = perry_runtime::closure::closure_capture_ref(wrapper_closure, 1)
+        as *const perry_runtime::ClosureHeader;
 
     // BEGIN
     js_sqlite_begin_transaction(db_handle);
@@ -523,15 +521,13 @@ pub unsafe extern "C" fn js_sqlite_transaction(
     db_handle: Handle,
     closure_ptr: i64,
 ) -> *mut perry_runtime::ClosureHeader {
-    use perry_runtime::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     require_database_open(db_handle);
 
     let wrapper = js_closure_alloc(perry_runtime::fn_info!(sqlite_tx_wrapper, 1), 2);
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
-    js_closure_set_capture_ptr(wrapper, 1, closure_ptr);
+    perry_runtime::closure::closure_set_capture_ref(wrapper, 1, closure_ptr);
 
     wrapper
 }
