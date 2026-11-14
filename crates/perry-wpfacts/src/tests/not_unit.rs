@@ -335,3 +335,48 @@ fn control_relink_chain_literal_escapes() {
     let pf = one(&format!("{C}{HOLD}const j: any = JSON.parse(s);\n{LS}hostTake(d.spot);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\nconsole.log(t.x);\n"));
     assert!(none(&at(&pf, "x", false), "OwnDataOrAbsent"));
 }
+
+// NOTUNIT6: a `__proto__` relink of a program literal (B.2.2.1.2: the
+// literal is an ordinary object; `t[k] = v` with `k` any string may be
+// `t.__proto__ = v`, whose setter sets [[Prototype]] to `v` when `v` is an
+// object or null, 10.1.2). The relink adds the edge and nothing else.
+fn raw(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
+    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    s.sort_by_key(|s| (s.module, s.byte_offset));
+    let v: Vec<String> = s.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    eprintln!("NOTUNIT6 {key} call={call}: {v:?}");
+    v
+}
+
+/// (i) The collapse shape (three.js `BufferGeometry.setAttribute`): a
+/// literal under an any-string-key store of literals; nothing unknown runs.
+/// Unrelated program objects keep their verdicts and no receiver is ⊤.
+#[test]
+fn nu6_relinked_literal_under_any_key_store_keeps_the_realm() {
+    let pf = one(&format!("{C}class G {{ attributes: any = {{}}; set(name: string, a: any) {{ this.attributes[name] = a; return this; }} }}\nconst g = new G();\nconst j: any = JSON.parse(s);\nfor (const k in j) g.set(k, {{ array: [1, 2], n: 1 }});\nconst u = {{ f(x: number) {{ return x + 1; }} }};\nconsole.log(u.f(2));\nfor (const k in g.attributes) console.log(g.attributes[k].n);\n"));
+    let f = raw(&pf, "f", true);
+    let n = raw(&pf, "n", false);
+    assert!(!f.is_empty() && f.iter().all(|v| !v.contains("Top")));
+    assert!(!n.is_empty() && n.iter().all(|v| !v.contains("Top")));
+}
+
+/// (ii) Soundness: `o[s] = p` may relink `o` to `p`: `o.x` may read `p.x`
+/// (never "absent only"), `o.m()` may run `m` with `this = o`.
+#[test]
+fn nu6_relinked_literal_reads_the_new_chain() {
+    let pf = one(&format!("{C}const o: any = {{}};\nconst p = {{ m() {{ return this; }}, x: 1 }};\no[s] = p;\nconsole.log(o.x);\nconsole.log(o.m());\n"));
+    let x = raw(&pf, "x", false);
+    let m = raw(&pf, "m", true);
+    // `o.x`: own data of `o`, `p.x` (data on the new chain) or undefined.
+    assert!(!x.is_empty() && x.iter().all(|v| v.starts_with("OwnDataOrAbsent")));
+    // `o.m()` may run `p.m` with `this = o`: no birth-field claim.
+    assert!(!m.is_empty() && m.iter().all(|v| v.starts_with("No(")));
+}
+
+/// (iii) Control: `v` may be an opaque host object: the chain is unknown,
+/// reads and calls on `o` are unknown (held).
+#[test]
+fn nu6_control_relink_to_a_host_object_is_held() {
+    let pf = one(&format!("{C}declare function hostGet(): any;\nconst o: any = {{}};\no[s] = hostGet();\nconsole.log(o.x);\n"));
+    assert!(none(&raw(&pf, "x", false).iter().map(|v| v.split(' ').next().unwrap().to_string()).collect::<Vec<_>>(), "OwnDataOrAbsent"));
+}
