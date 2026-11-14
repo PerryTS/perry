@@ -2188,8 +2188,8 @@ pub unsafe extern "C" fn perry_probe_set(
         OwnSet::Stored => 1,
         OwnSet::Slot(obj, address, slot) => probe_set_slot_any(obj, address, slot, store_bits(value)),
         OwnSet::Table(t, address) => probe_set_table_barrier(t, address, store_bits(value)),
-        OwnSet::Absent(obj, r) => probe_set_add(dir, obj, r, key_bits, hash, store_bits(value)),
-        OwnSet::Rest => probe_set_rest(dir, obj_bits, key_bits, hash, value),
+        OwnSet::Absent(r) => probe_set_add(dir, obj_bits, r, key_bits, hash, value),
+        OwnSet::OverflowMiss(_) | OwnSet::Rest => probe_set_rest(dir, obj_bits, key_bits, hash, value),
     }
 }
 
@@ -2205,17 +2205,34 @@ unsafe fn probe_set_rest(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64
     }
 }
 
-/// [`perry_probe_set`]'s add of a key its receiver's own list proves absent.
+/// [`perry_probe_set`]'s add of a key its receiver's own list does not hold
+/// ([`OwnSet::Absent`]): absent when the list is complete
+/// ([`own_list_complete`]), else the complete store probe.
 #[inline(never)]
 unsafe fn probe_set_add(
     dir: *const u8,
-    obj: *mut ObjectHeader,
+    obj_bits: u64,
     r: *const ShapeRecord,
     key_bits: u64,
     hash: u64,
-    bits: u64,
+    value: f64,
 ) -> i32 {
-    i32::from(probe_add(dir, obj, r, key_bits, hash, bits))
+    if !own_list_complete(r) {
+        return probe_set_rest(dir, obj_bits, key_bits, hash, value);
+    }
+    let obj = (obj_bits & POINTER_MASK) as usize as *mut ObjectHeader;
+    i32::from(probe_add(dir, obj, r, key_bits, hash, store_bits(value)))
+}
+
+/// Does record `r`'s own list name every own key of its receivers by atom
+/// (its probe word's `PROBE_ATOMS`), so that a key it does not hold is
+/// absent? Asked by the add arms, after the leaf's index loop.
+///
+/// # Safety
+/// `r` is a live record.
+#[inline(always)]
+pub(crate) unsafe fn own_list_complete(r: *const ShapeRecord) -> bool {
+    (*r).probe & PROBE_ATOMS != 0
 }
 
 /// [`perry_probe_set`]'s barriered store of a value other than a finite
@@ -2264,9 +2281,15 @@ pub(crate) enum OwnSet {
     Slot(*mut ObjectHeader, *mut u64, u32),
     /// An overflow-owned plain value word, written: its barrier remains.
     Table(*mut crate::object::overflow::Table, *mut u64),
-    /// The receiver (ordinary, unfrozen, no overflow, no prototype role)
-    /// and its record, whose own list proves the key absent: the add.
-    Absent(*mut ObjectHeader, *const ShapeRecord),
+    /// The record of the receiver (ordinary, unfrozen, no overflow, no
+    /// prototype role) whose own list does not hold the key: absent when the
+    /// list is complete ([`own_list_complete`], which the arm asks): the add.
+    Absent(*const ShapeRecord),
+    /// The record of an overflowed receiver (ordinary, unfrozen, no
+    /// prototype role) whose overflow does not hold the key. The overflow
+    /// owns every current own key, so the key is absent unless the layout
+    /// names it (a deleted layout key); the arm asks the layout, then the add.
+    OverflowMiss(*const ShapeRecord),
     /// Everything else: the complete store decides.
     Rest,
 }
@@ -2308,7 +2331,6 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
     if gc._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
         return OwnSet::Rest;
     }
-    let bits = store_bits(value);
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() {
@@ -2321,7 +2343,7 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
         if word & crate::object::overflow::SHADOW_BIT != 0 && (*meta).overflow != 0 {
             let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
             let Some(i) = crate::object::overflow::find_hashed_with(t, key_bits, || hash) else {
-                return OwnSet::Rest;
+                return OwnSet::OverflowMiss(r);
             };
             if let Some(slot) = crate::object::overflow::fixed_slot_of(t, i) {
                 if !crate::object::key_attrs::entry_is_plain_writable_data(
@@ -2329,7 +2351,7 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
                 ) {
                     return OwnSet::Rest;
                 }
-                return own_slot_hit(obj, r, slot, bits);
+                return own_slot_hit(obj, r, slot, value);
             }
             if !crate::object::overflow::plain_writable_value(t, i) {
                 return OwnSet::Rest;
@@ -2337,13 +2359,15 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
             let address = crate::object::overflow::value_at(t, i);
             // GC_STORE_AUDIT(BARRIERED): the table owns this value word; the
             // caller's tail call is its barrier.
-            *address = bits;
+            *address = store_bits(value);
             return OwnSet::Table(t, address);
         }
     }
+    // The hit takes the receiver from its value bits and computes the
+    // stored word itself, so the index loop holds neither.
     match own_store_slot(r, key_bits, hash) {
-        Ok(slot) => own_slot_hit(obj, r, slot, bits),
-        Err(true) => OwnSet::Absent(obj, r),
+        Ok(slot) => own_slot_hit((obj_bits & POINTER_MASK) as usize as *mut ObjectHeader, r, slot, value),
+        Err(true) => OwnSet::Absent(r),
         Err(false) => OwnSet::Rest,
     }
 }
@@ -2352,7 +2376,7 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
 /// property): a finite Number in a lane that takes it is stored here; a
 /// hole (an absent key), a spilled slot or a tail lane is the rest.
 #[inline(always)]
-unsafe fn own_slot_hit(obj: *mut ObjectHeader, r: *const ShapeRecord, slot: u32, bits: u64) -> OwnSet {
+unsafe fn own_slot_hit(obj: *mut ObjectHeader, r: *const ShapeRecord, slot: u32, value: f64) -> OwnSet {
     if slot >= (*r).live_inline_slot_count || slot >= crate::object::field_rep::REP_SLOTS {
         return OwnSet::Rest;
     }
@@ -2362,6 +2386,7 @@ unsafe fn own_slot_hit(obj: *mut ObjectHeader, r: *const ShapeRecord, slot: u32,
     if *address == TAG_HOLE {
         return OwnSet::Rest;
     }
+    let bits = store_bits(value);
     let rep = (*r).word0_lane(slot);
     if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000
         && rep != crate::object::field_rep::REP_SPECIAL
@@ -2379,7 +2404,8 @@ unsafe fn own_slot_hit(obj: *mut ObjectHeader, r: *const ShapeRecord, slot: u32,
 /// The inline slot a store of `key_bits` writes in record `r`'s receivers,
 /// from the index entry alone (no call): `Ok(slot)` for a [`WRITE_ENTRY`]
 /// (or an unindexed position below the bound, no entry blocking a store),
-/// `Err(true)` when the list proves the key absent, `Err(false)` for the
+/// `Err(true)` when the list does not hold the key (absent when the list is
+/// complete: [`own_list_complete`], asked by the caller), `Err(false)` for the
 /// rest (an underived or declining probe word, a TEXT entry of the key's
 /// hash that is not its word, an entry that is no plain writable slot).
 #[inline(always)]
@@ -2389,13 +2415,15 @@ unsafe fn own_store_slot(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Resul
         return Err(false);
     }
     let count = (*r).logical_key_count;
-    let absent = Err(word & PROBE_ATOMS != 0);
+    // The probe word is not held past here: the caller asks whether the
+    // list is complete ([`own_list_complete`]).
+    let absent = Err(true);
     if count == 0 {
         return absent;
     }
-    let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let table = (word & !PROBE_FLAGS) as *const KeyIndex;
     if table.is_null() {
+        let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
         let mut i = 0;
         while i < count {
             if *list.add(i as usize) == key_bits {
@@ -2430,7 +2458,8 @@ unsafe fn own_store_slot(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Resul
             let w = if e & ALIAS_ENTRY != 0 {
                 KeyIndex::word(table, p)
             } else {
-                *list.add(p as usize)
+                // The list is read at the entry, not held across the loop.
+                *(crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64).add(p as usize)
             };
             if w == key_bits {
                 return if e & WRITE_ENTRY != 0 {
@@ -2643,7 +2672,10 @@ pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;
 pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
-pub(crate) use computed::{keyed_add_admitted, keyed_own_set, probe_store_keyed, store_key_mintable, KeyedStore};
+pub(crate) use computed::{
+    keyed_add_admitted, keyed_leaf, keyed_overflow_append, probe_store_atom, probe_store_keyed,
+    probe_store_keyed_complete, store_key_mintable, KeyedStore,
+};
 pub(crate) use keyed_delete::probe_delete_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
