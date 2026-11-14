@@ -2948,6 +2948,9 @@ fn ns_method_inner(
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // `ArrayBuffer.isView(a)` (ECMA-262 25.1.5.1): a Boolean; it reads
+        // only the argument's [[ViewedArrayBuffer]] slot and runs no code.
+        (BuiltinNs::ArrayBuffer, "isView") => ret_prim(m, call, prim::BOOL),
         // A key the namespace's description (its own keys and its chain)
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).
