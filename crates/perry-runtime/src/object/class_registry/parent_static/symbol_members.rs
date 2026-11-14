@@ -330,7 +330,16 @@ mod static_receiver_tests {
             );
             let set = |class_id: u32, v: f64| {
                 let c = crate::object::class_value::class_value(class_id);
-                crate::object::property_ops::put_value::js_put_value_set_dynamic(c, sym, v, 0);
+                // SAFETY: this agent's own shape directory.
+                unsafe {
+                    crate::object::property_ops::put_value::js_put_value_set_dynamic(
+                        crate::object::shapes::ordinary_dir_addr(),
+                        c,
+                        sym,
+                        v,
+                        0,
+                    )
+                };
                 c
             };
             // An own symbol property of the class function object (an
