@@ -915,14 +915,22 @@ pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -
             let c = m.calls[call as usize].clone();
             let this = m.node_l("written-prim-this");
             m.add_prim(this, p);
-            let call2 = m.solver_call(
+            // One call per (root of `call`, key, primitive kinds): a stored
+            // method this call runs may reach the same written key on the
+            // same primitives again (`ObjectProtoMethod` runs every
+            // Object.prototype method on its primitive `this`); that is the
+            // call already made, joined, not a new one.
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_WRITTEN_PRIM, a, p as u32),
+                Some(w),
                 crate::model::CallSite {
                     this: crate::model::ThisArg::Node(this),
                     ..c
                 },
-            );
-            m.cons(w, Cons::Call { call: call2 });
+            ) {
+                m.cons(w, Cons::Call { call: call2 });
+            }
         }
         _ => unreachable!(),
     }

@@ -1125,7 +1125,7 @@ impl Model {
                     self.with_native(call, |m| builtins::annexb_lookup(m, Some(t), call, setter));
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.with_native(call, |m| builtins::annexb_lookup(m, None, call, setter));
+                    self.with_native(call, |m| builtins::annexb_lookup_prim(m, prim, call, setter));
                 }
             }
             Cons::AccessorInstall {

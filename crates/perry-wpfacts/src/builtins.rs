@@ -2146,7 +2146,7 @@ mod accessor_lookup;
 mod methods;
 pub(crate) mod object_statics;
 pub(crate) use accessor_lookup::{
-    annexb_lookup, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
+    annexb_lookup, annexb_lookup_prim, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
 };
 pub use methods::*;
 pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};

@@ -97,6 +97,26 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
     }
 }
 
+/// B.2.2.4/5 with a primitive `this` (ECMA-262 7.1.18 ToObject): the
+/// wrapper's own properties are data properties (a String's indices and
+/// `length`, 10.4.3) or none, so no own descriptor answers with an
+/// accessor; the walk starts at the prototype of the primitive's kind,
+/// whose chain the realm declares (`members::wrapper_protos`).
+pub(crate) fn annexb_lookup_prim(m: &mut Model, p: u16, call: CallId, setter: bool) {
+    for (bit, name) in [
+        (prim::STR, "String"),
+        (prim::NUM, "Number"),
+        (prim::BOOL, "Boolean"),
+        (prim::SYMBOL, "Symbol"),
+        (prim::BIGINT, "BigInt"),
+    ] {
+        if p & bit != 0 {
+            let t = native_proto(m, name);
+            annexb_lookup(m, Some(t), call, setter);
+        }
+    }
+}
+
 /// The same transfer serves intrinsic dispatch and the direct runtime lowering.
 /// `None` is a primitive wrapper: its native descriptors are not represented by
 /// program accessor records, so its result remains conservative.

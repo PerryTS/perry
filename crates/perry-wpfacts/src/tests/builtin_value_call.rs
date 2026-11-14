@@ -221,3 +221,65 @@ fn skinhold2_control_define_on_object_constructor_stays() {
         "a define under an unknown key on a value holding Object writes Object"
     );
 }
+
+/// SKINHOLD3: three.js skin `propertyMixers[ j ].accumulate( accuIndex,
+/// weight )` (AnimationAction::_update): the receiver may be `Object` and a
+/// primitive (`bindingsByName[ trackName ]` on `Object`, reached through
+/// `bindingsByRoot[ rootUuid ]` = `Object.prototype.constructor`, reads its
+/// `length` / `name`), the callee `Object.prototype.__lookupGetter__`
+/// (stored onto `Object` by `bindingByName[ trackName ] = binding` in
+/// `_addInactiveBinding`). B.2.2.4 on a primitive `this` runs on its
+/// wrapper (7.1.18): own data properties or none, then its kind's
+/// prototype chain: no unknown code, the realm is not held. The store's
+/// key is named: an unknown key may be `__proto__` (B.2.2.1.2), which
+/// gives `Object` a prototype whose chain has an accessor (E6, a separate
+/// hold, SKINHOLD4 note).
+#[test]
+fn red_skinhold3_lookup_getter_on_a_primitive_walks_its_prototype() {
+    assert_eq!(
+        run("const r: any = process.argv.length > 9 ? Object : 1; (Object as any).accumulate = ({} as any)[json.j]; const h: any = r.accumulate(1, 0.5); console.log(h(o));"),
+        (false, false)
+    );
+}
+
+/// Control: the direct call on a primitive answers the same way.
+#[test]
+fn skinhold3_control_direct_lookup_getter_on_a_number() {
+    assert_eq!(
+        run("const h: any = (1 as any).__lookupGetter__(json.k); console.log(h(o));"),
+        (false, false)
+    );
+}
+
+/// Control: a program getter installed on `Object.prototype` under an
+/// unknown key is what the lookup on a primitive may return: it runs, and
+/// its result is the program value it returns.
+#[test]
+fn skinhold3_control_program_getter_on_the_chain_is_found() {
+    assert!(
+        !proven("const json: any = JSON.parse(process.argv[2] ?? \"{}\"); (Object.prototype as any).__defineGetter__(json.k, function () { return json; }); const h: any = (1 as any).__lookupGetter__(json.k); const s: any = h(); console.log(s.marker);", "marker"),
+        "the getter returns a JSON value: s.marker reads an unknown object"
+    );
+}
+
+/// SKINHOLD4 control: a String wrapper's `length` is an own data
+/// property (10.4.3), so B.2.2.4/5 on a string answers `undefined` for it:
+/// no unknown function.
+#[test]
+fn skinhold4_control_lookup_on_a_string_own_data_is_undefined() {
+    assert_eq!(
+        run("const h: any = (\"abc\" as any).__lookupGetter__(\"length\"); const k: any = (\"abc\" as any).__lookupSetter__(\"length\"); if (h !== undefined) h(o); if (k !== undefined) k(o);"),
+        (false, false)
+    );
+}
+
+/// SKINHOLD4 control: on a number the walk from Number.prototype reaches
+/// Object.prototype's realm `__proto__` accessor (B.2.2.1): its getter
+/// reads the receiver's [[Prototype]] and runs no unknown code.
+#[test]
+fn skinhold4_control_lookup_proto_getter_on_a_number_is_the_realm_accessor() {
+    assert_eq!(
+        run("const h: any = (5 as any).__lookupGetter__(\"__proto__\"); const p: any = h.call(o); console.log(p);"),
+        (false, false)
+    );
+}

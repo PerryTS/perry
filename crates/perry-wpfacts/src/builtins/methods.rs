@@ -202,7 +202,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // program runs.
         Some(Mem::Fn) if name == "__defineGetter__" || name == "__defineSetter__" => {}
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
-            annexb_lookup(m, None, call, name == "__lookupSetter__");
+            annexb_lookup_prim(m, prim, call, name == "__lookupSetter__");
         }
         // 20.4.3.5 Symbol.prototype[@@toPrimitive](hint): thisSymbolValue;
         // the hint is not read.
