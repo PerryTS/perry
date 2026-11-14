@@ -510,17 +510,22 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                     }
                     remove_written(&catch.body, &mut thrown);
                 }
-                // An exception escaping body or catch also runs the finally,
-                // with any of their writes behind it.
-                merged.set.retain(|id| thrown.contains(id));
                 if let Some(finally) = finally {
                     self.finally_stack.pop();
                     let was_live = merged.live;
-                    let mut finally_state = FlowState::live(merged.set.clone());
+                    // An exception escaping body or catch also runs the
+                    // finally, with any of their writes behind it.
+                    let entry = merged.set.intersection(&thrown).copied().collect();
+                    let mut finally_state = FlowState::live(entry);
                     self.stmts(finally, &mut finally_state);
                     if !finally_state.live {
                         merged = finally_state;
                     } else {
+                        // The continuation is reached only by the normal
+                        // exits, so a local Number there stays one through a
+                        // finally that does not write it.
+                        remove_written(finally, &mut merged.set);
+                        finally_state.set.extend(merged.set);
                         merged = FlowState {
                             set: finally_state.set,
                             live: was_live,
@@ -956,6 +961,40 @@ mod tests {
                     Expr::Integer(1),
                 )))]),
                 None,
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(run(&stmts).contains(&N));
+    }
+
+    /// `n = 1; try { n = 2; } catch { n = 3; } return n`: both normal exits
+    /// store a Number, so the read after the try keeps the fact.
+    #[test]
+    fn continuation_keeps_a_fact_both_normal_exits_establish() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(1)),
+            try_stmt(
+                vec![set_n(Expr::Integer(2))],
+                Some(vec![set_n(Expr::Integer(3))]),
+                None,
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(run(&stmts).contains(&N));
+    }
+
+    /// `n = 1; try { n = 2; } finally { } return n`: the continuation is
+    /// reached only by the normal exit of the body.
+    #[test]
+    fn continuation_after_finally_keeps_the_normal_exit_fact() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(1)),
+            try_stmt(
+                vec![set_n(Expr::Integer(2))],
+                None,
+                Some(vec![Stmt::Expr(Expr::LocalGet(L))]),
             ),
             Stmt::Return(Some(Expr::LocalGet(N))),
         ];
