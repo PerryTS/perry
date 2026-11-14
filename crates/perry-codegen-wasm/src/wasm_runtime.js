@@ -3104,11 +3104,15 @@ function perry_ui_form_create() {
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
   return uiAlloc(el);
 }
-function perry_ui_section_create(title) {
+// `Section(title)` or `Section(title, children)`: the children array appends like a
+// VStack's, after the legend.
+function perry_ui_section_create(title, children) {
   const el = document.createElement("fieldset");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
   if (title) { const lg = document.createElement("legend"); lg.textContent = title; el.appendChild(lg); }
-  return uiAlloc(el);
+  const h = uiAlloc(el);
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  return h;
 }
 function perry_ui_navigationstack_create() {
   const el = document.createElement("div");
