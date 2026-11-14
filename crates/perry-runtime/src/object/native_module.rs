@@ -347,6 +347,8 @@ pub extern "C" fn js_vm_create_script_branded(code: f64, options: f64) -> f64 {
     )
 }
 
+// One `matches!`: inlined at each caller (the population tests every row).
+#[inline(always)]
 pub(crate) fn is_worker_messaging_constructor(property: &str) -> bool {
     matches!(
         property,
