@@ -250,6 +250,23 @@ fn script(placement: &Placement, lld: bool) -> String {
     out
 }
 
+/// The start-up functions of the objects perry generates for the program
+/// itself (not the runtime archives the list resolves against): the feature
+/// installer object's functions (`perry_codegen::stubs`) and each module's
+/// string-pool initializers (`__perry_prepare_literals_<module>`,
+/// `__perry_init_strings_<module>` and its chunks, `codegen::string_pool`).
+/// Every program runs them once before user code; they open the hot run.
+fn startup_sections() -> Vec<String> {
+    perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS
+        .iter()
+        .map(|name| format!(".text.{name}"))
+        .chain([
+            ".text.__perry_prepare_literals_*".to_string(),
+            ".text.__perry_init_strings_*".to_string(),
+        ])
+        .collect()
+}
+
 /// The text rules: one `.text` rule that takes the placed sections, in
 /// order, and then everything the default rule takes, in the default order
 /// (so the default rule that follows it is left empty and `.text` stays one
@@ -266,10 +283,10 @@ fn text_rules(placement: &Placement, lld: bool) -> String {
         placement.sections.len(),
         if lld { LLD_HOT_SECTION } else { ".text" }
     );
-    // The generated feature-installer object runs at every start-up; behind
-    // the cold runtime text it would map a 64 KiB window of its own.
-    for name in perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS {
-        out.push_str(&format!("  *(.text.{name})\n"));
+    // The program's own objects run these once at every start-up; behind the
+    // cold runtime text they would map a 64 KiB window of their own.
+    for section in startup_sections() {
+        out.push_str(&format!("  *({section})\n"));
     }
     for section in &placement.sections {
         out.push_str("  *(");
@@ -559,9 +576,10 @@ mod tests {
                 .unwrap();
             assert!(text.find("__perry_rt_hot_text_start").unwrap() < installers);
             assert!(installers < text.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap());
-            for name in perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS {
-                assert!(text.contains(&format!("*(.text.{name})\n")), "{text}");
+            for section in startup_sections() {
+                assert!(text.contains(&format!("*({section})\n")), "{text}");
             }
+            assert!(text.contains("*(.text.__perry_init_strings_*)\n"), "{text}");
         }
     }
 
