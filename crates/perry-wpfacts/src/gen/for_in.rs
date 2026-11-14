@@ -809,7 +809,8 @@ fn lit_key(e: &Expr) -> Option<&str> {
 /// F-A: the body of a for-in over a path runs no code but its own reads,
 /// stores and deletes (and the accessors those may run, `Gen::path_watch`):
 /// every expression is a literal, a local, `this`, a member read, store or
-/// delete (`PutValueSet` included) whose computed key is the loop key `key` or a string literal, a
+/// delete (`PutValueSet` included) whose computed key is the loop key `key` or a string literal, an
+/// object or array literal without spread or computed keys, a sequence, a
 /// conditional, `typeof`, `void`, `!`, `&&`/`||`/`??` or `===`/`!==` (no
 /// ToPrimitive, 7.2.15 IsStrictlyEqual).
 fn path_body_pure(body: &[Stmt], key: u32) -> bool {
@@ -836,6 +837,17 @@ fn path_body_pure(body: &[Stmt], key: u32) -> bool {
             | Expr::TypeOf(_)
             | Expr::Void(_)
             | Expr::Logical { .. } => true,
+            // An object or array literal runs no program code: its
+            // properties are made by CreateDataPropertyOrThrow (13.2.5.5
+            // PropertyDefinitionEvaluation, 13.2.4.1 ArrayAccumulation),
+            // which runs no setter; its static keys need no ToPropertyKey.
+            // Its parts (visited themselves) are checked here like any
+            // other expression; a spread (`ObjectSpread`, `ArraySpread`)
+            // or computed key is no such literal. `__AnonShape_*` is the
+            // HIR class of an object literal (its constructor only defines
+            // the fields from its arguments). A sequence runs its parts.
+            Expr::Object(_) | Expr::Array(..) | Expr::Sequence(_) => true,
+            Expr::New { class_name, .. } => class_name.starts_with("__AnonShape_"),
             Expr::Compare { op, .. } => matches!(op, CompareOp::Eq | CompareOp::Ne),
             Expr::Unary { op, .. } => matches!(op, UnaryOp::Not),
             _ => false,
