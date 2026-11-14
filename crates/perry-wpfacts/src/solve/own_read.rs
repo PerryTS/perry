@@ -52,7 +52,10 @@ impl Model {
     ) {
         if enumerable
             && t != TOP
-            && (self.enum_free(t) || self.enum_obj(t) || builtins::enum_free_instance(self, t))
+            && (self.enum_free(t)
+                || self.enum_obj(t)
+                || builtins::enum_free_instance(self, t)
+                || builtins::enum_free_buffer(self, t))
         {
             return self.enum_read_tok(idx, t, dst, shape);
         }
@@ -237,7 +240,10 @@ impl Model {
     /// of the per-key for-in runs (`Model::for_in_keys`).
     pub(crate) fn enum_subject(&self, t: Tok) -> bool {
         t != TOP
-            && (self.enum_free(t) || self.enum_obj(t) || builtins::enum_free_instance(self, t))
+            && (self.enum_free(t)
+                || self.enum_obj(t)
+                || builtins::enum_free_instance(self, t)
+                || builtins::enum_free_buffer(self, t))
             && !self.is_elem_array(t)
             && !self
                 .tmpl_of(t)
