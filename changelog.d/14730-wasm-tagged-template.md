@@ -1,0 +1,1 @@
+On the web target a tagged template passes its strings array to the tag: ``T.tag`x` `` on a static method, an instance method or a function receives the call site's frozen strings array, with `raw` and the same object on every evaluation, instead of `undefined` (or a TypeError for a static method).
