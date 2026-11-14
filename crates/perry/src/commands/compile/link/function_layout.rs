@@ -39,6 +39,23 @@ pub(super) fn add_link_args(
                     write_atomically(&script, rule)?;
                 }
                 cmd.arg(format!("-Wl,-T,{}", script.display()));
+            } else if !linux && !android && !harmony {
+                // Mach-O: the same default order as an `-order_file`,
+                // opt-in (`hot_text_order_macho`).
+                if let Some(file) =
+                    super::hot_text_order_macho::order_file_path(cache, runtime_archives, verbose)
+                {
+                    if direct_apple {
+                        cmd.arg("-order_file").arg(&file);
+                    } else if xlinker_apple {
+                        cmd.arg("-Xlinker")
+                            .arg("-order_file")
+                            .arg("-Xlinker")
+                            .arg(&file);
+                    } else {
+                        cmd.arg(format!("-Wl,-order_file,{}", file.display()));
+                    }
+                }
             }
             return Ok(());
         }
