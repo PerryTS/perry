@@ -36,8 +36,10 @@ pub(crate) struct ForIn<'s> {
 pub(crate) enum EnumSubject {
     /// ENUM1 (exact): the local `__forin_obj` copies, never written.
     Local(u32),
-    /// Rule R (optimistic): the loop subject path, re-read in the body.
-    Path(SubjPath),
+    /// Rule R (optimistic): the loop subject path, re-read in the body; and
+    /// the local `__forin_obj` holding the object the loop iterates (never
+    /// written, `enum_scope`).
+    Path(SubjPath, u32),
 }
 
 /// Rule R: a side-effect-free loop subject path `x.a.b` or `this.a.b`:
@@ -409,7 +411,7 @@ impl<'a> Gen<'a> {
                 if std::env::var_os("PERRY_FACTS_FORIN_PATH_COUNT").is_some() {
                     eprintln!("forin-path: module {mi} key {key} path {p:?}");
                 }
-                Some((mi, key, EnumSubject::Path(p)))
+                Some((mi, key, EnumSubject::Path(p, obj)))
             }
             _ => None,
         }
@@ -420,7 +422,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn enum_read(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
         self.enum_subjects(mi, index).any(|s| match s {
             EnumSubject::Local(src) => matches!(object, Expr::LocalGet(l) if l == src),
-            EnumSubject::Path(p) => p.is(object),
+            EnumSubject::Path(p, _) => p.is(object),
         })
     }
 
@@ -439,17 +441,22 @@ impl<'a> Gen<'a> {
             })
     }
 
-    /// ENUM3: the node of the subject local of the innermost ENUM1-scoped
-    /// for-in (`EnumSubject::Local`, exact) whose key `index` reads: a store
-    /// under that key stores under the keys the subject enumerates
-    /// (`Cons::StoreKeyed`'s `subj`); `NO_NODE` otherwise.
+    /// ENUM3: the node of the object the innermost ENUM-scoped for-in whose
+    /// key `index` reads iterates: its subject local (`EnumSubject::Local`)
+    /// or, for a path subject (`EnumSubject::Path`), the loop's own
+    /// `__forin_obj` local, which holds that object and is never written.
+    /// A store under that key stores under the keys that object enumerates
+    /// (`Cons::StoreKeyed`'s `subj`; ECMA-262 14.7.5.9: a key of the run is
+    /// one of them, so a key read from a numeric property is that canonical
+    /// numeric string and never a name); `NO_NODE` otherwise. Exact: the
+    /// key, not the path re-read in the body, decides the store.
     pub(crate) fn enum_key_subject(&mut self, fx: &Fx, index: &Expr) -> NodeId {
         let src = self
             .enum_subjects(fx.module, index)
             .last()
             .and_then(|s| match s {
                 EnumSubject::Local(src) => Some(*src),
-                EnumSubject::Path(_) => None,
+                EnumSubject::Path(_, obj) => Some(*obj),
             });
         match src {
             Some(src) => self.expr(fx, &Expr::LocalGet(src)),

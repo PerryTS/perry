@@ -962,3 +962,85 @@ fn red_r7hold9_arraybuffer_method_on_a_buffer_or_a_non_buffer() {
     assert!(!r7hold9_resize_escapes("c ? o : buf"));
 }
 
+
+/// R7HOLD13 (r7, GLTFLoader.js:2341 `addUnknownExtensionsToUserData`:
+/// `for ( const name in objectDef.extensions ) ... gltfExtensions[ name ] =
+/// objectDef.extensions[ name ]`): `src` holds a V only under a Number
+/// key (ToPropertyKey 7.1.19: a canonical numeric string) and `x` under
+/// `name`. A for-in over `src` (ECMA-262 14.7.5.9) yields "name" and
+/// that numeric string; `dst[k] = src[k]` stores each value under the key it
+/// was read under (13.15.2 PutValue with the same binding `k`), so
+/// `dst.position` stays 0 and V never reaches the host. The loop iterates a
+/// path (`o.ext`, as GLTFLoader iterates `objectDef.extensions`). Controls keep the
+/// rule from firing where the store key or the value is another one.
+fn r7hold13_escapes(src_fill: &str, loop_body: &str, read: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; getX(i: number) {{ return this.zz + i; }} }}
+        const j: any = JSON.parse(process.argv[2] ?? "{{}}");
+        const src: any = {{}};
+        {src_fill}
+        src.name = "x";
+        const o: any = {{ ext: src }};
+        const dst: any = {{ position: 0, name: 0 }};
+        {loop_body}
+        (globalThis as any).hostTake({read});
+        console.log(new V().getX(1));
+        "#
+    );
+    let v = site(&facts(&s), "zz").verdict.clone();
+    matches!(v, Verdict::No(_))
+}
+
+const R7H13_NUM_FILL: &str = "src[j.i * 1] = new V();";
+
+#[test]
+fn red_r7hold13_forin_copy_keeps_numeric_keys_numeric() {
+    assert!(!r7hold13_escapes(
+        R7H13_NUM_FILL,
+        "for (const k in o.ext) { dst[k] = o.ext[k]; }",
+        "dst.position"
+    ));
+}
+
+/// Control (i): the store key is another value: any name.
+#[test]
+fn control_r7hold13_other_store_key_escapes() {
+    assert!(r7hold13_escapes(
+        R7H13_NUM_FILL,
+        "const k2: any = j.n; for (const k in o.ext) { dst[k2] = o.ext[k]; }",
+        "dst.position"
+    ));
+}
+
+/// Control (ii): the loop variable is reassigned in the body: any name.
+#[test]
+fn control_r7hold13_reassigned_key_escapes() {
+    assert!(r7hold13_escapes(
+        R7H13_NUM_FILL,
+        "for (let k in o.ext) { k = j.n; dst[k] = o.ext[k]; }",
+        "dst.position"
+    ));
+}
+
+/// Control (iii): the source has a named field `position` holding a V:
+/// `dst.position` may be it.
+#[test]
+fn control_r7hold13_named_position_source_escapes() {
+    assert!(r7hold13_escapes(
+        "src.position = new V();",
+        "for (const k in o.ext) { dst[k] = o.ext[k]; }",
+        "dst.position"
+    ));
+}
+
+/// Control (iv): the value passes through a call returning a V: it lands
+/// under every key the loop yields, `name` among them.
+#[test]
+fn control_r7hold13_value_through_call_escapes() {
+    assert!(r7hold13_escapes(
+        R7H13_NUM_FILL,
+        "const g = (x: any) => new V(); for (const k in o.ext) { dst[k] = g(o.ext[k]); }",
+        "dst.name"
+    ));
+}
