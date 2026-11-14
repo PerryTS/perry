@@ -582,6 +582,7 @@ impl<'a> FuncEmitCtx<'a> {
 impl<'a> FuncEmitCtx<'a> {
     /// `super[key](args)` in a method of `current_class`: the lookup starts at that
     /// class's parent, not at the receiver's class, and `receiver` stays `this`.
+    /// As in `o.m(args)`, the property is read before the arguments are evaluated.
     fn emit_super_method_call(
         &mut self,
         func: &mut Function,
@@ -596,11 +597,29 @@ impl<'a> FuncEmitCtx<'a> {
             .copied()
             .unwrap_or(0);
         let class_bits = (STRING_TAG << 48) | (class_id as u64);
+        let store = Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        });
+        // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
         self.emit_frame_begin(func, 4);
+        self.emit_store_arg(func, 1, receiver);
+        self.emit_frame_begin(func, 3);
         self.emit_store_arg(func, 0, receiver);
         self.emit_store_const(func, 1, f64::from_bits(class_bits));
         self.emit_store_arg(func, 2, key);
+        self.emit_memcall(func, "class_super_get", 3);
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&store);
+        // The key names the callee in the TypeError; a computed one is not evaluated twice.
+        match key {
+            Expr::String(_) => self.emit_store_arg(func, 2, key),
+            _ => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
+        }
         self.emit_store_arg(func, 3, &Expr::Array(args.to_vec(), None));
-        self.emit_memcall(func, "class_call_super", 4);
+        self.emit_memcall(func, "class_super_call", 4);
     }
 }
