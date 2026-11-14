@@ -407,8 +407,24 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "class_call_method", 3);
             }
-            Expr::ClassRef(_) => {
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            Expr::ClassRef(class_name) => {
+                let class_id = self
+                    .emitter
+                    .string_map
+                    .get(class_name.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let class_bits = (STRING_TAG << 48) | (class_id as u64);
+                let ctor_slot = self
+                    .emitter
+                    .class_ctor_map
+                    .get(class_name.as_str())
+                    .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
+                    .map_or(-1.0, |&slot| slot as f64);
+                self.emit_frame_begin(func, 2);
+                self.emit_store_const(func, 0, f64::from_bits(class_bits));
+                self.emit_store_const(func, 1, ctor_slot);
+                self.emit_memcall(func, "class_ref", 2);
             }
             Expr::StaticFieldGet {
                 class_name,
