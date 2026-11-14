@@ -317,6 +317,43 @@ pub(super) fn cb_call(
     ret
 }
 
+/// `cb_call` of a declared native's `calls(..)` effect: the one call of
+/// `key` (`MK_NATIVE_CB`, the entry, the effect) under the root of `by`
+/// (`Model::solver_call_keyed`). A call per run never settles when the
+/// callback is the native itself on a receiver born per call: each run's
+/// callback call runs the native on a new wrapper, whose callback call is
+/// new again. Joined, the callee node `cb`, `this` and the arguments flow
+/// into the existing call and its result into `ret`.
+pub(super) fn cb_call_keyed(
+    m: &mut Model,
+    by: CallId,
+    key: (u8, u32, u32),
+    cb: NodeId,
+    this: ThisArg,
+    args: Vec<NodeId>,
+) -> NodeId {
+    let ret = m.node_l("cb-ret");
+    m.nodes[ret as usize].frame = m.call_run(by);
+    let call2 = m.calls.len() as CallId;
+    let made = m.solver_call_keyed(
+        by,
+        key,
+        Some(cb),
+        CallSite {
+            this,
+            args,
+            spread: vec![],
+            ret,
+            site: call2,
+            region: m.thrown,
+        },
+    );
+    if let Some(c) = made {
+        m.cons(cb, Cons::Call { call: c });
+    }
+    ret
+}
+
 /// The one call a builtin method makes of member `key` of receiver `t`
 /// (`Array.prototype.toString`'s Invoke(this, "join"), `toLocaleString`'s
 /// of each element), whatever call ran the method: the member, its `this`

@@ -68,6 +68,11 @@ pub const MK_FROM_MAP: u8 = 6;
 pub const MK_FROM_CONSTRUCT: u8 = 7;
 pub const MK_FN_CALL: u8 = 8;
 pub const MK_FN_APPLY: u8 = 9;
+/// The callback call of a declared native's run (`effects::run`, a
+/// `calls(..)` effect), per (entry, effect): a run of the native that its
+/// own callback call reaches again (`forEach` called with `forEach` on a
+/// primitive receiver whose wrapper's elements hold it) joins that call.
+pub const MK_NATIVE_CB: u8 = 10;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).

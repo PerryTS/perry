@@ -19,12 +19,12 @@ fn facts(src: &str) -> ProgramFacts {
 
 /// Every solver-made call is keyed by (program call, maker kind, a bound
 /// value or a protocol step), so there are at most calls x (3 x binds +
-/// 9 makers x 3 steps) of them; `(` counts the program's calls from above
+/// 10 makers x 3 steps) of them; `(` counts the program's calls from above
 /// and `.bind(` its bind sites.
 fn bound(src: &str) -> u64 {
     let calls = src.matches('(').count() as u64;
     let binds = src.matches(".bind(").count() as u64;
-    calls * (3 * binds + 27)
+    calls * (3 * binds + 30)
 }
 
 fn check(src: &str) {
@@ -92,4 +92,25 @@ for (let i = 0; i < 8; i++) {
 console.log(o.matrix.e[0]);
 "#
     ));
+}
+
+/// A declared native whose callback is the native itself, on a primitive
+/// receiver (ToObject: a wrapper born per call) whose wrapper's elements
+/// hold it: each run's callback call runs the native on a new wrapper. Its
+/// callback call is one per (program call, entry, effect) (`MK_NATIVE_CB`),
+/// so the solve ends (before: a call per run, a recursion without end).
+#[test]
+fn native_callback_that_is_the_native_on_a_primitive() {
+    check(
+        r#"
+const f: any = Array.prototype.forEach;
+(Number.prototype as any)[0] = f;
+(Number.prototype as any).length = 1;
+(Object.prototype as any)[0] = f;
+f.call(1, f, 2);
+const g: any = Array.prototype.map;
+(String.prototype as any).length = 1;
+g.call(3, g, 4);
+"#,
+    );
 }

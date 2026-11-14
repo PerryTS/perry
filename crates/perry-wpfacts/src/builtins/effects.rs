@@ -1062,7 +1062,7 @@ fn run(
         recv: None,
         returned: Vec::new(),
     };
-    for e in entry.effects.iter() {
+    for (ei, e) in entry.effects.iter().enumerate() {
         match e {
             RealmEffect::Reads(ss) => {
                 for s in ss.iter() {
@@ -1150,7 +1150,8 @@ fn run(
                     Some(cb) => {
                         let this = run.this_arg(m, this);
                         let args: Vec<NodeId> = args.iter().map(|a| run.operand(m, a)).collect();
-                        cb_call(m, call, cb, this, args)
+                        let key = (crate::summary::MK_NATIVE_CB, m.atom(entry.name), ei as u32);
+                        super::collections::cb_call_keyed(m, call, key, cb, this, args)
                     }
                     None => m.node_l("cb-ret"),
                 };
