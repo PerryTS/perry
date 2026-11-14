@@ -79,7 +79,9 @@ fn k2_control_own_tostring_name_reaches_object_prototype() {
          for (const p in o) { const v = o2[p]; console.log(v.x); }\n",
     );
     let r = recv(&pf, "x");
-    assert!(r.contains("ObjectProtoMethod"), "{r}");
+    // The run under "toString" reads the member itself (10.1.8.1).
+    assert!(r.contains("Object.prototype.toString"), "{r}");
+    assert!(!r.starts_with("Throws"), "{r}");
 }
 
 #[test]

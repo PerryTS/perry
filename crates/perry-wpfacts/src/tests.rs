@@ -2155,5 +2155,6 @@ mod prim_recv;
 mod proto_recv;
 mod bns_recv;
 mod key_inherit;
+mod multi_run;
 mod held_realm_verdicts;
 mod held_realm_flow;

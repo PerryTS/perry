@@ -1357,9 +1357,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             }
         }
     }
+    // A site in a body the solve runs more than once (a summary instance,
+    // a for-in body's run per key) is one operation: its receiver holds
+    // what the node of EVERY run holds, the shared body's and each
+    // instance's copy (`Inst::fresh`). A run's copy may hold what the shared
+    // body never observes (a for-in run's key, FVA 4.3b).
+    let copies = element::run_copies(m);
     // The verdict of one site over the receiver nodes `recvs`.
     let verdict_of = |s: &crate::gen::ReadSite, recvs: &[u32]| {
-        let set = receiver_set(m, recvs);
+        let all = element::with_copies(&copies, recvs);
+        let set = receiver_set(m, &all);
         let toks = &set.toks;
         let prim = set.prims;
         let top_recv = set.top_recv;
@@ -1368,7 +1375,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             judge(m, &by_id, &runtime, s, &key, toks, prim, top_recv);
         // Dead needs every value of the sources: a node that left one out
         // (`dropped`) is not empty in the program.
-        if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+        if verdict == Verdict::Dead && all.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
         // Throws and a claim naming the TypeError arm of a nullish receiver
@@ -1376,7 +1383,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
         if (verdict == Verdict::Throws
             || (nullish && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
-            && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
+            && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
         }
