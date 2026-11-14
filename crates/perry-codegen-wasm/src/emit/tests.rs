@@ -1572,3 +1572,27 @@ console.log(plain(4).twice());
         "function\nlocal\n8"
     );
 }
+
+// A closure created before a class declaration it reads shares that binding's cell, so
+// it sees the class once the declaration has run.
+#[test]
+fn a_closure_reads_a_class_declared_after_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) {
+  const read = () => C;
+  class C { t() { return tag; } }
+  return read() === C;
+}
+function makeError() {
+  const read = () => E;
+  class E extends Error {}
+  return typeof read() + " " + (read() === E);
+}
+console.log(make("a") + " " + make("b") + " " + makeError());
+"#
+        ),
+        "true true function true"
+    );
+}
