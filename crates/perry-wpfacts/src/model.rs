@@ -1431,6 +1431,20 @@ pub struct StoreSite {
     /// The evaluated key of an indexed source store. Its solved scalar kind
     /// distinguishes element effects from arbitrary named-property writes.
     pub key_value: Option<NodeId>,
+    /// SKINROOT11: a same-key copy `D[k] = S[k]` (or through one
+    /// `const v = S[k]`), `k` a for-in key (a String) of one version: it
+    /// sets D's prototype only under the key `"__proto__"` (B.2.2.1.2), and
+    /// then its value is `S["__proto__"]` (10.1.8.1). Gen lowers that case
+    /// as its own named store `D["__proto__"] = S["__proto__"]` (another
+    /// site); this site's store gives no prototype.
+    pub proto_named: bool,
+    /// SKINROOT12: on the named store `D["__proto__"] = S["__proto__"]` of
+    /// a same-key copy, the copy's site. That store runs into a receiver
+    /// only when the copy's key may be `"__proto__"` there: when the copy's
+    /// store into that receiver reaches its `__proto__` case
+    /// (`Model::proto_copy_hit`); before that it waits
+    /// (`Model::proto_copy_wait`).
+    pub proto_of: Option<SiteId>,
     /// RPG1b: where the store runs in its function, when the walk made it
     /// at a statement of a function body: `Some(true)` inside a loop
     /// (body, condition or update), `Some(false)` not. `None`: a site no
@@ -2539,6 +2553,12 @@ pub struct Model {
     /// is a `__proto__` store (`solve::store`): the chain is modeled
     /// (`given_prototype`), `derive::json_relink_closed` reads it.
     pub json_relink: crate::pts::FxHashSet<Tok>,
+    /// SKINROOT12: (same-key copy site, receiver) pairs whose copy store
+    /// may name `__proto__` (`StoreSite::proto_of`).
+    pub proto_copy_hit: crate::pts::FxHashSet<(SiteId, Tok)>,
+    /// SKINROOT12: a copy's named `__proto__` stores (value node, site) into
+    /// a receiver whose copy store has not reached `__proto__` yet.
+    pub proto_copy_wait: crate::pts::FxHashMap<(SiteId, Tok), Vec<(NodeId, SiteId)>>,
     /// Another unit's classes this unit gives as a class object's parent:
     /// their constructor runs on a receiver their unit does not see. The
     /// census reports each (`Gen::reports`, `extends <class>`).

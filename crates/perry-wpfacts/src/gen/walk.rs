@@ -1115,6 +1115,8 @@ impl<'a> Gen<'a> {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            proto_of: None,
             in_loop: self.order_ok.then_some(self.loop_depth > 0),
         });
         id
@@ -1236,6 +1238,12 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let n = self.local(fx.module, *id);
+                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) = (*mutable, init) {
+                    if let perry_hir::Expr::LocalGet(k) = index.as_ref() {
+                        self.same_key_reads
+                            .insert((fx.module, *id), (*k, object.as_ref().clone(), fx.f));
+                    }
+                }
                 if ["__forof_lit_src_", "__forof_lit_arr_", "__iterator_record_", "__arr_"]
                     .iter()
                     .any(|p| name.starts_with(p))

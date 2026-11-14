@@ -252,7 +252,10 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
             Reject(R5Load("()".into()))
         }
         Cons::MCall { key: k, .. } => Reject(R5Load(format!("{}()", key(k)))),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::OwnGate { .. } => {
+        Cons::IdxLoad { .. }
+        | Cons::IdxOwnLoad { .. }
+        | Cons::OwnGate { .. }
+        | Cons::EnumLoad { .. } => {
             Reject(R5Load("[computed]".into()))
         }
         Cons::IdxMCall { .. } => Reject(R5Load("[computed]()".into())),
@@ -407,7 +410,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
             op(named(key))
         }
         Cons::Fulfil { .. } => op("then".into()),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
+        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
+            op("[index]".into())
+        }
         Cons::IndexHole | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }

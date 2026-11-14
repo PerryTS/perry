@@ -58,6 +58,8 @@ fn site(m: &mut Model) -> u32 {
         rooted: false,
         deep: false,
         key_value: None,
+        proto_named: false,
+        proto_of: None,
         in_loop: None,
     });
     (m.stores.len() - 1) as u32

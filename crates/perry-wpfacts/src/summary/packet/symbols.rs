@@ -337,6 +337,7 @@ impl Model {
                     self.packet_shape(shape)
                 )
             }
+            Cons::EnumLoad { key, dst } => format!("EnumLoad key={key:?} dst={dst:?}"),
             Cons::EnumChain { key, dst, of, .. } => format!(
                 "EnumChain key={:?} dst={:?} of={:?}",
                 key,

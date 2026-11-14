@@ -457,6 +457,71 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// SKINROOT11: a store `D[k] = value` with `k` the innermost for-in's
+    /// key (a String: ToPropertyKey is pure and gives the same key at the
+    /// read and the store) never written, and `value` = `S[k]` or a never
+    /// written `const v = S[k]` of the same function (TDZ: its one version
+    /// was initialised in this run of the body, with this `k`); `S` a
+    /// binding or a member path rooted at one, the root never written. The
+    /// store sets D's prototype only under `"__proto__"`, to `S.[[Get]]
+    /// ("__proto__")` (B.2.2.1.2, 10.1.8.1): the node of the read
+    /// `S["__proto__"]` (`StoreSite::proto_named`). A path re-read here
+    /// reads its fields' values (flow-insensitive), a superset of the value
+    /// at the read.
+    ///
+    /// SKINROOT13: the named read has the read kind of the copy's own read
+    /// `S[k]`. Where that read is enumerable (`enum_read`: ENUM1, or Rule R
+    /// for a path subject), for-in yields `k` only if `k` names an
+    /// enumerable property on S's chain at that time, and `S[k]` reads that
+    /// property unless the body changed it: the named read is the
+    /// enumerable read of `"__proto__"` (`Cons::EnumLoad`), which never
+    /// finds Object.prototype's `__proto__` accessor (non-enumerable,
+    /// 20.1.3.8) or a built-in member. Elsewhere it is the ordinary read,
+    /// accessor included (DECISIONS 217).
+    pub(crate) fn same_key_proto_src(
+        &mut self,
+        fx: &Fx,
+        key: &Expr,
+        value: &Expr,
+    ) -> Option<NodeId> {
+        let Expr::LocalGet(k) = key else { return None };
+        self.for_in_key_of(fx.module, key)?;
+        let subj = match value {
+            Expr::IndexGet { object, index, .. }
+                if matches!(index.as_ref(), Expr::LocalGet(k2) if k2 == k) =>
+            {
+                object.as_ref().clone()
+            }
+            Expr::LocalGet(l) => {
+                let (k2, s, f) = self.same_key_reads.get(&(fx.module, *l))?.clone();
+                if k2 != *k || f != fx.f || self.written_locals(fx.module).contains(l) {
+                    return None;
+                }
+                s
+            }
+            _ => return None,
+        };
+        let root = match &subj {
+            Expr::LocalGet(r) => *r,
+            e => subj_path(e)?.root?,
+        };
+        let w = self.written_locals(fx.module);
+        if w.contains(k) || w.contains(&root) {
+            return None;
+        }
+        let s = self.expr(fx, &subj);
+        let a = self.m.atom("__proto__");
+        // A path subject is enumerable only under Rule R's premise (same
+        // path, same object); `PERRY_FACTS_FORIN_PATH=0` turns Rule R off,
+        // and with it this read falls back to the ordinary one.
+        if self.enum_read(fx.module, &subj, key) {
+            let dst = self.tmp("enumload");
+            self.m.cons(s, Cons::EnumLoad { key: Key::Named(a), dst });
+            return Some(dst);
+        }
+        Some(self.load(s, Key::Named(a)))
+    }
+
     /// Locals written anywhere this solve walks (`=`, `++`).
     pub(crate) fn written_locals(&mut self, mi: u32) -> &crate::pts::FxHashSet<u32> {
         if !self.written.contains_key(&mi) {

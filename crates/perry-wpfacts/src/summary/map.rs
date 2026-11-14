@@ -282,6 +282,7 @@ pub fn map_cons(
             shape,
             enumerable,
         },
+        EnumLoad { key, dst } => EnumLoad { key, dst: n(dst) },
         EnumChain { key, dst, of, from } => EnumChain {
             key,
             dst: n(dst),
@@ -566,6 +567,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | HasInstance { .. }
             | IdxLoad { .. }
             | EnumChain { .. }
+            | EnumLoad { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }
             | IdxOwnKey { .. }
@@ -618,6 +620,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }
+        | EnumLoad { dst, .. }
         | IdxKey { dst, .. }
         | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }
