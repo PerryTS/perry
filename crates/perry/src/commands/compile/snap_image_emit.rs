@@ -1304,4 +1304,12 @@ mod unit_tests {
         let c = classify(&[w(format::WORD_TLS, 0x2ef88, Val::Scalar(2))], &t, 0x600000);
         assert!(c.unresolved.iter().any(|u| u.contains("unnamed TLS word")), "{:?}", c.unresolved);
     }
+
+    #[test]
+    fn a_record_covers_only_the_registry_statics() {
+        let t = parse_syms(SY);
+        let ws = [w(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000))];
+        let r = classify_with(&ws, &t, 0x600000, true);
+        assert_eq!((r.dropped, r.unresolved.len()), (0, 1), "{:?}", r.unresolved);
+    }
 }
