@@ -55,6 +55,9 @@ impl Model {
                 crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
             }
         }
+        if !self.realm_held && self.prov.is_some() {
+            self.why_hold_r("escape", u32::MAX, Some(t), reason);
+        }
         if self.keysnap.is_some() && !self.realm_held {
             self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
             self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));

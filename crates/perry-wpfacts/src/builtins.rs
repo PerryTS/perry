@@ -343,6 +343,9 @@ enum Recv {
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     // −0 tolerance: unknown code receives the arguments.
     m.zs_call_args(call);
+    if !m.realm_held && m.prov.is_some() {
+        m.why_hold("method", call, None);
+    }
     if crate::unksrc::on() {
         let f = crate::unksrc::call_fn(m, call);
         crate::unksrc::note("method", why, call, f);

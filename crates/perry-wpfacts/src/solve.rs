@@ -269,6 +269,12 @@ impl Model {
                 self.aborted = true;
             }
         }
+        if self.prov.is_some() {
+            let newp = prim & !self.nodes[n as usize].prim;
+            if newp != 0 {
+                self.why_prim(n, newp, std::panic::Location::caller());
+            }
+        }
         let iv = self.cur_range.unwrap_or(crate::model::Rg::TOP);
         let node = &mut self.nodes[n as usize];
         let newp = prim & !node.prim;
@@ -293,7 +299,15 @@ impl Model {
         }
         if prim & prim::STR != 0 {
             let strs = if strs == STRS_NONE { STRS_TOP } else { strs };
-            changed |= self.join_strs(n, strs);
+            if self.prov.is_some() {
+                let old = self.nodes[n as usize].strs;
+                if self.join_strs(n, strs) {
+                    changed = true;
+                    self.why_strs(n, old, std::panic::Location::caller());
+                }
+            } else {
+                changed |= self.join_strs(n, strs);
+            }
         }
         let node = &mut self.nodes[n as usize];
         if changed && !node.in_wl {

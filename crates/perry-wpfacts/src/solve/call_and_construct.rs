@@ -235,6 +235,9 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
+        if !self.realm_held && self.prov.is_some() {
+            self.why_hold(if t == TOP { "callee-top" } else { "callee-builtin" }, call, Some(t));
+        }
         if crate::unksrc::on() {
             let kind = if t == TOP { "callee-top" } else { "callee-builtin" };
             let why = format!("{:?}", self.toks[t as usize]);
@@ -745,6 +748,9 @@ impl Model {
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
+                }
+                if !self.realm_held && self.prov.is_some() {
+                    self.why_hold(if t == TOP { "new-top" } else { "new-builtin" }, call, Some(t));
                 }
                 if crate::unksrc::on() {
                     let kind = if t == TOP { "new-top" } else { "new-builtin" };

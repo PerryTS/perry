@@ -598,8 +598,10 @@ impl<'a> Gen<'a> {
         }
         if relations {
             m.relations = Some(Vec::new());
-            m.prov = crate::provenance::Prov::from_env();
         }
+        m.prov = crate::provenance::Prov::from_env(relations, || {
+            modules.iter().map(|(p, _)| p.to_string()).collect()
+        });
         let top = m.tok(TokKind::Top);
         debug_assert_eq!(top, TOP);
         m.top_node = m.node_l("TOPNODE");
