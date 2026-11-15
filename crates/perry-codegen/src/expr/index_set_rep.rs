@@ -25,7 +25,16 @@
 //!   value the facts prove a Number, `facts_canonical::of`, never an INT32
 //!   box). The element facts say a Number, but a Number's encoding may still
 //!   be an INT32 box, so they alone do not prove the VALUE's word;
-//! - the raw store. No pointer is retired or stored: no barrier, no layout
+//! - the raw store, with no NaN select: a value that is a plain double
+//!   (proven, or tested above) is outside the tag band, and the program's
+//!   NaN invariant (`perry-runtime array::canonical_raw_f64`, #10779) keeps
+//!   every NaN in circulation the hardware one (`0x7FF8_…`, or `0xFFF8_…`
+//!   from `fneg` or the x86 default NaN): every raw-byte ingress (typed
+//!   arrays, DataView, Buffer, wasm, FFI, structured clone) collapses a NaN
+//!   payload, and arithmetic on such NaNs yields such NaNs. A slot then
+//!   reads back as the same Number through any read; the raw stores of
+//!   `expr_produces_canonical_raw_f64` values rest on the same invariant.
+//! - No pointer is retired or stored: no barrier, no layout
 //!   note, and the element kind (F64 or Any) admits a plain double.
 //!
 //! Every miss (forwarded, out of the capacity, a hole, a growing store, a
@@ -49,8 +58,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// `perry_abi::GC_FLAG_FORWARDED` in the header word's second byte.
 const FORWARDED_I32: &str = "32768";
-/// `0x7FF8_0000_0000_0000`, the one NaN an F64 slot may hold.
-const CANONICAL_NAN_I64: &str = "9221120237041090560";
 
 /// `PERRY_FACTS_ARRAY_STORE=0` (`off`, `false`) turns the tier off.
 pub(crate) fn enabled() -> bool {
@@ -212,13 +219,7 @@ pub(super) fn emit(
     super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
     {
         let blk = ctx.block();
-        let stored = if int_value {
-            val_double.to_string()
-        } else {
-            let is_nan = blk.fcmp("uno", val_double, val_double);
-            let nan = blk.bitcast_i64_to_double(CANONICAL_NAN_I64);
-            blk.select(I1, &is_nan, DOUBLE, &nan, val_double)
-        };
+        let stored = val_double.to_string();
         // GC_STORE_AUDIT(POINTER_FREE): a plain double over an own Number
         // slot of an Array whose elements the facts prove Numbers: no edge
         // is created or retired, so no barrier and no layout note.
