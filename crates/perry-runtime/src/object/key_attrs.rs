@@ -856,6 +856,30 @@ pub(crate) unsafe fn list_storage_slot(keys: *const ArrayHeader, pos: u32) -> Op
     Some(attributed_storage_slot(keys, pos))
 }
 
+/// [`list_storage_slot`] over many positions of one list: its attribute
+/// words and their written length, or `(null, 0)` when every position is its
+/// own slot (a handle, an overflow table, a list without attributes).
+#[inline]
+pub(crate) unsafe fn storage_slot_words(keys: *const ArrayHeader) -> (*const u64, usize) {
+    if (keys as usize) < perry_abi::RECEIVER_HANDLE_FLOOR || (keys as u64) >> 48 != 0 {
+        return (std::ptr::null(), 0);
+    }
+    let header = &*crate::gc::header_from_trusted_user_ptr(keys.cast());
+    if header.obj_type == crate::gc::GC_TYPE_OVERFLOW
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (crate::gc_type_is_not_array!(header.obj_type)
+                || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
+    {
+        return (std::ptr::null(), 0);
+    }
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    let (w, len) = words(attrs);
+    (w as *const u64, len)
+}
+
 /// [`list_storage_slot`] for a list with attributes: one shared helper, so
 /// each reader inlines only the header test.
 #[inline(never)]
