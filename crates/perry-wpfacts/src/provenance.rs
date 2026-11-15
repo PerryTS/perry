@@ -45,6 +45,10 @@ pub struct Prov {
     why: Option<WhyRec>,
     edges: crate::pts::FxHashMap<(NodeId, NodeId), EdgeOrigin>,
     pub(crate) lines: u64,
+    /// The input token of the constraint being applied, plus one (0: none):
+    /// the recorded cause of a rule's output. In `Prov`, so nothing of it
+    /// runs or is stored while provenance is off.
+    pub(crate) in_tok: u32,
 }
 
 impl Prov {
@@ -102,7 +106,7 @@ impl Prov {
         if out.is_none() && why.is_none() {
             return None;
         }
-        Some(Box::new(Prov { out, why, edges: Default::default(), lines: 0 }))
+        Some(Box::new(Prov { out, why, edges: Default::default(), lines: 0, in_tok: 0 }))
     }
 }
 
@@ -113,18 +117,47 @@ fn short(f: &str) -> &str {
 impl Model {
     /// Record where the new edge `a -> b` was made.
     pub(crate) fn prov_edge(&mut self, a: NodeId, b: NodeId, loc: &'static Location<'static>) {
-        let (call, rule, tok) = (self.prov_call, self.prov_rule, self.prov_in);
+        let (call, rule) = (self.prov_call, self.prov_rule);
         if let Some(p) = self.prov.as_mut() {
+            let tok = p.in_tok;
             p.edges.entry((a, b)).or_insert(EdgeOrigin { loc, call, rule, tok });
         }
     }
 
     /// The constraint being applied now works on input token `t` (the
     /// recorded cause of what it delivers).
+    /// `on` is `self.prov.is_some()`, read once per constraint application
+    /// (`apply_inner`): while provenance is off this is one test of a
+    /// register and no store.
     #[inline(always)]
-    pub(crate) fn prov_tok(&mut self, t: Tok) {
-        if self.prov.is_some() {
-            self.prov_in = t + 1;
+    pub(crate) fn prov_tok(&mut self, on: bool, t: Tok) {
+        if on {
+            self.prov_tok_on(t);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn prov_tok_on(&mut self, t: Tok) {
+        if let Some(p) = self.prov.as_mut() {
+            p.in_tok = t + 1;
+        }
+    }
+
+    /// Clear the recorded input token (a new constraint starts); returns
+    /// the previous one. Called only while provenance is on.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn prov_in_take(&mut self) -> u32 {
+        self.prov.as_mut().map_or(0, |p| std::mem::take(&mut p.in_tok))
+    }
+
+    /// Set the recorded input token. Called only while provenance is on.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn prov_in_set(&mut self, v: u32) {
+        if let Some(p) = self.prov.as_mut() {
+            p.in_tok = v;
         }
     }
 
@@ -424,10 +457,10 @@ impl Model {
         loc: &'static Location<'static>,
     ) {
         let (mode, rule, call, work) = (self.prov_mode, self.prov_rule, self.prov_call, self.work.get());
-        let cause = if mode == PM_RULE && !adopted { self.prov_in } else { 0 };
         let Some(p) = self.prov.as_mut() else {
             return;
         };
+        let cause = if mode == PM_RULE && !adopted { p.in_tok } else { 0 };
         let edge = if src != NO_NODE { p.edges.get(&(src, n)).copied() } else { None };
         let Some(w) = p.why.as_mut() else {
             return;

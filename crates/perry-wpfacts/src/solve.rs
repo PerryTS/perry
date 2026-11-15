@@ -86,7 +86,12 @@ impl Model {
 
     /// `add` with the string constants `strs` for a string in `prim` (a
     /// copy of another node's value: `Node::strs`).
+    ///
+    /// `#[track_caller]` and always inlined: a seed through it is booked to
+    /// its caller, and the location is a constant at each call site (no
+    /// extra argument at run time).
     #[track_caller]
+    #[inline(always)]
     pub(crate) fn add_s(&mut self, n: NodeId, toks: &[Tok], prim: u16, strs: StrSet) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Seed(
@@ -712,12 +717,20 @@ impl Model {
         self.add(n, &[t], 0);
     }
 
+    /// `#[track_caller]` and always inlined (see `add_s`); the relation
+    /// line is out of line, so each call site stays a test and a call.
     #[track_caller]
+    #[inline(always)]
     pub fn add_prim(&mut self, n: NodeId, p: u16) {
         if self.rel_phase != b'S' {
-            self.rel(|| format!("prim {n} {p}"));
+            self.rel_prim(n, p);
         }
         self.add(n, &[], p);
+    }
+
+    #[inline(never)]
+    fn rel_prim(&mut self, n: NodeId, p: u16) {
+        self.rel(|| format!("prim {n} {p}"));
     }
 
     /// Seed ⊤ into `n` as an ORIGIN (not a propagation): `why` names the
@@ -956,12 +969,19 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
-        let pv = (self.prov_mode, self.prov_rule, self.prov_in);
-        if self.prov.is_some() {
-            (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_RULE, Some((n, c)), 0);
-        }
+        let pv = (self.prov_mode, self.prov_rule);
+        let on = self.prov.is_some();
+        let pin = if on {
+            (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+            self.prov_in_take()
+        } else {
+            0
+        };
         self.with_s(|m| m.apply(n, &c, &toks, prim));
-        (self.prov_mode, self.prov_rule, self.prov_in) = pv;
+        (self.prov_mode, self.prov_rule) = pv;
+        if on {
+            self.prov_in_set(pin);
+        }
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -1095,7 +1115,8 @@ impl Model {
             // interval (`add_tokens`).
             self.cur_range = Some(self.rg(n));
             if self.prov.is_some() {
-                (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_COPY, None, 0);
+                (self.prov_mode, self.prov_rule) = (crate::provenance::PM_COPY, None);
+                self.prov_in_set(0);
             }
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
@@ -1166,7 +1187,8 @@ impl Model {
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
                 if self.prov.is_some() {
-                    (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_RULE, Some((n, c)), 0);
+                    (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+                    self.prov_in_set(0);
                 }
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
             }
@@ -1174,7 +1196,10 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
-        (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_ADD, None, 0);
+        (self.prov_mode, self.prov_rule) = (crate::provenance::PM_ADD, None);
+        if self.prov.is_some() {
+            self.prov_in_set(0);
+        }
         #[cfg(debug_assertions)]
         self.assert_shadowed_complete();
     }
