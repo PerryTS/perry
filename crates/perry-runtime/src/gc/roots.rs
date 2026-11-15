@@ -1993,6 +1993,7 @@ pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
 /// source, as the words the slots hold. Instrumented builds only.
 #[cfg(perry_gc_instruments)]
 pub(crate) fn census_visit_roots(visit: &mut dyn FnMut(&'static str, u64)) {
+    ensure_stack_maps_built();
     visit_shadow_stack_root_slots(|slot| {
         let source = match slot.kind {
             MutableRootSlotKind::ShadowStack => "shadow_stack",
