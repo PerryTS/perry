@@ -58,7 +58,9 @@ fn copy(lo: usize, hi: usize) -> (usize, Vec<u8>) {
 }
 
 /// Size of the executable's static TLS block (x86-64 variant II: the block
-/// ends at the thread pointer).
+/// ends at the thread pointer). Only the Linux x86-64 capture calls it, and the
+/// `dl_iterate_phdr` family it uses is missing from `libc` on tvOS and watchOS.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn executable_tls_size() -> usize {
     unsafe extern "C" fn each(
         info: *mut libc::dl_phdr_info,
