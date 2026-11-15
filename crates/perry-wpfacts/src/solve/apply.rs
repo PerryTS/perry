@@ -94,6 +94,15 @@ impl Model {
                     if fun || matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::Builtin(_)) {
                         self.load_from(t, t, Key::any(), dst);
                     }
+                    // A RegExp's own data property `lastIndex` (22.2.3.1
+                    // RegExpAlloc, a Number from birth; `regexp_last_index`)
+                    // and whatever the program stored there.
+                    let li = self.atom("lastIndex");
+                    if self.regexp_last_index(t, li) {
+                        self.add_prim(dst, prim::NUM);
+                        let f = self.field_r(t, li);
+                        self.edge(f, dst);
+                    }
                 }
             }
             Cons::Store { key, src, site } => {
