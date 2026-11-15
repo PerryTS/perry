@@ -20,13 +20,18 @@ impl Model {
             return;
         }
         let f = self.tok_fn(ft);
-        let keys = match self.summarized(f) && self.instantiable(ft) {
-            true => self.for_in_keys(f, t),
-            false => None,
-        };
-        let Some(keys) = keys else {
+        let runs = self.summarized(f) && self.instantiable(ft);
+        let Some(keys) = self.for_in_keys(f, t) else {
+            if for_in_diag() {
+                self.for_in_diag_why(f, ft, t);
+            }
             return self.for_in_every_key(call, ft);
         };
+        if !runs {
+            self.for_in_named_run(call, ft, &keys);
+            self.for_in_named.push((call, ft, t));
+            return;
+        }
         if self.for_in_key_runs(call, ft, &keys).is_some() {
             self.for_in_runs.push((call, ft, t));
         }
@@ -53,6 +58,43 @@ impl Model {
             }
         }
         Some(made)
+    }
+
+    /// FORIN1: a body with no per-key runs (not summarized: the activation
+    /// pass, a refused summary) runs once, shared, with its key parameter
+    /// holding the keys `for_in_keys` lists for each value it iterates
+    /// (ECMA-262 14.7.5.9 EnumerateObjectProperties, 14.7.5.10
+    /// %ForInIteratorPrototype%.next: a key is yielded only while it names
+    /// an own enumerable String-keyed property of the object or of its
+    /// chain; the built-in members of `%Object.prototype%` are not
+    /// enumerable, 20.1.3). The union over the iterated values holds every
+    /// key any iteration binds, so the run covers the loop; a key written
+    /// later joins the union (`settle_for_in`); a value whose keys are not
+    /// known runs the body with every key (`for_in_every_key`).
+    fn for_in_named_run(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> bool {
+        let k = match self.for_in_named_call.get(&(call, ft)) {
+            Some(&(_, k)) => k,
+            None => {
+                let k = self.node_l("forin-names");
+                let mut cs = self.calls[call as usize].clone();
+                cs.args = vec![k];
+                let nc = self.calls.len() as CallId;
+                self.calls.push(cs);
+                self.for_in_named_call.insert((call, ft), (nc, k));
+                self.call_tok(nc, ft, None);
+                k
+            }
+        };
+        if keys.is_empty() {
+            return false;
+        }
+        let mut v = keys.to_vec();
+        v.sort_unstable();
+        v.dedup();
+        let set = self.str_set(&v);
+        let before = (self.nodes[k as usize].prim, self.nodes[k as usize].strs);
+        self.add_s(k, &[], prim::STR, set);
+        before != (self.nodes[k as usize].prim, self.nodes[k as usize].strs)
     }
 
     /// Run for-in body `ft` once with every key (the loop as it is).
@@ -198,6 +240,71 @@ impl Model {
                 Some(keys) => more |= self.for_in_key_runs(call, ft, &keys) != Some(false),
             }
         }
+        // FORIN1: the shared named runs, the same way.
+        for (call, ft, t) in self.for_in_named.clone() {
+            if self.for_in_any.contains(&(call, ft)) {
+                continue;
+            }
+            let f = self.tok_fn(ft);
+            match self.for_in_keys(f, t) {
+                None => {
+                    self.for_in_every_key(call, ft);
+                    more = true;
+                }
+                Some(keys) => more |= self.for_in_named_run(call, ft, &keys),
+            }
+        }
         more
+    }
+}
+
+/// `PERRY_WPF_FORINDIAG`: print why a for-in body runs with every key.
+fn for_in_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_FORINDIAG").is_some())
+}
+
+impl Model {
+    fn for_in_diag_why(&self, f: FnIdx, ft: Tok, t: Tok) {
+        let lit = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => {
+                let tpl = &self.tmpls[tm as usize];
+                format!(
+                    "lit={} computed={}",
+                    matches!(
+                        tpl.kind,
+                        TmplKind::Lit { .. } | TmplKind::Class { literal_shape: true, .. }
+                    ),
+                    tpl.has_computed_members
+                )
+            }
+            _ => "lit=notobj".to_string(),
+        };
+        eprintln!(
+            "perry: wpfacts forindiag body={} tok={} summarized={} inst={} {lit} subj={} escaped={} hard={} anywritten={} protowritten={}",
+            self.funcs[f as usize].name,
+            self.tok_name(t),
+            self.summarized(f),
+            self.instantiable(ft),
+            self.enum_subject(t),
+            self.is_escaped(t),
+            self.hard.contains_key(&t),
+            self.enum_any_written(t),
+            self.object_proto_written()
+        );
+        let held = |n: NodeId| {
+            let nd = &self.nodes[n as usize];
+            format!("n{n}(pts={},prim={:#x})", nd.pts.len(), nd.prim)
+        };
+        let any = self.field_any.get(&t).map(|&n| held(n));
+        let shaped: Vec<String> = self
+            .shaped_of
+            .get(&t)
+            .into_iter()
+            .flatten()
+            .filter(|&&(_, _, store)| store)
+            .map(|&(k, n, _)| format!("shape{k}:{}", held(n)))
+            .collect();
+        eprintln!("perry: wpfacts forindiag   any={any:?} shaped={shaped:?}");
     }
 }

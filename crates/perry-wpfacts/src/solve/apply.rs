@@ -1906,7 +1906,27 @@ impl Model {
                 }
             }
             Cons::StoreKeyed { o, src, site, subj } => {
-                if let Some(k) = self.keyed_once(n, src, 1) {
+                // FORIN1: a key that holds String constants only (a shared
+                // for-in run over the keys `for_in_keys` lists,
+                // `for_in_named_run`) is one of them: a named store per
+                // constant, made as constants arrive. A key that turns any
+                // String later takes the rule below.
+                let (kp, ks) = (self.nodes[n as usize].prim, self.nodes[n as usize].strs);
+                if !self.key_nodes.contains_key(&n) && kp == prim::STR && ks >= crate::model::STRS_SET0 {
+                    for i in 0..self.str_atoms(ks).len() {
+                        let a = self.str_atoms(ks)[i];
+                        if self.keyed_named.insert((n, src, a)) {
+                            self.cons(
+                                o,
+                                Cons::Store {
+                                    key: Key::Named(a),
+                                    src,
+                                    site,
+                                },
+                            );
+                        }
+                    }
+                } else if let Some(k) = self.keyed_once(n, src, 1) {
                     // The key of a for-in run is a String: EnumerateObjectProperties
                     // never returns a Symbol key (ECMA-262 14.7.5.9, 14.7.5.10).
                     // An unknown one stores under the keys the subject

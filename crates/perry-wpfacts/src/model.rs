@@ -2558,6 +2558,14 @@ pub struct Model {
     pub val_runs: Vec<(CallId, Tok, Option<Tok>, u16, u32)>,
     /// (call, body token) run once with every key.
     pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// FORIN1: (call, body token, the literal) of a shared run over named
+    /// keys (`for_in_named_run`), checked again in `settle_for_in`.
+    pub for_in_named: Vec<(CallId, Tok, Tok)>,
+    /// FORIN1: (key node, stored value, constant) of a for-in keyed store
+    /// made per String constant of its key (`Cons::StoreKeyed`).
+    pub keyed_named: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
+    /// FORIN1: (call, body token) -> (the shared run's call, its key node).
+    pub for_in_named_call: crate::pts::FxHashMap<(CallId, Tok), (CallId, NodeId)>,
     /// (object node, body token, call) whose `ForInKeys` is attached.
     pub for_in_on: crate::pts::FxHashSet<(NodeId, Tok, CallId)>,
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,

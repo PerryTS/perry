@@ -1016,7 +1016,8 @@ impl Model {
     pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
         let pc = self.prov_call;
         if self.prov.is_some() {
-            self.prov_call = call + 1;
+            // `NO_NODE` (no call) wraps to 0, no call.
+            self.prov_call = call.wrapping_add(1);
         }
         self.bind_layout_bound(call, ft, x, prim);
         self.prov_call = pc;
