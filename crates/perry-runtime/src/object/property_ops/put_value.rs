@@ -518,6 +518,11 @@ fn set_dynamic_absent(
         }
         let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
         if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
+            // An empty layout has no slot to migrate: its first key starts
+            // its table (`overflow::ensure_adding`, prefix 0).
+            if crate::object::layout_probe::names_no_key(r) {
+                return table_first_append(obj, atom, value);
+            }
             if let Some(stored) = keyed_append(obj, atom, value) {
                 return stored;
             }
@@ -541,6 +546,9 @@ fn set_dynamic_overflow_miss(
 ) -> f64 {
     unsafe {
         let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
+        if crate::object::layout_probe::table_append(obj, r, atom, hash, value) {
+            return value;
+        }
         if crate::object::layout_probe::keyed_overflow_append(obj, r, atom, hash) {
             if let Some(stored) = keyed_append(obj, atom, value) {
                 return stored;
@@ -674,6 +682,23 @@ unsafe fn keyed_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> 
         value.get_nanbox_f64(),
     );
     Some(value.get_nanbox_f64())
+}
+
+/// [`set_dynamic_absent`]'s add for a receiver whose layout names no key:
+/// the overflow append without the migration step of [`keyed_append`].
+///
+/// # Safety
+/// As [`keyed_append`], and `obj`'s layout names no key.
+#[inline(never)]
+unsafe fn table_first_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::object::overflow::store_unfixed_routed(
+        obj,
+        (atom & POINTER_MASK) as *const crate::StringHeader,
+        value.get_nanbox_f64(),
+    );
+    value.get_nanbox_f64()
 }
 
 /// A store whose key no atom names yet: the atom is minted once (a key has

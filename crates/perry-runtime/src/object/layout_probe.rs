@@ -2629,7 +2629,7 @@ pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;
 pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
 pub(crate) use computed::{
-    keyed_add_admitted, keyed_leaf, keyed_overflow_append, probe_store_atom, probe_store_keyed,
+    keyed_add_admitted, keyed_leaf, names_no_key, table_append, keyed_overflow_append, probe_store_atom, probe_store_keyed,
     probe_store_keyed_complete, store_key_mintable, KeyedStore,
 };
 pub(crate) use keyed_delete::probe_delete_keyed;

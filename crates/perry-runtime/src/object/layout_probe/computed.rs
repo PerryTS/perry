@@ -433,6 +433,95 @@ pub(crate) unsafe fn keyed_overflow_append(
         && append_admitted(super::super::ordinary_dir_addr(), obj, r, key, hash)
 }
 
+/// Does record `r` name no key (an empty layout: the object's own keys are
+/// exactly its table's entries)?
+#[inline(always)]
+pub(crate) unsafe fn names_no_key(r: *const ShapeRecord) -> bool {
+    (*r).logical_key_count == 0
+}
+
+/// The keyed add of an overflowed receiver whose layout names no key
+/// ([`super::OwnSet::OverflowMiss`] on an empty layout): the table owns every
+/// own key and the leaf's probe of it missed, so the key is absent. With room
+/// in the table the entry is appended in place, under [`append_admitted`]'s
+/// receiver facts, with the chain answered by its end: a null prototype
+/// admits every add; the realm default is `%Object.prototype%`, which blocks
+/// no key but `__proto__` while it is the sealed intrinsic on its immutable
+/// layout (`descriptor_state::object_proto_may_intercept_any`, one word).
+/// No migration (an empty layout has no slot), no allocation, no chain walk.
+/// `false` changes nothing.
+///
+/// # Safety
+/// `obj` is the leaf's overflowed receiver, `r` its record, `key` a property
+/// atom with hash `hash`.
+#[inline(never)]
+pub(crate) unsafe fn table_append(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+    value: f64,
+) -> bool {
+    if !names_no_key(r)
+        || key & TAG_MASK != STRING_TAG
+        || hash == super::write::PROTO_KEY_HASH
+        || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+    {
+        return false;
+    }
+    let chain_admits = match (*r).proto_id {
+        super::super::PROTO_ID_NULL => true,
+        super::super::PROTO_ID_DEFAULT => {
+            !crate::object::descriptor_state::object_proto_may_intercept_any()
+        }
+        _ => false,
+    };
+    if !chain_admits {
+        return false;
+    }
+    let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
+    if first == b'#' || first.is_ascii_digit() {
+        return false;
+    }
+    let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
+    if (*gc)._reserved
+        & (crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
+        != 0
+    {
+        return false;
+    }
+    let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
+    if id.wrapping_sub(super::super::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+    {
+        return false;
+    }
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null()
+        || (*meta).overflow == 0
+        || (*meta).elements != 0
+        || (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+                | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
+                | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+            != 0
+    {
+        return false;
+    }
+    let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
+    if (*t).length >= (*t).capacity || crate::object::layout_desc::is_family_object(obj) {
+        return false;
+    }
+    crate::object::overflow::append_plain(t, key, super::store_bits(value));
+    true
+}
+
 /// [`append_admitted`] for the keyed store's [`super::OwnSet::Absent`].
 ///
 /// # Safety
