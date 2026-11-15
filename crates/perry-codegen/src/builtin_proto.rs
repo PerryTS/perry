@@ -60,9 +60,7 @@ pub(crate) fn emit_prototype_written(
 /// The shadow bit of the agent's intrinsic prototype of `family`.
 fn emit_shadow_bit(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
     let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
-    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
-    let word = ctx.block().load(I32, &at);
+    let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family as usize);
     ctx.block().icmp_uge(I32, &word, &end)
 }
 
@@ -100,9 +98,7 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
         return "true".to_string();
     };
     let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let holder = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family);
-    let at = ctx.block().gep(crate::types::I8, &holder, &[(I64, "4")]);
-    let word = ctx.block().load(I32, &at);
+    let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family);
     let patched = ctx.block().icmp_uge(I32, &word, &end);
     ctx.block()
         .call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
