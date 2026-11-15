@@ -356,8 +356,8 @@ mod projection_tests {
                 crate::value::TAG_UNDEFINED
             );
         });
-        // The mandatory capture poll remains; no per-inline-string poll.
-        assert!(polls <= 2);
-        assert!(polls >= 1);
+        // The automaton answers this one-start program, and its answer does
+        // not poll (the pre-search poll is strided); no per-inline-string poll.
+        assert!(polls <= 1);
     }
 }
