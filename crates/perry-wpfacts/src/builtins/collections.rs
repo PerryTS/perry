@@ -1276,13 +1276,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 }
             }
             if name == Some("flat") {
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: ofa,
-                    },
-                );
+                // FlattenIntoArray (ECMA-262 23.1.3.13.1): an element that
+                // IsArray gives `Get(element, ToString(k))` for its indices,
+                // never a member of its chain; another element is itself.
+                let key = m.elem_key();
+                m.cons(elems, Cons::Load { key, dst: ofa });
             }
             ret_tok(m, call, out);
         }
@@ -1320,13 +1318,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     species_from(m, out, t, call, None);
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
-                    m.cons(
-                        r,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: ofa,
-                        },
-                    );
+                    // FlattenIntoArray at depth 1 (23.1.3.12 step 3): the
+                    // indices of a returned array, as for `flat`.
+                    let key = m.elem_key();
+                    m.cons(r, Cons::Load { key, dst: ofa });
                     ret_tok(m, call, out);
                 }
                 Some("findLast") => {
