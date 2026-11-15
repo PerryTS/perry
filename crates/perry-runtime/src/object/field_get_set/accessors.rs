@@ -887,18 +887,9 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
     if key.is_null() {
         return None;
     }
-    let mut proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
-    if proto_addr == 0 {
-        // The first observable primitive read may need realm bootstrap.
-        // Both borrowed arguments must be refreshed if bootstrap collects.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let key_root = scope.root_string_ptr(key);
-        let receiver_root = scope.root_nanbox_f64(receiver);
-        super::super::js_get_global_this();
-        key = key_root.get_raw_const_ptr::<crate::StringHeader>();
-        receiver = receiver_root.get_nanbox_f64();
-        proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
-    }
+    // The wrapper family (Number, String, Boolean) is observed through its
+    // own birth; any other primitive has no wrapper prototype here.
+    let proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
     if proto_addr == 0 {
         return None;
     }

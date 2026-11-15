@@ -112,7 +112,6 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(16 << 20)
             .spawn(|| unsafe {
-                crate::object::js_get_global_this();
                 let proto = crate::array::array_prototype_addr();
                 assert_ne!(proto, 0, "no %Array.prototype%");
                 let bag =

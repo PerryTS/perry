@@ -857,10 +857,13 @@ pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
     if crate::value::JSValue::from_bits(value.to_bits()).is_pointer() {
         return value;
     }
-    // Populate the per-kind prototypes only when a real property walk needs
-    // them. populate stores Uint8Array's original prototype in capture 0.
-    crate::object::js_get_global_this();
-    let ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Relaxed)
-        as *const crate::closure::ClosureHeader;
-    crate::closure::js_closure_get_capture_f64(ctor, 0)
+    // Uint8Array's family is observed through its own birth, which stores
+    // its original prototype in capture 0.
+    let proto = crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::Uint8Array,
+    );
+    if proto == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(proto as i64)
 }

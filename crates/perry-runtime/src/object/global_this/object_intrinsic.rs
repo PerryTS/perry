@@ -264,7 +264,6 @@ mod tests {
     #[test]
     fn borrowed_object_constructor_method_reads_its_live_prototype() {
         on_a_fresh_thread(|| {
-            crate::object::js_get_global_this();
             let (ctor, proto) = ensure_object_intrinsics();
             let name = crate::string::js_string_from_bytes(b"hasOwnProperty".as_ptr(), 14);
             let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
