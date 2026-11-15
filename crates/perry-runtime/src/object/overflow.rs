@@ -355,7 +355,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
     }
 }
 
-unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
+pub(crate) unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     (*meta).overflow = t as usize as u64;
     // The slot owner is the live metadata record, whose generation can
@@ -380,6 +380,40 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
 /// [`ensure`] inside the publication of the key at `adding`: that key's value
 /// is stored only after the publication returns, so its slot may still hold
 /// the hole. It is a live key, not a tombstone.
+/// [`ensure_adding`] for an object whose layout names no key (`live` live
+/// inline slots): no key to copy, so the table is the prefix of keyless
+/// references to the inline slots (no atom, no barrier, no index entry) and
+/// room for the caller's append. The caller, which roots `obj` (the meta and
+/// the table allocate), installs it ([`install`]) before its append, with no
+/// allocation between. An existing table is returned as is.
+///
+/// # Safety
+/// `obj` is live with an empty layout; the caller holds no other raw heap
+/// pointer across the call (it allocates).
+pub(crate) unsafe fn start_empty(obj: *mut ObjectHeader, live: u32) -> *mut Table {
+    let existing = table(obj);
+    if !existing.is_null() {
+        return existing;
+    }
+    super::layout_desc::diag_note_install(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let prefix = live.max(super::INLINE_SLOT_FLOOR as u32);
+    let t = allocate((prefix + 4).next_power_of_two().max(4));
+    for i in 0..prefix {
+        // GC_STORE_AUDIT(POINTER_FREE): keyless prefix entry: the hole, an internal slot word, a scalar attrs word.
+        *key_at(t, i) = TAG_HOLE;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
+        *attrs_at(t, i) = SLOT_REF;
+    }
+    (*t).length = prefix;
+    (*t).fixed_prefix = prefix;
+    t
+}
+
 pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) -> *mut Table {
     let existing = table(obj);
     if !existing.is_null() {

@@ -266,6 +266,17 @@ pub(super) unsafe fn chain_admits_add(
     key_bits: u64,
     hash: u64,
 ) -> bool {
+    // A receiver on the realm-default link: its chain is `%Object.prototype%`
+    // alone, and that link's authority answers every key but `__proto__`
+    // (as in the `Next::Unknown` arm below and `table_add_admitted`): a
+    // sealed or unmaterialized intrinsic blocks no add (DEC 250 locks it).
+    if hash != PROTO_KEY_HASH
+        && walks_from(obj, r)
+        && realm_default_link(obj, r)
+        && !crate::object::descriptor_state::object_proto_may_intercept_any()
+    {
+        return true;
+    }
     let (mut cur, mut rc) = (obj, r);
     for _ in 0..MAX_HOPS {
         if !walks_from(cur, rc) {

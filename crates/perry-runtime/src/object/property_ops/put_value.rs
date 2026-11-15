@@ -521,7 +521,7 @@ fn set_dynamic_absent(
         // table (`overflow::ensure_adding`) and is appended to it, under the
         // admission of every later table add.
         if crate::object::layout_probe::table_add_admitted(obj, r, atom, hash) {
-            return table_first_append(obj, atom, value);
+            return table_first_append(obj, r, atom, value);
         }
         if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
             if let Some(stored) = keyed_append(obj, atom, value) {
@@ -692,12 +692,20 @@ unsafe fn keyed_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> 
 /// # Safety
 /// `obj`'s layout names no key and it admits the add of `atom` (absent).
 #[inline(never)]
-unsafe fn table_first_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> f64 {
+unsafe fn table_first_append(
+    obj: *mut crate::ObjectHeader,
+    r: *const crate::object::layout_probe::ShapeRecord,
+    atom: u64,
+    value: f64,
+) -> f64 {
+    let live = crate::object::layout_probe::record_live_inline_slots(r);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_nanbox_u64(atom);
-    let t = crate::object::overflow::ensure_adding(obj, None);
+    let t =
+        crate::object::overflow::start_empty(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), live);
+    crate::object::overflow::install(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), t);
     if (*t).length < (*t).capacity {
         crate::object::overflow::append_plain(
             t,

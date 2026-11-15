@@ -2698,3 +2698,9 @@ mod global_tests;
 #[cfg(test)]
 #[path = "layout_probe_symbol_store_tests.rs"]
 mod symbol_store_tests;
+
+/// The live inline slot count of record `r` (a live shape record).
+#[inline(always)]
+pub(crate) unsafe fn record_live_inline_slots(r: *const ShapeRecord) -> u32 {
+    (*r).live_inline_slot_count
+}
