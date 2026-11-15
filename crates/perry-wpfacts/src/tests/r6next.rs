@@ -191,7 +191,6 @@ fn r6next_b2_store_after_throwing_branch_is_birth_field() {
 const B3: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
 const v = new V(1); console.log(v.clone().x);";
 #[test]
-#[ignore = "rule B3 not built"]
 fn r6next_b3_prototype_constructor_read() {
     all_proven(B3, "constructor", false);
 }

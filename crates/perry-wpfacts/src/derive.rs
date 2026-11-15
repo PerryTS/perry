@@ -1856,6 +1856,27 @@ fn judge(
                         slots.push(None)
                     }
                     _ if own_data_or_absent(m, tf, t, key, s.key) => own_or_absent += 1,
+                    // Rule B3: a key the object never holds as its own (no
+                    // store names it, no computed key may hold it: the
+                    // `lookup` walk) is read where calls find it: OrdinaryGet
+                    // (ECMA-262 10.1.8.1) climbs the stable chain to the first
+                    // holder. Proven when every holder is a program class
+                    // prototype whose own member is constant (15.7.14), the
+                    // same read as one on the prototype itself.
+                    _ if unwritten
+                        && tf.fixed_layout
+                        && lookup_holders(m, tf, t, key, s.key).is_ok_and(|hs| {
+                            !hs.is_empty()
+                                && hs.iter().all(|&(h, _)| match &m.toks[h as usize] {
+                                    TokKind::Proto(tm) => by_id
+                                        .get(tm)
+                                        .is_some_and(|pf| pf.proto_consts.iter().any(|k| k == key)),
+                                    _ => false,
+                                })
+                        }) =>
+                    {
+                        statics += 1
+                    }
                     Some(_) | None => {
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
@@ -2821,6 +2842,18 @@ fn lookup(
     key: &str,
     a: Atom,
 ) -> Result<Vec<NodeId>, String> {
+    lookup_holders(m, tf, t, key, a).map(|hs| hs.into_iter().map(|(_, n)| n).collect())
+}
+
+/// The F5 chain walk of [`lookup`], each value node with the object that
+/// holds the key (`t` itself for a definite own data field).
+fn lookup_holders(
+    m: &Model,
+    tf: &TemplateFacts,
+    t: Tok,
+    key: &str,
+    a: Atom,
+) -> Result<Vec<(Tok, NodeId)>, String> {
     let computed = |h: Tok| {
         m.field_any
             .get(&h)
@@ -2838,7 +2871,7 @@ fn lookup(
     // A key the layout never writes (a read names it) is the chain's.
     match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
         Some(f) if f.definite && f.data_field && f.slot.is_some() => {
-            return Ok(holds(t).into_iter().collect());
+            return Ok(holds(t).into_iter().map(|n| (t, n)).collect());
         }
         Some(f) if !f.data_field => return Err("accessor key (E25)".into()),
         Some(f) if f.writers_ctor + f.writers_post > 0 || tf.birth_keys.contains(&f.key) => {
@@ -2874,7 +2907,7 @@ fn lookup(
                 return Err("a computed key may hold it".into());
             }
             match holds(p) {
-                Some(n) => out.push(n),
+                Some(n) => out.push((p, n)),
                 None => todo.push(p),
             }
         }
