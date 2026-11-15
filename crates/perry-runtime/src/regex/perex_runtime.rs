@@ -178,6 +178,34 @@ impl<'a, T: Copy + Default, const N: usize> Slots<'a, T, N> {
             Buffer::new(memory, count).map(Self::Heap)
         }
     }
+
+    /// [`Slots::new`] written straight into `slot`: the inline array is built
+    /// where it stays, never returned by value through a `Result` and moved
+    /// (for `Captures`, 16 spans: a 399-byte copy twice per capture pass).
+    #[inline(always)]
+    fn put<'s>(
+        slot: &'s mut Option<Self>,
+        memory: &'a MemoryBudget,
+        count: usize,
+    ) -> Result<&'s mut [T], StorageError> {
+        if count <= N {
+            let bytes = count
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(StorageError::Limit)?;
+            let charge = Charge::new(memory, bytes)?;
+            *slot = Some(Self::Inline {
+                slots: [T::default(); N],
+                count,
+                _charge: charge,
+            });
+        } else {
+            *slot = Some(Buffer::new(memory, count).map(Self::Heap)?);
+        }
+        match slot {
+            Some(slots) => Ok(&mut **slots),
+            None => unreachable!(),
+        }
+    }
 }
 
 impl<T: Copy + Default, const N: usize> std::ops::Deref for Slots<'_, T, N> {
@@ -462,7 +490,7 @@ fn take_captures<'mem>(
     copy: impl FnOnce(&mut [Option<Span>]) -> Result<(), ExecError>,
 ) -> Result<(), EngineError> {
     if let CaptureMode::All = mode {
-        let output = captures.insert(Slots::new(memory, count)?);
+        let output = Slots::put(captures, memory, count)?;
         copy(output).map_err(EngineError::Execution)?;
     }
     Ok(())
@@ -1054,7 +1082,7 @@ where
         };
         #[cfg(test)]
         DFA_CAPTURE_PASSES.with(|n| n.set(n.get() + 1));
-        let output = captures.insert(Slots::new(memory, program.capture_count())?);
+        let output = Slots::put(captures, memory, program.capture_count())?;
         let found = loop {
             let found = dfa::captures(program, input, start, &mut *cache, budget, output);
             if let Ok(dfa::Found::Declined(why)) = found {
