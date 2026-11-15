@@ -2189,7 +2189,10 @@ pub unsafe extern "C" fn perry_probe_set(
         OwnSet::Slot(obj, address, slot) => probe_set_slot_any(obj, address, slot, store_bits(value)),
         OwnSet::Table(t, address) => probe_set_table_barrier(t, address, store_bits(value)),
         OwnSet::Absent(r) => probe_set_add(dir, obj_bits, r, key_bits, hash, value),
-        OwnSet::OverflowMiss(_) | OwnSet::Rest => probe_set_rest(dir, obj_bits, key_bits, hash, value),
+        // The overflow owns every own key: the complete probe declines too
+        // (store_target::overflow), so the [[Set]] decides the add at once.
+        OwnSet::OverflowMiss(_) => 0,
+        OwnSet::Rest => probe_set_rest(dir, obj_bits, key_bits, hash, value),
     }
 }
 
