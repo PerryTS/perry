@@ -291,6 +291,14 @@ const _: () = assert!(
 pub(crate) fn realm_seals_constructor_prototype(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) -> bool {
+    !declaration.lazy && family_prototype_is_sealed(declaration)
+}
+
+/// Is this family's prototype sealed before program code can reach it, at
+/// realm setup or at the end of its own birth (`seal_born_family`)?
+pub(crate) fn family_prototype_is_sealed(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> bool {
     BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
 }
 

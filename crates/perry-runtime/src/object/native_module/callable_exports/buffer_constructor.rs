@@ -21,7 +21,7 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // mint, mirroring `install_native_module_vtable()` above.
         crate::object::native_module_registry::js_nm_install_buffer();
 
-        let func_ptr = crate::fn_info!(#[realm(Buffer, kind = constructor, capture = [ref(Buffer.prototype)], extends = Uint8Array, attrs = {prototype = writable}, members = { from, attrs = writable | enumerable | configurable; alloc, attrs = writable | enumerable | configurable; allocUnsafe, attrs = writable | enumerable | configurable; allocUnsafeSlow, attrs = writable | enumerable | configurable; concat, attrs = writable | enumerable | configurable; of, attrs = writable | enumerable | configurable; isBuffer, attrs = writable | enumerable | configurable; isEncoding, attrs = writable | enumerable | configurable; byteLength, attrs = writable | enumerable | configurable; compare, attrs = writable | enumerable | configurable; copyBytesFrom, attrs = writable | enumerable | configurable; poolSize = 65536.0, attrs = writable | enumerable | configurable; prototype; [Symbol.species] = accessor(get = "Buffer[\"@@species\"].<get>"); })] export crate::object::native_module::callable_exports::buffer_constructor_thunk, 3; with_declared(3));
+        let func_ptr = crate::fn_info!(#[realm(Buffer, kind = constructor, capture = [ref(Buffer.prototype)], extends = Uint8Array, attrs = {prototype = writable}, members = { from, attrs = writable | enumerable | configurable; alloc, attrs = writable | enumerable | configurable; allocUnsafe, attrs = writable | enumerable | configurable; allocUnsafeSlow, attrs = writable | enumerable | configurable; concat, attrs = writable | enumerable | configurable; of, attrs = writable | enumerable | configurable; isBuffer, attrs = writable | enumerable | configurable; isEncoding, attrs = writable | enumerable | configurable; byteLength, attrs = writable | enumerable | configurable; compare, attrs = writable | enumerable | configurable; copyBytesFrom, attrs = writable | enumerable | configurable; poolSize = 65536.0, attrs = writable | enumerable | configurable; [Symbol.species] = accessor(get = "Buffer[\"@@species\"].<get>"); })] export crate::object::native_module::callable_exports::buffer_constructor_thunk, 3; with_declared(3));
         let closure = crate::closure::js_closure_alloc(func_ptr, 1);
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -109,6 +109,27 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // #11193: `Buffer[Symbol.species]` (FastBuffer). After the slot is
         // set, so a re-entrant read of `Buffer` during the install sees it.
         buffer_species::install_buffer_species(value);
+        // `class Buffer extends Uint8Array`: the birth links both edges
+        // (#9173), from Uint8Array's own family cells.
+        let uint8 = crate::object::BuiltinConstructorIdentity::Uint8Array;
+        let uint8_proto = crate::array::intrinsic_prototype_addr(uint8);
+        let uint8_ctor = crate::array::intrinsic_constructor_addr(uint8);
+        let ctor = crate::value::JSValue::from_bits(slot.get());
+        if let Some(proto) = cached_buffer_intrinsic_prototype_value() {
+            let proto = crate::value::JSValue::from_bits(proto.to_bits());
+            if proto.is_pointer() && uint8_proto != 0 {
+                crate::object::prototype_chain::object_set_static_prototype(
+                    proto.as_pointer::<ObjectHeader>() as usize,
+                    crate::value::js_nanbox_pointer(uint8_proto as i64).to_bits(),
+                );
+            }
+        }
+        if uint8_ctor != 0 {
+            crate::closure::closure_set_static_prototype(
+                ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
+                crate::value::js_nanbox_pointer(uint8_ctor as i64).to_bits(),
+            );
+        }
         f64::from_bits(slot.get())
     })
 }

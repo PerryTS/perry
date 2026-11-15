@@ -180,15 +180,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(true, true, true),
         );
     }
-    // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
-    // typed-array constructors can link their `__proto__` to it as they're
-    // built below, and the per-kind `.prototype` objects can be flagged with
-    // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
-    let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
-    // #3664: build the generator / async-generator intrinsic prototype towers
-    // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
-    // `%Generator(.prototype)%` chains resolve to real objects.
-    ensure_generator_intrinsics();
+    // The thread realm births no family here (each is born by its own
+    // observation); a vm realm births each one in the loop below.
+    let typed_array_intrinsic_ctor = if super::is_thread_realm_global(singleton()) {
+        std::ptr::null_mut()
+    } else {
+        ensure_typed_array_intrinsic().0
+    };
     // Constructors: ClosureHeader-backed so typeof is "function".
     // #4533: native error subclasses must link to `Error` / `Error.prototype`.
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
@@ -210,34 +208,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // exist here (Buffer is deliberately last in the constructor
             // table), so link the real prototype objects without recursively
             // initializing globalThis from buffer_constructor_value().
-            let ctor = JSValue::from_bits(ctor_value.to_bits());
-            if ctor.is_pointer() {
-                let buffer_proto = crate::closure::closure_get_dynamic_prop(
-                    ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
-                    "prototype",
-                );
-                let buffer_proto_value = JSValue::from_bits(buffer_proto.to_bits());
-                let uint8_proto = builtin_prototype_value("Uint8Array");
-                if buffer_proto_value.is_pointer()
-                    && JSValue::from_bits(uint8_proto.to_bits()).is_pointer()
-                {
-                    super::super::prototype_chain::object_set_static_prototype(
-                        buffer_proto_value.as_pointer::<ObjectHeader>() as usize,
-                        uint8_proto.to_bits(),
-                    );
-                }
-                // #11239: and the constructor side of the same edge —
-                // `Object.getPrototypeOf(Buffer) === Uint8Array`, as for any
-                // `class Buffer extends Uint8Array`.
-                let uint8_ctor =
-                    js_get_global_this_builtin_value("Uint8Array".as_ptr(), "Uint8Array".len());
-                if JSValue::from_bits(uint8_ctor.to_bits()).is_pointer() {
-                    crate::closure::closure_set_static_prototype(
-                        ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
-                        uint8_ctor.to_bits(),
-                    );
-                }
-            }
             super::super::define_builtin_data_property(
                 singleton(),
                 name_key,
@@ -343,10 +313,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             );
         }
     }
-    // The hidden async/generator towers are allocated before the constructor
-    // loop, but their parents are the `Function` values installed by that
-    // loop. Complete those links now that both are available.
-    wire_function_intrinsic_parents();
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
@@ -705,10 +671,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(false, false, false),
         );
     }
-    // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
-    // same function object as `Array.prototype.toString`. Alias it now that
-    // both the Array constructor and the TypedArray intrinsic are set up.
-    alias_typed_array_proto_to_string(singleton());
     // #10497: memoize the intrinsic prototype identities while every
     // `globalThis.<Builtin>` still names its intrinsic — before any user code
     // can reassign the writable `globalThis.Function`.
@@ -842,7 +804,7 @@ fn birth_family(
         // The realm seals this family prototype before any program code
         // can reach it (`seal_realm`): it is born on the born-prototype
         // lineage, so that seal's mark mints no shape.
-        if crate::object::builtin_proto::realm_seals_constructor_prototype(declaration) {
+        if crate::object::builtin_proto::family_prototype_is_sealed(declaration) {
             // SAFETY: the keyless newborn, unexposed, in this no-move window.
             unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
         }
@@ -1261,39 +1223,19 @@ fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinC
         .then_some(identity)
 }
 
-fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
+/// `%TypedArray%.prototype.toString` is `Array.prototype.toString` (ECMA-262
+/// §23.2.3.33): `%TypedArray%`'s birth installs it, reading Array's own
+/// family cell (which births Array), never %Global%.
+pub(super) fn alias_typed_array_proto_to_string() {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {
         return;
     }
-    // #6982: `js_string_from_bytes` allocates, so every pointer held across the
-    // lookups below can be relocated by an evacuating minor. Root them and read
-    // back through the handles. `TYPED_ARRAY_INTRINSIC_PROTO_PTR` is itself a
-    // scanned root, but the local copy taken above is not.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
-    let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
     let ta_proto_handle = scope.root_raw_mut_ptr(ta_proto_addr as *mut ObjectHeader);
-
-    // Read Array constructor from globalThis, then Array.prototype.toString.
-    let arr_key = crate::string::js_string_from_bytes(b"Array".as_ptr(), 5);
-    let arr_ctor = js_object_get_field_by_name(singleton(), arr_key);
-    if (arr_ctor.bits() >> 48) != 0x7FFD {
-        return;
-    }
-    let arr_ctor_ptr = (arr_ctor.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    if arr_ctor_ptr.is_null() {
-        return;
-    }
-    let arr_ctor_handle = scope.root_raw_mut_ptr(arr_ctor_ptr);
-
-    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    let arr_proto =
-        js_object_get_field_by_name(arr_ctor_handle.get_raw_mut_ptr::<ObjectHeader>(), proto_key);
-    if (arr_proto.bits() >> 48) != 0x7FFD {
-        return;
-    }
-    let arr_proto_ptr = (arr_proto.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let arr_proto_ptr =
+        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Array)
+            as *mut ObjectHeader;
     if arr_proto_ptr.is_null() {
         return;
     }
