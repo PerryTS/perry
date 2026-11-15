@@ -1055,12 +1055,16 @@ impl Model {
         Some(Some(out))
     }
 
-    /// A Number-or-undefined operand of a String method (`NO_NODE`:
-    /// absent, which is `undefined`): its interval and whether it may be
-    /// `undefined`. `None` while it holds no value (or a Number whose
-    /// interval has not arrived), `Some(None)` when it may hold another
-    /// kind or a Number the interval does not bound (⊤: NaN, an infinity,
-    /// a fraction; `model::range`).
+    /// A Number-, String- or undefined operand of a String method
+    /// (`NO_NODE`: absent, which is `undefined`): the interval of its
+    /// ToIntegerOrInfinity (7.1.5) and whether it may be `undefined`.
+    /// A String constant counts by ToNumber (7.1.4.1.1 StringToNumber,
+    /// `str_to_integer`), an infinity as ±2^53, which every caller clamps
+    /// to `[0, len]` exactly as the infinity. `None` while it holds no
+    /// value (or a Number whose interval has not arrived), `Some(None)`
+    /// when it may hold another kind, any String, or a Number the
+    /// interval does not bound (⊤: NaN, an infinity, a fraction;
+    /// `model::range`).
     fn int_operand(&self, n: NodeId) -> Option<Option<(crate::model::Iv, bool)>> {
         use crate::model::Iv;
         if n == NO_NODE {
@@ -1070,13 +1074,25 @@ impl Model {
         if x.prim == 0 && x.pts.is_empty() {
             return None;
         }
-        if !x.pts.is_empty() || x.prim & !(prim::NUM | prim::UNDEF) != 0 {
+        if !x.pts.is_empty() || x.prim & !(prim::NUM | prim::UNDEF | prim::STR) != 0 {
             return Some(None);
         }
         let num = x.prim & prim::NUM != 0;
-        let iv = if num { x.range } else { Iv::EMPTY };
+        let mut iv = if num { x.range } else { Iv::EMPTY };
         if num && iv.is_top() {
             return Some(None);
+        }
+        if x.prim & prim::STR != 0 {
+            if x.strs < STRS_SET0 {
+                return Some(None);
+            }
+            for &a in self.str_atoms(x.strs) {
+                if self.atom_is_mark(a) {
+                    return Some(None);
+                }
+                let k = str_to_integer(&self.atoms[a as usize]);
+                iv = iv.join(Iv { lo: k, hi: k, nz: false });
+            }
         }
         let undef = x.prim & prim::UNDEF != 0;
         if iv.is_empty() && !undef {
@@ -1368,4 +1384,98 @@ pub(crate) fn index_string(s: &str) -> bool {
         return false;
     }
     s.parse::<u64>().is_ok_and(|v| v < u32::MAX as u64)
+}
+
+/// ToIntegerOrInfinity(ToNumber(s)) of a String (ECMA-262 7.1.5, 7.1.4.1.1
+/// StringToNumber, 7.1.4.1.2 RoundMVResult): StrWhiteSpaceChar trimmed;
+/// empty is 0; StrNumericLiteral (a NonDecimalIntegerLiteral with no
+/// sign or separators, or a StrDecimalLiteral: sign, `Infinity` or
+/// digits with `.` and an exponent); anything else is NaN, which is 0.
+/// The integer is saturated to ±2^53 (an infinity, or a value past the
+/// safe range: callers clamp to a String length, so the same).
+fn str_to_integer(s: &str) -> i64 {
+    const LIM: f64 = 9007199254740992.0;
+    let ws = |c: char| {
+        matches!(
+            c,
+            '\u{9}' | '\u{b}' | '\u{c}' | '\u{feff}' | '\u{a}' | '\u{d}' | '\u{2028}' | '\u{2029}'
+                | '\u{20}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
+        )
+    };
+    let t = s.trim_matches(ws);
+    let sat = |f: f64| -> i64 {
+        if f.is_nan() {
+            0
+        } else {
+            f.trunc().clamp(-LIM, LIM) as i64
+        }
+    };
+    if t.is_empty() {
+        return 0;
+    }
+    let b = t.as_bytes();
+    if b.len() > 2 && b[0] == b'0' {
+        let radix = match b[1] {
+            b'x' | b'X' => 16,
+            b'o' | b'O' => 8,
+            b'b' | b'B' => 2,
+            _ => 0,
+        };
+        if radix != 0 {
+            let mut v = 0f64;
+            for &c in &b[2..] {
+                match (c as char).to_digit(radix) {
+                    Some(d) => v = v * radix as f64 + d as f64,
+                    None => return 0,
+                }
+            }
+            return sat(v);
+        }
+    }
+    let (neg, body) = match b[0] {
+        b'+' => (false, &t[1..]),
+        b'-' => (true, &t[1..]),
+        _ => (false, t),
+    };
+    if body == "Infinity" {
+        return if neg { -LIM as i64 } else { LIM as i64 };
+    }
+    // StrUnsignedDecimalLiteral: DecimalDigits [. [DecimalDigits]] [Exp]
+    // | . DecimalDigits [Exp]; Exp: (e|E) [+|-] DecimalDigits.
+    let d = body.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize| {
+        let st = *i;
+        while *i < d.len() && d[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i - st
+    };
+    let int = digits(&mut i);
+    let mut frac = 0;
+    if i < d.len() && d[i] == b'.' {
+        i += 1;
+        frac = digits(&mut i);
+    }
+    if int == 0 && frac == 0 {
+        return 0;
+    }
+    if i < d.len() && (d[i] == b'e' || d[i] == b'E') {
+        i += 1;
+        if i < d.len() && (d[i] == b'+' || d[i] == b'-') {
+            i += 1;
+        }
+        if digits(&mut i) == 0 {
+            return 0;
+        }
+    }
+    if i != d.len() {
+        return 0;
+    }
+    // The text is a StrDecimalLiteral, which Rust's f64 parser reads with
+    // the same correctly rounded value.
+    match t.parse::<f64>() {
+        Ok(f) => sat(f),
+        Err(_) => 0,
+    }
 }

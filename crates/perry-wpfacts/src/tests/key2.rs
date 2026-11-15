@@ -19,7 +19,7 @@
 
 use super::*;
 
-fn recv(pf: &ProgramFacts, key: &str) -> Vec<String> {
+pub(super) fn recv(pf: &ProgramFacts, key: &str) -> Vec<String> {
     let mut r: Vec<String> = pf
         .sites
         .iter()
@@ -41,12 +41,12 @@ fn dump(tag: &str, pf: &ProgramFacts) {
     }
 }
 
-fn v(xs: &[&str]) -> Vec<String> {
+pub(super) fn v(xs: &[&str]) -> Vec<String> {
     xs.iter().map(|s| s.to_string()).collect()
 }
 
 /// three.core.js:53001-53033, verbatim (types added).
-const TRACK_RE: &str = r#"
+pub(super) const TRACK_RE: &str = r#"
 const _RESERVED_CHARS_RE = '\\[\\]\\.:\\/';
 const _reservedRe = new RegExp( '[' + _RESERVED_CHARS_RE + ']', 'g' );
 const _wordChar = '[^' + _RESERVED_CHARS_RE + ']';
@@ -68,7 +68,7 @@ const _supportedObjectNames = [ 'material', 'materials', 'bones', 'map' ];
 
 /// three.core.js:53210-53250 (`parseTrackName`, verbatim but the throws'
 /// messages) and the `objectName` part of `bind` (:53489-53627).
-const PARSE_BIND: &str = r#"
+pub(super) const PARSE_BIND: &str = r#"
 function parseTrackName( trackName: any ): any {
 	const matches = _trackRe.exec( trackName );
 	if ( matches === null ) {
