@@ -358,7 +358,13 @@ impl<'a> FuncEmitCtx<'a> {
     /// Compute memory address for a slot in the current frame.
     /// Address = sp - (current_frame_size - slot) * 8
     /// This works correctly across nested calls because sp was advanced by emit_frame_begin.
+    #[track_caller]
     pub(super) fn emit_slot_addr(&self, func: &mut Function, slot: u32) {
+        debug_assert!(
+            slot < self.current_frame_size,
+            "slot {slot} lies outside the open frame of {} slots",
+            self.current_frame_size
+        );
         let sp = self.emitter.nan_temp_global;
         let offset_from_sp = (self.current_frame_size - slot) * 8;
         func.instruction(&Instruction::GlobalGet(sp));
@@ -367,6 +373,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// Store an expression's result to memory at the current frame's slot.
+    #[track_caller]
     pub(super) fn emit_store_arg(&mut self, func: &mut Function, slot: u32, expr: &Expr) {
         match expr {
             Expr::String(s) => {
@@ -401,6 +408,7 @@ impl<'a> FuncEmitCtx<'a> {
         }
     }
 
+    #[track_caller]
     pub(super) fn emit_store_const(&self, func: &mut Function, slot: u32, val: f64) {
         let bits = val.to_bits();
         self.emit_slot_addr(func, slot);

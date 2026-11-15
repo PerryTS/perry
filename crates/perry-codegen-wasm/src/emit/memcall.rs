@@ -15,6 +15,14 @@ impl<'a> FuncEmitCtx<'a> {
         (self.current_frame_size + self.frame_stack.iter().sum::<u32>()) * 8
     }
 
+    /// Returns to the enclosing frame once a bridge call has consumed the open one.
+    #[track_caller]
+    fn close_frame(&mut self) {
+        let enclosing = self.frame_stack.pop();
+        debug_assert!(enclosing.is_some(), "bridge call without an open frame");
+        self.current_frame_size = enclosing.unwrap_or(0);
+    }
+
     pub(super) fn emit_exception_guard(&mut self, func: &mut Function) {
         let handler = self
             .exception_handlers
@@ -49,6 +57,7 @@ impl<'a> FuncEmitCtx<'a> {
     /// Handles stack pointer save/advance/restore automatically.
     /// Call a bridge function. Frame must already be set up via emit_frame_begin + emit_store_arg.
     /// Returns f64 result, then restores sp.
+    #[track_caller]
     pub(super) fn emit_memcall(
         &mut self,
         func: &mut Function,
@@ -86,7 +95,7 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Const(frame_bytes));
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
-        self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        self.close_frame();
         if !matches!(
             bridge_fn_name,
             "try_start"
@@ -100,6 +109,7 @@ impl<'a> FuncEmitCtx<'a> {
         }
     }
 
+    #[track_caller]
     pub(super) fn emit_memcall_void(
         &mut self,
         func: &mut Function,
@@ -126,7 +136,7 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Const(frame_bytes));
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
-        self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        self.close_frame();
         if !matches!(
             bridge_fn_name,
             "try_start"
@@ -150,6 +160,7 @@ impl<'a> FuncEmitCtx<'a> {
         self.emit_memcall_void(func, bridge, count);
     }
 
+    #[track_caller]
     pub(super) fn emit_memcall_i32(
         &mut self,
         func: &mut Function,
@@ -175,7 +186,7 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::I32Const(frame_bytes));
         func.instruction(&Instruction::I32Sub);
         func.instruction(&Instruction::GlobalSet(sp));
-        self.current_frame_size = self.frame_stack.pop().unwrap_or(0);
+        self.close_frame();
         if !matches!(
             bridge_fn_name,
             "try_start"

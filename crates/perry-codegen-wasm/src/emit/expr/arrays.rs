@@ -433,15 +433,18 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, name, 3);
             }
             Expr::ArrayToReversed { array } => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_to_reversed", 1);
             }
             Expr::ArrayToSorted { array, comparator } => {
                 if let Some(cmp) = comparator {
+                    self.emit_frame_begin(func, 2);
                     self.emit_store_arg(func, 0, array);
                     self.emit_store_arg(func, 1, cmp);
                     self.emit_memcall(func, "array_to_sorted_cmp", 2);
                 } else {
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_arg(func, 0, array);
                     self.emit_memcall(func, "array_to_sorted", 1);
                 }
@@ -452,6 +455,7 @@ impl<'a> FuncEmitCtx<'a> {
                 delete_count,
                 items: _,
             } => {
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, start);
                 self.emit_store_arg(func, 2, delete_count);
@@ -463,6 +467,7 @@ impl<'a> FuncEmitCtx<'a> {
                 index,
                 value,
             } => {
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, index);
                 self.emit_store_arg(func, 2, value);
@@ -474,6 +479,7 @@ impl<'a> FuncEmitCtx<'a> {
                 start,
                 end,
             } => {
+                self.emit_frame_begin(func, if end.is_some() { 4 } else { 3 });
                 // emit local get for array_id
                 func.instruction(&Instruction::LocalGet(*array_id));
                 func.instruction(&Instruction::LocalSet(self.temp_local));
@@ -494,14 +500,17 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
             Expr::ArrayEntries(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_entries", 1);
             }
             Expr::ArrayKeys(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_keys", 1);
             }
             Expr::ArrayValues(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_values", 1);
             }

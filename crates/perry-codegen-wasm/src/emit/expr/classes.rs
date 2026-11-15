@@ -472,6 +472,9 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let method_bits = (STRING_TAG << 48) | (method_id as u64);
+                // The frame is open before any slot store; the args array is built in
+                // frames above it.
+                self.emit_frame_begin(func, 3);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits)); // slot 0 = class handle
                 self.emit_store_const(func, 1, f64::from_bits(method_bits)); // slot 1 = method name
                                                                              // Build args array
@@ -490,7 +493,6 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_arg(func, 1, arg);
                     self.emit_memcall(func, "array_push", 2);
                 }
-                self.emit_frame_begin(func, 3);
                 func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array
                 self.emit_slot_addr(func, 2);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
