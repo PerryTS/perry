@@ -2082,9 +2082,14 @@ fn judge(
                     // (ECMA-262 10.1.8.1) climbs the stable chain to the first
                     // holder. Proven when every holder is a program class
                     // prototype whose own member is constant (15.7.14), the
-                    // same read as one on the prototype itself.
+                    // same read as one on the prototype itself. The layout
+                    // need not be fixed (R9BIRTH5): OrdinaryGet stops at the
+                    // first object that has the key itself, so keys the
+                    // instance gains after birth that are not this key do not
+                    // move the holder; `unwritten` and the walk (no named,
+                    // computed or assign/define store may give the instance or
+                    // a link below the holder the key) keep it the holder.
                     _ if unwritten
-                        && tf.fixed_layout
                         && lookup_holders(m, tf, t, key, s.key).is_ok_and(|hs| {
                             !hs.is_empty()
                                 && hs.iter().all(|&(h, _)| match &m.toks[h as usize] {
