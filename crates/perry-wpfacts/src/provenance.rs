@@ -103,6 +103,7 @@ impl Prov {
                 sel_checked: Default::default(),
                 mints: Default::default(),
                 implicit_by: Default::default(),
+                arrive: std::env::var("PERRY_FACTS_WHY_ARRIVE").ok().as_deref() == Some("1"),
             }
         });
         if out.is_none() && why.is_none() {
@@ -388,6 +389,10 @@ pub(crate) struct WhyRec {
     mints: crate::pts::FxHashMap<u32, Mint>,
     /// (node, reason) -> the model call whose `implicit_args` touched it.
     implicit_by: crate::pts::FxHashMap<(NodeId, u32), u32>,
+    /// `PERRY_FACTS_WHY_ARRIVE=1`: print every first arrival of a value at
+    /// a node an `n<id>` selector names (its value set as it grows, with
+    /// the source position of the rule or edge that delivered it).
+    arrive: bool,
 }
 
 /// Where a call without a source site was minted (the solver or a builtin
@@ -507,10 +512,16 @@ impl Model {
             return;
         };
         let mut check = false;
+        let mut arrive = false;
         if let std::collections::hash_map::Entry::Vacant(e) = w.first.entry((n, v)) {
             e.insert(Parent { src, mode, adopted, rule, edge, call, work, loc, cause });
             w.by_node.entry(n).or_default().push((work, v));
             check = w.stop == STOP_WIDE && !w.wide_done;
+            arrive = w.arrive && w.sel_nodes.contains_key(&n);
+        }
+        if arrive {
+            let solve = w.solve;
+            eprintln!("WHY ARRIVE solve={solve} n{n} value={} src=n{src} work={work} at={loc}", self.why_val(v));
         }
         if check {
             self.why_wide_check(n, v);
