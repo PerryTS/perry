@@ -81,6 +81,15 @@ pub struct CtorPhase {
     /// Identity of the construction-phase stores inside a followed method
     /// body (a subset of `phase_stores`).
     pub m_stores: BTreeSet<usize>,
+    /// R9BIRTH3 rule K: keys whose construction-phase store put a fresh
+    /// closure into the instance itself (`this.k = function () { .. scope .. }`).
+    /// Creating a closure runs no code (ECMA-262 15.2.5 / 10.2.3
+    /// OrdinaryFunctionCreate), and the closure is reachable only through
+    /// `this.k`: it can run, and see `this`, only once `this.k` is read or
+    /// `this` reaches other code, and each of those closes the phase there.
+    /// A subclass constructor could read the key without either (it is a
+    /// present key there): the class leaks to subclasses (`Gen::parent_chain_leaks`).
+    pub closure_keys: BTreeSet<String>,
 }
 
 impl CtorPhase {
@@ -838,6 +847,10 @@ impl W<'_> {
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
+                // Rule K: the read hands out the closure, which holds `this`.
+                if self.ph.closure_keys.contains(property) {
+                    self.leak(st);
+                }
                 if !st.assigned.contains(property) && !self.is_present(st, property) {
                     self.read_before.insert(property.clone());
                     // Not own yet: the read walks the prototype chain, where
@@ -847,6 +860,33 @@ impl W<'_> {
                     }
                 }
             }
+            // Rule K: a fresh closure stored straight into `this.k` while
+            // `this` is unobserved: its creation runs no code; a capture of
+            // a pending alias is noted as before (rule L, hoisting).
+            Expr::PropertySet {
+                object,
+                property,
+                value,
+                ..
+            } if st.open
+                && matches!(object.as_ref(), Expr::This)
+                && matches!(value.as_ref(), Expr::Closure { .. }) =>
+            {
+                if let Expr::Closure {
+                    captures,
+                    mutable_captures,
+                    ..
+                } = value.as_ref()
+                {
+                    for c in captures.iter().chain(mutable_captures) {
+                        if self.alias_pending.contains(c) {
+                            self.alias_early.insert(*c);
+                        }
+                    }
+                }
+                self.store(st, e, property);
+                self.ph.closure_keys.insert(property.clone());
+            }
             Expr::PropertySet {
                 object,
                 property,
@@ -855,6 +895,36 @@ impl W<'_> {
             } if matches!(object.as_ref(), Expr::This) => {
                 self.expr(st, value);
                 self.store(st, e, property);
+            }
+            // Rule K for the `[[Set]]` form HIR lowers `this.k = v` to.
+            Expr::PutValueSet {
+                target,
+                key,
+                value,
+                receiver,
+                ..
+            } if st.open
+                && matches!(target.as_ref(), Expr::This)
+                && matches!(receiver.as_ref(), Expr::This)
+                && matches!(key.as_ref(), Expr::String(_))
+                && matches!(value.as_ref(), Expr::Closure { .. }) =>
+            {
+                if let Expr::Closure {
+                    captures,
+                    mutable_captures,
+                    ..
+                } = value.as_ref()
+                {
+                    for c in captures.iter().chain(mutable_captures) {
+                        if self.alias_pending.contains(c) {
+                            self.alias_early.insert(*c);
+                        }
+                    }
+                }
+                if let Expr::String(k) = key.as_ref() {
+                    self.store(st, e, k);
+                    self.ph.closure_keys.insert(k.clone());
+                }
             }
             Expr::PutValueSet {
                 target,
@@ -874,6 +944,9 @@ impl W<'_> {
             Expr::PropertyUpdate {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
+                if self.ph.closure_keys.contains(property) {
+                    self.leak(st);
+                }
                 if !st.assigned.contains(property) && !self.is_present(st, property) {
                     self.read_before.insert(property.clone());
                     if !self.methods.contains(property) {

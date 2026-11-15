@@ -724,6 +724,15 @@ impl<'a> Gen<'a> {
         if self.m_override_leaks.contains(&tm) {
             return true;
         }
+        // Rule K: a parent's closure key is a present key in this class's
+        // constructor, whose read hands out a closure that holds `this`.
+        let mut up = self.m.tmpls[tm as usize].parent;
+        while let Some(p) = up {
+            if self.ctor_phase.get(&p).is_some_and(|ph| !ph.closure_keys.is_empty()) {
+                return true;
+            }
+            up = self.m.tmpls[p as usize].parent;
+        }
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;
         }

@@ -160,3 +160,61 @@ fn r9birth3_k5_reflect_construct_other_new_target() {
     show("K5", &pf, &["b", "c"]);
     assert!(stores(&pf, "c", false), "K5 store .c proven though a Reflect.construct instance runs F's init");
 }
+
+// K (rule K): the LoadingManager shape: closures over the alias stored
+// into the instance itself, then more stores. `BODY` runs after the first
+// closure store, before `this.after`.
+fn k_src(body: &str, member: &str) -> String {
+    format!(
+        "function reg(x: any) {{ return x; }}
+class LM {{ constructor(onLoad: any) {{
+    const scope = this;
+    let total = 0;
+    this.onLoad = onLoad;
+    this.itemEnd = function (url: string) {{ total++; if (scope.onLoad !== undefined) scope.onLoad(url, total); }};
+{body}    this.after = 1;
+    this.itemStart = function (url: string) {{ total++; return scope.after; }};
+    this.last = 2;
+  }}
+{member} }}
+const lm = new LM((u: string, n: number) => console.log(u, n));
+lm.itemEnd(String(process.argv[2] ?? \"a\"));
+console.log(lm.after + lm.last, lm.itemStart(\"b\"));
+"
+    )
+}
+
+// C1: the stores after each closure store are birth stores.
+#[test]
+fn r9birth3_c1_closure_stored_into_this() {
+    let pf = facts(&k_src("", ""));
+    show("C1", &pf, &["itemEnd", "after", "itemStart", "last"]);
+    for k in ["itemEnd", "after", "itemStart", "last"] {
+        assert!(stores(&pf, k, true), "C1 store .{k} not proven");
+    }
+}
+
+// C2 KEEP: the closure is called in the constructor before `this.after`.
+#[test]
+fn r9birth3_c2_closure_called_in_ctor() {
+    let pf = facts(&k_src("    this.itemEnd(\"x\");\n", ""));
+    show("C2", &pf, &["after", "last"]);
+    assert!(stores(&pf, "after", false), "C2 store .after proven after the closure ran");
+}
+
+// C3 KEEP: the closure is passed to an unknown function.
+#[test]
+fn r9birth3_c3_closure_passed_out() {
+    let pf = facts(&k_src("    reg(this.itemEnd);\n", ""));
+    show("C3", &pf, &["after", "last"]);
+    assert!(stores(&pf, "after", false), "C3 store .after proven after the closure was passed out");
+}
+
+// C4 KEEP: a getter of the class hands the closure out, read in the
+// constructor.
+#[test]
+fn r9birth3_c4_getter_returns_closure() {
+    let pf = facts(&k_src("    reg(this.h);\n", "  get h() { return this.itemEnd; }"));
+    show("C4", &pf, &["after", "last"]);
+    assert!(stores(&pf, "after", false), "C4 store .after proven after a getter handed the closure out");
+}
