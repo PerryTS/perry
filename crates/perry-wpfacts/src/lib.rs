@@ -631,7 +631,9 @@ fn generate<'a>(
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
-    if cfg.profile && loud {
+    // The activation pass profiles too (same env): its work, curve and
+    // top kinds / nodes are reported when it ends or stops at a bound.
+    if cfg.profile {
         g.m.profile = Some(Default::default());
         g.m.prof = Some(Default::default());
     }
@@ -700,8 +702,9 @@ fn generate<'a>(
         }
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    if cfg.profile && loud {
-        eprintln!("perry: wpfacts after generation {}", g.m.size_line());
+    if cfg.profile {
+        let pass = if loud { "" } else { "activation pass " };
+        eprintln!("perry: wpfacts {pass}after generation {}", g.m.size_line());
     }
     let t1 = std::time::Instant::now();
     g.m.log_seed_accessors();
@@ -867,6 +870,16 @@ fn activation_pass<'a>(
             if g.m.aborted { ", past the bound" } else { "" },
             t0.elapsed().as_secs_f64() * 1000.0
         );
+    }
+    if cfg.profile {
+        eprintln!("perry: wpfacts activation pass profile: {}", g.m.size_line());
+        g.m.prof_mark(crate::model::NO_NODE, "activation end");
+        g.m.prof_report();
+        let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
+        v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+        for (k, (es, ec, pops)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts activation pass labelwork {k} succ={es} cons={ec} pops={pops}");
+        }
     }
     if g.m.aborted {
         return None;
