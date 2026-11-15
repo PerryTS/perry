@@ -32,7 +32,7 @@ const LANE_LOW: u64 = 0x5555_5555_5555_5555;
 const LANE_HIGH: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 
 /// The representation of `slot` in `rep`.
-#[inline]
+#[inline(always)]
 pub(crate) fn slot_rep(rep: u64, slot: u32) -> u64 {
     if slot >= REP_SLOTS {
         return REP_ANY;

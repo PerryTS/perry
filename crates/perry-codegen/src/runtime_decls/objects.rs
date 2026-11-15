@@ -662,7 +662,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_put_value_set_dynamic",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, I32],
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
     );
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables (where `use_local_exec_tls` turns this model into
