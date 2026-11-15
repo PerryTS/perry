@@ -1425,6 +1425,15 @@ impl Model {
                 for &t in toks {
                     self.idx_load_tok(idx, t, dst, shape, enumerable);
                 }
+                // A primitive receiver (7.3.2 GetV): ToObject, then the read
+                // under every key the key may be (the rule of `Cons::Load`):
+                // a String's index keys are its one-character Strings, its
+                // `length` a Number (10.4.3.5), any other key a member of
+                // the prototype chain of the kind.
+                if prim != 0 {
+                    let key = self.prim_index_key(idx, shape);
+                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
+                }
             }
             Cons::EnumLoad { key, dst } => {
                 for &t in toks {
@@ -1557,6 +1566,13 @@ impl Model {
             } => {
                 for &t in toks {
                     self.idx_own_load_tok(idx, t, dst, shape, enumerable);
+                }
+                // A primitive receiver: the own properties of its wrapper
+                // (10.4.3.5): a String's index keys (one-character Strings)
+                // and `length` (a Number); no own property else.
+                if prim != 0 {
+                    let key = self.prim_index_key(idx, shape);
+                    self.prim_own_load(prim, key, dst);
                 }
             }
             Cons::IdxOwnKey { obj, dst, shape } => self.idx_own_key(n, obj, dst, shape, toks, prim),

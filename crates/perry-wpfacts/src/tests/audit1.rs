@@ -88,6 +88,18 @@ fn audit1_u1c_number_computed_key_dead() {
     let r = v("const u: any = 5;\nconst j: string = [\"toFixed\"][0];\nconst h = u[j];\nh.zz;\n", "zz", false);
     assert!(!has(&r, "Dead"), "h is Number.prototype.toFixed in JS: {r:?}");
 }
+/// U1 KEEP: a character of a String is no function and stores nothing: `f.a()` keeps its one callee.
+#[test]
+fn audit1_u1_keep_string_index_read() {
+    let r = v("const f = { a() { return 1; } };\nconst s: string = \"ab\";\nconst c: any = s[0];\nc.length;\nf.a();\n", "a", true);
+    assert!(has(&r, "T0Mono"), "f.a() calls its own method only: {r:?}");
+}
+/// U1 KEEP: an array element read under a String's index key stays exact: `o.m()` keeps its callee.
+#[test]
+fn audit1_u1_keep_array_by_char_key() {
+    let r = v("const o = { m() { return 1; } };\nconst xs: any = { a: o };\nconst s: string = \"ab\";\nxs[s[0]].m();\no.m();\n", "m", true);
+    assert!(last_is(&r, "T0Mono"), "o.m() calls its own method only: {r:?}");
+}
 /// U2: a `__proto__` store on a class instance relinks it (B.2.2.1.2): `a.m()` calls g.
 #[test]
 fn audit1_u2_proto_store_class_instance() {

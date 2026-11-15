@@ -731,7 +731,7 @@ pub(crate) enum BoxChain {
 }
 
 /// A canonical array index (`"0"`, `"17"`): an element, not a member.
-pub(super) fn is_index_name(name: &str) -> bool {
+pub(crate) fn is_index_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 10
         && name.bytes().all(|b| b.is_ascii_digit())

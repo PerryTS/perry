@@ -41,6 +41,42 @@ impl Model {
                     | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
             ) || crate::builtins::surely_callable(self, t))
     }
+    /// The key of an index read `o[k]` on a primitive `o`: the for-in run's
+    /// one key (FVA 4.3b), else every key of the site's shape.
+    pub(super) fn prim_index_key(&self, idx: NodeId, shape: KeyShapeId) -> Key {
+        match self.key_nodes.get(&idx) {
+            Some(&a) => Key::Named(a),
+            None => Key::Any(shape),
+        }
+    }
+
+    /// An own-only read of a primitive under `key` (10.4.3.5
+    /// StringGetOwnProperty; a Number, Boolean, Symbol or BigInt wrapper has
+    /// no own property): `undefined`, and on a String a one-character
+    /// String under an index key, its length under `length`.
+    pub(super) fn prim_own_load(&mut self, prim: u16, key: Key, dst: NodeId) {
+        if prim & (prim::NULL | prim::UNDEF) == prim {
+            return; // TypeError
+        }
+        self.add_prim(dst, prim::UNDEF);
+        if prim & prim::STR == 0 {
+            return;
+        }
+        let (index, length) = match key {
+            Key::Named(a) => {
+                let s = self.atoms[a as usize].as_str();
+                (crate::builtins::members::is_index_name(s), s == "length")
+            }
+            k => (true, self.key_may_name_str(k, "length")),
+        };
+        if index {
+            self.add_prim(dst, prim::STR);
+        }
+        if length {
+            self.add_prim(dst, prim::NUM);
+        }
+    }
+
     /// `Cons::IdxLoad` for one object token `t`.
     pub(super) fn idx_load_tok(
         &mut self,
