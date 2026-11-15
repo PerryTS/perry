@@ -322,18 +322,35 @@ pub(crate) fn run(
         let t0 = pf
             .sites
             .iter()
-            .filter(|s| !matches!(s.verdict, perry_wpfacts::Verdict::No(_)))
+            .filter(|s| !s.access.is_store() && !matches!(s.verdict, perry_wpfacts::Verdict::No(_)))
+            .count();
+        let reads = pf.sites.iter().filter(|s| !s.access.is_store()).count();
+        // ACCSITE1 (owner 11-15): stores in their own column; AddsKey is
+        // unproven in round one (D1).
+        let st_all = pf.sites.iter().filter(|s| s.access.is_store()).count();
+        let st_ok = pf
+            .sites
+            .iter()
+            .filter(|s| {
+                s.access.is_store()
+                    && !matches!(
+                        s.verdict,
+                        perry_wpfacts::Verdict::No(_) | perry_wpfacts::Verdict::AddsKey
+                    )
+            })
             .count();
         eprintln!(
             "perry: wpfacts: {} modules, {} templates ({} fact units), {} nodes, {} constraints; \
-             {} of {} read/call sites proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",
+             {} of {} read/call sites proven, {} of {} stores proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",
             s.modules,
             s.templates,
             s.fact_units,
             s.nodes,
             s.constraints,
             t0,
-            pf.sites.len(),
+            reads,
+            st_ok,
+            st_all,
             s.gen_ms,
             s.solve_ms,
             s.pops,
@@ -1227,6 +1244,9 @@ fn verification_sites(
         .iter()
         .enumerate()
         .filter_map(|(ordinal, site)| {
+            if site.access.is_store() {
+                return None;
+            }
             let module = pf.module_paths.get(site.module as usize)?;
             if path.is_some_and(|path| path != module) {
                 return None;
@@ -1242,7 +1262,10 @@ fn verification_sites(
                 perry_wpfacts::Verdict::Throws => SiteVerdict::Throws,
                 perry_wpfacts::Verdict::NsExport => SiteVerdict::NsExport,
                 perry_wpfacts::Verdict::IntrinsicCall => SiteVerdict::IntrinsicCall,
-                perry_wpfacts::Verdict::No(_) => return None,
+                perry_wpfacts::Verdict::AccessorGet
+                | perry_wpfacts::Verdict::AccessorSet
+                | perry_wpfacts::Verdict::AddsKey
+                | perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {
                 ordinal,

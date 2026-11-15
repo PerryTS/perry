@@ -224,6 +224,7 @@ impl<'a> Gen<'a> {
                 }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset: off,
                         key: a,
@@ -351,6 +352,7 @@ impl<'a> Gen<'a> {
                 {
                     let key = self.m.atom("()");
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset,
                         key,

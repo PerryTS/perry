@@ -245,7 +245,45 @@ pub enum Verdict {
     /// a held realm. The claim is the binding, not a value: an `export let`
     /// its module reassigns is read live.
     NsExport,
+    /// ACCSITE1 P2: a named read (the GetValue of a compound too) whose key,
+    /// on every receiver, OrdinaryGet (ECMA-262 10.1.8.1) finds as ONE
+    /// accessor property of a program prototype, the same getter function
+    /// for all: no receiver can own the key (no birth key, no store, no
+    /// computed store, no own accessor), no data property and no other
+    /// definition of it sits on the chain before that holder, no prototype
+    /// on the way is escaped or hard. The read is [[Call]] of the getter
+    /// with `this` = the receiver (`targets`).
+    AccessorGet,
+    /// The same for a named store: OrdinarySet (10.1.9.2) finds the
+    /// accessor and calls its one setter with the receiver (`targets`).
+    AccessorSet,
+    /// A named store whose receivers are program class instances that lack
+    /// the key and whose chains lack it (`absent_key`): OrdinarySet creates
+    /// an own data property (10.1.9.2 step 2.c-e). Unproven in round one
+    /// (owner D1): no direct lowering exists.
+    AddsKey,
     No(String),
+}
+
+/// ACCSITE1 D2: the access a site record names; one record for every
+/// member access, no separate store table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Access {
+    /// A read, or a call (`is_call`).
+    #[default]
+    Read,
+    /// A named store `o.k = v` or a compound's PutValue (13.15.2-3);
+    /// `strict`: a failed [[Set]] throws (10.1.9, 13.15.2 PutValue step 5.d).
+    Set { strict: bool },
+    /// A compound's GetValue (13.15.3 step 2), at the store's offset.
+    UpdateGet,
+}
+
+impl Access {
+    /// A store site or a compound's read: the "stores" column.
+    pub fn is_store(self) -> bool {
+        !matches!(self, Access::Read)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -258,6 +296,7 @@ pub struct SiteFacts {
     pub byte_offset: u32,
     pub key: String,
     pub is_call: bool,
+    pub access: Access,
     pub receivers: Vec<String>,
     /// The unguarded solved values, before a verdict's entry-guard refinement.
     pub receiver_values: Vec<ReceiverValue>,
@@ -1349,7 +1388,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     }
     // One fact per read site: records of the same site (a body walked
     // twice) unite their receivers.
-    let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
+    let mut first: FxHashMap<(u32, u32, u32, bool, bool, Access), usize> = FxHashMap::default();
     let mut groups: Vec<(usize, Vec<u32>, Vec<FnIdx>)> = Vec::new();
     // The functions only the runtime has (a promise's resolvers, a promise
     // capability's executor). Every other function token is a body:
@@ -1361,8 +1400,9 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         .chain(m.executors.values())
         .map(|&t| m.tok_fn(t))
         .collect();
-    for (i, s) in g.read_sites.iter().enumerate() {
-        let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
+    let all: Vec<&crate::gen::ReadSite> = g.read_sites.iter().chain(g.store_sites.iter()).collect();
+    for (i, s) in all.iter().enumerate() {
+        let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call, s.access);
         match first.get(&k) {
             Some(&gi) => {
                 groups[gi].1.push(s.recv);
@@ -1466,7 +1506,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         )
     };
     for (i, recvs, funcs) in &groups {
-        let s = &g.read_sites[*i];
+        let s = all[*i];
         let key = m.atoms[s.key as usize].clone();
         let (
             receivers,
@@ -1532,6 +1572,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             byte_offset: s.byte_offset,
             key,
             is_call: s.is_call,
+            access: s.access,
             receivers,
             receiver_values,
             receiver_prims,
@@ -1656,6 +1697,9 @@ fn judge(
     prim: u16,
     top_recv: NodeId,
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
+    if let Access::Set { strict } = s.access {
+        return judge_store(m, by_id, s, key, toks, prim, strict);
+    }
     if s.value_call {
         let top = toks.contains(&TOP);
         if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
@@ -1746,6 +1790,8 @@ fn judge(
     let mut callee: Vec<NodeId> = Vec::new();
     // Reads of a class object's constant static (3.4).
     let mut statics = 0usize;
+    // ACCSITE1 P2: the getter each receiver's lookup ends at.
+    let mut acc: Vec<Tok> = Vec::new();
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -1859,9 +1905,12 @@ fn judge(
                     {
                         slots.push(f.slot)
                     }
-                    Some(f) if !f.data_field => {
-                        verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
-                    }
+                    Some(f) if !f.data_field => match accessor_one(m, t, s.key, false) {
+                        Ok(AccOne::Fn(x)) => acc.push(x),
+                        _ => {
+                            verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
+                        }
+                    },
                     // An absent key is one outcome, as one slot is: the
                     // read gives `undefined` (`None` in `slots`).
                     _ if unwritten && tf.fixed_layout && absent_key(m, t, key, s.key) => {
@@ -1888,6 +1937,12 @@ fn judge(
                         }) =>
                     {
                         statics += 1
+                    }
+                    // An inherited accessor (ACCSITE1 S5).
+                    Some(_) | None if matches!(accessor_one(m, t, s.key, false), Ok(AccOne::Fn(_))) => {
+                        if let Ok(AccOne::Fn(x)) = accessor_one(m, t, s.key, false) {
+                            acc.push(x);
+                        }
                     }
                     Some(_) | None => {
                         // Not a definite birth field: a prototype member
@@ -2028,6 +2083,9 @@ fn judge(
                 Err(why) => Verdict::No(why),
             }
         }
+        None if !acc.is_empty() => {
+            accessor_verdict(m, &mut acc, slots.len() + own_or_absent + statics, &mut targets, false)
+        }
         None if own_or_absent > 0 && statics > 0 => {
             Verdict::No("receivers mix class objects and instances".into())
         }
@@ -2058,6 +2116,236 @@ fn judge(
     let verdict = match (verdict, native_why) {
         (Verdict::No(_), Some(why)) => Verdict::No(why),
         (v, _) => v,
+    };
+    (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// ACCSITE1: where a named lookup of `a` from receiver `t` ends.
+enum AccOne {
+    /// The one accessor function (getter for a read, setter for a store).
+    Fn(Tok),
+    /// A store whose accessor has a getter and no setter: [[Set]] returns
+    /// false (10.1.9.2 step 7), PutValue throws in strict code.
+    GetterOnly,
+    /// No holder on the chain.
+    Absent,
+}
+
+/// ACCSITE1 P2: the OrdinaryGet / OrdinarySet walk (ECMA-262 10.1.8.1,
+/// 10.1.9.2) of named key `a` from receiver `t`, when it ends at one
+/// accessor property. `t` must not own the key in any form (no field node
+/// with values, no computed store, no own accessor); each prototype on the
+/// way neither holds the key as data nor may gain it (computed store,
+/// escape, hard operation), and the chain cannot end at `null` before the
+/// holder. Every holder found names the same getter and setter lists.
+fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String> {
+    let has = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    let holds = |h: Tok| m.fields.get(&(h, a)).is_some_and(|&n| has(n));
+    let computed = |h: Tok| m.field_any.get(&h).is_some_and(|&n| has(n));
+    // The receiver is a prefix-stable instance (the callers' rule: no hard
+    // operation, no escape), so no [[DefineOwnProperty]] gives it the key;
+    // a [[Set]] of the key (a named or a computed store) finds the accessor
+    // on the chain and never creates an own property (10.1.9.2 step 3). The
+    // field node the solve also writes is that arm's over-approximation
+    // (ACCSITE1 D3), not an own property. An own accessor defines it.
+    if m.accessors.contains_key(&(t, a)) {
+        return Err("the receiver may own the key".into());
+    }
+    let mut found: Option<&(Vec<Tok>, Vec<Tok>)> = None;
+    let mut ended = false;
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    while let Some(h) = todo.pop() {
+        let protos: Vec<Tok> = match m.proto_node.get(&h) {
+            Some(&pn) if m.nodes[pn as usize].prim != 0 => {
+                return Err("the chain may end at a null prototype".into())
+            }
+            Some(&pn) => m.nodes[pn as usize].pts.to_sorted(),
+            None => Vec::new(),
+        };
+        if protos.is_empty() {
+            ended = true;
+            continue;
+        }
+        for p in protos {
+            if !seen.insert(p) {
+                continue;
+            }
+            if p == TOP || m.is_marker(p) {
+                return Err("a prototype from unmodeled code".into());
+            }
+            if computed(p) || m.is_escaped(p) || m.hard.contains_key(&p) {
+                return Err("a prototype on the chain may gain the key".into());
+            }
+            match m.accessors.get(&(p, a)) {
+                Some(acc) => {
+                    if holds(p) {
+                        return Err("data and accessor definitions of the key".into());
+                    }
+                    match found {
+                        None => found = Some(acc),
+                        Some(f) if f == acc => {}
+                        Some(_) => return Err("different accessors on the chains".into()),
+                    }
+                }
+                None if holds(p) => return Err("a data property on the chain".into()),
+                None => todo.push(p),
+            }
+        }
+    }
+    let Some((g, s)) = found else {
+        return Ok(AccOne::Absent);
+    };
+    if ended {
+        return Err("a chain may end before the accessor".into());
+    }
+    let list = if set { s } else { g };
+    match list.as_slice() {
+        [x] if m.tok_fn(*x) != NO_FN => Ok(AccOne::Fn(*x)),
+        [] if set && !g.is_empty() => Ok(AccOne::GetterOnly),
+        _ => Err("not exactly one accessor function".into()),
+    }
+}
+
+/// The accessor verdict over the receivers' accessor functions `acc`;
+/// `others`: receivers that resolved the key otherwise.
+fn accessor_verdict(
+    m: &Model,
+    acc: &mut Vec<Tok>,
+    others: usize,
+    targets: &mut FxHashMap<FnIdx, String>,
+    set: bool,
+) -> Verdict {
+    acc.sort_unstable();
+    acc.dedup();
+    if others > 0 {
+        return Verdict::No("receivers mix an accessor with data or absent keys".into());
+    }
+    if acc.len() != 1 {
+        return Verdict::No("receivers resolve the key to different accessors".into());
+    }
+    let f = m.tok_fn(acc[0]);
+    targets.insert(f, body_name(m, f));
+    if set {
+        Verdict::AccessorSet
+    } else {
+        Verdict::AccessorGet
+    }
+}
+
+/// ACCSITE1 P1/P2: the verdict of a named store site `o.k = v` (ECMA-262
+/// 13.15.2 PutValue, 10.1.9.2 OrdinarySet). Per receiver (a program class
+/// instance, prefix-stable): an own definite writable data field at a slot
+/// (step 2: the own data descriptor is written); else the one accessor the
+/// chain ends at (`accessor_one`: the setter is called; no setter: strict
+/// code throws); else a key absent from receiver and chain (`absent_key`):
+/// the store adds an own key. One kind over all receivers.
+#[allow(clippy::too_many_arguments)]
+fn judge_store(
+    m: &Model,
+    by_id: &FxHashMap<TmplId, &TemplateFacts>,
+    s: &crate::gen::ReadSite,
+    key: &str,
+    toks: &[Tok],
+    prim: u16,
+    strict: bool,
+) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
+    let mut receivers: Vec<String> = Vec::new();
+    let mut top = false;
+    let mut fixed_shape = true;
+    let mut why: Option<String> = None;
+    let mut slots: Vec<u32> = Vec::new();
+    let mut acc: Vec<Tok> = Vec::new();
+    let (mut throws, mut adds) = (0usize, 0usize);
+    let private = m.is_private_atom(s.key);
+    for &t in toks {
+        match &m.toks[t as usize] {
+            TokKind::Top => {
+                top = true;
+                why.get_or_insert("store: receiver from unmodeled code (TOP)".into());
+            }
+            TokKind::Obj(..) if m.closed_marker(t) => {}
+            TokKind::Obj(tm, _) if !m.is_marker(t) && by_id.contains_key(tm) => {
+                let tf = by_id[tm];
+                receivers.push(tf.display.clone());
+                if m.tmpls[*tm as usize].per_evaluation && private {
+                    why.get_or_insert("store: per class evaluation".into());
+                    continue;
+                }
+                if !tf.prefix_stable {
+                    why.get_or_insert("store: receiver layout is not prefix-stable".into());
+                    continue;
+                }
+                if !tf.fixed_layout {
+                    fixed_shape = false;
+                }
+                let row = tf.fields.iter().find(|f| f.is(key, private));
+                match row {
+                    // A key a data descriptor defines (at birth, BD-A, or
+                    // later, D2) may be non-writable: 10.1.9.2 step 2.a.
+                    Some(f)
+                        if f.data_field
+                            && (m.birth_attrs.contains_key(&(*tm, s.key))
+                                || m.defined_keys.get(tm).is_some_and(|ks| ks.contains(&s.key))) =>
+                    {
+                        why.get_or_insert("store: a defined key (its attributes decide)".into());
+                    }
+                    Some(f) if f.data_field && f.definite && f.slot.is_some() => {
+                        slots.push(f.slot.unwrap_or_default())
+                    }
+                    _ => match accessor_one(m, t, s.key, true) {
+                        Ok(AccOne::Fn(x)) => acc.push(x),
+                        Ok(AccOne::GetterOnly) if strict => throws += 1,
+                        Ok(AccOne::GetterOnly) => {
+                            why.get_or_insert("store: getter-only accessor in sloppy code".into());
+                        }
+                        Ok(AccOne::Absent) if row.is_none() && absent_key(m, t, key, s.key) => adds += 1,
+                        Ok(AccOne::Absent) => {
+                            why.get_or_insert("store: key not a definite birth field".into());
+                        }
+                        Err(w) => {
+                            why.get_or_insert(format!("store: {w}"));
+                        }
+                    },
+                }
+            }
+            _ => {
+                receivers.push(m.tok_name(t));
+                why.get_or_insert("store: receiver is not a program class instance".into());
+            }
+        }
+    }
+    let mut seen_r: FxHashSet<String> = FxHashSet::default();
+    receivers.retain(|r| seen_r.insert(r.clone()));
+    if prim != 0 {
+        why.get_or_insert("store: primitive receiver".into());
+    }
+    let mut targets = FxHashMap::default();
+    let kinds = [!slots.is_empty(), !acc.is_empty(), throws > 0, adds > 0]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+    let verdict = match why {
+        Some(w) => Verdict::No(w),
+        None if kinds == 0 => Verdict::Dead,
+        None if kinds > 1 => Verdict::No("store: receivers mix store kinds".into()),
+        None if !slots.is_empty() => {
+            if slots.iter().all(|&x| x == slots[0]) {
+                if receivers.len() == 1 {
+                    Verdict::T0Mono
+                } else {
+                    Verdict::T0Set
+                }
+            } else {
+                Verdict::No("store: slots differ across the receiver set".into())
+            }
+        }
+        None if !acc.is_empty() => accessor_verdict(m, &mut acc, 0, &mut targets, true),
+        None if throws > 0 => Verdict::Throws,
+        None => Verdict::AddsKey,
     };
     (receivers, top, verdict, fixed_shape, targets)
 }

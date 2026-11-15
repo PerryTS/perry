@@ -24,6 +24,16 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 /// (offset, is_call, verdict, receivers) of every site of `key` in a.ts.
+/// The read and call sites of `key` (no store sites, ACCSITE1).
+fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, crate::Verdict, Vec<String>)> {
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    pf.sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && !s.access.is_store())
+        .map(|s| (s.byte_offset, s.is_call, s.verdict.clone(), s.receivers.clone()))
+        .collect()
+}
+
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, crate::Verdict, Vec<String>)> {
     let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
     pf.sites
@@ -74,7 +84,7 @@ fn birthdef1_f1_define_properties_literal_is_birth_field() {
     let pf = facts(F1);
     show("F1", &pf, &["p", "x"]);
     show_class("F1", &pf, "O");
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(!p.is_empty() && p.iter().all(|s| proven(&s.2)), "F1 .p: {p:?}");
 }
 
@@ -127,10 +137,10 @@ console.log(o.p.x);";
 fn birthdef1_f3_keep_nonwritable_store_does_not_store() {
     let pf = facts(F3);
     show("F3", &pf, &["p", "x"]);
-    let x = sites(&pf, "x");
+    let x = reads(&pf, "x");
     let leaked: Vec<_> = x.iter().filter(|s| s.3.iter().any(|r| r.ends_with(":W"))).collect();
     assert!(leaked.is_empty(), "F3 .x sees W: {leaked:?}");
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(!p.is_empty() && p.iter().all(|s| proven(&s.2)), "F3 .p: {p:?}");
 }
 
@@ -141,7 +151,7 @@ const o = new O(); console.log(o.p);";
 fn birthdef1_f4_keep_unknown_descriptor_map() {
     let pf = facts(F4);
     show("F4", &pf, &["p"]);
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(p.iter().any(|s| !proven(&s.2)), "F4 .p must stay unproven: {p:?}");
 }
 
@@ -154,7 +164,7 @@ fn birthdef1_f5_keep_defined_accessor() {
     let pf = facts(F5);
     show("F5", &pf, &["p", "x"]);
     show_class("F5", &pf, "O");
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(
         p.iter().all(|s| !matches!(s.2, crate::Verdict::T0Mono | crate::Verdict::T0Set)),
         "F5 .p must not be a slot read: {p:?}"
@@ -194,7 +204,7 @@ fn birthdef1_f7_delete_of_configurable_defined_key() {
     let pf = facts(F7);
     show("F7", &pf, &["p", "x"]);
     show_class("F7", &pf, "O");
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(
         p.iter().all(|s| !matches!(s.2, crate::Verdict::T0Mono | crate::Verdict::T0Set)),
         "F7 .p after a delete must not be a definite slot read: {p:?}"
@@ -220,7 +230,7 @@ fn birthdef1_f8_subclass_redefine_keeps_its_value() {
     show("F8", &pf, &["p", "x"]);
     show_class("F8", &pf, "A");
     show_class("F8", &pf, "B");
-    let x = sites(&pf, "x");
+    let x = reads(&pf, "x");
     assert!(
         x.iter().all(|s| !proven(&s.2) || s.3.iter().any(|r| r.ends_with(":W"))),
         "F8 b.p.x must see W (or stay unproven): {x:?}"
@@ -267,8 +277,8 @@ console.log(o.p.x);";
 fn birthdef1_f3b_nonconfigurable_nonwritable_store_does_not_store() {
     let pf = facts(F3B);
     show("F3b", &pf, &["p", "x"]);
-    let x = sites(&pf, "x");
+    let x = reads(&pf, "x");
     assert!(x.iter().all(|s| !s.3.iter().any(|r| r.ends_with(":W"))), "F3b .x sees W: {x:?}");
-    let p = sites(&pf, "p");
+    let p = reads(&pf, "p");
     assert!(!p.is_empty() && p.iter().all(|s| proven(&s.2)), "F3b .p: {p:?}");
 }

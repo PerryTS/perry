@@ -49,7 +49,7 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
         }
     }
     let mut ambiguous = BTreeSet::new();
-    for site in pf.sites.iter().filter(|s| s.module as usize == mi) {
+    for site in pf.sites.iter().filter(|s| s.module as usize == mi && !s.access.is_store()) {
         let reason = match &site.verdict {
             perry_wpfacts::Verdict::No(why) => why.clone(),
             perry_wpfacts::Verdict::OwnLength => {
@@ -80,6 +80,10 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::OwnDataOrAbsent => {
                 "own data or absent proof recorded; generic path emitted".into()
             }
+            perry_wpfacts::Verdict::AccessorGet | perry_wpfacts::Verdict::AccessorSet => {
+                "accessor proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::AddsKey => "adds-key store recorded; generic path emitted".into(),
         };
         let key = (site.byte_offset, site.key.clone(), site.is_call);
         if ambiguous.contains(&key) {

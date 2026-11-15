@@ -48,7 +48,7 @@ fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
     let mut s: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == key && s.is_call == call)
+        .filter(|s| s.key == key && s.is_call == call && !s.access.is_store())
         .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();

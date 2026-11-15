@@ -156,10 +156,10 @@ pub(in crate::units) fn join_site_records(pf: &mut ProgramFacts) {
             crate::Verdict::No(r) => r.starts_with("dead site"),
             _ => false,
         };
-    let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call);
-    let live: FxHashSet<(u32, u32, String, bool)> =
-        pf.sites.iter().filter(|s| !dead(s)).map(key).collect();
-    let mut seen: FxHashSet<(u32, u32, String, bool)> = FxHashSet::default();
+    let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call, s.access);
+    type K = (u32, u32, String, bool, crate::derive::Access);
+    let live: FxHashSet<K> = pf.sites.iter().filter(|s| !dead(s)).map(key).collect();
+    let mut seen: FxHashSet<K> = FxHashSet::default();
     pf.sites
         .retain(|s| !dead(s) || (!live.contains(&key(s)) && seen.insert(key(s))));
 }

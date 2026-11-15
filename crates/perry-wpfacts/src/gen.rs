@@ -42,6 +42,9 @@ pub struct ReadSite {
     /// the atom `()`.
     pub value_call: bool,
     pub func: FnIdx,
+    /// ACCSITE1 D2: the access the record names (a read or call, a store,
+    /// a compound's GetValue).
+    pub access: crate::derive::Access,
 }
 
 /// A folded builtin-method node (`perry_hir::folded_call`): the call
@@ -168,6 +171,10 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// ACCSITE1: the named store sites (`o.k = v`, a compound's PutValue and
+    /// GetValue). Kept apart from `read_sites`, which the read-side passes
+    /// walk; `derive::site_facts` judges both.
+    pub store_sites: Vec<ReadSite>,
     /// The folded method nodes that have a site (`method_sites`).
     pub(crate) folded_sites: Vec<FoldedSite>,
     pub(crate) element_sites: Vec<ElementSite>,
@@ -703,6 +710,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            store_sites: Vec::new(),
             folded_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),

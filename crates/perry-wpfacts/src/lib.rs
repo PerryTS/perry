@@ -72,7 +72,7 @@ pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
 pub use derive::{
-    ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
+    Access, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
 pub use family_reach::{FamilyReach, FamilyVerdict};

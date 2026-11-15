@@ -68,8 +68,11 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::Throws
         | crate::Verdict::OwnDataOrAbsent
         | crate::Verdict::IntrinsicCall
-        | crate::Verdict::NsExport => 2,
+        | crate::Verdict::NsExport
+        | crate::Verdict::AccessorGet
+        | crate::Verdict::AccessorSet => 2,
         crate::Verdict::E0 => 1,
+        crate::Verdict::AddsKey => 0,
         crate::Verdict::No(_) => 0,
     }
 }

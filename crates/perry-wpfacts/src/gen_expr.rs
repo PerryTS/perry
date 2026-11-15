@@ -465,6 +465,7 @@ impl<'a> Gen<'a> {
         let pa = self.member_atom(inner, p);
         if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
+                access: crate::derive::Access::Read,
                 module: mi,
                 byte_offset: *byte_offset,
                 key: pa,
@@ -1081,6 +1082,7 @@ impl<'a> Gen<'a> {
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
                     if *byte_offset != 0 {
                         self.read_sites.push(ReadSite {
+                            access: crate::derive::Access::Read,
                             module: mi,
                             byte_offset: *byte_offset,
                             key: a,
@@ -1101,6 +1103,7 @@ impl<'a> Gen<'a> {
                 let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: mi,
                         byte_offset: *byte_offset,
                         key: a,
@@ -1127,11 +1130,33 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 value,
+                byte_offset,
                 ..
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr_zs(fx, value);
                 let a = self.member_atom(object, property);
+                // ACCSITE1 P4: a compound `o.k op= v` (13.15.3): GetValue
+                // then PutValue of one reference, one base evaluation: two
+                // sites at the member's offset.
+                let compound = *byte_offset != 0
+                    && !matches!(object.as_ref(), Expr::PrivateGuard { .. })
+                    && matches!(value.as_ref(), Expr::Binary { left, .. }
+                        if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
+                if compound {
+                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false }] {
+                        self.store_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *byte_offset,
+                            key: a,
+                            recv: o,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                            access,
+                        });
+                    }
+                }
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1177,6 +1202,25 @@ impl<'a> Gen<'a> {
                 let v = self.expr_zs(fx, value);
                 self.direct_arr = None;
                 let rv = self.expr(fx, receiver);
+                // ACCSITE1 P1: a named store `o.k = v` (13.15.2 PutValue,
+                // 10.1.9 [[Set]]) is a site at the member's offset.
+                if let (Expr::String(s), Expr::PutValueSet { element_offset, strict, .. }) =
+                    (key.as_ref(), e)
+                {
+                    if *element_offset != 0 && !s.starts_with('#') {
+                        let a = self.m.atom(s);
+                        self.store_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *element_offset,
+                            key: a,
+                            recv: rv,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                            access: crate::derive::Access::Set { strict: *strict },
+                        });
+                    }
+                }
                 let owner = self.phase_owner(fx, e, target);
                 if let Some(kp) = self.for_in_key_of(fx.module, key) {
                     // A for-in run's key decides the stored key (FVA 4.3b).
