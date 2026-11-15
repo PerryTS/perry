@@ -45,9 +45,6 @@ pub const REGION_TLS: u8 = 4;
 
 pub const WORD_DATA: u8 = 0;
 pub const WORD_TLS: u8 = 1;
-/// Or-ed into the region: written only by the capture's own collect (the
-/// word equals the baseline in the copy taken first at the cut).
-pub const WORD_COLLECT: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Val {

@@ -3,8 +3,8 @@
 //! A binary compiled with `PERRY_SNAP_IMAGE_RUN` calls [`js_snap_image_begin`]
 //! first in `main` and [`js_snap_image_cut`] where the entry body starts, after
 //! every static dependency has been initialised. With
-//! `PERRY_SNAP_IMAGE_OUT=<file>` set, the cut collects, walks every cell the
-//! allocators hold, writes the image file (see `format`) and exits before the
+//! `PERRY_SNAP_IMAGE_OUT=<file>` set, the cut marks the cells the collector's roots reach (read-only, no
+//! collection), walks them, writes the image file (see `format`) and exits before the
 //! entry body runs. Without it the cut returns at once. No other binary
 //! reaches this code: the calls are emitted only for the knob.
 
@@ -109,25 +109,42 @@ pub extern "C" fn js_snap_image_begin(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[unsafe(naked)]
 #[no_mangle]
 pub extern "C" fn js_snap_image_cut() {
+    crate::gc::offering_entry_asm!(0, js_snap_image_cut_from)
+}
+
+/// The cut entry offers its caller's frame to the root walk, as `gc()` does.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+extern "C" fn js_snap_image_cut_from(pc: usize, sp: usize, fp: usize) {
+    // First, before the offer below writes the walk origin and before any
+    // other code of the capture: the words as the program left them.
+    let p = BASELINE.load(Relaxed);
+    if !p.is_null() {
+        // SAFETY: leaked in `begin`, never freed; one cut per process.
+        take_pre(unsafe { &mut *p });
+    }
+    let origin = crate::gc::WalkOrigin { pc, sp, fp };
+    let _origin = crate::gc::EntryWalkOrigin::enter(&origin);
+    cut_body();
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn cut_body() {
     let p = BASELINE.load(Relaxed);
     if p.is_null() {
         return;
     }
     // SAFETY: leaked in `begin`, never freed; one cut per process.
     let b = unsafe { &mut *p };
-    // First, before the capture runs any code of its own (no environment
-    // lookup, no maps read): the words as the program left them.
-    take_pre(b);
     let Some(out) = std::env::var_os("PERRY_SNAP_IMAGE_OUT") else {
         return;
     };
     BASELINE.store(std::ptr::null_mut(), Relaxed);
     let b = &*b;
     let pre = read_maps();
-    crate::gc::js_gc_collect();
-    let img = build(Some(b), pre);
+    let img = build(Some(b), pre, true);
     let ok = std::fs::write(&out, format::encode(&img)).is_ok();
     std::process::exit(if ok { 0 } else { 70 });
 }
@@ -279,9 +296,12 @@ fn cell_headers() -> Vec<usize> {
 
 /// The image of the heap now and, with a baseline, of the root words that
 /// changed since `begin`.
-pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>) -> Image {
+pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: bool) -> Image {
     use crate::gc::{GcHeader, GC_HEADER_SIZE};
-    let headers = cell_headers();
+    let mut headers = cell_headers();
+    if live {
+        headers = mark_live(headers, crate::gc::image_visit_roots);
+    }
     let mut maps = pre;
     maps.extend(read_maps());
     let sect = |lo: &u8, hi: &u8| (lo as *const u8 as usize, hi as *const u8 as usize);
@@ -388,18 +408,17 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>) -> Image 
                 if a >= own && a < own + 8 {
                     continue;
                 }
-                // SAFETY: the range the baseline copied.
-                let now = unsafe { std::ptr::read_volatile(a as *const u64) };
+                // The word as the program left it at the cut: the copy taken
+                // first, never the live word (the capture's own code runs
+                // after that copy).
+                let now = pre.get(i * 8..i * 8 + 8).map_or(0, le);
                 let was = le(o);
                 if now == was {
                     continue;
                 }
-                // Equal to the baseline in the copy taken first: only the
-                // capture's collect wrote it.
-                let collect = pre.get(i * 8..i * 8 + 8).is_some_and(|p| le(p) == was);
                 let val = w.val(now).unwrap_or(Val::Opaque(now));
                 img.words.push(Word {
-                    region: region | if collect { format::WORD_COLLECT } else { 0 },
+                    region,
                     off: (a - lo) as u64,
                     val,
                 });
@@ -474,4 +493,47 @@ fn merged(mut v: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
         }
     }
     out
+}
+
+/// The headers among `headers` (sorted) that `roots` reach through the traced
+/// slots: a read-only mark into a local flag per header, dropped on return.
+/// Nothing is swept, moved, promoted or counted.
+fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Vec<usize> {
+    use crate::gc::{GcHeader, GC_HEADER_SIZE};
+    use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+    let cell_of = |hs: &[usize], bits: u64| -> Option<usize> {
+        let tag = bits & TAG_MASK;
+        let a = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+            (bits & POINTER_MASK) as usize
+        } else {
+            bits as usize
+        };
+        hs.binary_search(&a.wrapping_sub(GC_HEADER_SIZE)).ok()
+    };
+    let mut marked = vec![false; headers.len()];
+    let mut work: Vec<usize> = Vec::new();
+    let mut found: Vec<u64> = Vec::new();
+    roots(&mut |bits| found.push(bits));
+    loop {
+        for bits in found.drain(..) {
+            if let Some((i, m)) = cell_of(&headers, bits).and_then(|i| Some((i, marked.get_mut(i)?))) {
+                if !*m {
+                    *m = true;
+                    work.push(i);
+                }
+            }
+        }
+        let Some(&h) = work.pop().and_then(|i| headers.get(i)) else { break };
+        // SAFETY: a cell the allocators hold; the slots are read in place.
+        unsafe {
+            crate::gc::image_cells::visit_cell_slots_raw(h as *mut GcHeader, &mut |_slot, bits, _own| {
+                found.push(bits)
+            });
+        }
+    }
+    headers
+        .into_iter()
+        .zip(marked)
+        .filter_map(|(h, m)| m.then_some(h))
+        .collect()
 }

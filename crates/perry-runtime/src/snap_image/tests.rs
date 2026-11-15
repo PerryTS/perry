@@ -86,7 +86,7 @@ fn array_cell_names_its_string_and_zeroes_the_slot() {
     let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let mut arr = crate::array::js_array_alloc(2);
     arr = crate::array::js_array_push_f64(arr, crate::value::js_nanbox_string(s as i64));
-    let img = build(None, Vec::new());
+    let img = build(None, Vec::new(), false);
     let si = string_cell(&img, text).expect("string cell captured");
     let ai = img
         .cells
@@ -131,7 +131,7 @@ fn shaped_object_keeps_its_slots_inside_the_cell() {
     let v = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let key = crate::string::js_string_from_bytes(b"probeKey".as_ptr(), 8);
     crate::object::js_object_set_field_by_name(o, key, crate::value::js_nanbox_string(v as i64));
-    let img = build(None, Vec::new());
+    let img = build(None, Vec::new(), false);
     let si = string_cell(&img, text).expect("value cell captured");
     let oi = img
         .cells
@@ -171,7 +171,7 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let base = Baseline {
         data: copy(lo, hi),
         tls: (0, Vec::new()),
-        pre_data: Vec::new(),
+        pre_data: vec![0u8; hi - lo],
         pre_tls: Vec::new(),
         classes: crate::object::class_image::snap_image_table_size(),
         claims_from: 0,
@@ -180,7 +180,9 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
     unsafe { probe.write_volatile(crate::value::js_nanbox_string(s as i64).to_bits()) };
-    let img = build(Some(&base), Vec::new());
+    let mut base = base;
+    take_pre(&mut base);
+    let img = build(Some(&base), Vec::new(), false);
     let want = (probe as usize - lo) as u64;
     let w = img
         .words
@@ -248,7 +250,7 @@ fn a_word_outside_every_mapping_is_a_scalar_and_a_tagged_symbol_word_is_sym() {
 #[thread_local]
 static PROBE_TLS: std::cell::Cell<u64> = std::cell::Cell::new(0x77);
 
-fn probe_baseline(pre_is_baseline: bool) -> (Baseline, usize) {
+fn probe_baseline() -> (Baseline, usize) {
     let lo = std::ptr::addr_of!(__data_start) as usize;
     let hi = std::ptr::addr_of!(_end) as usize;
     let mut fs = 0usize;
@@ -257,11 +259,7 @@ fn probe_baseline(pre_is_baseline: bool) -> (Baseline, usize) {
     let tls_lo = fs - executable_tls_size();
     let data = copy(lo, hi);
     let tls = copy(tls_lo, fs);
-    let (pre_data, pre_tls) = if pre_is_baseline {
-        (data.1.clone(), tls.1.clone())
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let (pre_data, pre_tls) = (vec![0u8; data.1.len()], vec![0u8; tls.1.len()]);
     let b = Baseline {
         data,
         tls,
@@ -276,9 +274,11 @@ fn probe_baseline(pre_is_baseline: bool) -> (Baseline, usize) {
 
 #[test]
 fn a_runtime_thread_local_word_written_after_the_baseline_is_a_root_word() {
-    let (base, tls_lo) = probe_baseline(false);
+    let (base, tls_lo) = probe_baseline();
     PROBE_TLS.set(0x78);
-    let img = build(Some(&base), Vec::new());
+    let mut base = base;
+    take_pre(&mut base);
+    let img = build(Some(&base), Vec::new(), false);
     let want = (std::ptr::addr_of!(PROBE_TLS) as usize - tls_lo) as u64;
     PROBE_TLS.set(0x77);
     let w = img
@@ -290,43 +290,76 @@ fn a_runtime_thread_local_word_written_after_the_baseline_is_a_root_word() {
 }
 
 #[test]
-fn a_word_equal_to_the_baseline_in_the_first_copy_is_collect_only() {
+fn a_word_the_capture_writes_after_the_first_copy_is_not_a_root_word() {
     let probe = std::ptr::addr_of_mut!(PROBE);
     let lo = std::ptr::addr_of!(__data_start) as usize;
-    let (base, _) = probe_baseline(true);
+    let (mut base, _) = probe_baseline();
+    let want = (probe as usize - lo) as u64;
     // SAFETY: a test-owned static, written by the tests that use it.
     unsafe { probe.write_volatile(0x9999) };
-    let img = build(Some(&base), Vec::new());
-    let want = (probe as usize - lo) as u64;
+    take_pre(&mut base);
+    // Written by the capture's own code after the first copy.
+    unsafe { probe.write_volatile(0x6666) };
+    let img = build(Some(&base), Vec::new(), false);
     let w = img
         .words
         .iter()
         .find(|w| w.off == want && w.region & WORD_TLS == 0)
-        .expect("probe word captured");
-    assert_eq!(w.region, WORD_DATA | WORD_COLLECT);
-    // The first copy already differs (the program wrote it before the cut).
-    let (mut base2, _) = probe_baseline(true);
-    let i = (want / 8) as usize;
-    base2.pre_data[i * 8..i * 8 + 8].copy_from_slice(&0x5555u64.to_le_bytes());
-    // SAFETY: as above.
-    unsafe { probe.write_volatile(0x6666) };
-    let img2 = build(Some(&base2), Vec::new());
-    let w2 = img2
-        .words
-        .iter()
-        .find(|w| w.off == want && w.region & WORD_TLS == 0);
-    assert!(w2.is_some_and(|w| w.region == WORD_DATA), "{w2:?}");
-    // SAFETY: as above.
+        .expect("the program's word is captured");
+    assert_eq!(w.val, Val::Scalar(0x9999), "the value of the first copy");
+    // A word the program left unchanged is not a root word at all.
+    let (mut base2, _) = probe_baseline();
+    take_pre(&mut base2);
+    unsafe { probe.write_volatile(0x7777) };
+    let img2 = build(Some(&base2), Vec::new(), false);
+    assert!(
+        !img2.words.iter().any(|w| w.off == want && w.region & WORD_TLS == 0),
+        "a write after the first copy is invisible"
+    );
     unsafe { probe.write_volatile(0x1234_5678) };
+}
+
+static mut LIVE_ROOT: u64 = 0;
+
+#[test]
+fn the_mark_keeps_what_the_roots_reach_and_nothing_else() {
+    let text = |t: &[u8]| crate::string::js_string_from_bytes(t.as_ptr(), t.len() as u32);
+    let held = text(b"mark probe: held by an array that a root names, long enough to be a cell");
+    let dead = text(b"mark probe: reachable from nothing at all, long enough to be a cell too");
+    let mut arr = crate::array::js_array_alloc(2);
+    arr = crate::array::js_array_push_f64(arr, crate::value::js_nanbox_string(held as i64));
+    let header = |p: usize| p - crate::gc::GC_HEADER_SIZE;
+    let all = cell_headers();
+    let live = mark_live(all.clone(), |v| v(crate::value::js_nanbox_pointer(arr as i64).to_bits()));
+    assert!(live.contains(&header(arr as usize)), "the root's own cell");
+    assert!(live.contains(&header(held as usize)), "reached through a traced slot");
+    assert!(!live.contains(&header(dead as usize)), "garbage stays out");
+    assert!(live.len() < all.len());
+}
+
+#[test]
+fn every_root_source_of_the_full_trace_reaches_the_mark() {
+    let s = crate::string::js_string_from_bytes(b"global root probe, a heap string cell for the mark".as_ptr(), 50);
+    // SAFETY: a test-owned static word registered as a global root.
+    unsafe {
+        let slot = std::ptr::addr_of_mut!(LIVE_ROOT);
+        slot.write(crate::value::js_nanbox_string(s as i64).to_bits());
+        crate::gc::js_gc_register_global_root(slot as i64);
+    }
+    let live = mark_live(cell_headers(), crate::gc::image_visit_roots);
+    assert!(
+        live.contains(&(s as usize - crate::gc::GC_HEADER_SIZE)),
+        "a cell held by a registered global root is live"
+    );
 }
 
 #[test]
 fn growth_of_the_class_tables_stops_the_image() {
-    let (mut base, _) = probe_baseline(false);
-    let none = build(Some(&base), Vec::new());
+    let (mut base, _) = probe_baseline();
+    let none = build(Some(&base), Vec::new(), false);
     assert!(none.stops.iter().all(|s| s.kind != STOP_CLASS_TABLES));
     base.classes = base.classes.wrapping_sub(3);
-    let grew = build(Some(&base), Vec::new());
+    let grew = build(Some(&base), Vec::new(), false);
     let s = grew.stops.iter().find(|s| s.kind == STOP_CLASS_TABLES);
     assert_eq!(s.map(|s| s.value), Some(3));
 }
@@ -361,26 +394,26 @@ fn the_claim_record_lists_late_claims_in_order_and_replays_to_the_same_indices()
 
 #[test]
 fn the_capture_takes_the_claims_before_its_own_code_runs() {
-    let (mut base, _) = probe_baseline(false);
+    let (mut base, _) = probe_baseline();
     let n = b"snap_test::CAPTURE_LATE@9:9";
     // SAFETY: a readable name.
     let i = unsafe { crate::tls_hot::js_tls_hot_claim_slot(n.as_ptr(), n.len(), 0) };
     base.claims_from = i;
     take_pre(&mut base);
-    let img = build(Some(&base), Vec::new());
+    let img = build(Some(&base), Vec::new(), false);
     assert_eq!(img.claims_from, i);
     assert_eq!(img.claims.first().map(|k| k.as_slice()), Some(&n[..]));
 }
 
 #[test]
 fn a_claim_key_over_four_kib_stops_the_image() {
-    let (mut base, _) = probe_baseline(false);
+    let (mut base, _) = probe_baseline();
     let long = vec![b'k'; 5000];
     // SAFETY: a readable name of 5000 bytes.
     let i = unsafe { crate::tls_hot::js_tls_hot_claim_slot(long.as_ptr(), long.len(), 0) };
     base.claims_from = i;
     take_pre(&mut base);
-    let img = build(Some(&base), Vec::new());
+    let img = build(Some(&base), Vec::new(), false);
     let s = img.stops.iter().find(|s| s.kind == STOP_CLAIM_KEY);
     assert_eq!(s.map(|s| s.cell), Some(i));
 }

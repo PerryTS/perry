@@ -257,7 +257,6 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
     };
     for w in words {
         let tls = w.region & format::WORD_TLS != 0;
-        let collect = w.region & format::WORD_COLLECT != 0;
         let (kind, a) = if tls {
             ("tls", w.off)
         } else {
@@ -269,18 +268,6 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
             continue;
         };
         let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, sym_path(&s.name), a - s.addr);
-        if collect {
-            // Written only by the capture's collect: a scalar under the gc
-            // module is policy state B1's own collects derive again.
-            if is_collect_pristine(&s.name, &w.val) {
-                c.dropped += 1;
-                *c.dropped_by.entry(sym_path(&s.name)).or_default() += 1;
-            } else {
-                c.unresolved
-                    .push(format!("{at}: the capture's collect wrote it, and it is not a scalar under the gc module"));
-            }
-            continue;
-        }
         match judge(&s.name, &w.val) {
             Judge::Pristine => {
                 c.dropped += 1;
@@ -716,10 +703,21 @@ fn phdr_proof(b0: &[(u64, String)], b1: &[(u64, String)]) -> Result<usize, Strin
     Ok(r0.len())
 }
 
+/// The list of unresolved words of one compile, beside B0.
+fn unresolved_path(b0: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.unresolved", b0.display()))
+}
+
+/// Every compile writes its list fresh or leaves none.
+fn clear_unresolved(b0: &Path) {
+    let _ = std::fs::remove_file(unresolved_path(b0));
+}
+
 /// Run B0 to the cut, name the words, build the image object.
 pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Prepared, String> {
     let file = PathBuf::from(format!("{}.img", b0.display()));
     let _ = std::fs::remove_file(&file);
+    clear_unresolved(b0);
     let st = Command::new(b0)
         .env("PERRY_SNAP_IMAGE_OUT", &file)
         .stdin(Stdio::null())
@@ -732,6 +730,17 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     }
     let bytes = std::fs::read(&file).map_err(|e| format!("no image file: {e}"))?;
     let img = format_read::decode(&bytes)?;
+    if std::env::var_os("PERRY_SNAP_IMAGE_LIST_PAST_STOPS").is_some() {
+        // Test only: name the words past a stop; the stop itself stays.
+        if let Ok((syms, _, _)) = probe(b0) {
+            if let Some(ds) = find_sym(&syms, "__data_start") {
+                let c = classify(&img.words, &syms, ds);
+                if !c.unresolved.is_empty() {
+                    let _ = std::fs::write(unresolved_path(b0), c.unresolved.join("\n"));
+                }
+            }
+        }
+    }
     if let Some(t) = img.stops.iter().find(|t| t.kind == format::STOP_CLASS_TABLES) {
         return Err(format!(
             "the class tables grew by {} row(s) between the baseline and the cut, and the image has no form that restores them",
@@ -760,7 +769,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     }
     let c = classify(&img.words, &syms, data_start);
     if !c.unresolved.is_empty() {
-        let full = PathBuf::from(format!("{}.unresolved", b0.display()));
+        let full = unresolved_path(b0);
         let _ = std::fs::write(&full, c.unresolved.join("\n"));
         return Err(format!(
             "{} root word(s) have no name and no pristine form (listed in {}); first: {}",
@@ -960,20 +969,27 @@ mod tests {
     }
 
     #[test]
-    fn a_collect_only_word_is_pristine_only_as_a_scalar_under_the_gc_module() {
-        let t = parse_syms("Symbol table '.symtab' contains 2 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime2gc6policy5CACHE\n    11: 0000000000600008     8 OBJECT  LOCAL  DEFAULT   24 SOME_CACHE\n");
-        let c = format::WORD_COLLECT;
+    fn a_changed_word_of_a_pristine_static_is_judged_by_the_pristine_list() {
+        let t = parse_syms("Symbol table '.symtab' contains 2 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000     8 OBJECT  LOCAL  DEFAULT   24 theap_main\n    11: 0000000000600008     8 OBJECT  LOCAL  DEFAULT   24 SOME_CACHE\n");
         let ws = [
-            word(format::WORD_DATA | c, 0, Val::Scalar(1)),
-            word(format::WORD_DATA | c, 0, Val::Opaque(0x7f00_0000_1000)),
-            word(format::WORD_DATA | c, 8, Val::Scalar(2)),
-            word(format::WORD_DATA, 0, Val::Scalar(3)),
+            word(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000)),
+            word(format::WORD_DATA, 8, Val::Opaque(0x7f00_0000_2000)),
         ];
         let r = classify(&ws, &t, 0x600000);
-        assert_eq!(r.dropped, 1, "only the scalar under the gc module");
-        assert_eq!(r.unresolved.len(), 2, "{:?}", r.unresolved);
-        assert!(r.unresolved.iter().all(|u| u.contains("collect wrote it")));
-        assert_eq!(r.kept.len(), 1, "a program-changed word is judged as before");
+        assert_eq!(r.dropped, 1, "the allocator static is pristine whatever it holds");
+        assert_eq!(r.unresolved.len(), 1, "{:?}", r.unresolved);
+        assert!(r.unresolved[0].contains("SOME_CACHE"));
+    }
+
+    #[test]
+    fn a_stale_unresolved_list_is_removed() {
+        let d = std::env::temp_dir().join(format!("img_stale_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let b0 = d.join("b0");
+        std::fs::write(unresolved_path(&b0), "old").unwrap();
+        clear_unresolved(&b0);
+        assert!(!unresolved_path(&b0).exists());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -1068,10 +1084,4 @@ mod tests {
         assert!(check_b0_layout(&[], 0x80_0000).is_err());
         assert!(placeholder_ll().contains(SECTION));
     }
-}
-
-/// A word only the capture's collect changed is state of the collector itself
-/// when it is a scalar under `perry_runtime::gc`.
-fn is_collect_pristine(name: &str, v: &Val) -> bool {
-    matches!(v, Val::Scalar(_)) && under(&sym_path(name), "perry_runtime::gc")
 }
