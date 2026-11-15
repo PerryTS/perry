@@ -15,7 +15,7 @@ use crate::feature_hooks::Hook;
 static IS_BUILTIN_STREAM_METHOD: Hook<fn(f64, &str) -> bool> = Hook::empty();
 
 pub(crate) fn install_stream_method_probe() {
-    IS_BUILTIN_STREAM_METHOD.set(crate::node_stream::is_builtin_stream_method);
+    IS_BUILTIN_STREAM_METHOD.set(crate::stream_hooks::builtin_stream_method_for_slot);
 }
 
 /// The kind of perry-ext-http server handle `handle_id` is, if any.
