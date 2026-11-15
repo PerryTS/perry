@@ -940,17 +940,6 @@ fn birth_family(
             crate::external_family::birth(declaration.identity, proto_obj);
         }
         populate_builtin_prototype_methods(name, proto_obj);
-        #[cfg(feature = "regex-engine")]
-        if name == "RegExp" {
-            // An intrinsic is a realm-private value, independent of the
-            // writable public constructor. Ordinary private storage keeps
-            // it alive and relocates it through the global object's trace.
-            crate::object::intrinsic_private_add(
-                crate::value::js_nanbox_pointer(singleton() as i64),
-                "[[RegExpPrototype]]",
-                crate::value::js_nanbox_pointer(proto_obj as i64),
-            );
-        }
         crate::event_target_hook_slots::prototype_install_constructor_constants(
             name,
             closure_ptr.cast(),

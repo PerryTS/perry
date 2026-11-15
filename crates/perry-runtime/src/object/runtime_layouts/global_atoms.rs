@@ -5,7 +5,6 @@
 //! seed); the atom table answers them at a miss from the `GLOBAL_OBJECT`
 //! layout index. Populate keys the global object with them and allocates no
 //! name, and every key of the global object is an atom.
-use super::intrinsic_private_atoms::REGEXP_PROTOTYPE;
 use super::*;
 
 macro_rules! global_atom {
@@ -1002,9 +1001,8 @@ global_atom!(
 // 0 = writable, enumerable, configurable; 7 = read-only, not enumerable, not
 // configurable (NaN, Infinity, undefined); 57/59 = the sessionStorage /
 // localStorage accessors (getter and setter) as populate defines them; 24 =
-// enumerable getter only. The last key is the realm's private
-// `[[RegExpPrototype]]` slot (66 = private, not enumerable), which populate
-// stores with the RegExp intrinsic. The global object is born on this layout
+// enumerable getter only.
+// The global object is born on this layout
 // (`js_get_global_this`) in one publish, and population fills its slots.
 runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
     GA0 => 2,
@@ -1141,7 +1139,6 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
     GA124 => 7,
     GA125 => 7,
     GA126 => 7,
-    REGEXP_PROTOTYPE => 66,
 ], realm = ["%Global%"]);
 
 /// The global object's own key named `name` (FNV-1a `hash`), found through

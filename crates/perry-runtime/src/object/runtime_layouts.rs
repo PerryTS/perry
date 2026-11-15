@@ -357,11 +357,6 @@ pub(crate) mod intrinsic_private_atoms {
         "#<perry:private-value:0:@0:[[RegExpMatcher]]>",
         "233c70657272793a707269766174652d76616c75653a303a40303a5b5b5265674578704d6174636865725d5d3e"
     );
-    runtime_atom!(
-        REGEXP_PROTOTYPE,
-        "#<perry:private-value:0:@0:[[RegExpPrototype]]>",
-        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b52656745787050726f746f747970655d5d3e"
-    );
     // A sync generator instance's resume record (`generator_state`).
     runtime_atom!(
         GENERATOR_STATE,

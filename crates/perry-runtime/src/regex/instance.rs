@@ -6,10 +6,6 @@ use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
-static PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
-    crate::object::IntrinsicPrivateReadSite::new(
-        &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_PROTOTYPE,
-    );
 crate::perry_thread_local! {
     static BIRTH_SHAPE: Cell<u32> = const { Cell::new(0) };
 }
@@ -253,11 +249,10 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
     *slot(receiver, 1) = 0.0f64.to_bits();
 }
 
-// Read the realm intrinsic through the same private slot machinery as matcher
-// data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
+// The realm intrinsic %RegExp.prototype%, born with its own family: the
+// realm records it in [[Intrinsics]], and %Global% is not observed.
 pub(crate) fn intrinsic_prototype() -> f64 {
-    let global = crate::object::js_get_global_this();
-    PROTOTYPE_READ
-        .read(global)
-        .expect("realm has installed the RegExp intrinsic")
+    js_nanbox_pointer(
+        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::RegExp) as i64,
+    )
 }
