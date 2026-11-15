@@ -1030,9 +1030,10 @@ pub enum Protocol {
     /// formatting/util_format.rs): the `[util.inspect.custom]` hook (a
     /// class's under `INSPECT_CUSTOM_METHOD`; an object's symbol-keyed one
     /// is a computed store, which every named key sees), ToPrimitive for
-    /// `%s`/`%d`/`%i`/`%f`, `toJSON` for `%j`. Every value it shows (own
-    /// properties, elements, entries) is formatted as `InspectShown`, and
-    /// serialized by `%j`'s JSON.stringify (`Json`); what a hook or
+    /// `%s`/`%d`/`%i`/`%f`, and `%j`'s JSON.stringify of the argument
+    /// (`Json` on the argument, whose own reads serialize its values).
+    /// Every value it shows (own properties, elements, entries) is
+    /// formatted as `InspectShown`; what a hook or
     /// `toJSON` returns is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
     Inspect,
@@ -1167,7 +1168,7 @@ impl Protocol {
     pub fn read_touches(self) -> &'static [Protocol] {
         match self {
             Protocol::Json => &[Protocol::Json],
-            Protocol::Inspect => &[Protocol::InspectShown, Protocol::Json],
+            Protocol::Inspect => &[Protocol::InspectShown],
             Protocol::InspectShown => &[Protocol::InspectShown],
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],

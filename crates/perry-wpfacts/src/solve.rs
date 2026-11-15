@@ -1747,6 +1747,22 @@ impl Model {
         a
     }
 
+    /// JSON's touch of `t` reads its own values only (`implicit`): a callable
+    /// (never descended) or an object whose own properties the solver
+    /// models (`own_props_modelled`); any other keeps the any-key read.
+    fn json_reads_own(&self, t: Tok) -> bool {
+        t != TOP && (self.is_callable_tok(t) || self.own_props_modelled(t))
+    }
+
+    /// `t` is callable (IsCallable, 7.2.3): a function, class, bound or
+    /// builtin function value.
+    fn is_callable_tok(&self, t: Tok) -> bool {
+        matches!(
+            self.toks[t as usize],
+            TokKind::Func(..) | TokKind::ClassObj(_) | TokKind::Bound(_) | TokKind::BuiltinFn(_)
+        )
+    }
+
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
@@ -1754,6 +1770,13 @@ impl Model {
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
         self.rest_used(t);
+        // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,
+        // 25.5.2.1): its own values are serialized by that touch's own
+        // reads, never a value only the formatter shows (a chain member,
+        // a class's `prototype`).
+        if proto == Protocol::Inspect {
+            self.implicit(t, reason, Protocol::Json);
+        }
         // The touch looks up and calls the protocol's keys and reads its
         // values, nothing else.
         let keys: Option<Vec<Atom>> = proto
@@ -1764,11 +1787,24 @@ impl Model {
             .iter()
             .map(|k| Key::Named(self.atom(k)))
             .collect();
+        // JSON (25.5.2.2 SerializeJSONProperty): after the `toJSON` lookup
+        // (a chain [[Get]], `keys`), a callable value serializes as
+        // `undefined` and is never descended (step 10); any other object
+        // serializes its ENUMERABLE OWN properties (25.5.2.5 / 25.5.2.6 via
+        // EnumerableOwnProperties, 7.3.23): never its chain (`constructor`,
+        // methods) nor a non-enumerable own one (a function's `prototype`).
+        // `json_own`: those values (`Cons::OwnValues`, getters of own
+        // accessors run) where the solver models the own properties.
+        let mut json_own = false;
         if proto.reads_all() {
-            reads.push(Key::any());
+            if proto == Protocol::Json && self.json_reads_own(t) {
+                json_own = !self.is_callable_tok(t);
+            } else {
+                reads.push(Key::any());
+            }
         }
         let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
-        if !calls && reads.is_empty() {
+        if !calls && reads.is_empty() && !json_own {
             return;
         }
         // `PERRY_WPF_IMPLSRC=1`: one stderr line per protocol request on `t`
@@ -1831,6 +1867,18 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
+            for &proto in proto.read_touches() {
+                self.cons(dst, Cons::Implicit { reason, proto });
+            }
+            self.add_tok(recv, t);
+        }
+        if json_own {
+            let recv = self.node_l("implicit-recv");
+            let dst = self.node_l("implicit-read");
+            self.nodes[recv as usize].frame = home;
+            self.nodes[dst as usize].frame = home;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::OwnValues { dst });
             for &proto in proto.read_touches() {
                 self.cons(dst, Cons::Implicit { reason, proto });
             }
