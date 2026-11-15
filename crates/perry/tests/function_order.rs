@@ -494,33 +494,12 @@ fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current(
         text.iter().filter(|s| s.0 < start).count() < 64,
         "the hot run leads the runtime text"
     );
-    // The program's JS function bodies (`perry_js_text`) are never part of
-    // it; the program's other text (module init, the string-pool
-    // initializers: start-up code every run executes once) opens it.
-    let js = (
-        at("__start_perry_js_text").expect("JS text start"),
-        at("__stop_perry_js_text").expect("JS text end"),
-    );
-    type Symbol = (u64, String, String);
-    let (bodies, startup): (Vec<&Symbol>, Vec<&Symbol>) = text
-        .iter()
-        .copied()
-        .filter(|s| s.2.contains("main_ts"))
-        .partition(|s| js.0 <= s.0 && s.0 < js.1);
-    assert!(!bodies.is_empty(), "the program's functions are symbols");
+    // The program's own code is never part of it.
+    let generated: Vec<_> = text.iter().filter(|s| s.2.contains("main_ts__")).collect();
+    assert!(!generated.is_empty(), "the program's functions are symbols");
     assert!(
-        bodies.iter().all(|s| s.0 >= end),
-        "the program's JS bodies stay behind the hot run"
-    );
-    assert!(
-        startup
-            .iter()
-            .any(|s| s.2.starts_with("__perry_init_strings_")),
-        "the program's string-pool initializer is a symbol: {startup:?}"
-    );
-    assert!(
-        startup.iter().all(|s| start <= s.0 && s.0 < end),
-        "the program's start-up text is in the hot run: {startup:?}"
+        generated.iter().all(|s| s.0 >= end),
+        "generated code stays behind the hot run"
     );
 
     // Off: no run, and the same named code as on.
@@ -590,8 +569,8 @@ fn a_link_line_that_picks_lld_takes_the_lld_hot_text_script() {
             .unwrap()
             .to_string()
     };
-    assert!(script(&gnu_log).ends_with(".v2.ld"), "{gnu_log}");
-    assert!(script(&lld_log).ends_with(".v2.lld.ld"), "{lld_log}");
+    assert!(script(&gnu_log).ends_with(".v1.ld"), "{gnu_log}");
+    assert!(script(&lld_log).ends_with(".v1.lld.ld"), "{lld_log}");
     assert_eq!(run(&lld, None), run(&gnu, None));
     let symbols = symbol_addresses(&lld);
     let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);

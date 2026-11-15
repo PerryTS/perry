@@ -84,10 +84,6 @@ pub(super) struct StagingDir {
     remove_on_drop: AtomicBool,
 }
 
-/// The name prefix of every staging directory: the link script selects the
-/// program's own objects by it (`link::hot_text_order`).
-pub(super) const STAGING_PREFIX: &str = "perry-objs-";
-
 impl StagingDir {
     /// Create the staging directory under the system temp directory.
     pub(super) fn create() -> Result<Self> {
@@ -109,7 +105,7 @@ impl StagingDir {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = parent.join(format!("{STAGING_PREFIX}{}-{}", std::process::id(), nanos));
+        let path = parent.join(format!("perry-objs-{}-{}", std::process::id(), nanos));
         std::fs::create_dir_all(&path)
             .with_context(|| format!("failed to create object staging dir {}", path.display()))?;
         Ok(Self {
