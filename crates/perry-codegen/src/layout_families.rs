@@ -244,6 +244,10 @@ pub struct ProgramLayouts {
     /// Structurally run-once, closed-world evaluated declarations. Compile
     /// facts only; generated code adds no flag, table or observation state.
     pub run_once_evaluated: BTreeSet<u32>,
+    /// Templates some module evaluates per expression (`ClassExprFresh`).
+    /// Their declarations name no member by its symbol
+    /// (`class_declarations::declared_symbol_member`).
+    pub fresh_templates: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
     /// Literal prototype identity and source-ordered base slots; compile facts only.
@@ -1318,6 +1322,19 @@ fn param_keys(class: &Class) -> Vec<(u32, String)> {
 
 mod parents;
 
+/// The class ids of every `ClassExprFresh` template in `modules`.
+fn fresh_template_ids<'a>(modules: impl Iterator<Item = &'a HirModule>) -> BTreeSet<u32> {
+    modules
+        .flat_map(|hir| {
+            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
+            hir.classes
+                .iter()
+                .filter(move |c| templates.contains(&c.name))
+                .map(|c| c.id)
+        })
+        .collect()
+}
+
 /// Every class chain is resolved over the whole program, with the owning
 /// module retained at every step (local ids and names are module scoped).
 /// The classes that are not families because `Reflect.construct(Q, args, P)`
@@ -1393,16 +1410,7 @@ fn program_families(
     let accessor = |c: &Class, k: &str| {
         c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k)
     };
-    let fresh: BTreeSet<u32> = modules
-        .iter()
-        .flat_map(|(_, hir)| {
-            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
-            hir.classes
-                .iter()
-                .filter(move |c| templates.contains(&c.name))
-                .map(|c| c.id)
-        })
-        .collect();
+    let fresh = fresh_template_ids(modules.iter().map(|(_, hir)| *hir));
     let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
     let reflect_made = reflect_construct_classes(modules);
     let mut out = Vec::new();
@@ -2043,6 +2051,7 @@ pub fn compute<'a>(
         }
     }
     literal::finish(&mut layouts, &literal_ids);
+    layouts.fresh_templates = fresh_template_ids(modules.iter().copied());
     layouts.late_total = late as u32;
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache
