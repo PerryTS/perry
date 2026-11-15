@@ -5,6 +5,18 @@
 use crate::value::JSValue;
 
 use super::class_registry::{http_server_handle_kind_probe, HttpServerHandleKind};
+use crate::feature_hooks::Hook;
+
+/// `node_stream::is_builtin_stream_method`. Filled where perry-ext-http
+/// registers its handle classifier (`js_register_http_server_handle_kind_probe`),
+/// the only way [`kind_of`] answers, so [`field`] never meets it empty; a
+/// program without an http server handle links no stream family through the
+/// generic property read.
+static IS_BUILTIN_STREAM_METHOD: Hook<fn(f64, &str) -> bool> = Hook::empty();
+
+pub(crate) fn install_stream_method_probe() {
+    IS_BUILTIN_STREAM_METHOD.set(crate::node_stream::is_builtin_stream_method);
+}
 
 /// The kind of perry-ext-http server handle `handle_id` is, if any.
 fn kind_of(handle_id: usize) -> Option<HttpServerHandleKind> {
@@ -82,28 +94,9 @@ pub(crate) fn inherited_field(
     }
 }
 
-/// [`field_impl`], filled where perry-ext-http registers its handle
-/// classifier (`js_register_http_server_handle_kind_probe`), the only way
-/// [`kind_of`] answers: empty, no value is an http server handle. The read
-/// compares inherited members with the stream intrinsics, so a program
-/// without an http server links no stream family through the generic
-/// property read.
-static FIELD: crate::feature_hooks::Hook<fn(usize, *const crate::StringHeader) -> Option<JSValue>> =
-    crate::feature_hooks::Hook::empty();
-
-pub(crate) fn install_field() {
-    FIELD.set(field_impl);
-}
-
 /// Resolve a live HTTP handle before generic registry dispatch. Native own
 /// state survives prototype replacement; synthetic inherited members do not.
-/// Not inlined: its callers keep main's code, a call to this function.
-#[inline(never)]
 pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option<JSValue> {
-    FIELD.peek()?(handle_id, key)
-}
-
-fn field_impl(handle_id: usize, key: *const crate::StringHeader) -> Option<JSValue> {
     let kind = kind_of(handle_id)?;
     if key.is_null() {
         return Some(JSValue::undefined());
@@ -174,7 +167,10 @@ fn field_impl(handle_id: usize, key: *const crate::StringHeader) -> Option<JSVal
     if let Some(value) = inherited_field(handle_id, key) {
         // Stream/emitter intrinsics use heap listener state. Registry HTTP
         // objects must keep using their native listener store instead.
-        if crate::node_stream::is_builtin_stream_method(f64::from_bits(value.bits()), name) {
+        let is_builtin_stream_method = IS_BUILTIN_STREAM_METHOD.get().expect(
+            "an http server handle in a program compiled without the stream runtime family",
+        );
+        if is_builtin_stream_method(f64::from_bits(value.bits()), name) {
             return Some(native());
         }
         return Some(value);
@@ -209,21 +205,22 @@ pub(crate) fn constructor_or_stub(dispatched: f64) -> JSValue {
 }
 
 #[cfg(test)]
-mod field_slot_tests {
+mod stream_method_probe_tests {
     unsafe extern "C" fn no_http_handle(_handle: i64) -> u8 {
         0
     }
 
-    /// The handle read is linked by the registration of the http server
-    /// handle classifier, the only way it answers: a registered classifier
-    /// always finds the slot filled, and a handle it does not classify reads
-    /// nothing through it.
+    /// The stream comparison is linked by the registration of the http
+    /// server handle classifier, the only way `field` gets past `kind_of`:
+    /// a registered classifier always finds the slot filled.
     #[test]
-    fn registering_the_handle_classifier_fills_the_field_slot() {
+    fn registering_the_handle_classifier_fills_the_stream_method_slot() {
         unsafe {
             super::super::class_handles::js_register_http_server_handle_kind_probe(no_http_handle)
         };
-        assert!(super::FIELD.peek().is_some());
-        assert!(super::field(0x10, std::ptr::null()).is_none());
+        let probe = super::IS_BUILTIN_STREAM_METHOD
+            .peek()
+            .expect("the classifier registration fills the slot");
+        assert!(!probe(f64::from_bits(crate::value::TAG_UNDEFINED), "on"));
     }
 }
