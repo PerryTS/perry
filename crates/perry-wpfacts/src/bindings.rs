@@ -420,6 +420,9 @@ pub struct BindingFacts {
     /// this name (`named_lengths`): a loop without calls that walks it
     /// need not fear a store through another name.
     pub named_length: bool,
+    /// It holds only sync generator objects whose for-of protocol is the
+    /// intrinsic one (`gen_sources`): for-of over it resumes their bodies.
+    pub generator_source: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
