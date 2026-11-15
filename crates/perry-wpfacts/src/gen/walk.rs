@@ -47,6 +47,7 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, ph);
             }
         }
+        self.ctor_phase_present(&modules);
         // The push-filled births (`push_fills`), with the birth lengths.
         if self.m.push_fills
             && self.m.rest_elems
@@ -560,6 +561,69 @@ impl<'a> Gen<'a> {
             cur = self.m.tmpls[p as usize].parent;
         }
         false
+    }
+
+    /// R9BIRTH1 rule C: a derived class's construction phase again, with
+    /// the keys its parent chain's constructors definitely leave as own data
+    /// properties (`CtorPhase::definite`) present after `super()`: storing
+    /// one is no add (`ctor_phase::analyze_in_present`). Parents first. Only
+    /// for a chain of this program's classes that never leaks `this` before
+    /// its keys are stored (no observer could delete one) and whose
+    /// constructors return no value (`super()` binds `this` to the object
+    /// the parent constructed).
+    fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)]) {
+        let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+        for mi in 0..modules.len() {
+            for c in self.classes_of(mi) {
+                by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+            }
+        }
+        let depth = |m: &Model, tm: TmplId| {
+            let (mut d, mut cur) = (0usize, m.tmpls[tm as usize].parent);
+            while let Some(p) = cur {
+                d += 1;
+                cur = m.tmpls[p as usize].parent;
+            }
+            d
+        };
+        let mut todo: Vec<TmplId> = by_tm
+            .keys()
+            .copied()
+            .filter(|&tm| self.m.tmpls[tm as usize].parent.is_some())
+            .collect();
+        todo.sort_by_key(|&tm| (depth(&self.m, tm), tm));
+        for tm in todo {
+            if self.parent_chain_leaks(tm) {
+                continue;
+            }
+            let mut present = std::collections::BTreeSet::new();
+            let mut cur = self.m.tmpls[tm as usize].parent;
+            let mut ok = true;
+            while let Some(p) = cur {
+                match (self.ctor_phase.get(&p), by_tm.get(&p)) {
+                    (Some(ph), Some((_, pc)))
+                        if !pc
+                            .constructor
+                            .as_ref()
+                            .is_some_and(|f| crate::ctor_phase::returns_value(&f.body)) =>
+                    {
+                        present.extend(ph.definite.iter().cloned());
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+                cur = self.m.tmpls[p as usize].parent;
+            }
+            if !ok || present.is_empty() {
+                continue;
+            }
+            let (mi, c) = by_tm[&tm];
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
+            let ph = crate::ctor_phase::analyze_in_present(c, &shapes, &present);
+            self.ctor_phase.insert(tm, ph);
+        }
     }
 
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {

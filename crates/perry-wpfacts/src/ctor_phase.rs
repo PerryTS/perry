@@ -81,6 +81,8 @@ struct St {
     top: usize,
     /// Some run so far added a key out of the layout's order.
     disordered: bool,
+    /// `super()` has returned on every run so far (R9BIRTH1 rule C).
+    supered: bool,
 }
 
 impl St {
@@ -108,6 +110,10 @@ struct W<'a> {
     /// construction order); `None` for a constructor function, whose order
     /// is not tracked.
     order: Option<BTreeMap<String, usize>>,
+    /// R9BIRTH1 rule C: the keys the parent chain's construction makes own
+    /// data properties on every run (`analyze_in_present`): present once
+    /// `super()` has returned.
+    present: &'a BTreeSet<String>,
 }
 
 pub fn analyze(c: &Class) -> CtorPhase {
@@ -137,6 +143,19 @@ pub fn plain_shapes(classes: &[Class]) -> BTreeMap<String, Vec<String>> {
 }
 
 pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhase {
+    analyze_in_present(c, shapes, &BTreeSet::new())
+}
+
+/// [`analyze_in`] of a derived class whose parent chain's construction
+/// leaves the keys `present` as own data properties on every run, before
+/// anyone can observe the instance (R9BIRTH1 rule C, ECMA-262 10.1.9.2
+/// OrdinarySetWithOwnDescriptor: a store of an own data key changes its
+/// value and creates no key, so it is no add at any layout position).
+pub fn analyze_in_present(
+    c: &Class,
+    shapes: &BTreeMap<String, Vec<String>>,
+    present: &BTreeSet<String>,
+) -> CtorPhase {
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
         .iter()
@@ -166,7 +185,7 @@ pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhas
         }
         m
     });
-    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true);
+    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true, present);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -174,7 +193,7 @@ pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhas
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true).definite;
+    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true, present).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     ph
 }
@@ -191,7 +210,7 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
     // A closure or function names no class: no class shape to read
     // (`plain_shapes`).
     let shapes = BTreeMap::new();
-    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false);
+    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new());
     if !ctor_order() || ph.assigned_order.is_empty() {
         return ph;
     }
@@ -201,7 +220,7 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
         .enumerate()
         .map(|(i, k)| (k.clone(), i))
         .collect();
-    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false)
+    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new())
 }
 
 fn analyze_body(
@@ -212,8 +231,10 @@ fn analyze_body(
     body: &[Stmt],
     order: Option<BTreeMap<String, usize>>,
     class_ctor: bool,
+    present: &BTreeSet<String>,
 ) -> CtorPhase {
     let mut w = W {
+        present,
         class_ctor,
         shapes,
         ph: CtorPhase::default(),
@@ -228,6 +249,7 @@ fn analyze_body(
         assigned: BTreeSet::new(),
         top: 0,
         disordered: false,
+        supered: false,
     };
     // A base constructor defines its fields right after binding `this`,
     // before the parameter defaults run (node: field, then param). A derived
@@ -322,6 +344,11 @@ impl W<'_> {
             })
         })
     }
+    /// An inherited key that is an own data property on this run (rule C).
+    fn is_present(&self, st: &St, key: &str) -> bool {
+        st.open && st.supered && self.present.contains(key)
+    }
+
     fn leak(&mut self, st: &mut St) {
         if st.open {
             st.open = false;
@@ -387,6 +414,7 @@ impl W<'_> {
                     None => st.clone(),
                 };
                 st.open = a.open && b.open;
+                st.supered = a.supered && b.supered;
                 st.assigned = a.assigned.intersection(&b.assigned).cloned().collect();
                 st.join_order(&a);
                 st.join_order(&b);
@@ -465,23 +493,67 @@ impl W<'_> {
                 cases,
             } => {
                 self.expr(st, discriminant);
-                let mut open = st.open;
-                // A case falls through into the next: each starts where the
-                // cases before it may have left the order.
-                let mut through = st.clone();
+                // R9BIRTH1 rule B (ECMA-262 14.12.4 CaseBlockEvaluation): a
+                // case body runs after the selection, which evaluates the
+                // case tests (all of them before a `default`), or by falling
+                // through from the body above when that body completes
+                // normally. Each case starts from the dispatch (every test
+                // evaluated: the widest order) and, unless the body above
+                // ends in a jump, from where that body left the order.
+                let mut disp = st.clone();
                 for c in cases {
-                    let mut b = through.clone();
+                    if let Some(t) = &c.test {
+                        self.expr(&mut disp, t);
+                    }
+                }
+                let mut open = disp.open;
+                let mut through = disp.clone();
+                let mut above: Option<St> = None;
+                // The keys every run that leaves the switch to its next
+                // statement has assigned: known when each body's only jump
+                // is its last statement (`case_exit`).
+                let mut exits: Option<Vec<BTreeSet<String>>> = Some(Vec::new());
+                for (ci, c) in cases.iter().enumerate() {
+                    let mut b = disp.clone();
                     b.open = st.open;
                     b.assigned = st.assigned.clone();
-                    if let Some(t) = &c.test {
-                        self.expr(&mut b, t);
+                    if let Some(a) = &above {
+                        b.join_order(a);
+                        b.open = b.open && a.open;
                     }
                     self.stmts(&mut b, &c.body);
                     open = open && b.open;
                     through.join_order(&b);
+                    match case_exit(&c.body) {
+                        Some(CaseEnd::Leaves) => {}
+                        // A body that falls through leaves the switch only
+                        // when it is the last one.
+                        Some(CaseEnd::Falls) if ci + 1 < cases.len() => {}
+                        Some(CaseEnd::Exits | CaseEnd::Falls) => {
+                            if let Some(e) = exits.as_mut() {
+                                e.push(b.assigned.clone());
+                            }
+                        }
+                        None => exits = None,
+                    }
+                    let falls = matches!(case_exit(&c.body), Some(CaseEnd::Falls) | None);
+                    above = falls.then_some(b);
+                }
+                // No case matched and there is no `default`: the switch is
+                // left with the dispatch's keys.
+                if !cases.iter().any(|c| c.test.is_none()) {
+                    if let Some(e) = exits.as_mut() {
+                        e.push(st.assigned.clone());
+                    }
                 }
                 st.open = open;
                 st.join_order(&through);
+                if let Some(e) = exits {
+                    let mut it = e.into_iter();
+                    if let Some(first) = it.next() {
+                        st.assigned = it.fold(first, |acc, s| acc.intersection(&s).cloned().collect());
+                    }
+                }
             }
             Stmt::Break
             | Stmt::Continue
@@ -516,7 +588,7 @@ impl W<'_> {
         let Some(order) = &self.order else {
             return;
         };
-        if key.starts_with('#') || st.assigned.contains(key) {
+        if key.starts_with('#') || st.assigned.contains(key) || self.is_present(st, key) {
             return;
         }
         let at = order.get(key).copied();
@@ -548,10 +620,23 @@ impl W<'_> {
                 self.leak(st);
                 walk_expr_children(e, &mut |c| self.expr(st, c));
             }
+            // `delete this.k` removes the key (10.1.10 OrdinaryDelete): a
+            // later store adds it again, at the end of the layout, and the
+            // instance is no longer the one construction lays out. The
+            // phase closes there.
+            Expr::Delete(inner)
+                if matches!(inner.as_ref(), Expr::PropertyGet { object, .. }
+                    if matches!(object.as_ref(), Expr::This)) =>
+            {
+                if let Expr::PropertyGet { property, .. } = inner.as_ref() {
+                    st.assigned.remove(property);
+                }
+                self.leak(st);
+            }
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
-                if !st.assigned.contains(property) {
+                if !st.assigned.contains(property) && !self.is_present(st, property) {
                     self.read_before.insert(property.clone());
                     // Not own yet: the read walks the prototype chain, where
                     // an accessor runs with `this`.
@@ -587,7 +672,7 @@ impl W<'_> {
             Expr::PropertyUpdate {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
-                if !st.assigned.contains(property) {
+                if !st.assigned.contains(property) && !self.is_present(st, property) {
                     self.read_before.insert(property.clone());
                     if !self.methods.contains(property) {
                         self.leak(st);
@@ -655,6 +740,7 @@ impl W<'_> {
                 for a in args {
                     self.expr(st, a);
                 }
+                st.supered = true;
             }
             Expr::Closure {
                 captures_this,
@@ -739,6 +825,64 @@ pub(crate) fn literal_defines<'e>(
         }
         _ => None,
     }
+}
+
+/// Some `return` in constructor body `ss` returns a value: `super()` may
+/// then bind `this` to another object (ECMA-262 10.2.2 step 10-12).
+pub(crate) fn returns_value(ss: &[Stmt]) -> bool {
+    ss.iter().any(|s| match s {
+        Stmt::Return(e) => e.is_some(),
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => returns_value(then_branch) || else_branch.as_deref().is_some_and(returns_value),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            returns_value(body)
+        }
+        Stmt::Labeled { body, .. } => returns_value(std::slice::from_ref(body.as_ref())),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            returns_value(body)
+                || catch.as_ref().is_some_and(|c| returns_value(&c.body))
+                || finally.as_deref().is_some_and(returns_value)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| returns_value(&c.body)),
+        _ => false,
+    })
+}
+
+/// How a switch case body ends (`case_exit`).
+enum CaseEnd {
+    /// It completes normally: it falls through into the next body.
+    Falls,
+    /// Its last statement is a `break` (or a labeled one, maybe of the
+    /// switch itself): the run may continue after the switch.
+    Exits,
+    /// Its last statement is a `return`, `throw` or `continue`: the run
+    /// never continues after the switch from here.
+    Leaves,
+}
+
+/// The end of switch case body `ss` when its only jump is its last
+/// statement; `None` when a jump sits elsewhere in it (a run may leave the
+/// body part way, with fewer keys).
+fn case_exit(ss: &[Stmt]) -> Option<CaseEnd> {
+    let Some((last, init)) = ss.split_last() else {
+        return Some(CaseEnd::Falls);
+    };
+    if jumps(init) {
+        return None;
+    }
+    Some(match last {
+        Stmt::Break | Stmt::LabeledBreak(_) => CaseEnd::Exits,
+        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => CaseEnd::Leaves,
+        s if jumps(std::slice::from_ref(s)) => return None,
+        _ => CaseEnd::Falls,
+    })
 }
 
 /// Some statement in `ss` (at any depth) is a `break` or `continue`.
