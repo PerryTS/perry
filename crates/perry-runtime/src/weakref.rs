@@ -503,6 +503,11 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     if !is_callable_value(callback) {
         weakref_type_error("FinalizationRegistry: cleanup must be callable");
     }
+    // The instance is restamped onto the FinalizationRegistry CLASS identity
+    // word as its [[Prototype]]: this birth observes the family first.
+    crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::FinalizationRegistry,
+    );
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle = scope.root_nanbox_f64(callback);

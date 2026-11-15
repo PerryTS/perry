@@ -76,6 +76,9 @@ pub(crate) fn alloc_data_view(
     offset: u32,
     length: u32,
 ) -> *mut BufferHeader {
+    // The one DataView factory: its [[Prototype]] is read through the family
+    // cell (view_prototype_bits), so this birth observes the family first.
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::DataView);
     store::new_view(
         crate::gc::GC_TYPE_BUFFER_DATA_VIEW,
         backing as usize,

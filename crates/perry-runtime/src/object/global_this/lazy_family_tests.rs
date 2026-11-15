@@ -117,7 +117,7 @@ fn lazy_declarations_are_bornable_late() {
         // layout, and the one instance birth (`js_weakmap_new` /
         // `js_weakset_new` / `js_weakref_new`) observes the family cell first; every other
         // reader compares the word (the `_if_bound` form).
-        const IDENTITY_WORD_AUDITED: &[&str] = &["Array", "WeakMap", "WeakSet", "WeakRef"];
+        const IDENTITY_WORD_AUDITED: &[&str] = &["Array", "WeakMap", "WeakSet", "WeakRef", "DataView", "URL", "URLSearchParams", "FinalizationRegistry"];
         assert!(
             IDENTITY_WORD_AUDITED.contains(&declaration.name)
                 || declaration.prototype_class.is_none()

@@ -527,7 +527,9 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         format!("{}//{}", protocol, host)
     };
 
-    // Component storage and its intrinsic prototype are declared at startup.
+    // The layout's prototype family names %URL.prototype%, which its own
+    // family birth builds: observe it before the instance.
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::URL);
     let obj = unsafe {
         let obj = crate::object::layout_desc::perry_alloc_layout(
             crate::object::runtime_layouts::URL_COMPONENTS::desc(),
