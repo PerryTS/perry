@@ -104,7 +104,7 @@ static ASYNC_LOCAL_STORAGE_FAMILY: NativePayloadFamily = NativePayloadFamily {
 fn install_async_local_storage_prototype(proto: &mut PayloadPrototype) {
     proto.getter(
         "name",
-        crate::fn_info!(als_name_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(als_name_thunk, 0; with_name("get name"), with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
     );
     proto.method(
         "run",
