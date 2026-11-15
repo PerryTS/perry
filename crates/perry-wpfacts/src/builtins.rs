@@ -1566,7 +1566,18 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
             _ => !builtin_heritage(m, *tm),
         },
         TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => slot,
+        // A function value (a function, a bound function, a class object)
+        // is an ordinary function object or a bound function exotic object
+        // (ECMA-262 10.2, 10.4.1): none has [[NumberData]], [[BooleanData]],
+        // [[SymbolData]], [[BigIntData]], [[TypedArrayName]] or
+        // [[ArrayBufferData]], so thisNumberValue & co. throw a TypeError
+        // before any argument is used; the runtime agrees
+        // (primitive_proto_thunks.rs `number_receiver_or_throw` 235-257: a
+        // closure or class ref is no boxed Number and not Number.prototype).
+        // A console `%s` / ToPrimitive lookup that finds such a native on a
+        // class (three.core.js `error()`, rule CONSOLE-PCT) only throws.
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(_) => slot,
         _ => false,
     }
 }
