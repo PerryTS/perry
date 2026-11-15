@@ -1468,3 +1468,5 @@ mod interp_proto_guard;
 
 mod family_never;
 pub mod snap_census;
+
+mod snap_image;
