@@ -90,3 +90,60 @@ fn r3_keep_subclass_own() {
         prim::NUM | prim::TRUE,
     );
 }
+
+/// Rule G2-false: `look(x)` takes the `else` arm only with a value whose
+/// read of `isV` may be falsy; `t.x` is what `set` stored there. A
+/// Number passes the true side too (its wrapper read is not judged), so
+/// `copy` may read `undefined` from it.
+fn g2(proto: &str, extra_call: &str) -> String {
+    format!(
+        "class Box {{ v: any; constructor(v: any) {{ this.v = v; }} }}
+         class V {{ x: any; {proto} constructor() {{ this.x = 0; }}
+           set(x: any) {{ this.x = x; return this; }} copy(v: any) {{ this.x = v.x; return this; }} }}
+         const t = new V();
+         function look(x: any) {{ if (x.isV) t.copy(x); else t.set(x); }}
+         look(new V());
+         look(Number(process.argv[2]));
+         {extra_call}
+         const b = new Box(t.x);
+         console.log(b.v);"
+    )
+}
+
+fn g2_obj(s: &str) -> bool {
+    let (_, o, _) = boxv(s);
+    o
+}
+
+#[test]
+fn g2f_else_arm_has_no_flagged_instance() {
+    let s = g2("static { (V.prototype as any).isV = true; }", "");
+    let (p, o, pf) = boxv(&s);
+    assert!(!o && p & !(prim::NUM | prim::UNDEF) == 0, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+}
+
+#[test]
+fn g2f_keep_flag_from_argv() {
+    let s = g2("", "(V.prototype as any).isV = process.argv[2];");
+    assert!(g2_obj(&s), "a V may take the else arm");
+}
+
+#[test]
+fn g2f_keep_literal_with_false_flag() {
+    let s = g2("static { (V.prototype as any).isV = true; }", "look({ isV: false, x: 1 });");
+    assert!(g2_obj(&s), "the literal takes the else arm");
+}
+
+#[test]
+fn g2f_keep_getter_flag() {
+    let s = g2("get isV(): any { return Math.random() > 2; }", "");
+    assert!(g2_obj(&s), "the getter may give false");
+}
+
+#[test]
+fn g2f_not_form_true_side() {
+    let s = g2("static { (V.prototype as any).isV = true; }", "")
+        .replace("if (x.isV) t.copy(x); else t.set(x);", "if (!x.isV) { t.set(x); return; } t.copy(x);");
+    let (p, o, pf) = boxv(&s);
+    assert!(!o && p & !(prim::NUM | prim::UNDEF) == 0, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+}

@@ -34,7 +34,12 @@
 //! Rule G2: a truthy test of a
 //! local's property (`x.f`, `!x.f` false) leaves its values but
 //! `null`/`undefined` and the objects whose read of `f` holds only
-//! `undefined`/`null` (`Cons::FieldTruthy`, solved per token).
+//! `undefined`/`null` (`Cons::FieldTruthy`, solved per token). Rule
+//! G2-false: a falsy test of it (`x.f` false, `!x.f` true, in every form
+//! G2 takes: the `else` arm, `?:`, `&&`/`||`, an early exit) leaves its
+//! values but `null`/`undefined` and the objects whose read of `f` cannot
+//! be falsy (ECMA-262 7.1.2 ToBoolean: `guard::FALSY`; an object is never
+//! falsy); a non-nullish primitive stays (its wrapper's read is not judged).
 //! Rule G3: where `x.f === lit` is true (a String, Number, `null` or
 //! `undefined` literal), and in a `switch (x.f)` clause that only `case`
 //! tests of such literals of one type select (`Gen::case_narrow`), `x`
@@ -837,15 +842,17 @@ fn implied<'p>(
             // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
         }
-        // Rule G2: a truthy `local.key` (module docs, "Guards").
+        // Rule G2: a truthy `local.key` (module docs, "Guards"); rule
+        // G2-false: a falsy one, through the same forms negated.
         Expr::PropertyGet {
             object, property, ..
-        } if positive => {
+        } => {
+            let test = match positive {
+                true => crate::model::guard::TRUTHY,
+                false => crate::model::guard::FALSY,
+            };
             if let Some(id) = host_of(object, subst, depth) {
-                out.push(Implied::Present(
-                    id,
-                    Presence::FieldTruthy(property.clone(), crate::model::guard::TRUTHY),
-                ));
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
             }
         }
         // Rule G1: `local.key === b` (`!==`) with `b` a Boolean constant,
@@ -1380,7 +1387,7 @@ impl<'a> Gen<'a> {
             // rule G2 (`if (this.f)`), unless `PERRY_WPF_THIS_HOST=all`.
             if id == THIS_LOCAL
                 && matches!(&fact, Implied::Present(_, Presence::FieldTruthy(_, test))
-                    if *test == crate::model::guard::TRUTHY)
+                    if matches!(*test, crate::model::guard::TRUTHY | crate::model::guard::FALSY))
                 && this_host_bool()
             {
                 continue;
