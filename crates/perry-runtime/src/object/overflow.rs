@@ -619,6 +619,7 @@ pub(crate) unsafe fn get(obj: *const ObjectHeader, slot: u32) -> Option<u64> {
 ///
 /// # Safety
 /// `t` is a live table.
+#[inline(always)]
 pub(crate) unsafe fn fixed_slot_of(t: *const Table, slot: u32) -> Option<u32> {
     (slot < (*t).length && *key_at(t, slot) != TAG_HOLE && *attrs_at(t, slot) & SLOT_REF != 0)
         .then(|| *value_at(t, slot) as u32)
@@ -673,6 +674,7 @@ unsafe fn read_found_with_live(
     Some(*value_at(t, slot))
 }
 
+#[inline(always)]
 pub(crate) unsafe fn entry_attrs(keys: *const ArrayHeader, slot: u32) -> u8 {
     let t = keys as *const Table;
     if slot >= (*t).length {
@@ -749,6 +751,7 @@ pub(crate) unsafe fn reattach_fixed(obj: *mut ObjectHeader, key: u64) {
 
 /// Is entry `i` a plain writable data property holding its own value (not
 /// a fixed-slot reference, an accessor or a private name)?
+#[inline(always)]
 pub(crate) unsafe fn plain_writable_value(t: *const Table, i: u32) -> bool {
     let attrs = *attrs_at(t, i);
     attrs & SLOT_REF == 0
