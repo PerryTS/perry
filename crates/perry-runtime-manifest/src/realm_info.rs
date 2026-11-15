@@ -191,6 +191,10 @@ impl Info {
         if ts.get(1).is_none_or(|t| t.text != "(") || ts.last().is_none_or(|t| t.text != ")") {
             return Err(format!("malformed fn_info builder: {}", text(ts)));
         }
+        if name == "with_name" {
+            // The text is static data of the record, not an ABI fact.
+            return Ok(());
+        }
         let args = split(&ts[2..ts.len() - 1], ",")
             .iter()
             .map(|arg| integer(&text(arg), constants))
