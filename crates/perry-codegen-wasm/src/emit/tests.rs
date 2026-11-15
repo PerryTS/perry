@@ -1080,3 +1080,29 @@ console.log(a === site(), a === id`q`, Array.isArray(a), a.length);
         "a|b|c/1,2\nMv=3!\na\\nb|1|a\nb\nx\\ty,z\ntrue false true 1"
     );
 }
+
+/// #14733: every object pattern opens with RequireObjectCoercible on its
+/// source, which hands the source through or throws a TypeError for a nullish one.
+#[test]
+fn object_patterns_bind_from_their_source_and_reject_nullish() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const arr = [{ k: 1 }, { k: 2 }];
+for (const { k } of arr) console.log("k", k);
+const v: any = { a: 3, b: { c: 4 } };
+const { a, b: { c } } = v;
+console.log("decl", a, c);
+let reads = 0;
+function src(): any { reads++; return { x: 5 }; }
+const { x } = src();
+console.log("once", x, reads);
+function nullish(o: any): string {
+  try { const { y } = o; return "no throw " + y; } catch (e) { return "caught " + (e instanceof TypeError); }
+}
+console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
+"#
+        ),
+        "k 1\nk 2\ndecl 3 4\nonce 5 1\ncaught true caught true no throw 6"
+    );
+}
