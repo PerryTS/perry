@@ -49,6 +49,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
 
 fn site(m: &mut Model) -> u32 {
     m.stores.push(StoreSite {
+        proto_first: None,
         module: 0,
         func: 0,
         desc: "test".into(),

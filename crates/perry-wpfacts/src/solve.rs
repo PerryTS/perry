@@ -1022,6 +1022,7 @@ impl Model {
                     && !self.settle_for_in()
                     && !self.settle_val_runs()
                     && !self.settle_define()
+                    && !self.settle_proto_first()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;

@@ -715,6 +715,7 @@ impl Model {
         // writer, because rest arrays are Arr templates.
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: 0,
             func: 0,
             desc: "binding".into(),

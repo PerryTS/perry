@@ -408,6 +408,7 @@ impl<'a> Gen<'a> {
         let Some(c) = module.classes.iter().find(|c| c.name == name) else {
             return;
         };
+        self.proto_first_class(tm, c);
         let mut declared = Vec::new();
         let phase = self.ctor_phase.get(&tm).cloned();
         // A parent constructor that leaks `this` lets an observer see the
@@ -790,6 +791,7 @@ impl<'a> Gen<'a> {
         ctor_of: Option<TmplId>,
     ) {
         self.m.note_walked(fxi);
+        self.proto_first_stmts(mi, f);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let mut fx = Fx {
@@ -1192,6 +1194,7 @@ impl<'a> Gen<'a> {
     ) -> SiteId {
         let id = self.m.stores.len() as SiteId;
         self.m.stores.push(StoreSite {
+            proto_first: self.m.proto_first_cur,
             module: mi,
             func: f,
             desc,
@@ -1280,7 +1283,10 @@ impl<'a> Gen<'a> {
             self.for_of_walks.insert((fx.module, array, counter));
         }
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let first = self.m.proto_first_stmts.get(&(s as *const Stmt as usize)).copied();
+        let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
         self.stmt_inner(fx, s);
+        self.m.proto_first_cur = prev_first;
         self.m.cur_fn = prev;
     }
 

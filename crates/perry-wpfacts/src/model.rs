@@ -1460,6 +1460,10 @@ pub struct Node {
 #[derive(Clone, Debug)]
 pub struct StoreSite {
     pub module: u32,
+    /// Rule 3 (`gen::proto_first`): `C.prototype.K = lit` in a static
+    /// block of class `C` (the template) that runs before any instance of
+    /// `C` or of a subclass can exist.
+    pub proto_first: Option<TmplId>,
     pub func: FnIdx,
     pub desc: String,
     /// `this.f = v` in the constructor of this template, before `this`
@@ -2221,6 +2225,17 @@ pub struct Model {
     /// by template: when the key stops being sure (a spread source that
     /// lacks it, a `delete`), each gets `undefined` after all.
     pub present_reads: FxHashMap<TmplId, Vec<(Atom, NodeId)>>,
+    /// Rule 3: reads that took no `undefined` because the key's holder is
+    /// a prototype the program fills before any receiver exists
+    /// (`proto_first_holds`); checked again whenever the worklist empties.
+    pub proto_first_reads: Vec<(Tok, Atom, NodeId)>,
+    pub proto_first_seen: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    /// Gen: the statements (by address) of rule 3 stores, and the class
+    /// whose store statement is being walked.
+    pub proto_first_stmts: FxHashMap<usize, TmplId>,
+    pub proto_first_cur: Option<TmplId>,
+    /// Gen: (class, key) of each rule 3 store statement.
+    pub proto_first_keys: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub present_seen: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
     /// The `Cons::Defined` node a present read's chain flows through, by
     /// the read's destination.

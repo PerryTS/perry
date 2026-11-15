@@ -548,6 +548,109 @@ impl Model {
         }
     }
 
+    /// Rule 3 (`gen::proto_first`): object `t` is an instance of a program
+    /// class whose chain (ECMA-262 10.1.8.1 OrdinaryGet), followed from the
+    /// class up, reaches a prototype that a rule 3 store statement gives `a`
+    /// (`proto_first_keys`) and that no other writer of `a` stores into. Every link is
+    /// the static one (no `setPrototypeOf`, `delete`, `defineProperty` on
+    /// it: `hard`; not reachable by unknown code: `escaped`, `inst_escaped`;
+    /// its prototype node holds only the parent's prototype), no link
+    /// defines an accessor under `a` and nothing redefined `a` through ⊤ or
+    /// a builtin prototype (`reshaped_keys`). Links below the holder may
+    /// hold `a` too: their values join through the chain.
+    pub(crate) fn proto_first_holds(&self, t: Tok, a: Atom) -> bool {
+        if t == TOP || self.is_marker(t) || self.is_proto_key(Key::Named(a)) || self.is_private_atom(a) {
+            return false;
+        }
+        let TokKind::Obj(tm0, _) = self.toks[t as usize] else {
+            return false;
+        };
+        if self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.hard.contains_key(&t)
+            || self.escaped.contains_key(&t)
+        {
+            return false;
+        }
+        let only = |m: &Self, o: Tok, p: Tok| {
+            m.proto_node
+                .get(&o)
+                .is_none_or(|&n| m.nodes[n as usize].pts.to_sorted().iter().all(|&q| q == p))
+        };
+        let (mut c, mut below) = (tm0, t);
+        loop {
+            let tp = &self.tmpls[c as usize];
+            if tp.per_evaluation
+                || !matches!(tp.kind, TmplKind::Class { literal_shape: false, .. })
+                || self.inst_escaped.contains(&c)
+                || tp.accessor_keys.contains(&a)
+            {
+                return false;
+            }
+            let Some(&p) = self.tok_index.get(&TokKind::Proto(c)) else {
+                return false;
+            };
+            // A link's field holding `undefined` (a stored one) would be
+            // stripped with the absences: the rule ends.
+            let stored_undef = self
+                .fields
+                .get(&(p, a))
+                .is_some_and(|&n| self.nodes[n as usize].prim & prim::UNDEF != 0);
+            if !only(self, below, p)
+                || stored_undef
+                || self.hard.contains_key(&p)
+                || self.escaped.contains_key(&p)
+                || self.accessor_keys.get(&p).is_some_and(|ks| ks.contains(&a))
+            {
+                return false;
+            }
+            // The store statement runs when the class is evaluated, before
+            // any instance exists; every other writer the solve finds
+            // (later: `settle_proto_first`) ends the rule.
+            if self.proto_first_keys.contains(&(c, a)) {
+                return self.proto_writers.get(&(c, a)).is_none_or(|w| {
+                    w.ctor.is_empty()
+                        && w.post.iter().all(|&s| self.stores[s as usize].proto_first == Some(c))
+                });
+            }
+            match (tp.parent, &tp.native_parent) {
+                (Some(q), None) => (c, below) = (q, p),
+                _ => return false,
+            }
+        }
+    }
+
+    /// A read that rule 3 answers: filed, so that a later writer, escape or
+    /// re-link gives it `undefined` after all (`settle_proto_first`).
+    fn proto_first_read(&mut self, t: Tok, a: Atom, dst: NodeId) -> bool {
+        if !self.proto_first_holds(t, a) {
+            return false;
+        }
+        if self.proto_first_seen.insert((t, a, dst)) {
+            self.proto_first_reads.push((t, a, dst));
+        }
+        true
+    }
+
+    /// Once the worklist is empty: the rule 3 reads whose chain no longer
+    /// holds read `undefined`. True when that made new work.
+    pub(crate) fn settle_proto_first(&mut self) -> bool {
+        if self.proto_first_reads.is_empty() {
+            return false;
+        }
+        let reads = std::mem::take(&mut self.proto_first_reads);
+        let mut kept = Vec::with_capacity(reads.len());
+        for (t, a, dst) in reads {
+            if self.proto_first_holds(t, a) {
+                kept.push((t, a, dst));
+            } else {
+                self.add_prim(dst, prim::UNDEF);
+            }
+        }
+        self.proto_first_reads = kept;
+        !self.wl.is_empty()
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
@@ -759,7 +862,16 @@ impl Model {
             Key::Named(a) => self.surely_own_data(t, a),
             Key::Any(_) => false,
         };
-        if !present && !private && !realm {
+        // Rule 3 (`proto_first_holds`): the chain holds the key from every
+        // receiver's birth on; what the chain holds (a stored `undefined`
+        // too) reaches the read as it is.
+        let first = !present
+            && !closed
+            && match key {
+                Key::Named(a) => self.proto_first_read(t, a, dst),
+                Key::Any(_) => false,
+            };
+        if !present && !private && !realm && !first {
             self.add_prim(dst, prim::UNDEF);
         }
         // What a closed marker's own load gives (its classes' chain through
@@ -825,7 +937,11 @@ impl Model {
         // object: the chain's end, where a key no link defines reads
         // `undefined`, is never reached. Its values stay (a superset).
         let defined = present && !self.is_proto_key(key);
-        let chain = if defined { self.defined_into(dst) } else { dst };
+        // Rule 3: every link holds the key or passes the lookup on to the
+        // holder, which holds it: no link's absence and no chain end gives
+        // `undefined` (a stored `undefined` ends the rule:
+        // `proto_first_holds`).
+        let chain = if defined || first { self.defined_into(dst) } else { dst };
         // DECISIONS 234: a key every object `t` denotes holds as an own data
         // property never reaches the builtin prototypes, nor the builtin
         // members of `t`'s own kind.
@@ -887,7 +1003,7 @@ impl Model {
         }
         // The prototype chain's values, shared by every receiver of `t`.
         let cv = self.cv_of(t, key, !shadow);
-        if defined {
+        if defined || first {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
             // `sum_skip` applies that to this rule by its `dst`.

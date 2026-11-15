@@ -425,6 +425,7 @@ impl Model {
     pub fn anon_post_site(&mut self, desc: &str) -> SiteId {
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: u32::MAX,
             func: u32::MAX,
             desc: desc.to_string(),
@@ -446,6 +447,7 @@ impl Model {
     pub fn anon_birth_site(&mut self, desc: &str) -> SiteId {
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: u32::MAX,
             func: u32::MAX,
             desc: desc.to_string(),
