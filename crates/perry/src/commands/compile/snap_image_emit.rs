@@ -4,10 +4,12 @@
 //! binary (B0), runs it up to the end of the static dependency inits (it
 //! writes the image file and exits), names every changed root word by B0's
 //! symbol table, and links a second binary (B1) that carries the cells in the
-//! section `perry_snap_image`. The section sits at a fixed address far above
-//! B0's `_end`, so no other section of B1 moves: every address the file
-//! records (`__data_start`, `__executable_start`, TLS offsets) is the same in
-//! B1. B1 does not use the section yet.
+//! section `perry_snap_image`. B0 is linked with a one-word placeholder in the
+//! same section at the same fixed address, so both links have the same program
+//! header table and no other section moves: every address the file records
+//! (`__data_start`, `__executable_start`, TLS offsets) is the same in B1. The
+//! proof lists every section whose address or size differs. B1 does not use
+//! the section yet.
 //!
 //! The file format is the runtime's own, included unchanged.
 
@@ -26,6 +28,19 @@ const SECTION: &str = "perry_snap_image";
 const SECTION_MAGIC: u64 = 0x3130_4742_4d49_5350; // "PSIMBG01"
 const ADDR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const CELL_HEADER: u64 = 8;
+/// Where the image section is linked, in B0 (placeholder) and in B1.
+///
+/// Address rule: the section needs a fixed address that is known before B0 is
+/// linked, so it cannot follow B0's `_end`. It is 1 GiB: below 2 GiB (the
+/// non-PIE small code model reaches it), far above the load address (4 MiB),
+/// and `prepare` demands `_end + IMAGE_HEADROOM <= IMAGE_ADDR`, so the bss, the
+/// brk heap that starts after it and the reservations made at startup cannot
+/// reach it. The window `[IMAGE_ADDR, IMAGE_ADDR + IMAGE_WINDOW)` is what the
+/// image may occupy; a larger image, or a B0 whose `_end` is too high, is "no
+/// image", never an unproven link.
+pub(super) const IMAGE_ADDR: u64 = 0x4000_0000;
+const IMAGE_WINDOW: u64 = 0x1000_0000;
+const IMAGE_HEADROOM: u64 = 0x1000_0000;
 
 #[derive(Clone, Debug)]
 struct Sym {
@@ -511,22 +526,66 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
     Ok(img)
 }
 
-/// Every section of B0 keeps its address and size in B1.
+/// Every section of B0 other than the image section keeps its address and
+/// size in B1. All differences are reported, not the first.
 fn proof(b0: &[Sec], b1: &[Sec]) -> Result<usize, String> {
     let mut n = 0;
-    for s in b0 {
+    let mut bad = Vec::new();
+    for s in b0.iter().filter(|s| s.name != SECTION) {
         match b1.iter().find(|t| t.name == s.name) {
             Some(t) if t.addr == s.addr && t.size == s.size => n += 1,
-            Some(t) => {
-                return Err(format!(
-                    "section {} moved: {:#x}+{:#x} in B0, {:#x}+{:#x} in B1",
-                    s.name, s.addr, s.size, t.addr, t.size
-                ))
-            }
-            None => return Err(format!("section {} is missing in B1", s.name)),
+            Some(t) => bad.push(format!(
+                "section {} moved: {:#x}+{:#x} in B0, {:#x}+{:#x} in B1",
+                s.name, s.addr, s.size, t.addr, t.size
+            )),
+            None => bad.push(format!("section {} is missing in B1", s.name)),
         }
     }
-    Ok(n)
+    for t in b1.iter().filter(|t| t.name != SECTION) {
+        if !b0.iter().any(|s| s.name == t.name) {
+            bad.push(format!("section {} exists only in B1", t.name));
+        }
+    }
+    if bad.is_empty() {
+        Ok(n)
+    } else {
+        Err(format!("{} section(s) differ: {}", bad.len(), bad.join("; ")))
+    }
+}
+
+/// The IR of B0's placeholder: one word in the image section.
+fn placeholder_ll() -> String {
+    format!(
+        "@perry_snap_placeholder = global i64 1, section \"{SECTION}\", align 8\n@llvm.used = appending global [1 x ptr] [ptr @perry_snap_placeholder], section \"llvm.metadata\"\n"
+    )
+}
+
+/// The object B0 is linked with, and the link argument that puts its section
+/// at `IMAGE_ADDR`.
+pub(super) fn placeholder(work: &Path, target: Option<&str>) -> Result<(PathBuf, String), String> {
+    let obj = perry_codegen::linker::compile_ll_to_object(
+        &placeholder_ll(),
+        target.and_then(perry_codegen::resolve_target_triple).as_deref(),
+    )
+    .map_err(|e| format!("placeholder object: {e}"))?;
+    let path = work.join("_perry_snap_placeholder.o");
+    std::fs::write(&path, obj).map_err(|e| format!("placeholder object: {e}"))?;
+    Ok((path, format!("-Wl,--section-start={SECTION}={IMAGE_ADDR:#x}")))
+}
+
+/// The placeholder is in B0 where it must be and the bss cannot reach it.
+fn check_b0_layout(secs: &[Sec], end: u64) -> Result<(), String> {
+    match secs.iter().find(|s| s.name == SECTION) {
+        Some(s) if s.addr == IMAGE_ADDR => {}
+        Some(s) => return Err(format!("B0 has the placeholder at {:#x}, wanted {IMAGE_ADDR:#x}", s.addr)),
+        None => return Err("B0 has no placeholder section".into()),
+    }
+    if end + IMAGE_HEADROOM > IMAGE_ADDR {
+        return Err(format!(
+            "B0 ends at {end:#x}, too close to the image address {IMAGE_ADDR:#x} (headroom {IMAGE_HEADROOM:#x})"
+        ));
+    }
+    Ok(())
 }
 
 fn tool(cmd: &str, args: &[&str]) -> Result<String, String> {
@@ -542,7 +601,6 @@ fn tool(cmd: &str, args: &[&str]) -> Result<String, String> {
 
 pub(super) struct Prepared {
     pub object: PathBuf,
-    pub section_addr: u64,
     expected: Image,
     b0_secs: Vec<Sec>,
     b0_syms: [u64; 3],
@@ -587,6 +645,13 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     let (syms, secs) = probe(b0)?;
     let need = |n: &str| find_sym(&syms, n).ok_or_else(|| format!("B0 has no symbol {n} (symbols stripped?)"));
     let (data_start, end, exe_start) = (need("__data_start")?, need("_end")?, need("__executable_start")?);
+    check_b0_layout(&secs, end)?;
+    let est: u64 = img.cells.iter().map(|c| c.bytes.len() as u64 + 64 + 32 * c.slots.len() as u64).sum::<u64>()
+        + 64 * img.words.len() as u64
+        + 4096;
+    if est > IMAGE_WINDOW {
+        return Err(format!("the image needs about {est:#x} bytes, the window holds {IMAGE_WINDOW:#x}"));
+    }
     let c = classify(&img.words, &syms, data_start);
     if !c.unresolved.is_empty() {
         let full = PathBuf::from(format!("{}.unresolved", b0.display()));
@@ -603,7 +668,6 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         .map_err(|e| format!("image object: {e}"))?;
     let object = work.join("_perry_snap_image.o");
     std::fs::write(&object, obj).map_err(|e| format!("image object: {e}"))?;
-    let section_addr = end.div_ceil(0x20_0000) * 0x20_0000 + 0x20_0000;
     let b0_dump = format_read::dump(&img);
     let total_words = img.words.len();
     let expected = Image {
@@ -614,9 +678,8 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     };
     Ok(Prepared {
         object,
-        section_addr,
         expected,
-        b0_secs: secs.into_iter().filter(|s| s.name != SECTION).collect(),
+        b0_secs: secs,
         b0_syms: [data_start, end, exe_start],
         dropped: c.dropped,
         total_words,
@@ -638,8 +701,11 @@ pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
         .iter()
         .find(|s| s.name == SECTION)
         .ok_or("B1 has no perry_snap_image section")?;
-    if s.addr != p.section_addr {
-        return Err(format!("the section is at {:#x}, wanted {:#x}", s.addr, p.section_addr));
+    if s.addr != IMAGE_ADDR || s.size > IMAGE_WINDOW {
+        return Err(format!(
+            "the section is at {:#x}+{:#x}, wanted {IMAGE_ADDR:#x} within {IMAGE_WINDOW:#x}",
+            s.addr, s.size
+        ));
     }
     let bin = PathBuf::from(format!("{}.sec", b1.display()));
     tool(
@@ -796,5 +862,32 @@ mod tests {
         c[0].size += 8;
         assert!(proof(&a, &c).is_err());
         assert!(proof(&a, &a[..1]).is_err());
+    }
+
+    #[test]
+    fn every_other_section_must_be_equal_and_all_moves_are_listed() {
+        let sec = |n: &str, a: u64, z: u64| Sec { name: n.into(), addr: a, size: z };
+        // The image section itself differs in size and does not count.
+        let b0 = vec![sec(".text", 0x401000, 0x100), sec(".data", 0x600000, 16), sec(SECTION, IMAGE_ADDR, 8)];
+        let b1 = vec![sec(".text", 0x401000, 0x100), sec(".data", 0x600000, 16), sec(SECTION, IMAGE_ADDR, 0x900)];
+        assert_eq!(proof(&b0, &b1), Ok(2));
+        // Two sections moved and one appeared: all three are named.
+        let mut c = b1.clone();
+        c[0].addr += 0x38;
+        c[1].size += 8;
+        c.push(sec(".extra", 0x700000, 4));
+        let e = proof(&b0, &c).unwrap_err();
+        assert!(e.contains(".text") && e.contains(".data") && e.contains(".extra"), "{e}");
+        assert!(e.starts_with("3 section(s) differ"), "{e}");
+    }
+
+    #[test]
+    fn the_image_address_is_checked_against_the_bss() {
+        let sec = |a: u64| vec![Sec { name: SECTION.into(), addr: a, size: 8 }];
+        assert!(check_b0_layout(&sec(IMAGE_ADDR), 0x80_0000).is_ok());
+        assert!(check_b0_layout(&sec(IMAGE_ADDR), IMAGE_ADDR - IMAGE_HEADROOM + 1).is_err());
+        assert!(check_b0_layout(&sec(IMAGE_ADDR + 0x1000), 0x80_0000).is_err());
+        assert!(check_b0_layout(&[], 0x80_0000).is_err());
+        assert!(placeholder_ll().contains(SECTION));
     }
 }

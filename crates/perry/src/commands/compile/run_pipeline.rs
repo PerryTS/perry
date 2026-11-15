@@ -8812,12 +8812,22 @@ pub fn run_with_parse_cache(
         && cfg!(all(target_os = "linux", target_arch = "x86_64"))
     {
         let b0 = PathBuf::from(format!("{}.b0", exe_path.display()));
-        build_and_run_link(
+        let (hold_obj, hold_arg) = super::snap_image_emit::placeholder(&object_output_dir, target.as_deref())
+            .map_err(|e| anyhow::anyhow!("snap image: {e}"))?;
+        let mut b0_objs = obj_paths.clone();
+        let mut b0_fps = obj_fingerprints.clone();
+        b0_objs.push(hold_obj);
+        b0_fps.push(None);
+        std::env::set_var(
+            "PERRY_EXTRA_LINK_ARGS",
+            format!("{} {hold_arg}", image_old_args.as_deref().unwrap_or("")),
+        );
+        let b0_link = build_and_run_link(
         &args.input,
         &ctx,
         target.as_deref(),
-        &obj_paths,
-        &obj_fingerprints,
+        &b0_objs,
+        &b0_fps,
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
@@ -8829,18 +8839,19 @@ pub fn run_with_parse_cache(
         format,
         args.debug_symbols,
         verbose,
-    )?;
+    );
+        match &image_old_args {
+            Some(v) => std::env::set_var("PERRY_EXTRA_LINK_ARGS", v),
+            None => std::env::remove_var("PERRY_EXTRA_LINK_ARGS"),
+        }
+        b0_link?;
         match super::snap_image_emit::prepare(&b0, &object_output_dir, target.as_deref()) {
             Ok(p) => {
                 image_objs.push(p.object.clone());
                 image_fps.push(None);
                 std::env::set_var(
                     "PERRY_EXTRA_LINK_ARGS",
-                    format!(
-                        "{} -Wl,--section-start=perry_snap_image={:#x}",
-                        image_old_args.as_deref().unwrap_or(""),
-                        p.section_addr
-                    ),
+                    format!("{} {hold_arg}", image_old_args.as_deref().unwrap_or("")),
                 );
                 image_prep = Some(p);
             }
