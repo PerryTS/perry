@@ -10,9 +10,13 @@
 //! double. So the store needs no band test, no type or integrity test and no
 //! old-value classification:
 //! - the forwarding test, unless the storage never moves (`r.unmoved()`);
-//! - `idx <u capacity`, then the slot is no hole: with the
-//!   `[length, capacity)` hole invariant an own slot is below the length,
-//!   and overwriting an own element asks nothing of the prototype chain;
+//! - `idx <u capacity`, unless the facts bound the key to `[0, floor)`
+//!   (`read.in_floor`): wpfacts `ArrRep` (C) gives every Array of the set
+//!   `capacity >= floor` for its whole life, so such a key is always inside
+//!   the storage;
+//! - the slot is no hole: with the `[length, capacity)` hole invariant an
+//!   own slot is below the length, and overwriting an own element asks
+//!   nothing of the prototype chain;
 //! - the value is a plain double (tested at run time unless it is widened
 //!   from a native integer: the facts say a Number, its encoding may still
 //!   be an INT32 box), with a NaN made the canonical one;
@@ -63,12 +67,11 @@ pub(crate) fn fact(ctx: &FnCtx<'_>, object: &Expr, e: &Expr) -> Option<RepRead> 
     let Expr::IndexSet { element_offset, .. } = e else {
         return None;
     };
+    // `in_floor`: the facts bound the store's key to `[0, floor)` at every
+    // copy (`element_keys` of the store's own offset); otherwise the store
+    // bounds its key itself.
     let read = rep_read(ctx, object, *element_offset)?;
-    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed).then_some(RepRead {
-        // The store bounds its key itself.
-        in_floor: false,
-        ..read
-    })
+    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed).then_some(read)
 }
 
 /// `PERRY_STORE_ARM_DIAG=1`: one stderr line per rep-keyed store.
@@ -137,14 +140,22 @@ pub(super) fn emit(
         let live = ctx.block().icmp_eq(I32, &moved, "0");
         step(ctx, &live, "arep.set.live");
     }
-    let capacity = {
-        let blk = ctx.block();
-        let ptr = blk.inttoptr(I64, &handle);
-        let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
-        blk.load(I32, &cap_ptr)
+    // A key in `[0, floor)` is inside the storage (`ArrRep` C:
+    // `capacity >= floor`); `floor > 0` then also fixes the element base.
+    let floor_key = read.in_floor && r.floor > 0;
+    let capacity = if floor_key {
+        None
+    } else {
+        let capacity = {
+            let blk = ctx.block();
+            let ptr = blk.inttoptr(I64, &handle);
+            let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+            blk.load(I32, &cap_ptr)
+        };
+        let inside = ctx.block().icmp_ult(I32, idx_i32, &capacity);
+        step(ctx, &inside, "arep.set.inside");
+        Some(capacity)
     };
-    let inside = ctx.block().icmp_ult(I32, idx_i32, &capacity);
-    step(ctx, &inside, "arep.set.inside");
     let addr = {
         let blk = ctx.block();
         if r.floor > 0 {
@@ -158,6 +169,7 @@ pub(super) fn emit(
             );
             blk.add(I64, &base, &offset)
         } else {
+            let capacity = capacity.expect("a key outside the floor loads the capacity");
             blk.array_element_addr_with_capacity(&handle, &capacity, idx_i32)
         }
     };
