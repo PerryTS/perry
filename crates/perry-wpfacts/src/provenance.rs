@@ -333,6 +333,8 @@ pub(crate) struct Sel {
     fnsub: String,
     what: String,
     prim: bool,
+    /// `:undef`: stop at `undefined` only.
+    undef: bool,
 }
 
 fn parse_sel() -> Vec<Sel> {
@@ -343,6 +345,10 @@ fn parse_sel() -> Vec<Sel> {
         .map(str::trim)
         .filter(|x| !x.is_empty())
         .map(|x| {
+            let (x, undef) = match x.strip_suffix(":undef") {
+                Some(b) => (b, true),
+                None => (x, false),
+            };
             let (body, prim) = match x.strip_suffix(":prim") {
                 Some(b) => (b, true),
                 None => (x, false),
@@ -352,7 +358,7 @@ fn parse_sel() -> Vec<Sel> {
                 Some((f, w)) => (f.to_string(), w.to_string()),
                 None => (String::new(), body.to_string()),
             };
-            Sel { raw: x.to_string(), node, fnsub, what, prim }
+            Sel { raw: x.to_string(), node, fnsub, what, prim, undef }
         })
         .collect()
 }
@@ -582,7 +588,10 @@ impl Model {
         let wide = match v {
             WVal::AnyStr => true,
             WVal::Tok(t) => t == TOP,
-            WVal::Prim(b) => w.sel[i].prim && b != crate::model::prim::STR,
+            WVal::Prim(b) => {
+                (w.sel[i].prim && b != crate::model::prim::STR)
+                    || (w.sel[i].undef && b == crate::model::prim::UNDEF)
+            }
             WVal::Str(_) => false,
         };
         if !wide {

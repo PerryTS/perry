@@ -1048,6 +1048,18 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
             if m.arr_elem_sabotage && node.prim & crate::model::prim::NUM != 0 {
                 ElemRep::F64
             } else if !numbers {
+                // PERRY_FACTS_ARR_WHY=1: which element node keeps a plain
+                // Array boxed (feed `n<id>` to PERRY_FACTS_WHY_AT).
+                if std::env::var_os("PERRY_FACTS_ARR_WHY").is_some() {
+                    let pts = node.pts.to_sorted();
+                    eprintln!(
+                        "ARRWHY tok={t} {} elem=n{e} prim={:#x} pts={} first={:?}",
+                        m.tok_name(t),
+                        node.prim,
+                        pts.len(),
+                        pts.iter().take(4).map(|&p| m.tok_name(p)).collect::<Vec<_>>()
+                    );
+                }
                 ElemRep::Boxed
             } else if int32 && elem_demand(m, t, node) {
                 ElemRep::I32
