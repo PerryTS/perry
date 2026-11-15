@@ -205,9 +205,89 @@ fn r6next_t4_truthy_guard_in_for_in_is_dead() {
 const T5: &str = "if (typeof __DEVT__ !== \"undefined\") { __DEVT__.ping(1); }
 console.log(1);";
 #[test]
-#[ignore = "rule T5 (DESIGN-R6NEXT) not built"]
 fn r6next_t5_typeof_guarded_global_is_dead() {
     all_proven(T5, "ping", true);
+    assert!(verdicts(T5, "ping", true).iter().all(|v| matches!(v, crate::Verdict::Dead)));
+}
+// The three.js form: the guard in a constructor, `this` passed.
+const T5C: &str = "class A { constructor() { this.k = 1;
+  if (typeof __DEVT__ !== \"undefined\") { __DEVT__.ping(this); } } }
+const a = new A(); console.log(a.k);";
+#[test]
+fn r6next_t5_typeof_guard_in_constructor_is_dead() {
+    let v = verdicts(T5C, "ping", true);
+    assert!(v.iter().all(|v| matches!(v, crate::Verdict::Dead)), "{v:?}");
+}
+// `typeof NAME === "undefined"` false: the else branch is the dead one.
+const T5E: &str = "if (typeof __DEVT__ === \"undefined\") { console.log(0); } else { __DEVT__.ping(1); }";
+#[test]
+fn r6next_t5_typeof_eq_undefined_else_is_dead() {
+    let v = verdicts(T5E, "ping", true);
+    assert!(v.iter().all(|v| matches!(v, crate::Verdict::Dead)), "{v:?}");
+}
+// A top-level `var` of another module: an ES module's `var` is bound in the
+// module environment record (16.2.1.6.4 InitializeEnvironment step 21), not
+// on the global object; perry lowers it to a module global, so `typeof` in
+// a.ts still reads the global object: dead.
+#[test]
+fn r6next_t5_other_module_var_is_not_a_global() {
+    let b = "export var __DEVT__ = { ping(x) { return x; } }; console.log(__DEVT__.ping(2));";
+    let mut h = hirs(T5);
+    let bp = "b.ts".to_string();
+    let bm = perry_parser::parse_typescript(b, &bp).expect("parses");
+    h.push((bp.clone(), perry_hir::lower_module(&bm, "b", &bp).expect("lowers")));
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let cfg = FactsConfig { unit_io: true, ..Default::default() };
+    let pf = crate::compute(&list, &cfg);
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let v: Vec<_> = pf.sites.iter().filter(|s| s.module == mi && s.key == "ping" && s.is_call).map(|s| s.verdict.clone()).collect();
+    assert!(v.iter().all(|v| matches!(v, crate::Verdict::Dead)), "{v:?}");
+}
+/// The guarded call keeps a site that is not Dead (rule T5 must not fire).
+fn live(src: &str, key: &str) {
+    let v = verdicts(src, key, true);
+    assert!(v.iter().any(|v| !matches!(v, crate::Verdict::Dead)), ".{key} must stay live: {v:?}");
+}
+const T5G: &str = "if (typeof __DEVT__ !== \"undefined\") { __DEVT__.ping(1); }";
+// keep: `globalThis.NAME = v` elsewhere.
+#[test]
+fn r6next_t5_keep_global_this_store() {
+    live(&format!("function inst() {{ globalThis.__DEVT__ = {{ ping(x) {{ return x; }} }}; }}\n{T5G}\ninst();"), "ping");
+}
+// keep: `globalThis[k] = v`, k unknown.
+#[test]
+fn r6next_t5_keep_global_this_computed_store() {
+    live(&format!("const k = String(Math.random()); globalThis[k] = {{ ping(x) {{ return x; }} }};\n{T5G}"), "ping");
+}
+// keep: `Object.prototype[k] = v`, k unknown (the global object inherits it).
+#[test]
+fn r6next_t5_keep_object_prototype_computed_store() {
+    live(&format!("const k = String(Math.random()); Object.prototype[k] = {{ ping(x) {{ return x; }} }};\n{T5G}"), "ping");
+}
+// keep: `Object.defineProperty(globalThis, "NAME", ..)`.
+#[test]
+fn r6next_t5_keep_define_property_global() {
+    live(&format!("Object.defineProperty(globalThis, \"__DEVT__\", {{ value: {{ ping(x) {{ return x; }} }} }});\n{T5G}"), "ping");
+}
+// keep: an assignment to the undeclared NAME (strict: writes an existing
+// global, else throws; it is a store into the global object under NAME).
+#[test]
+fn r6next_t5_keep_undeclared_assignment() {
+    live(&format!("function inst() {{ __DEVT__ = {{ ping(x) {{ return x; }} }}; }}\n{T5G}\ntry {{ inst(); }} catch (e) {{}}"), "ping");
+}
+// keep: a host global (`typeof console`, `typeof process`) stays live.
+#[test]
+fn r6next_t5_keep_host_global() {
+    live("if (typeof console !== \"undefined\") { console.log(1); }", "log");
+    let p = "if (typeof process !== \"undefined\") { const e = process.env; console.log(e.HOME); }";
+    let v = verdicts(p, "HOME", false);
+    assert!(v.iter().any(|v| !matches!(v, crate::Verdict::Dead)), ".HOME must stay live: {v:?}");
+}
+// keep: a declared `let` in its TDZ: `typeof` throws (13.5.3 step 2 with a
+// resolvable reference: GetValue throws ReferenceError), not this rule.
+#[test]
+fn r6next_t5_keep_tdz_let() {
+    live("function f() { if (typeof dv !== \"undefined\") { dv.ping(1); } }\nlet dv = { ping(x) { return x; } }; f();", "ping");
 }
 
 // ---- group B: key not a definite birth field ----

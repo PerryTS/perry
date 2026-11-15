@@ -1255,8 +1255,13 @@ impl<'a> Gen<'a> {
                 let Some(k) = lit(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-                let recv = self.tok_node(t);
+                // Under a rule T5 test (`gen/narrow.rs`): the global object
+                // as the test narrowed it.
+                let narrowed = self.narrowed_read(fx.module, crate::gen::narrow::GLOBAL_LOCAL);
+                let recv = narrowed.unwrap_or_else(|| {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    self.tok_node(t)
+                });
                 let key = Key::Named(self.m.atom(&k));
                 self.load(recv, key)
             }

@@ -907,6 +907,38 @@ fn implied<'p>(
                 out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
             }
         }
+        // Rule T5: `typeof NAME !== "undefined"` true (`=== "undefined"`
+        // false), NAME an identifier with no binding in any enclosing scope
+        // or module and no host global the HIR knows (HIR lowers the operand
+        // to `js_global_get_optional("NAME")`, `lower_expr/arm_unary.rs`).
+        // 13.5.3 step 2: an unresolvable reference gives "undefined"; else
+        // the reference is the global environment's, whose object record
+        // reads `[[Get]](globalThis, NAME)` (9.1.1.4, 9.1.1.2.6), and
+        // `typeof v` is "undefined" iff `v` is `undefined` (13.5.3 table;
+        // the runtime has no [[IsHTMLDDA]] object). So the test narrows the
+        // global object (rule T2's host form, `GLOBAL_LOCAL`): it passes
+        // only if its read of NAME may give a value other than `undefined`,
+        // and that read is the solver's own load of the key (the realm's
+        // declarations of `%Global%` and `Object.prototype`, every store
+        // into either object under NAME or an unknown key, and ⊤ once
+        // unknown code holds them, `builtins::loads::tok_load`).
+        // CLOSED-WORLD PREMISE (owner 2026-11-14): no dynamic code creates
+        // the global.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if typeof_unbound_global(left, right).is_some() => {
+            use crate::model::guard;
+            let Some(name) = typeof_unbound_global(left, right) else {
+                return;
+            };
+            let test = match matches!(op, CompareOp::Eq) == positive {
+                true => guard::UNDEF,
+                false => guard::NOT_UNDEF,
+            };
+            out.push(Implied::Present(GLOBAL_LOCAL, Presence::FieldTruthy(name.clone(), test)));
+        }
         // Rule G4: `typeof local.key === s` true (`!==` false), `s` a String
         // whose type has a G3 test: the read is of that type.
         Expr::Compare {
@@ -1031,6 +1063,12 @@ fn implied<'p>(
 /// The narrowing id of `this` (`Gen::narrow_enter_body` puts it in scope
 /// for a body with its own `this` binding; no local has this id).
 pub(crate) const THIS_LOCAL: u32 = u32::MAX - 1;
+/// The narrowing id of the global object (rule T5): a read of an unbound
+/// identifier (`js_global_get_or_throw_unresolved`,
+/// `js_global_get_optional`) reads off its narrowed node. The binding
+/// never changes (the global object is one object for the whole run), so
+/// it is in scope in every body, the module's top level included.
+pub(crate) const GLOBAL_LOCAL: u32 = u32::MAX - 2;
 
 /// `this` is a narrowing host of rule G1 only (`this.f === b`), not of
 /// rule G2 (`if (this.f)`); `PERRY_WPF_THIS_HOST=all` makes it a host of
@@ -1052,6 +1090,28 @@ pub(crate) fn literal_type_test(e: &Expr) -> Option<u8> {
         Expr::Number(_) | Expr::Integer(_) => Some(guard::IS_NUM),
         Expr::Null => Some(guard::IS_NULL),
         Expr::Undefined => Some(guard::UNDEF),
+        _ => None,
+    }
+}
+
+/// Rule T5: `typeof NAME` (HIR: `typeof js_global_get_optional("NAME")`,
+/// a name with no binding) compared with the String "undefined" (either
+/// order): NAME.
+fn typeof_unbound_global<'e>(a: &'e Expr, b: &'e Expr) -> Option<&'e String> {
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    if s != "undefined" {
+        return None;
+    }
+    let Expr::Call { callee, args, .. } = o.as_ref() else {
+        return None;
+    };
+    let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+        return None;
+    };
+    match (name.as_str(), args.as_slice()) {
+        ("js_global_get_optional", [Expr::String(n)]) => Some(n),
         _ => None,
     }
 }
@@ -1233,9 +1293,7 @@ impl<'a> Gen<'a> {
         }
         // The body being walked (`stmts` runs outside `stmt`'s `cur_fn`).
         let f = fx.f;
-        if !self.narrow_scope.as_ref().is_some_and(|(sf, _)| *sf == f) {
-            return 0;
-        }
+        let local_scope = self.narrow_scope.as_ref().is_some_and(|(sf, _)| *sf == f);
         let mut facts = Vec::new();
         let module: &'a perry_hir::Module = self.modules[fx.module as usize].1;
         let pred = |fid: u32| -> Option<Predicate<'a>> {
@@ -1256,9 +1314,13 @@ impl<'a> Gen<'a> {
         // Without guard ranges (`FactsConfig::no_guard_ranges`) no clip;
         // without guard presence (`FactsConfig::no_guard_presence`) no
         // presence.
+        // The global object (rule T5) is a host in every body, whole-program
+        // only (a unit does not see the other units' stores into it).
+        let unit_mode = self.m.unit_mode;
         facts.retain(|x| match x {
-            Implied::Clip(..) => self.guard_ranges,
-            Implied::Present(..) => self.guard_presence,
+            Implied::Clip(..) => self.guard_ranges && local_scope,
+            Implied::Present(GLOBAL_LOCAL, _) => self.guard_presence && !unit_mode,
+            Implied::Present(..) => self.guard_presence && local_scope,
         });
         if facts.is_empty() {
             return 0;
@@ -1278,10 +1340,11 @@ impl<'a> Gen<'a> {
             let id = match &fact {
                 Implied::Clip(id, ..) | Implied::Present(id, _) => *id,
             };
-            if !self
-                .narrow_scope
-                .as_ref()
-                .is_some_and(|(_, ls)| ls.contains(&id))
+            if id != GLOBAL_LOCAL
+                && !self
+                    .narrow_scope
+                    .as_ref()
+                    .is_some_and(|(_, ls)| ls.contains(&id))
             {
                 continue;
             }
@@ -1297,6 +1360,10 @@ impl<'a> Gen<'a> {
             let src = match self.narrowed_read(mi, id) {
                 Some(n) => n,
                 None if id == THIS_LOCAL => fx.this,
+                None if id == GLOBAL_LOCAL => {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    self.tok_node(t)
+                }
                 None => self.local(mi, id),
             };
             let start = self.tmp("guard");
