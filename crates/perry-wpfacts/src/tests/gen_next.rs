@@ -309,3 +309,16 @@ fn gen_next_fact_p4_top_store_of_next() {
          for (const s of gen()) { console.log(g(s)); }",
     );
 }
+
+/// An own key of any name moves the instance off its birth layout, where
+/// the direct resume reads the record.
+#[test]
+fn gen_next_fact_u8_own_other_key() {
+    excluded("const it: any = gen(); it.tag = 1; for (const s of it) { console.log(g(s), it.tag); }");
+}
+
+/// Reading an absent own key stores nothing.
+#[test]
+fn gen_next_fact_p5_read_absent_key() {
+    holds("const it: any = gen(); console.log(it.tag); for (const s of it) { console.log(g(s)); }");
+}

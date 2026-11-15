@@ -13,8 +13,10 @@
 //!   model's generator object), not escaped (no unknown code holds it, no
 //!   reflective operation reached it: `Model::mark_hard` escapes) and not
 //!   HARD;
-//! - it has no own field, any-key field or accessor under `next`,
-//!   `return`, `throw` or `@@iterator`;
+//! - it has no own field, any-key field or accessor at all: its layout
+//!   stays the birth layout, whose first slot is the record (the direct
+//!   resume reads it there; an instance with own keys keeps the brand but
+//!   leaves that layout);
 //! - its [[Prototype]] holder (`FuncInfo::gen_proto`) holds only the
 //!   original `prototype` object of its generator function (no
 //!   replacement), unescaped and not HARD, with no such field or accessor;
@@ -32,7 +34,7 @@
 use crate::bindings::ModuleBindings;
 use crate::gen::Gen;
 use crate::model::{Model, NodeId, Tok, TokKind, TmplKind, TOP};
-use crate::pts::FxHashMap;
+use crate::pts::{FxHashMap, FxHashSet};
 
 const UNDEF: u16 = crate::model::prim::UNDEF;
 const NULL: u16 = crate::model::prim::NULL;
@@ -63,9 +65,21 @@ fn no_own(m: &Model, t: Tok, keys: &[Option<u32>]) -> bool {
         })
 }
 
+/// The generator object `t` has no own key at all: no field or accessor
+/// under any key, and nothing stored under an unknown key.
+fn no_own_key(m: &Model, t: Tok, owned: &FxHashSet<Tok>) -> bool {
+    no_own(m, t, &[]) && !owned.contains(&t)
+}
+
 /// `t` is a sync generator object whose for-of protocol is the intrinsic
 /// one (the module comment).
-fn intrinsic_generator(m: &Model, t: Tok, keys: &[Option<u32>], op: Tok) -> bool {
+fn intrinsic_generator(
+    m: &Model,
+    t: Tok,
+    keys: &[Option<u32>],
+    op: Tok,
+    owned: &FxHashSet<Tok>,
+) -> bool {
     let TokKind::Func(f, _) = m.toks[t as usize] else {
         return false;
     };
@@ -73,7 +87,7 @@ fn intrinsic_generator(m: &Model, t: Tok, keys: &[Option<u32>], op: Tok) -> bool
     let Some(gp) = fi.gen_proto else {
         return false;
     };
-    if fi.gen_async || !no_own(m, t, keys) {
+    if fi.gen_async || !no_own_key(m, t, owned) {
         return false;
     }
     let node = &m.nodes[gp as usize];
@@ -120,6 +134,17 @@ pub(crate) fn collect(
     }
     let keys: Vec<Option<u32>> = KEYS.iter().map(|k| m.atom_index.get(*k).copied()).collect();
     let op = m.tok_index.get(&TokKind::ObjectProto).copied().unwrap_or(TOP);
+    // Every object with an own field (that holds a value) or accessor.
+    let mut owned: FxHashSet<Tok> = FxHashSet::default();
+    for (&(t, _), &n) in &m.fields {
+        if m.nodes
+            .get(n as usize)
+            .is_some_and(|node| node.prim != 0 || !node.pts.is_empty())
+        {
+            owned.insert(t);
+        }
+    }
+    owned.extend(m.accessors.keys().map(|&(t, _)| t));
     let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
     for inst in 0..m.sum.insts.len() as u32 {
         m.inst_copies(inst, |orig, copy| copies.entry(orig).or_default().push(copy));
@@ -153,7 +178,7 @@ pub(crate) fn collect(
             let ok = sabotage
                 || toks
                     .iter()
-                    .all(|&t| t != TOP && intrinsic_generator(m, t, &keys, op));
+                    .all(|&t| t != TOP && intrinsic_generator(m, t, &keys, op, &owned));
             b.generator_source = ok;
             if let Some(p) = probe.as_deref_mut() {
                 p.push(format!(
