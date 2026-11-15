@@ -119,6 +119,10 @@ struct W<'a> {
     /// of it is a use of `this` (a leak): a read of the local, a closure
     /// that captures it.
     aliases: BTreeSet<perry_hir::types::LocalId>,
+    /// Aliases whose `const` statement the walk has not reached yet.
+    alias_pending: BTreeSet<perry_hir::types::LocalId>,
+    /// Pending aliases a closure (a hoisted function declaration) captured.
+    alias_early: BTreeSet<perry_hir::types::LocalId>,
 }
 
 pub fn analyze(c: &Class) -> CtorPhase {
@@ -249,6 +253,8 @@ fn analyze_body(
         exits: Vec::new(),
         order,
         aliases: BTreeSet::new(),
+        alias_pending: BTreeSet::new(),
+        alias_early: BTreeSet::new(),
     };
     let mut st = St {
         open: true,
@@ -284,7 +290,8 @@ fn analyze_body(
     // Rule L: the body's top-level `const x = this` aliases, known before
     // the walk: a function declaration is hoisted (its closure is created
     // at the top of the body, ECMA-262 10.2.11 step 36), ahead of the
-    // alias's own statement, and a capture of the alias there is a use.
+    // alias's own statement; its capture of the alias is a use of `this`
+    // from the alias's statement on (`alias_early`).
     for s in body {
         if let Stmt::Let {
             id,
@@ -294,6 +301,7 @@ fn analyze_body(
         } = s
         {
             w.aliases.insert(*id);
+            w.alias_pending.insert(*id);
         }
     }
     w.stmts(&mut st, body);
@@ -416,7 +424,15 @@ impl W<'_> {
                 mutable: false,
                 init: Some(Expr::This),
                 ..
-            } if self.aliases.contains(id) => {}
+            } if self.aliases.contains(id) => {
+                // A closure created above (hoisted) holds the binding: from
+                // here on its calls see `this` (before, they throw: the
+                // binding is uninitialised, 9.1.1.1.6 GetBindingValue).
+                self.alias_pending.remove(id);
+                if self.alias_early.contains(id) {
+                    self.leak(st);
+                }
+            }
             Stmt::Let { init, .. } => {
                 if let Some(e) = init {
                     self.expr(st, e);
@@ -777,10 +793,15 @@ impl W<'_> {
                 mutable_captures,
                 ..
             } => {
-                if *captures_this
-                    || body_mentions_this(body)
-                    || captures.iter().chain(mutable_captures).any(|c| self.aliases.contains(c))
-                {
+                let mut alias = false;
+                for c in captures.iter().chain(mutable_captures) {
+                    if self.alias_pending.contains(c) {
+                        self.alias_early.insert(*c);
+                    } else if self.aliases.contains(c) {
+                        alias = true;
+                    }
+                }
+                if *captures_this || body_mentions_this(body) || alias {
                     self.leak(st);
                 }
             }
