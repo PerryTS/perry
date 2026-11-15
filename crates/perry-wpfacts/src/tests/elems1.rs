@@ -404,3 +404,83 @@ fn elems1_u7_keep_switch_break_before_the_assignment() {
     let s = ortho("switch (k) { case 1: if (k > Number(process.argv[3])) break; c = 1; break; default: c = 2; } te[0] = c;");
     assert_eq!(elem_kind(&s), "boxed");
 }
+
+// ELEM4 H-fixtures: the rep of the three `mul` locals `ae`, `be`, `te`
+// (`# arr_rep` lines; the codegen's rep tier keys on it). Only the `mul`
+// locals and their aliases hold `elements` Arrays.
+
+/// The `# arr_rep` reps of the fixture's locals.
+fn local_reps(s: &str) -> Vec<String> {
+    let pf = facts_with(
+        s,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    pf.dump_text()
+        .lines()
+        .filter(|l| l.starts_with("# arr_rep"))
+        .filter_map(|l| l.split("rep=").nth(1).map(str::to_string))
+        // An `elements` Array is stored into by `mul`: never immutable
+        // (`,im`), so an `im` rep is another local of the fixture.
+        .filter(|r| !r.ends_with(",im>"))
+        .collect()
+}
+
+#[test]
+fn elems1_h1_mul_locals_have_the_field_rep_under_aliasing() {
+    // x.mul(x, y) (BASE) and y.mul(x, x), x.mul(y, x): `a`, `b`, `this`
+    // the same object.
+    let r = local_reps(&src("", "", &[], "y.mul(x, x); x.mul(y, x);"));
+    assert!(r.iter().filter(|r| r.as_str() == F4).count() >= 3, "{r:#?}");
+}
+
+#[test]
+fn elems1_h2_push_keeps_locals_not_fixed() {
+    let r = local_reps(&src(
+        "",
+        "",
+        &[],
+        "if (process.argv[2] === \"1\") x.elements.push(1);",
+    ));
+    assert!(r.iter().all(|r| !r.contains("fixed")), "{r:#?}");
+}
+
+#[test]
+fn elems1_h3_non_array_field_value_gives_no_local_rep() {
+    let r = local_reps(&src(
+        "",
+        "",
+        &[],
+        "if (process.argv[2] === \"1\") x.elements = \"str\";",
+    ));
+    assert!(r.iter().all(|r| !r.starts_with("arr<")), "{r:#?}");
+}
+
+#[test]
+fn elems1_h4_undefined_store_keeps_locals_boxed() {
+    let r = local_reps(&src(
+        "",
+        "",
+        &[],
+        "x.elements[Number(process.argv[2]) & 3] = undefined;",
+    ));
+    assert!(r.iter().all(|r| !r.starts_with("arr<f64")), "{r:#?}");
+}
+
+#[test]
+fn elems1_h5_escape_to_a_reading_callee_keeps_the_rep() {
+    let look = "look(t) { if (process.argv[2] === \"9\") console.log(t[0]); }";
+    let s = src("", "", &[look], "x.look(x.elements);");
+    let r = local_reps(&s);
+    assert!(r.iter().filter(|r| r.as_str() == F4).count() >= 3, "{r:#?}");
+}
+
+#[test]
+fn elems1_h5s_escape_to_a_string_storing_callee_is_boxed() {
+    let look = "look(t) { if (process.argv[2] === \"1\") t[1] = \"s\"; }";
+    let s = src("", "", &[look], "x.look(x.elements);");
+    let r = local_reps(&s);
+    assert!(r.iter().all(|r| !r.starts_with("arr<f64")), "{r:#?}");
+}
