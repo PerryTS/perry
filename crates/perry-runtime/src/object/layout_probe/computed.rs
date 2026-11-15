@@ -440,43 +440,51 @@ pub(crate) unsafe fn names_no_key(r: *const ShapeRecord) -> bool {
     (*r).logical_key_count == 0
 }
 
-/// The keyed add of an overflowed receiver whose layout names no key
-/// ([`super::OwnSet::OverflowMiss`] on an empty layout): the table owns every
-/// own key and the leaf's probe of it missed, so the key is absent. With room
-/// in the table the entry is appended in place, under [`append_admitted`]'s
-/// receiver facts, with the chain answered by its end: a null prototype
-/// admits every add; the realm default is `%Object.prototype%`, which blocks
-/// no key but `__proto__` while it is the sealed intrinsic on its immutable
-/// layout (`descriptor_state::object_proto_may_intercept_any`, one word).
-/// No migration (an empty layout has no slot), no allocation, no chain walk.
-/// `false` changes nothing.
+/// May key `key` (a property atom absent from the receiver, hash `hash`) be
+/// added to `obj`, whose layout names no key (record `r`), as a plain
+/// writable data entry of its table, with no note? The receiver facts of
+/// [`append_admitted`], plus: no prototype role and no sealed intrinsic (the
+/// table append writes no add note), and no class family (a family record
+/// names its descriptor). The chain is answered by its end when it ends at
+/// once: a null prototype admits every add; the realm default is
+/// `%Object.prototype%`, which blocks no key but `__proto__` while it is the
+/// sealed intrinsic on its immutable layout
+/// (`descriptor_state::object_proto_may_intercept_any`, one word). Any other
+/// prototype (`Object.create(P)`) is asked hop by hop from the current
+/// layouts and tables ([`super::write::chain_admits_add`]): a setter, a
+/// non-writable key or an exotic object on the chain declines. Reads only.
 ///
 /// # Safety
-/// `obj` is the leaf's overflowed receiver, `r` its record, `key` a property
-/// atom with hash `hash`.
-#[inline(never)]
-pub(crate) unsafe fn table_append(
+/// `obj` is a live ordinary receiver, `r` its record, `key` a property atom
+/// with hash `hash`.
+#[inline(always)]
+pub(crate) unsafe fn table_add_admitted(
     obj: *mut ObjectHeader,
     r: *const ShapeRecord,
     key: u64,
     hash: u64,
-    value: f64,
+) -> bool {
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    table_add_admitted_meta(obj, r, key, hash, meta)
+}
+
+/// [`table_add_admitted`] with the receiver's meta (null when it has none)
+/// already read.
+#[inline(always)]
+unsafe fn table_add_admitted_meta(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+    meta: *const crate::object::ObjectMeta,
 ) -> bool {
     if !names_no_key(r)
         || key & TAG_MASK != STRING_TAG
         || hash == super::write::PROTO_KEY_HASH
         || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || (*r).family_desc_index_plus_one != 0
     {
-        return false;
-    }
-    let chain_admits = match (*r).proto_id {
-        super::super::PROTO_ID_NULL => true,
-        super::super::PROTO_ID_DEFAULT => {
-            !crate::object::descriptor_state::object_proto_may_intercept_any()
-        }
-        _ => false,
-    };
-    if !chain_admits {
         return false;
     }
     let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
@@ -500,22 +508,65 @@ pub(crate) unsafe fn table_append(
     {
         return false;
     }
-    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if meta.is_null()
-        || (*meta).overflow == 0
-        || (*meta).elements != 0
-        || (*meta).flags
-            & (crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
-                | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
-                | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
-                | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
-            != 0
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags
+                & (crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+                    | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
+                    | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                != 0)
     {
         return false;
     }
+    match (*r).proto_id {
+        super::super::PROTO_ID_NULL => true,
+        super::super::PROTO_ID_DEFAULT => {
+            !crate::object::descriptor_state::object_proto_may_intercept_any()
+        }
+        _ => user_chain_admits_add(obj, r, key, hash),
+    }
+}
+
+/// [`table_add_admitted`]'s chain below a prototype that is neither null nor
+/// the realm default (`Object.create(P)`): every hop's current layout and
+/// table ([`super::write::chain_admits_add`]). Out of line, so the default and
+/// null arms keep a small frame.
+#[inline(never)]
+unsafe fn user_chain_admits_add(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    super::write::chain_admits_add(super::super::ordinary_dir_addr(), obj, r, key, hash)
+}
+
+/// The keyed add of an overflowed receiver whose layout names no key
+/// ([`super::OwnSet::OverflowMiss`] on an empty layout): the table owns every
+/// own key and the leaf's probe of it missed, so the key is absent. With room
+/// in the table and [`table_add_admitted`], the entry is appended in place.
+/// No migration (an empty layout has no slot), no allocation. `false`
+/// changes nothing.
+///
+/// # Safety
+/// `obj` is the leaf's overflowed receiver, `r` its record, `key` a property
+/// atom with hash `hash`.
+#[inline(never)]
+pub(crate) unsafe fn table_append(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+    value: f64,
+) -> bool {
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).overflow == 0 {
+        return false;
+    }
     let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
-    if (*t).length >= (*t).capacity || crate::object::layout_desc::is_family_object(obj) {
+    if (*t).length >= (*t).capacity || !table_add_admitted_meta(obj, r, key, hash, meta) {
         return false;
     }
     crate::object::overflow::append_plain(t, key, super::store_bits(value));
