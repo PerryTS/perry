@@ -1,3 +1,2 @@
-// A dynamic function made inside a dependency's init.
-const f = new Function("return 1");
-export const v = f();
+// A first module with a plain value.
+export const first = 1;
