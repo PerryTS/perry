@@ -241,9 +241,7 @@ pub(crate) unsafe fn bool_option(options_value: f64, name: &str, default: bool) 
 }
 
 pub(crate) fn non_negative_i32_value(value: JSValue, name: &str, allow_infinity: bool) -> i32 {
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else if value.is_number() {
+    let number = if value.is_number() {
         value.as_number()
     } else {
         throw_type(&format!("The \"{}\" option must be a number", name));

@@ -559,9 +559,7 @@ fn parse_constfn_static_entries(
     let mut infos = Vec::with_capacity(entries.len());
     let mut previous = None;
     for entry in entries {
-        if previous.is_some_and(|slot| entry.slot <= slot)
-            || entry.info.is_null()
-        {
+        if previous.is_some_and(|slot| entry.slot <= slot) || entry.info.is_null() {
             return None;
         }
         // SAFETY: codegen names a `JsFunctionInfo` in its permanent image.

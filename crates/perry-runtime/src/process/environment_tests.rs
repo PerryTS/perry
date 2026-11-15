@@ -227,6 +227,8 @@ fn local_environment_mutations_update_only_their_cached_field_and_json_alias() {
         state.install();
         let scope = crate::gc::RuntimeHandleScope::new();
         let env = scope.root_nanbox_f64(js_process_env());
+        // `process.env` holds no host data until observed: a key listing is the first observation.
+        crate::object::js_object_keys_value(env.get_nanbox_f64());
         let keep =
             scope.root_nanbox_u64(own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits());
         write("LOCAL", "set-value");
@@ -305,6 +307,8 @@ fn environment_descriptor_keeps_unqueried_mirrored_strings() {
         state.install();
         let scope = crate::gc::RuntimeHandleScope::new();
         let env = scope.root_nanbox_f64(js_process_env());
+        // `process.env` holds no host data until observed: a key listing is the first observation.
+        crate::object::js_object_keys_value(env.get_nanbox_f64());
         let keep =
             scope.root_nanbox_u64(own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits());
         assert_env_descriptor(env.get_nanbox_f64(), "QUERY", Some("query-value"));
@@ -326,6 +330,8 @@ fn unchanged_environment_enumeration_keeps_mirrored_strings() {
         state.install();
         let scope = crate::gc::RuntimeHandleScope::new();
         let env = scope.root_nanbox_f64(js_process_env());
+        // `process.env` holds no host data until observed: a key listing is the first observation.
+        crate::object::js_object_keys_value(env.get_nanbox_f64());
         let keep =
             scope.root_nanbox_u64(own_env_field(env.get_nanbox_f64(), "KEEP").unwrap().bits());
         for operation in 0..4 {

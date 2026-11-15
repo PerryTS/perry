@@ -219,7 +219,13 @@ impl LoweringContext {
         name: &str,
         scope_key: u32,
     ) -> Option<Option<(String, u32)>> {
-        if self.lookup_class(name).is_none() {
+        // A class that shadows a global built-in constructor (`function f() {
+        // class MessageChannel {} }`) is scope-local too: registered under its
+        // plain name, it captured every `new MessageChannel()` of the module,
+        // the global ones outside its scope included.
+        if self.lookup_class(name).is_none()
+            && !super::expr_new_builtins::is_reified_global_builtin_constructor(name)
+        {
             return None;
         }
         if self

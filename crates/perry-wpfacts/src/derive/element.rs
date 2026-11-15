@@ -52,7 +52,7 @@ pub struct ElementFacts {
 
 /// The same receiver union feeds named-site verdicts and element facts.
 /// Guarded verdicts may refine a claim, but never this unguarded value set.
-pub(super) struct ReceiverSet {
+pub(crate) struct ReceiverSet {
     pub toks: Vec<Tok>,
     pub prims: u16,
     pub top_recv: NodeId,
@@ -78,7 +78,7 @@ pub(super) fn with_copies(copies: &FxHashMap<NodeId, Vec<NodeId>>, recvs: &[Node
     all
 }
 
-pub(super) fn receiver_set(m: &Model, recvs: &[NodeId]) -> ReceiverSet {
+pub(crate) fn receiver_set(m: &Model, recvs: &[NodeId]) -> ReceiverSet {
     let mut toks = Vec::new();
     let mut prims = 0;
     let mut top_recv = recvs[0];

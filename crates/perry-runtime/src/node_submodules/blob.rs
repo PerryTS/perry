@@ -9,9 +9,7 @@ use super::consumers::{
     buffer_from_bytes, bytes_to_array_buffer_value, bytes_to_text_value, bytes_to_uint8_array_value,
 };
 use super::fs_promises::{promise_rejected, promise_value};
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
@@ -326,7 +324,7 @@ fn captured_file_blob_stream_id(closure: *const ClosureHeader) -> usize {
 }
 
 fn captured_blob_bytes(closure: *const ClosureHeader) -> Vec<u8> {
-    let raw = js_closure_get_capture_ptr(closure, 0) as usize;
+    let raw = crate::closure::closure_capture_ref(closure, 0) as usize;
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
         return Vec::new();
     }
@@ -361,7 +359,11 @@ fn blob_method_value(info: *const crate::closure::JsFunctionInfo, backing: f64) 
     let scope = crate::gc::RuntimeHandleScope::new();
     let backing = scope.root_nanbox_f64(backing);
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, backing_ptr(backing.get_nanbox_f64()) as i64);
+    crate::closure::closure_set_capture_ref(
+        closure,
+        0,
+        backing_ptr(backing.get_nanbox_f64()) as i64,
+    );
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 

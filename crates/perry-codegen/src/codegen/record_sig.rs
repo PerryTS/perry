@@ -321,12 +321,17 @@ pub(crate) fn lower_return(ctx: &mut FnCtx<'_>, r: FactsRecRep, e: Option<&Expr>
         words(&facts, r.tmpl).ok_or_else(|| anyhow!("ICE: value record result has no layout"))?;
     let (present, lanes): (String, Vec<String>) = match e {
         // The absent record: its words are not read.
-        None => (bool_lit(false), Vec::new()),
+        None => {
+            crate::verify_facts::life_measure::at_return(ctx, String::new())?;
+            (bool_lit(false), Vec::new())
+        }
         Some(e) => {
             let (first, copy) = split_copy(e);
             for x in first {
                 lower_expr(ctx, x)?;
             }
+            // LIFE: the body returns; the lanes are read after the hook.
+            crate::verify_facts::life_measure::at_return(ctx, String::new())?;
             let Some(l) = copy_lanes(&facts, r.tmpl, copy) else {
                 bail!("ICE: a value record `$sig` returns a value that is no copy of its result lanes");
             };

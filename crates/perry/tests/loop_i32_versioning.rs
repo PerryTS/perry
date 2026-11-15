@@ -141,7 +141,9 @@ fn function<'a>(ir: &'a str, file: &str, name: &str) -> &'a str {
 fn versioned_counter_branchy_bodies_resynchronize() {
     let (stdout, ir) = compile_and_run(
         "branchy",
-        include_str!("../../../tests/parity/language/control-flow/test_gap_loop_i32_versioning_branchy.ts"),
+        include_str!(
+            "../../../tests/parity/language/control-flow/test_gap_loop_i32_versioning_branchy.ts"
+        ),
         false,
     );
     assert_eq!(

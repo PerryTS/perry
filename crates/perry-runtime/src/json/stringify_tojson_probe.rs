@@ -606,8 +606,7 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
 pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
     let class_id = (*obj).class_id;
-    if class_id != 0 && class_chain_may_have_to_json(class_id) && !class_holders_lack_to_json(ptr)
-    {
+    if class_id != 0 && class_chain_may_have_to_json(class_id) && !class_holders_lack_to_json(ptr) {
         return false;
     }
     if crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize) {

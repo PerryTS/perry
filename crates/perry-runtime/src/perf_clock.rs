@@ -23,11 +23,16 @@ fn wall_clock_ms() -> f64 {
                 .unwrap_or(0.0)
         });
     }
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        }
+    }
 }
 
 fn perf_clock() -> &'static PerfClock {
@@ -50,8 +55,13 @@ pub(crate) fn time_origin_ms() -> f64 {
             || perf_clock().time_origin_ms,
         );
     }
-
-    perf_clock().time_origin_ms
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            perf_clock().time_origin_ms
+        }
+    }
 }
 
 pub(crate) fn performance_now_ms() -> f64 {

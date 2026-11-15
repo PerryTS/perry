@@ -388,7 +388,7 @@ fn create_import_function(import_value: f64, name: &str) -> f64 {
     ));
     let closure_ptr = closure.get_raw_mut_ptr::<ClosureHeader>();
     let import_ptr = heap_object_ptr(import.get_nanbox_f64()).unwrap_or(std::ptr::null_mut());
-    crate::closure::js_closure_set_capture_ptr(closure_ptr, 0, import_ptr as i64);
+    crate::closure::closure_set_capture_ref(closure_ptr, 0, import_ptr as i64);
     crate::closure::js_closure_set_capture_f64(
         closure_ptr,
         1,
@@ -1026,7 +1026,7 @@ fn import_from_closure(this: crate::closure::JsThis, closure: *const ClosureHead
             return this;
         }
     }
-    ptr_value(crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader)
+    ptr_value(crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader)
 }
 
 fn import_field(import: f64, name: &[u8]) -> f64 {

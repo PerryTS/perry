@@ -97,7 +97,9 @@ fn view_kind_getter(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
                 )
                 .to_bits(),
             )),
-            b"byteOffset" => Some(JSValue::number(crate::buffer::buffer_byte_offset(addr) as f64)),
+            b"byteOffset" => Some(JSValue::number(
+                crate::buffer::buffer_byte_offset(addr) as f64
+            )),
             _ => None,
         };
     }

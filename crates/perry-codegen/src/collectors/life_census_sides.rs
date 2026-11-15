@@ -108,9 +108,7 @@ pub(super) fn resolve(
                 Err(_) if recv.class_ids.is_empty() => return Err("receiver-top"),
                 Err(_) if recv.class_ids.len() > 4 => return Err("several-classes"),
                 Err(_) => return Err("key-not-a-field"),
-                Ok(false) if recv.checked || facts.interp_guard => {
-                    return Err("receiver-guarded")
-                }
+                Ok(false) if recv.checked || facts.interp_guard => return Err("receiver-guarded"),
                 Ok(false) => return Err("field-declared-or-reserved"),
                 Ok(true) => {}
             }
@@ -135,7 +133,12 @@ fn fate_over(m: &ModuleCensus, bodies: &[FuncId], i: usize) -> String {
 }
 
 /// Column 9 of argument `i` of `callee(...)`.
-pub(super) fn call_side(m: &ModuleCensus, this_fn: Option<FuncId>, callee: &Expr, i: usize) -> String {
+pub(super) fn call_side(
+    m: &ModuleCensus,
+    this_fn: Option<FuncId>,
+    callee: &Expr,
+    i: usize,
+) -> String {
     if let Expr::PropertyGet {
         object, property, ..
     } = callee
@@ -169,13 +172,39 @@ pub(super) fn construct_side(m: &ModuleCensus, class: &str, i: usize) -> String 
 /// HIR nodes that are language operations, stores or literal parts, not
 /// runtime library code: a birth under one has no receiving side here.
 const LANGUAGE: &[&str] = &[
-    "Binary", "Unary", "Compare", "Logical", "Conditional", "TypeOf", "Void",
-    "InstanceOf", "In", "Await", "Yield", "Sequence", "Delete", "LocalSet",
-    "GlobalSet", "ScopedTemp", "WithSet", "PutValueSet", "PropertyUpdate",
-    "IndexUpdate", "StaticFieldSet", "SuperPropertySet", "ObjectSuperPropertySet",
-    "ClassEnvSet", "LiteralSlotInit", "LiteralChunks", "LiteralChunkObject",
-    "IterResultSet", "TemplateStringCoerce", "StringCoerce", "NumberCoerce",
-    "BooleanCoerce", "ObjectCoerce",
+    "Binary",
+    "Unary",
+    "Compare",
+    "Logical",
+    "Conditional",
+    "TypeOf",
+    "Void",
+    "InstanceOf",
+    "In",
+    "Await",
+    "Yield",
+    "Sequence",
+    "Delete",
+    "LocalSet",
+    "GlobalSet",
+    "ScopedTemp",
+    "WithSet",
+    "PutValueSet",
+    "PropertyUpdate",
+    "IndexUpdate",
+    "StaticFieldSet",
+    "SuperPropertySet",
+    "ObjectSuperPropertySet",
+    "ClassEnvSet",
+    "LiteralSlotInit",
+    "LiteralChunks",
+    "LiteralChunkObject",
+    "IterResultSet",
+    "TemplateStringCoerce",
+    "StringCoerce",
+    "NumberCoerce",
+    "BooleanCoerce",
+    "ObjectCoerce",
 ];
 
 /// Column 9 of `child`, an operand of the call-like or dedicated node
@@ -188,8 +217,14 @@ pub(super) fn node_side(m: &ModuleCensus, parent: &Expr, child: &Expr) -> String
             method_name,
             args,
         } => {
-            let i = args.iter().position(|a| std::ptr::eq(a, child)).unwrap_or(0);
-            match m.static_by_name.get(&(class_name.clone(), method_name.clone())) {
+            let i = args
+                .iter()
+                .position(|a| std::ptr::eq(a, child))
+                .unwrap_or(0);
+            match m
+                .static_by_name
+                .get(&(class_name.clone(), method_name.clone()))
+            {
                 Some(f) => format!("compiled:static:{}", fate_over(m, &[*f], i)),
                 None => "unknown-target:other-module".to_string(),
             }
@@ -241,7 +276,10 @@ impl Callers {
             } => {
                 if let Expr::FuncRef(f) = callee.as_ref() {
                     *callee_refs.entry(*f).or_default() += 1;
-                    c.sites.entry(*f).or_default().insert((*byte_offset, *byte_end));
+                    c.sites
+                        .entry(*f)
+                        .or_default()
+                        .insert((*byte_offset, *byte_end));
                 }
             }
             Expr::FuncRef(f) => *refs.entry(*f).or_default() += 1,
@@ -269,8 +307,11 @@ impl Callers {
                 is_generator,
                 ..
             } if captures.is_empty() && !captures_this && !captures_new_target => {
-                c.closure_bodies
-                    .push((body.as_ptr() as usize, *func_id, *is_async || *is_generator));
+                c.closure_bodies.push((
+                    body.as_ptr() as usize,
+                    *func_id,
+                    *is_async || *is_generator,
+                ));
                 c.closures.push(perry_hir::Function {
                     id: *func_id,
                     name: format!("closure#{func_id}"),
@@ -314,8 +355,18 @@ fn bodies(hir: &perry_hir::Module) -> Vec<&[Stmt]> {
     out.extend(hir.functions.iter().map(|f| f.body.as_slice()));
     for c in &hir.classes {
         out.extend(c.constructor.iter().map(|f| f.body.as_slice()));
-        out.extend(c.methods.iter().chain(&c.static_methods).map(|f| f.body.as_slice()));
-        out.extend(c.getters.iter().chain(&c.setters).map(|(_, f)| f.body.as_slice()));
+        out.extend(
+            c.methods
+                .iter()
+                .chain(&c.static_methods)
+                .map(|f| f.body.as_slice()),
+        );
+        out.extend(
+            c.getters
+                .iter()
+                .chain(&c.setters)
+                .map(|(_, f)| f.body.as_slice()),
+        );
     }
     out
 }

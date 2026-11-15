@@ -307,6 +307,7 @@ fn decode_sections<'data>(
 pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
     let mut nodes = Vec::new();
     let mut globals = HashSet::new();
+    let mut held = Vec::new();
     for archive in archives {
         let bytes =
             std::fs::read(archive).with_context(|| format!("read {}", archive.display()))?;
@@ -371,6 +372,43 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                         .push(sym.to_owned());
                 }
                 for section in file.sections() {
+                    if data_holds_addresses(section.kind(), section.name().unwrap_or("")) {
+                        // The addresses a data section holds (a vtable, a
+                        // static table, a function-info record).
+                        let mut targets = Vec::new();
+                        for (_, reloc) in section.relocations() {
+                            let target = match reloc.target() {
+                                RelocationTarget::Symbol(i) => {
+                                    let s = file.symbol_by_index(i)?;
+                                    if s.kind() == object::SymbolKind::Section {
+                                        s.section_index()
+                                            .and_then(|i| file.section_by_index(i).ok())
+                                            .and_then(|s| s.name().ok().map(str::to_owned))
+                                            .unwrap_or_default()
+                                    } else {
+                                        fmt.norm(s.name()?)
+                                    }
+                                }
+                                RelocationTarget::Section(i) => {
+                                    file.section_by_index(i)?.name()?.to_owned()
+                                }
+                                _ => continue,
+                            };
+                            targets.push(target);
+                        }
+                        if !targets.is_empty() {
+                            let mut names = vec![section.name()?.to_owned()];
+                            if let Some(labels) = symbols.get(&section.index()) {
+                                names.extend(labels.values().flatten().map(|s| fmt.norm(s)));
+                            }
+                            held.push(crate::graph::DataSection {
+                                obj: name.clone(),
+                                names,
+                                targets,
+                            });
+                        }
+                        continue;
+                    }
                     if section.kind() != SectionKind::Text {
                         continue;
                     }
@@ -444,7 +482,25 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
         })?;
         nodes.extend(decoded);
     }
-    Graph::new(nodes, globals)
+    Graph::new(nodes, globals, held)
+}
+
+/// Whether a relocation in this section is an address the program's data
+/// holds. Unwind tables, exception tables and debug sections name every
+/// function without holding a callable address.
+fn data_holds_addresses(kind: SectionKind, name: &str) -> bool {
+    let data = match kind {
+        SectionKind::Data
+        | SectionKind::ReadOnlyData
+        | SectionKind::ReadOnlyDataWithRel
+        | SectionKind::Tls => true,
+        // `.init_array` and its kin.
+        SectionKind::Elf(_) => name.contains("_array"),
+        _ => false,
+    };
+    data && !["eh_frame", "except_tab", "unwind", "debug", "llvm", "note"]
+        .iter()
+        .any(|part| name.contains(part))
 }
 
 #[cfg(test)]

@@ -382,20 +382,18 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     stream.request_handle = request_handle;
     stream.response_handle = response_handle;
 
-    super::queue_pending(
-        crate::server::server::HttpPendingRequest {
-            server_handle,
-            request_handle,
-            response: crate::server::request::handle_to_pointer_f64(response_handle),
-            // A `'stream'` listener answers the request itself, exactly as it
-            // does on the hyper path; synthesizing a default response here as
-            // well would put two responses on one stream.
-            skip_default_response: has_stream_listener,
-            h2_stream_handle: stream_handle,
-            h2_stream_headers: headers_vec,
-            is_check_continue: false,
-        },
-    );
+    super::queue_pending(crate::server::server::HttpPendingRequest {
+        server_handle,
+        request_handle,
+        response: crate::server::request::handle_to_pointer_f64(response_handle),
+        // A `'stream'` listener answers the request itself, exactly as it
+        // does on the hyper path; synthesizing a default response here as
+        // well would put two responses on one stream.
+        skip_default_response: has_stream_listener,
+        h2_stream_handle: stream_handle,
+        h2_stream_headers: headers_vec,
+        is_check_continue: false,
+    });
 }
 
 // ── Client inbound ──────────────────────────────────────────────────────────

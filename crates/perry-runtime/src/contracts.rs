@@ -31,7 +31,7 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
@@ -358,9 +358,11 @@ fn kind_of(v: f64) -> u16 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG if crate::value::is_int32_bits(bits) => K_NUM,
-        // A `C.prototype` ref or another non-Number `0x7FFE` word.
-        INT32_TAG => K_OBJ,
+        // A slot word of an I32 lane or an at-rest Array (`layout_slot`): the
+        // Number it stores. No JS value is in the `0x7FFE` band (P3 B4b).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => K_NUM,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -744,7 +746,7 @@ mod tests {
     #[test]
     fn value_kinds_match_the_compiler_mask() {
         assert_eq!(kind_of(1.5), K_NUM);
-        assert_eq!(kind_of(f64::from_bits(INT32_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 1)), K_UNDEF);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 2)), K_NULL);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 4)), K_BOOL);
@@ -759,7 +761,7 @@ mod tests {
 
     #[test]
     fn a_non_number_0x7ffe_word_is_not_k_num() {
-        assert_eq!(kind_of(f64::from_bits(INT32_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
         assert_eq!(kind_of(f64::from_bits(PROTO_REF_5)), K_OBJ);
         assert_eq!(kind_of(f64::from_bits(HIGH_BITS)), K_OBJ);
     }

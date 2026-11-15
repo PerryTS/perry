@@ -171,7 +171,11 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     {
         return 2;
     }
-    match READERS.lock().ok().and_then(|m| m.get(&id).map(|r| r.is_byob)) {
+    match READERS
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&id).map(|r| r.is_byob))
+    {
         Some(true) => return 9,
         Some(false) => return 3,
         None => {}
@@ -229,9 +233,9 @@ pub(crate) unsafe fn dispatch_stream_method(
     if requested != 0 {
         return match method {
             "respond" => Some(super::byob::byob_request_respond(requested, arg0)),
-            "respondWithNewView" => {
-                Some(super::byob::byob_request_respond_with_new_view(requested, arg0))
-            }
+            "respondWithNewView" => Some(super::byob::byob_request_respond_with_new_view(
+                requested, arg0,
+            )),
             _ => None,
         };
     }

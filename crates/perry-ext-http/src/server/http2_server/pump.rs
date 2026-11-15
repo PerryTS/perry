@@ -67,7 +67,11 @@ pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
             let raw = handler.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }
@@ -81,7 +85,11 @@ pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
             let raw = callback as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }

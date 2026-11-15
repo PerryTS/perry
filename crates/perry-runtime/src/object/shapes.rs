@@ -650,7 +650,14 @@ impl ShapeRecordRef {
         }
     }
 
-    /// A ConstFn lane at slot >= 32 exists.
+    /// A ConstFn lane at slot >= 32 exists. Only the field-representation
+    /// verifier asks, so it exists in the same configurations.
+    #[cfg(any(
+        test,
+        debug_assertions,
+        feature = "field-rep-assert",
+        perry_gc_instruments
+    ))]
     #[inline]
     pub(crate) fn has_tail_constfn(self) -> bool {
         // SAFETY: a live slab record (type docs).
@@ -890,6 +897,28 @@ pub(crate) fn test_positional_of_id(id: LayoutWord) -> Option<(u32, u32)> {
 #[inline]
 pub(crate) fn ordinary_dir_addr() -> *const u8 {
     ShapeSlab::ordinary_dir_addr()
+}
+
+/// The property-atom index (`string::intern`) the directory at `dir` names:
+/// null until the agent's first atom, and for `PERRY_EMPTY_SHAPE_DIR`. One
+/// load from the directory in hand; no thread-local is named, so the
+/// directory's static stays private to its module.
+///
+/// # Safety
+/// `dir` is an agent's ordinary directory or `PERRY_EMPTY_SHAPE_DIR`.
+#[inline(always)]
+pub(crate) unsafe fn dir_atoms(dir: *const u8) -> *const u8 {
+    *(dir.add(shapes_store::DIR_ATOMS_OFFSET) as *const *const u8)
+}
+
+/// `string::intern` publishes the agent's atom index when its slots move.
+pub(crate) fn publish_agent_atoms(table: *const u8) {
+    ShapeSlab::publish_agent_atoms(table);
+}
+
+/// `string::intern` retracts the agent's atom index when it is dropped.
+pub(crate) fn retract_agent_atoms(table: *const u8) {
+    ShapeSlab::retract_agent_atoms(table);
 }
 
 /// [`positional_key_words`] for the computed-key read
@@ -3209,7 +3238,11 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
     // The report may withdraw a sealed prototype (its shadow bit on the word
     // still in place): the publication carries the bit from the word the
     // report left, not the one read before it.
-    let previous = if marked { (*obj).parent_class_id } else { previous };
+    let previous = if marked {
+        (*obj).parent_class_id
+    } else {
+        previous
+    };
     (*obj).parent_class_id = match publish {
         Publish::Carry => super::layout_desc::carry_shadow(previous, id),
         Publish::Write => super::shadow::publish_word(obj, previous, id),
@@ -4818,7 +4851,10 @@ pub(crate) unsafe fn stamp_born_prototype_root(obj: *mut crate::object::ObjectHe
     let Some(current) = object_shape_descriptor(obj) else {
         return;
     };
-    debug_assert_eq!(current.logical_key_count, 0, "a born prototype root is keyless");
+    debug_assert_eq!(
+        current.logical_key_count, 0,
+        "a born prototype root is keyless"
+    );
     if current.logical_key_count != 0 || current.semantic_generation != 0 {
         return;
     }
@@ -4913,9 +4949,9 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
             rep = super::field_rep::with_slot_rep(rep, slot, super::field_rep::REP_ANY);
         }
     }
-    let rep = infos
-        .iter()
-        .fold(rep, |rep, i| super::field_rep::with_special_lane(rep, i.slot));
+    let rep = infos.iter().fold(rep, |rep, i| {
+        super::field_rep::with_special_lane(rep, i.slot)
+    });
     let keys = current.keys as usize as *const ArrayHeader;
     let summary = receiver_extra_summary(obj)
         | if keys.is_null() {

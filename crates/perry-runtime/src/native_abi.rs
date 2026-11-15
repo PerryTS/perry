@@ -26,9 +26,7 @@ fn throw_range_error(message: &str) -> ! {
 
 fn strict_number(value: f64, message: &str) -> f64 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         js_value.as_number()
     } else {
         throw_type_error(message)
@@ -75,7 +73,7 @@ pub extern "C" fn js_native_abi_check_f64(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_typed_f64_arg_guard(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    (js_value.is_number() || js_value.is_int32()) as i32
+    (js_value.is_number()) as i32
 }
 
 /// Convert an already-guarded JS number/int32 argument to the raw f64 ABI used
@@ -106,9 +104,6 @@ pub extern "C" fn js_typed_f64_arg_to_raw(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        return 1;
-    }
     if !js_value.is_number() {
         return 0;
     }
@@ -125,11 +120,7 @@ pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_typed_i32_arg_to_raw(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        js_value.as_int32()
-    } else {
-        js_value.as_number() as i32
-    }
+    js_value.as_number() as i32
 }
 
 /// Guard for internal typed-i1 Perry function clones.

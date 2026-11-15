@@ -15,6 +15,37 @@ struct PrivateStorageKey {
     slot: std::cell::Cell<Option<(LayoutWord, u32, u32, u8)>>,
 }
 
+/// Where a located private field's value lives.
+#[derive(Clone, Copy)]
+enum PrivatePlace {
+    /// Storage slot `slot` of a holder whose live inline bound is `live`.
+    Slot { slot: u32, live: u32 },
+    /// Entry `pos` of the holder's overflow table. A table addresses its
+    /// entries by position, and the entry names the value's place: a layout
+    /// key's entry refers to its fixed storage slot (which is not the
+    /// position when the layout stores its keys in another order), any other
+    /// entry holds the value. Only the table reads or writes through it.
+    Entry { pos: u32 },
+}
+
+impl PrivatePlace {
+    /// The field's value in `object`, the holder this place was located on.
+    ///
+    /// # Safety
+    /// `object` is live and unchanged since the place was located.
+    #[inline]
+    unsafe fn read(self, object: *const ObjectHeader) -> u64 {
+        match self {
+            PrivatePlace::Slot { slot, live } => {
+                super::object_field_at_with_live(object, slot, live).bits()
+            }
+            PrivatePlace::Entry { pos } => {
+                crate::object::overflow::get(object, pos).unwrap_or(crate::value::TAG_UNDEFINED)
+            }
+        }
+    }
+}
+
 impl std::ops::Deref for PrivateStorageKey {
     type Target = str;
     fn deref(&self) -> &str {
@@ -23,12 +54,12 @@ impl std::ops::Deref for PrivateStorageKey {
 }
 
 impl PrivateStorageKey {
-    /// The receiver and the inline/overflow position of this field, when the
+    /// The receiver and the place of this field's value, when the
     /// receiver's shape lists it as a private field. `None` is "not present
     /// on an ordinary layout": an absent field, an unshaped receiver, or a key
     /// of this spelling that a program wrote as a property.
     #[inline]
-    fn locate(&self, receiver: f64) -> Option<(*const ObjectHeader, u32, u32)> {
+    fn locate(&self, receiver: f64) -> Option<(*const ObjectHeader, PrivatePlace)> {
         let bits = receiver.to_bits();
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
@@ -44,14 +75,14 @@ impl PrivateStorageKey {
                 return unsafe {
                     crate::object::key_attrs::private_element_present(object, entry, index)
                 }
-                .then_some((object, index, live));
+                .then_some((object, PrivatePlace::Slot { slot: index, live }));
             }
         }
         self.locate_miss(receiver)
     }
 
     #[inline(never)]
-    fn locate_miss(&self, receiver: f64) -> Option<(*const ObjectHeader, u32, u32)> {
+    fn locate_miss(&self, receiver: f64) -> Option<(*const ObjectHeader, PrivatePlace)> {
         let object = unsafe { private_element_holder(receiver) }?;
         let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
         if unsafe { crate::object::key_attrs::object_summary(object) }
@@ -62,16 +93,14 @@ impl PrivateStorageKey {
         }
         if unsafe { crate::object::overflow::has_overflow(object) } {
             let keys = unsafe { crate::object::object_keys(object) };
-            let index = unsafe {
+            let pos = unsafe {
                 crate::object::keys_find_private_slot_by_bytes(
                     keys.arr(),
                     keys.count(),
                     self.as_bytes(),
                 )
             }?;
-            return Some((object, unsafe { keys.storage_slot(index) }, unsafe {
-                crate::object::object_live_slot_count(object)
-            }));
+            return Some((object, PrivatePlace::Entry { pos }));
         }
         let slot = self.slot.get().filter(|slot| slot.0 == shape).or_else(|| {
             if !crate::object::shapes::shape_object_kind_of_receiver((shape).0).is_some_and(
@@ -107,7 +136,13 @@ impl PrivateStorageKey {
         // A layout's optional element (a class family's) is present once its
         // slot is filled, which this object's word says, not the ShapeId.
         unsafe { crate::object::key_attrs::private_element_present(object, slot.3, slot.1) }
-            .then_some((object, slot.1, slot.2))
+            .then_some((
+                object,
+                PrivatePlace::Slot {
+                    slot: slot.1,
+                    live: slot.2,
+                },
+            ))
     }
 
     /// Define this field on `receiver` whose holder's layout already lists
@@ -167,10 +202,8 @@ impl PrivateStorageKey {
 
     #[inline]
     fn get_cached(&self, receiver: f64) -> Option<f64> {
-        let (object, index, live) = self.locate(receiver)?;
-        Some(f64::from_bits(unsafe {
-            super::object_field_at_with_live(object, index, live).bits()
-        }))
+        let (object, place) = self.locate(receiver)?;
+        Some(f64::from_bits(unsafe { place.read(object) }))
     }
 
     /// The field's value. A dictionary holder lists the field in its private
@@ -190,7 +223,7 @@ impl PrivateStorageKey {
     /// property: freezing, sealing or preventing extensions of its holder
     /// does not make it read-only, so only the layout is consulted.
     fn set_cached(&self, receiver: f64, value: f64) -> bool {
-        let Some((object, index, live)) = self.locate(receiver) else {
+        let Some((object, place)) = self.locate(receiver) else {
             return false;
         };
         unsafe {
@@ -203,13 +236,23 @@ impl PrivateStorageKey {
             } else {
                 value.to_bits()
             };
-            if index < live {
-                crate::object::store_object_field_slot(object, index as usize, bits);
-            } else if index < crate::object::object_inline_capacity(object) {
-                crate::object::set_object_live_slot_count(object, index + 1);
-                crate::object::store_object_field_slot(object, index as usize, bits);
-            } else {
-                overflow_set(object as usize, index as usize, bits);
+            match place {
+                PrivatePlace::Slot { slot, live } if slot < live => {
+                    crate::object::store_object_field_slot(object, slot as usize, bits);
+                }
+                PrivatePlace::Slot { slot, .. }
+                    if slot < crate::object::object_inline_capacity(object) =>
+                {
+                    crate::object::set_object_live_slot_count(object, slot + 1);
+                    crate::object::store_object_field_slot(object, slot as usize, bits);
+                }
+                PrivatePlace::Slot { slot, .. } => {
+                    overflow_set(object as usize, slot as usize, bits);
+                }
+                PrivatePlace::Entry { pos } => {
+                    let stored = crate::object::overflow::store_index(object, pos, bits);
+                    debug_assert!(stored, "a located table entry takes its store");
+                }
             }
         }
         true
@@ -611,11 +654,15 @@ impl IntrinsicPrivateReadSite {
                 self.spelling(),
             )
         }?;
-        let live = unsafe { crate::object::object_live_slot_count(object) };
-        let index = unsafe { keys.storage_slot(index) };
-        Some(f64::from_bits(unsafe {
-            super::object_field_at_with_live(object, index, live).bits()
-        }))
+        let place = if unsafe { crate::object::overflow::has_overflow(object) } {
+            PrivatePlace::Entry { pos: index }
+        } else {
+            PrivatePlace::Slot {
+                slot: unsafe { keys.storage_slot(index) },
+                live: unsafe { crate::object::object_live_slot_count(object) },
+            }
+        };
+        Some(f64::from_bits(unsafe { place.read(object) }))
     }
 }
 

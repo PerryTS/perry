@@ -132,13 +132,17 @@ pub fn map_cons(
             shared,
             dst: n(dst),
         },
+        Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
             reason,
         },
         RequireSpec { call } => RequireSpec { call: k(call) },
-        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
+        TopIfTop { dst, reason } => TopIfTop {
+            dst: n(dst),
+            reason,
+        },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -278,11 +282,13 @@ pub fn map_cons(
             dst,
             shape,
             enumerable,
+            kept,
         } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
             enumerable,
+            kept,
         },
         EnumLoad { key, dst } => EnumLoad { key, dst: n(dst) },
         EnumChain { key, dst, of, from } => EnumChain {
@@ -580,6 +586,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NotBuffer { .. }
             | ProtoObjects { .. }
             | NotNull { .. }
+            | Objects { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }

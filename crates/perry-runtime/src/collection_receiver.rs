@@ -49,7 +49,7 @@ pub extern "C-unwind" fn js_throw_collection_receiver_type_error(
         b"string"
     } else if value.is_bigint() {
         b"bigint"
-    } else if value.is_int32() || value.is_number() {
+    } else if value.is_number() {
         b"number"
     } else {
         b""

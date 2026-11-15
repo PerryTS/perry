@@ -36,7 +36,7 @@ fn root_word_probes(addr: usize) -> Vec<(&'static str, u64, bool)> {
         ("bare address", addr as u64, true),
         ("undefined", crate::value::TAG_UNDEFINED, false),
         ("null", crate::value::TAG_NULL, false),
-        ("int32 42", crate::value::INT32_TAG | 42, false),
+        ("int32 42", crate::value::INTERNAL_WORD_TAG | 42, false),
         ("double 3.5", 3.5f64.to_bits(), false),
         ("double -1.0", (-1.0f64).to_bits(), false),
         ("zero", 0, false),
@@ -372,7 +372,7 @@ fn decode_root_word_round_trips_each_representation() {
     // Nothing else decodes to a reference.
     assert_eq!(decode_root_word(0), None);
     assert_eq!(decode_root_word(crate::value::TAG_UNDEFINED), None);
-    assert_eq!(decode_root_word(crate::value::INT32_TAG | 7), None);
+    assert_eq!(decode_root_word(crate::value::INTERNAL_WORD_TAG | 7), None);
     assert_eq!(decode_root_word(1.5f64.to_bits()), None);
     // Below the first page: a small integer, not an address.
     assert_eq!(decode_root_word(0x40), None);

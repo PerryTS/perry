@@ -362,7 +362,7 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     // Empty inline arguments need only the internal operand read. Keep the
     // partial-argument scratch buffer and adapter frame in one shared helper.
     if std::ptr::eq((*closure).info, &BOUND_FUNCTION_INFO)
-        && *slots.add(2) & !1 == crate::value::INT32_TAG
+        && *slots.add(2) & !1 == crate::value::INTERNAL_WORD_TAG
     {
         return call_bound_target(f64::from_bits(*slots), f64::from_bits(*slots.add(1)), args);
     }
@@ -445,13 +445,13 @@ unsafe fn call_bound_target(target: f64, receiver: f64, args: &[f64]) -> f64 {
 /// bit. Partial values follow the three compact slots or five snapshot slots.
 /// Legacy/resolved adapters retain their raw array-or-null slot.
 pub(in crate::closure) fn inline_args_marker(count: usize, lazy: bool) -> u64 {
-    crate::value::INT32_TAG | ((count as u64) << 1) | u64::from(lazy)
+    crate::value::INTERNAL_WORD_TAG | ((count as u64) << 1) | u64::from(lazy)
 }
 
 unsafe fn inline_args_layout(closure: *const ClosureHeader) -> Option<(usize, bool)> {
     let slots = crate::closure::closure_capture_slots_mut(closure as *mut ClosureHeader);
     let marker = *slots.add(2);
-    (marker & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG)
+    (marker & 0xFFFF_0000_0000_0000 == crate::value::INTERNAL_WORD_TAG)
         .then_some(((marker as u32 >> 1) as usize, marker & 1 != 0))
 }
 
@@ -977,9 +977,7 @@ unsafe fn function_bind_observable(
         if crate::object::has_own_helpers::closure_own_key_present(target as usize, "length") {
             let value = crate::closure::closure_get_dynamic_prop(target as usize, "length");
             let value = JSValue::from_bits(value.to_bits());
-            if value.is_int32() {
-                value.as_int32() as f64
-            } else if value.is_number() {
+            if value.is_number() {
                 value.as_number()
             } else {
                 0.0

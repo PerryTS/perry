@@ -69,12 +69,32 @@ mod lazy_family_tests;
 /// pointer instead of undefined, which is what unblocks lodash's
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
+///
+/// The population has two phases: phase A, the core ([`populate_realm_core`]),
+/// then phase B, the rest ([`populate_realm_rest`]). This runs both back to
+/// back: the complete realm, for a global that is not the thread's own (a
+/// `vm` context, an eval realm, the Rust tests).
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
+    populate_realm_core(singleton_at_entry);
+    populate_realm_rest(singleton_at_entry);
+}
+
+/// Phase A of the population of the realm global `singleton_at_entry`.
+/// Every row is in phase A today.
+pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     // Every install below is a builtin definition, which arms the own-override
     // guard only on a Map, Set or Date owner (#10697).
     super::super::own_override::as_builtin_definition(|| {
         populate_global_this_builtins_inner(singleton_at_entry)
     })
+}
+
+/// Phase B of the population of the realm global `singleton_at_entry`: the
+/// rows phase A left unbound. No row yet. A row that moves here keeps its
+/// declared slot (the global's layout is static) and its place in its
+/// family's declaration order. Runs inside the caller's no-move window.
+pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
+    let _ = singleton_at_entry;
 }
 crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 4, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
 // Compact the once-per-realm installer, not the methods it installs. Blanket
@@ -741,9 +761,14 @@ const INTERFACE_PARENTS: [(&str, &str, bool); 5] = [
 
 /// A lazy interface child's links to its (eager) parent, made in its birth:
 /// the same two links the population makes for an eager child.
-fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
-    let Some(&(_, parent, constructor_inherits)) =
-        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
+fn link_interface_parent(
+    name: &str,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    proto_obj: *mut ObjectHeader,
+) {
+    let Some(&(_, parent, constructor_inherits)) = INTERFACE_PARENTS
+        .iter()
+        .find(|(child, _, _)| *child == name)
     else {
         return;
     };
@@ -1218,7 +1243,10 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 
 /// The identity of the closure at `ptr` (header word `word`) while it is its
 /// realm's still unborn `lazy` constructor, outside that family's own birth.
-fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
+fn unborn_lazy_identity(
+    ptr: usize,
+    word: u32,
+) -> Option<crate::object::BuiltinConstructorIdentity> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
     (identity.declaration().lazy
         && BIRTHING.with(|c| c.get()) != identity as u8

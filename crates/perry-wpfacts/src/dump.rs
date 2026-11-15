@@ -220,16 +220,24 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             out.push_str(&format!("# record_array module={mi} local={id} of={r}\n"));
         }
         for (at, k, r) in &bindings.record_array_reads {
-            out.push_str(&format!("# record_array module={mi} read={at}.{k} of={r}\n"));
+            out.push_str(&format!(
+                "# record_array module={mi} read={at}.{k} of={r}\n"
+            ));
         }
         for (id, r) in &bindings.record_array_birth_locals {
-            out.push_str(&format!("# record_array module={mi} birth-local={id} of={r}\n"));
+            out.push_str(&format!(
+                "# record_array module={mi} birth-local={id} of={r}\n"
+            ));
         }
         for (at, r) in &bindings.record_array_birth_stores {
-            out.push_str(&format!("# record_array module={mi} birth-store={at} of={r}\n"));
+            out.push_str(&format!(
+                "# record_array module={mi} birth-store={at} of={r}\n"
+            ));
         }
         for (c, k, r) in &bindings.record_array_birth_fields {
-            out.push_str(&format!("# record_array module={mi} birth-field={c}.{k} of={r}\n"));
+            out.push_str(&format!(
+                "# record_array module={mi} birth-field={c}.{k} of={r}\n"
+            ));
         }
     }
     // N6: each module binding the facts give one Number.
@@ -280,6 +288,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for r in &s.field_truthy_rows {
         out.push_str(r);
+        out.push('\n');
+    }
+    for l in pf.family_reach.iter().flat_map(|f| f.dump_lines()) {
+        out.push_str(&l);
         out.push('\n');
     }
     for (k, n, ms) in &s.profile {

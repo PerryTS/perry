@@ -280,8 +280,6 @@ unsafe fn read_number_field(obj_f64: f64, field: &str) -> Option<f64> {
     let val = JsValue::from_bits(bits);
     if val.is_number() {
         Some(val.to_number())
-    } else if val.is_int32() {
-        Some(val.to_int32() as f64)
     } else {
         None
     }

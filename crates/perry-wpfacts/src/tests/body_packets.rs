@@ -388,6 +388,7 @@ fn another_body_interning_key_shapes_does_not_change_transfer() {
                 dst,
                 shape,
                 enumerable: false,
+                kept: false,
             },
         );
         m.packet_end(None, true);

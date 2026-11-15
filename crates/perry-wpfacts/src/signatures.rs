@@ -170,6 +170,7 @@ pub(crate) fn collect(
             .reduce(Rep::join)
             .unwrap_or(Rep::Boxed)
     };
+    let binding_nodes = crate::bindings::BindingNodes::new(m);
     // The function token's body index of every function.
     let mut sigs: std::collections::BTreeMap<(u32, u32), Signature> = Default::default();
     // Each typed body's literal defaults (§4.1): the caller applies them.
@@ -190,22 +191,26 @@ pub(crate) fn collect(
         // earlier parameter has a non-literal default.
         let mut earlier_nonliteral = false;
         for p in &hir.params {
-            let local = g.mods[f.module as usize].locals.get(&p.id).copied();
+            // The parameter local's own fact, exactly P1's
+            // `BindingFacts`: the binding over its nodes
+            // (`BindingNodes`). The callers' arguments flow into the shared
+            // node; a literal the body assigns to the parameter is in the
+            // instance copies only.
+            let local = g.mods[f.module as usize]
+                .locals
+                .get(&p.id)
+                .copied()
+                .filter(|&n| live(n))
+                .map(|n| crate::bindings::facts_of_binding(g, &binding_nodes, n));
             let rep = match &p.default {
                 Some(d) if !is_literal(d) || earlier_nonliteral => {
                     earlier_nonliteral |= !is_literal(d);
                     Rep::Boxed
                 }
-                // The parameter local's own fact, exactly P1's
-                // `BindingFacts::rep`: instance copies flow into the shared
-                // node, so its values cover every copy.
-                _ => match g.mods[f.module as usize].locals.get(&p.id) {
-                    Some(&n) => rep1(n),
-                    None => Rep::Boxed,
-                },
+                _ => local.as_ref().map_or(Rep::Boxed, |b| b.rep),
             };
-            ranges.push(match (rep, local) {
-                (Rep::I32, Some(n)) if live(n) => crate::bindings::facts_of_node(g, n).int_range,
+            ranges.push(match (rep, &local) {
+                (Rep::I32, Some(b)) => b.int_range,
                 _ => None,
             });
             params.push(rep);

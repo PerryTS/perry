@@ -14,14 +14,11 @@ unsafe fn primitive(bits: u64) -> bool {
         && bits & crate::value::TAG_MASK != POINTER_TAG
         && bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG
         && bits & crate::value::TAG_MASK != BIGINT_TAG
-        && !is_raw_pointer(bits)
 }
 
 unsafe fn array_pointer(bits: u64) -> Option<*const crate::ArrayHeader> {
     let ptr = if bits & crate::value::TAG_MASK == POINTER_TAG {
         (bits & POINTER_MASK) as *const crate::ArrayHeader
-    } else if is_raw_pointer(bits) {
-        bits as *const crate::ArrayHeader
     } else {
         return None;
     };

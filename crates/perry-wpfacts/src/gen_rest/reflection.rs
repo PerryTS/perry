@@ -80,6 +80,7 @@ impl<'a> Gen<'a> {
                                 dst,
                                 shape: 0,
                                 enumerable: false,
+                                kept: false,
                             },
                         );
                         dst

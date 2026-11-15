@@ -420,7 +420,7 @@ pub(crate) fn constructor_identity(value: f64) -> Option<BuiltinConstructorIdent
 /// never a JS value, and never a Number (P3 B4a: nothing builds an INT32
 /// Number).
 pub(crate) const fn builtin_constructor_identity_word(identity: u32) -> u64 {
-    crate::value::INT32_TAG | identity as u64
+    crate::value::INTERNAL_WORD_TAG | identity as u64
 }
 
 /// Birth consumes one declaration, so code, header identity and call capture

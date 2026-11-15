@@ -66,6 +66,9 @@ pub(super) unsafe fn lookup_value(recv: f64, name: &[u8], direct: f64) -> Option
 /// call.
 #[inline(never)]
 pub(super) unsafe fn function_call(recv: f64, args: &[f64]) -> f64 {
+    if let Some(value) = has_own_property_call(recv, args) {
+        return value;
+    }
     if let Some(value) = super::super::native_call_method::compiled_target_call(
         false,
         recv,
@@ -80,4 +83,29 @@ pub(super) unsafe fn function_call(recv: f64, args: &[f64]) -> f64 {
         this,
         args.get(1..).unwrap_or(&[]),
     )
+}
+
+/// `f.call(o, k)` where `function_ok` proved `call` the intrinsic and the
+/// VALUE `f` is the realm's `Object.prototype.hasOwnProperty` (its info names
+/// that body): the call is the body with `this = o`. Asked of the callee on
+/// every call; nothing about the site or the answer is kept. An object or
+/// nullish `o` only: a primitive receiver takes the explicit-`this` call as
+/// before.
+#[inline(always)]
+unsafe fn has_own_property_call(recv: f64, args: &[f64]) -> Option<f64> {
+    let closure = raw(recv) as *const crate::closure::ClosureHeader;
+    let info = (*closure).info.as_ref()?;
+    if info.code as usize != super::super::global_this::has_own_property_body() {
+        return None;
+    }
+    let this = args.first().copied().unwrap_or(UNDEFINED);
+    let bits = this.to_bits();
+    if bits & !POINTER_MASK != POINTER_TAG
+        && bits != TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+    {
+        return None;
+    }
+    let key = args.get(1).copied().unwrap_or(UNDEFINED);
+    Some(super::super::object_ops::has_own::object_prototype_has_own_property(this, key))
 }

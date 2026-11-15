@@ -1269,6 +1269,27 @@ impl LlBlock {
         r
     }
 
+    /// The count of a JS `<<`, `>>` or `>>>` over an `i32` that is the
+    /// operand's ToInt32: its low five bits (ECMA-262 `ℝ(rnum) modulo 32`).
+    /// An LLVM shift by a count at or past the width is poison, so every
+    /// `i32` shift whose count is not a literal in `0..32` shifts by this.
+    /// `PERRY_SHIFT_COUNT_MASK=0` (`off`, `false`) shifts by the operand
+    /// itself, as the i32 chains did before (wrong for a count outside
+    /// `0..32`: `1 << -1`, `x << 33` in a variable).
+    pub fn js_shift_count(&mut self, count: &str) -> String {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let on = *ON.get_or_init(|| {
+            !matches!(
+                std::env::var("PERRY_SHIFT_COUNT_MASK").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+        });
+        if !on || count.parse::<u32>().is_ok_and(|k| k < 32) {
+            return count.to_string();
+        }
+        self.and(crate::types::I32, count, "31")
+    }
+
     pub fn shl(&mut self, ty: LlvmType, a: &str, b: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Bin {

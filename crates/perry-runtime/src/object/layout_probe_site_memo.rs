@@ -52,6 +52,7 @@ impl ReadSiteMemo {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> [u64; PAIRS] {
         std::array::from_fn(|i| self.pairs[i].load(Relaxed))
     }
@@ -555,89 +556,6 @@ pub unsafe extern "C" fn perry_probe_get_value_site(
         hash,
         memo,
     )
-}
-
-#[repr(C)]
-struct KeyedWay {
-    // Set once from zero to SSO content, never reassigned. Thus every pair
-    // in this way proves the same key even while another agent publishes it.
-    key: AtomicU64,
-    memo: ReadSiteMemo,
-}
-
-/// Four shape answers for short string keys, each way bound once on use.
-/// The key is CONTENT bits, never a GC address or a cached program value.
-#[repr(C)]
-pub struct KeyedSiteMemo {
-    ways: [KeyedWay; 4],
-}
-
-#[inline]
-unsafe fn short_key(bits: u64) -> Option<u64> {
-    if bits & TAG_MASK == crate::value::SHORT_STRING_TAG {
-        return Some(bits);
-    }
-    if bits & TAG_MASK == STRING_TAG {
-        return crate::string::short_ascii_sso_bits(
-            (bits & POINTER_MASK) as *const crate::StringHeader,
-        );
-    }
-    None
-}
-
-pub(crate) unsafe fn keyed_answer(
-    dir: *const u8,
-    obj_bits: u64,
-    key_bits: u64,
-    memo: &KeyedSiteMemo,
-) -> Option<Answer> {
-    if obj_bits & TAG_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (obj_bits & POINTER_MASK) as usize;
-    if addr < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return None;
-    }
-    let key = short_key(key_bits)?;
-    let obj = addr as *const ObjectHeader;
-    if let Some(way) = memo.ways.iter().find(|way| way.key.load(Relaxed) == key) {
-        if let Some(answer) = lookup(dir, obj, &way.memo) {
-            return Some(answer);
-        }
-        if declined(obj, &way.memo) {
-            return None;
-        }
-        let (canonical, hash) = computed_key(key_bits)?;
-        return collect(dir, obj, canonical, hash, &way.memo);
-    }
-    if memo.ways.iter().all(|way| way.key.load(Relaxed) != 0) {
-        return None;
-    }
-    let (canonical, hash) = computed_key(key_bits)?;
-    let learned = ReadSiteMemo::EMPTY;
-    let answer = collect(dir, obj, canonical, hash, &learned);
-    let pairs = learned.snapshot();
-    // An absent key has no holder slot to derive its content from. Serve
-    // that fresh proof without retaining its key, as the stateless path does.
-    if pairs.iter().any(|&pair| pair != 0 && pair as u32 == ABSENT) {
-        return answer;
-    }
-    if pairs[0] == 0 {
-        return answer;
-    }
-    // Claim only an empty way: replacing a key would let another reader
-    // observe a proof for a different key. A full site uses the complete read.
-    if let Some(way) =
-        memo.ways.iter().find(
-            |way| match way.key.compare_exchange(0, key, Relaxed, Relaxed) {
-                Ok(_) => true,
-                Err(found) => found == key,
-            },
-        )
-    {
-        way.memo.publish(&pairs);
-    }
-    answer
 }
 
 #[cfg(test)]

@@ -435,10 +435,6 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
     if (v.to_bits() & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR {
         return Some(v);
     }
-    let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return Some(jv.as_int32() as f64);
-    }
     match v.to_bits() {
         crate::value::TAG_UNDEFINED => Some(f64::NAN),
         crate::value::TAG_NULL | crate::value::TAG_FALSE => Some(0.0),
@@ -775,8 +771,6 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         ValueTypeofTag::Object
     } else if jsval.is_bigint() {
         ValueTypeofTag::BigInt
-    } else if jsval.is_int32() {
-        ValueTypeofTag::Number
     } else {
         // Issue #654: typed-array pointers arrive as a raw `i64 → f64`
         // bitcast (no NaN-box tag) per the codegen for `new Float64Array(...)`
@@ -956,8 +950,8 @@ mod rel_numeric_fastpath_tests {
         assert!(rel_numeric_operand(f64::INFINITY).is_some());
         assert!(rel_numeric_operand(f64::NEG_INFINITY).is_some());
         assert!(rel_numeric_operand(f64::NAN).is_some());
-        assert_eq!(rel_numeric_operand(i32v(7)), Some(7.0));
-        assert_eq!(rel_numeric_operand(i32v(-7)), Some(-7.0));
+        // A 0x7FFE word is no Number (P3 B4b): it takes the full comparison.
+        assert_eq!(rel_numeric_operand(i32v(7)), None);
         assert!(rel_numeric_operand(f64::from_bits(UNDEF)).unwrap().is_nan());
         assert_eq!(rel_numeric_operand(f64::from_bits(NULLV)), Some(0.0));
         assert_eq!(rel_numeric_operand(f64::from_bits(FALSEV)), Some(0.0));
@@ -1046,10 +1040,10 @@ mod rel_numeric_fastpath_tests {
         assert!(is_true(js_rel_le(2.0, 2.0)));
         assert!(is_true(js_rel_gt(f64::INFINITY, 1e308)));
         assert!(is_true(js_rel_lt(f64::NEG_INFINITY, 0.0)));
-        assert!(is_true(js_rel_lt(i32v(3), i32v(9))));
-        assert!(!is_true(js_rel_gt(i32v(3), i32v(9))));
-        assert!(is_true(js_rel_lt(i32v(3), 3.5)));
-        assert!(is_true(js_rel_gt(3.5, i32v(3))));
+        assert!(is_true(js_rel_lt(3.0, 9.0)));
+        assert!(!is_true(js_rel_gt(3.0, 9.0)));
+        assert!(is_true(js_rel_lt(3.0, 3.5)));
+        assert!(is_true(js_rel_gt(3.5, 3.0)));
     }
 }
 

@@ -72,7 +72,14 @@ pub(super) fn alloc_born<T: 'static>(
     let recorded = memo.with(std::cell::Cell::get);
     if recorded != 0 {
         if let Some(obj) = unsafe {
-            born_final(family, recorded, cell.get_nanbox_u64(), own_values, state_values, accessors)
+            born_final(
+                family,
+                recorded,
+                cell.get_nanbox_u64(),
+                own_values,
+                state_values,
+                accessors,
+            )
         } {
             let obj = scope.root_raw_mut_ptr(obj);
             link_cell(&obj, cell.get_nanbox_u64(), external_bytes);

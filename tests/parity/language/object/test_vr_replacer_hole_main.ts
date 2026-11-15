@@ -2,6 +2,11 @@
 // to a JSON.stringify replacer. The replacer runs with (key, value) and
 // `this` = the holder for every value serialized, so it may store into the
 // object; a later read of the "readonly" field must see the store.
+// Added to pin main's hole (default mode printed `twotwotwo` and `seven`,
+// check mode rc 86 "F2 kind (raw f64)"); the solve now calls the replacer
+// with the values serialized and their holders
+// (`PERRY_FACTS_REACH_JSON_REPLACER`, `Model::json_replacer_calls`), and
+// the program matches Node.
 
 const p = { n: 1, s: "a" };
 const holder = { p };

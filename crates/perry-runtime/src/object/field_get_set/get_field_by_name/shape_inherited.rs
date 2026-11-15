@@ -58,11 +58,25 @@ pub(super) unsafe fn get(
     } else {
         recorded
     };
-    if bits >> 48 != 0x7FFD
-        && bits != crate::value::TAG_NULL
-        && pid != super::super::super::shapes::PROTO_ID_NULL
-    {
-        return None; // An unmaterialized class/default holder keeps Get.
+    if bits >> 48 != 0x7FFD {
+        if bits != crate::value::TAG_NULL && pid != super::super::super::shapes::PROTO_ID_NULL {
+            return None; // An unmaterialized class/default holder keeps Get.
+        }
+        // A deferred namespace (#14421) is a null-prototype object, so its
+        // read is decided here, on a receiver the header already proved an
+        // object, and before the null link below answers `undefined`. Reads
+        // of objects with an object prototype never enter this branch.
+        if (*obj).class_id == super::super::super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
+            if let Some((target, key)) =
+                super::super::super::deferred_namespace::string_key_target(obj, key)
+            {
+                return Some(super::js_object_get_field_by_name(
+                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                    key,
+                ));
+            }
+            // `then` stays an ordinary miss on the namespace itself.
+        }
     }
     // Admit the live link before any own-key work. The native data probe
     // declined accessors too, so a usable link alone cannot prove absence.

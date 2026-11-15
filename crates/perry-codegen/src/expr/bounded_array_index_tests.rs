@@ -12,6 +12,14 @@
 //! The counter loop proves `i < bs.length`, so `bs[i]` takes this tier. Its
 //! receiver is only DECLARED an array, and the declaration is a hint.
 //!
+//! The proof is the length hoist, which keeps `bs.length` only when the
+//! loop's sites run no program code (#14537, `crate::quiet`). That is the
+//! whole-program solve's word, and a unit test runs no solve: the module is
+//! compiled with the quiet-site facts `perry compile` gives this program
+//! (`PERRY_FACTS_DUMP`: `bs.length` a quiet read with a primitive value,
+//! `bs[i]` a quiet element site with a primitive value; [`quiet_facts`]).
+//! Without them the hoist is refused and `bs[i]` takes no `bidx.*` tier.
+//!
 //! * #11875: a Proxy bound to `bs` is a POINTER-tagged id in the handle band.
 //!   The tier read the receiver's GC header before any receiver test, i.e.
 //!   from unmapped memory (SIGSEGV). The header block must be reached only
@@ -22,13 +30,38 @@
 use perry_hir::types::Type;
 use perry_hir::{CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 
+use crate::codegen::{ElisionFacts, ProgramFactsView};
 use crate::{compile_module, CompileOptions};
 
 const BS: u32 = 1;
 const S: u32 = 2;
 const I: u32 = 3;
 
-fn module_ir() -> String {
+/// The quiet-site facts of this program by the whole-program solve
+/// (`perry compile` of the module docs' program, `PERRY_FACTS_DUMP`):
+///
+/// ```text
+/// # quiet kind=read      key=length verdict=quiet   (bs.length)
+/// # quiet kind=value     key=length verdict=quiet
+/// # quiet kind=element              verdict=quiet   (bs[i])
+/// # quiet kind=elemvalue            verdict=quiet
+/// ```
+///
+/// The HIR here has offset 0 at both sites, so they are keyed by 0.
+fn quiet_facts() -> ProgramFactsView {
+    let mut elision = ElisionFacts::default();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    elision.primitive_elements.insert(0);
+    ProgramFactsView {
+        elision: std::sync::Arc::new(elision),
+        ..Default::default()
+    }
+}
+
+/// The IR of the module docs' program; `quiet`: with [`quiet_facts`].
+fn module_ir(quiet: bool) -> String {
     let mut module = Module::new("bounded_array_index");
     module.init.push(Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -112,6 +145,11 @@ fn module_ir() -> String {
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
+        program_facts: if quiet {
+            quiet_facts()
+        } else {
+            ProgramFactsView::default()
+        },
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("module compiles"))
@@ -143,7 +181,7 @@ fn label_of(block_text: &str) -> &str {
 
 #[test]
 fn the_receiver_header_is_read_only_behind_the_heap_pointer_test() {
-    let ir = module_ir();
+    let ir = module_ir(true);
     let header = block(&ir, "bidx.header.");
     assert!(
         header.contains("@js_array_get_f64") || header.contains("load i8"),
@@ -177,5 +215,21 @@ fn the_receiver_header_is_read_only_behind_the_heap_pointer_test() {
     assert!(
         entry.contains(&format!("{cond} = icmp ult i64 ")),
         "#11875: the branch into the header block must test the fused receiver compare ({cond})\n{entry}"
+    );
+}
+
+/// The twin: a `bs` the solve does not prove a plain Array (a Proxy, as in
+/// #11875, is ⊤) has no quiet sites, so the hoist is refused (#14537) and
+/// the tier whose header read this file guards is not emitted at all.
+#[test]
+fn without_the_quiet_facts_no_header_block_is_emitted() {
+    let ir = module_ir(false);
+    assert!(
+        !ir.contains("\nbidx.header."),
+        "without the facts' word on the loop's sites no `bidx.header.*` block may be emitted\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @perry_array_read_cold_shared("),
+        "premise: `bs[i]` takes the generic read with its full fallback\n{ir}"
     );
 }

@@ -225,14 +225,7 @@ impl WasmModuleEmitter {
             Expr::Bool(false) => "u64ToF64(TAG_FALSE)".to_string(),
             Expr::Undefined => "u64ToF64(TAG_UNDEFINED)".to_string(),
             Expr::Null => "u64ToF64(TAG_NULL)".to_string(),
-            Expr::String(s) => {
-                let escaped = s
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r");
-                format!("fromJsValue(\"{}\")", escaped)
-            }
+            Expr::String(s) => format!("fromJsValue({})", js_string_literal(s)),
             Expr::ScopedTemp { id, value, body } => {
                 let prefix = format!("__scoped_v_{id}_");
                 let depth = locals
@@ -248,23 +241,54 @@ impl WasmModuleEmitter {
                 let body = self.emit_js_expr(body, &inner);
                 format!("({value_name} = {init}, {result_name} = {body}, {value_name} = undefined, {result_name})")
             }
-            Expr::LocalGet(id) => locals
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| format!("__l{}", id)),
+            // A local the body does not bind is a module-level `let`, promoted to an
+            // exported WASM global (`module_let_globals`); no JS binding exists for it.
+            Expr::LocalGet(id) => match locals.get(id) {
+                Some(name) => name.clone(),
+                None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
+                    Some(&gidx) => {
+                        format!(
+                            "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                            gidx
+                        )
+                    }
+                    None => format!("__l{}", id),
+                },
+            },
             Expr::LocalSet(id, val) => {
-                let name = locals
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("__l{}", id));
                 let v = self.emit_js_expr(val, locals);
-                format!("({} = {})", name, v)
+                match locals.get(id) {
+                    Some(name) => format!("({} = {})", name, v),
+                    None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
+                        Some(&gidx) => format!(
+                            "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                            gidx, v
+                        ),
+                        None => format!("(__l{} = {})", id, v),
+                    },
+                }
             }
-            Expr::GlobalGet(id) => format!("__g{}", id),
-            Expr::GlobalSet(id, val) => {
+            // An id with no WASM global is the HIR's unresolved-global sentinel (the receiver
+            // of `Promise.resolve`, `fetch`, `JSON.parse`); in JS that receiver is globalThis.
+            // The WASM arm reads the same id as undefined, but here a bare `__g{id}` would be
+            // an undeclared name and throw ReferenceError on entry to the async body.
+            Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
+                "globalThisValue()".to_string()
+            }
+            // A declared global lives in its WASM global, which the module exports by
+            // index; no JS binding `__g{id}` exists.
+            Expr::GlobalGet(id) => format!(
+                "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                self.global_map[id]
+            ),
+            Expr::GlobalSet(id, val) if self.global_map.contains_key(id) => {
                 let v = self.emit_js_expr(val, locals);
-                format!("(__g{} = {})", id, v)
+                format!(
+                    "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                    self.global_map[id], v
+                )
             }
+            Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
@@ -360,17 +384,36 @@ impl WasmModuleEmitter {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
                     }
+                    // `console.log(x)` lowers to `GlobalGet(0).log(x)`: a known global
+                    // in member position is the bare sentinel and codegen routes by the
+                    // method name, as the WASM arm does. Without this the call reads
+                    // `globalThis.log`, which is not a function.
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(property.as_str(), "log" | "warn" | "error") =>
+                    {
+                        let args_js: Vec<String> = args_js
+                            .iter()
+                            .map(|a| format!("toJsValue({})", a))
+                            .collect();
+                        format!(
+                            "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
+                            property,
+                            args_js.join(", ")
+                        )
+                    }
                     Expr::PropertyGet {
                         object, property, ..
                     } => {
                         let obj = self.emit_js_expr(object, locals);
-                        let _args_str = args_js.join(", ");
                         format!(
-                            "fromJsValue(toJsValue({}).{}({}))",
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
                             obj,
-                            property,
-                            args.iter()
-                                .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
+                            js_string_literal(property),
+                            args_js
+                                .iter()
+                                .map(|a| format!("toJsValue({})", a))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         )
@@ -410,7 +453,7 @@ impl WasmModuleEmitter {
                             opts.push_str(", ");
                         }
                         let v = self.emit_js_expr(val, locals);
-                        opts.push_str(&format!("'{}': getString({})", key, v));
+                        opts.push_str(&format!("{}: getString({})", js_string_literal(key), v));
                     }
                     opts.push('}');
                 }
@@ -425,7 +468,11 @@ impl WasmModuleEmitter {
                 object, property, ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
-                format!("fromJsValue(toJsValue({}).{})", obj, property)
+                format!(
+                    "fromJsValue(toJsValue({})[{}])",
+                    obj,
+                    js_string_literal(property)
+                )
             }
             Expr::PropertySet {
                 object,
@@ -435,16 +482,20 @@ impl WasmModuleEmitter {
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Object, then value, each evaluated once: the value is both stored and
+                // the expression's result, and may have side effects.
                 format!(
-                    "(toJsValue({}).{} = toJsValue({}), {})",
-                    obj, property, val, val
+                    "((__o, __v) => (toJsValue(__o)[{}] = toJsValue(__v), __v))({}, {})",
+                    js_string_literal(property),
+                    obj,
+                    val
                 )
             }
             Expr::Object(fields) => {
                 let mut parts = Vec::new();
                 for (key, val) in fields {
                     let v = self.emit_js_expr(val, locals);
-                    parts.push(format!("'{}': toJsValue({})", key, v));
+                    parts.push(format!("{}: toJsValue({})", js_string_literal(key), v));
                 }
                 format!("fromJsValue({{{}}})", parts.join(", "))
             }
@@ -651,9 +702,10 @@ impl WasmModuleEmitter {
                 let obj = self.emit_js_expr(target, locals);
                 let k = self.emit_js_expr(key, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
-                    obj, k, val, val
+                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    obj, k, val
                 )
             }
             Expr::ArrayPush {
@@ -742,14 +794,48 @@ impl WasmModuleEmitter {
             Expr::New {
                 class_name, args, ..
             } => {
-                let args_js: Vec<String> = args
-                    .iter()
-                    .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
-                    .collect();
+                let args_js: Vec<String> =
+                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                if !self.user_classes.contains(class_name.as_str()) {
+                    // A host constructor (`Map`, `Error`, ...): the class name is a global.
+                    let host_args: Vec<String> = args_js
+                        .iter()
+                        .map(|a| format!("toJsValue({})", a))
+                        .collect();
+                    return format!(
+                        "fromJsValue(new globalThis[{}]({}))",
+                        js_string_literal(class_name),
+                        host_args.join(", ")
+                    );
+                }
+                // A user class, including the `__AnonShape_*` class of an object literal,
+                // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
+                // `{__class__}` object) and run the compiled constructor, which returns
+                // `this`.
+                let instance = format!(
+                    "fromJsValue({{__class__: {}}})",
+                    js_string_literal(class_name)
+                );
+                let Some(&ctor_idx) = self.class_ctor_map.get(class_name.as_str()) else {
+                    return instance;
+                };
+                let mut call_args = vec![format!("f64ToU64({})", instance)];
+                call_args.extend(args_js.iter().map(|a| format!("f64ToU64({})", a)));
+                // A WASM i64 parameter rejects a missing (undefined) argument, so pad
+                // to the constructor's arity. Excess arguments are still evaluated and
+                // the export ignores them.
+                if let Some(&expected) = self.func_param_counts.get(&ctor_idx) {
+                    while call_args.len() < expected {
+                        call_args.push("TAG_UNDEFINED".to_string());
+                    }
+                }
+                // Through the callback boundary: an exception the constructor raised
+                // under an enclosing WASM `try` is left pending, and this rethrows it
+                // here instead of handing back `this` as if it had succeeded.
                 format!(
-                    "fromJsValue(new (toJsValue(fromJsValue('{}')))({}))",
-                    class_name,
-                    args_js.join(", ")
+                    "u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{}, {}))",
+                    ctor_idx,
+                    call_args.join(", ")
                 )
             }
             Expr::InstanceOf { expr, ty, .. } => {
@@ -778,4 +864,14 @@ impl WasmModuleEmitter {
             }
         }
     }
+}
+
+/// A double-quoted JS string literal holding exactly `s`.
+fn js_string_literal(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{}\"", escaped)
 }

@@ -60,19 +60,15 @@ pub const fn is_reference_bits(bits: u64) -> bool {
     top16 == POINTER_TAG >> 48 || top16 == HANDLE_TAG >> 48
 }
 
-/// Int32 tag: 0x7FFE_0000_XXXX_XXXX (32 bits for i32)
-pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
-
-/// THE "is this an int32 Number?" test: tag `0x7FFE` with bits 32..47 clear.
-/// Other words in the `0x7FFE` band are not Numbers: the `C.prototype` ref
-/// (`CLASS_PROTOTYPE_REF_FLAG`, bit 32), key-attribute and overflow route
-/// words, the bound-closure inline-args marker. A test of the top 16 bits
-/// alone reads those as int32 Numbers; every Number consumer asks this.
-#[inline]
-pub(crate) const fn is_int32_bits(bits: u64) -> bool {
-    bits & !INT32_MASK == INT32_TAG
-}
+/// The `0x7FFE` band holds runtime-internal words only, never a JS value
+/// (P3 B4b): a JS Number has one encoding, the plain double. The words are
+/// the I32 slot words of an at-rest Array or an I32 field lane
+/// (`layout_slot`, decoded by its accessor before a value leaves the
+/// slot), overflow-table route markers, the bound-function inline-args
+/// marker, class id and state captures, a method's home word
+/// (`CLASS_PROTOTYPE_REF_FLAG`), key-attribute words and the async i32
+/// control cells.
+pub(crate) const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 
 /// String pointer tag: 0x7FFF_XXXX_XXXX_XXXX (48 bits for string pointer)
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -156,7 +152,7 @@ mod nanbox_operand_tests {
                 pointer_floor.wrapping_neg(),
             ),
             ("TAG_TRUE", TAG_TRUE),
-            ("INT32_TAG", INT32_TAG),
+            ("INTERNAL_WORD_TAG", INTERNAL_WORD_TAG),
             ("BIGINT_TAG", BIGINT_TAG),
             ("TAG_TDZ", TAG_TDZ),
             ("TAG_FALSE", TAG_FALSE),

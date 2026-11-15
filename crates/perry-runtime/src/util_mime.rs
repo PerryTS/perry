@@ -598,9 +598,6 @@ fn optional_port(value: f64) -> Option<i64> {
     if js.is_undefined() || js.is_null() {
         return None;
     }
-    if js.is_int32() {
-        return Some(js.as_int32() as i64);
-    }
     if js.is_number() && value.is_finite() {
         return Some(value as i64);
     }

@@ -847,6 +847,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            byte_end,
             ..
         } => {
             super::downgrade_buffer_aliases_in_expr(
@@ -871,9 +872,11 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.strings.debug_locations_enabled() {
                 ctx.strings.set_pending_call_offset(*byte_offset);
             }
-            crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
+            let watched = crate::verify_facts::life::watch_call(ctx, *byte_offset, *byte_end, args);
+            let value = crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
                 lower_call(ctx, callee, args)
-            })
+            });
+            crate::verify_facts::life::end_call(ctx, watched, value?)
         }
 
         // -------- Proxy / Reflect (metaprogramming) --------

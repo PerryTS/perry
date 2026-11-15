@@ -19,9 +19,7 @@ use super::generator_state::{
     shape_held_birth_shape_for, Holder, PROTO_SLOT, STATE_READ,
 };
 use super::*;
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::codegen_abi::LayoutWord;
 use crate::promise::{
     js_promise_attach_settle_listener, js_promise_new, js_promise_reject, js_promise_resolve,
@@ -404,15 +402,17 @@ fn make_record_wrapper(
     out: &crate::gc::RuntimeHandle<'_>,
 ) -> *mut ClosureHeader {
     let wrapper = js_closure_alloc(info, 2);
-    js_closure_set_capture_ptr(wrapper, 0, rec.ptr() as i64);
-    out.with_mut_ptr::<Promise, _>(|out| js_closure_set_capture_ptr(wrapper, 1, out as i64));
+    crate::closure::closure_set_capture_ref(wrapper, 0, rec.ptr() as i64);
+    out.with_mut_ptr::<Promise, _>(|out| {
+        crate::closure::closure_set_capture_ref(wrapper, 1, out as i64)
+    });
     wrapper
 }
 
 fn wrapper_parts(closure: *const ClosureHeader) -> (*const ClosureHeader, *mut Promise) {
     (
-        js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader,
-        js_closure_get_capture_ptr(closure, 1) as *mut Promise,
+        crate::closure::closure_capture_ref(closure, 0) as *const ClosureHeader,
+        crate::closure::closure_capture_ref(closure, 1) as *mut Promise,
     )
 }
 

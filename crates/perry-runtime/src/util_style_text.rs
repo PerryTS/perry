@@ -339,9 +339,6 @@ fn received_for_invalid_value(value: f64) -> String {
         return format!("'{s}'");
     }
     let jsvalue = JSValue::from_bits(value.to_bits());
-    if jsvalue.is_int32() {
-        return jsvalue.as_int32().to_string();
-    }
     if jsvalue.is_number() && value.is_finite() {
         return value.to_string();
     }

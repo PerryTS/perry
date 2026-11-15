@@ -51,7 +51,10 @@ fn install_and_rollback_roundtrip() {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn rollback_after_committed_swap_cleans_up_without_swapping_again() {
     let (_dir, target, stage, _prev) = protocol_fixture(false);
-    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(
+        perry_updater_install(make_str(&stage), make_str(&target)),
+        1
+    );
     assert_eq!(read_version(&target, false), b"new");
     assert_eq!(perry_updater_perform_rollback(make_str(&target)), 1);
     assert_eq!(read_version(&target, false), b"old");
@@ -98,7 +101,10 @@ fn install_clears_armed_rollback_marker() {
     // A previous rollback left the marker armed after a failed cleanup.
     std::fs::write(&marker, b"").unwrap();
 
-    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(
+        perry_updater_install(make_str(&stage), make_str(&target)),
+        1
+    );
     assert_eq!(read_version(&target, false), b"new");
     assert!(!std::path::Path::new(&marker).exists());
 
@@ -111,7 +117,10 @@ fn install_clears_armed_rollback_marker() {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn rollback_normalizes_trailing_separator_target() {
     let (_dir, target, stage, _prev) = protocol_fixture(false);
-    assert_eq!(perry_updater_install(make_str(&stage), make_str(&target)), 1);
+    assert_eq!(
+        perry_updater_install(make_str(&stage), make_str(&target)),
+        1
+    );
     assert_eq!(read_version(&target, false), b"new");
 
     // A trailing separator must not derive .prev inside the target, where

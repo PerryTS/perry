@@ -396,7 +396,7 @@ fn web_locks_release_callback_value(
     };
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, id as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, output_promise as i64);
+    crate::closure::closure_set_capture_ref(closure, 1, output_promise as i64);
     closure
 }
 
@@ -544,8 +544,7 @@ extern "C" fn worker_threads_locks_release_fulfill(
     value: f64,
 ) -> f64 {
     let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let output =
-        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    let output = crate::closure::closure_capture_ref(closure, 1) as *mut crate::promise::Promise;
     web_locks_release(id);
     crate::promise::js_promise_resolve(output, value);
     web_locks_undefined()
@@ -557,8 +556,7 @@ extern "C" fn worker_threads_locks_release_reject(
     reason: f64,
 ) -> f64 {
     let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    let output =
-        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    let output = crate::closure::closure_capture_ref(closure, 1) as *mut crate::promise::Promise;
     web_locks_release(id);
     crate::promise::js_promise_reject(output, reason);
     web_locks_undefined()

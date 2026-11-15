@@ -281,9 +281,10 @@ fn slot_kind(bits: u64) -> usize {
         POINTER_TAG => 0,
         STRING_TAG => 1,
         SHORT_STRING_TAG => 2,
-        INT32_TAG if crate::value::is_int32_bits(bits) => 3,
-        // A non-Number `0x7FFE` word (a `C.prototype` ref).
-        INT32_TAG => 11,
+        // An I32 slot word (`layout_slot`).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => 3,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => 11,
         BIGINT_TAG => 9,
         JS_HANDLE_TAG => 10,
         TAG_MARKER => match bits {

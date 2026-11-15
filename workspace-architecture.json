@@ -85,7 +85,6 @@
       "perry-ui-model",
       "perry-update-manifest",
       "perry-updater",
-      "perry-uuid",
       "perry-wasm-host",
       "perry-wpfacts"
     ],
@@ -384,10 +383,6 @@
       "decision": "keep"
     },
     "perry-updater": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-uuid": {
       "category": "runtime-core",
       "decision": "keep"
     },

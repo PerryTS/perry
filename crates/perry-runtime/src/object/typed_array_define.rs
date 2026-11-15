@@ -245,11 +245,11 @@ pub(crate) unsafe fn typed_array_define_own_property(
         let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
         let idx = numeric_index as u32;
         if is_buf {
-            let n = crate::value::JSValue::from_bits(primitive.to_bits()).to_number();
-            crate::buffer::js_buffer_set(
+            // `primitive` is already a primitive: its ToNumber runs no code.
+            crate::buffer::js_buffer_set_value(
                 addr as *mut crate::buffer::BufferHeader,
                 idx as i32,
-                n as i32,
+                primitive,
             );
         } else {
             crate::typedarray_hook_slots::js_typed_array_set(

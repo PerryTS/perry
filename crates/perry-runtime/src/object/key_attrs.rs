@@ -19,7 +19,7 @@
 //!
 //! A keys array that carries any non-default entry owns an *attributes
 //! array*: a pointer-free `GC_TYPE_ARRAY` with one element per key position,
-//! `INT32_TAG | cumulative << 8 | entry`. `cumulative` is the OR of
+//! `INTERNAL_WORD_TAG | cumulative << 8 | entry`. `cumulative` is the OR of
 //! [`entry_summary`] over positions `0..=i`, so the summary of any PREFIX of
 //! the list — which is what a shape names, since one canonical backing serves
 //! a whole growth chain (`canonical_keys.rs`) — is one load:
@@ -57,7 +57,7 @@
 //! position, so they stay exact.
 
 use crate::array::ArrayHeader;
-use crate::value::{INT32_TAG, POINTER_MASK, POINTER_TAG, TAG_MASK};
+use crate::value::{INTERNAL_WORD_TAG, POINTER_MASK, POINTER_TAG, TAG_MASK};
 
 /// `[[Writable]]` is false. On an accessor this is the internal writable bit
 /// (`install_fresh_accessor_property` keeps it true for a fresh accessor).
@@ -222,7 +222,7 @@ impl Word {
 
     #[inline]
     const fn encode(self) -> u64 {
-        INT32_TAG
+        INTERNAL_WORD_TAG
             | self.entry as u64
             | (self.summary as u64) << 8
             | (self.entry_bloom as u64) << 16

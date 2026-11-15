@@ -78,6 +78,10 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         m.diagnostic_builtin(call, |_| format!("Function.prototype.{name}"));
     }
 
+    // A generator object's inherited members (`gen_members`).
+    if gen_members::call(m, t, name, call) {
+        return;
+    }
     let c = m.calls[call as usize].clone();
     match name {
         // A well-known-symbol member of `Function.prototype`: only
@@ -276,6 +280,20 @@ fn gen_throw_passes(
 }
 
 // ------------------------------------------------------------- arrays
+
+/// Position value `n` of `c` where the position may also be absent: with
+/// a spread argument (`Model::builtin_args_view`) the argument list may end before
+/// it, and the rule then reads `undefined` there (a `thisArg`).
+fn maybe_absent(m: &mut Model, c: &CallSite, n: NodeId) -> NodeId {
+    if c.spread.is_empty() {
+        return n;
+    }
+    let v = m.node_l("spread-arg-or-absent");
+    m.nodes[v as usize].frame = m.nodes[n as usize].frame;
+    m.edge(n, v);
+    m.add_prim(v, prim::UNDEF);
+    v
+}
 
 /// A native's call of callback `cb` from the run of call `by`.
 ///
@@ -642,6 +660,16 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
+    m.step_done(r1);
+    m.step_done(r2);
+    // IteratorClose (ECMA-262 7.4.11): a built-in consumer that stops
+    // before the iterator is done (its callback or adder threw, an entry
+    // was no object) calls `return` on it.
+    if m.reach_iter_close {
+        let ra = Key::Named(m.atom("return"));
+        let _ = sub(m, it, ra, 3);
+        let _ = sub(m, v, ra, 4);
+    }
     out
 }
 
@@ -695,7 +723,7 @@ pub(super) fn entry_pairs(m: &mut Model, call: CallId, keys: Option<NodeId>, val
 /// Methods of a builtin iterator: `next()` gives `{ value, done }` over its
 /// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
 /// callback on the values. Builtin iterators have no `return`/`throw`.
-fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     let c = m.calls[call as usize].clone();
     let elems = iter_elems(m, t);
     let num = m.node_l("num");
@@ -766,6 +794,9 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
+            }
+            if !c.spread.is_empty() {
+                m.edge(elems, acc);
             }
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num]);
             m.edge(r, acc);
@@ -1153,8 +1184,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
         m.rest_fill_relays.push(recv);
     }
-    let this_arg = |i: usize| match c.arg(i) {
-        Some(&n) => ThisArg::Node(n),
+    let this_arg = |m: &mut Model, i: usize| match c.arg(i) {
+        Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
         None => ThisArg::Undef,
     };
     // The index operands each method's own algorithm converts with
@@ -1175,7 +1206,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     };
     if !index_operands.is_empty() {
         let spread = c.spread.iter().copied();
-        let at = index_operands.iter().filter_map(|&i| c.args.get(i).copied());
+        let at = index_operands.iter().filter_map(|&i| c.arg(i).copied());
         for a in at.chain(spread) {
             to_prim(m, a, "array index operand ToIntegerOrInfinity");
         }
@@ -1334,7 +1365,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let Some(&cb) = c.arg(0) else {
                 return;
             };
-            let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
+            let this = this_arg(m, 1);
+            let r = cb_call(m, call, cb, this, vec![elems, num, recv]);
             match name {
                 Some("flatMap") => {
                     let out = site_tmpl(m, call, "Array");
@@ -1363,6 +1395,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
+            }
+            if !c.spread.is_empty() {
+                m.edge(elems, acc);
             }
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
             m.edge(r, acc);
@@ -1590,7 +1625,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 let recv = m.node_l("coll");
                 m.add_tok(recv, t);
                 let this = match c.arg(1) {
-                    Some(&n) => ThisArg::Node(n),
+                    Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
                     None => ThisArg::Undef,
                 };
                 // Map.prototype.forEach (24.1.3.5) calls back with (value,
@@ -1634,7 +1669,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     adopt(m, call, r, ov);
                 }
             }
-            if name == Some("finally") || on_ok.is_none() {
+            if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
                 m.edge(v, ov);
             }
             ret_tok(m, call, out);
@@ -1848,6 +1883,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 ret_tok(m, call, t);
             }
         }
+        // A view of the receiver's bytes: a Buffer, as the receiver is (not
+        // a container of primitives).
+        ("Buffer", Some("subarray" | "slice")) => typed_array_methods::buffer_view(m, t, call),
+        // The receiver, filled or byte-swapped in place.
+        ("Buffer", Some("fill" | "swap16" | "swap32" | "swap64")) => {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_tok(m, call, t);
+        }
         // A `Buffer.prototype` method the runtime declares the effects of.
         ("Buffer", Some(n)) if effects::declared_at("Buffer.prototype", n).is_some() => {
             let e = effects::declared_at("Buffer.prototype", n).expect("declared");
@@ -1863,9 +1906,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     let a = m.atom(n);
                     intrinsic_written(m, a)
                 } => {}
-        ("Buffer", Some("slice")) if c.spread.is_empty() => {
-            typed_array_methods::buffer_view_slice(m, t, call)
-        }
         ("Buffer", _) => {
             anyfall("buffer method argument", &what, &name);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
@@ -1953,7 +1993,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups" | "hostrecord",
+            | "fromEntries" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

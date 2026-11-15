@@ -105,13 +105,9 @@ unsafe fn is_primitive(bits: u64) -> bool {
         return false;
     }
     let tag = bits & crate::value::TAG_MASK;
-    // BigInt can run a user-installed toJSON. Untagged pointers need the
-    // same tracked-allocation disambiguation as the existing numeric path:
-    // positive subnormal doubles must not be mistaken for addresses.
-    tag != POINTER_TAG
-        && tag != crate::value::HANDLE_TAG
-        && tag != BIGINT_TAG
-        && !is_raw_pointer(bits)
+    // BigInt can run a user-installed toJSON. A word without a tag is a
+    // Number (a subnormal when its top bits are clear), never an address.
+    tag != POINTER_TAG && tag != crate::value::HANDLE_TAG && tag != BIGINT_TAG
 }
 
 #[cfg(test)]

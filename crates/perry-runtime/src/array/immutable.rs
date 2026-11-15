@@ -52,8 +52,24 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            // A sparse store, an index accessor or an inherited index: the
+            // elements are read by `Get`, then reversed where they stand.
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            let len = (*copy).length as usize;
+            let slots = crate::array::array_elements_ptr(copy as *const ArrayHeader) as *mut f64;
+            for i in 0..len / 2 {
+                // GC_STORE_AUDIT(BARRIERED): in-place swap of an unpublished copy, rebuilt below.
+                std::ptr::swap(slots.add(i), slots.add(len - 1 - i));
+            }
+            rebuild_array_layout(copy);
+            return copy;
+        }
         let len = (*arr).length as usize;
-        let new_arr = js_array_alloc(len as u32);
+        // The copy allocation can move the source before its slots are read.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -99,6 +115,9 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            return js_array_sort_default(super::exotic_snapshot::exotic_snapshot(arr, false));
+        }
         let len = (*arr).length as usize;
         // The clone allocation can move the source before its slots are
         // read, so root it across the allocation.
@@ -164,6 +183,13 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let comparator = scope.root_raw_const_ptr(comparator);
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            return comparator
+                .with_const_ptr(|comparator| js_array_sort_with_comparator(copy, comparator));
+        }
         let len = (*arr).length as usize;
         // Root both inputs before the clone allocation can move them.
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -205,8 +231,22 @@ pub extern "C" fn js_array_to_spliced(
         return js_array_alloc(0);
     }
     unsafe {
+        // The receiver and the items are rooted across the two allocations
+        // below; a sparse store, an index accessor or an inherited index is
+        // first read by `Get` into a dense copy.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let item_handles = if items.is_null() || items_count == 0 {
+            Vec::new()
+        } else {
+            scope.root_nanbox_f64_slice(std::slice::from_raw_parts(items, items_count as usize))
+        };
+        let source = scope.root_raw_const_ptr(arr);
+        if crate::array::array_iteration_is_exotic(arr) {
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            source.set_raw_const_ptr(copy as *const ArrayHeader);
+        }
+        let arr = source.get_raw_const_ptr::<ArrayHeader>();
         let len = (*arr).length as isize;
-        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
 
         // Normalize start index (ECMA ToIntegerOrInfinity). NaN -> 0,
         // +Infinity -> len, -Infinity -> 0. Avoid `f as isize` on non-finite.
@@ -255,8 +295,13 @@ pub extern "C" fn js_array_to_spliced(
         }
 
         let new_len = (len - dc + items_count as isize) as usize;
-        let new_arr = js_array_alloc(new_len as u32);
+        if new_len > u32::MAX as usize {
+            crate::array::array_length_range_error();
+        }
+        let (new_arr, arr) =
+            source.across_const::<ArrayHeader, _>(|| js_array_alloc(new_len as u32));
         (*new_arr).length = new_len as u32;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
 
         // Copy elements before start
@@ -266,8 +311,8 @@ pub extern "C" fn js_array_to_spliced(
         }
         // Copy inserted items
         // GC_STORE_AUDIT(BARRIERED): inserted toSpliced items are included in the rebuild below.
-        for i in 0..items_count as usize {
-            *dst.add(s as usize + i) = *items.add(i);
+        for (i, item) in item_handles.iter().enumerate() {
+            *dst.add(s as usize + i) = item.get_nanbox_f64();
         }
         // Copy elements after deleted range
         let after_start = (s + dc) as usize;
@@ -334,13 +379,24 @@ pub extern "C" fn js_array_with(
             throw_invalid_index(index);
         }
         let idx = resolved as isize;
+        // The value and the receiver are rooted across the copy's allocation.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        if crate::array::array_iteration_is_exotic(arr) {
+            // A sparse store, an index accessor or an inherited index: the
+            // elements are read by `Get`.
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            note_array_slot(copy, idx as usize, value.get_nanbox_f64().to_bits());
+            return copy;
+        }
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
-        let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): with() clone and replacement are followed by layout/barrier rebuild.
         std::ptr::copy_nonoverlapping(src, dst, len as usize);
-        *dst.add(idx as usize) = value;
+        *dst.add(idx as usize) = value.get_nanbox_f64();
         rebuild_array_layout(new_arr);
         new_arr
     }

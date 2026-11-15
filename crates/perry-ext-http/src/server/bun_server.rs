@@ -5,8 +5,8 @@ use std::os::raw::c_int;
 use std::sync::Mutex;
 
 use perry_ffi::{
-    alloc_null_proto_object, alloc_string, get_handle, register_handle, ErrorKind,
-    GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
+    alloc_null_proto_object, alloc_string, get_handle, register_handle, ErrorKind, GcRootVisitor,
+    JsClosure, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
 };
 
 use crate::server::request::{handle_to_pointer_f64, IncomingMessage};
@@ -501,7 +501,12 @@ fn queue_promise(
     }
 }
 
-fn settle_value(context: &mut HttpPendingRequest, fetch_request: f64, value: f64, stage: PromiseStage) {
+fn settle_value(
+    context: &mut HttpPendingRequest,
+    fetch_request: f64,
+    value: f64,
+    stage: PromiseStage,
+) {
     let js_value = JsValue::from_bits(value.to_bits());
     if js_value.is_pointer() && unsafe { js_value_is_promise(value) } != 0 {
         let promise = js_value.as_pointer::<Promise>();
@@ -611,7 +616,12 @@ pub(crate) fn process_request(mut pending: HttpPendingRequest) {
             js_promise_run_microtasks();
         }
         pending.response = res_root.get();
-        settle_value(&mut pending, fetch_request, result.get(), PromiseStage::Fetch);
+        settle_value(
+            &mut pending,
+            fetch_request,
+            result.get(),
+            PromiseStage::Fetch,
+        );
     }
     pending.response = res_root.get();
     finalize_or_park_request(&pending);
@@ -641,9 +651,9 @@ pub(crate) fn process_pending_promises() -> i32 {
             let handles_alive = get_handle::<IncomingMessage>(request).is_some()
                 && response_state(crate::server::server::object_handle(response)).is_some();
             if state != 0 || !handles_alive {
-                if let Some(Some(entry)) =
-                    with_base_server_mut(server, |s| (index < s.bun_promises.len()).then(|| s.bun_promises.remove(index)))
-                {
+                if let Some(Some(entry)) = with_base_server_mut(server, |s| {
+                    (index < s.bun_promises.len()).then(|| s.bun_promises.remove(index))
+                }) {
                     let response = roots.root_nanbox(entry.response);
                     settled.push((server, entry, response, state, handles_alive));
                 }

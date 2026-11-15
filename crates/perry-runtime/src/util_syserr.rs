@@ -405,13 +405,6 @@ fn throw_err_out_of_range(n: f64) -> ! {
 /// Validate a JS value as the negative safe-integer libuv code Node accepts.
 pub(crate) fn validate_system_error_code(value: f64) -> i64 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        let n = jsval.as_int32() as f64;
-        if n < 0.0 {
-            return jsval.as_int32() as i64;
-        }
-        throw_err_out_of_range(n);
-    }
     if !crate::fs::validate::is_numeric(jsval) {
         throw_invalid_err_type(value);
     }

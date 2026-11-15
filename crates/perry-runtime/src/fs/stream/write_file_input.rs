@@ -97,9 +97,6 @@ fn write_file_raw_ptr_from_value(value: f64) -> usize {
     if js.is_pointer() || js.is_string() || js.is_bigint() {
         return (bits & crate::value::POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 

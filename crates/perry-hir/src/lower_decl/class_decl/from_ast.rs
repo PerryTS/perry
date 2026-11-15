@@ -406,10 +406,7 @@ pub(crate) fn lower_class_from_ast(
                     // `TypeError: value is not iterable`.
                     ast::PropName::Computed(_) => {
                         match lower_well_known_computed_method(ctx, method, name)? {
-                            Some(
-                                WellKnownComputedMethod::Unsupported,
-                            )
-                            | None => continue,
+                            Some(WellKnownComputedMethod::Unsupported) | None => continue,
                         }
                     }
                     _ => continue,

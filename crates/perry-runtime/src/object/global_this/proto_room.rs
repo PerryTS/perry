@@ -98,6 +98,7 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
         },
     );
     (*header).size = crate::gc::gc_header_size_word(fitted);
+    crate::snap_census::resize(header as *const u8, fitted);
 }
 
 #[cfg(test)]

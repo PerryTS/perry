@@ -578,8 +578,14 @@ fn compute_object_cache_key_with_env(
     let mut deferred_names: Vec<_> = opts.deferred_namespace_imports.iter().cloned().collect();
     deferred_names.sort();
     h.field("deferred_namespaces", &deferred_names.join("|"));
-    h.field("async_modules", if opts.program_has_tla { "1" } else { "0" });
-    h.field("async_graph", if opts.module_graph_has_tla { "1" } else { "0" });
+    h.field(
+        "async_modules",
+        if opts.program_has_tla { "1" } else { "0" },
+    );
+    h.field(
+        "async_graph",
+        if opts.module_graph_has_tla { "1" } else { "0" },
+    );
     // Issue #842: side-effect-only dynamic-import targets emit a
     // `@__perry_ns_<prefix>` global + populator regardless of
     // `namespace_entries`. Toggling this flag changes the emitted IR

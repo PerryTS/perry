@@ -366,6 +366,10 @@ pub struct ElisionFacts {
     /// (`ProgramFacts::zero_sign_tolerated`): check mode's int32 witnesses
     /// of elements and signatures admit `-0`.
     pub zero_sign_tolerated: bool,
+    /// The families `family_reach` says are never created or observed
+    /// (`FamilyReach::never`, a bit per family in table order); 0 without
+    /// the fact. Check mode's family claim only: no lowering reads it.
+    pub family_never: u64,
     /// (class id, key) of the fields whose nodes keep an int32 interval by
     /// −0 tolerance (wpfacts `FieldFacts::zero_tol`): the field-rep witness
     /// admits `-0` for them only.
@@ -397,14 +401,39 @@ pub struct ElisionFacts {
     /// born shared, never appended to in place, so a copy of one needs no
     /// string demote (`expr::literal_strings`).
     pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose every value is `true` or `false` (wpfacts
+    /// `BindingFacts::booleans`): the truthiness of a read is one compare
+    /// (`expr::booleans`).
+    pub boolean_locals: std::collections::BTreeSet<u32>,
     /// Locals whose Arrays keep their length while the function that
     /// declares them runs (wpfacts `BindingFacts::stable_length`), with
     /// `stable_front` (`expr::held_len`).
     pub stable_length_locals: std::collections::BTreeMap<u32, bool>,
+    /// Locals whose Arrays change their length, in the functions that can
+    /// name them, only through that name (wpfacts
+    /// `BindingFacts::named_length`; `stmt::loops::named_len`).
+    pub named_length_locals: std::collections::BTreeSet<u32>,
+    /// Quiet sites (wpfacts `quiet_sites`; `crate::quiet`): the named reads
+    /// (byte offset, key) and element sites (`element_offset`) that run no
+    /// program code, the named reads and element reads whose value is a
+    /// primitive, and the locals that hold a primitive and no object.
+    pub quiet_reads: std::collections::BTreeSet<(u32, String)>,
+    /// Method sites (wpfacts `method_sites`; `crate::method_site`): what the
+    /// solve proves of a by-name method call's receiver values, by the
+    /// site's key and the method name (`perry_hir::folded_call::SITE_*` bits).
+    pub method_sites: std::collections::BTreeMap<(perry_hir::folded_call::Site, String), u8>,
+    pub quiet_elements: std::collections::BTreeSet<u32>,
+    pub primitive_reads: std::collections::BTreeSet<(u32, String)>,
+    pub primitive_elements: std::collections::BTreeSet<u32>,
+    pub primitive_locals: std::collections::BTreeSet<u32>,
     /// (class id, key) of the fields every store of any unit writes only
     /// such Strings into (wpfacts `FieldFacts::literal_strings`,
     /// `FieldProof::literal_strings`).
     pub literal_string_fields: std::collections::BTreeSet<(u32, String)>,
+    /// Class fields (class id, key) every store of the program puts only
+    /// Booleans into (wpfacts `FieldFacts::booleans`,
+    /// `FieldProof::booleans`).
+    pub boolean_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -502,6 +531,11 @@ pub struct ElisionFacts {
     /// `ModuleBindings::inbounds_stores`): no lowering reads it; check mode
     /// tests the claim (`array_rep::witness_in_bounds_store`).
     pub inbounds_stores: std::collections::BTreeSet<u32>,
+    /// In-bounds reads (by `element_offset`; wpfacts
+    /// `ModuleBindings::inbounds_reads`): the key is an integer in
+    /// `[0, length)` of the Array read; `true` when the slot is a present
+    /// element too (`index_get::proven_array::RepRead::kept`).
+    pub inbounds_reads: std::collections::BTreeMap<u32, bool>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest
@@ -594,7 +628,9 @@ impl ElisionFacts {
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
+            && self.boolean_locals.is_empty()
             && self.stable_length_locals.is_empty()
+            && self.named_length_locals.is_empty()
             && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()

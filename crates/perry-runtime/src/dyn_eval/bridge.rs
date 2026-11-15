@@ -403,9 +403,7 @@ pub(crate) fn compare(a: f64, b: f64) -> i32 {
     // NaN vs NaN, which would make `NaN <= NaN` true).
     let a_jv = crate::value::JSValue::from_bits(a.to_bits());
     let b_jv = crate::value::JSValue::from_bits(b.to_bits());
-    if (a_jv.is_number() && a.is_nan() && !a_jv.is_int32())
-        || (b_jv.is_number() && b.is_nan() && !b_jv.is_int32())
-    {
+    if (a_jv.is_number() && a.is_nan()) || (b_jv.is_number() && b.is_nan()) {
         return 2;
     }
     crate::value::js_jsvalue_compare(a, b)
@@ -430,9 +428,6 @@ pub(crate) fn to_number(v: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(v.to_bits());
     if jv.is_number() {
         return v;
-    }
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
     }
     // `x * 1` runs the runtime's own ToNumber coercion for strings/bools/
     // null/undefined/objects without duplicating it here.

@@ -1,0 +1,11 @@
+WeakRef object true true
+FinalizationRegistry object true true
+WeakSet object true true
+AggregateError object true true
+Float64Array object true true
+BigInt64Array object true true
+Int16Array object true true
+URIError object true true
+EvalError object true true
+SharedArrayBuffer object true true
+true true true

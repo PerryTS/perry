@@ -15,7 +15,10 @@ function neverRun(n: number): number { let s = 0; for (let i = 0; i < n; i++) s 
 const steps = [delta, gamma, beta, alpha];
 let x = Number(process.argv.length) + 20;
 for (const step of steps) x = step(x);
-if (x === -12345) x = neverRun(x);
+// A value use keeps `neverRun`'s callable wrapper in the binary: generated
+// code that never runs and is listed nowhere.
+const later = [neverRun];
+if (x === -12345) x = later[0](x);
 console.log("result " + x);
 "#;
 
@@ -28,6 +31,10 @@ fn compile(dir: &Path, out: &str, extra: &[&str]) -> PathBuf {
     let compile = Command::new(perry_bin())
         .current_dir(dir)
         .env("PERRY_KEEP_SYMBOLS", "1")
+        // A `--function-order` link always takes GNU ld (`link/elf_linker.rs`);
+        // the plain build it is compared with must use the same linker, as
+        // the two keep different sets of duplicate local symbols.
+        .env_remove("PERRY_LINK_LLD")
         .arg("compile")
         .arg(dir.join("main.ts"))
         .arg("-o")
@@ -79,15 +86,32 @@ fn text_symbols(binary: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The symbol of `function`'s code, named as the compiler names it
+/// (`perry_codegen::symbol_names`). The function body (`perry_fn_*`) when it
+/// is a symbol of its own; a small typed function's public entry is
+/// `alwaysinline` (P2 inline admissions, d08e52eaa8), so once every call site
+/// has inlined it the body runs inside its callable wrapper
+/// (`__perry_wrap_perry_fn_*`, which `steps` calls) and only that is left.
 fn user_symbol(names: &[String], function: &str) -> String {
-    // The function body itself, not its `__perry_wrap_*` callable wrapper.
-    let suffix = format!("__{function}");
-    let matches: Vec<&String> = names
-        .iter()
-        .filter(|n| n.starts_with("perry_fn_") && n.ends_with(&suffix))
-        .collect();
-    assert_eq!(matches.len(), 1, "one symbol for {function}: {matches:?}");
-    matches[0].clone()
+    use perry_codegen::symbol_names;
+    let prefix = symbol_names::module_prefix("main.ts");
+    let body = symbol_names::function(&prefix, function);
+    let wrapper = symbol_names::function_wrapper(&prefix, function);
+    let count = |name: &str| names.iter().filter(|n| *n == name).count();
+    assert!(
+        count(&body) <= 1 && count(&wrapper) <= 1,
+        "one symbol each for {function}: {names:?}"
+    );
+    if count(&body) == 1 {
+        body
+    } else {
+        assert_eq!(
+            count(&wrapper),
+            1,
+            "{function}: neither {body} nor {wrapper} in {names:?}"
+        );
+        wrapper
+    }
 }
 
 fn position(symbols: &[String], name: &str) -> usize {
@@ -202,6 +226,11 @@ fn a_recorded_order_is_the_layout_and_a_stale_list_is_harmless() {
     // Same named code as the ordinary link: layout cannot introduce clones.
     let mut plain_set = plain_symbols.clone();
     let mut ordered_set = symbols.clone();
+    // The plain build carries the runtime's default hot-text and hot-data
+    // runs and their bound symbols (`link/hot_text_order.rs`,
+    // `link/hot_data_order.rs`); a `--function-order` link replaces that
+    // layout, so they are no code of the program's.
+    plain_set.retain(|n| !n.starts_with("__perry_rt_hot_"));
     plain_set.sort();
     ordered_set.retain(|n| !n.contains("hot_text") && !n.contains("thp_enabled"));
     ordered_set.sort();
@@ -357,4 +386,321 @@ fn backing_bounds_cover_complete_selected_pages_without_text_padding() {
             "{headers}"
         );
     }
+}
+
+/// Defined symbols by name, with their address.
+#[cfg(target_os = "linux")]
+fn symbol_addresses(binary: &Path) -> Vec<(u64, String, String)> {
+    let nm = Command::new("nm")
+        .arg("-n")
+        .arg("--defined-only")
+        .arg(binary)
+        .output()
+        .expect("run nm");
+    assert!(nm.status.success());
+    String::from_utf8_lossy(&nm.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let (addr, kind, name) = (parts.next()?, parts.next()?, parts.next()?);
+            Some((
+                u64::from_str_radix(addr, 16).ok()?,
+                kind.to_string(),
+                name.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The runtime's default hot-text order (`link/hot_text_order.rs`): an
+/// ordinary ELF build packs the listed runtime functions at the front of
+/// `.text`, the list still names the runtime that is built here, and
+/// `PERRY_HOT_TEXT_ORDER=off` restores the unordered layout with the same
+/// code.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("main.ts"), SOURCE).unwrap();
+    let build = |out: &str, switch: Option<&str>| {
+        let output = dir.path().join(out);
+        let mut cmd = Command::new(perry_bin());
+        cmd.current_dir(dir.path())
+            .env("PERRY_KEEP_SYMBOLS", "1")
+            .env_remove("PERRY_HOT_TEXT_ORDER")
+            .arg("compile")
+            .arg(dir.path().join("main.ts"))
+            .arg("-o")
+            .arg(&output)
+            .args(["--no-cache", "--no-auto-optimize", "--verbose"]);
+        if let Some(value) = switch {
+            cmd.env("PERRY_HOT_TEXT_ORDER", value);
+        }
+        let compile = cmd.output().expect("run perry compile");
+        let stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
+        assert!(compile.status.success(), "perry compile failed:\n{stderr}");
+        (output, stderr)
+    };
+    let (on, on_log) = build("on", None);
+    let (off, off_log) = build("off", Some("off"));
+    assert_eq!(run(&on, None), run(&off, None));
+
+    // The list against this build's runtime archives.
+    let summary = on_log
+        .lines()
+        .find(|l| l.starts_with("[hot-text] "))
+        .unwrap_or_else(|| panic!("the link reports the default order:\n{on_log}"));
+    let field = |name: &str| -> Vec<u64> {
+        let at = summary
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} in {summary}"))
+            + name.len();
+        summary[at..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .split('/')
+            .map(|n| n.parse().unwrap())
+            .collect()
+    };
+    let (listed, resolved, core) = (field("listed=")[0], field("resolved=")[0], field("core="));
+    // A backstop against wholesale rot (a mangling or crate-name change),
+    // loose enough for any build profile of the archives; the strict gate is
+    // `scripts/hot_text_order.py check`.
+    assert!(
+        resolved * 100 >= listed * 75 && core[0] * 100 >= core[1] * 90,
+        "the default hot-text order no longer names this runtime ({summary}): \
+         rebuild it (scripts/hot_text_order.py; `check` lists the missing names)"
+    );
+    assert!(
+        !off_log.contains("[hot-text]"),
+        "the switch keeps the JS text rule alone:\n{off_log}"
+    );
+
+    // The hot run: bounded, at the front of the text, and it holds code.
+    let symbols = symbol_addresses(&on);
+    let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);
+    let (start, end) = (
+        at("__perry_rt_hot_text_start").expect("hot run start"),
+        at("__perry_rt_hot_text_end").expect("hot run end"),
+    );
+    let text: Vec<&(u64, String, String)> = symbols
+        .iter()
+        .filter(|s| matches!(s.1.as_str(), "t" | "T") && !s.2.starts_with("__perry_rt_hot_text_"))
+        .collect();
+    let inside = text.iter().filter(|s| start <= s.0 && s.0 < end).count();
+    assert!(inside >= 200, "{inside} functions in the hot run");
+    assert!(
+        text.iter().filter(|s| s.0 < start).count() < 64,
+        "the hot run leads the runtime text"
+    );
+    // The program's own code is never part of it.
+    let generated: Vec<_> = text.iter().filter(|s| s.2.contains("main_ts__")).collect();
+    assert!(!generated.is_empty(), "the program's functions are symbols");
+    assert!(
+        generated.iter().all(|s| s.0 >= end),
+        "generated code stays behind the hot run"
+    );
+
+    // Off: no run, and the same named code as on.
+    let off_symbols = symbol_addresses(&off);
+    assert!(off_symbols
+        .iter()
+        .all(|s| !s.2.starts_with("__perry_rt_hot_text_")));
+    let names = |symbols: &[(u64, String, String)]| {
+        let mut names: Vec<String> = symbols
+            .iter()
+            .filter(|s| {
+                matches!(s.1.as_str(), "t" | "T") && !s.2.starts_with("__perry_rt_hot_text_")
+            })
+            .map(|s| s.2.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&symbols), names(&off_symbols), "layout only");
+}
+
+/// A link line that picks lld itself (the cross links to Linux pass
+/// `-fuse-ld=lld`, `link/platform_cmd.rs`; here `PERRY_EXTRA_LINK_ARGS` gives
+/// the native link the same driver flag) takes the lld flavor of the default
+/// hot-text script: lld rejects the GNU one ("unable to insert .text before
+/// .text"). The run is in place and the program's output is GNU ld's.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_link_line_that_picks_lld_takes_the_lld_hot_text_script() {
+    let lld_on_path = std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("ld.lld").is_file()));
+    if !lld_on_path {
+        eprintln!("skipped: no ld.lld on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("main.ts"), SOURCE).unwrap();
+    let build = |out: &str, extra_link_args: Option<&str>| {
+        let output = dir.path().join(out);
+        let mut cmd = Command::new(perry_bin());
+        cmd.current_dir(dir.path())
+            .env("PERRY_KEEP_SYMBOLS", "1")
+            .env_remove("PERRY_HOT_TEXT_ORDER")
+            .env_remove("PERRY_LINK_LLD")
+            .env_remove("PERRY_EXTRA_LINK_ARGS")
+            .arg("compile")
+            .arg(dir.path().join("main.ts"))
+            .arg("-o")
+            .arg(&output)
+            .args(["--no-cache", "--no-auto-optimize", "--verbose"]);
+        if let Some(args) = extra_link_args {
+            cmd.env("PERRY_EXTRA_LINK_ARGS", args);
+        }
+        let compile = cmd.output().expect("run perry compile");
+        let stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
+        assert!(compile.status.success(), "perry compile failed:\n{stderr}");
+        (output, stderr)
+    };
+    let (gnu, gnu_log) = build("gnu", None);
+    let (lld, lld_log) = build("lld", Some("-fuse-ld=lld -Wl,--image-base=0x400000"));
+    let script = |log: &str| {
+        log.lines()
+            .find(|l| l.starts_with("[hot-text] "))
+            .unwrap_or_else(|| panic!("the link reports the default order:\n{log}"))
+            .split(':')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(script(&gnu_log).ends_with(".v1.ld"), "{gnu_log}");
+    assert!(script(&lld_log).ends_with(".v1.lld.ld"), "{lld_log}");
+    assert_eq!(run(&lld, None), run(&gnu, None));
+    let symbols = symbol_addresses(&lld);
+    let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);
+    let (start, end) = (
+        at("__perry_rt_hot_text_start").expect("hot run start"),
+        at("__perry_rt_hot_text_end").expect("hot run end"),
+    );
+    let inside = symbols
+        .iter()
+        .filter(|s| matches!(s.1.as_str(), "t" | "T") && start <= s.0 && s.0 < end)
+        .count();
+    assert!(inside >= 200, "{inside} functions in the hot run");
+}
+
+/// The runtime's default hot-data order (`link/hot_data_order.rs`): an
+/// ordinary x86-64 glibc build places the listed runtime data at the front of
+/// `.rodata` and `.data.rel.ro`, the list still names data of the runtime
+/// built here, and `PERRY_HOT_DATA_ORDER=off` restores the previous layout
+/// with the same symbols.
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[test]
+fn the_default_runtime_data_order_packs_the_listed_data_and_the_list_is_current() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("main.ts"), SOURCE).unwrap();
+    let build = |out: &str, switch: Option<&str>| {
+        let output = dir.path().join(out);
+        let mut cmd = Command::new(perry_bin());
+        cmd.current_dir(dir.path())
+            .env("PERRY_KEEP_SYMBOLS", "1")
+            .env_remove("PERRY_HOT_DATA_ORDER")
+            .env_remove("PERRY_HOT_TEXT_ORDER")
+            .env_remove("PERRY_LINK_LLD")
+            .arg("compile")
+            .arg(dir.path().join("main.ts"))
+            .arg("-o")
+            .arg(&output)
+            .args(["--no-cache", "--no-auto-optimize", "--verbose"]);
+        if let Some(value) = switch {
+            cmd.env("PERRY_HOT_DATA_ORDER", value);
+        }
+        let compile = cmd.output().expect("run perry compile");
+        let stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
+        assert!(compile.status.success(), "perry compile failed:\n{stderr}");
+        (output, stderr)
+    };
+    let (on, on_log) = build("on", None);
+    let (off, off_log) = build("off", Some("off"));
+    assert_eq!(run(&on, None), run(&off, None));
+    let summary = on_log
+        .lines()
+        .find(|l| l.starts_with("[hot-data] "))
+        .unwrap_or_else(|| panic!("the link reports the data order:\n{on_log}"));
+    let field = |name: &str| -> Vec<u64> {
+        let at = summary
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} in {summary}"))
+            + name.len();
+        summary[at..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .split('/')
+            .map(|n| n.parse().unwrap())
+            .collect()
+    };
+    let (listed, resolved, core) = (field("listed=")[0], field("resolved=")[0], field("core="));
+    // A backstop against wholesale rot (a key or mangling change); the strict
+    // gate is `scripts/hot_data_order.py check`. Unnamed constants are keyed
+    // by their bytes, so a rebuilt runtime loses more lines than the text
+    // list does.
+    assert!(
+        resolved * 100 >= listed * 60 && core[0] * 100 >= core[1] * 75,
+        "the default hot-data order no longer names this runtime ({summary}): \
+         rebuild it (scripts/hot_data_order.py; `check` lists the missing keys)"
+    );
+    assert!(!off_log.contains("[hot-data]"), "{off_log}");
+    assert!(
+        on_log.contains("[hot-text] ") && off_log.contains("[hot-text] "),
+        "the text order is independent of the data switch"
+    );
+
+    let symbols = symbol_addresses(&on);
+    let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);
+    let section = |binary: &Path, name: &str| -> (u64, u64) {
+        let out = Command::new("readelf")
+            .args(["-SW"])
+            .arg(binary)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let line = text
+            .lines()
+            .find(|l| l.split_whitespace().any(|w| w == name))
+            .unwrap_or_else(|| panic!("{name} in\n{text}"));
+        let f: Vec<&str> = line.split(']').nth(1).unwrap().split_whitespace().collect();
+        (
+            u64::from_str_radix(f[2], 16).unwrap(),
+            u64::from_str_radix(f[4], 16).unwrap(),
+        )
+    };
+    for (run_name, out_section) in [("rodata", ".rodata"), ("relro", ".data.rel.ro")] {
+        let (start, end) = (
+            at(&format!("__perry_rt_hot_{run_name}_start")).expect("run start"),
+            at(&format!("__perry_rt_hot_{run_name}_end")).expect("run end"),
+        );
+        let (addr, size) = section(&on, out_section);
+        assert!(end > start, "the {run_name} run holds data");
+        assert_eq!(start, addr, "the {run_name} run leads {out_section}");
+        assert!(end <= addr + size);
+        // The output section holds the same bytes, in another order (the
+        // alignment padding between sections may differ).
+        let (_, off_size) = section(&off, out_section);
+        assert!(
+            size.abs_diff(off_size) < 4096,
+            "{out_section}: {size} vs {off_size}"
+        );
+    }
+    let named = |symbols: &[(u64, String, String)]| {
+        let mut names: Vec<String> = symbols
+            .iter()
+            .filter(|s| !s.2.starts_with("__perry_rt_hot_"))
+            .map(|s| format!("{} {}", s.1, s.2))
+            .collect();
+        names.sort();
+        names
+    };
+    let off_symbols = symbol_addresses(&off);
+    assert!(off_symbols
+        .iter()
+        .all(|s| !s.2.starts_with("__perry_rt_hot_rodata_")
+            && !s.2.starts_with("__perry_rt_hot_relro_")));
+    assert_eq!(named(&symbols), named(&off_symbols), "layout only");
 }

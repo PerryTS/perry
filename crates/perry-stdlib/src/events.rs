@@ -235,11 +235,7 @@ fn validate_max_listeners(value: f64) -> f64 {
     if !perry_runtime::fs::validate::is_numeric(js_value) {
         throw_max_listeners_invalid_type(value);
     }
-    let n = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else {
-        js_value.as_number()
-    };
+    let n = js_value.as_number();
     if n.is_nan() || n < 0.0 {
         throw_max_listeners_out_of_range(n);
     }

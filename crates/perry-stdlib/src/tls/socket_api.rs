@@ -142,7 +142,7 @@ pub unsafe extern "C" fn js_tls_socket_export_keying_material(
         return undefined();
     }
     let length_value = JSValue::from_bits(length.to_bits());
-    if !length_value.is_number() && !length_value.is_int32() {
+    if !length_value.is_number() {
         throw_type_error(
             "The \"length\" argument must be of type number",
             "ERR_INVALID_ARG_TYPE",
@@ -382,7 +382,7 @@ pub unsafe extern "C" fn js_tls_socket_get_peer_x509_certificate(handle: i64) ->
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_socket_set_max_send_fragment(handle: i64, size: f64) -> f64 {
     let js = JSValue::from_bits(size.to_bits());
-    if !js.is_number() && !js.is_int32() {
+    if !js.is_number() {
         throw_type_error(
             "The \"size\" argument must be of type number",
             "ERR_INVALID_ARG_TYPE",

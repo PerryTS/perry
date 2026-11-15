@@ -12,7 +12,7 @@ enum ReceivedNativePrototype {
 /// small integer). `JSValue::is_number` deliberately excludes the INT32 tag,
 /// so both must be checked.
 pub fn is_numeric(jv: JSValue) -> bool {
-    jv.is_number() || jv.is_int32()
+    jv.is_number()
 }
 
 pub(crate) fn is_nullish(jv: JSValue) -> bool {
@@ -43,11 +43,7 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
     }
     // Denormal bits can resemble legacy addresses; never probe them as pointers.
     if is_numeric(jv) {
-        let n = if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            value
-        };
+        let n = value;
         let number = if n == 0.0 && n.is_sign_negative() {
             "-0".to_string()
         } else {
@@ -701,11 +697,7 @@ pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
             value,
         );
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !n.is_finite() || n.fract() != 0.0 {
         let received = if n.is_nan() {
             "NaN".to_string()

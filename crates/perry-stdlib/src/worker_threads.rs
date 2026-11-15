@@ -1425,6 +1425,7 @@ fn worker_new_started(
     source: Option<String>,
     is_eval: bool,
 ) -> f64 {
+    perry_runtime::snap_census::worker_spawn();
     ensure_worker_gc_scanner();
     ensure_worker_thread_exit_hook_registered();
     worker_pump::ensure_parent_event_retire_hook();

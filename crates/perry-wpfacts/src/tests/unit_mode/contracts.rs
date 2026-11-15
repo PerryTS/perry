@@ -344,7 +344,15 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // it held. In rounds 1-2 the removed members fed no later delivery
     // (with the rebuild uncharged the rounds are the old ones exactly), so
     // the rebuilds are the whole difference (was [1962, 2324, 2035, 512]).
-    assert_eq!(pf.round_work, [1962, 2339, 2044, 512], "{:?}", pf.units);
+    // MAPVALS (9e7d3a488e, `solve/map_vals.rs`): a Map's `set` gives the
+    // Map a value node of its own. In unit mode no Map is closed, so the
+    // node is fed by the contents node and holds what it holds (no fact
+    // changes); it is one more node and one more delivery in `b`'s solves
+    // of rounds 1-2, where `this.pos.set(x, x)` first runs (in round 0 the
+    // Map has not reached `this.pos`). Every other unit's work is equal,
+    // and `PERRY_FACTS_MAP_VALUES=0` gives the old numbers (was [1962,
+    // 2339, 2044, 512]).
+    assert_eq!(pf.round_work, [1962, 2340, 2045, 512], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

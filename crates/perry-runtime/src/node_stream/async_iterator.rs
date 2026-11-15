@@ -56,7 +56,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let outer = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     if !outer.is_null() {
         crate::promise::js_promise_resolve(outer, iterator_result(value, false));
     }
@@ -127,8 +127,8 @@ fn readable_iterator_chunk_result(value: f64) -> f64 {
         crate::fn_info!(ns_readable_iterator_chunk_rejected, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(fulfill, 0, outer as i64);
-    js_closure_set_capture_ptr(reject, 0, outer as i64);
+    crate::closure::closure_set_capture_ref(fulfill, 0, outer as i64);
+    crate::closure::closure_set_capture_ref(reject, 0, outer as i64);
     crate::promise::js_promise_attach_handlers(inner, fulfill, reject);
     box_pointer(outer as *const u8)
 }

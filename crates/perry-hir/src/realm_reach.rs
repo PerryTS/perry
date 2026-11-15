@@ -566,15 +566,23 @@ impl Scan<'_> {
     }
 
     /// A call, optional call or `import()` (callee `None`).
-    fn call(&mut self, span: swc_common::Span, callee: Option<&ast::Expr>, args: &[ast::ExprOrSpread]) {
+    fn call(
+        &mut self,
+        span: swc_common::Span,
+        callee: Option<&ast::Expr>,
+        args: &[ast::ExprOrSpread],
+    ) {
         let module_call = match callee {
             None => true,
             Some(callee) => {
                 self.loaders.loader(callee)
-                    || self.loaders.create_require_call(callee).is_some_and(|maker| {
-                        self.called_makers.insert(maker);
-                        true
-                    })
+                    || self
+                        .loaders
+                        .create_require_call(callee)
+                        .is_some_and(|maker| {
+                            self.called_makers.insert(maker);
+                            true
+                        })
             }
         };
         // A loader made by `createRequire` that is neither a const alias nor

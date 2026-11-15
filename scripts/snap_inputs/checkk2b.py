@@ -160,9 +160,12 @@ elif name in ("f13", "f13s"):
         need(all(int(r["rt"]) > 0 and r["policy"] == "STOP" for r in rp), "no runtime-pc STOP")
     need(0 not in m_init and all(r["init"] != "0" for r in rp), "capture outside an init")
 elif name == "fw":
-    wf = [kv(v) for v in vals("worker_flag")]
-    info = f"rows={wf}"
-    need(len(wf) == 1 and wf[0]["cut"] == "0" and wf[0]["policy"] == "STOP", "no worker_flag STOP row")
+    # SNAPREC2 (SNAPTLS1 T0): no static worker_flag STOP; the primary agent's TLS block is imaged (tls_image at the boundary).
+    tl = [kv(v) for v in vals("tls_image")]
+    info = f"tls_image={tl}"
+    need(not vals("worker_flag"), "a worker_flag row (retired)")
+    need(len(tl) == 1 and tl[0]["policy"] == "image", "no tls_image row")
+    need(not [v for v in vals("worker_spawn") if kv(v)["policy"] == "STOP"], "a worker_spawn STOP row in a program that starts no worker")
 elif name == "f2c":
     e = entry_init()
     c = [kv(v) for v in vals("p_entry") if kv(v).get("rule") == "c"]
@@ -187,6 +190,21 @@ elif name == "f15u":
     # again under that lock. Red: the run deadlocks, no boundary, no report.
     need(os.path.exists(report), "no report (the run never finished)")
     info = f"rows={len(ops)} boundary={sum(1 for _, _, o, _ in ops if o == 'boundary')}"
+
+elif name in ("envheld", "envheld-enum"):
+    # process.env holds no host data until enumerated: iso.ts only holds the
+    # reference during init (and the entry reads one key after the cut), so no
+    # env_block row; envheld-enum has enum.ts call Object.keys(process.env) in
+    # its own init, so the block is read there and only there.
+    eb = [(i, s) for s, i, o, _ in ops if o == "env_block"]
+    ie = [i for _, i, o, _ in sorted(ops) if o == "init_enter"]
+    info = f"env_block={eb} init_enters={ie}"
+    if name == "envheld":
+        need(len(eb) == 0, f"want 0 env_block rows, got {len(eb)}")
+    else:
+        need(len(ie) >= 3, "want the three module inits")
+        need(len(eb) >= 1 and (len(ie) < 3 or {i for i, _ in eb} == {ie[1]}),
+             "env_block rows must come only from the enumerating init (enum.ts, the second)")
 else:
     fails.append("unknown fixture")
 print(f"{name} {'PASS' if not fails else 'FAIL ' + '; '.join(fails)} | {info}"[:600])

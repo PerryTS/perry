@@ -88,7 +88,7 @@ unsafe fn object_from_entries_has_iterator(value: f64, raw: i64, gc_type: Option
 
 unsafe fn object_from_entries_materialize_entries(entries_value: f64) -> *mut ArrayHeader {
     let jv = crate::value::JSValue::from_bits(entries_value.to_bits());
-    if jv.is_null() || jv.is_undefined() || jv.is_bool() || jv.is_number() || jv.is_int32() {
+    if jv.is_null() || jv.is_undefined() || jv.is_bool() || jv.is_number() {
         throw_from_entries_not_iterable();
     }
     if jv.is_bigint() {
@@ -144,7 +144,6 @@ unsafe fn object_from_entries_entry_values(entry_val: f64) -> (f64, f64) {
         || jv.is_undefined()
         || jv.is_bool()
         || jv.is_number()
-        || jv.is_int32()
         || jv.is_any_string()
         || jv.is_bigint()
     {

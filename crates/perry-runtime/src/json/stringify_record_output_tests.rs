@@ -80,7 +80,7 @@ fn full_entry_zero_spacing_reuses_canonical_record_output() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_nanbox_u64(parse(text).bits());
         let null = f64::from_bits(TAG_NULL);
-        for spacer in [0.0, -0.0, f64::from_bits(crate::value::INT32_TAG)] {
+        for spacer in [0.0, -0.0] {
             REPEATED_OUTPUT_HITS.with(|count| count.set(0));
             for _ in 0..8 {
                 let result =

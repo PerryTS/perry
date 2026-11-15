@@ -345,7 +345,10 @@ pub(super) fn compile_method(
         .and_then(|tm| tm.plan.record.as_ref())
         .and_then(|r| r.ret);
     if sig_record_return.is_some() {
-        params.push((crate::types::PTR, super::record_sig::RESULT_PARAM.to_string()));
+        params.push((
+            crate::types::PTR,
+            super::record_sig::RESULT_PARAM.to_string(),
+        ));
     }
     let lf = llmod.define_function(
         &llvm_name,
@@ -561,6 +564,7 @@ pub(super) fn compile_method(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(Some(method.id));
     let _opt_report_scope = crate::opt_report::enter_method_region(
         &format!("{}.{}", class.name, method.name),
         cross_module
@@ -936,6 +940,7 @@ pub(super) fn compile_method(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
+        life_claims: native_facts.life_claims(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
@@ -1802,6 +1807,7 @@ pub(super) fn compile_method(
             ctx.block().br(&target.after_label);
         }
         ctx.current_block = *after_idx;
+        crate::verify_facts::life_measure::ctor_return(&mut ctx, &target.result_slot)?;
     }
 
     if !ctx.block().is_terminated() {

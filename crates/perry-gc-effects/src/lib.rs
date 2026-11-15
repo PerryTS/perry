@@ -12,6 +12,8 @@
 #[cfg(feature = "analyzer")]
 mod archive;
 #[cfg(feature = "analyzer")]
+pub mod births;
+#[cfg(feature = "analyzer")]
 pub mod census;
 #[cfg(feature = "analyzer")]
 pub mod effects;

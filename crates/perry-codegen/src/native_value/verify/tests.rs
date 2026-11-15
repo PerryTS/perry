@@ -562,6 +562,7 @@ fn rejects_raw_f64_dynamic_fallback_without_rejected_and_invalidated_layout_fact
     for (expr_kind, consumer) in [
         ("NumericArrayPush", "js_array_push_f64"),
         ("NumericArrayPush", "js_array_push_f64_spec_or_own"),
+        ("NumericArrayPush", "js_array_push_f64_spec_or_method"),
         (
             "NumericArrayIndexGet",
             "js_typed_feedback_array_index_get_fallback_boxed",

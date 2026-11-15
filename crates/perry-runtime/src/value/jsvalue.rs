@@ -112,12 +112,6 @@ impl JSValue {
         self.bits == TAG_TRUE || self.bits == TAG_FALSE
     }
 
-    /// Check if this is an int32
-    #[inline]
-    pub fn is_int32(&self) -> bool {
-        super::tags::is_int32_bits(self.bits)
-    }
-
     /// A `POINTER_TAG` word: a GC-headed heap allocation whose header may be
     /// read. This is a *representation* test. A native handle (`HANDLE_TAG`)
     /// is a JavaScript object too but has no header, so it fails here; a site
@@ -218,13 +212,6 @@ impl JSValue {
         self.bits == TAG_TRUE
     }
 
-    /// Get as i32 (panics if not an int32)
-    #[inline]
-    pub fn as_int32(&self) -> i32 {
-        debug_assert!(self.is_int32(), "Value is not an int32");
-        (self.bits & INT32_MASK) as i32
-    }
-
     /// Get as pointer (panics if not a pointer)
     #[inline]
     pub fn as_pointer<T>(&self) -> *const T {
@@ -236,8 +223,6 @@ impl JSValue {
     pub fn to_number(&self) -> f64 {
         if self.is_number() {
             self.as_number()
-        } else if self.is_int32() {
-            self.as_int32() as f64
         } else if self.is_bool() {
             if self.as_bool() {
                 1.0
@@ -261,8 +246,6 @@ impl JSValue {
         } else if self.is_number() {
             let n = self.as_number();
             n != 0.0 && !n.is_nan()
-        } else if self.is_int32() {
-            self.as_int32() != 0
         } else if self.is_null() || self.is_undefined() {
             false
         } else {
@@ -407,8 +390,6 @@ impl std::fmt::Debug for JSValue {
             write!(f, "{}", self.as_bool())
         } else if self.is_number() {
             write!(f, "{}", self.as_number())
-        } else if self.is_int32() {
-            write!(f, "{}i", self.as_int32())
         } else if self.is_pointer() {
             write!(f, "<ptr {:p}>", self.as_pointer::<u8>())
         } else if self.is_handle() {

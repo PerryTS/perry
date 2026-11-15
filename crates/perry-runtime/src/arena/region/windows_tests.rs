@@ -48,12 +48,20 @@ fn a_released_region_returns_its_commit_and_reuse_commits_it_again() {
             let data = map(kind, len);
             assert!(!data.is_null());
             assert_eq!(data as usize % super::super::GENERATION_PAGE_SIZE, 0);
-            assert_eq!(committed_bytes(data, len), len, "fresh backing is committed");
+            assert_eq!(
+                committed_bytes(data, len),
+                len,
+                "fresh backing is committed"
+            );
             std::ptr::write_bytes(data, 0xa5, len);
             assert!(contains(data as usize, len));
 
             assert_eq!(release(data, len), len);
-            assert_eq!(committed_bytes(data, len), 0, "LIVE SUBJECT: commit returned");
+            assert_eq!(
+                committed_bytes(data, len),
+                0,
+                "LIVE SUBJECT: commit returned"
+            );
             assert_eq!(state_at(data), MEM_RESERVE, "the reservation stays");
             assert!(
                 !contains(data as usize, 16),

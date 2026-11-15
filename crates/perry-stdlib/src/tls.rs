@@ -271,7 +271,7 @@ fn type_name(value: f64) -> &'static str {
         "boolean"
     } else if jsv.is_any_string() {
         "string"
-    } else if jsv.is_number() || jsv.is_int32() {
+    } else if jsv.is_number() {
         "number"
     } else if jsv.is_pointer() {
         "object"
@@ -906,7 +906,7 @@ unsafe fn validate_server_options(options: f64) -> (f64, bool, bool, Option<Vec<
     for field in ["handshakeTimeout", "sessionTimeout"] {
         let value = object_field(options, field);
         let js = JSValue::from_bits(value.to_bits());
-        if !js.is_undefined() && !js.is_number() && !js.is_int32() {
+        if !js.is_undefined() && !js.is_number() {
             throw_type_error(
                 &format!("The \"options.{field}\" property must be of type number"),
                 "ERR_INVALID_ARG_TYPE",

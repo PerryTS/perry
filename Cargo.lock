@@ -5086,6 +5086,7 @@ dependencies = [
  "perry-hir",
  "perry-parser",
  "perry-realm-table",
+ "perry-runtime-manifest",
  "perry-transform",
  "serde",
  "serde_json",
@@ -5135,6 +5136,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hir",
  "perry-parser",
+ "perry-transform",
  "wasm-encoder 0.258.3",
 ]
 
@@ -5430,6 +5432,7 @@ dependencies = [
  "llvm-sys",
  "object 0.37.3",
  "perry-abi",
+ "perry-dispatch",
  "perry-perex",
  "perry-runtime-manifest",
  "regex",
@@ -5634,6 +5637,7 @@ dependencies = [
  "ed25519-dalek",
  "ed448-goldilocks",
  "flate2",
+ "getrandom 0.4.3",
  "ghash 0.6.0",
  "hkdf",
  "hmac 0.13.0",
@@ -5656,7 +5660,6 @@ dependencies = [
  "perry-runtime",
  "perry-tls-session",
  "perry-updater",
- "perry-uuid",
  "proptest",
  "rand 0.10.3",
  "rand_core 0.6.4",
@@ -5913,13 +5916,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-uuid"
-version = "0.5.1663"
-dependencies = [
- "getrandom 0.4.3",
-]
-
-[[package]]
 name = "perry-wasi"
 version = "0.5.1663"
 dependencies = [
@@ -5987,6 +5983,7 @@ dependencies = [
  "perry-hir",
  "perry-parser",
  "perry-realm-table",
+ "perry-runtime-manifest",
  "perry-transform",
 ]
 

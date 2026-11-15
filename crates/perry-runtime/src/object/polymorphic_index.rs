@@ -95,11 +95,6 @@ fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
 }
 
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
-    let bits = value.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < u32::MAX as f64 {
         Some(value as u32)
     } else {
@@ -108,11 +103,6 @@ fn numeric_key_u32_index(value: f64) -> Option<u32> {
 }
 
 fn numeric_key_i32_index(value: f64) -> Option<i32> {
-    let bits = value.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {
@@ -233,7 +223,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     {
         if let Some(key) = crate::buffer::canonical_index_key(idx) {
             return crate::buffer::buffer_read_own_prop(raw as usize, &key)
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw as usize, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
@@ -357,12 +347,19 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             idx,
         );
     }
-    // Buffer / Map / Set / typed-array / unknown — try the array getter
-    // (which handles registered buffers + typed arrays via per-kind reads).
-    let Some(index) = numeric_key_u32_index(idx) else {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    };
-    crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index)
+    // An object's overflow table read as its key list (a runtime caller):
+    // the array getter owns that layout.
+    if gc_type == crate::gc::GC_TYPE_OVERFLOW {
+        let Some(index) = numeric_key_u32_index(idx) else {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        };
+        return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
+    }
+    // Every other GC-headed receiver (a Date, a Promise, an Error, a RegExp,
+    // a weak collection, ...) is an object with no element vector: `o[i]` is
+    // the ordinary [[Get]] of ToPropertyKey(i). The array getter refused such
+    // a receiver and answered NaN.
+    unsafe { rooted_property_key_get(raw, idx) }
 }
 
 /// Polymorphic numeric-key set: `obj[idx] = value` where `idx` is a number
@@ -474,10 +471,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
         if let Some(index) = numeric_key_i32_index(idx) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
             return;
         }
@@ -564,17 +561,23 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         );
         return;
     }
-    // Buffer / typed-array were handled above. Map / Set are collection
-    // objects with external storage, not dense ArrayHeader payloads, so numeric
-    // writes are no-ops instead of truncating fractional keys into element
-    // offsets.
-    if let Some(index) = numeric_key_u32_index(idx) {
-        crate::array::js_array_set_f64_extend_strict(
-            raw as *mut crate::array::ArrayHeader,
-            index,
-            value,
-        );
+    // A lazy JSON array becomes its ordinary Array inside the array setter.
+    if gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if let Some(index) = numeric_key_u32_index(idx) {
+            crate::array::js_array_set_f64_extend_strict(
+                raw as *mut crate::array::ArrayHeader,
+                index,
+                value,
+            );
+        }
+        return;
     }
+    // Buffer / typed-array / Map / Set were handled above. Every other
+    // GC-headed receiver (a Date, a Promise, an Error, a RegExp, a weak
+    // collection, ...) is an object with no element vector: `o[i] = v` is the
+    // ordinary [[Set]] of ToPropertyKey(i). The array setter refused such a
+    // receiver and dropped the store.
+    crate::proxy::js_put_value_set(boxed, idx, value, boxed, 0);
 }
 
 /// A NON-numeric computed key as a Rust string (`buf["writeInt8"]`), or `None`

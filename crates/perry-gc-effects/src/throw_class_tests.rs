@@ -22,7 +22,7 @@ fn graph(names: &[&str], edges: &[(usize, usize)]) -> Graph {
         .iter()
         .map(|n| (n.obj.clone(), n.names[0].clone()))
         .collect();
-    Graph::new(nodes, globals).unwrap()
+    Graph::new(nodes, globals, Vec::new()).unwrap()
 }
 
 #[test]

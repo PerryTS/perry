@@ -434,6 +434,7 @@ pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
             d.publication
                 .store(serial() | kind_bits(kind) | MAPPED, SeqCst);
         }
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
         crate::snap_census::region_mapped(base, mapped);
         return data.cast();
     }

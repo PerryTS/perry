@@ -112,11 +112,67 @@ impl PrologueStore {
     ///   argument is tested. A non-Number argument is a NaN box, `fadd`
     ///   propagates a NaN, so the result fails the finite test and the
     ///   construction takes the ordinary constructor.
+    ///
+    /// P3 B4b: a Number has one encoding, the plain double, so a value the
+    /// facts or its structure prove a Number
+    /// (`expr_produces_canonical_raw_f64`) is the word a raw-`f64` lane
+    /// holds and needs no test ([`proven_number`](Self::proven_number)).
+    /// Check mode tests it instead (`Fact::CanonicalNumber`).
     pub(super) fn requires_number_check(&self, ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+        if self.proven_number(ctx, args) {
+            return false;
+        }
         self.requires_raw_f64
             || (self.numeric_addend.is_some()
                 && !addend_operand_is_proven_number(ctx, args.get(self.arg_index)))
     }
+
+    /// This store writes a raw-`f64` lane with no number test because its
+    /// argument is a proven Number (P3 B4b; `PERRY_FACTS_NUMBER_BIRTHS=0`
+    /// keeps the test).
+    pub(super) fn proven_number(&self, ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+        self.requires_raw_f64
+            && number_births()
+            && !ctx.wpfacts_off
+            && args
+                .get(self.arg_index)
+                .is_some_and(|arg| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, arg))
+    }
+}
+
+/// A raw-`f64` lane store took `value` with no number test
+/// ([`PrologueStore::proven_number`]): count the claim, and in check mode
+/// test that the value is a plain double (a miss exits 86,
+/// `Fact::CanonicalNumber`). Called before the allocation, where a call is
+/// allowed.
+pub(super) fn witness_proven_number(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    slot: u32,
+) -> anyhow::Result<()> {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "birth_slot": slot }),
+    );
+    crate::facts_consumed::used();
+    crate::expr::facts_canonical::witness(
+        ctx,
+        value,
+        crate::expr::facts_canonical::Num::Number,
+        "birth lane",
+    )
+}
+
+/// `PERRY_FACTS_NUMBER_BIRTHS=0` (`off`, `false`): every raw-`f64` lane store
+/// of a birth keeps its plain-finite-number test.
+pub(crate) fn number_births() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_NUMBER_BIRTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
 }
 
 /// The facts prove `arg` a Number (a Number's representation is its raw

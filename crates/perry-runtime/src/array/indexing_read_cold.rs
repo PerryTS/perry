@@ -187,11 +187,7 @@ unsafe fn read_cold_dispatch(
 /// and arrays with named storage. Sparse own values precede the prototype.
 #[inline(always)]
 unsafe fn plain_index_get(receiver: f64, key: f64) -> Option<f64> {
-    let n = if crate::value::is_int32_bits(key.to_bits()) {
-        key.to_bits() as i32 as f64
-    } else {
-        key
-    };
+    let n = key;
     if !(n >= 0.0 && n < u32::MAX as f64 && n == n.trunc()) {
         return None;
     }

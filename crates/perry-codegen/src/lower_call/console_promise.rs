@@ -1806,10 +1806,20 @@ fn lower_closure_call_rooted<'a>(
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &obj_bits), (I64, &key_handle)],
+        // The receiver is any value: a Number whose top 16 bits are clear
+        // must not reach the handle entry, which reads it as a raw pointer.
+        crate::expr::index_get::named_get_on_unproven_receiver(
+            ctx,
+            &obj_bits,
+            &key_handle,
+            "0",
+            |ctx| {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_field_by_name_f64",
+                    &[(I64, &obj_bits), (I64, &key_handle)],
+                )
+            },
         )
     } else {
         lower_expr(ctx, callee)?

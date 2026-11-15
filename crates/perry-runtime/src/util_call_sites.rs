@@ -110,11 +110,7 @@ fn validate_options(options: f64) {
 fn frame_count_value(frame_count: f64) -> i32 {
     crate::fs::validate::validate_int32(frame_count, "frameCount", 1, MAX_FRAME_COUNT);
     let jv = JSValue::from_bits(frame_count.to_bits());
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
+    jv.as_number() as i32
 }
 
 fn resolve_args(frame_count_or_options: f64, options: f64) -> (i32, f64) {

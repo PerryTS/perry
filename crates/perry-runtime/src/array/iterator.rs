@@ -30,6 +30,30 @@ use super::*;
 ///
 /// Refs #321 (effect Context/Layer iterate `for (const [tag, s] of
 /// self.unsafeMap)` over an untyped Map).
+/// The admission of a `for-of` whose source is annotated as a numeric typed
+/// array (HIR `typedArrayForOfAdmits`): true when the value really is a typed
+/// array of a numeric kind, so the loop may walk it by index and bind
+/// Numbers. Anything else (an Array, a Set, a generator, a BigInt view, a
+/// value that is not iterable) takes the loop's iterator-protocol arm, which
+/// iterates it or throws node's TypeError.
+#[no_mangle]
+pub extern "C" fn js_typed_array_for_of_admits(value: f64) -> f64 {
+    use crate::typedarray::{KIND_BIGINT64, KIND_BIGUINT64};
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    let numeric = jsv.is_pointer()
+        && matches!(
+            crate::byte_cell_support::lookup_typed_array_kind(
+                (value.to_bits() & crate::value::POINTER_MASK) as usize
+            ),
+            Some(kind) if kind != KIND_BIGINT64 && kind != KIND_BIGUINT64
+        );
+    f64::from_bits(if numeric {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET};
@@ -230,8 +254,6 @@ pub(crate) fn iter_bt_dump(tag: &str, value: f64) {
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
     let kind = if jv.is_number() {
         "number"
-    } else if jv.is_int32() {
-        "int32"
     } else if jv.is_bool() {
         "bool"
     } else if jv.is_undefined() {
@@ -294,8 +316,7 @@ extern "C" fn async_from_sync_fulfilled(
     let done = crate::closure::js_closure_get_capture_f64(closure, 1) != 0.0;
     let result = async_from_sync_iter_result(value, done);
     let closure = closure_h.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let promise =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     if !promise.is_null() {
         crate::promise::js_promise_resolve(promise, result);
     }
@@ -321,8 +342,7 @@ extern "C" fn async_from_sync_rejected_value(
         async_from_sync_close(iter_h.get_nanbox_f64());
     }
     let closure = closure_h.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let promise =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     if !promise.is_null() {
         crate::promise::js_promise_reject(promise, reason_h.get_nanbox_f64());
     }
@@ -378,9 +398,9 @@ fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: boo
         let outer = outer_h.get_raw_mut_ptr::<crate::promise::Promise>();
         let on_fulfilled = on_fulfilled_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
         let on_rejected = on_rejected_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
-        crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, outer as i64);
+        crate::closure::closure_set_capture_ref(on_fulfilled, 0, outer as i64);
         crate::closure::js_closure_set_capture_f64(on_fulfilled, 1, if done { 1.0 } else { 0.0 });
-        crate::closure::js_closure_set_capture_ptr(on_rejected, 0, outer as i64);
+        crate::closure::closure_set_capture_ref(on_rejected, 0, outer as i64);
         crate::closure::js_closure_set_capture_f64(on_rejected, 1, iter_h.get_nanbox_f64());
         crate::closure::js_closure_set_capture_f64(
             on_rejected,
@@ -935,7 +955,16 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let value = &value_h;
-    let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer: it has no address.
+    let raw_ptr = || {
+        let value = value_h.get_nanbox_f64();
+        if value.to_bits() >> 48 == 0 {
+            0
+        } else {
+            js_nanbox_get_pointer(value) as usize
+        }
+    };
 
     let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
     if jsv.is_null() || jsv.is_undefined() {

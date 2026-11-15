@@ -323,7 +323,8 @@ fn witness(
         number: base.rep.elem != FactsElemRep::Boxed,
         receiver: super::proven_array::Receiver::Field,
         bounded: None,
+        kept: None,
     };
-    super::array_rep::witness_read(ctx, &fresh, idx, read, false);
+    super::array_rep::witness_read(ctx, &fresh, idx, read, false, false);
     Ok(())
 }

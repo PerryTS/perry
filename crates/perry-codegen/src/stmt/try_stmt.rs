@@ -245,6 +245,8 @@ pub(crate) fn lower_try(
     let catch_label = ctx.block_label(catch_idx);
     let finally_label = ctx.block_label(finally_idx);
 
+    // LIFE I1: the activation depth the handler restores (measure knob only).
+    let life_depth = crate::verify_facts::life_measure::try_depth(ctx);
     // --- current block: enter body; landing pad → catch ---
     let scope = emit_eh_dispatch(ctx, &catch_label, &try_body_label);
 
@@ -281,6 +283,8 @@ pub(crate) fn lower_try(
             },
         )?;
     } else if let Some(clause) = catch {
+        // Before the exception is taken: the runtime's slot roots it.
+        crate::verify_facts::life_measure::caught(ctx, &life_depth);
         let exc = ctx.block().call(DOUBLE, "js_catch_enter", &[]);
         // Bind the catch param (if any) to the exception value.
         if let Some((id, _name)) = &clause.param {
@@ -350,6 +354,8 @@ pub(crate) fn lower_try(
         // itself completed abruptly (a `return`/`throw` inside finally
         // overrides the pending exception, per spec).
         emit_try_end(ctx);
+        // Before the pending exception is read: it is still the runtime's.
+        crate::verify_facts::life_measure::caught(ctx, &life_depth);
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
         let pending = super::wasm_eh::root_pending(ctx, &exc);
         if let Some(f) = finally {

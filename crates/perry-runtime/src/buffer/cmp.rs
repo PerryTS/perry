@@ -232,9 +232,7 @@ fn buffer_search_needle_with_encoding(
             };
         }
     }
-    let byte_val = if crate::value::is_int32_bits(needle_bits) {
-        (needle_bits as u32) & 0xFF
-    } else if top16 < 0x7FF8 || (top16 == 0x7FF8 && needle_bits == 0x7FF8_0000_0000_0000) {
+    let byte_val = if top16 < 0x7FF8 || (top16 == 0x7FF8 && needle_bits == 0x7FF8_0000_0000_0000) {
         ((needle as i64) & 0xFF) as u32
     } else {
         return None;
@@ -300,11 +298,8 @@ pub extern "C" fn js_buffer_index_of_enc(
             }
         }
     }
-    // Numeric byte needle — INT32_TAG or plain double
-    let byte_val = if crate::value::is_int32_bits(needle_bits) {
-        // INT32_TAG: lower 32 bits are an i32
-        (needle_bits as u32) & 0xFF
-    } else if top16 < 0x7FF8 || (top16 == 0x7FF8 && needle_bits == 0x7FF8_0000_0000_0000) {
+    // Numeric byte needle: a plain double
+    let byte_val = if top16 < 0x7FF8 || (top16 == 0x7FF8 && needle_bits == 0x7FF8_0000_0000_0000) {
         // Raw double — convert to byte
         ((needle as i64) & 0xFF) as u32
     } else {

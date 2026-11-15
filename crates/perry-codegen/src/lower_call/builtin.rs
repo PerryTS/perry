@@ -16,7 +16,10 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_pointer_or_null, unbox_to_i64,
+    FnCtx,
+};
 use crate::nanbox::double_literal;
 use crate::rooting::{self, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
@@ -345,11 +348,9 @@ pub(super) fn lower_builtin_new<'a>(
             } else {
                 "js_array_buffer_new_with_options"
             };
-            let handle = ctx.block().call(
-                I64,
-                runtime,
-                &[(DOUBLE, &size_box), (DOUBLE, &options_box)],
-            );
+            let handle =
+                ctx.block()
+                    .call(I64, runtime, &[(DOUBLE, &size_box), (DOUBLE, &options_box)]);
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
         }
         "ArrayBuffer" | "SharedArrayBuffer" => {
@@ -1404,7 +1405,9 @@ pub(super) fn lower_builtin_new<'a>(
             }
             let exec_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let exec_handle = unbox_to_i64(blk, &exec_box);
+            // By the tag alone: a Number executor (also an address-shaped
+            // one) reaches the runtime as null and throws its TypeError.
+            let exec_handle = unbox_pointer_or_null(blk, &exec_box);
             let p = blk.call(I64, "js_promise_new_with_executor", &[(I64, &exec_handle)]);
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }

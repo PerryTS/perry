@@ -54,16 +54,8 @@ pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
         return true;
     }
     if !jv.is_pointer() {
-        // Module-level raw-I64 object pointers (top16 == 0) — accept if it
-        // resolves to a real heap object.
-        let bits = value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
-            if is_primitive_cell(bits as usize) {
-                return false;
-            }
-            return is_valid_obj_ptr(bits as *const u8)
-                || crate::closure::is_closure_ptr(bits as usize);
-        }
+        // A primitive. A word whose top 16 bits are clear is a Number (a
+        // denormal, or +0), not a raw object pointer.
         return false;
     }
     let ptr = jv.as_pointer::<u8>() as usize;

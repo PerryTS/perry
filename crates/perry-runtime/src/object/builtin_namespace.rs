@@ -55,7 +55,10 @@ pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
 const fn console_index() -> usize {
     let mut i = 0;
     while i < COUNT {
-        if matches!(crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(), b"console") {
+        if matches!(
+            crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(),
+            b"console"
+        ) {
             return i;
         }
         i += 1;

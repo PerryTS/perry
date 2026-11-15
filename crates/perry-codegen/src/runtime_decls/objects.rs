@@ -457,11 +457,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[I64, I64, I64, PTR],
     );
-    module.declare_function(
-        "js_object_get_keyed_site_slow",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, I64, I32, PTR],
-    );
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
     // The static-key store site (`expr/put_value_store_ic.rs`): the store
@@ -667,7 +662,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_put_value_set_dynamic",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, I32],
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
     );
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables (where `use_local_exec_tls` turns this model into

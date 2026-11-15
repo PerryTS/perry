@@ -354,7 +354,7 @@ pub(super) unsafe fn dispatch_string(
                         .unwrap_or(std::ptr::null());
                     let s_ptr = receiver_string();
                     // Integer-returning methods MUST return raw `i as f64` (not
-                    // NaN-boxed INT32_TAG) — otherwise downstream comparisons
+                    // NaN-boxed INTERNAL_WORD_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values
                     // are NaN and any comparison with NaN returns false. The
                     // typed string-method path in `lower_string_method.rs`

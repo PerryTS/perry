@@ -247,16 +247,30 @@ extern "C" fn bctl_byob_request(_: *const ClosureHeader, this: JsThis) -> f64 {
     }
 }
 extern "C" fn bctl_desired_size(_: *const ClosureHeader, this: JsThis) -> f64 {
-    unsafe { js_readable_stream_controller_desired_size(receiver(this, KIND_BYTE_CONTROLLER, RBSC)) }
+    unsafe {
+        js_readable_stream_controller_desired_size(receiver(this, KIND_BYTE_CONTROLLER, RBSC))
+    }
 }
 extern "C" fn bctl_close(_: *const ClosureHeader, this: JsThis) -> f64 {
     unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "close", &[]) }
 }
 extern "C" fn bctl_enqueue(_: *const ClosureHeader, this: JsThis, chunk: f64) -> f64 {
-    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "enqueue", &[chunk]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYTE_CONTROLLER, RBSC),
+            "enqueue",
+            &[chunk],
+        )
+    }
 }
 extern "C" fn bctl_error(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
-    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "error", &[reason]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYTE_CONTROLLER, RBSC),
+            "error",
+            &[reason],
+        )
+    }
 }
 
 extern "C" fn byob_closed(_: *const ClosureHeader, this: JsThis) -> f64 {
@@ -267,13 +281,27 @@ extern "C" fn byob_closed(_: *const ClosureHeader, this: JsThis) -> f64 {
     }
 }
 extern "C" fn byob_cancel(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
-    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "cancel", &[reason])) }
+    unsafe {
+        promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| {
+            call(r, "cancel", &[reason])
+        })
+    }
 }
 extern "C" fn byob_read(_: *const ClosureHeader, this: JsThis, view: f64) -> f64 {
-    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "read", &[view])) }
+    unsafe {
+        promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| {
+            call(r, "read", &[view])
+        })
+    }
 }
 extern "C" fn byob_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 {
-    unsafe { call(receiver(this, KIND_BYOB_READER, RSBYOBR), "releaseLock", &[]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYOB_READER, RSBYOBR),
+            "releaseLock",
+            &[],
+        )
+    }
 }
 
 /// The byte stream a BYOB request receiver belongs to.

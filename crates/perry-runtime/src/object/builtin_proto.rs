@@ -1325,7 +1325,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     if v.is_any_string() {
         return Some(ReceiverFact::Builtin(BuiltinProto::String, false));
     }
-    if v.is_number() || v.is_int32() {
+    if v.is_number() {
         return Some(ReceiverFact::Builtin(BuiltinProto::Number, false));
     }
     if v.is_bool() {
@@ -1415,6 +1415,18 @@ pub(crate) unsafe fn redirect_call(
     argc: usize,
 ) -> Option<f64> {
     select_and_call(recv, recv, name, args, argc, false, None)
+}
+
+/// `Call(Get(recv, name), recv, args)` whatever the method is: the ordinary
+/// call for a primitive receiver an Array site refused. Its `Get` may select
+/// ANOTHER kind's builtin (`String.prototype.at` for a String), which must run
+/// as itself, never as the Array body the site was folded to.
+///
+/// # Safety
+/// `recv` and `args` are NaN-boxed values live at the call.
+pub(crate) unsafe fn complete_call(recv: f64, name: &[u8], args: &[f64]) -> f64 {
+    select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
+        .expect("a complete call always calls")
 }
 
 /// `Call(Get(holder, name), this, args)` — the one body behind every generic
@@ -1639,7 +1651,7 @@ pub extern "C-unwind" fn js_borrowed_object_has_own(this: f64, key: f64) -> f64 
     if let Some(v) = borrowed_object_redirect(b"hasOwnProperty", this, &[key]) {
         return v;
     }
-    super::js_object_has_own(this, key)
+    super::object_ops::has_own::object_prototype_has_own_property(this, key)
 }
 
 #[no_mangle]
@@ -1762,6 +1774,22 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call3(
 ) -> f64 {
     let args = [a0, a1, a2];
     js_builtin_proto_generic_call(GENERIC_RECEIVER, recv, method_id, args.as_ptr(), 3)
+}
+
+/// `Get(recv, "size")`: the miss of a Map / Set `size` read whose receiver
+/// failed the brand test (codegen `collection_receiver::lower_collection_size`):
+/// an own or inherited `size` (a getter runs with `recv` as `this`),
+/// `undefined`, or node's TypeError for null / undefined.
+#[no_mangle]
+pub extern "C-unwind" fn js_collection_size_get(recv: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    // The interned key may allocate on first use; the receiver is rooted.
+    let key = crate::string::canonical_key(b"size");
+    crate::value::js_dyn_index_get(
+        recv.get_nanbox_f64(),
+        crate::value::js_nanbox_string(key as i64),
+    )
 }
 
 /// Contract builds: a site that took the direct builtin path must

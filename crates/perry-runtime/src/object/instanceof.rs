@@ -85,9 +85,6 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
 #[inline]
 fn instanceof_lhs_is_primitive(value: f64) -> bool {
     let bits = value.to_bits();
-    if (bits >> 48) == 0 && bits != 0 {
-        return false;
-    }
     let jv = crate::JSValue::from_bits(bits);
     if jv.is_number() {
         return true;
@@ -97,7 +94,10 @@ fn instanceof_lhs_is_primitive(value: f64) -> bool {
         || jv.is_bool()
         || jv.is_any_string()
         || jv.is_bigint()
-        || (jv.is_int32() && class_ref_id(value).is_none())
+        // A runtime-internal word that names no class is no object: the walk
+        // answers false for it and never reads it as an address.
+        || (bits & crate::value::TAG_MASK == crate::value::INTERNAL_WORD_TAG
+            && class_ref_id(value).is_none())
 }
 
 /// Candidate heap address of an `instanceof` operand; 0 for every primitive.
@@ -333,9 +333,10 @@ fn ordinary_has_instance_prototype_walk_rooted(
         if jv.is_null()
             || jv.is_undefined()
             || jv.is_bool()
-            || jv.is_int32()
             || jv.is_any_string()
             || jv.is_bigint()
+            // A runtime-internal word is no object and no address.
+            || current.to_bits() & crate::value::TAG_MASK == crate::value::INTERNAL_WORD_TAG
             || (jv.is_number() && value_addr(current) == 0)
             || unsafe { crate::symbol::js_is_symbol(current) != 0 }
         {
@@ -486,8 +487,6 @@ fn proto_identity_addr(v: f64) -> usize {
     let top16 = bits >> 48;
     if top16 == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits >= 0x1000 {
-        bits as usize
     } else {
         0
     }
@@ -504,8 +503,6 @@ fn throw_non_object_prototype(proto: f64) -> ! {
         "null".to_string()
     } else if jv.is_bool() {
         (proto.to_bits() == crate::value::TAG_TRUE).to_string()
-    } else if jv.is_int32() {
-        jv.as_int32().to_string()
     } else if jv.is_number() {
         if proto.is_nan() {
             "NaN".to_string()
@@ -592,7 +589,6 @@ fn rhs_is_object_value(value: f64) -> bool {
         || jsval.is_undefined()
         || jsval.is_bool()
         || jsval.is_any_string()
-        || jsval.is_int32()
         || jsval.is_bigint()
     {
         return false;
@@ -609,18 +605,8 @@ fn rhs_is_object_value(value: f64) -> bool {
         }
         return true;
     }
-    // Raw bitcast pointers (typed arrays / buffers / arrays) — these are
-    // objects too.
-    let top16 = bits >> 48;
-    if top16 == 0 && bits >= 0x1000 {
-        let addr = bits as usize;
-        // #10694: a raw word must be allocator-owned before the brand read.
-        return crate::buffer::buffer_family_type_owned(addr).is_some()
-            || crate::set::is_registered_set(addr)
-            || crate::map::is_registered_map(addr)
-            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
-            || addr >= crate::gc::GC_HEADER_SIZE;
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer.
     false
 }
 
@@ -883,13 +869,13 @@ mod null_lhs_tests {
             f64::from_bits(crate::value::TAG_UNDEFINED),
             f64::from_bits(crate::value::TAG_NULL),
             f64::from_bits(crate::value::TAG_TRUE),
-            f64::from_bits(crate::value::INT32_TAG | 5), // int32 5
-            f64::from_bits(crate::value::STRING_TAG | 0x1000), // string tag (addr never deref'd)
-            f64::from_bits(crate::value::BIGINT_TAG | 0x1000), // bigint tag (addr never deref'd)
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5), // an internal word
+            f64::from_bits(crate::value::STRING_TAG | 0x1000),   // string tag (addr never deref'd)
+            f64::from_bits(crate::value::BIGINT_TAG | 0x1000),   // bigint tag (addr never deref'd)
             // #10479: inline SSO strings ("uri", "a") and a synthetic class ref.
             f64::from_bits(crate::value::SHORT_STRING_TAG | 0x0300_0069_7275),
             f64::from_bits(crate::value::SHORT_STRING_TAG | 0x0100_0000_0061),
-            f64::from_bits(crate::value::INT32_TAG | 0x8000_0000),
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 0x8000_0000),
             // Ordinary numbers: a dynamic `1.5 instanceof Number` reached the
             // walk and matched through the ToObject wrapper.
             1.5,
@@ -1009,8 +995,8 @@ mod primitive_lhs_native_brand_tests_11261 {
             f64::from_bits(crate::value::STRING_TAG | 0x1000),
             f64::from_bits(crate::value::SHORT_STRING_TAG | 0x0300_0069_7275),
             f64::from_bits(crate::value::BIGINT_TAG | 0x1000),
-            // An INT32 payload that is not a registered class id.
-            f64::from_bits(crate::value::INT32_TAG | 0x7654_3210),
+            // An internal word whose payload is no registered class id.
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 0x7654_3210),
             0.0,
             -0.0,
             3.0,
@@ -1019,6 +1005,9 @@ mod primitive_lhs_native_brand_tests_11261 {
             -7.0,
             f64::NAN,
             f64::INFINITY,
+            // A word with clear top 16 bits is a Number (a denormal), not a
+            // raw pointer.
+            f64::from_bits(PROBE_HANDLE as u64),
         ];
         for v in primitives {
             assert!(
@@ -1031,8 +1020,6 @@ mod primitive_lhs_native_brand_tests_11261 {
             // A POINTER-tagged registry handle and a heap address.
             f64::from_bits(crate::value::HANDLE_TAG | PROBE_HANDLE as u64),
             f64::from_bits(crate::value::POINTER_TAG | 0x7F12_3456_7890),
-            // The raw-bitcast band is left to the downstream decoders.
-            f64::from_bits(PROBE_HANDLE as u64),
         ];
         for v in not_primitive {
             assert!(

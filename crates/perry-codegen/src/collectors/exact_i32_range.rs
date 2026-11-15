@@ -721,7 +721,8 @@ pub(crate) fn overflow_exit_counter(
     let unit_step = matches!(by, StepBy::One)
         || super::index_uses::collect_index_used_locals(body).contains(&counter);
     let guarded = conjuncts.iter().any(|(op, bound)| {
-        let length_bound = matches!(bound, Expr::PropertyGet { property, .. } if property == "length");
+        let length_bound =
+            matches!(bound, Expr::PropertyGet { property, .. } if property == "length");
         matches!(op, CompareOp::Lt | CompareOp::Le)
             && invariant(bound)
             && (unit_step || !length_bound)
@@ -802,7 +803,10 @@ mod tests {
             left: lg(1),
             right: Box::new(Expr::Integer(100)),
         };
-        assert_eq!(for_step_fits(None, Some(&small), &upd, &[], &mut r), Some(1));
+        assert_eq!(
+            for_step_fits(None, Some(&small), &upd, &[], &mut r),
+            Some(1)
+        );
     }
 
     #[test]
@@ -875,7 +879,11 @@ mod tests {
         // 46340 + step must stay inside i32.
         let huge = Expr::LocalSet(
             1,
-            bin(BinaryOp::Add, lg(1), Box::new(Expr::Integer(i64::from(i32::MAX)))),
+            bin(
+                BinaryOp::Add,
+                lg(1),
+                Box::new(Expr::Integer(i64::from(i32::MAX))),
+            ),
         );
         assert_eq!(
             for_step_fits(Some(&init), Some(&cond), &huge, &[], &mut r),

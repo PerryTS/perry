@@ -1054,8 +1054,11 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             ) =>
         {
             let l = lower_expr_native_i32(ctx, left)?.value;
-            let r = lower_expr_native_i32(ctx, right)?.value;
+            let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
+            if matches!(op, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) {
+                r = blk.js_shift_count(&r);
+            }
             Some(match op {
                 BinaryOp::Add => blk.add(I32, &l, &r),
                 BinaryOp::Sub => blk.sub(I32, &l, &r),
@@ -1493,8 +1496,11 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         }
         Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
             let l = lower_expr_native_i32(ctx, left)?.value;
-            let r = lower_expr_native_i32(ctx, right)?.value;
+            let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
+            if matches!(op, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) {
+                r = blk.js_shift_count(&r);
+            }
             match op {
                 BinaryOp::Add => blk.add(I32, &l, &r),
                 BinaryOp::Sub => blk.sub(I32, &l, &r),
@@ -1693,6 +1699,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         } => {
             let l = lower_expr_native_u32(ctx, left)?.value;
             let r = lower_expr_native_u32(ctx, right)?.value;
+            let r = ctx.block().js_shift_count(&r);
             ctx.block().lshr(I32, &l, &r)
         }
         _ => {

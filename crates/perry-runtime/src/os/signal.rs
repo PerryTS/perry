@@ -1046,9 +1046,7 @@ fn read_js_string(value: f64) -> Option<String> {
 }
 
 fn numeric_value(jv: JSValue) -> Option<f64> {
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() {
+    if jv.is_number() {
         Some(jv.as_number())
     } else {
         None
@@ -1302,11 +1300,7 @@ pub extern "C" fn js_process_kill(pid: f64, signal: f64) -> f64 {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let pid_i = if pid_jv.is_int32() {
-        pid_jv.as_int32()
-    } else {
-        pid_jv.as_number() as i32
-    };
+    let pid_i = pid_jv.as_number() as i32;
     let sig_i = normalize_process_signal(signal);
     #[cfg(unix)]
     unsafe {

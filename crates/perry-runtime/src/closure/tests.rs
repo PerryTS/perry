@@ -51,6 +51,53 @@ fn test_closure_capture_bits_roundtrip_tagged_values() {
     }
 }
 
+/// A heap reference in a capture slot is a POINTER_TAG value: the collector
+/// reads the slot as value bits, and the reader gets the address back.
+#[test]
+fn capture_ref_is_stored_tagged_and_read_back_as_the_address() {
+    let target = js_closure_alloc(&TEST_CLOSURE_FUNC, 0);
+    let closure = js_closure_alloc(&TEST_CLOSURE_FUNC, 5);
+    closure_set_capture_ref(closure, 0, target as i64);
+    let bits = js_closure_get_capture_bits(closure, 0);
+    assert_eq!(bits & crate::value::TAG_MASK, crate::value::POINTER_TAG);
+    assert_eq!(bits & crate::value::POINTER_MASK, target as u64);
+    assert_eq!(closure_capture_ref(closure, 0), target as i64);
+    assert!(crate::gc::layout_pointer_bearing_bits(bits));
+    // The value the slot holds is the function object itself.
+    assert_eq!(
+        crate::value::js_nanbox_get_pointer(js_closure_get_capture_f64(closure, 0)),
+        target as i64
+    );
+
+    // Null stays the zero word and reads back as null.
+    closure_set_capture_ref(closure, 1, 0);
+    assert_eq!(js_closure_get_capture_bits(closure, 1), 0);
+    assert_eq!(closure_capture_ref(closure, 1), 0);
+
+    // An address that already carries its tag is stored once-tagged.
+    closure_set_capture_ref(
+        closure,
+        2,
+        (crate::value::POINTER_TAG | target as u64) as i64,
+    );
+    assert_eq!(js_closure_get_capture_bits(closure, 2), bits);
+
+    // The reader takes the payload of a string- or bigint-tagged word too,
+    // and answers null for every value that is not a reference.
+    js_closure_set_capture_bits(closure, 3, crate::value::STRING_TAG | target as u64);
+    assert_eq!(closure_capture_ref(closure, 3), target as i64);
+    for not_a_reference in [
+        crate::value::TAG_UNDEFINED,
+        crate::value::TAG_NULL,
+        crate::value::TAG_TRUE,
+        1.5f64.to_bits(),
+        (-0.0f64).to_bits(),
+    ] {
+        js_closure_set_capture_bits(closure, 4, not_a_reference);
+        assert_eq!(closure_capture_ref(closure, 4), 0, "{not_a_reference:#x}");
+    }
+}
+
 #[test]
 fn test_closure_alloc_with_captures_singleton_preserves_capture_bits() {
     test_clear_singleton_closure_caches();

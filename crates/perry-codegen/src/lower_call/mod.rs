@@ -34,7 +34,6 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
-pub(crate) mod field_read_call;
 pub(crate) mod birth_lanes;
 #[cfg(test)]
 mod birth_lanes_tests;
@@ -48,6 +47,7 @@ mod closure_analysis;
 #[cfg(test)]
 mod closure_call_arity_tests;
 mod console_promise;
+pub(crate) mod field_read_call;
 pub(crate) use console_promise::{
     emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
     try_lower_optional_method_call,

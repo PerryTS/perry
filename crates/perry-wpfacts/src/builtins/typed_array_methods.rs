@@ -71,14 +71,20 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
     species(m, t, call, vec![num]);
 }
 
-/// `slice(start, end)` of a Buffer. `Buffer.prototype.slice` is a view of
-/// the same memory (Node lib/buffer.js: `subarray`'s result, a Buffer): its
-/// [[ViewedArrayBuffer]] is the receiver's. It converts start and end
-/// (ToIntegerOrInfinity).
-pub(super) fn buffer_view_slice(m: &mut Model, t: Tok, call: CallId) {
+/// `Buffer.prototype.subarray` / `slice` (Node; the runtime's
+/// `buffer_dispatch`) on Buffer `t`: start and end ToIntegerOrInfinity,
+/// then a new Buffer over the receiver's bytes (%TypedArray%.prototype.
+/// subarray, 23.2.3.28, makes one of the receiver's kind; Node's Buffer
+/// `slice` is the same view, lib/buffer.js). The runtime constructs no
+/// species. Its elements are Numbers, the receiver's buffer is shared with
+/// it, and its [[ViewedArrayBuffer]] is the receiver's (`Cons::ViewedBuffer`,
+/// what `.buffer` reads). A spread argument list reaches here as its view
+/// (`Model::builtin_args_view`): positions 0 and 1 hold every spread
+/// element, so each one is converted.
+pub(super) fn buffer_view(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
     for &a in c.args.iter().take(2) {
-        to_prim(m, a, "buffer slice start/end ToIntegerOrInfinity");
+        to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
     }
     let recv = m.node_l("buffer-receiver");
     m.add_tok(recv, t);

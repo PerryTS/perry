@@ -67,7 +67,9 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_T
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
-pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
+pub(crate) use access::{
+    admitted_u8_read, admitted_u8_write, is_admitted_u8_cell, js_buffer_set_value,
+};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
@@ -92,7 +94,8 @@ pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 pub use own_props::{
     buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
-    buffer_own_prop_names, buffer_read_own_prop, buffer_set_own_prop,
+    buffer_inherited_get, buffer_inherited_has, buffer_own_prop_names, buffer_read_own_prop,
+    buffer_set_own_prop,
 };
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;
@@ -380,6 +383,26 @@ mod tests {
             crate::object::js_object_get_field_by_name_f64(result_obj, value_key),
             7.0
         );
+    }
+
+    #[test]
+    fn a_byte_store_of_a_js_value_is_tonumber_then_modulo_256() {
+        let buf = buffer_alloc(6);
+        unsafe {
+            super::store::set_length(buf as usize, 6);
+        }
+        // Past int32 a saturating `as i32` gave 255; ToUint8 is modular.
+        let values = [1e10, 2f64.powi(31) + 5.0, -1.0, 300.7, f64::NAN, -0.5];
+        for (i, value) in values.iter().enumerate() {
+            js_buffer_set_value(buf, i as i32, *value);
+        }
+        let bytes: Vec<i32> = (0..6).map(|i| js_buffer_get(buf, i)).collect();
+        assert_eq!(bytes, [0, 5, 255, 44, 0, 0]);
+        // A Boolean and null convert; an index past the end stores nothing.
+        js_buffer_set_value(buf, 0, f64::from_bits(crate::value::TAG_TRUE));
+        js_buffer_set_value(buf, 1, f64::from_bits(crate::value::TAG_NULL));
+        js_buffer_set_value(buf, 6, 9.0);
+        assert_eq!((js_buffer_get(buf, 0), js_buffer_get(buf, 1)), (1, 0));
     }
 
     #[test]

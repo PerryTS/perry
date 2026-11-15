@@ -54,7 +54,7 @@ impl Model {
                 };
                 for &t in toks {
                     if let Some(at) = at {
-                        self.len_event(t, at, false);
+                        self.len_event_through(t, at, false, n);
                     }
                     self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
@@ -573,7 +573,15 @@ impl Model {
                     self.cons(one, Cons::Load { key, dst: read });
                 }
             }
+            Cons::Objects { dst } => {
+                // ToObject of an object is the object; a primitive's
+                // wrapper is the caller's one `Guard` per kind (`to_object_into`).
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+            }
             Cons::Fulfil { dst } => {
+                // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
                 // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.
                 if prim != 0 {
                     let strs = self.nodes[n as usize].strs;
@@ -730,7 +738,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
-                        self.len_event(t, u32::MAX, false);
+                        self.len_event_through(t, u32::MAX, false, NO_NODE);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
@@ -951,6 +959,7 @@ impl Model {
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
                     self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.note_unnamed_set(target);
                 }
             }
             Cons::CreateProto { reason } => {
@@ -1352,6 +1361,15 @@ impl Model {
                             );
                         }
                         self.note_objproto_accessor();
+                        // `ObjectProto` stands for every built-in prototype:
+                        // the lookups of a primitive (`prim_load`) and of an
+                        // unknown value (⊤) end there too, and no walk runs
+                        // for them. Any of them may call the accessor, with
+                        // any receiver.
+                        if self.reach_proto_accessors {
+                            let r = self.reason("accessor on a built-in prototype");
+                            self.escape(f, r);
+                        }
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
                 }
@@ -1499,9 +1517,10 @@ impl Model {
                 dst,
                 shape,
                 enumerable,
+                kept,
             } => {
                 for &t in toks {
-                    self.idx_load_tok(idx, t, dst, shape, enumerable);
+                    self.idx_load_tok(idx, t, dst, shape, enumerable, kept);
                 }
                 // A primitive receiver (7.3.2 GetV): ToObject, then the read
                 // under every key the key may be (the rule of `Cons::Load`):

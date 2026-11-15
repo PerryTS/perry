@@ -25,18 +25,12 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     let bits = value.to_bits();
     let jsvalue = JSValue::from_bits(bits);
 
-    // Get the raw pointer, handling both NaN-boxed and raw bitcast pointers
     let raw_ptr: *const u8 = if jsvalue.is_pointer() {
         jsvalue.as_pointer::<u8>()
     } else {
-        // Check for raw bitcast pointer (no NaN-box tag, stored as f64 bits)
-        let raw = bits;
-        let upper = raw >> 48;
-        if upper == 0 && (raw & 0x0000_FFFF_FFFF_FFFF) > 0x10000 {
-            raw as *const u8
-        } else {
-            return false_val;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return false_val;
     };
 
     if raw_ptr.is_null() {

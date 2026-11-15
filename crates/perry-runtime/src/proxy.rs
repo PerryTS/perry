@@ -143,10 +143,8 @@ fn proxy_arg_is_object(value: f64) -> bool {
         }
         return true;
     }
-    // Module-level raw-I64 object/array pointers (top16 == 0).
-    if top == 0 && bits > 0x10000 {
-        return true;
-    }
+    // Every other value is a primitive. A word whose top 16 bits are clear
+    // is a Number (a denormal, or +0), not a raw object pointer.
     false
 }
 

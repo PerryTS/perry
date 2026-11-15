@@ -10,7 +10,7 @@ fn strict_dense_overwrite_preserves_numeric_and_pointer_layouts() {
     js_array_push_f64(arr, 20.0);
     assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
 
-    let tagged_i32 = f64::from_bits(crate::value::INT32_TAG | 33);
+    let tagged_i32 = f64::from_bits(crate::value::INTERNAL_WORD_TAG | 33);
     assert_eq!(
         indexing::try_strict_dense_index_set(arr, 1, tagged_i32),
         Some(arr)

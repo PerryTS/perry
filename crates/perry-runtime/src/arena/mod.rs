@@ -7,6 +7,8 @@
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
 pub(crate) use std::collections::hash_map::Entry;
 
+#[cfg(perry_gc_instruments)]
+pub(crate) mod alloc_life;
 pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
@@ -187,6 +189,8 @@ pub(crate) use quarantine::{
 pub use quarantine::{quarantine_stats, QuarantineStats};
 
 // stats.rs
+#[cfg(perry_gc_instruments)]
+pub(crate) use stats::allocation_totals_by_arena;
 pub(crate) use stats::{active_survivor_space, allocation_totals, inactive_survivor_space};
 pub use stats::{
     arena_live_allocated_bytes, js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes,

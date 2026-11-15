@@ -85,6 +85,7 @@ impl Model {
         dst: NodeId,
         shape: KeyShapeId,
         enumerable: bool,
+        kept: bool,
     ) {
         if enumerable
             && t != TOP
@@ -121,21 +122,30 @@ impl Model {
         // past its end only (`Cons::ElemUndef`, watching the key and the
         // length); below it, an element or a hole (`hole`).
         let watched = self.elem_undef_watched(t);
-        if !watched {
+        // The in-bounds read (`gen/in_bounds.rs`): the key was below the
+        // length of an Array that only grows, so the read is past its end
+        // only under a key that is no index (`Model::kept_read`).
+        let kept = kept && self.kept_read(t);
+        if !watched && !kept {
             self.add_prim(dst, prim::UNDEF);
         }
         if self.idx_done.insert((idx, t, dst, 0)) {
-            if watched {
+            if watched || kept {
                 let h = self.hole(t);
                 self.edge(h, dst);
-                let len = self.arr_len(t);
                 let c = Cons::ElemUndef {
                     obj: t,
                     key: idx,
                     dst,
                 };
+                if kept {
+                    self.kept_reads.entry(t).or_default().push((idx, dst));
+                }
                 self.cons(idx, c);
-                self.cons(len, c);
+                if watched {
+                    let len = self.arr_len(t);
+                    self.cons(len, c);
+                }
             }
             self.plain_key(t, ChainAct::Load(dst));
             self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
@@ -504,7 +514,7 @@ impl Model {
         enumerable: bool,
     ) {
         if !self.own_read_obj(t) {
-            return self.idx_load_tok(idx, t, dst, shape, enumerable);
+            return self.idx_load_tok(idx, t, dst, shape, enumerable, false);
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
@@ -693,6 +703,7 @@ impl Model {
                     dst,
                     shape,
                     enumerable,
+                    kept: false,
                 },
             );
         }

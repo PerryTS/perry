@@ -8,6 +8,9 @@ import sys
 if sys.argv[1:] == ["--version"]:
     print("v1.0.0")
     sys.exit(0)
+# The web host runs a page; the stand-in page is the replay script fake_perry wrote.
+if sys.argv[1].endswith("parity_web_host.cjs"):
+    os.execv(sys.executable, [sys.executable, *sys.argv[2:]])
 source = next(a for a in sys.argv[1:] if re.search(r"\.(m|c)?ts$|\.cjs$", a))
 text = open(source, encoding="utf-8").read()
 for line in re.findall(r"^// node-out: ?(.*)$", text, re.M):

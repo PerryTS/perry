@@ -51,6 +51,11 @@ pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i
     }
     unsafe {
         let length = (*arr).length;
+        if length > (*arr).capacity {
+            // A sparse Array: the complete search reads past the store by
+            // HasProperty / Get.
+            return js_array_indexOf_jsvalue(arr, value, 0.0, 0) as i32;
+        }
         let elements_ptr = array_elements_ptr(arr);
 
         for i in 0..length as usize {
@@ -456,8 +461,14 @@ pub extern "C" fn js_array_includes_jsvalue(
         // which differs from === in one place: NaN equals NaN. Routing
         // through `js_jsvalue_same_value_zero` preserves the `indexOf(NaN) ===
         // -1` / `includes(NaN) === true` split.
+        // A sparse store, an index accessor or an inherited index: `Get`.
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in start..length {
-            let element = array_element_get_value(elements_ptr, i as usize);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i as usize)
+            };
             if crate::value::js_jsvalue_same_value_zero(element, value) == 1 {
                 return 1;
             }

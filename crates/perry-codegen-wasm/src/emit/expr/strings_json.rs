@@ -81,6 +81,14 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "json_stringify", 1);
             }
+            // The HIR lowers every `JSON.stringify` call to this form.
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, val);
+                self.emit_store_arg(func, 1, replacer);
+                self.emit_store_arg(func, 2, space);
+                self.emit_memcall(func, "json_stringify", 3);
+            }
 
             _ => return false,
         }

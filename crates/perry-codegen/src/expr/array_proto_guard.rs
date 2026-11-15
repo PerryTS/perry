@@ -75,6 +75,111 @@ pub(crate) fn emit_array_has_named_layout(blk: &mut LlBlock, arr_addr: &str) -> 
     blk.icmp_ne(crate::types::I64, &named, "0")
 }
 
+/// `PERRY_ARRAY_METHOD_TIERS=0` (`off`, `false`) keeps the by-name Array
+/// method tiers that run the builtin without resolving the method on the
+/// receiver, as before this switch existed:
+///
+/// * `pop` on a local, parameter or module-binding receiver
+///   (`Expr::ArrayPop`) and the slow arm of the inline `pop` call
+///   `js_array_pop_f64_site`, which tests the prototype but no own `pop`
+///   (default: the checked entry `js_array_m_pop0`);
+/// * a folded Array node whose receiver is annotated but not proven an Array
+///   (a module binding read inside a function) is guarded by the global
+///   install flag, which no Array arms (default: the Array header test);
+/// * the guard's question for a receiver that is no Array is "may it own the
+///   name" (`js_receiver_may_own_named_method`), which answers no for an
+///   ordinary object (default: `js_array_method_needs_get`);
+/// * `findLast`, `findLastIndex`, `with`, `entries`, `keys` and `values` on a
+///   proven Array reach their direct arm unguarded.
+///
+/// Read per call, like `PERRY_PUSH_METHOD_TIERS`; a compile-cache input.
+pub(crate) fn method_tiers_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_ARRAY_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The runtime question behind an Array site's guard: with the switch on,
+/// THE Array-site predicate (`js_array_method_needs_get`: also yes for an
+/// ordinary object behind the annotation).
+pub(crate) fn array_guard_predicate() -> &'static str {
+    if method_tiers_enabled() {
+        "js_array_method_needs_get"
+    } else {
+        "js_receiver_may_own_named_method"
+    }
+}
+
+/// `arr.pop()`'s runtime entry on the boxed receiver `recv_box` whose unboxed
+/// address is `handle`: the checked entry `js_array_m_pop0` (the receiver's
+/// own proof, else the real `Get`), or with the switch off the site entry
+/// that only tests the prototype.
+pub(crate) fn emit_array_pop_call(blk: &mut LlBlock, recv_box: &str, handle: &str) -> String {
+    if method_tiers_enabled() {
+        blk.call(
+            crate::types::DOUBLE,
+            "js_array_m_pop0",
+            &[(crate::types::DOUBLE, recv_box)],
+        )
+    } else {
+        blk.call(
+            crate::types::DOUBLE,
+            "js_array_pop_f64_site",
+            &[(crate::types::I64, handle)],
+        )
+    }
+}
+
+/// Branch to `plain_label` when the NaN-boxed `recv` is a live, unforwarded
+/// `GC_TYPE_ARRAY` head that owns no named property and reads its methods from
+/// the unmodified `%Array.prototype%` (so `recv.<method>` IS the realm's
+/// builtin), else to `other_label`, where the caller performs the real `Get`.
+/// The receiver is only annotated an Array, so the header is read behind the
+/// heap-pointer band test (the test `class_field_push` makes).
+pub(crate) fn emit_plain_array_method_branch(
+    ctx: &mut super::FnCtx<'_>,
+    recv: &str,
+    plain_label: &str,
+    other_label: &str,
+) {
+    use crate::types::I64;
+    let hdr = ctx.new_block("arrmethod.header");
+    let hdr_label = ctx.block_label(hdr);
+    let handle = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv);
+        let tag = blk.lshr(I64, &bits, "48");
+        let pointer = blk.icmp_eq(I64, &tag, "32765");
+        let handle = blk.and(I64, &bits, "281474976710655");
+        let above = blk.icmp_ugt(I64, &handle, super::receiver_range::HANDLE_BAND_TOP_LITERAL);
+        let below = blk.icmp_ult(I64, &handle, "140737488355328");
+        let range = blk.and(I1, &above, &below);
+        let heap = blk.and(I1, &pointer, &range);
+        blk.cond_br(&heap, &hdr_label, other_label);
+        handle
+    };
+    ctx.current_block = hdr;
+    let blk = ctx.block();
+    let ptr = blk.inttoptr(I64, &handle);
+    let kind_ptr = blk.gep(I8, &ptr, &[(I64, "-8")]);
+    let kind = blk.load(I8, &kind_ptr);
+    let array = crate::target_layout::emit_gc_type_is_array(blk, I8, &kind);
+    let flags_ptr = blk.gep(I8, &ptr, &[(I64, "-7")]);
+    let flags = blk.load(I8, &flags_ptr);
+    let forwarded = blk.and(I8, &flags, "128");
+    let live = blk.icmp_eq(I8, &forwarded, "0");
+    let reserved_ptr = blk.gep(I8, &ptr, &[(I64, "-6")]);
+    let reserved = blk.load(I16, &reserved_ptr);
+    let has_named = emit_array_has_named_layout(blk, &handle);
+    let no_own = blk.xor(I1, &has_named, "true");
+    let default_proto = emit_array_method_admission(blk, &reserved);
+    let plain = blk.and(I1, &array, &live);
+    let method = blk.and(I1, &no_own, &default_proto);
+    let ok = blk.and(I1, &plain, &method);
+    blk.cond_br(&ok, plain_label, other_label);
+}
+
 /// Does any code of the program define an element descriptor on an array
 /// (`patched_builtins::ARRAY_ELEMENT_DESCRIPTORS`)? Without one no array has
 /// element descriptors and the per-read query is not emitted at all.

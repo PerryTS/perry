@@ -413,6 +413,79 @@ pub(super) fn prove_group_numeric_fields<'a>(
 
 // ── #7770: numeric-by-construction locals ──────────────────────────────────
 
+/// `PERRY_LITERAL_ARRAY_WRITE_CHECK=0` (`off`, `false`) keeps today's main:
+/// a local bound to an Array literal of numbers counts as numeric storage
+/// whatever the body later stores into it. Read per call; a compile-cache
+/// input.
+pub(crate) fn literal_array_write_check_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_LITERAL_ARRAY_WRITE_CHECK").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// Drop from `inits` every local bound to an Array literal of numbers
+/// (`const a = [1, 2, 3]`, the Add rule's `numeric_storage`) that `stmts` use
+/// other than to read an element (`a[i]`) or `length`. An element store, a
+/// method call, an alias, an argument or a capture can put a non-Number into
+/// the Array; then `a[i]` is no Number-or-`undefined` and the accumulator of
+/// `t = t + a[i]` is no Number by construction: after
+/// `(a as any)[1] = "two"` its numeric arm `fadd`ed the string it held
+/// (`1two` where node prints `1two3`). The locals are block-scoped bindings
+/// of this body, so its expressions (closure bodies included) are all their
+/// uses.
+pub(super) fn retain_unwritten_literal_arrays(
+    stmts: &[Stmt],
+    extra: &[&Expr],
+    inits: &mut HashMap<u32, Option<&Expr>>,
+) {
+    if !literal_array_write_check_enabled() {
+        return;
+    }
+    let candidates: HashSet<u32> = inits
+        .iter()
+        .filter(|(_, init)| {
+            matches!(init, Some(Expr::Array(elements, _))
+                if elements.iter().all(|e| matches!(e, Expr::Integer(_) | Expr::Number(_))))
+        })
+        .map(|(&id, _)| id)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    // Every use of a candidate, and the uses that only read it.
+    let mut uses: HashMap<u32, (usize, usize)> = HashMap::new();
+    let mut visit = |e: &Expr| {
+        let read = match e {
+            Expr::LocalGet(id) => {
+                if candidates.contains(id) {
+                    uses.entry(*id).or_default().0 += 1;
+                }
+                return;
+            }
+            Expr::IndexGet { object, .. } => object,
+            Expr::PropertyGet {
+                object, property, ..
+            } if property == "length" => object,
+            _ => return,
+        };
+        if let Expr::LocalGet(id) = read.as_ref() {
+            if candidates.contains(id) {
+                uses.entry(*id).or_default().1 += 1;
+            }
+        }
+    };
+    perry_hir::tdz_check::for_each_stmts_expr(stmts, &mut visit);
+    for e in extra {
+        perry_hir::tdz_check::for_each_expr_in(e, &mut visit);
+    }
+    for id in candidates {
+        if uses.get(&id).is_some_and(|&(all, reads)| all != reads) {
+            inits.remove(&id);
+        }
+    }
+}
+
 /// Extra leaves and entry candidates for one guarded region's F clone.
 pub(crate) struct RegionNumberAssumptions<'a> {
     pub(crate) entry_candidates: &'a HashSet<u32>,
@@ -524,6 +597,11 @@ pub(crate) fn collect_numeric_by_construction_locals_in_region<'a>(
             stable_local_inits.entry(id).or_insert(Some(*init));
         }
     }
+    retain_unwritten_literal_arrays(
+        stmts,
+        region.map_or(&[][..], |r| r.loop_control),
+        &mut stable_local_inits,
+    );
     let empty_members: HashSet<u32> = shape_members.clone();
     let empty_fields: HashSet<String> = shape_numeric_fields.clone();
     let mut numeric: HashSet<u32> = let_bound

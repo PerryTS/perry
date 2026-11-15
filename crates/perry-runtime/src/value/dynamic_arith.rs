@@ -32,8 +32,6 @@ unsafe fn describe_mix_operand(v: f64) -> String {
     if jv.is_bigint() {
         let s = crate::bigint_hooks::js_bigint_to_string(jv.as_bigint_ptr());
         format!("bigint({}n)", crate::exception::string_header_to_string(s))
-    } else if jv.is_int32() {
-        format!("int32({})", jv.as_int32())
     } else if jv.is_bool() {
         format!("bool({})", jv.as_bool())
     } else if jv.is_undefined() {
@@ -388,22 +386,6 @@ unsafe fn dynamic_bigint_binary_op_from_handles<'scope>(
     js_nanbox_bigint(result as i64)
 }
 
-/// Decode an int32-tagged operand to its plain-double value before an f64
-/// arithmetic op. An int32 is NaN-boxed (INT32_TAG = 0x7FFE), so its f64 bits
-/// ARE a NaN; a raw `a OP b` would propagate the tag through the FPU (ARM64
-/// keeps the NaN payload) and hand back the boxed operand instead of the
-/// result — e.g. a better-sqlite3 integer column `n` made `n + 100 === n`.
-/// Plain doubles (and real NaNs from arithmetic) pass through unchanged.
-#[inline]
-fn numify_arith_operand(v: f64) -> f64 {
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    }
-}
-
 /// True when a NaN-boxed operand is a plain IEEE-754 double — its top 16 bits
 /// (sign stripped) sit below the `0x7FF9` Perry tag band, so it is not a
 /// string / pointer / bigint / int32 / singleton.
@@ -479,7 +461,7 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
             crate::bigint_hooks::js_bigint_mul,
         );
     }
-    numify_arith_operand(a) * numify_arith_operand(b)
+    a * b
 }
 
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
@@ -488,7 +470,7 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint_hooks::js_bigint_add);
     }
-    numify_arith_operand(a) + numify_arith_operand(b)
+    a + b
 }
 
 /// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
@@ -671,15 +653,11 @@ unsafe extern "C" fn dynamic_add_non_plain(a: f64, b: f64) -> f64 {
     // `n + 100 === n`). Plain numbers already hold their value in the f64.
     let a_num = if a_val.is_number() {
         a_prim_handle.get_nanbox_f64()
-    } else if a_val.is_int32() {
-        a_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(a_prim_handle.get_nanbox_f64())
     };
     let b_num = if b_val.is_number() {
         b_prim_handle.get_nanbox_f64()
-    } else if b_val.is_int32() {
-        b_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(b_prim_handle.get_nanbox_f64())
     };
@@ -704,7 +682,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
             crate::bigint_hooks::js_bigint_sub,
         );
     }
-    numify_arith_operand(a) - numify_arith_operand(b)
+    a - b
 }
 
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
@@ -725,7 +703,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
             crate::bigint_hooks::js_bigint_div,
         );
     }
-    numify_arith_operand(a) / numify_arith_operand(b)
+    a / b
 }
 
 /// JS `%` on two Numbers (ECMA-262 Number::remainder).
@@ -794,8 +772,6 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
             crate::bigint_hooks::js_bigint_mod,
         );
     }
-    let a = numify_arith_operand(a);
-    let b = numify_arith_operand(b);
     // JS `%` is C `fmod`: the result takes the *sign of the dividend*, so
     // `-1 % -1` is `-0`, not `+0`. The old `a - (a / b).trunc() * b` closed-form
     // lost that (`-1.0 - 1.0 * -1.0 == +0.0`) and also returned `NaN` for

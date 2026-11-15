@@ -56,8 +56,7 @@ pub(super) unsafe fn construct(
         BuiltinConstructorIdentity::ReadableStreamDefaultReader
         | BuiltinConstructorIdentity::ReadableStreamBYOBReader => {
             return Some(
-                crate::external_family::construct(name, args)
-                .unwrap_or_else(|| {
+                crate::external_family::construct(name, args).unwrap_or_else(|| {
                     // No provider linked: nothing can be a ReadableStream.
                     crate::fs::validate::throw_type_error_with_code(
                         "The \"stream\" argument must be an instance of ReadableStream.",

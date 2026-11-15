@@ -51,13 +51,16 @@ use wasm_encoder::{
 
 // Explicit named re-exports of cross-sibling items. Sub-modules with
 // `use super::*;` see these names at module scope.
-use closures::{collect_closures_from_expr, collect_closures_from_stmts};
+use closures::{
+    collect_closures_from_expr, collect_closures_from_stmts, generator_record_captures,
+};
 // `f64_const_bits` is held alive for future use (matches the pre-split
 // `#[allow(dead_code)]` annotation on its original definition).
 use constants::{
     f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 use func_emit_ctx::{FinallyTarget, FuncEmitCtx};
+use function::constructor_of;
 use locals::{
     collect_exported_names, collect_expr_locals, collect_locals, collect_module_let_ids,
     collect_param_locals, resolve_export_to_func, resolve_export_to_let, resolve_source_module_idx,

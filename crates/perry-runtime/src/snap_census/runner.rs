@@ -270,25 +270,26 @@ impl WordSet {
     }
 }
 
-/// Open-addressing map from a birth's start to its size.
-struct SizeMap {
+/// Open-addressing map from a birth's start to its size (or to another
+/// per-start value).
+struct SizeMap<V: Copy = u32> {
     keys: *mut u64,
-    vals: *mut u32,
+    vals: *mut V,
     mask: usize,
     len: usize,
 }
 
-impl SizeMap {
+impl<V: Copy> SizeMap<V> {
     unsafe fn new(log2: u32) -> Self {
         let n = 1usize << log2;
         SizeMap {
             keys: map_zeroed::<u64>(n),
-            vals: map_zeroed::<u32>(n),
+            vals: map_zeroed::<V>(n),
             mask: n - 1,
             len: 0,
         }
     }
-    fn insert(&mut self, k: u64, v: u32) {
+    fn insert(&mut self, k: u64, v: V) {
         assert!(self.len * 2 < self.mask, "snap census: size map full");
         let mut i = WordSet::hash(k) & self.mask;
         unsafe {
@@ -306,7 +307,7 @@ impl SizeMap {
             }
         }
     }
-    fn get(&self, k: u64) -> Option<u32> {
+    fn get(&self, k: u64) -> Option<V> {
         let mut i = WordSet::hash(k) & self.mask;
         unsafe {
             loop {
@@ -545,6 +546,129 @@ impl PageMap {
     }
 }
 
+/// The births living now, by address: one start bit per 8-byte word of the
+/// reservation, the size at each start and the init and seq that bore it.
+/// Everything that says "this object lives here" reads these three.
+struct Cells {
+    heap: PageMap,
+    /// One bit per 8-byte word of the reservation: a birth starts there.
+    starts: *mut u64,
+    /// Size of every birth and realm image cell, by start.
+    sizes: SizeMap,
+    /// The init whose frame was on top at each birth (by start), and the
+    /// birth's seq: names the birth that lives at the start now.
+    born_by: SizeMap<(u32, u64)>,
+}
+
+impl Cells {
+    unsafe fn new(lo: usize, hi: usize, log2: u32) -> Self {
+        Cells {
+            heap: PageMap::new(lo, hi),
+            starts: map_zeroed::<u64>(((hi - lo) / 8).div_ceil(64).max(1)),
+            sizes: SizeMap::new(log2),
+            born_by: SizeMap::new(log2),
+        }
+    }
+
+    /// The birth `(addr, size, seq)` is the object living at `addr` now: its
+    /// start bit is set, the size there is its size and `born_by` names its
+    /// seq (a later birth on reused memory replaces all three). The runtime's
+    /// objects found at the census start carry seq 0 and no `born_by` entry.
+    fn current(&self, addr: usize, size: usize, seq: u64) -> bool {
+        self.is_start(addr)
+            && self.sizes.get(addr as u64) == Some(size as u32)
+            && self.born_by.get(addr as u64).map_or(0, |(_, s)| s) == seq
+    }
+
+    fn is_start(&self, addr: usize) -> bool {
+        self.start_bit(addr)
+            .is_some_and(|i| unsafe { *self.starts.add(i / 64) } & (1 << (i % 64)) != 0)
+    }
+
+    fn set_start(&mut self, addr: usize) {
+        if let Some(i) = self.start_bit(addr) {
+            unsafe { *self.starts.add(i / 64) |= 1 << (i % 64) };
+        }
+    }
+
+    fn start_bit(&self, addr: usize) -> Option<usize> {
+        let lo = self.heap.lo;
+        (addr >= lo && addr < lo + self.heap.pages * PAGE).then(|| (addr - lo) / 8)
+    }
+
+    /// The birth that holds `word` (its header address), from the start bitmap.
+    fn object_start(&self, word: usize) -> Option<usize> {
+        let mut i = self.start_bit(word)?;
+        let floor = i.saturating_sub(1 << 22);
+        loop {
+            let w = unsafe { *self.starts.add(i / 64) } & (u64::MAX >> (63 - (i % 64)));
+            if w != 0 {
+                let bit = 63 - w.leading_zeros() as usize;
+                return Some(self.heap.lo + ((i / 64) * 64 + bit) * 8);
+            }
+            if i < 64 || i - (i % 64) <= floor {
+                return None;
+            }
+            i = i - (i % 64) - 1;
+        }
+    }
+
+    /// Clear the start bits of `[lo, hi)` (the part inside the reservation);
+    /// the number of bits that were set.
+    fn clear_starts(&mut self, lo: usize, hi: usize) -> u64 {
+        let base = self.heap.lo;
+        let end = base + self.heap.pages * PAGE;
+        let (lo, hi) = (lo.max(base), hi.min(end));
+        if lo >= hi {
+            return 0;
+        }
+        let (a, b) = ((lo - base) / 8, (hi - 1 - base) / 8);
+        let mut cleared = 0;
+        for w in a / 64..=b / 64 {
+            let mut mask = u64::MAX;
+            if w == a / 64 {
+                mask &= u64::MAX << (a % 64);
+            }
+            if w == b / 64 {
+                mask &= u64::MAX >> (63 - b % 64);
+            }
+            let word = unsafe { &mut *self.starts.add(w) };
+            cleared += u64::from((*word & mask).count_ones());
+            *word &= !mask;
+        }
+        cleared
+    }
+
+    /// A birth `[addr, addr + size)` by `(top, seq)`. True when it reuses
+    /// memory an earlier birth covered (that birth's start is retired).
+    fn birth(&mut self, addr: usize, size: usize, top: u32, seq: u64) -> bool {
+        let earlier = self.object_start(addr + size - 1).is_some_and(|h| {
+            self.sizes
+                .get(h as u64)
+                .is_some_and(|s| addr < h + s as usize)
+        });
+        if earlier {
+            self.clear_starts(addr, addr + size);
+        }
+        self.set_start(addr);
+        self.sizes.insert(addr as u64, size as u32);
+        self.born_by.insert(addr as u64, (top, seq));
+        earlier
+    }
+
+    /// The object at `header` was cut to `new_total` bytes in place.
+    fn resize(&mut self, header: usize, new_total: usize) {
+        if self.sizes.get(header as u64).is_some() {
+            self.sizes.insert(header as u64, new_total as u32);
+        }
+    }
+
+    /// A fresh mapping `[base, base + len)` holds no objects.
+    fn region_mapped(&mut self, base: usize, len: usize) -> u64 {
+        self.clear_starts(base, base + len)
+    }
+}
+
 struct State {
     inputs: input_record::Record,
     out: String,
@@ -580,8 +704,12 @@ struct State {
     /// Registered module-global root slots (the handler cannot borrow
     /// `GLOBAL_ROOTS`: the interrupted code may hold it).
     globals: WordSet,
-    /// One bit per 8-byte word of the reservation: a birth starts there.
-    starts: *mut u64,
+    /// The births living now: start bits, sizes, who bore them.
+    cells: Cells,
+    /// Births whose object was shrunk in place (`resize`).
+    resized: u64,
+    /// Start bits a fresh mapping cleared (`region_mapped`).
+    remap_cleared: u64,
     /// Host touches while the runtime (init 0) works for an init: the realm
     /// populating itself on first use. (what, call chain), first per what.
     realm_hosts: Vec<(&'static str, [usize; 6])>,
@@ -602,8 +730,6 @@ struct State {
     repw_reads: u64,
     /// Depth of the representation scopes inside `bookkeeping`.
     repr_depth: i32,
-    /// The init whose frame was on top at each birth (by start).
-    born_by: SizeMap,
     /// R2: a shared immutable cell (string, regex program, canonical key
     /// list) is named by its content and takes no rank. `PERRY_SNAP_R2=0`.
     r2: bool,
@@ -641,8 +767,8 @@ struct State {
     /// bound clipped to its key count and leaves the slack slots out.
     /// `PERRY_SNAP_SLACK=0`.
     slack: bool,
-    /// Tail shape rule: an arguments object's private tail
-    /// (`ArgumentsTail`: length, birth ShapeId) carries a second copy of a
+    /// Tail shape rule: an arguments object's birth word in its meta record
+    /// (`ObjectMeta::arguments_birth`: length, birth ShapeId) carries a second copy of a
     /// ShapeId, a creation-order number; it is named by the shape it names,
     /// as the header word is. `PERRY_SNAP_TAILSHAPE=0`.
     tail_shape: bool,
@@ -668,8 +794,6 @@ struct State {
     /// dig's own name for a slot), so the check leaves it out too, as a
     /// birth word D wrote. `PERRY_SNAP_WDSLOT=0`.
     wd_slot: bool,
-    /// Size of every birth and realm image cell, by start.
-    sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
     realm_starts: *mut u64,
     free_space: u64,
@@ -713,6 +837,10 @@ struct State {
     /// The walk origin of the async module evaluation now in progress
     /// (0: none, else `WALK_*` in snap_census.rs).
     walk_origin: u8,
+    /// The record the walk in progress was opened for (0: none).
+    walk_root: usize,
+    /// `js_snap_entry_module` was called with a worker program (SNAPTLS1 T0).
+    worker_program: bool,
     /// Global root slots on no tracked page that are not the runtime's own
     /// thread-locals (a program slot the census does not watch): must be 0.
     untracked_slots: u64,
@@ -743,7 +871,6 @@ struct State {
     births: Log<Birth>,
     listed: Log<usize>,
     regions: Vec<(usize, usize)>,
-    heap: PageMap,
     bin: PageMap,
     /// The main thread's program TLS slots (initialized data): module
     /// globals live there in a program with a Worker (per-thread init flags
@@ -852,7 +979,7 @@ struct State {
     /// First (a)/(b) hit per init: (init, rule, word, pc, input seq).
     /// Pushed in signal context: the capacity is reserved up front.
     p_entry_log: Vec<(u32, u8, usize, usize, u64)>,
-    /// The open host-value scope (1 argv, 2 execPath; 0 none) and the births
+    /// The open host-value scope (1 argv, 2 execPath, 3 argv0; 0 none) and the births
     /// made inside one: (start, end, what, input seq).
     host_what: u8,
     host_targets: Vec<(usize, usize, u8, u64)>,
@@ -958,7 +1085,9 @@ unsafe fn start_census(out: String) {
         wby: CauseMap::new(28),
         rby: CauseMap::new(28),
         globals: WordSet::new(22),
-        starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
+        cells: Cells::new(res_lo, res_hi, 26),
+        resized: 0,
+        remap_cleared: 0,
         realm_hosts: Vec::new(),
         excluded: 0,
         r1: !std::env::var("PERRY_SNAP_R1").is_ok_and(|v| v == "0"),
@@ -969,7 +1098,6 @@ unsafe fn start_census(out: String) {
         repw_owned: 0,
         repw_reads: 0,
         repr_depth: 0,
-        born_by: SizeMap::new(26),
         r2: !std::env::var("PERRY_SNAP_R2").is_ok_and(|v| v == "0"),
         keyname: !std::env::var("PERRY_SNAP_KEYNAME").is_ok_and(|v| v == "0"),
         r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
@@ -1002,7 +1130,6 @@ unsafe fn start_census(out: String) {
                 .unwrap_or_default()
         },
         wd_slot: !std::env::var("PERRY_SNAP_WDSLOT").is_ok_and(|v| v == "0"),
-        sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
         reborn: 0,
@@ -1023,6 +1150,8 @@ unsafe fn start_census(out: String) {
         entry_module_next: false,
         entry_record: 0,
         walk_origin: 0,
+        walk_root: 0,
+        worker_program: false,
         untracked_slots: 0,
         untracked_first: 0,
         runtime_tls_roots: 0,
@@ -1039,7 +1168,6 @@ unsafe fn start_census(out: String) {
         births: Log::new(1 << 28),
         listed: Log::new(1 << 26),
         regions: Vec::new(),
-        heap: PageMap::new(res_lo, res_hi),
         bin: PageMap::new(bin_lo, bin_hi),
         tls: PageMap::new(tls_lo, tls_hi),
         tlsb: PageMap::new(tlsb_lo, tlsb_hi),
@@ -1129,6 +1257,8 @@ unsafe fn start_census(out: String) {
     std::mem::forget(st);
     let _input_logging = input_record::Scope::enter();
     let st = state();
+    let anchor = std::ptr::addr_of!(ANCHOR) as usize;
+    super::inventory::start((anchor, anchor + PAGE), st.tls_block, st.tls_ranges);
     // Nothing moves until the boundary. The weights run (no protection)
     // collects as production does: its Ir per init includes the collections.
     if !st.noprotect {
@@ -1137,8 +1267,8 @@ unsafe fn start_census(out: String) {
     // The objects that exist now are the runtime's (init 0).
     crate::arena::arena_walk_objects_with_block_index(|header, _| {
         let size = (*(header as *const crate::gc::GcHeader)).size as usize;
-        set_start(st, header as usize);
-        st.sizes.insert(header as u64, size as u32);
+        st.cells.set_start(header as usize);
+        st.cells.sizes.insert(header as u64, size as u32);
         st.births.push(Birth {
             addr: header as usize,
             size: size as u32,
@@ -1218,7 +1348,7 @@ unsafe fn walk_realm_cells(st: &mut State) {
         if size >= 8 && size % 8 == 0 && p + size <= hi && g.obj_type != 0 {
             let i = (p - lo) / 8;
             *st.realm_starts.add(i / 64) |= 1 << (i % 64);
-            st.sizes.insert(p as u64, size as u32);
+            st.cells.sizes.insert(p as u64, size as u32);
             p += size;
         } else {
             p += 8;
@@ -1358,6 +1488,7 @@ pub(super) fn current_init() -> u32 {
 
 fn set_mode_for_top(st: &mut State) {
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
+    super::inventory::frame_changed(top as u32);
     if st.mark {
         // A syscall trace (strace) attributes what follows to this init.
         unsafe {
@@ -1413,11 +1544,94 @@ pub(super) fn entry_record(addr: usize) {
     }
 }
 
-pub(super) fn walk_origin(origin: u8) -> u8 {
+pub(super) fn walk_origin(origin: u8, root: usize) -> (u8, usize) {
     if !on() {
-        return 0;
+        return (0, 0);
     }
-    std::mem::replace(&mut state().walk_origin, origin)
+    let st = state();
+    (
+        std::mem::replace(&mut st.walk_origin, origin),
+        std::mem::replace(&mut st.walk_root, root),
+    )
+}
+
+/// SNAPREC2: a record leaves the walk stack. The row follows the member's
+/// `init_exit` (the body ran first); `init` is 0 for a record whose body has
+/// not run (a parent that waits on a suspended dependency).
+pub(super) fn record_settle(record: usize, suspended: bool) {
+    if !inputs_on() || !on_main_thread() {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    let init = if record == st.entry_record {
+        st.entry_init
+    } else {
+        st.inits
+            .iter()
+            .rposition(|i| i.guard == record)
+            .map_or(0, |i| i as u32)
+    };
+    input_record::event(
+        st,
+        "record_settle",
+        format!(
+            "init={init};record={record:x};status={}",
+            if suspended {
+                "ASYNC;policy=STOP"
+            } else {
+                "EVALUATED"
+            }
+        ),
+    );
+}
+
+/// SNAPREC2 (SNAPTLS1 T0): `new Worker` on the main thread. A worker that
+/// starts before the cut cannot be in an image (a blocker); the entry body
+/// re-runs live, so a worker it starts is no blocker.
+pub(super) fn worker_spawn() {
+    if !inputs_on() || !on_main_thread() {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.worker_rule {
+        return;
+    }
+    let init = top_init(st);
+    let policy = if is_entry(st, init) { "live" } else { "STOP" };
+    input_record::event(st, "worker_spawn", format!("init={init};policy={policy}"));
+}
+
+/// SNAPREC2 (SNAPTLS1 T0): what the primary agent's TLS image would carry,
+/// over the anchored ranges: bytes of `.tdata` and `.tbss`, and the words
+/// that point into those ranges (the module records, their root slots; they
+/// rebase on the block address at restore).
+fn tls_image_row(st: &mut State) {
+    if !st.worker_program || !st.worker_rule || !st.tls_whole {
+        return;
+    }
+    let r = st.tls_ranges;
+    let into = |v: usize| (v >= r[0] && v < r[1]) || (v >= r[2] && v < r[3]);
+    let mut ptr_words = 0usize;
+    for (lo, hi) in [(r[0], r[1]), (r[2], r[3])] {
+        let mut a = lo;
+        while a + 8 <= hi {
+            // SAFETY: whole pages of the main thread's program TLS block.
+            let v = unsafe { std::ptr::read_volatile(a as *const usize) };
+            ptr_words += into(v) as usize;
+            a += 8;
+        }
+    }
+    input_record::event(
+        st,
+        "tls_image",
+        format!(
+            "data={};bss={};tls_ptr_words={ptr_words};policy=image",
+            r[1] - r[0],
+            r[3] - r[2]
+        ),
+    );
 }
 
 pub(super) fn walk_origin_now() -> u8 {
@@ -1495,6 +1709,11 @@ fn init_enter_with(addr: usize, forced: Option<Reach>) {
     st.seq += 1;
     let id = st.inits.len() as u32;
     assert!((id as usize) < MAX_INITS, "snap census: too many inits");
+    super::inventory::at_init(id, &st.out, !st.noprotect, &|a| {
+        let b = st.births.as_slice();
+        let i = b.partition_point(|x| x.addr <= a);
+        (i > 0 && a < b[i - 1].addr + b[i - 1].size as usize).then(|| b[i - 1].init)
+    });
     let mut init = blank_init(addr, parent_id, reach);
     init.enter_seq = st.seq;
     init.open = true;
@@ -1676,13 +1895,11 @@ pub(super) fn entry_module(worker: bool) {
     // (entry.rs `entry_in_init`: a worker or top-level await); `worker` tells
     // which. A worker program's init flags are thread-local, which an image
     // cannot initialize (DESIGN27 §1.5), so the cut is 0.
-    if worker && st.worker_rule && inputs_on() && on_main_thread() {
-        let _input_logging = input_record::Scope::enter();
-        input_record::event(
-            st,
-            "worker_flag",
-            "program_has_worker=1;cut=0;policy=STOP".to_owned(),
-        );
+    if worker && inputs_on() && on_main_thread() {
+        // SNAPREC2 (SNAPTLS1 T0): no static STOP. The image carries the
+        // primary agent's TLS block (`tls_image` at the boundary); a worker
+        // started during init is the blocker (`worker_spawn`).
+        st.worker_program = true;
     }
 }
 
@@ -1708,10 +1925,10 @@ pub(super) fn meta_installed(slot: usize, meta: usize) {
     if !st.meta_rule || !st.rule4_armed || !pre_existing(st, slot) {
         return;
     }
-    let Some(h) = object_start(st, meta) else {
+    let Some(h) = st.cells.object_start(meta) else {
         return;
     };
-    let Some(size) = st.sizes.get(h as u64) else {
+    let Some(size) = st.cells.sizes.get(h as u64) else {
         return;
     };
     let e = h + size as usize;
@@ -1790,17 +2007,17 @@ pub(super) fn attached(obj: usize, cells: &[usize]) {
     if st.transparent.is_empty() {
         return;
     }
-    let Some(h) = object_start(st, obj) else {
+    let Some(h) = st.cells.object_start(obj) else {
         return;
     };
     if !st.transp.contains(h as u64) {
         return;
     }
     for &c in cells {
-        if let Some(ch) = object_start(st, c) {
+        if let Some(ch) = st.cells.object_start(c) {
             st.transp.insert(ch as u64);
             st.transp_no.remove(ch as u64);
-            if let Some(s) = st.sizes.get(ch as u64) {
+            if let Some(s) = st.cells.sizes.get(ch as u64) {
                 st.transp_objs.push((ch, ch + s as usize));
             }
         }
@@ -1902,47 +2119,15 @@ pub(super) fn host(class: Effect, what: &'static str) {
     }
 }
 
-fn set_start(st: &mut State, addr: usize) {
-    if let Some(i) = start_bit(st, addr) {
-        unsafe { *st.starts.add(i / 64) |= 1 << (i % 64) };
-    }
-}
-
-fn start_bit(st: &State, addr: usize) -> Option<usize> {
-    let lo = st.heap.lo;
-    (addr >= lo && addr < lo + st.heap.pages * PAGE).then(|| (addr - lo) / 8)
-}
-
-/// The birth that holds `word` (its header address), from the start bitmap.
-fn object_start(st: &State, word: usize) -> Option<usize> {
-    let mut i = start_bit(st, word)?;
-    let floor = i.saturating_sub(1 << 22);
-    loop {
-        let w = unsafe { *st.starts.add(i / 64) } & (u64::MAX >> (63 - (i % 64)));
-        if w != 0 {
-            let bit = 63 - w.leading_zeros() as usize;
-            return Some(st.heap.lo + ((i / 64) * 64 + bit) * 8);
-        }
-        if i < 64 || i - (i % 64) <= floor {
-            return None;
-        }
-        i = i - (i % 64) - 1;
-    }
-}
-
 pub(super) fn birth(addr: usize, size: usize) {
     let _input_logging = input_record::Scope::enter();
     let st = state();
     st.inputs.allocated_bytes += size as u64;
+    let top = st.frames.last().map_or(0, |f| f.init);
     // Memory handed out again (a free-list slot, a rewound bump) holds new
     // locations: an earlier birth there and what members of D did to its
     // words are gone.
-    let earlier = object_start(st, addr + size - 1).is_some_and(|h| {
-        st.sizes
-            .get(h as u64)
-            .is_some_and(|s| addr < h + s as usize)
-    });
-    if earlier {
+    if st.cells.birth(addr, size, top, st.inputs.seq) {
         st.reborn += 1;
         for w in (addr..addr + size).step_by(8) {
             st.w.remove(w as u64);
@@ -1950,20 +2135,11 @@ pub(super) fn birth(addr: usize, size: usize) {
             st.er.remove(w as u64);
             st.ew.remove(w as u64);
         }
-        if let (Some(a), Some(b)) = (start_bit(st, addr), start_bit(st, addr + size - 1)) {
-            for i in a..=b {
-                unsafe { *st.starts.add(i / 64) &= !(1 << (i % 64)) };
-            }
-        }
     }
-    set_start(st, addr);
-    st.sizes.insert(addr as u64, size as u32);
-    let top = st.frames.last().map_or(0, |f| f.init);
     if st.inits[top as usize].transparent {
         st.transp.insert(addr as u64);
         st.transp_objs.push((addr, addr + size));
     }
-    st.born_by.insert(addr as u64, top);
     st.births.push(Birth {
         addr,
         size: size as u32,
@@ -1979,12 +2155,21 @@ pub(super) fn birth(addr: usize, size: usize) {
     i.birth_bytes += size as u64;
 }
 
+/// The object at `header` was cut to `new_total` bytes in place.
+pub(super) fn resize(header: usize, new_total: usize) {
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    st.cells.resize(header, new_total);
+    st.resized += 1;
+}
+
 pub(super) fn region_mapped(base: usize, len: usize) {
     let _input_logging = input_record::Scope::enter();
     let st = state();
     if unsafe { libc::syscall(libc::SYS_gettid) } != st.main_tid {
         return;
     }
+    st.remap_cleared += st.cells.region_mapped(base, len);
     st.regions.push((base, base + len));
     mark_tracked(base, base + len);
     if st.d_mode && !st.noprotect {
@@ -2089,7 +2274,8 @@ fn executable_tls_size() -> usize {
 
 #[inline]
 fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
-    st.heap
+    st.cells
+        .heap
         .slot(addr)
         .or_else(|| st.bin.slot(addr))
         .or_else(|| tls_slot(st, addr))
@@ -2262,7 +2448,7 @@ unsafe fn extend_top(st: &mut State) {
     st.pre_upto = st.births.len;
     for k in from..st.pre_upto {
         let b = *st.births.p.add(k);
-        if let Some(i) = start_bit(st, b.addr) {
+        if let Some(i) = st.cells.start_bit(b.addr) {
             *st.pre_bits.add(i / 64) |= 1 << (i % 64);
         }
         let mut p = b.addr & !(PAGE - 1);
@@ -2298,7 +2484,11 @@ fn top_pre_existing(st: &State, word: usize) -> bool {
     if st.pre_globals.contains(word as u64) {
         return true;
     }
-    match object_start(st, word).and_then(|h| start_bit(st, h)) {
+    match st
+        .cells
+        .object_start(word)
+        .and_then(|h| st.cells.start_bit(h))
+    {
         Some(i) => unsafe { *st.pre_bits.add(i / 64) & (1 << (i % 64)) != 0 },
         None => false,
     }
@@ -2443,7 +2633,7 @@ unsafe fn on_segv_inner(
         if st.rset_active {
             let uc = ctx as *mut libc::ucontext_t;
             let gregs = &mut (*uc).uc_mcontext.gregs;
-            if gregs[libc::REG_ERR as usize] & 2 == 0 || st.heap.slot(addr).is_none() {
+            if gregs[libc::REG_ERR as usize] & 2 == 0 || st.cells.heap.slot(addr).is_none() {
                 return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
             }
             st.rset_faults += 1;
@@ -2473,7 +2663,7 @@ unsafe fn on_segv_inner(
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
             let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
-            let range = if st.heap.slot(addr).is_some() {
+            let range = if st.cells.heap.slot(addr).is_some() {
                 1
             } else if st.bin.slot(addr).is_some() {
                 2
@@ -2705,16 +2895,17 @@ fn note_access_at(st: &mut State, word: usize, write: bool, pc: usize, watch_end
     // changes after its birth (its cached hash is no observation), and a
     // shared canonical key list is an interned trie node. Reaching one
     // through a location a member of D wrote is caught at that location.
-    let cell = if st.heap.slot(word).is_some() {
-        object_start(st, word)
+    let cell = if st.cells.heap.slot(word).is_some() {
+        st.cells.object_start(word)
     } else {
         realm_cell(st, word)
     };
-    if st.heap.slot(word).is_some() || cell.is_some() {
+    if st.cells.heap.slot(word).is_some() || cell.is_some() {
         // A word outside every born object is free space the allocator
         // touched (block setup), not a location.
         let inside = cell.is_some_and(|h| {
-            st.sizes
+            st.cells
+                .sizes
                 .get(h as u64)
                 .is_some_and(|s| word < h + s as usize)
         });
@@ -2800,9 +2991,10 @@ fn note_repw(st: &mut State, word: usize) {
 
 /// The object starting at `h` was born while a member of D ran.
 fn born_in_d(st: &State, h: usize) -> bool {
-    st.born_by
+    st.cells
+        .born_by
         .get(h as u64)
-        .is_some_and(|i| i != 0 && st.inits[i as usize].in_d)
+        .is_some_and(|(i, _)| i != 0 && st.inits[i as usize].in_d)
 }
 
 /// R1 (design §2.10.16): an access inside a representation scope or a meta
@@ -2813,13 +3005,14 @@ fn born_in_d(st: &State, h: usize) -> bool {
 /// the rollback set (`repw`, the digest and `.wd` leave it out), no edge.
 /// An imaged init's representation access is an access only of D state.
 fn repr_access(st: &mut State, word: usize, write: bool, pc: usize) {
-    let cell = if st.heap.slot(word).is_some() {
-        object_start(st, word)
+    let cell = if st.cells.heap.slot(word).is_some() {
+        st.cells.object_start(word)
     } else {
         realm_cell(st, word)
     };
     let Some(h) = cell.filter(|&h| {
-        st.sizes
+        st.cells
+            .sizes
             .get(h as u64)
             .is_some_and(|s| word < h + s as usize)
     }) else {
@@ -3089,6 +3282,8 @@ pub(super) fn boundary(at: &'static str) {
     }
     input_record::event(st, "boundary", at.to_owned());
     charge(st);
+    // The TLS scan is census work, charged to no init.
+    tls_image_row(st);
     st.seq += 1;
     st.boundary_seq = st.seq;
     st.boundary_at = at;
@@ -3159,7 +3354,7 @@ fn heap_pointer(st: &State, v: u64) -> bool {
         return false;
     }
     let a = (v & 0xFFFF_FFFF_FFFF) as usize;
-    st.heap.slot(a).is_some()
+    st.cells.heap.slot(a).is_some()
 }
 
 extern "C" fn rset_report() {
@@ -3757,7 +3952,7 @@ fn write_report(st: &mut State) {
                 return in_malloc(a);
             }
             (hi == 0x7FFD || hi == 0x7FFC || hi == 0x7FFF || hi == 0x7FFE)
-                && st.heap.slot(a).is_none()
+                && st.cells.heap.slot(a).is_none()
                 && st.bin.slot(a).is_none()
                 && tls_slot(st, a).is_none()
         };
@@ -3783,8 +3978,6 @@ fn write_report(st: &mut State) {
             // whose zero-bound shape hides the floor slots, while a tracking
             // birth in the other run is born at its learned width) is named
             // the same way: the shape never addresses capacity past `live`.
-            // An arguments object keeps a private tail at the allocation end,
-            // so it is never widened.
             let slack_end = if st.slack && ty == crate::gc::GC_TYPE_OBJECT {
                 let base =
                     crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
@@ -3796,10 +3989,7 @@ fn write_report(st: &mut State) {
                     let live = d.live_inline_slot_count as usize;
                     let size = b.size as usize;
                     let widened = size > base + 8 * live
-                        && d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-                        && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
-                            & crate::gc::OBJ_FLAG_ARGUMENTS
-                            == 0;
+                        && d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary;
                     (size == base + 8 * live || widened)
                         .then(|| base + 8 * live.min(d.logical_key_count as usize))
                 })
@@ -3931,15 +4121,14 @@ fn write_report(st: &mut State) {
                 // another id when the env block differs. It hashes as the
                 // shape it names: key list, counts, flags, prototype link,
                 // kind and representation.
-                // An arguments object's tail word (`ArgumentsTail`: the length
-                // in the low half, the birth ShapeId in the high half) is the
-                // same kind of carrier: it hashes as the length and the shape.
+                // An arguments object's birth word (`ObjectMeta::arguments_birth`:
+                // the length in the low half, the birth ShapeId in the high half)
+                // is the same kind of carrier: it hashes as the length and the shape.
                 let tail_word = st.tail_shape
-                    && ty == perry_abi::GC_TYPE_OBJECT
-                    && off - 8 + 16 == b.size as usize
-                    && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
-                        & crate::gc::OBJ_FLAG_ARGUMENTS
-                        != 0;
+                    && ty == crate::gc::GC_TYPE_OBJECT_META
+                    && off - 8
+                        == crate::gc::GC_HEADER_SIZE
+                            + std::mem::offset_of!(crate::object::ObjectMeta, arguments_birth);
                 if tail_word
                     || off - 8 == crate::gc::GC_HEADER_SIZE
                         && (ty == perry_abi::GC_TYPE_OBJECT || ty == perry_abi::GC_TYPE_CLOSURE)
@@ -4103,6 +4292,18 @@ fn write_report(st: &mut State) {
         st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
         st.serial as u8, st.keyname as u8, st.symid as u8
     );
+    for (id, i) in st
+        .inits
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, i)| i.guard != 0)
+    {
+        let _ = writeln!(f, "#record\t{:x}\t{id}", i.guard);
+    }
+    if st.entry_record != 0 {
+        let _ = writeln!(f, "#record\t{:x}\t{}", st.entry_record, st.entry_init);
+    }
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
@@ -4245,10 +4446,32 @@ fn is_entry(st: &State, id: u32) -> bool {
     id != 0 && (id == st.entry_init || st.inits[id as usize].entry_module)
 }
 
+/// A root slot inside the entry module record. The entry record is imaged in
+/// configure state (its root slots hold undefined), so none of its words is
+/// a holder of an entry value; the record layout states the extent.
+fn in_entry_record(st: &State, slot: usize) -> bool {
+    st.entry_record != 0
+        && slot.wrapping_sub(st.entry_record) < crate::async_module::MODULE_RECORD_SIZE
+}
+
+/// The words of `b` that the collector traces, as (offset from the header,
+/// word): an array's elements up to its length, a promise's value, handler,
+/// next and meta fields; never the words past an object's logical extent.
+fn holder_words(b: &Birth, mut f: impl FnMut(usize, u64)) {
+    // SAFETY: a live birth is a collector object; the visitor reads its
+    // header and layout words.
+    unsafe {
+        crate::gc::visit_traced_slots(b.addr as *mut crate::gc::GcHeader, |slot| {
+            f(slot - b.addr, (slot as *const u64).read());
+        });
+    }
+}
+
 fn host_name(what: u8) -> &'static str {
     match what {
         1 => "argv",
         2 => "exec_path",
+        3 => "argv0",
         _ => "entry_birth",
     }
 }
@@ -4293,13 +4516,26 @@ pub(super) fn host_value_exit() {
 /// both births, so the row is dated at the later one (`at_seq`). Then the
 /// P-entry (a)/(b) hits logged during the run.
 fn k2a_rows(st: &mut State) {
+    // Holders and targets are the births living now; a birth whose memory
+    // was handed out again is history only.
+    let live = |b: &Birth| st.cells.current(b.addr, b.size as usize, b.seq);
+    let stale_births = st.births.as_slice().iter().filter(|b| !live(b)).count();
+    // A hold names an object by its address, which names one object only in
+    // a run that holds collection: a run that lets the collector move
+    // objects reports no hold rows (and says so in the summary).
+    let collected = !st.noprotect;
     let mut t: Vec<(usize, usize, u8, u64, u32)> = Vec::new();
-    if st.host_rule {
-        t.extend(st.host_targets.iter().map(|&(a, e, w, s)| (a, e, w, s, 0)));
+    if collected && st.host_rule {
+        t.extend(
+            st.host_targets
+                .iter()
+                .filter(|&&(a, e, _, s)| st.cells.current(a, e - a, s))
+                .map(|&(a, e, w, s)| (a, e, w, s, 0)),
+        );
     }
-    if st.p_entry_rule {
+    if collected && st.p_entry_rule {
         for b in st.births.as_slice() {
-            if is_entry(st, b.init) {
+            if is_entry(st, b.init) && live(b) {
                 t.push((b.addr, b.addr + b.size as usize, 255, b.seq, b.init));
             }
         }
@@ -4313,7 +4549,7 @@ fn k2a_rows(st: &mut State) {
     // key as P-entry (a)/(b)), not an entry value. It is no (c) target, and
     // its words are scanned as the holder's. Edges into adopted storage
     // (an entry-born meta's spill) are followed to a fixpoint.
-    let owned: Vec<(usize, usize, u32)> = if st.p_entry_rule {
+    let owned: Vec<(usize, usize, u32)> = if collected && st.p_entry_rule {
         let hs = crate::gc::GC_HEADER_SIZE;
         let meta_edges = [
             std::mem::offset_of!(crate::object::ObjectMeta, spill),
@@ -4334,7 +4570,7 @@ fn k2a_rows(st: &mut State) {
             .births
             .as_slice()
             .iter()
-            .filter(|b| !is_entry(st, b.init))
+            .filter(|b| !is_entry(st, b.init) && live(b))
             .map(|b| (b.addr, b.init))
             .collect();
         while let Some((h, init)) = work.pop() {
@@ -4404,7 +4640,7 @@ fn k2a_rows(st: &mut State) {
             .births
             .as_slice()
             .iter()
-            .filter(|b| !is_entry(st, b.init))
+            .filter(|b| !is_entry(st, b.init) && live(b))
             .map(|b| (b.addr, b.size as usize, b.init, b.seq))
             .chain(owned.iter().map(|&(a, e, init)| (a, e - a, init, 0)));
         for (addr, size, init, seq) in holders {
@@ -4417,8 +4653,7 @@ fn k2a_rows(st: &mut State) {
                 init,
                 seq,
             };
-            for off in (8..b.size as usize).step_by(8) {
-                let v = unsafe { ((b.addr + off) as *const u64).read() };
+            holder_words(&b, |off, v| {
                 if let Some(k) = find(v) {
                     held += 1;
                     if seen.insert((b.addr, k)) && rows.len() < CHECK_FAIL_MAX {
@@ -4436,11 +4671,11 @@ fn k2a_rows(st: &mut State) {
                         );
                     }
                 }
-            }
+            });
         }
         for (n, &slot) in st.globals_log.iter().enumerate() {
             let owner = st.slot_owner.get(n).copied().unwrap_or(0);
-            if is_entry(st, owner) {
+            if is_entry(st, owner) || in_entry_record(st, slot) {
                 continue;
             }
             let v = unsafe { (slot as *const u64).read() };
@@ -4466,11 +4701,18 @@ fn k2a_rows(st: &mut State) {
             ),
         ));
     }
+    let holds = if collected {
+        "collected"
+    } else {
+        "not-collected(no-hold)"
+    };
     let summary = format!(
-        "host_targets={};entry_births={};held_words={held};p_entry_ab={}",
+        "holds={holds};host_targets={};entry_births={};held_words={held};p_entry_ab={};stale_births={stale_births};resized={};remap_cleared={}",
         st.host_targets.len(),
         t.iter().filter(|x| x.2 == 255).count(),
-        st.p_entry_log.len()
+        st.p_entry_log.len(),
+        st.resized,
+        st.remap_cleared
     );
     for (op, v) in rows {
         input_record::event(st, op, v);
@@ -4570,7 +4812,7 @@ pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
     let idx = st.env_obs.len() as u32;
     if kind == OBS_STORE {
         let h = ptr - crate::gc::GC_HEADER_SIZE;
-        match st.sizes.get(h as u64) {
+        match st.cells.sizes.get(h as u64) {
             Some(size) => watch_env_words(st, ptr, h + size as usize, idx),
             // Not a logged birth: nothing to watch, so the value is observed.
             None => kind = OBS_OBSERVE,
@@ -4798,7 +5040,8 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
                 let o = &st.env_obs[t as usize];
                 found[t as usize] += 1;
                 // The alias hint at the boundary (0 shared, 1 unique).
-                let alias = unsafe { (*(o.ptr as *const crate::StringHeader)).refcount };
+                let alias =
+                    u32::from(unsafe { (*(o.ptr as *const crate::StringHeader)).refcount } == 1);
                 let _ = writeln!(
                     f,
                     "#cell\tenv_var\t{name}\t{}\t{}\talias={alias}",
@@ -5492,9 +5735,15 @@ fn k4_queue_rows(st: &mut State) {
             format!("init={init};pending={n};policy=image;ticks={list}"),
         );
     }
-    let resolves = crate::promise::snap_scheduled_resolves()
-        .map(|r| r.iter().map(|(o, c)| format!("resolve:{o}:{c:x}")).collect());
-    if resolves.as_ref().is_none_or(|r: &Vec<String>| !r.is_empty()) {
+    let resolves = crate::promise::snap_scheduled_resolves().map(|r| {
+        r.iter()
+            .map(|(o, c)| format!("resolve:{o}:{c:x}"))
+            .collect()
+    });
+    if resolves
+        .as_ref()
+        .is_none_or(|r: &Vec<String>| !r.is_empty())
+    {
         let (n, list) = shown_field(resolves);
         input_record::event(
             st,
@@ -5568,14 +5817,105 @@ fn k2b_enter_rows(st: &mut State) {
                     st,
                     "job_queue",
                     format!(
-                        "init={};pending={};policy=STOP;jobs={}",
+                        "init={};pending={};policy={};walk_root={:x};jobs={}",
                         st.frames.last().map_or(0, |f| f.init),
                         n.map_or("busy".to_owned(), |n| n.to_string()),
+                        // A walk is open: the jobs are held by its root record
+                        // and queued when it starts (SNAP_DESIGN 2.10.24).
+                        if st.walk_root != 0 { "image" } else { "STOP" },
+                        st.walk_root,
                         pending_jobs_field()
                     ),
                 );
             }
         }
         k4_queue_rows(st);
+    }
+}
+
+#[cfg(test)]
+mod cells_tests {
+    use super::*;
+
+    const MB: usize = 1 << 20;
+    const B: usize = 0x7e00_0000_0000;
+
+    fn cells() -> Cells {
+        unsafe { Cells::new(B, B + 8 * MB, 10) }
+    }
+
+    /// A prototype cut in place keeps its own start and its new size; the
+    /// hole made of its tail is born at the cut without touching it.
+    #[test]
+    fn trim_keeps_the_cut_object_live() {
+        let mut c = cells();
+        let h = B + 4096;
+        assert!(!c.birth(h, 128, 1, 10));
+        c.resize(h, 48);
+        assert!(!c.birth(h + 48, 80, 2, 11));
+        assert_eq!(c.object_start(h + 40), Some(h));
+        assert!(c.current(h, 48, 10));
+        assert_eq!(c.object_start(h + 48), Some(h + 48));
+        assert!(c.current(h + 48, 80, 11));
+    }
+
+    /// A fresh mapping holds no objects: the starts of what the address range
+    /// held before it was unmapped are gone, a dead holder below stays.
+    #[test]
+    fn remap_clears_the_starts_of_the_range() {
+        let mut c = cells();
+        let old = B + 2 * MB + 4096;
+        c.birth(B, 3 * MB, 1, 1);
+        c.birth(old, 8192, 1, 2);
+        assert!(c.is_start(old));
+        assert_eq!(c.region_mapped(B + 2 * MB, 2 * MB), 1);
+        assert!(!c.is_start(old));
+        assert!(c.is_start(B));
+        c.birth(B + 2 * MB + 64, 64, 2, 3);
+        assert_eq!(c.object_start(B + 2 * MB + 72), Some(B + 2 * MB + 64));
+        let starts = (B + 2 * MB..B + 4 * MB)
+            .step_by(8)
+            .filter(|&a| c.is_start(a));
+        assert_eq!(starts.collect::<Vec<_>>(), vec![B + 2 * MB + 64]);
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    /// An array holder is scanned as the collector traces it: its elements up
+    /// to its length, never the words between its length and its capacity.
+    #[test]
+    fn holder_words_stop_at_the_array_length() {
+        const TAG: u64 = 0x7FFD_0000_0000_0000;
+        unsafe {
+            let a = crate::array::js_array_alloc_with_length(32);
+            for i in 0..32u32 {
+                crate::array::js_array_set_f64(a, i, f64::from_bits(TAG | i as u64));
+            }
+            (*a).length = 26;
+            let addr = a as usize - crate::gc::GC_HEADER_SIZE;
+            let b = Birth {
+                addr,
+                size: (*(addr as *const crate::gc::GcHeader)).size,
+                init: 1,
+                seq: 1,
+            };
+            let mut traced = Vec::new();
+            holder_words(&b, |_, v| {
+                if v & !0xFFFF == TAG {
+                    traced.push(v & 0xFFFF);
+                }
+            });
+            assert_eq!(traced, (0..26).collect::<Vec<u64>>());
+            // The physical extent holds the six words past the length too.
+            let physical = (8..b.size as usize)
+                .step_by(8)
+                .filter(|off| unsafe { ((addr + off) as *const u64).read() } & !0xFFFF == TAG)
+                .count();
+            assert_eq!(physical, 32);
+            (*a).length = 32;
+        }
     }
 }

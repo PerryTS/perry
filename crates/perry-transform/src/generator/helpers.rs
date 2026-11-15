@@ -61,7 +61,9 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
             else_branch,
             ..
         } => {
-            then_branch.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            then_branch
+                .iter_mut()
+                .for_each(|s| walk_hoisting_scope_mut(s, f));
             if let Some(eb) = else_branch {
                 eb.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
             }
@@ -83,7 +85,9 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
         } => {
             body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
             if let Some(c) = catch {
-                c.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+                c.body
+                    .iter_mut()
+                    .for_each(|s| walk_hoisting_scope_mut(s, f));
             }
             if let Some(fin) = finally {
                 fin.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
@@ -91,7 +95,9 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
         }
         Stmt::Switch { cases, .. } => {
             for case in cases {
-                case.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+                case.body
+                    .iter_mut()
+                    .for_each(|s| walk_hoisting_scope_mut(s, f));
             }
         }
         _ => {}

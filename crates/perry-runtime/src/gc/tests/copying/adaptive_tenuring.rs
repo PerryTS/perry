@@ -218,10 +218,16 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
     );
 }
 
+/// The ladder's climb on real minors under `PERRY_GC_TENURING_SURVIVALS_MAX=4`
+/// (the previous default); the default ceiling is
+/// `quiet_full_eden_windows_hold_the_default_ceiling`.
 #[test]
 fn quiet_full_eden_windows_restore_maximum_threshold_debounced() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _climb = crate::gc::tenuring::set_occupancy_max_for_test(
+        crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX,
+    );
 
     fill_slots_with_heavy_influx();
     let _ = gc_collect_minor();
@@ -269,4 +275,42 @@ fn quiet_full_eden_windows_restore_maximum_threshold_debounced() {
             "threshold must rise at most one step per cycle, saw {seen:?}"
         );
     }
+}
+
+/// Default ceiling (3) on real minors: the same quiet full Eden windows that
+/// climb to 4 under `PERRY_GC_TENURING_SURVIVALS_MAX=4` stop at 3.
+#[test]
+fn quiet_full_eden_windows_hold_the_default_ceiling() {
+    let _guard = CopyingNurseryTestGuard::new(SLOTS);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    fill_slots_with_heavy_influx();
+    let _ = gc_collect_minor();
+    let _ = gc_collect_minor();
+    let dead_payload = vec![b'x'; 4096];
+    let mut seen = vec![crate::gc::tenuring::tenuring_survivals()];
+    for _ in 0..8 {
+        let cap = crate::gc::tenuring::scavenge_nursery_cap_effective_bytes();
+        while crate::arena::copying_from_space_in_use_bytes()
+            .saturating_sub(crate::arena::copying_active_survivor_in_use_bytes())
+            < cap
+        {
+            let _ = crate::string::js_string_from_bytes(
+                dead_payload.as_ptr(),
+                dead_payload.len() as u32,
+            );
+        }
+        let _ = gc_collect_minor();
+        seen.push(crate::gc::tenuring::tenuring_survivals());
+    }
+    assert!(
+        seen.iter()
+            .all(|&s| s <= crate::gc::tenuring::OCCUPANCY_MAX_SURVIVALS),
+        "the default ceiling must hold the occupancy rule at or below 3, saw {seen:?}"
+    );
+    assert_eq!(
+        *seen.last().unwrap(),
+        crate::gc::tenuring::OCCUPANCY_MAX_SURVIVALS,
+        "quiet influx settles at the ceiling, saw {seen:?}"
+    );
 }

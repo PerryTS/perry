@@ -32,12 +32,7 @@ fn buffer_dispatch_string_ptr(value: f64) -> *const crate::string::StringHeader 
 }
 
 fn buffer_dispatch_i32(value: f64) -> i32 {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        jsval.as_int32()
-    } else {
-        value as i32
-    }
+    value as i32
 }
 
 /// `buf.write(string, offset?, length?, encoding?)` argument handling,
@@ -1290,11 +1285,6 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if crate::value::is_int32_bits(key_bits) {
-                    // int32 key
-                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                    idx >= 0 && idx < buf_len
                 } else if !(0x7FF8..=0x7FFF).contains(&(key_bits >> 48)) {
                     // raw f64 numeric key (NaN-boxing tags occupy 0x7FF8..=0x7FFF)
                     let n = args[0];
@@ -1317,7 +1307,6 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
             let key_is_own = if args.is_empty() {
                 false
             } else {
-                let key_bits = args[0].to_bits();
                 if let Some(own) = crate::string::with_string_value_bytes(args[0], |bytes| {
                     // A string key — heap or inline SSO (#11519). Only
                     // numeric-string indices that are in bounds count as own
@@ -1328,10 +1317,6 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if crate::value::is_int32_bits(key_bits) {
-                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                    idx >= 0 && idx < buf_len
                 } else if !args[0].is_nan() {
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {

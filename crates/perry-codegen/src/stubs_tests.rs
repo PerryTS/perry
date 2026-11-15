@@ -52,6 +52,7 @@ fn elf_startup_registration_lands_in_init_array() {
             &["js_runtime_install_dyn_eval".to_string()],
             Some(&["js_stdlib_install_fastify".to_string()]),
             &[],
+            1 << 26,
             Some(target),
         )
         .expect("the installer unit compiles");

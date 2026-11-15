@@ -750,7 +750,7 @@ fn read_fractional_second_digits(
         return;
     }
     let jv = JSValue::from_bits(raw.to_bits());
-    if jv.is_number() || jv.is_int32() {
+    if jv.is_number() {
         let n = jv.to_number();
         if !n.is_finite() {
             range("fractionalSecondDigits must be \"auto\" or an integer 0-9");

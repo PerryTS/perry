@@ -605,7 +605,9 @@ fn object_set_static_prototype_impl_with(
             // cell's meta record. Only holder-owning receivers reach here.
             if matches!(
                 receiver_header_type(obj_ptr),
-                Some(crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_DATE_CELL)
+                Some(
+                    crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_DATE_CELL
+                )
             ) {
                 crate::object::own_override::note_builtin_proto_modified();
             }

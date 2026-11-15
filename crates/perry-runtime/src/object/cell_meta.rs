@@ -155,8 +155,12 @@ pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHead
 #[inline(always)]
 pub(crate) unsafe fn builtin_cell_has_meta(user_ptr: usize, obj_type: u8) -> bool {
     match obj_type {
-        crate::gc::GC_TYPE_MAP => !map_cell_meta(user_ptr as *const crate::map::MapHeader).is_null(),
-        crate::gc::GC_TYPE_SET => !set_cell_meta(user_ptr as *const crate::set::SetHeader).is_null(),
+        crate::gc::GC_TYPE_MAP => {
+            !map_cell_meta(user_ptr as *const crate::map::MapHeader).is_null()
+        }
+        crate::gc::GC_TYPE_SET => {
+            !set_cell_meta(user_ptr as *const crate::set::SetHeader).is_null()
+        }
         crate::gc::GC_TYPE_DATE_CELL => {
             !(*date_cell_meta_slot(user_ptr as *mut crate::date::DateCell)).is_null()
         }

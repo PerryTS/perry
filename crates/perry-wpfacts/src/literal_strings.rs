@@ -120,11 +120,12 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
             .join(",")
     };
     let mut out = Vec::new();
+    let nodes = crate::bindings::BindingNodes::new(m);
     for (mi, info) in g.mods.iter().enumerate() {
         let mut ls: Vec<(u32, NodeId)> = info.locals.iter().map(|(&i, &n)| (i, n)).collect();
         ls.sort_unstable();
         for (id, n) in ls {
-            if let Some(atoms) = constants(m, &[n]) {
+            if let Some(atoms) = constants(m, &nodes.of(n)) {
                 let name = m.node_names.get(n as usize).map_or("?", |s| s.as_str());
                 out.push(format!(
                     "# lit_strings module={mi} local={id} name={} set=[{}]",

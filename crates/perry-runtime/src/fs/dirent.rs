@@ -210,9 +210,6 @@ pub(crate) unsafe fn options_bool_field(options_value: f64, field: &[u8]) -> boo
 pub(crate) unsafe fn options_number_field(options_value: f64, field: &[u8]) -> Option<f64> {
     let val = options_field_value(options_value, field)?;
     let js = crate::value::JSValue::from_bits(val.bits());
-    if js.is_int32() {
-        return Some(js.as_int32() as f64);
-    }
     let n = f64::from_bits(val.bits());
     if js.is_number() && n.is_finite() {
         Some(n)

@@ -73,6 +73,11 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     {
         return false;
     }
+    // `process.env`: its own keys are the environment, not its field mirror,
+    // which only the object walk refreshes. An empty mirror is no empty object.
+    if crate::process::is_process_env_ptr(ptr as usize) {
+        return true;
+    }
     let obj = ptr as *const crate::ObjectHeader;
     let potential_keys_ptr = crate::object::object_keys(obj).arr() as u64;
     if crate::object::overflow::is_table(potential_keys_ptr as *const crate::ArrayHeader) {
@@ -136,6 +141,11 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     )
     .is_none()
     {
+        return false;
+    }
+    // `process.env`: its own keys are the environment, not its field mirror,
+    // which only the object walk refreshes. An empty mirror is no empty object.
+    if crate::process::is_process_env_ptr(ptr as usize) {
         return false;
     }
     let table = crate::object::overflow::table(ptr.cast());
@@ -1112,12 +1122,8 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let template = if len >= 2 {
         let first_bits = elem_at(0).to_bits();
         let tag = first_bits & 0xFFFF_0000_0000_0000;
-        let first_ptr = if tag == POINTER_TAG {
-            (first_bits & POINTER_MASK) as *const u8
-        } else {
-            first_bits as *const u8
-        };
-        if (tag == POINTER_TAG || is_raw_pointer(first_bits))
+        let first_ptr = (first_bits & POINTER_MASK) as *const u8;
+        if tag == POINTER_TAG
             // A small-handle-band id (Proxy id, fetch/zlib/stream handle) is not
             // an object; building a shape template from it would deref unmapped
             // memory (#4904/#1843). Fall through to per-element handling.
@@ -1215,15 +1221,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // An element's `toJSON` key is its stringified index (#5909).
             set_to_json_key_index(i as usize);
             stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
-        } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
+        } else if elem_tag == POINTER_TAG {
             // An element's `toJSON` key is its stringified index (#5909) — set
             // before the object/array `toJSON` probes and the recursion below.
             set_to_json_key_index(i as usize);
-            let elem_ptr = if elem_tag == POINTER_TAG {
-                (elem_bits & POINTER_MASK) as *const u8
-            } else {
-                elem_bits as *const u8
-            };
+            let elem_ptr = (elem_bits & POINTER_MASK) as *const u8;
             // A small-handle-band element (revocable-Proxy id, fetch/zlib/stream
             // handle) is not a serializable heap value; the `gc_obj_type` /
             // `is_object_pointer` / ArrayHeader-length probes below would deref

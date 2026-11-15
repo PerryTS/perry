@@ -62,7 +62,7 @@ mod tests;
 // named constant for documentation + external tooling but not re-exported
 // since no in-crate consumer references it directly.
 pub(crate) use tags::{
-    is_int32_bits, BIGINT_TAG, INT32_MASK, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
+    BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
     SHORT_STRING_DATA_MASK, SHORT_STRING_LEN_MASK, SHORT_STRING_LEN_SHIFT, SHORT_STRING_TAG,
     STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MARKER, TAG_MASK, TAG_NULL, TAG_TDZ, TAG_TRUE,
     TAG_UNDEFINED,
@@ -92,9 +92,6 @@ pub(crate) use tags::{
     JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
 
-#[cfg(test)]
-mod int32_exact_tests;
-
 // ----- JSValue type + impls -----
 pub use jsvalue::JSValue;
 
@@ -113,7 +110,7 @@ pub use handle::{
 };
 
 // ----- Basic NaN-box pack / unpack FFI -----
-pub(crate) use nanbox::{box_receiver_word, nanbox_string_key};
+pub(crate) use nanbox::nanbox_string_key;
 pub use nanbox::{
     js_checkpoint, js_debug_val, js_ffi_arg_ptr, js_get_string_pointer_unified, js_nanbox_bigint,
     js_nanbox_get_bigint, js_nanbox_get_handle, js_nanbox_get_pointer,

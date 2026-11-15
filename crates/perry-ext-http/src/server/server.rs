@@ -917,7 +917,13 @@ pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
     let parked: Vec<_> = with_base_server_mut(handle, |s| std::mem::take(&mut s.in_flight))
         .unwrap_or_default()
         .into_iter()
-        .map(|e| (e.request_handle, roots.root_nanbox(e.response), e.recycle_deadline()))
+        .map(|e| {
+            (
+                e.request_handle,
+                roots.root_nanbox(e.response),
+                e.recycle_deadline(),
+            )
+        })
         .collect();
     for (req, res, deadline) in parked {
         let res = object_handle(res.get());
@@ -1374,8 +1380,11 @@ fn process_pending(mut pending: HttpPendingRequest) {
                 let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    let _ =
-                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                    let _ = closure.call2(
+                        perry_ffi::JsThis::from_f64(server_this),
+                        req_f64,
+                        res_root.get(),
+                    );
                 }
                 js_promise_run_microtasks();
             }
@@ -1407,7 +1416,11 @@ fn process_pending(mut pending: HttpPendingRequest) {
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
                 // `'request'` listener — same `this` = server binding.
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }
@@ -1421,7 +1434,11 @@ fn process_pending(mut pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }

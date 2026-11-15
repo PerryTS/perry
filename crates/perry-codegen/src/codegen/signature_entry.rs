@@ -378,11 +378,39 @@ pub(crate) fn signed_index_params() -> bool {
     })
 }
 
+/// An index clone's parameter is covered by an F64 signature slot. The slot
+/// is a proven Number on every entry, which the clone's guard tests per call
+/// (an exact non-negative int32, else the generic body). The typed body
+/// converts the Number exactly where it is an element key (the same test,
+/// which folds to the integer compare when the caller passes an int), and
+/// an at-rest read with a default takes its i32 form for it
+/// (`expr::rest_elems`). A Boxed slot (an argument that may be `undefined`,
+/// an element of an Array with holes) keeps the clone: only its guard
+/// proves a Number. `PERRY_SIG_NUMBER_INDEX=0` (`off`, `false`) keeps the
+/// clone for an F64 slot too.
+pub(crate) fn number_index_params() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        signed_index_params()
+            && !matches!(
+                std::env::var("PERRY_SIG_NUMBER_INDEX").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+    })
+}
+
 /// A signature slot (`rep`, with its interval `range`) is at least as
 /// precise as an index clone's parameter: an I32 whose interval is
-/// non-negative, or, with `signed` (`signed_index_params`), any I32.
-fn index_param_covered(rep: FactsRep, range: Option<(i64, i64)>, signed: bool) -> bool {
+/// non-negative, or, with `signed` (`signed_index_params`), any I32, or,
+/// with `number` (`number_index_params`), an F64.
+fn index_param_covered(
+    rep: FactsRep,
+    range: Option<(i64, i64)>,
+    signed: bool,
+    number: bool,
+) -> bool {
     rep == FactsRep::I32 && (signed || range.is_some_and(|(lo, _)| lo >= 0))
+        || rep == FactsRep::F64 && number
 }
 
 /// The probe `PERRY_SIG_DIAG=1`: one line per method a `typed_calls` site
@@ -537,12 +565,14 @@ pub(crate) fn select_methods(
             // (which no representation carries).
             let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
             let signed_index = signed_index_params();
+            let number_index = number_index_params();
             let index_ok = cm.nonnegative_index_methods.get(&key).is_none_or(|ids| {
                 m.params
                     .iter()
                     .zip(sig.params.iter().zip(sig.ranges.iter()))
                     .all(|(p, (rep, range))| {
-                        !ids.contains(&p.id) || index_param_covered(*rep, *range, signed_index)
+                        !ids.contains(&p.id)
+                            || index_param_covered(*rep, *range, signed_index, number_index)
                     })
             });
             let less_precise = if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
@@ -1266,17 +1296,32 @@ mod tests {
     /// An index clone proves its parameters non-negative int32s. A signature
     /// covers one with an I32 slot: of any sign when the unsigned bound
     /// absorbs the sign test, else only with a non-negative interval. A
-    /// double or Boxed slot never covers it.
+    /// Boxed slot never covers it.
     #[test]
     fn a_signed_i32_slot_covers_an_index_clone_parameter() {
-        assert!(index_param_covered(FactsRep::I32, Some((-128, 255)), true));
-        assert!(index_param_covered(FactsRep::I32, Some((-8, 7)), true));
-        assert!(index_param_covered(FactsRep::I32, None, true));
-        assert!(index_param_covered(FactsRep::I32, Some((0, 127)), true));
-        for signed in [true, false] {
-            assert!(!index_param_covered(FactsRep::F64, None, signed));
-            assert!(!index_param_covered(FactsRep::Boxed, None, signed));
-            assert!(index_param_covered(FactsRep::I32, Some((0, 127)), signed));
+        for number in [true, false] {
+            assert!(index_param_covered(
+                FactsRep::I32,
+                Some((-128, 255)),
+                true,
+                number
+            ));
+            assert!(index_param_covered(
+                FactsRep::I32,
+                Some((-8, 7)),
+                true,
+                number
+            ));
+            assert!(index_param_covered(FactsRep::I32, None, true, number));
+            for signed in [true, false] {
+                assert!(!index_param_covered(FactsRep::Boxed, None, signed, number));
+                assert!(index_param_covered(
+                    FactsRep::I32,
+                    Some((0, 127)),
+                    signed,
+                    number
+                ));
+            }
         }
     }
 
@@ -1287,9 +1332,33 @@ mod tests {
         assert!(!index_param_covered(
             FactsRep::I32,
             Some((-128, 255)),
+            false,
             false
         ));
-        assert!(!index_param_covered(FactsRep::I32, Some((-1, 7)), false));
-        assert!(!index_param_covered(FactsRep::I32, None, false));
+        assert!(!index_param_covered(
+            FactsRep::I32,
+            Some((-1, 7)),
+            false,
+            false
+        ));
+        assert!(!index_param_covered(FactsRep::I32, None, false, false));
+    }
+
+    /// An F64 slot is a proven Number: it covers the clone's parameter with
+    /// the number rule on (`PERRY_SIG_NUMBER_INDEX`), whatever its interval,
+    /// and never with it off (main's rule).
+    #[test]
+    fn an_f64_slot_covers_an_index_clone_parameter_with_the_number_rule() {
+        for signed in [true, false] {
+            assert!(index_param_covered(FactsRep::F64, None, signed, true));
+            assert!(index_param_covered(
+                FactsRep::F64,
+                Some((-1, 7)),
+                signed,
+                true
+            ));
+            assert!(!index_param_covered(FactsRep::F64, None, signed, false));
+            assert!(!index_param_covered(FactsRep::Boxed, None, signed, true));
+        }
     }
 }

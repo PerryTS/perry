@@ -207,9 +207,7 @@ fn bool_option(options: f64, name: &str, default: bool) -> bool {
 
 fn numeric_option(value: f64) -> Option<f64> {
     let js_value = JSValue::from_bits(value.to_bits());
-    let number = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else if js_value.is_number() {
+    let number = if js_value.is_number() {
         js_value.as_number()
     } else {
         return None;

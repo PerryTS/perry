@@ -506,6 +506,10 @@ fn collect_shape_proven_ptr_locals_impl(
         family_present,
         ..
     } = walk;
+    // An Array literal of numbers is numeric storage only while nothing but
+    // element and `length` reads use it.
+    let mut const_local_inits = const_local_inits;
+    numeric::retain_unwritten_literal_arrays(stmts, &[], &mut const_local_inits);
     // #7770: locals whose every write is number-producing by construction —
     // they let a provenance `new C(i, i + 1)` resolve its parameters.
     let mut numeric_locals = collect_numeric_by_construction_locals(

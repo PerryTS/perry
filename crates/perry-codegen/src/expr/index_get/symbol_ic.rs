@@ -18,8 +18,8 @@ pub(crate) fn lower_symbol_property_get_ic(
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers
     // the symbol key (`perry_probe_get_keyed`); a decline takes the complete
     // keyed read.
-    emit_keyed_probe_impl(ctx, obj_box, sym_box, false, |ctx, memo| {
-        keyed_site_slow(ctx, obj_box, sym_box, "0", false, memo)
+    emit_keyed_probe(ctx, obj_box, sym_box, |ctx| {
+        keyed_slow(ctx, obj_box, sym_box, "0", false)
     })
 }
 
@@ -44,9 +44,7 @@ pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers a
     // string or symbol key through the key's atom (`perry_probe_get_keyed`);
     // only a decline calls the complete keyed read.
-    let named_value = emit_keyed_probe(ctx, obj, key, |ctx, memo| {
-        keyed_site_slow(ctx, obj, key, "0", true, memo)
-    });
+    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| keyed_slow(ctx, obj, key, "0", true));
     let named_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = numeric;
@@ -66,26 +64,16 @@ pub(crate) fn emit_keyed_probe(
     ctx: &mut FnCtx<'_>,
     obj: &str,
     key: &str,
-    slow: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
+    slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> String {
-    emit_keyed_probe_impl(ctx, obj, key, true, slow)
-}
-
-fn emit_keyed_probe_impl(
-    ctx: &mut FnCtx<'_>,
-    obj: &str,
-    key: &str,
-    can_memoize: bool,
-    slow: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
-) -> String {
-    // Every operand is a NaN-boxed word or the agent's directory, and the
-    // memo is 24 `u64` words (`KeyedSiteMemo`) on every target; wasm32 calls
-    // reach the leaves through their real wasm32 signatures
-    // (`wasm32::abi_adapt`). Other 32-bit targets have no lowering yet.
+    // Every operand is a NaN-boxed word or the agent's directory; the site
+    // owns no storage. wasm32 calls reach the leaves through their real
+    // wasm32 signatures (`wasm32::abi_adapt`). Other 32-bit targets have no
+    // lowering yet.
     if crate::target_layout::target_is_ilp32(ctx.target_triple)
         && !crate::target_layout::wasm32_lowering(ctx.target_triple)
     {
-        return slow(ctx, "null");
+        return slow(ctx);
     }
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
         ctx,
@@ -94,13 +82,6 @@ fn emit_keyed_probe_impl(
     );
     let obj_bits = ctx.block().bitcast_double_to_i64(obj);
     let key_bits = ctx.block().bitcast_double_to_i64(key);
-    // The leaf stays stateless; only its decline consults the site memo.
-    // Symbol keys cannot use the short-string memo.
-    let memo = if can_memoize {
-        crate::expr::ic_fast_split::emit_read_site_memo(ctx, 24)
-    } else {
-        "null".into()
-    };
     let probed = ctx.block().call(
         DOUBLE,
         "perry_probe_get_keyed",
@@ -117,7 +98,7 @@ fn emit_keyed_probe_impl(
     let probe_end = ctx.block().label.clone();
     ctx.block().cond_br(&served, &merge_l, &slow_l);
     ctx.current_block = slow_idx;
-    let slow_value = slow(ctx, &memo);
+    let slow_value = slow(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = merge_idx;
@@ -145,30 +126,6 @@ pub(crate) fn keyed_slow(
             (DOUBLE, key),
             (I64, site_id),
             (crate::types::I32, if dynamic { "1" } else { "0" }),
-        ],
-    )
-}
-
-pub(crate) fn keyed_site_slow(
-    ctx: &mut FnCtx<'_>,
-    obj: &str,
-    key: &str,
-    site_id: &str,
-    dynamic: bool,
-    memo: &str,
-) -> String {
-    if memo == "null" {
-        return keyed_slow(ctx, obj, key, site_id, dynamic);
-    }
-    ctx.block().call(
-        DOUBLE,
-        "js_object_get_keyed_site_slow",
-        &[
-            (DOUBLE, obj),
-            (DOUBLE, key),
-            (I64, site_id),
-            (crate::types::I32, if dynamic { "1" } else { "0" }),
-            (PTR, memo),
         ],
     )
 }

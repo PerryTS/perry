@@ -236,6 +236,33 @@ fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
 }
 
+/// `PERRY_BYTE_STORE_TONUMBER=0` (also `off` / `false`) is main's byte store:
+/// the value of `u8[i] = v` and `buf[i] = v` is the ToInt32 of its raw bits,
+/// so an object, a string, a Boolean or a BigInt is stored as `0` with no
+/// `valueOf` / `toString` / `Symbol.toPrimitive` call and no TypeError.
+pub(crate) fn byte_store_tonumber_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_BYTE_STORE_TONUMBER").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Does a byte store (`Uint8ArraySet`, `BufferIndexSet`) of `value` need the
+/// spec's ToNumber before its ToInt32? Not when the store already takes it as
+/// an exact int32 (`can_lower_integer_typed_array_store_value`) or the facts
+/// prove it a canonical Number (`expr_produces_canonical_raw_f64`, the P3
+/// claim): then the value's bits are the Number and the store is unchanged.
+/// Any other value can be an object whose conversion runs program code (and
+/// can detach or shrink the view), a string, a Boolean or a BigInt.
+pub(crate) fn byte_store_value_needs_tonumber(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    byte_store_tonumber_on()
+        && !can_lower_integer_typed_array_store_value(ctx, value)
+        && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+}
+
 /// Does a store of `value` into `view` take the native element store (no
 /// runtime call)? The value gate of [`lower_typed_array_store`]; the loop
 /// region planner asks it before it plans a view store bare.
@@ -655,6 +682,12 @@ pub(crate) fn lower_buffer_store(
         _ => false,
     } && rooting::operand_may_collect(ctx, value_expr);
     if value_crosses_cached_view {
+        return Ok(None);
+    }
+    // The inline store takes the value as a native int32: a value that needs
+    // ToNumber (which runs program code that can detach or shrink the view)
+    // takes the checked store, which converts before its bounds test.
+    if byte_store_value_needs_tonumber(ctx, value_expr) {
         return Ok(None);
     }
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {

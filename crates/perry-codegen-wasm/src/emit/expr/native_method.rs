@@ -21,27 +21,9 @@ impl<'a> FuncEmitCtx<'a> {
                         func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                     }
                     "console" => match method.as_str() {
-                        "log" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_log", 1);
-                            }
-                        }
-                        "warn" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_warn", 1);
-                            }
-                        }
-                        "error" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_error", 1);
-                            }
-                        }
+                        "log" => self.emit_console_call(func, "console_log", args),
+                        "warn" => self.emit_console_call(func, "console_warn", args),
+                        "error" => self.emit_console_call(func, "console_error", args),
                         _ => {}
                     },
                     "JSON" => match method.as_str() {

@@ -38,9 +38,7 @@ fn throw_type_error(message: &str) -> ! {
 
 fn number_arg(value: f64) -> Option<f64> {
     let value = JSValue::from_bits(value.to_bits());
-    if value.is_int32() {
-        Some(value.as_int32() as f64)
-    } else if value.is_number() {
+    if value.is_number() {
         Some(value.as_number())
     } else {
         None
@@ -1105,9 +1103,6 @@ unsafe fn yaml_add_js_value(
             YAML_BOOL_TAG,
             if value.as_bool() { "true" } else { "false" },
         );
-    }
-    if value.is_int32() {
-        return yaml_add_scalar(document, YAML_INT_TAG, &value.as_int32().to_string());
     }
     if value.is_number() {
         let number = value.as_number();

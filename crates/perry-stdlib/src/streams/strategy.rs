@@ -79,10 +79,6 @@ pub(crate) unsafe fn parse_strategy_value(value: f64) -> (f64, i64) {
         if bits == TAG_UNDEFINED || bits == TAG_NULL {
             return (1.0, 0);
         }
-        // INT32-tagged plain number (e.g. a literal highWaterMark).
-        if top == 0x7FFE {
-            return ((bits as u32 as i32) as f64, 0);
-        }
         let hwm = f64::from_bits(read_high_water_mark(value));
         return (hwm, read_queuing_strategy_size(value));
     }

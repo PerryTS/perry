@@ -43,9 +43,6 @@ fn is_callable(value: f64) -> bool {
 
 fn number_i32(value: f64) -> Option<i32> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        return Some(js.as_int32());
-    }
     if js.is_number()
         && value.is_finite()
         && value.fract() == 0.0

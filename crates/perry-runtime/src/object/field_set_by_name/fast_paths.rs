@@ -1097,7 +1097,7 @@ mod tests {
             test_reset_transition_fast_hits();
             for proven in [false, true] {
                 for bits in [
-                    crate::value::INT32_TAG | 17,
+                    crate::value::INTERNAL_WORD_TAG | 17,
                     (-0.0_f64).to_bits(),
                     f64::NAN.to_bits(),
                 ] {

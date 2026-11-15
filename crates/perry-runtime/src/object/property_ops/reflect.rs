@@ -177,6 +177,32 @@ pub(crate) fn set_resolved(target: f64, property_key: f64, value: f64, receiver:
     if crate::object::builtin_proto::lock_refuses_write(receiver, property_key) {
         return nanbox_bool(false);
     }
+    // Two [[Set]]s whose rejection `Reflect.set` reports as `false`: an
+    // Array's `length` (ArraySetLength stops at an element that cannot be
+    // deleted; a frozen Array or a read-only `length` rejects), and a typed
+    // array's `length` / `byteLength` / `byteOffset` / `buffer` (accessors
+    // of `%TypedArray%.prototype` with no setter).
+    if target.to_bits() == receiver.to_bits() {
+        if key_is_length(property_key) {
+            if let Some(arr) = array_ptr_from_value(target) {
+                return nanbox_bool(crate::array::array_set_length_reflect(arr, value));
+            }
+        }
+        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(target) {
+            if let Some(name) = key_to_rust_string(property_key) {
+                if matches!(
+                    name.as_str(),
+                    "length" | "byteLength" | "byteOffset" | "buffer"
+                ) {
+                    return nanbox_bool(unsafe {
+                        crate::typedarray_props::typed_array_set_property_by_name(
+                            addr, &name, value,
+                        )
+                    });
+                }
+            }
+        }
+    }
     // ES-module namespace imports use the namespace exotic [[Set]] operation:
     // their reflected data descriptors report writable=true, but writes still
     // fail. `node:async_hooks` is materialized through Perry's shared native

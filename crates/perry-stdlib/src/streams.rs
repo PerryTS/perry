@@ -351,8 +351,8 @@ mod pipe;
 pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
 };
-mod strategy;
 mod prototypes;
+mod strategy;
 mod subclass;
 mod tee;
 #[cfg(test)]
@@ -384,13 +384,12 @@ pub(crate) use self::expando::stream_expando_get;
 #[cfg(test)]
 pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
-use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::prototypes::install_stream_prototypes;
+use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init,
-    js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
-    js_writable_stream_subclass_init,
+    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
+    js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
 };
 #[cfg(test)]
 pub(crate) use self::transform::transform_side_tables_hold_for_test;
@@ -596,9 +595,16 @@ pub(crate) const STREAM_BYOB_REQUEST_BIT: usize =
 pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_BYOB_REQUEST_BIT;
 const _: () = assert!(STREAM_CONTROLLER_BIT.is_power_of_two());
 const _: () = assert!(STREAM_BYOB_REQUEST_BIT.is_power_of_two());
-const _: () = assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
-const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1);
-const _: () = assert!((STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1);
+const _: () =
+    assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT
+        == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1
+);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT
+        == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1
+);
 
 /// The controller value of readable stream `id`.
 #[inline]
@@ -1163,7 +1169,7 @@ extern "C" fn readable_pull_microtask(
     unsafe {
         let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
         let stream_id = f64::from_bits(stream_bits) as usize;
-        let cb = js_closure_get_capture_ptr(closure, 1);
+        let cb = perry_runtime::closure::closure_capture_ref(closure, 1);
         let pull_returns_byte_chunk = js_closure_get_capture_ptr(closure, 2) != 0;
         let should_pull = {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -1355,7 +1361,7 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
         3,
     );
     js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
-    js_closure_set_capture_ptr(pull, 1, cb);
+    perry_runtime::closure::closure_set_capture_ref(pull, 1, cb);
     perry_runtime::closure::closure_set_capture_word(
         pull,
         2,
@@ -2319,7 +2325,7 @@ extern "C" fn readable_from_chunk_fulfilled(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     unsafe {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise = scope.root_raw_mut_ptr(promise);
@@ -2337,7 +2343,7 @@ extern "C" fn readable_from_chunk_rejected(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     js_promise_reject(promise, reason);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -2387,12 +2393,12 @@ unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
             let reject =
                 js_closure_alloc(perry_runtime::fn_info!(readable_from_chunk_rejected, 1), 1);
             let reject = scope.root_raw_mut_ptr(reject);
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 fulfill.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,
             );
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 reject.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,

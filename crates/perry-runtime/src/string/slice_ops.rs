@@ -295,7 +295,7 @@ fn trim_impl(s: *const StringHeader, trim_start: bool, trim_end: bool) -> *mut S
         // image owns its address for the life of the executable, so a literal
         // with nothing to trim stays that literal (and its atom: a Map keyed
         // by `name.trim()` keeps the key's stored hash).
-        if unsafe { (*s).refcount } != 0 {
+        if unsafe { (*s).refcount } == 1 {
             js_string_addref(s.cast_mut());
         }
         return s.cast_mut();

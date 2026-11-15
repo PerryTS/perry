@@ -146,7 +146,15 @@ impl<'a> FuncEmitCtx<'a> {
                 {
                     func.instruction(&Instruction::GlobalSet(gidx));
                 } else if let Some(&idx) = self.local_map.get(id) {
-                    func.instruction(&Instruction::LocalSet(idx));
+                    if !self.is_boxed(id) {
+                        func.instruction(&Instruction::LocalSet(idx));
+                    } else if self.preallocated.contains(id) {
+                        self.emit_box_set(func, idx);
+                        func.instruction(&Instruction::Drop);
+                    } else {
+                        self.emit_box_call(func, "box_new");
+                        func.instruction(&Instruction::LocalSet(idx));
+                    }
                 } else {
                     func.instruction(&Instruction::Drop);
                 }
@@ -447,6 +455,9 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_memcall(func, "get_exception", 0);
                     if let Some((param_id, _)) = &catch_clause.param {
                         if let Some(&idx) = self.local_map.get(param_id) {
+                            if self.is_boxed(param_id) {
+                                self.emit_box_call(func, "box_new");
+                            }
                             func.instruction(&Instruction::LocalSet(idx));
                         } else {
                             func.instruction(&Instruction::Drop);
@@ -527,7 +538,18 @@ impl<'a> FuncEmitCtx<'a> {
             // Issue #569: Wasm backend has no equivalent of LLVM's
             // alloca'd box slot — JS hoisting in the host runtime handles
             // forward refs natively. Emit nothing.
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+            // A closure created before its captured `let` runs shares the cell made here.
+            Stmt::PreallocateBoxes(ids) => {
+                for id in ids {
+                    if let Some(&idx) = self.local_map.get(id).filter(|_| self.is_boxed(id)) {
+                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                        self.emit_box_call(func, "box_new");
+                        func.instruction(&Instruction::LocalSet(idx));
+                        self.preallocated.insert(*id);
+                    }
+                }
+            }
+            Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
         }
     }
 

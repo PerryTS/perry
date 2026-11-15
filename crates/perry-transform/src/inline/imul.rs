@@ -224,12 +224,26 @@ mod tests {
             },
         ];
         rewrite_imul_calls_in_stmts(&mut stmts, &ids);
-        let Stmt::For { body: plain, .. } = &stmts[0] else { panic!("plain loop") };
+        let Stmt::For { body: plain, .. } = &stmts[0] else {
+            panic!("plain loop")
+        };
         assert!(is_math_imul(&plain[0]), "plain loop");
-        let Stmt::Labeled { body, .. } = &stmts[1] else { panic!("labelled loop") };
-        let Stmt::For { body: labelled, .. } = body.as_ref() else { panic!("labelled for") };
-        assert!(is_math_imul(&labelled[0]), "labelled loop keeps the polyfill call");
-        let Stmt::Switch { cases, .. } = &stmts[2] else { panic!("switch") };
-        assert!(is_math_imul(&cases[0].body[0]), "switch case keeps the polyfill call");
+        let Stmt::Labeled { body, .. } = &stmts[1] else {
+            panic!("labelled loop")
+        };
+        let Stmt::For { body: labelled, .. } = body.as_ref() else {
+            panic!("labelled for")
+        };
+        assert!(
+            is_math_imul(&labelled[0]),
+            "labelled loop keeps the polyfill call"
+        );
+        let Stmt::Switch { cases, .. } = &stmts[2] else {
+            panic!("switch")
+        };
+        assert!(
+            is_math_imul(&cases[0].body[0]),
+            "switch case keeps the polyfill call"
+        );
     }
 }

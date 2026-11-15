@@ -210,11 +210,15 @@ pub(super) fn values(
         .iter()
         .map(|store| store.requires_number_check(ctx, args))
         .collect();
+    let proven: Vec<bool> = plan
+        .iter()
+        .map(|store| store.proven_number(ctx, args))
+        .collect();
     let lanes = crate::expr::rest_fields::lanes_of(ctx, class_name);
     let reread = super::refresh_rooted_args(ctx, group)?;
     let mut admit: Option<String> = None;
     let mut values = Vec::with_capacity(plan.len());
-    for (store, &check) in plan.iter().zip(&checked) {
+    for ((store, &check), &proven) in plan.iter().zip(&checked).zip(&proven) {
         let arg = &reread[store.arg_index];
         let value = store.numeric_addend.map_or_else(
             || arg.clone(),
@@ -223,6 +227,9 @@ pub(super) fn values(
                     .fadd(arg, &crate::nanbox::double_literal(addend))
             },
         );
+        if proven {
+            super::super::ctor_prologue_stores::witness_proven_number(ctx, &value, store.slot)?;
+        }
         if check {
             let blk = ctx.block();
             let bits = blk.bitcast_double_to_i64(&value);

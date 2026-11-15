@@ -12,11 +12,7 @@ pub extern "C" fn js_fs_to_unix_timestamp(time_value: f64) -> f64 {
     }
 
     if validate::is_numeric(js_value) {
-        let number = if js_value.is_int32() {
-            js_value.as_int32() as f64
-        } else {
-            js_value.as_number()
-        };
+        let number = js_value.as_number();
         if number.is_finite() {
             if number < 0.0 {
                 return crate::clock::wall_millis() / 1000.0;

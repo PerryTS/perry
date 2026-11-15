@@ -849,7 +849,8 @@ pub fn transform_generator_function_with_extra_captures(
         .filter(|id| tdz_hoisted_ids.contains(id))
         .collect();
     prealloc_ids.retain(|id| !tdz_hoisted_ids.contains(id));
-    let mut preallocated: std::collections::HashSet<LocalId> = prealloc_ids.iter().copied().collect();
+    let mut preallocated: std::collections::HashSet<LocalId> =
+        prealloc_ids.iter().copied().collect();
     preallocated.extend(tdz_hoisted.iter().copied());
     new_body.push(Stmt::PreallocateBoxes(prealloc_ids));
     if !tdz_hoisted.is_empty() {

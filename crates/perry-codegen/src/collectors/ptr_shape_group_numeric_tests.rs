@@ -1021,3 +1021,65 @@ fn update_value_resolves_via_not_bigint() {
         "without the not-BigInt fact the update's value is unproven"
     );
 }
+
+/// `t = t + a[i]` over `const a = [1, 2, 3]`: the literal is numeric storage
+/// while only element and `length` reads use it; one element store (or any
+/// other use) voids the accumulator's proof.
+#[test]
+fn literal_array_sum_loses_its_proof_to_an_element_store() {
+    let program = |store: bool| {
+        let mut stmts = vec![
+            Stmt::Let {
+                id: 40,
+                name: "a".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(
+                    vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+                    None,
+                )),
+            },
+            Stmt::Let {
+                id: 41,
+                name: "t".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+        ];
+        if store {
+            stmts.push(Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(40)),
+                index: Box::new(Expr::Integer(1)),
+                value: Box::new(Expr::String("two".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
+                element_offset: 0,
+            }));
+        }
+        stmts.push(counted_loop(
+            42,
+            arr_len(40),
+            vec![Stmt::Expr(Expr::LocalSet(
+                41,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(41)),
+                    right: Box::new(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(40)),
+                        index: Box::new(Expr::LocalGet(42)),
+                    }),
+                }),
+            ))],
+        ));
+        stmts
+    };
+    assert!(numeric_locals_of(&program(false)).contains(&41));
+    assert!(
+        !numeric_locals_of(&program(true)).contains(&41),
+        "a string stored into the literal makes `t + a[i]` a concatenation"
+    );
+}

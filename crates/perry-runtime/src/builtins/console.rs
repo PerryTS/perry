@@ -30,10 +30,6 @@ pub extern "C" fn js_console_log(value: JSValue) {
         } else {
             println!("{}", format_finite_number_js(n));
         }
-    } else if value.is_int32() {
-        // #9415: a class reference shares the INT32 tag, so this arm printed
-        // the raw class id (`console.log(class K {})` -> `49`).
-        println!("{}", int32_or_class_repr(f64::from_bits(value.bits())));
     } else if is_array_hole(f64::from_bits(value.bits())) {
         println!("undefined");
     } else {
@@ -73,8 +69,6 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
         // `NaN` for every single-arg `console.log(x)` where x is a
         // bigint (refs GH #33).
         println!("{}{}", p, format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        println!("{}{}", p, int32_or_class_repr(value));
     } else if is_array_hole(value) {
         println!("{}undefined", p);
     } else {
@@ -280,8 +274,6 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
     } else if jsval.is_reference() {
         // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        eprintln!("{}", int32_or_class_repr(value));
     } else if is_array_hole(value) {
         eprintln!("undefined");
     } else {
@@ -341,8 +333,6 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
     } else if jsval.is_reference() {
         // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        eprintln!("{}", int32_or_class_repr(value));
     } else if is_array_hole(value) {
         eprintln!("undefined");
     } else {
@@ -925,9 +915,6 @@ fn color_mode_received(value: f64) -> String {
     }
     if jsval.is_bool() {
         return jsval.as_bool().to_string();
-    }
-    if jsval.is_int32() {
-        return int32_or_class_repr(value);
     }
     if jsval.is_number() {
         let n = jsval.as_number();
@@ -1653,10 +1640,6 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         if v.is_null() {
             return Some(usize::MAX);
         }
-        if v.is_int32() {
-            let n = v.as_int32();
-            return Some(if n < 0 { 0 } else { n as usize });
-        }
         if v.is_number() {
             let n = v.as_number();
             if n.is_nan() {
@@ -1730,9 +1713,6 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_bool() {
             return Some(v.as_bool());
-        }
-        if v.is_int32() {
-            return Some(v.as_int32() != 0);
         }
         if v.is_number() {
             let n = v.as_number();

@@ -166,6 +166,26 @@ fn ir_for(module: Module) -> String {
     String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap()
 }
 
+/// The quiet-site facts the whole-program solve gives a loop
+/// `for (let i = 0; i < arr.length; i++) arr[i] = …` over a local Array
+/// literal (`perry compile`, `PERRY_FACTS_DUMP`: `arr.length` a quiet read
+/// with a primitive value, `arr[i]` a quiet element site). The length hoist
+/// keeps `arr.length` only on that word (#14537, `perry_codegen` `quiet`),
+/// and a unit test runs no solve. The HIR has offset 0 at both sites.
+fn quiet_site_opts() -> CompileOptions {
+    let mut elision = perry_codegen::ElisionFacts::default();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..Default::default()
+        },
+        ..empty_opts()
+    }
+}
+
 fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
     let start_pos = ir
         .find(start)
@@ -552,9 +572,9 @@ fn c262_addition_assignment_operands_use_dynamic_add_helper() {
     );
 }
 
-#[test]
-fn bounded_integer_array_store_omits_layout_note_and_barrier() {
-    let module = base_module(
+/// `probe() { let arr: number[] = [0, 0, 0]; for (let i = 0; i < arr.length; i++) arr[i] = i + 1; return arr }`
+fn bounded_integer_array_store_module() -> Module {
+    base_module(
         "bounded_integer_array_store.ts",
         vec![
             Stmt::Let {
@@ -611,9 +631,13 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
         Vec::new(),
-    );
+    )
+}
 
-    let ir = ir_for(module);
+#[test]
+fn bounded_integer_array_store_omits_layout_note_and_barrier() {
+    let module = bounded_integer_array_store_module();
+    let ir = String::from_utf8(compile_module(&module, quiet_site_opts()).unwrap()).unwrap();
 
     assert!(
         ir.contains("idxset.bounded_numeric_fast") && ir.contains("store double"),
@@ -638,6 +662,23 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     assert!(
         !ir.contains("call void @js_write_barrier_slot"),
         "integer store into a numeric array should not emit a slot barrier"
+    );
+}
+
+/// The twin: without the quiet-site facts the loop's sites may run program
+/// code (no solve, or an `arr` the solve does not prove a plain Array), the
+/// length hoist is refused (#14537) and no store takes the bounded arm; the
+/// loop reads `arr.length` live in its condition.
+#[test]
+fn bounded_integer_array_store_without_quiet_facts_takes_no_bounded_arm() {
+    let ir = ir_for(bounded_integer_array_store_module());
+    assert!(
+        !ir.contains("idxset.bounded"),
+        "without the facts' word on the loop's sites no store may take the bounded arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_value_length_property_f64("),
+        "premise: the refused loop reads its length at every step:\n{ir}"
     );
 }
 

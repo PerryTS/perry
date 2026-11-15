@@ -151,7 +151,7 @@ pub(crate) fn read_bigint_i128(v: f64) -> Option<i128> {
         let s = read_string(crate::value::js_nanbox_string(s_ptr as i64));
         return s.parse::<i128>().ok();
     }
-    if jv.is_number() || jv.is_int32() {
+    if jv.is_number() {
         let n = jv.to_number();
         if n.is_finite() {
             return Some(n as i128);

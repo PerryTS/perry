@@ -43,7 +43,7 @@ fn wasm32_method_and_keyed_sites_match_lp64() {
         "js_bm_get1",
         "js_bm_set2",
         "perry_probe_get_keyed",
-        "js_object_get_keyed_site_slow",
+        "js_object_get_keyed_slow",
     ] {
         assert!(calls(&native, callee), "native lost {callee}");
         assert!(calls(&wasm, callee), "wasm32 does not use {callee}");
@@ -54,7 +54,7 @@ fn wasm32_method_and_keyed_sites_match_lp64() {
     ] {
         assert!(!calls(&wasm, generic), "wasm32 still calls {generic}");
     }
-    assert!(wasm.contains("_read_shape_slots = private global [24 x i64] zeroinitializer, align 8"));
+    assert!(!wasm.contains("_read_shape_slots"));
     // The adapted module is valid wasm32 code.
     let object = crate::linker::compile_ll_to_object(&wasm, Some("wasm32-wasip2")).unwrap();
     assert!(object.starts_with(b"\0asm"));

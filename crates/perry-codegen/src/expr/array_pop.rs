@@ -243,7 +243,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
     ctx.current_block = slow_idx;
     let slow = {
         let blk = ctx.block();
-        blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &handle)])
+        crate::expr::array_proto_guard::emit_array_pop_call(blk, recv_box, &handle)
     };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -478,9 +478,9 @@ mod tests {
         let slow = super::super::class_field_barrier_tests::block_body(ir, "apop.slow.")
             .expect("slow block");
         assert!(
-            slow.contains("call double @js_array_pop_f64_site("),
-            "{what}: the runtime pop (behind the builtin-prototype proof) must remain \
-             the fallback:\n{slow}"
+            slow.contains("call double @js_array_m_pop0("),
+            "{what}: the checked runtime pop (the receiver's own proof, else the real \
+             `Get`) must remain the fallback:\n{slow}"
         );
         // An elements-backed Array subclass resolves its payload through the
         // meta record (`ObjectMeta.elements`, word 12) and pops from it with
@@ -535,5 +535,21 @@ mod tests {
     fn array_pop_takes_the_inline_tier_with_the_runtime_call_as_fallback() {
         assert_inline_pop_tier(&ir_of(field_pop_module()), "erased field receiver");
         assert_inline_pop_tier(&ir_of(param_pop_module()), "claimed array parameter");
+    }
+
+    /// The HIR's own `pop` node (`Expr::ArrayPop`, a local receiver) calls the
+    /// checked entry, which proves that `pop` is the builtin on the receiver
+    /// or performs the real `Get`; the site entry it replaces tested the
+    /// prototype only, so an own `pop` was ignored.
+    #[test]
+    fn the_folded_pop_node_calls_the_checked_entry() {
+        let mut m = param_pop_module();
+        m.functions[0].body = vec![Stmt::Return(Some(Expr::ArrayPop(5)))];
+        let ir = ir_of(m);
+        assert!(
+            ir.contains("call double @js_array_m_pop0(")
+                && !ir.contains("call double @js_array_pop_f64_site("),
+            "Expr::ArrayPop must call the checked pop entry:\n{ir}"
+        );
     }
 }

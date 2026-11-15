@@ -22,9 +22,7 @@ unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
     if crate::symbol::js_is_symbol(radix_value) != 0 {
         crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
     }
-    if jsval.is_int32() {
-        jsval.as_int32() as f64
-    } else if jsval.is_bool() {
+    if jsval.is_bool() {
         if jsval.as_bool() {
             1.0
         } else {
@@ -262,15 +260,6 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         crate::bigint_hooks::js_bigint_to_string_radix(ptr, radix!())
     } else if jsval.is_string() {
         jsval.as_string_ptr() as *mut crate::string::StringHeader
-    } else if jsval.is_int32() {
-        let radix = radix!();
-        let n = jsval.as_int32();
-        if radix == 10 {
-            let s = n.to_string();
-            return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        }
-        let s = double_to_radix_string(n as f64, radix as u32);
-        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_number() {
         number_to_radix_string(value, radix!())
     } else {

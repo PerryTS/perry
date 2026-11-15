@@ -382,8 +382,6 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         let top = obj_bits >> 48;
         if top == 0x7FFD {
             (obj_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else if top == 0 && obj_bits > 0x10000 {
-            obj_bits as usize
         } else {
             0
         }

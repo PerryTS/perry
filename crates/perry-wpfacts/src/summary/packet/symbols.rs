@@ -154,6 +154,7 @@ impl Model {
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }
+            Cons::Objects { dst } => format!("Objects dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(
                 "Hard kind={:?} reason={:?}",
                 kind,
@@ -331,6 +332,7 @@ impl Model {
                 dst,
                 shape,
                 enumerable,
+                ..
             } => {
                 format!(
                     "IdxLoad idx={:?} dst={:?} shape={:?} enumerable={enumerable}",

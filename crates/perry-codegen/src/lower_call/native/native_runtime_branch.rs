@@ -426,6 +426,17 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 }
                 return lower_expr(ctx, &args[0]);
             }
+            // The admission of a for-of over a source annotated as a numeric
+            // typed array (`for_of_guard::source_for_of`).
+            "typedArrayForOfAdmits" => {
+                let value = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_typed_array_for_of_admits", &[(DOUBLE, &value)]));
+            }
             "isBuiltin" => {
                 let specifier = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),

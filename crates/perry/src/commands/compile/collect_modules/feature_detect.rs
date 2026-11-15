@@ -184,13 +184,16 @@ fn stmts_any_expr(
 /// text never spells by name, yet every element read produces a BigInt.
 fn module_uses_bigint_typed_array(module: &perry_hir::Module) -> bool {
     use perry_hir::walker::walk_expr_children;
-    use perry_hir::{TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64};
     use perry_hir::Expr;
+    use perry_hir::{TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64};
 
     fn uses(expr: &Expr) -> bool {
         match expr {
             Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. }
-                if matches!(*kind, TYPED_ARRAY_KIND_BIGINT64 | TYPED_ARRAY_KIND_BIGUINT64) =>
+                if matches!(
+                    *kind,
+                    TYPED_ARRAY_KIND_BIGINT64 | TYPED_ARRAY_KIND_BIGUINT64
+                ) =>
             {
                 return true
             }
@@ -710,6 +713,11 @@ fn detect_optional_feature_usage_with_capabilities(
         || ["MessageChannel", "MessagePort", "BroadcastChannel"]
             .iter()
             .any(|name| hir_debug.contains(name));
+    // The global `BroadcastChannel` reaches other channels of its name only
+    // through the stdlib's channel registry (`worker_threads::broadcast_channel`,
+    // registered by the stdlib's init): without the stdlib its runtime object
+    // has no transport, and `postMessage` delivered nothing.
+    ctx.needs_stdlib |= hir_debug.contains(r#""BroadcastChannel""#);
     ctx.uses_os |= global_object::may_escape(hir_module)
         || hir_debug
             .as_bytes()

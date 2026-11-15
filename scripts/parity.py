@@ -2,9 +2,9 @@
 """Run Perry's program cases against Node and gate them on per-subject snapshots.
 
     parity.py run [SELECTOR ...] [--suite test-files|node-suite|all] [--filter S]
-                  [--shard N/M] [--jobs N] [--mode fast|auto] [--update]
+                  [--shard N/M] [--jobs N] [--mode fast|auto|web] [--update]
                   [--report PATH] [--unpinned-oracle]
-    parity.py accept REPORT [REPORT ...] [--mode fast|auto] [--platform P]
+    parity.py accept REPORT [REPORT ...] [--mode fast|auto|web] [--platform P]
 
 Runnable formats are .ts, .cts, .mts and test_*.cjs in every root. Keep the
 extension to preserve Node's module mode; case ids omit TS-family suffixes
@@ -15,6 +15,9 @@ for a root in SUBJECT_ROOTS), a whole root, or a path to a case file or a
 directory of cases. Every case is compiled, run, and
 compared with Node on merged stdout+stderr and exit status after the `unified`
 profile of scripts/parity_normalize.py.
+
+`--mode web` compiles with `--target web` and runs the emitted page under Node
+through scripts/parity_web_host.cjs; it links no native archive.
 
 A subject's snapshot, tests/parity/snapshots/<platform>-<mode>/<subject>.json,
 lists its cases that do not pass; an unlisted case must pass. The check runs
@@ -51,6 +54,7 @@ SCRIPTS = Path(__file__).resolve().parent
 WINDOWS = os.name == "nt"
 EXE = ".exe" if WINDOWS else ""
 
+MODES = ("fast", "auto", "web")
 STATUSES = ("pass", "parity_fail", "compile_fail", "crash", "node_fail", "skipped")
 TRIAGE_FIELDS = ("issue", "added", "category", "reason")
 # One 30s run budget for every case: cases share the machine with parallel
@@ -322,21 +326,21 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
         env.pop("PERRY_NO_AUTO_OPTIMIZE", None)
         if name.startswith("test_parity_") or cid.startswith("node-suite/"):
             env["PERRY_ALLOW_UNIMPLEMENTED"] = "1"
-        ext_routed = bool(EXT_ROUTED.search(text))
+        ext_routed, web = bool(EXT_ROUTED.search(text)), mode == "web"
         # A test-files case routed to an ext wrapper cannot be served by one
         # prebuilt stdlib, so fast mode lets auto-optimize build a coherent set.
-        auto = name not in FORCE_NO_AUTO and (
+        auto = not web and name not in FORCE_NO_AUTO and (
             mode == "auto" or (ext_routed and not cid.startswith("node-suite/")))
         if not auto:
             env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
-        flags = []
-        if re.match(r"node-suite/[^/]+/.*(webassembly|wasm)", cid):
+        flags, target = [], ["--target", "web"] if web else []
+        if not web and re.match(r"node-suite/[^/]+/.*(webassembly|wasm)", cid):
             flags.append("--enable-wasm-runtime")
         budget = compile_budget(name, text, auto, ext_routed)
-        binary = work / f"case{EXE}"
-        compile_line = [ctx["perry"], *compile_cmd, *flags, str(source), "-o", str(binary)]
+        binary = work / ("case.html" if web else f"case{EXE}")
+        compile_line = [ctx["perry"], *compile_cmd, *flags, str(source), *target, "-o", str(binary)]
         code = run(compile_line, budget, root, env, work / "compile")
-        if code != 0 and "perry-jsruntime" in read_capped(work / "compile"):
+        if code != 0 and not web and "perry-jsruntime" in read_capped(work / "compile"):
             compile_line.insert(-3, "--enable-js-runtime")
             code = run(compile_line, budget, root, env, work / "compile")
         if code != 0:
@@ -348,7 +352,8 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
 
         run_env = {**base, "PERRY_STUB_DIAG": "off", **hdr["env"]}
         prefix = process_budget(ctx["jobs"]) + ([*limits, str(path)] if hdr["rlimit"] else [])
-        perry_exit = run([*prefix, str(binary), *hdr["argv"]], RUN_TIMEOUT, root, run_env,
+        host = [ctx["node"], str(SCRIPTS / "parity_web_host.cjs")] if web else []
+        perry_exit = run([*prefix, *host, str(binary), *hdr["argv"]], RUN_TIMEOUT, root, run_env,
                          work / "perry")
         perry_out = read_capped(work / "perry")
         if perry_exit == 125 and FORK_CAP_FAILED in perry_out:
@@ -648,13 +653,13 @@ def main(argv=None, root: Path = ROOT) -> int:
     run_p.add_argument("--filter", action="append")
     run_p.add_argument("--shard")
     run_p.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
-    run_p.add_argument("--mode", choices=("fast", "auto"), default="fast")
+    run_p.add_argument("--mode", choices=MODES, default="fast")
     run_p.add_argument("--update", action="store_true")
     run_p.add_argument("--report", default=str(root / "tests/parity" / "reports" / "latest.json"))
     run_p.add_argument("--unpinned-oracle", action="store_true")
     acc_p = sub.add_parser("accept")
     acc_p.add_argument("reports", nargs="+")
-    acc_p.add_argument("--mode", choices=("fast", "auto"))
+    acc_p.add_argument("--mode", choices=MODES)
     acc_p.add_argument("--platform", choices=("windows", "macos", "linux", "other"))
     args = parser.parse_args(argv)
     try:

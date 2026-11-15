@@ -224,7 +224,7 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
     }
     // Non-buffer: a Number or BigInt receiver treats the string arg as a radix.
     let jsval = crate::value::JSValue::from_bits(bits);
-    if jsval.is_number() || jsval.is_int32() || jsval.is_bigint() {
+    if jsval.is_number() || jsval.is_bigint() {
         return crate::value::js_jsvalue_to_string_radix(value, arg);
     }
     crate::value::js_jsvalue_to_string(value)

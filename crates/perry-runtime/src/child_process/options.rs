@@ -10,7 +10,7 @@ pub(crate) fn cp_read_uid_gid_option(opts_val: f64, key: &[u8]) -> Option<u32> {
     if js_value.is_undefined() || js_value.is_null() {
         return None;
     }
-    if !js_value.is_number() && !js_value.is_int32() {
+    if !js_value.is_number() {
         return None;
     }
     let id = js_value.to_number();
@@ -194,9 +194,7 @@ pub(crate) enum CpStdio {
 
 fn cp_stdio_number_fd(value: f64) -> Option<i32> {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        Some(js_value.as_int32())
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         let n = js_value.as_number();
         if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= i32::MAX as f64 {
             Some(n as i32)

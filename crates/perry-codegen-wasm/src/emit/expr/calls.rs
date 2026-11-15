@@ -52,27 +52,15 @@ impl<'a> FuncEmitCtx<'a> {
                     if let Expr::GlobalGet(_) = object.as_ref() {
                         match property.as_str() {
                             "log" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_log", 1);
-                                }
+                                self.emit_console_call(func, "console_log", args);
                                 return true;
                             }
                             "warn" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_warn", 1);
-                                }
+                                self.emit_console_call(func, "console_warn", args);
                                 return true;
                             }
                             "error" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_error", 1);
-                                }
+                                self.emit_console_call(func, "console_error", args);
                                 return true;
                             }
                             _ => {}

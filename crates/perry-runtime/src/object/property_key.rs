@@ -12,6 +12,15 @@ use super::*;
 /// default formatting.
 #[no_mangle]
 pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
+    if value.to_bits() >> 48 == 0 {
+        // A Number with clear top 16 bits (a denormal, or +0): its key is
+        // ToString of the Number. It is not a raw object pointer, so no
+        // object conversion is tried on it.
+        let key = crate::value::js_jsvalue_to_string(value);
+        if !key.is_null() {
+            return crate::value::js_nanbox_string(key as i64);
+        }
+    }
     if crate::symbol::js_is_symbol(value) != 0 {
         return value;
     }
@@ -312,8 +321,6 @@ fn object_ptr_from_value(value: f64) -> usize {
     let top = bits >> 48;
     if top == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top == 0 && bits > 0x10000 {
-        bits as usize
     } else {
         0
     }

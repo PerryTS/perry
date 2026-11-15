@@ -150,9 +150,7 @@ fn filehandle_field_fd(handle: f64) -> Option<i32> {
     let value =
         crate::object::js_object_get_field_by_name(ptr as *const crate::object::ObjectHeader, key);
     let js = crate::value::JSValue::from_bits(value.bits());
-    if js.is_int32() {
-        Some(js.as_int32())
-    } else if js.is_number() {
+    if js.is_number() {
         Some(f64::from_bits(value.bits()) as i32)
     } else {
         None
@@ -543,9 +541,6 @@ fn options_number_field_checked(options: f64, field: &[u8], display: &str) -> Op
         return None;
     };
     let js = crate::value::JSValue::from_bits(value.bits());
-    if js.is_int32() {
-        return Some(js.as_int32() as f64);
-    }
     let n = f64::from_bits(value.bits());
     if js.is_number() && n.is_finite() {
         return Some(n);

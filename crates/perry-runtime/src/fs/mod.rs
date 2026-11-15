@@ -840,9 +840,6 @@ fn parse_mode_string(s: &str) -> Option<u32> {
 
 fn mkdir_mode_from_options(options_value: f64) -> Option<u32> {
     let value = crate::value::JSValue::from_bits(options_value.to_bits());
-    if value.is_int32() {
-        return Some(value.as_int32() as u32);
-    }
     if value.is_number() && options_value.is_finite() {
         return Some(options_value as u32);
     }
@@ -853,9 +850,6 @@ fn mkdir_mode_from_options(options_value: f64) -> Option<u32> {
         if let Some(mode) = options_field_value(options_value, b"mode") {
             let bits = mode.bits();
             let mode_value = crate::value::JSValue::from_bits(bits);
-            if mode_value.is_int32() {
-                return Some(mode_value.as_int32() as u32);
-            }
             let v = f64::from_bits(bits);
             if mode_value.is_number() && v.is_finite() {
                 return Some(v as u32);
@@ -879,9 +873,6 @@ fn write_mode_from_options(options_value: f64) -> Option<u32> {
         let mode = options_field_value(options_value, b"mode")?;
         let bits = mode.bits();
         let mode_value = crate::value::JSValue::from_bits(bits);
-        if mode_value.is_int32() {
-            return Some(mode_value.as_int32() as u32);
-        }
         let v = f64::from_bits(bits);
         if mode_value.is_number() && v.is_finite() {
             return Some(v as u32);

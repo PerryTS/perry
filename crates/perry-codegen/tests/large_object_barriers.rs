@@ -445,10 +445,23 @@ fn apush_region_from_inbounds(ir: &str) -> ApushRegion {
             .unwrap_or_default()
     };
 
+    // A call-site stack check (`expr::stack_guard`, 36a74ffa6a) may sit on an
+    // edge into a calling block of the push (the bookkeeping block calls the
+    // layout note): every edge into that block enters `stack_guard.call.*`
+    // first, and the check rejoins it. The walk passes through those blocks
+    // (they hold no marker) so the push's own blocks behind them stay in the
+    // region.
     let mut order: Vec<String> = Vec::new();
+    let mut passed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     queue.push_back(entry);
     while let Some(name) = queue.pop_front() {
+        if name.starts_with("stack_guard.") {
+            if passed.insert(name.clone()) {
+                queue.extend(successors(&name));
+            }
+            continue;
+        }
         if order.contains(&name) || !name.starts_with("apush.") {
             continue;
         }

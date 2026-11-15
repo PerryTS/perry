@@ -48,15 +48,31 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "parse_float", 1);
             }
+            Expr::EncodeURI(val)
+            | Expr::DecodeURI(val)
+            | Expr::EncodeURIComponent(val)
+            | Expr::DecodeURIComponent(val) => {
+                let bridge = match expr {
+                    Expr::EncodeURI(_) => "encode_uri",
+                    Expr::DecodeURI(_) => "decode_uri",
+                    Expr::EncodeURIComponent(_) => "encode_uri_component",
+                    _ => "decode_uri_component",
+                };
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall(func, bridge, 1);
+            }
             Expr::NumberCoerce(val) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "number_coerce", 1);
             }
+            // The global `isNaN` / `isFinite` apply ToNumber first (`isNaN("abc")` is
+            // true), so they cannot share the non-coercing `is_nan` / `is_finite`.
             Expr::IsNaN(val) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
-                self.emit_memcall_i32(func, "is_nan", 1);
+                self.emit_memcall_i32(func, "global_is_nan", 1);
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
                 )));
@@ -81,7 +97,29 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::IsFinite(val) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
-                self.emit_memcall_i32(func, "is_finite", 1);
+                self.emit_memcall_i32(func, "global_is_finite", 1);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
+                func.instruction(&Instruction::Else);
+                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
+                func.instruction(&Instruction::End);
+            }
+            // `is_nan` / `is_finite` are `Number.isNaN` / `Number.isFinite` (no coercion).
+            Expr::NumberIsNaN(val)
+            | Expr::NumberIsFinite(val)
+            | Expr::NumberIsInteger(val)
+            | Expr::NumberIsSafeInteger(val) => {
+                let bridge = match expr {
+                    Expr::NumberIsNaN(_) => "is_nan",
+                    Expr::NumberIsFinite(_) => "is_finite",
+                    Expr::NumberIsInteger(_) => "number_is_integer",
+                    _ => "number_is_safe_integer",
+                };
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall_i32(func, bridge, 1);
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
                 )));

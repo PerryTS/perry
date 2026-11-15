@@ -221,11 +221,7 @@ fn validate_exit_code(code: f64) -> Option<i32> {
     // NaN-producing strings rejected as TypeError; everything that is not
     // already a number is a TypeError too.
     let n = if crate::fs::validate::is_numeric(jv) {
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        }
+        jv.as_number()
     } else if jv.is_any_string() {
         match coerce_exit_code_string(code) {
             Some(num) => num,
@@ -515,11 +511,7 @@ fn throw_cpu_prior_invalid_type(value: f64) -> ! {
 }
 
 fn numeric_value(jv: JSValue) -> f64 {
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    }
+    jv.as_number()
 }
 
 fn format_node_number(value: f64) -> String {
@@ -967,11 +959,7 @@ pub extern "C" fn js_process_pending_exit_code() -> i32 {
     if jv.is_undefined() || jv.is_null() {
         return 0;
     }
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
+    jv.as_number() as i32
 }
 
 // The natural-exit epilogue emits a call to `js_process_pending_exit_code`
@@ -1179,9 +1167,10 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 
 /// `process.env` as a materialized JS object.
 ///
-/// Built lazily from the current agent's effective environment. The rooted
-/// cache preserves object identity; enumeration refreshes its field mirror
-/// to observe mutations made by agents sharing the native backing.
+/// Built empty and lazily: taking the object reads no variable. The rooted
+/// cache preserves object identity; every enumeration fills the field mirror
+/// from the current agent's effective environment (`refresh_process_env`),
+/// which also observes mutations made by agents sharing the native backing.
 ///
 /// Returns an f64 NaN-boxed POINTER_TAG value so the codegen can hand
 /// it straight to subsequent PropertyGet dispatch.
@@ -1585,7 +1574,10 @@ fn js_process_env_impl() -> f64 {
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
-    refresh_process_env(boxed)
+    // Node's `process.env` is an interceptor object: getting it reads no
+    // variable. Host data enters only through the observing funnels (by-name
+    // reads, and `refresh_process_env` at enumeration).
+    boxed
 }
 
 /// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.

@@ -40,6 +40,9 @@ struct AsyncModule {
     finish: usize,
     reserved: u64,
 }
+/// Size of the module record: the layout's owner states it for the census.
+#[cfg(perry_gc_instruments)]
+pub(crate) const MODULE_RECORD_SIZE: usize = std::mem::size_of::<AsyncModule>();
 struct Parent {
     module: *mut AsyncModule,
     next: *mut Parent,
@@ -202,6 +205,8 @@ unsafe fn inner(w: *mut Walk, m: *mut AsyncModule) {
                 } else {
                     ASYNC
                 };
+                #[cfg(perry_gc_instruments)]
+                crate::snap_census::record_settle(member as usize, (*member).status == ASYNC);
             }
             (*member).cycle_root = m;
             if member == m {
@@ -362,7 +367,7 @@ extern "C" fn import_job(c: *const ClosureHeader, _this: JsThis, _value: f64) ->
         let scope = crate::gc::RuntimeHandleScope::new();
         let result = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 1));
         #[cfg(perry_gc_instruments)]
-        let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_IMPORT);
+        let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_IMPORT, m as usize);
         let root = evaluate(m);
         let fulfilled = scope.root_nanbox_f64(js_nanbox_pointer(handler(
             &IMPORT_FULFILLED,
@@ -437,7 +442,7 @@ pub unsafe extern "C" fn js_async_module_entry(addr: i64) {
     #[cfg(perry_gc_instruments)]
     let walk = {
         crate::snap_census::entry_record(addr as usize);
-        crate::snap_census::walk_scope(crate::snap_census::WALK_ENTRY)
+        crate::snap_census::walk_scope(crate::snap_census::WALK_ENTRY, addr as usize)
     };
     let m = evaluate(addr as *mut AsyncModule);
     #[cfg(perry_gc_instruments)]
@@ -482,7 +487,7 @@ pub unsafe extern "C" fn js_async_module_require(addr: i64) {
         );
     }
     #[cfg(perry_gc_instruments)]
-    let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_REQUIRE);
+    let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_REQUIRE, m as usize);
     let m = evaluate(m);
     if (*m).status == FAILED {
         crate::exception::throw_open((*m).error);

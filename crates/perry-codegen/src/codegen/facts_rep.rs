@@ -10,7 +10,8 @@
 //! collectors would have proved. A local the facts do not cover keeps the
 //! collectors' decision.
 //!
-//! `PERRY_WP_REP_P1=0` restores the collectors' decision everywhere.
+//! `PERRY_WP_REP_P1=0` restores the collectors' decision everywhere (their
+//! value proof; the per-body profitability refusal of #7128 is gone, P5).
 //!
 //! Phase P3 (§10.5): a Number is a canonical double, its one encoding. No
 //! reader tests for another.

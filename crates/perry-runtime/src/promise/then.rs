@@ -408,12 +408,12 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                     crate::fn_info!(promise_forward_resolve, 1),
                     1,
                 );
-                crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, outer_i64);
+                crate::closure::closure_set_capture_ref(resolve_closure, 0, outer_i64);
 
                 // Create a reject forwarding closure
                 let reject_closure =
                     crate::closure::js_closure_alloc(crate::fn_info!(promise_forward_reject, 1), 1);
-                crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
+                crate::closure::closure_set_capture_ref(reject_closure, 0, outer_i64);
 
                 // #5437 bug#2: add the forwarding callbacks as an OVERFLOW
                 // reaction rather than OVERWRITING inner's inline
@@ -461,7 +461,7 @@ extern "C" fn promise_forward_resolve(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let outer_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let outer_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     js_promise_resolve(outer_ptr, value);
     0.0
 }
@@ -472,7 +472,7 @@ extern "C" fn promise_forward_reject(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let outer_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let outer_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     js_promise_reject(outer_ptr, reason);
     0.0
 }
@@ -860,7 +860,7 @@ pub extern "C" fn js_promise_finally(
     promise: *mut Promise,
     on_finally: ClosurePtr,
 ) -> *mut Promise {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_alloc;
 
     // `.finally()` is a reaction — it marks any prior rejection on `promise`
     // handled, even though it wires the wrapper handlers via direct field
@@ -887,9 +887,9 @@ pub extern "C" fn js_promise_finally(
         .across_const::<crate::closure::ClosureHeader, _>(|| {
             js_closure_alloc(crate::fn_info!(finally_fulfill_wrapper, 1), 2)
         });
-    js_closure_set_capture_ptr(fulfill_wrap, 0, on_finally as i64);
+    crate::closure::closure_set_capture_ref(fulfill_wrap, 0, on_finally as i64);
     next_handle.with_mut_ptr::<Promise, _>(|next| {
-        js_closure_set_capture_ptr(fulfill_wrap, 1, next as i64)
+        crate::closure::closure_set_capture_ref(fulfill_wrap, 1, next as i64)
     });
     let fulfill_handle = scope.root_raw_mut_ptr(fulfill_wrap);
 
@@ -898,9 +898,10 @@ pub extern "C" fn js_promise_finally(
         .across_const::<crate::closure::ClosureHeader, _>(|| {
             js_closure_alloc(crate::fn_info!(finally_reject_wrapper, 1), 2)
         });
-    js_closure_set_capture_ptr(reject_wrap, 0, on_finally as i64);
-    next_handle
-        .with_mut_ptr::<Promise, _>(|next| js_closure_set_capture_ptr(reject_wrap, 1, next as i64));
+    crate::closure::closure_set_capture_ref(reject_wrap, 0, on_finally as i64);
+    next_handle.with_mut_ptr::<Promise, _>(|next| {
+        crate::closure::closure_set_capture_ref(reject_wrap, 1, next as i64)
+    });
 
     // Register wrappers on `promise`.  Crucially, set `promise.next = null`
     // so the microtask runner does NOT attempt to resolve `next` after calling
@@ -1728,13 +1729,11 @@ fn finally_wrapper_common(
     orig: f64,
     is_fulfilled: bool,
 ) -> f64 {
-    use crate::closure::{
-        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_f64,
-        js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
-    let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
-    let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let on_finally =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
+    let next = crate::closure::closure_capture_ref(closure, 1) as *mut Promise;
     // #11821: `onFinally()` is user code and the continuations below allocate;
     // any of them can run a moving minor. The original outcome (`orig`) and
     // `next` were Rust locals across those calls, so `next` settled with a
@@ -1788,7 +1787,7 @@ fn finally_wrapper_common(
             // On cleanup fulfillment: settle `next` with the original outcome.
             let on_ok = js_closure_alloc(crate::fn_info!(finally_cleanup_fulfill, 1), 3);
             next_handle.with_mut_ptr::<Promise, _>(|next| {
-                js_closure_set_capture_ptr(on_ok, 0, next as i64)
+                crate::closure::closure_set_capture_ref(on_ok, 0, next as i64)
             });
             js_closure_set_capture_f64(on_ok, 1, orig_handle.get_nanbox_f64());
             js_closure_set_capture_f64(
@@ -1809,7 +1808,7 @@ fn finally_wrapper_common(
                     js_closure_alloc(crate::fn_info!(finally_cleanup_reject, 1), 1)
                 });
             next_handle.with_mut_ptr::<Promise, _>(|next| {
-                js_closure_set_capture_ptr(on_err, 0, next as i64)
+                crate::closure::closure_set_capture_ref(on_err, 0, next as i64)
             });
             let cleanup = cleanup_handle.get_nanbox_f64();
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
@@ -1848,9 +1847,7 @@ fn finally_wrapper_common(
 /// Settle `next` with the original outcome after one extra microtask hop,
 /// matching Node's `.finally()` microtask depth.
 fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfilled: bool) {
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
     if next.is_null() {
         return;
     }
@@ -1864,7 +1861,9 @@ fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfille
     let next_handle = scope.root_raw_mut_ptr(next);
     let orig_handle = scope.root_nanbox_f64(orig);
     let pass = js_closure_alloc(pass_fn, 2);
-    next_handle.with_mut_ptr::<Promise, _>(|next| js_closure_set_capture_ptr(pass, 0, next as i64));
+    next_handle.with_mut_ptr::<Promise, _>(|next| {
+        crate::closure::closure_set_capture_ref(pass, 0, next as i64)
+    });
     js_closure_set_capture_f64(pass, 1, orig_handle.get_nanbox_f64());
     let pass_handle = scope.root_raw_mut_ptr(pass);
     let (undef_promise, pass) = pass_handle.across_mut::<crate::closure::ClosureHeader, _>(|| {
@@ -1881,8 +1880,8 @@ extern "C" fn finally_cleanup_fulfill(
     _this: crate::closure::JsThis,
     _cleanup_value: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
-    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    use crate::closure::js_closure_get_capture_f64;
+    let next = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     let orig = js_closure_get_capture_f64(closure, 1);
     let is_fulfilled = js_closure_get_capture_f64(closure, 2).to_bits() == crate::value::TAG_TRUE;
     if !next.is_null() {
@@ -1902,8 +1901,7 @@ pub(crate) extern "C" fn finally_cleanup_reject(
     _this: crate::closure::JsThis,
     cleanup_reason: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let next = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if !next.is_null() {
         js_promise_reject(next, cleanup_reason);
     }
@@ -1917,8 +1915,8 @@ extern "C" fn finally_passthrough_fulfill(
     _this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
-    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    use crate::closure::js_closure_get_capture_f64;
+    let next = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     let value = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
         // V8 hop parity: `.finally(cb).then(X)` fires `X` on the FOURTH tick
@@ -1960,8 +1958,8 @@ extern "C" fn finally_passthrough_reject(
     _this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
-    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    use crate::closure::js_closure_get_capture_f64;
+    let next = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     let reason = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
         // Same extra tick as the fulfilled passthrough (V8 hop parity).

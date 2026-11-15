@@ -51,7 +51,7 @@ fn stable_value_kind_name(kind: u16) -> String {
         _ if kind == (STRING_TAG >> 48) as u16 => "string",
         _ if kind == (BIGINT_TAG >> 48) as u16 => "bigint",
         _ if kind == (SHORT_STRING_TAG >> 48) as u16 => "short_string",
-        _ if kind == (INT32_TAG >> 48) as u16 => "int32",
+        _ if kind == (INTERNAL_WORD_TAG >> 48) as u16 => "int32",
         _ if kind == (JS_HANDLE_TAG >> 48) as u16 => "js_handle",
         _ => return format!("raw_tag_0x{kind:04x}"),
     };

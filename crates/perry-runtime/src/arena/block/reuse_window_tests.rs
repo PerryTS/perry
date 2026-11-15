@@ -377,7 +377,11 @@ fn already_discarded_windows_block_commits_even_inside_a_new_pool_window() {
         assert_eq!(super::super::region::release(raw, size), size);
         assert_eq!(committed_for_test(raw, size), 0, "live subject");
         assert!(block_pool_put(raw, size));
-        assert_eq!(block_pool_take(size), Some(raw), "new window has not expired");
+        assert_eq!(
+            block_pool_take(size),
+            Some(raw),
+            "new window has not expired"
+        );
         assert_eq!(
             committed_for_test(raw, size),
             size,

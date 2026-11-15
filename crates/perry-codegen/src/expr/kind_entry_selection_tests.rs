@@ -92,3 +92,54 @@ fn a_reassigned_map_binding_keeps_the_generic_entry() {
         "a reassigned binding is no construction proof:\n{ir}"
     );
 }
+
+/// A receiver the compiler did not construct tests its brand before the
+/// `clear()` entry; a miss is the ordinary Get + Call (wa4). (The `size` read's
+/// test is covered by the parity fixture's class-field form.)
+#[test]
+fn an_unconstructed_map_clear_tests_its_brand_and_calls_on_a_miss() {
+    let map_type = Type::Generic {
+        base: "Map".to_string(),
+        type_args: vec![Type::Any, Type::Any],
+    };
+    let ir = ir_for(
+        "kind_entry_unconstructed_size",
+        vec![
+            Stmt::Let {
+                id: M,
+                name: format!("v{M}"),
+                ty: map_type,
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::MapNew))),
+            local(R, false, size_of(M)),
+            Stmt::Expr(Expr::MapClear(Box::new(Expr::LocalGet(M)))),
+        ],
+    );
+    assert!(
+        ir.contains("collguard.miss"),
+        "no brand test in front of clear():\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_builtin_proto_generic_call0("),
+        "the clear() miss is not the ordinary Get + Call:\n{ir}"
+    );
+}
+
+/// A constructed receiver keeps its exact code: no brand test.
+#[test]
+fn a_constructed_map_size_and_clear_keep_their_exact_code() {
+    let ir = ir_for(
+        "kind_entry_constructed_size_clear",
+        vec![
+            local(M, false, Expr::MapNew),
+            local(R, false, size_of(M)),
+            Stmt::Expr(Expr::MapClear(Box::new(Expr::LocalGet(M)))),
+        ],
+    );
+    assert!(
+        !ir.contains("collguard"),
+        "a constructed receiver was brand-tested:\n{ir}"
+    );
+}

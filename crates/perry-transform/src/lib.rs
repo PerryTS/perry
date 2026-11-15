@@ -41,7 +41,7 @@ mod async_module;
 pub use async_module::lower_async_module_body;
 pub use closure::convert_closures;
 pub use finally_inline::inline_finally_into_returns;
-pub use generator::transform_generators;
+pub use generator::{transform_generators, transform_generators_without_private_frames};
 pub use i18n::{apply_i18n, I18nDiagnostic, I18nStringTable};
 pub use inline::{
     gather_cross_module_anon_classes, gather_cross_module_functions, gather_cross_module_methods,

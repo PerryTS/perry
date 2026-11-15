@@ -3,7 +3,7 @@
 
 mod element;
 pub(crate) use element::element_facts;
-use element::receiver_set;
+pub(crate) use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};
 
 use crate::gen::Gen;
@@ -132,6 +132,10 @@ pub struct FieldFacts {
     /// (`literal_strings`, over every token of the template): never with an
     /// escaped template or a ⊤ kind.
     pub literal_strings: bool,
+    /// Every value any store of any unit puts in the field is `true` or
+    /// `false` (`booleans`, over every token of the template): never with
+    /// an escaped template, a ⊤ kind or an accessor.
+    pub booleans: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -340,6 +344,7 @@ impl FieldFacts {
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
         self.literal_strings &= o.literal_strings;
+        self.booleans &= o.booleans;
         self.ta_stable &= o.ta_stable;
         // The join, not the meet: the row must hold for either class.
         self.rep = crate::bindings::Rep::join(self.rep, o.rep);
@@ -1068,18 +1073,25 @@ fn template_facts(
         } else {
             rep
         };
-        let literal_strings = !kind.top && !is_accessor && {
-            let nodes: Vec<NodeId> = ts
-                .iter()
+        let field_nodes = || -> Vec<NodeId> {
+            ts.iter()
                 .filter_map(|t| m.fields.get(&(*t, a)).copied())
-                .collect();
-            crate::literal_strings::holds(m, &nodes)
+                .collect()
         };
+        let literal_strings =
+            !kind.top && !is_accessor && crate::literal_strings::holds(m, &field_nodes());
+        let booleans = !kind.top
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && crate::booleans::holds(m, &field_nodes());
         fields.push(FieldFacts {
             rep,
             zero_tol,
             rest: false,
             literal_strings,
+            booleans,
             fns,
             ta_stable,
             ta_kind,
@@ -2070,7 +2082,7 @@ fn judge(
 ///    operation on them, no program write onto them, no store into ⊤
 ///    (which may be any of them). Per unit, other units' writes are
 ///    replayed into the same facts (`SharedWrite`).
-fn native_member(
+pub(crate) fn native_member(
     m: &Model,
     s: &crate::gen::ReadSite,
     toks: &[Tok],

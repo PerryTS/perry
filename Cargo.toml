@@ -4,7 +4,6 @@ members = [
     "crates/perry-gc-effects",
     "crates/perry-hex",
     "crates/perry-base64",
-    "crates/perry-uuid",
     "crates/perry",
     "crates/perry-parser",
     "crates/perry-api-manifest",
@@ -400,7 +399,6 @@ not_unsafe_ptr_arg_deref = "allow"
 [workspace.dependencies]
 perry-hex = { path = "crates/perry-hex" }
 perry-base64 = { path = "crates/perry-base64" }
-perry-uuid = { path = "crates/perry-uuid", default-features = false }
 # SWC for TypeScript parsing
 swc_ecma_parser = "45.1"
 swc_ecma_ast = "29.0"

@@ -1279,8 +1279,7 @@ static MODULE_INIT_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::A
 /// the guard is its first byte, bytes 4..8 are this number.
 unsafe fn module_init_record_number(guard_addr: i64) -> u32 {
     use std::sync::atomic::Ordering::Relaxed;
-    let slot =
-        std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
+    let slot = std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
     let number = slot.load(Relaxed);
     if number != 0 {
         return number;

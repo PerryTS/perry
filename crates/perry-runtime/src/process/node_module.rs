@@ -1679,9 +1679,6 @@ fn module_invalid_option_received(value: f64) -> String {
     if let Some(value) = module_value_to_string(value) {
         return format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"));
     }
-    if jv.is_int32() {
-        return jv.as_int32().to_string();
-    }
     if jv.is_number() {
         let number = jv.as_number();
         if number.fract() == 0.0 {

@@ -182,6 +182,7 @@ pub(crate) fn feature_installer(
         &symbols,
         stdlib_symbols.as_deref(),
         &[],
+        0,
         Some(flavour.target()),
     )?;
     let path = directory.join("_perry_feature_installs.o");

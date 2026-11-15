@@ -45,16 +45,34 @@ fn pending_jobs_name_kind_callback_and_queueing_init() {
             trigger_async_id: 0,
             resource: undefined,
         });
-        q.push_back(Task::Inline(ptr::null(), undefined, ptr::null_mut(), true, third));
+        q.push_back(Task::Inline(
+            ptr::null(),
+            undefined,
+            ptr::null_mut(),
+            true,
+            third,
+        ));
     });
     let jobs = snap_pending_job_list().expect("queue not borrowed");
     TASK_QUEUE.with(|q| q.borrow_mut().clear());
     assert_eq!(
         jobs,
         vec![
-            SnapPendingJob { kind: "inline", code: code_a, owner: 7 },
-            SnapPendingJob { kind: "microtask", code: code_b, owner: 11 },
-            SnapPendingJob { kind: "inline", code: 0, owner: 12 },
+            SnapPendingJob {
+                kind: "inline",
+                code: code_a,
+                owner: 7
+            },
+            SnapPendingJob {
+                kind: "microtask",
+                code: code_b,
+                owner: 11
+            },
+            SnapPendingJob {
+                kind: "inline",
+                code: 0,
+                owner: 12
+            },
         ]
     );
 }

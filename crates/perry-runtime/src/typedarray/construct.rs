@@ -17,7 +17,6 @@ pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut Typed
 
 /// Allocate a typed array from a NaN-boxed JS value. Dispatches at runtime:
 /// - POINTER_TAG (0x7FFD) → create from the pointed-to array's elements
-/// - INT32_TAG  (0x7FFE) → use the tagged integer as the element count
 /// - plain f64 / NaN    → use the numeric value as the element count
 /// - anything else      → empty typed array
 ///
@@ -49,12 +48,6 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = scope.root_nanbox_f64(val);
         return typed_array_new_from_heap_source(kind, &rooted);
-    }
-    if crate::value::is_int32_bits(bits) {
-        // INT32_TAG — lower 32 bits are the signed length.
-        let n = (bits & 0xFFFF_FFFF) as i32;
-        let len = typed_array_length_or_throw(n as f64);
-        return typed_array_alloc(kind as u8, len);
     }
     if !(0x7FFC..=0x7FFF).contains(&top16) {
         // Issue #654: typed-array sources (`new Float64Array(otherTA)`)

@@ -127,7 +127,8 @@ fn brotli_dictionary_wire(quality: i32) {
     let input = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
     let compressed = brotli_codec::compress(input, Some(dictionary), quality).unwrap();
     assert_eq!(
-        brotli_codec::decompress(&compressed, Some(dictionary.to_vec()), usize::MAX, false).unwrap(),
+        brotli_codec::decompress(&compressed, Some(dictionary.to_vec()), usize::MAX, false)
+            .unwrap(),
         input,
         "quality {quality}: {}-byte dictionary wire must restore the original input",
         compressed.len(),
@@ -146,10 +147,9 @@ fn brotli_dictionary_quality_nine_wire_interoperates() {
 
 /// Node's `brotliCompressSync(text, { params: { LARGE_WINDOW: 1, LGWIN: 30, QUALITY: 5 } })`.
 const LARGE_WINDOW_BROTLI: &[u8] = &[
-    0x11, 0x5e, 0xb4, 0x00, 0x00, 0x10, 0xb7, 0xb1, 0x75, 0x1d, 0xa7, 0x7b, 0x6c, 0x09, 0x91,
-    0x60, 0x81, 0x43, 0x4e, 0x0f, 0xea, 0x5f, 0x20, 0x61, 0x82, 0x54, 0x5b, 0x74, 0x80, 0xa4,
-    0x10, 0x4f, 0xa5, 0x0e, 0x30, 0xfe, 0x11, 0x74, 0x58, 0xff, 0x4d, 0x8c, 0x6a, 0x5b, 0xd2,
-    0xc0, 0x00,
+    0x11, 0x5e, 0xb4, 0x00, 0x00, 0x10, 0xb7, 0xb1, 0x75, 0x1d, 0xa7, 0x7b, 0x6c, 0x09, 0x91, 0x60,
+    0x81, 0x43, 0x4e, 0x0f, 0xea, 0x5f, 0x20, 0x61, 0x82, 0x54, 0x5b, 0x74, 0x80, 0xa4, 0x10, 0x4f,
+    0xa5, 0x0e, 0x30, 0xfe, 0x11, 0x74, 0x58, 0xff, 0x4d, 0x8c, 0x6a, 0x5b, 0xd2, 0xc0, 0x00,
 ];
 const LARGE_WINDOW_TEXT: &[u8] = b"large window brotli is not content-encoding br";
 
@@ -160,9 +160,17 @@ fn step_all(payload: &mut driver::Payload, input: &[u8]) -> Result<Vec<u8>, Stri
     let mut final_phase = false;
     for _ in 0..1_000_000 {
         let op = ns::StepIn {
-            op: if final_phase { ns::StreamOp::FINAL } else { ns::StreamOp::WRITE },
+            op: if final_phase {
+                ns::StreamOp::FINAL
+            } else {
+                ns::StreamOp::WRITE
+            },
             flush_kind: 0,
-            input: if final_phase { std::ptr::null() } else { unsafe { input.as_ptr().add(offset) } },
+            input: if final_phase {
+                std::ptr::null()
+            } else {
+                unsafe { input.as_ptr().add(offset) }
+            },
             len: if final_phase { 0 } else { input.len() - offset },
         };
         let mut out = ns::StepOut {
@@ -216,7 +224,13 @@ fn brotli_large_window_requires_opt_in() {
     let mut large =
         driver::Payload::new(Codec::BrotliDecompress, Compression::default(), 4096).unwrap();
     large.allow_brotli_large_window();
-    assert_eq!(step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(), LARGE_WINDOW_TEXT);
+    assert_eq!(
+        step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(),
+        LARGE_WINDOW_TEXT
+    );
     large.reset().unwrap();
-    assert_eq!(step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(), LARGE_WINDOW_TEXT);
+    assert_eq!(
+        step_all(&mut large, LARGE_WINDOW_BROTLI).unwrap(),
+        LARGE_WINDOW_TEXT
+    );
 }

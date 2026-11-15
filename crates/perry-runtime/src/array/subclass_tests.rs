@@ -966,7 +966,11 @@ fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
         let word = array_subclass_fast_index_get(receiver_h.get_nanbox_f64(), index as u32)
             .expect("dense element")
             .to_bits();
-        assert_eq!(word, expected.to_bits(), "element {index} after mode-2 admission");
+        assert_eq!(
+            word,
+            expected.to_bits(),
+            "element {index} after mode-2 admission"
+        );
     }
     assert_eq!(
         js_packed_ecs_u32_loop_guard(

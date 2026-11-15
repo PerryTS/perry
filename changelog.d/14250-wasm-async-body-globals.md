@@ -1,0 +1,1 @@
+On the web/wasm target, an async function that reads a builtin (`await Promise.resolve(x)`, `fetch`) no longer throws `ReferenceError: __g0 is not defined` on entry, and `console.log` inside an async function prints.

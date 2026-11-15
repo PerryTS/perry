@@ -305,6 +305,13 @@ pub enum Cons {
     /// (ECMA-262 B.2.2.1.2 step 4), `setPrototypeOf` and `Object.create`
     /// throw (20.1.2.23, 20.1.2.2).
     ProtoObjects { dst: NodeId },
+    /// ToObject of the node's values (ECMA-262 7.1.18) for what is an
+    /// object already: its object and function tokens, ⊤ and its markers
+    /// flow into `dst`; no primitive does (ToObject never returns one). A
+    /// primitive's wrapper is a separate `Guard` of the caller, one per
+    /// kind (`guard::BOXED_NUM` .. `BOXED_OTHER`, `builtins::to_object_into`). A rule of the program text, like
+    /// `NotNullish`.
+    Objects { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -481,6 +488,11 @@ pub enum Cons {
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
+    ///
+    /// `kept`: gen proved the key below the length the Array held at a test
+    /// of the walked code (`gen/in_bounds.rs`, the in-bounds read): the
+    /// read of an Array of this unit that never shrinks is then of an
+    /// element or a hole, never past the end (`Model::kept_read`).
     IdxLoad {
         idx: NodeId,
         dst: NodeId,
@@ -490,6 +502,7 @@ pub enum Cons {
         /// string keys, so on a built-in object (`Model::enum_free`) the
         /// read is what the program wrote there, never a built-in member.
         enumerable: bool,
+        kept: bool,
     },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be
@@ -925,6 +938,7 @@ impl Cons {
             Cons::NotNull { .. } => "notnull",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::ProtoObjects { .. } => "protoobjects",
+            Cons::Objects { .. } => "objects",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",

@@ -193,8 +193,6 @@ unsafe fn params_from_array(arr_ptr: *const ArrayHeader) -> Vec<Box<dyn rusqlite
             } else {
                 params.push(Box::new(rusqlite::types::Null));
             }
-        } else if val.is_int32() {
-            params.push(Box::new(val.to_int32() as i64));
         } else {
             // Real f64 number — coerce to int64 if it's a whole
             // number in range, else pass through as f64.

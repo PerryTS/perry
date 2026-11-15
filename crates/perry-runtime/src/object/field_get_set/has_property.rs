@@ -215,17 +215,30 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    // The probe's own-slot answer is a leaf (no frame); everything else is
+    // one tail call.
+    match unsafe { crate::object::layout_probe::in_keyed_leaf(obj.to_bits(), key.to_bits()) } {
+        Ok(()) => f64::from_bits(JSValue::bool(true).bits()),
+        Err((k, h)) => in_operator_miss(obj, key, k, h),
+    }
+}
+
+/// [`js_in_operator`] past the own-slot answer: the probe's presence walk
+/// with the key the leaf resolved (`layout_probe::in_keyed_miss`, the answers
+/// of `probe_has`; it declines a deferred namespace at every hop), then the
+/// namespace arm and the complete operation for what it cannot answer.
+#[inline(never)]
+extern "C" fn in_operator_miss(obj: f64, key: f64, k: u64, h: u64) -> f64 {
+    match unsafe { crate::object::layout_probe::in_keyed_miss(obj.to_bits(), key.to_bits(), k, h) }
+    {
+        1 => return f64::from_bits(JSValue::bool(true).bits()),
+        0 => return f64::from_bits(JSValue::bool(false).bits()),
+        _ => {}
+    }
     if let Some(result) =
         super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
     {
         return result;
-    }
-    // The probe's presence mode (`layout_probe::probe_has`), else the
-    // complete operation.
-    match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
-        1 => return f64::from_bits(JSValue::bool(true).bits()),
-        0 => return f64::from_bits(JSValue::bool(false).bits()),
-        _ => {}
     }
     in_operator_generic(obj, key)
 }
@@ -667,13 +680,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     unsafe { crate::typedarray_props::typed_array_has_property(ta, key_str) };
                 return if present { nanbox_true } else { nanbox_false };
             }
-            if key_val.is_int32() {
-                let index = key_val.as_int32();
-                let present = unsafe {
-                    index >= 0 && (index as u32) < crate::buffer::store::raw_length(ta as usize)
-                };
-                return if present { nanbox_true } else { nanbox_false };
-            }
             if key_val.is_number() {
                 let f = f64::from_bits(key_val.bits());
                 let present = unsafe {
@@ -702,7 +708,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             && crate::buffer::is_non_indexed_buffer_view(obj_addr as usize)
         {
             if let Some(name) = crate::buffer::canonical_index_key(f64::from_bits(key_val.bits())) {
-                return if crate::buffer::buffer_has_own_prop(obj_addr as usize, &name) {
+                return if crate::buffer::buffer_has_own_prop(obj_addr as usize, &name)
+                    || crate::buffer::buffer_inherited_has(obj_addr as usize, &name)
+                {
                     nanbox_true
                 } else {
                     nanbox_false
@@ -744,14 +752,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
             let buf = obj_addr as *const crate::buffer::BufferHeader;
             let len = crate::buffer::js_buffer_length(buf);
-            if key_val.is_int32() {
-                let idx = key_val.as_int32();
-                return if idx >= 0 && idx < len {
-                    nanbox_true
-                } else {
-                    nanbox_false
-                };
-            }
             if key_val.is_number() {
                 let f = f64::from_bits(key_val.bits());
                 let present = f.is_finite()
@@ -931,14 +931,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
-                let idx: Option<u32> = if key_val.is_int32() {
-                    let i = key_val.as_int32();
-                    if i >= 0 {
-                        Some(i as u32)
-                    } else {
-                        None
-                    }
-                } else if key_val.is_number() {
+                let idx: Option<u32> = if key_val.is_number() {
                     let f = f64::from_bits(key_val.bits());
                     if f >= 0.0 && f.fract() == 0.0 && f < u32::MAX as f64 {
                         Some(f as u32)

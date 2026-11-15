@@ -182,6 +182,10 @@ macro_rules! meta_obj_from_type {
             let ty = unsafe { $crate::object::header::object_type(obj) };
             debug_assert_eq!(ty, t);
         }
+        // The type is only checked in debug builds; the release expansion
+        // still reads it so a binding made for the check is not unused.
+        #[cfg(not(debug_assertions))]
+        let _ = $t;
         $crate::object::header::MetaObj(obj)
     }};
 }

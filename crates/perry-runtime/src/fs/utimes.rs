@@ -50,14 +50,6 @@ pub(crate) fn to_unix_timestamp_or_throw(time_value: f64, arg_name: &str) -> f64
         }
         return number;
     }
-    if js_value.is_int32() {
-        let number = js_value.as_int32() as f64;
-        return if number < 0.0 {
-            current_unix_timestamp_seconds()
-        } else {
-            number
-        };
-    }
     if js_value.is_number() {
         let number = js_value.as_number();
         if !number.is_finite() {

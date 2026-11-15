@@ -321,7 +321,7 @@ fn test_write_barrier_non_pointer_child_skipped() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     let old = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
-    // INT32_TAG in child position.
+    // INTERNAL_WORD_TAG in child position.
     let int32_val = 0x7FFE_0000_0000_002A_u64;
     js_write_barrier(POINTER_TAG | (old as u64), int32_val);
     assert_eq!(

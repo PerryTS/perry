@@ -196,7 +196,8 @@ pub(super) fn function_address(origin: usize, entry: usize, field: u32) -> Optio
         .checked_add_signed(field as i32 as isize)
 }
 
-/// Used by the ELF section headers.
+/// Used by the ELF section headers (linux only; see `stack_maps_sections.rs`).
+#[cfg(target_os = "linux")]
 pub(super) fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
         bytes.get(offset..offset + 2)?.try_into().ok()?,

@@ -311,6 +311,12 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
         if len <= 1 {
             return arr;
         }
+        // A frozen, sealed or non-extensible Array, or a read-only `length`:
+        // the spec steps (`generic_object::restricted_array_value`).
+        if let Some(recv) = crate::array::restricted_array_value(arr) {
+            crate::array::generic_object_reverse(recv);
+            return arr;
+        }
         // A raw slot swap is only equivalent to Reverse when every index is
         // an ordinary dense own property. Holes can expose inherited
         // Array.prototype indices, and accessors may delete later indices

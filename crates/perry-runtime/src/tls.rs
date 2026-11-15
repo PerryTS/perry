@@ -337,9 +337,6 @@ fn host_to_string(value: f64) -> String {
     if let Some(s) = value_to_string(value) {
         return s;
     }
-    if js.is_int32() {
-        return js.as_int32().to_string();
-    }
     if js.is_number() {
         let n = js.as_number();
         return if n.fract() == 0.0 {
@@ -1264,7 +1261,7 @@ fn validate_connect_options(options: f64, require_endpoint: bool) {
     let port = get_field(obj, "port");
     if object_has_own(obj, "port") {
         let port_js = JSValue::from_bits(port.to_bits());
-        if !port_js.is_number() && !port_js.is_int32() {
+        if !port_js.is_number() {
             crate::fs::validate::throw_type_error_with_code(
                 "Port should be >= 0 and < 65536",
                 "ERR_SOCKET_BAD_PORT",

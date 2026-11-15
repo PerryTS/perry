@@ -28,10 +28,7 @@ fn class_value_is_one_pinned_function_object_per_class() {
     let b = class_value(cid);
     assert_eq!(a.to_bits(), b.to_bits(), "one function object per class");
     let v = crate::value::JSValue::from_bits(a.to_bits());
-    assert!(
-        !v.is_int32() && !v.is_number(),
-        "a class value is not a number"
-    );
+    assert!(!v.is_number(), "a class value is not a number");
     assert!(v.is_pointer());
     let ptr = (a.to_bits() & crate::value::POINTER_MASK) as usize;
     assert!(
@@ -42,7 +39,7 @@ fn class_value_is_one_pinned_function_object_per_class() {
     assert_eq!(class_closure_id(ptr), Some(cid));
     // The number equal to the class id is not the class.
     assert_ne!(
-        f64::from_bits(crate::value::INT32_TAG | cid as u64).to_bits(),
+        f64::from_bits(crate::value::INTERNAL_WORD_TAG | cid as u64).to_bits(),
         a.to_bits()
     );
     let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }.expect("header");
@@ -519,16 +516,15 @@ fn first_evaluation_receives_its_heritage_before_later_evaluations() {
     );
 }
 
-/// #11414: an INT32 word is a number, also when it equals a registered class
-/// id; only the class function object names the class. A method's home word
-/// (bit 32 set, never an int32 number) is runtime-internal and names no class
-/// as a value either.
+/// #11414: a `0x7FFE` word whose payload equals a registered class id names
+/// no class; only the class function object does. A method's home word (bit
+/// 32 set) is runtime-internal and names no class as a value either.
 #[test]
-fn an_int32_equal_to_a_registered_class_id_is_a_number() {
+fn an_internal_word_equal_to_a_registered_class_id_names_no_class() {
     let cid = 0x6A10;
     register(cid);
     let class = class_value(cid);
-    let int = f64::from_bits(crate::value::INT32_TAG | cid as u64);
+    let int = f64::from_bits(crate::value::INTERNAL_WORD_TAG | cid as u64);
     assert_eq!(class_value_id(int), None);
     assert_eq!(class_ref_word(int.to_bits()), None);
     assert_eq!(crate::object::class_ref_id(int), None);
@@ -537,18 +533,6 @@ fn an_int32_equal_to_a_registered_class_id_is_a_number() {
     assert_eq!(class_ref_word(home.to_bits()), None);
     assert_eq!(crate::object::class_ref_id(home), None);
     assert_eq!(class_value_id(home), None);
-    assert!(matches!(
-        crate::builtins::arithmetic::classify_value_typeof(int),
-        crate::builtins::arithmetic::ValueTypeofTag::Number
-    ));
-    let s = crate::value::to_string::js_jsvalue_to_string(int);
-    let text = unsafe {
-        std::slice::from_raw_parts(
-            (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*s).byte_len as usize,
-        )
-    };
-    assert_eq!(text, cid.to_string().as_bytes());
 }
 
 #[test]

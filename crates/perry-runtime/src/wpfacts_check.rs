@@ -23,7 +23,7 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
@@ -42,6 +42,10 @@ pub const WPF_STORE: u32 = 1;
 pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (a reserved or declared key, `FieldProof::
+/// maybe_absent`): the site pairs the load with the hole compare, whose miss
+/// is the generic read, so a hole at the key's slot is part of the claim.
+pub const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Use the same numeric classification as runtime value dispatch.
 fn is_plain_f64(bits: u64) -> bool {
@@ -60,9 +64,11 @@ fn kind_of(bits: u64) -> u32 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG if crate::value::is_int32_bits(bits) => K_NUM,
-        // A `C.prototype` ref or another non-Number `0x7FFE` word.
-        INT32_TAG => K_OBJ,
+        // A slot word of an I32 lane or an at-rest Array (`layout_slot`): the
+        // Number it stores. No JS value is in the `0x7FFE` band (P3 B4b).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => K_NUM,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -260,7 +266,27 @@ macro_rules! check_field {
     } else {
         key_matches(at, key)
     };
-    if !key_matches {
+    // F3 is "slot k is the key's own storage word". Once an overflow orders
+    // the object (`object::overflow`), a key added out of the layout's order
+    // keeps its fixed slot through an appended entry that references it,
+    // while the layout's own entry at k stays a tombstone: the claim holds
+    // when the key's live entry references slot k. A possibly absent key
+    // (reserved or declared) read behind the hole compare may also find the
+    // hole at k, where the layout names it or no key (a tombstone).
+    let slot_ref = || unsafe {
+        let t = crate::object::overflow::table(addr as *const ObjectHeader);
+        !t.is_null()
+            && crate::object::overflow::find_bytes(t, key)
+                .and_then(|i| crate::object::overflow::fixed_slot_of(t, i))
+                == Some(slot)
+    };
+    // `ObjectKeys::get` reads a tombstone (`TAG_HOLE`) as `undefined`, which
+    // is never a key.
+    let no_key = at == crate::value::TAG_HOLE || at == crate::value::TAG_UNDEFINED;
+    let absent_hole = || {
+        flags & WPF_MAYBE_ABSENT != 0 && value.to_bits() == crate::value::TAG_HOLE && no_key
+    };
+    if !key_matches && !slot_ref() && !absent_hole() {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
@@ -433,7 +459,7 @@ mod tests {
             JS_HANDLE_TAG,
             TAG_MARKER,
             POINTER_TAG,
-            INT32_TAG,
+            INTERNAL_WORD_TAG,
             STRING_TAG,
         ] {
             assert!(!is_plain_f64(tag | 0x1234), "{tag:#018x}");
@@ -572,8 +598,22 @@ pub extern "C" fn perry_verify_facts_tick() {
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-mod report;
+// Lifetime claims: only in the instrumented variant, with the collector's life
+// hooks (`gc/diagnostic_hooks.rs`).
+#[cfg(perry_gc_instruments)]
+mod life;
+#[cfg(perry_gc_instruments)]
+mod life_measure;
+#[cfg(perry_gc_instruments)]
+mod life_regions;
+/// LIFE I3: the census's fresh-header event and the region measurement.
+#[cfg(perry_gc_instruments)]
+pub(crate) use life_regions::{
+    born as life_regions_born, evacuated as life_regions_evacuated, exit as life_regions_exit,
+    on as life_regions_on,
+};
 pub(crate) mod records;
+mod report;
 use report::Witness;
 
 fn key_matches(bits: u64, expected: &[u8]) -> bool {
@@ -594,3 +634,8 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
 
 #[cfg(test)]
 mod reporting_tests;
+
+// The family claim (`family_reach` never): only in the instrumented variant.
+// Declared last, so that no line of this file moves in the default build.
+#[cfg(perry_gc_instruments)]
+pub(crate) mod family;

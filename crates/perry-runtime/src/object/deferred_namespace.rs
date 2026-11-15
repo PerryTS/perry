@@ -72,6 +72,34 @@ pub(crate) fn with_key_target<R>(
     ))
 }
 
+/// The [[Get]]/[[Delete]] target of a string key on `obj`, which the caller
+/// has already classified as a heap object whose class id is
+/// `DEFERRED_NAMESPACE_CLASS_ID`. `then` is symbol-like: `None`, and the
+/// caller continues its ordinary operation on `obj` itself. Every other
+/// string key evaluates the module and names its namespace; the key stays
+/// rooted across the evaluation and is returned at its current address.
+///
+/// # Safety
+/// `obj` is a live, untagged deferred namespace; `key` is a live string.
+pub(crate) unsafe fn string_key_target(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<(f64, *const crate::StringHeader)> {
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    if bytes == b"then" {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
+    let key = scope.root_string_ptr(key);
+    let target = scope.root_nanbox_f64(evaluate(receiver.get_nanbox_f64()));
+    Some((
+        target.get_nanbox_f64(),
+        key.get_raw_const_ptr::<crate::StringHeader>(),
+    ))
+}
+
 /// OwnPropertyKeys always evaluates, even when the caller only wants symbols.
 pub(crate) fn with_keys_target<R>(receiver: f64, operation: impl FnOnce(f64) -> R) -> Option<R> {
     if !is_deferred(receiver) {

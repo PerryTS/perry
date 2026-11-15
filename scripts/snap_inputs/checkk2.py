@@ -38,11 +38,13 @@ host = [kv(v) for v in vals("host_value")]
 held = [kv(v) for v in vals("host_value.held")]
 pent = [kv(v) for v in vals("p_entry")]
 reach = [kv(v) for v in vals("p_reach")]
-if name in ("f1", "f10"):
-    what = "argv" if name == "f1" else "exec_path"
+if name in ("f1", "f10", "f11"):
+    # f11: a dynamic process["argv0"] read in an imaged module (fixtures/argv0/reader.ts) has its own host_value row
+    what = {"f1": "argv", "f10": "exec_path", "f11": "argv0"}[name]
     need(any(h["what"] == what and h["by"] == "imaged" and h["policy"] == "STOP" for h in host),
          f"no imaged {what} read STOP")
-    need(any(h["what"] == what and h["policy"] == "STOP" for h in held), f"no held {what} pointer STOP")
+    if name != "f11":
+        need(any(h["what"] == what and h["policy"] == "STOP" for h in held), f"no held {what} pointer STOP")
     need(not any(h["by"] == "entry" and h["policy"] != "live" for h in host), "entry read not live")
     if name == "f1":
         need(any(h["what"] == "argv" and h["by"] == "entry" and h["policy"] == "live" for h in host),

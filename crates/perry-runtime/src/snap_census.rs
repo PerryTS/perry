@@ -229,26 +229,50 @@ pub(crate) const WALK_IMPORT: u8 = 2;
 #[cfg(perry_gc_instruments)]
 pub(crate) const WALK_REQUIRE: u8 = 3;
 
-/// An async module walk of `origin` starts; the previous origin returns on drop.
+/// An async module walk of `origin` starts, rooted at the record `root`; the
+/// previous origin and root return on drop.
 #[cfg(perry_gc_instruments)]
-pub(crate) fn walk_scope(origin: u8) -> WalkScope {
+pub(crate) fn walk_scope(origin: u8, root: usize) -> WalkScope {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    return WalkScope(runner::walk_origin(origin));
+    return WalkScope(runner::walk_origin(origin, root));
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
-        let _ = origin;
-        WalkScope(0)
+        let _ = (origin, root);
+        WalkScope((0, 0))
     }
 }
 
 #[cfg(perry_gc_instruments)]
-pub(crate) struct WalkScope(u8);
+pub(crate) struct WalkScope((u8, usize));
 
 #[cfg(perry_gc_instruments)]
 impl Drop for WalkScope {
     fn drop(&mut self) {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        runner::walk_origin(self.0);
+        runner::walk_origin(self.0 .0, self.0 .1);
+        // On the non-linux census configurations the walk stack is tracked
+        // elsewhere; reading the tuple here keeps the fields live for Drop.
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = (self.0 .0, self.0 .1);
+    }
+}
+
+/// A record leaves the walk stack with its final status for this walk:
+/// EVALUATED, or `suspended` (ASYNC: it or a dependency is suspended).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn record_settle(record: usize, suspended: bool) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    runner::record_settle(record, suspended);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (record, suspended);
+}
+
+/// `new Worker` is called (before the thread starts).
+#[inline(always)]
+pub fn worker_spawn() {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::worker_spawn();
     }
 }
 
@@ -427,6 +451,18 @@ pub(crate) fn birth_user(user: usize, size: usize) {
     let _ = (user, size);
 }
 
+/// A born object was cut to `new_total` bytes in place (its tail became a
+/// dead header): the census records the new size. Empty in default archives.
+#[inline(always)]
+pub(crate) fn resize(header: *const u8, new_total: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::resize(header as usize, new_total);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (header, new_total);
+}
+
 /// While the census runs, compiled code must allocate through the runtime
 /// (every birth is logged), so the inline bump bound is closed.
 #[inline(always)]
@@ -438,14 +474,14 @@ pub(crate) fn inline_bump_closed() -> bool {
 }
 
 /// The reservation mapped `[base, base + len)` (a new arena block).
+/// Only the linux-x86_64 instrumented build records it (the reservation map
+/// path that calls it is linux-only).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 #[inline(always)]
 pub(crate) fn region_mapped(base: usize, len: usize) {
-    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {
         runner::region_mapped(base, len);
     }
-    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
-    let _ = (base, len);
 }
 
 /// A module-global root slot was registered.
@@ -580,6 +616,8 @@ pub extern "C" fn js_snap_entry_module(worker: i32) {
     if runner::on() || runner::start_if_requested() {
         runner::entry_module(worker != 0);
     }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = worker;
 }
 
 /// The program's TLS slot ranges: census compiles call this first in `main`
@@ -756,7 +794,7 @@ impl Drop for HostValueScope {
     }
 }
 
-/// Open a SNAPK2a host-value scope (1 argv, 2 execPath) for the rest of the
+/// Open a host-value scope (1 argv, 2 execPath, 3 argv0) for the rest of the
 /// enclosing block, in the instrumented Linux cohort only.
 #[macro_export]
 macro_rules! snap_host_value {
@@ -843,7 +881,11 @@ pub(crate) fn pc_check(pcs: &[usize], js_text: (usize, usize)) {
         let _scope = runner::input_record::Scope::enter();
         runner::input_event(
             "stack.pc_check",
-            format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
+            format!(
+                "exec={};out={out};n={};text={lo:x}-{hi:x}",
+                exec as u8,
+                pcs.len()
+            ),
         );
         runner::runtime_pcs(pcs, js_text);
     }
@@ -940,7 +982,15 @@ pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
 macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
 #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
 #[macro_export]
-macro_rules! census_inputs { ($($code:tt)*) => {}; }
+macro_rules! census_inputs {
+    ($($code:tt)*) => {};
+}
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn record_scope() -> impl Drop { runner::input_record::Scope::enter() }
+pub(crate) fn record_scope() -> impl Drop {
+    runner::input_record::Scope::enter()
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[path = "snap_census/inventory.rs"]
+mod inventory;

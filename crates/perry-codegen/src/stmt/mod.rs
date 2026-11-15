@@ -44,9 +44,9 @@ pub(crate) mod field_base;
 #[cfg(test)]
 mod field_base_tests;
 pub(crate) mod fn_base;
-mod held_len;
 #[cfg(test)]
 mod fn_base_tests;
+mod held_len;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
@@ -57,11 +57,11 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
-pub(crate) use loops::bounded_poll;
-pub(crate) use loops::this_field_fast_off;
 pub(crate) use crate::expr::index_get::descriptor_read;
 pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
+pub(crate) use loops::bounded_poll;
 pub(crate) use loops::create_poll_refreshed_receiver_cache;
+pub(crate) use loops::this_field_fast_off;
 mod masked_window_region;
 mod number_local_loop;
 pub(crate) use number_local_loop::numeric_callbacks;
@@ -175,6 +175,7 @@ fn lower_async_rejecting_stmts_inner(
     // (Itanium landing pad vs SEH funclet) is decided in exactly one place.
     // The landing pad reads no locals; the unwind edges keep SSA values live
     // where LLVM's ordinary EH liveness says so.
+    let life_depth = crate::verify_facts::life_measure::try_depth(ctx);
     let scope = try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label);
 
     ctx.current_block = body_idx;
@@ -190,6 +191,7 @@ fn lower_async_rejecting_stmts_inner(
 
     ctx.current_block = catch_idx;
     try_stmt::emit_try_end(ctx);
+    crate::verify_facts::life_measure::caught(ctx, &life_depth);
     let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
     let handle = ctx
         .block()
@@ -228,7 +230,11 @@ fn lower_stmts_from(
     // (`binding_cell::ReadyCellRoots`).
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
+    crate::verify_facts::life::list_begin(ctx, stmts);
+    crate::verify_facts::life_measure::list_begin(ctx, stmts);
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    crate::verify_facts::life::list_end(ctx, stmts, lowered.is_ok());
+    crate::verify_facts::life_measure::list_end(ctx, stmts, lowered.is_ok());
     // N2: a function-level base installed in this lowering of the list ends
     // with it.
     fn_base::end_list(ctx, stmts);
@@ -570,6 +576,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
             }
             let v = lower_return_expr(ctx, e)?;
+            let v = crate::verify_facts::life::at_return(ctx, v)?;
+            let v = crate::verify_facts::life_measure::at_return(ctx, v)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
             // js_promise_resolved (whose Promise.resolve(p) === p identity
@@ -627,6 +635,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             if let Some(r) = ctx.sig_record_return {
                 return crate::codegen::record_sig::lower_return(ctx, r, None);
             }
+            crate::verify_facts::life_measure::at_return(ctx, String::new())?;
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
             // resolved promise.
@@ -690,12 +699,12 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
-            ctx.pushed_array_birth =
-                if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty()) {
-                    crate::expr::inline_birth::list_slots(ctx, *id)
-                } else {
-                    0
-                };
+            ctx.pushed_array_birth = if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty())
+            {
+                crate::expr::inline_birth::list_slots(ctx, *id)
+            } else {
+                0
+            };
             let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
             ctx.snap_lowering = snap_frame;
@@ -741,6 +750,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 update.as_ref(),
                 body,
             );
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }
@@ -752,6 +762,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 loops::bounded_poll::Loop::While { condition, body },
             );
             let lowered = lower_while(ctx, condition, body);
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }
@@ -763,6 +774,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 loops::bounded_poll::Loop::DoWhile { body, condition },
             );
             let lowered = lower_do_while(ctx, body, condition);
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }
@@ -776,6 +788,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .last()
                 .map(|(_c, b, d)| (b.clone(), *d))
                 .ok_or_else(|| anyhow!("break statement outside any loop"))?;
+            let exit = ctx.loop_targets.len().checked_sub(1);
+            crate::verify_facts::life::at_exit(ctx, exit);
             // Pop any `try` frames this break jumps OUT of so WASI's setjmp
             // handler stack stays balanced. The loop recorded the try_depth
             // at its entry; any frames opened since (the difference) are
@@ -806,6 +820,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
             let cont_label = crate::expr::resume_locals::direct_dispatch_target(ctx, loop_index)
                 .unwrap_or(cont_label);
+            crate::verify_facts::life::at_exit(ctx, Some(loop_index));
             // Pop try frames escaped by jumping back to the loop header
             // (see Stmt::Break / Stmt::Return for the balancing rationale).
             for _ in target_depth..ctx.try_depth {
@@ -896,6 +911,11 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(_c, b, d)| (b.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?
                 };
+            let exit = ctx
+                .loop_targets
+                .iter()
+                .rposition(|(_c, b, _d)| *b == target);
+            crate::verify_facts::life::at_exit(ctx, exit);
             // Pop any try frames escaped by this labeled break (the target
             // loop/label may sit outside one or more open `try` frames —
             // e.g. a state-machine suspend `break`s out of the dispatch
@@ -920,6 +940,11 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(c, _b, d)| (c.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
                 };
+            let exit = ctx
+                .loop_targets
+                .iter()
+                .rposition(|(c, _b, _d)| *c == target);
+            crate::verify_facts::life::at_exit(ctx, exit);
             for _ in target_depth..ctx.try_depth {
                 try_stmt::emit_try_end(ctx);
             }

@@ -1,9 +1,8 @@
-//! Closure collection helpers extracted from emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move: `collect_closures_from_stmts` / `collect_closures_from_expr`.
+//! Closure collection: `collect_closures_from_stmts` / `collect_closures_from_expr`.
 
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId};
+use perry_hir::walker::walk_expr_children;
 
 /// Recursively collect all Expr::Closure nodes from statements
 pub(super) fn collect_closures_from_stmts(
@@ -88,204 +87,50 @@ pub(super) fn collect_closures_from_stmts(
     }
 }
 
-/// Recursively collect Expr::Closure from an expression tree
+/// Collect every `Expr::Closure` under `expr`. Descends through `walk_expr_children`,
+/// so a closure under any variant is registered; an unregistered one emits `undefined`.
 pub(super) fn collect_closures_from_expr(
     expr: &Expr,
     out: &mut Vec<(FuncId, Vec<Param>, Vec<Stmt>, Vec<LocalId>, Vec<LocalId>)>,
 ) {
-    match expr {
-        Expr::ScopedTemp { value, body, .. } => {
-            collect_closures_from_expr(value, out);
-            collect_closures_from_expr(body, out);
-        }
-        Expr::Closure {
-            func_id,
-            params,
-            body,
-            captures,
-            mutable_captures,
+    if let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        mutable_captures,
+        ..
+    } = expr
+    {
+        out.push((
+            *func_id,
+            params.clone(),
+            body.clone(),
+            captures.clone(),
+            mutable_captures.clone(),
+        ));
+    }
+    // A closure's children are its parameter defaults; its body is statements.
+    walk_expr_children(expr, &mut |child| collect_closures_from_expr(child, out));
+    if let Expr::Closure { body, .. } = expr {
+        collect_closures_from_stmts(body, out);
+    }
+}
+
+/// The captures of the sync generator resume record `body` returns, if it is a
+/// lowered generator. The record writes its control slots and the runtime driver
+/// reads them between calls, so every one of them lives in a cell.
+pub(super) fn generator_record_captures(body: &[Stmt]) -> &[LocalId] {
+    match body.last() {
+        Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
+            obj,
+            is_async: false,
+            fixed_state: true,
             ..
-        } => {
-            out.push((
-                *func_id,
-                params.clone(),
-                body.clone(),
-                captures.clone(),
-                mutable_captures.clone(),
-            ));
-            // Also collect nested closures, including parameter defaults.
-            for param in params {
-                if let Some(default) = &param.default {
-                    collect_closures_from_expr(default, out);
-                }
-            }
-            collect_closures_from_stmts(body, out);
-        }
-        Expr::Call { callee, args, .. } => {
-            collect_closures_from_expr(callee, out);
-            for a in args {
-                collect_closures_from_expr(a, out);
-            }
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => {
-            collect_closures_from_expr(left, out);
-            collect_closures_from_expr(right, out);
-        }
-        Expr::Unary { operand, .. }
-        | Expr::TypeOf(operand)
-        | Expr::Void(operand)
-        | Expr::Await(operand) => {
-            collect_closures_from_expr(operand, out);
-        }
-        Expr::LocalSet(_, val) | Expr::GlobalSet(_, val) => {
-            collect_closures_from_expr(val, out);
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_closures_from_expr(condition, out);
-            collect_closures_from_expr(then_expr, out);
-            collect_closures_from_expr(else_expr, out);
-        }
-        Expr::Object(fields) => {
-            for (_, v) in fields {
-                collect_closures_from_expr(v, out);
-            }
-        }
-        Expr::Array(elems, _) => {
-            for e in elems {
-                collect_closures_from_expr(e, out);
-            }
-        }
-        Expr::PropertyGet { object, .. } => {
-            collect_closures_from_expr(object, out);
-        }
-        Expr::PropertySet { object, value, .. } => {
-            collect_closures_from_expr(object, out);
-            collect_closures_from_expr(value, out);
-        }
-        Expr::IndexGet { object, index, .. } => {
-            collect_closures_from_expr(object, out);
-            collect_closures_from_expr(index, out);
-        }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-            ..
-        } => {
-            collect_closures_from_expr(object, out);
-            collect_closures_from_expr(index, out);
-            collect_closures_from_expr(value, out);
-        }
-        // #5016: PutValueSet is the lowered form of `obj.prop = v` / `obj[i] = v`.
-        // Recurse into all operands so a closure used as a value/key/target
-        // (e.g. `obj.handler = () => {}`) is collected and emitted.
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } => {
-            collect_closures_from_expr(target, out);
-            collect_closures_from_expr(key, out);
-            collect_closures_from_expr(value, out);
-            collect_closures_from_expr(receiver, out);
-        }
-        Expr::NativeMethodCall { args, object, .. } => {
-            if let Some(o) = object {
-                collect_closures_from_expr(o, out);
-            }
-            for a in args {
-                collect_closures_from_expr(a, out);
-            }
-        }
-        Expr::New { args, .. } => {
-            for a in args {
-                collect_closures_from_expr(a, out);
-            }
-        }
-        Expr::ArrayMap { array, callback }
-        | Expr::ArrayFilter { array, callback }
-        | Expr::ArrayForEach { array, callback }
-        | Expr::ArrayFind { array, callback }
-        | Expr::ArrayFindIndex { array, callback }
-        | Expr::ArraySort {
-            array,
-            comparator: callback,
-        } => {
-            collect_closures_from_expr(array, out);
-            collect_closures_from_expr(callback, out);
-        }
-        Expr::ArrayReduce {
-            array,
-            callback,
-            initial,
-        }
-        | Expr::ArrayReduceRight {
-            array,
-            callback,
-            initial,
-        } => {
-            collect_closures_from_expr(array, out);
-            collect_closures_from_expr(callback, out);
-            if let Some(i) = initial {
-                collect_closures_from_expr(i, out);
-            }
-        }
-        Expr::ArrayToSorted { array, comparator } => {
-            collect_closures_from_expr(array, out);
-            if let Some(c) = comparator {
-                collect_closures_from_expr(c, out);
-            }
-        }
-        Expr::ArrayToSpliced {
-            array,
-            start,
-            delete_count,
-            items,
-        } => {
-            collect_closures_from_expr(array, out);
-            collect_closures_from_expr(start, out);
-            collect_closures_from_expr(delete_count, out);
-            for item in items {
-                collect_closures_from_expr(item, out);
-            }
-        }
-        Expr::ArrayWith {
-            array,
-            index,
-            value,
-        } => {
-            collect_closures_from_expr(array, out);
-            collect_closures_from_expr(index, out);
-            collect_closures_from_expr(value, out);
-        }
-        Expr::ArrayCopyWithin {
-            target, start, end, ..
-        } => {
-            collect_closures_from_expr(target, out);
-            collect_closures_from_expr(start, out);
-            if let Some(e) = end {
-                collect_closures_from_expr(e, out);
-            }
-        }
-        Expr::ArrayToReversed { array } => {
-            collect_closures_from_expr(array, out);
-        }
-        Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
-            collect_closures_from_expr(array, out);
-        }
-        Expr::Sequence(exprs) => {
-            for e in exprs {
-                collect_closures_from_expr(e, out);
-            }
-        }
-        _ => {}
+        }))) => match obj.as_ref() {
+            Expr::Closure { captures, .. } => captures,
+            _ => &[],
+        },
+        _ => &[],
     }
 }

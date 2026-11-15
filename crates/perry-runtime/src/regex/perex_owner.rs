@@ -42,11 +42,12 @@ struct ProgramCell {
 const DFA_MAX_WORDS: usize = 64 * 1024;
 
 /// SNAP census (design §2.10.16 R2): the immutable program words of the cell
-/// at `cell`, the content that names it. Instrumented builds only.
+/// at `cell`, the content that names it. Instrumented builds only; the only
+/// reader is the linux-x86_64 census runner.
 ///
 /// # Safety
 /// `cell` must be the payload address of a live `GC_TYPE_REGEX_PROGRAM`.
-#[cfg(perry_gc_instruments)]
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) unsafe fn snap_program_words<'a>(cell: usize) -> &'a [u32] {
     unsafe {
         let c = cell as *const ProgramCell;

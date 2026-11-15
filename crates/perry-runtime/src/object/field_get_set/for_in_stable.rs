@@ -231,6 +231,8 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     unsafe {
         let keys_gc =
             (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        #[cfg(perry_gc_instruments)]
+        crate::arena::alloc_life::shape_shared(keys_gc);
         (*keys_gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     }
     Some(keys)

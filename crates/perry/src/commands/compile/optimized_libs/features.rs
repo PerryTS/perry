@@ -124,9 +124,21 @@ pub(crate) fn gc_trace_requested() -> bool {
 /// before codegen, from the same knobs the instruments answer to: any
 /// instrument or hot-diag knob set while compiling, `PERRY_GC_INSTRUMENTS=1`,
 /// `PERRY_GC_TRACE=1`, or a contract build (`PERRY_CHECK_CONTRACTS=1`, whose
-/// witnesses and checks the instrumented variant also carries).
+/// witnesses and checks the instrumented variant also carries). A
+/// `PERRY_VERIFY_FACTS=1` compile alone links the default archives; its
+/// lifetime claims are emitted only when one of these knobs also selects the
+/// variant (`perry_codegen::verify_facts::life_claims_on`).
+/// `PERRY_LIFE_MEASURE` (LIFE I1): compile time only, like
+/// `PERRY_GC_INSTRUMENTS`; its hooks exist only in the instrumented variant,
+/// so a measure build against the default archives fails to link. Not a
+/// run-time instrument knob: the default runtime reads nothing new.
+fn life_measure_requested() -> bool {
+    perry_codegen::verify_facts::life_measure_requested()
+}
+
 pub(crate) fn instrumented_variant_requested() -> bool {
     gc_instruments_requested()
+        || life_measure_requested()
         || hot_diag_requested()
         || gc_trace_requested()
         || crate::commands::compile::program_facts::contracts_requested()

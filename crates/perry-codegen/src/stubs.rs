@@ -211,10 +211,20 @@ fn startup_registration_ll(func: &str, triple: Option<&str>) -> String {
 /// calls first, before `main` (they may only store pointers): an optional
 /// archive the runtime never names, such as `perry-wasm-host`, registers its
 /// entry points with the runtime this way (`perry_wasm_host_register`).
+///
+/// `runtime_never` is the image's family claim (a bit per runtime family, in
+/// the order of `perry_runtime_manifest::families`): the families whose
+/// install is left out because the whole-program fact `family_reach` says
+/// the program never creates or observes a value of them. When it is not
+/// empty the runtime installer first hands it, with its own address as the
+/// image's identity, to `js_runtime_families_never`, so that a value of such
+/// a family that is born anyway aborts at its birth (perry-runtime
+/// `family_never`). Zero emits nothing.
 pub fn generate_feature_installer_object(
     runtime_installs: &[String],
     stdlib_installs: Option<&[String]>,
     registrations: &[String],
+    runtime_never: u64,
     target: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut ll = String::new();
@@ -235,9 +245,19 @@ pub fn generate_feature_installer_object(
         for symbol in symbols.iter() {
             ll.push_str(&format!("declare void @{}()\n", symbol));
         }
+        let claim = *half == "runtime" && runtime_never != 0;
+        if claim {
+            ll.push_str("declare void @js_runtime_families_never(i64, ptr)\n");
+        }
         ll.push_str(&format!(
             "\ndefine internal void @perry_{half}_feature_installer() {{\n"
         ));
+        if claim {
+            ll.push_str(&format!(
+                "  call void @js_runtime_families_never(i64 {}, ptr @perry_{half}_feature_installer)\n",
+                runtime_never as i64
+            ));
+        }
         for symbol in symbols.iter() {
             ll.push_str(&format!("  call void @{}()\n", symbol));
         }

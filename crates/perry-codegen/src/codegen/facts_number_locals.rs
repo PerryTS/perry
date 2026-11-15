@@ -141,7 +141,10 @@ pub(crate) fn accept_let_value(
     source: &perry_hir::Expr,
     value: String,
 ) -> String {
-    if !ctx.facts_number_locals.contains(&id) && !ctx.facts_int32_locals.contains(&id) {
+    if !ctx.facts_number_locals.contains(&id)
+        && !ctx.facts_int32_locals.contains(&id)
+        && !super::facts_int32_locals::checked(ctx, id)
+    {
         return value;
     }
     // The HIR's release of an initialized const (`IteratorRecordPlan::release`

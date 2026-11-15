@@ -870,7 +870,10 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         // `process` dynamically.
         "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
-        "argv0" => module_string_value(&process_argv0_string()),
+        "argv0" => {
+            crate::snap_host_value!(3);
+            module_string_value(&process_argv0_string())
+        }
         "execPath" => {
             crate::snap_host_value!(2);
             module_string_value(&process_exec_path_string())

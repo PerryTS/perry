@@ -58,9 +58,27 @@ fn pending_timers_name_kind_owner_callback_delay_and_repeat() {
     assert_eq!(
         pending,
         vec![
-            SnapPendingTimer { kind: "timeout", owner: 5, code: code_a, delay_ms: 25, repeat: false },
-            SnapPendingTimer { kind: "immediate", owner: 6, code: code_b, delay_ms: 0, repeat: false },
-            SnapPendingTimer { kind: "interval", owner: 8, code: code_b, delay_ms: 40, repeat: true },
+            SnapPendingTimer {
+                kind: "timeout",
+                owner: 5,
+                code: code_a,
+                delay_ms: 25,
+                repeat: false
+            },
+            SnapPendingTimer {
+                kind: "immediate",
+                owner: 6,
+                code: code_b,
+                delay_ms: 0,
+                repeat: false
+            },
+            SnapPendingTimer {
+                kind: "interval",
+                owner: 8,
+                code: code_b,
+                delay_ms: 40,
+                repeat: true
+            },
         ]
     );
 }
@@ -70,7 +88,10 @@ fn no_pending_timer_no_entry() {
     reset_for_test();
     with_current(|timers| {
         timers.insert_timer(entry(1, Class::Timeout, 25, 0, 5));
-        assert!(timers.test_find_by_id(1).is_some(), "the subject must hold the entry first");
+        assert!(
+            timers.test_find_by_id(1).is_some(),
+            "the subject must hold the entry first"
+        );
         assert!(timers.remove_by_id(1, |_| true).is_some());
     });
     assert_eq!(snap_pending_timers(), Some(Vec::new()));

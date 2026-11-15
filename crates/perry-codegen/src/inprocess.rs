@@ -17,8 +17,8 @@
 
 mod assemble;
 pub(crate) use assemble::assemble_text;
-mod cold_paths;
 mod coff;
+mod cold_paths;
 #[cfg(test)]
 mod dead_statepoint_tests;
 mod equivalent_shape_bodies;

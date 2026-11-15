@@ -23,7 +23,11 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                self.emit_memcall(func, "date_new", 1);
+                // `date_new_val`, not `date_new`: only the former is in the collected string
+                // table, and an uncollected bridge name resolves to string id 0, so every
+                // Date would come back undefined. The argument count tells `new Date()`
+                // (now) from `new Date(undefined)` (an invalid Date).
+                self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
             }
             Expr::DateGetTime(d) => {
                 self.emit_frame_begin(func, 1);

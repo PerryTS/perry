@@ -531,16 +531,6 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
         } else {
             f64::NAN
         }
-    } else if jsval.is_int32() {
-        // A constructor ClassRef uses the INT32 tag but is a Function object:
-        // ToNumber must run ToPrimitive(number), not expose its class-id
-        // payload as a numeric value (#9101).
-        if crate::object::class_ref_id(value).is_some() {
-            let primitive = unsafe { crate::value::to_string::class_ref_to_primitive(value, 1) };
-            return js_number_coerce(primitive);
-        }
-        // Plain INT32 NaN-boxed value → convert to f64.
-        jsval.as_int32() as f64
     } else if jsval.is_bigint() {
         // BigInt → number conversion
         let ptr = jsval.as_bigint_ptr();
@@ -723,14 +713,6 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
         // An object reference (heap object or native handle, #12540).
         // Delegate to js_jsvalue_to_string which handles arrays via join(",") and objects.
         return crate::value::js_jsvalue_to_string(value);
-    } else if jsval.is_int32() {
-        // Constructor ClassRefs share the INT32 tag but are Function objects.
-        // Delegate so String(C) performs ToPrimitive(string) instead of
-        // exposing the numeric class-id payload (#9101).
-        if crate::object::class_ref_id(value).is_some() {
-            return crate::value::js_jsvalue_to_string(value);
-        }
-        jsval.as_int32().to_string()
     } else {
         // Regular number — delegate to `js_number_to_string`: its small-int
         // cache answers `String(i)` for 0..255 with an interned longlived
@@ -749,7 +731,7 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_template_string_coerce(value: f64) -> *mut StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_reference() || (jsval.is_int32() && crate::object::class_ref_id(value).is_some()) {
+    if jsval.is_reference() {
         return crate::value::to_string::js_jsvalue_to_string_impl(value, true);
     }
     js_string_coerce(value)

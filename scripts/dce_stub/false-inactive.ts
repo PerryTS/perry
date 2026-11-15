@@ -1,6 +1,7 @@
-// The facts call the iterator's `return` inactive, yet destructuring runs it (a known false
-// inactive claim, CXCHK0 findings, accepted witness language/array/test_gap_10086). With
-// PERRY_FACTS_DCE=1 the body is a trap: why removal is off by default.
+// Once a known false inactive claim (CXCHK0 findings, accepted witness
+// language/array/test_gap_10086): the facts called the iterator's `return`
+// inactive, yet destructuring runs it. The activation reach now reaches it, so
+// dead-body removal (on by default) keeps it and the output is Node's.
 let closed = 0;
 const closing: any = {};
 closing[Symbol.iterator] = function () {

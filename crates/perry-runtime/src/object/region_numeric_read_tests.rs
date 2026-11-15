@@ -374,10 +374,21 @@ fn holes_alone_are_served_with_the_presence_test_and_other_summary_bits_refuse()
         };
         let plain = region_loop_pack(object_shape_stamp(obj), 1, [bits(key), 0, 0, 0, 0], 0, 0, 1)
             .expect("the identity F64 lane is served");
-        assert_eq!(plain & REGION_LOOP_WORD_PRESENCE_TEST, 0, "no holes, no presence test");
-        assert_eq!(plain & REGION_LOOP_WORD_VALUE_TEST, 0, "an identity F64 lane needs no value test");
+        assert_eq!(
+            plain & REGION_LOOP_WORD_PRESENCE_TEST,
+            0,
+            "no holes, no presence test"
+        );
+        assert_eq!(
+            plain & REGION_LOOP_WORD_VALUE_TEST,
+            0,
+            "an identity F64 lane needs no value test"
+        );
         let holey = mint(SUMMARY_HOLES);
-        assert_eq!(shape_record_for_word(holey).unwrap().summary(), SUMMARY_HOLES);
+        assert_eq!(
+            shape_record_for_word(holey).unwrap().summary(),
+            SUMMARY_HOLES
+        );
         let word = region_loop_pack(holey, 1, [bits(key), 0, 0, 0, 0], 0, 0, 1)
             .expect("a holey layout is served");
         assert_eq!(LayoutWord(word as u32), holey);
@@ -387,7 +398,11 @@ fn holes_alone_are_served_with_the_presence_test_and_other_summary_bits_refuse()
             0,
             "an R key of a holey layout is value-tested even on an F64 lane"
         );
-        assert_eq!((word >> 32) & 63, 1, "the presence bit leaves the slot fields alone");
+        assert_eq!(
+            (word >> 32) & 63,
+            1,
+            "the presence bit leaves the slot fields alone"
+        );
         for extra in [
             SUMMARY_ACCESSOR,
             SUMMARY_NON_WRITABLE,

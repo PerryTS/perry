@@ -598,8 +598,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 // An Array of Numbers: the nullish test is on the read's
                 // miss arm only (`index_get::rep_default`).
-                if let Some(v) =
-                    super::index_get::rep_default::try_lower(ctx, left, right, false)?
+                if let Some(v) = super::index_get::rep_default::try_lower(ctx, left, right, false)?
                 {
                     return Ok(v);
                 }

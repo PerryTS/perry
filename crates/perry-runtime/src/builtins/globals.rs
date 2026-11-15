@@ -825,7 +825,13 @@ pub(crate) fn test_seed_queued_job_owner(async_id: u64, resource: f64) {
 /// `(owner, code)` per job: the init that queued it
 /// (`AsyncContextSnapshot::snap_init`, stamped at enqueue) and its callback's
 /// code address. None while the queue is borrowed.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_pending_ticks() -> Option<Vec<(u32, usize)>> {
     QUEUED_MICROTASKS.with(|q| {
         q.try_borrow().ok().map(|q| {
