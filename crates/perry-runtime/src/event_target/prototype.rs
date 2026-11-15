@@ -416,7 +416,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             get(
                 "target",
-                crate::fn_info!(#[realm(realm_decl! { "Event.prototype.srcElement.<get>"; "Event.prototype.target.<get>"; })] export crate::event_target::prototype::get_target, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.target.<get>")] export crate::event_target::prototype::get_target, 0; with_name("get target"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "currentTarget",
@@ -424,7 +424,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             get(
                 "srcElement",
-                crate::fn_info!(get_target, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.srcElement.<get>")] export crate::event_target::prototype::get_target, 0; with_name("get srcElement"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "type",
