@@ -98,6 +98,11 @@ pub(crate) fn closure_static_prototype_proven(closure_ptr: usize) -> Option<u64>
             crate::object::class_value::constructor_parent_bits(closure_ptr as *mut ClosureHeader)
         });
     }
+    // An unborn lazy builtin family answers its [[Prototype]] by being born:
+    // the birth links it to its `extends` parent (`%TypedArray%`, `Error`),
+    // as it gives it its bag and its `prototype` value.
+    // SAFETY: `closure_ptr` is a proven, live closure cell.
+    unsafe { crate::object::birth_unborn_family_of(closure_ptr) };
     // A described shape is the record of the link; FunctionDictionary keeps
     // it in the function's own record ("ask the object").
     let closure = closure_ptr as *const ClosureHeader;
