@@ -189,6 +189,7 @@ fn flag_sym(n: &str) -> bool {
         || n.starts_with("__perry_agent_strings_ready_")
         || n.starts_with("__perry_literals_ready_")
         || n == "completed.0"
+        || n == "PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"
 }
 
 struct Classified {
