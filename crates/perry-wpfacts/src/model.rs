@@ -2084,6 +2084,10 @@ pub struct Model {
     pub born_recs: Vec<crate::born_with::BornRec>,
     pub store_only: FxHashMap<FnIdx, Vec<Atom>>,
     pub born_with: crate::pts::FxHashSet<(Tok, Atom)>,
+    /// R9BIRTH6: class prototype keys a top-level store adds before any
+    /// code can read through the prototype (`gen::settled`), with the
+    /// global names read between the class declaration and the store.
+    pub settled_proto: FxHashMap<(TmplId, Atom), Vec<Atom>>,
     /// RPG1b: the functions whose body runs at most once per evaluation of
     /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
     /// with reload (the runtime's path registry may evaluate the module

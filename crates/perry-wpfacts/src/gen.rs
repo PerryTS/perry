@@ -17,6 +17,7 @@ pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
+pub(crate) mod settled;
 mod own_guard;
 mod own_store;
 pub(crate) mod ret_param;

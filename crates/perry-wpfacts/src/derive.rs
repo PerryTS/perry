@@ -2093,9 +2093,17 @@ fn judge(
                         && lookup_holders(m, tf, t, key, s.key).is_ok_and(|hs| {
                             !hs.is_empty()
                                 && hs.iter().all(|&(h, _)| match &m.toks[h as usize] {
-                                    TokKind::Proto(tm) => by_id
-                                        .get(tm)
-                                        .is_some_and(|pf| pf.proto_consts.iter().any(|k| k == key)),
+                                    // R9BIRTH6: or a key a settled top-level
+                                    // store added (`present_from_start`): the
+                                    // field holds every value stored there.
+                                    TokKind::Proto(tm) => {
+                                        by_id
+                                            .get(tm)
+                                            .is_some_and(|pf| pf.proto_consts.iter().any(|k| k == key))
+                                            || (m.settled_proto.contains_key(&(*tm, s.key))
+                                                && present_from_start(m, h, s.key)
+                                                && !m.accessor_keys.get(&h).is_some_and(|ks| ks.contains(&s.key)))
+                                    }
                                     _ => false,
                                 })
                         }) =>
@@ -3476,6 +3484,7 @@ fn lookup_holders(
             h.map_or(0, |n| m.nodes[n as usize].prim),
             h.map_or(0, |n| m.nodes[n as usize].pts.len()),
         );
+        eprintln!("WHY_LOOKUP settled={:?}", m.settled_proto.iter().filter(|((_, x), _)| *x == a).collect::<Vec<_>>());
     }
     // A key the layout never writes (a read names it) is the chain's.
     match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
@@ -3531,10 +3540,63 @@ fn lookup_holders(
                 return Err("a computed key may hold it".into());
             }
             match holds(p) {
-                Some(n) => out.push((p, n)),
+                Some(n) if present_from_start(m, p, a) => out.push((p, n)),
+                Some(_) => {
+                    if WHY_LOOKUP.get().is_some_and(|w| w.as_deref() == Some(key)) {
+                        eprintln!("WHY_LOOKUP R9BIRTH6 holder {:?} not present from the start: hard={} esc={} top={} own={} gf={}", m.toks[p as usize], m.hard.contains_key(&p), m.is_escaped(p), m.global_in_top, m.global_written_own, m.global_fields.iter().any(|(k, _)| *k == a));
+                    }
+                    return Err("the key may be read before its store has run (R9BIRTH6)".into());
+                }
                 None => todo.push(p),
             }
         }
     }
     Ok(out)
+}
+
+/// R9BIRTH6: holder `p`'s own key `a` exists at every read or call that
+/// can reach `p` on a chain: a class-body member is defined while the class
+/// is created (15.7.14), before anything can reach the prototype; a key a
+/// store adds is present only after that store ran, so it must be a
+/// settled store (`gen::settled`: it completes before any code can reach
+/// the prototype) on a prototype no `delete` / `defineProperty` (HARD) or
+/// unknown code (escape) changes, and every global it read on the way must
+/// be the realm's own data property: unknown code cannot reach the global
+/// object and every value the solve sees under that global name is no
+/// program value (a program getter or store would put its own there). A literal object holds its birth keys from
+/// its evaluation on. Else the read may find no `a` there: `undefined`, or
+/// a TypeError for a call (13.3.6.2): never one holder's value.
+fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
+    match m.toks[p as usize] {
+        TokKind::Proto(tm) => {
+            let tpl = &m.tmpls[tm as usize];
+            if tpl.proto_members.contains(&a) {
+                return true;
+            }
+            let Some(gs) = m.settled_proto.get(&(tm, a)) else {
+                return false;
+            };
+            !m.hard.contains_key(&p)
+                && !m.is_escaped(p)
+                && (gs.is_empty()
+                    || (!m.global_in_top
+                        && !m.global_written_own
+                        && gs.iter().all(|g| {
+                            m.global_fields.iter().filter(|(k, _)| k == g).all(|&(_, n)| {
+                                let nd = &m.nodes[n as usize];
+                                nd.pts.to_sorted().into_iter().all(|t| {
+                                    t != TOP
+                                        && m.tmpl_of(t).is_none()
+                                        && !matches!(m.toks[t as usize], TokKind::Func(..))
+                                })
+                            })
+                        })))
+        }
+        TokKind::Obj(tm, _) => {
+            let tpl = &m.tmpls[tm as usize];
+            matches!(tpl.kind, TmplKind::Class { literal_shape: true, .. } | TmplKind::Lit { .. })
+                && tpl.birth_keys.contains(&a)
+        }
+        _ => false,
+    }
 }

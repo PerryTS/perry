@@ -1,0 +1,159 @@
+//! R9BIRTH6: the top-level prototype stores that complete before any code
+//! can read through the prototype.
+//!
+//! ECMA-262 16.2.1.5.3 InnerModuleEvaluation runs a module's top-level
+//! statements in order; a class declaration is evaluated at its statement
+//! (15.7.14 ClassDefinitionEvaluation) and its binding is in its TDZ until
+//! then (14.3.1, 9.1.1.1.6 GetBindingValue): every earlier reference, from
+//! this module, a hoisted function or a cyclic importer, throws. So no
+//! object whose chain holds `X.prototype` (nor `X.prototype` itself) can be
+//! reached before the declaration. When the statements from the
+//! declaration up to a store `X.prototype.k = v` run no code (each is
+//! *inert*: no call, construction, accessor or unknown operation can run
+//! between them), the store has completed before any read or call through
+//! `X.prototype` can execute: `k` is then present at every such read
+//! (until a `delete` or `defineProperty`, which `derive` refuses).
+//!
+//! Inert statements: `let`/`const` of an inert value, a named store
+//! `Y.prototype.k = v` / `Y.k = v` into a class of this module whose
+//! chain (all in this module) declares no accessor of `k` (no setter can
+//! run, 10.1.9.2) with `k` none of `__proto__` (an Object.prototype
+//! accessor), `prototype`, `name`, `length` (own non-writable data of a
+//! class) or `caller` / `arguments` (Function.prototype accessors).
+//! Inert values: literals, a binding or class reference, a closure (its
+//! creation runs no code), an object literal of inert values, and a read of
+//! a global builtin name (`derive` checks the program made no global of
+//! that name: then it is the realm's own data property). A class
+//! declaration's own evaluation statements (parent registration, computed
+//! names, static elements, decorators) start at its `decl_stmt` and are
+//! scanned like any other. Anything else ends every open window.
+
+use perry_hir::{Class, Expr, Module, Stmt};
+
+/// Per settled store: (class name, key, the global names read between the
+/// class declaration and the store).
+pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Vec<String>)> {
+    let mut out = Vec::new();
+    // Open windows: class name -> globals read since its declaration.
+    let mut open: Vec<(String, Vec<String>)> = Vec::new();
+    let n = module.init.len();
+    for i in 0..=n {
+        for c in &module.classes {
+            if c.decl_stmt == Some(i as u32) && !c.is_nested {
+                open.push((c.name.clone(), Vec::new()));
+            }
+        }
+        if i == n {
+            break;
+        }
+        let mut globals = Vec::new();
+        let inert = match &module.init[i] {
+            Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| inert_value(module, e, &mut globals)),
+            Stmt::Expr(Expr::PutValueSet {
+                target,
+                key,
+                value,
+                receiver,
+                ..
+            }) => match (target.as_ref(), key.as_ref()) {
+                (t, Expr::String(k)) if same_target(t, receiver) => {
+                    match store_target(module, t, k) {
+                        Some((x, true)) if inert_value(module, value, &mut globals) => {
+                            for (name, g) in open.iter_mut() {
+                                g.extend(globals.iter().cloned());
+                                if *name == x {
+                                    out.push((x.clone(), k.clone(), g.clone()));
+                                }
+                            }
+                            continue;
+                        }
+                        Some((_, false)) => inert_value(module, value, &mut globals),
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if inert {
+            for (_, g) in open.iter_mut() {
+                g.extend(globals.iter().cloned());
+            }
+        } else {
+            open.clear();
+        }
+    }
+    out
+}
+
+fn same_target(t: &Expr, r: &Expr) -> bool {
+    match (t, r) {
+        (Expr::ClassRef(a), Expr::ClassRef(b)) => a == b,
+        (
+            Expr::PropertyGet { object: a, property: pa, .. },
+            Expr::PropertyGet { object: b, property: pb, .. },
+        ) => pa == pb && same_target(a, b),
+        _ => false,
+    }
+}
+
+/// `X.prototype` (true) or `X` (false) for a class `X` of this module whose
+/// chain is in this module and declares no accessor of `k`, with `k` no key
+/// whose [[Set]] runs code or fails on a class.
+fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
+    if matches!(k, "__proto__" | "prototype" | "name" | "length" | "caller" | "arguments") {
+        return None;
+    }
+    let (x, proto) = match t {
+        Expr::ClassRef(x) => (x, false),
+        Expr::PropertyGet { object, property, .. } if property == "prototype" => match object.as_ref() {
+            Expr::ClassRef(x) => (x, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let mut c: &Class = module.classes.iter().find(|c| &c.name == x && !c.is_nested)?;
+    loop {
+        if c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k) {
+            return None;
+        }
+        if c.extends_expr.is_some() || c.native_extends.is_some() || !c.computed_members.is_empty() {
+            return None;
+        }
+        match c.extends {
+            None if c.extends_name.is_none() => break,
+            Some(id) => c = module.classes.iter().find(|p| p.id == id)?,
+            None => return None,
+        }
+    }
+    Some((x.clone(), proto))
+}
+
+fn inert_value(module: &Module, e: &Expr, globals: &mut Vec<String>) -> bool {
+    match e {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::ClassRef(_)
+        | Expr::LocalGet(_)
+        | Expr::Closure { .. } => true,
+        Expr::PropertyGet { object, property, .. } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+            globals.push(property.clone());
+            true
+        }
+        // An object literal's layout class: its construction stores the
+        // values as own data keys (13.2.5.5), no constructor code of the
+        // program runs.
+        Expr::New { class_name, args, .. } => {
+            module.classes.iter().any(|c| {
+                &c.name == class_name && c.name.starts_with("__AnonShape_") && c.methods.is_empty()
+                    && c.getters.is_empty() && c.setters.is_empty() && c.extends.is_none()
+                    && c.extends_name.is_none()
+            }) && args.iter().all(|a| inert_value(module, a, globals))
+        }
+        _ => false,
+    }
+}

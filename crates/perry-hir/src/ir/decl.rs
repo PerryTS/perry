@@ -283,6 +283,13 @@ pub struct Class {
     /// inside a turbopack factory threw at module init). Codegen
     /// (`init_static_fields_*`) skips module-init static init for these.
     pub is_nested: bool,
+    /// R9BIRTH6: the `module.init` index the declaration evaluates at
+    /// (ECMA-262 15.7.14 ClassDefinitionEvaluation runs at the statement's
+    /// position; before it the binding is in its TDZ, 14.3.1), for a
+    /// top-level class declaration: the statements its evaluation emits
+    /// (parent registration, computed names, static elements) start there.
+    /// `None` for nested classes, class expressions and synthetic classes.
+    pub decl_stmt: Option<u32>,
     /// #6812 (w16): minimum inline slot count to allocate for instances,
     /// beyond `fields.len()`. Set only on per-site empty-literal anon-shape
     /// classes when the lowering can prove the builder's final width (e.g. a

@@ -1127,6 +1127,7 @@ fn lower_module(
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
         };
         imported_class_stubs.push(stub);
         imported_stub_prefixes.push(ic.source_prefix.clone());
