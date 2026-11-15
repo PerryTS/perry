@@ -192,7 +192,8 @@ impl Info {
             return Err(format!("malformed fn_info builder: {}", text(ts)));
         }
         if name == "with_name" {
-            // The text is static data of the record, not an ABI fact.
+            // The text is static data of the record; the flag that licenses its tail is the ABI fact.
+            self.flags |= u64::from(perry_abi::FN_HAS_NAME);
             return Ok(());
         }
         let args = split(&ts[2..ts.len() - 1], ",")
