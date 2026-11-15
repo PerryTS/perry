@@ -526,6 +526,11 @@ impl Model {
                     .get(site as usize)
                     .map(|s| (&s.desc, s.birth, s.rooted))
             ),
+            Cons::OwnComputedKey { key, val } => format!("OwnComputedKey key={key:?} val={val:?}"),
+            Cons::ProtoKeySet { target, val, site } => format!(
+                "ProtoKeySet target={:?} val={val:?} site={site:?}",
+                self.packet_token(target, packet)
+            ),
             Cons::SpreadFrom { src, site, .. } => format!(
                 "SpreadFrom src={:?} site={:?}",
                 self.packet_token(src, packet),

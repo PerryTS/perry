@@ -1116,6 +1116,7 @@ impl<'a> Gen<'a> {
             deep: false,
             key_value: None,
             proto_named: false,
+            assign: false,
             proto_of: None,
             in_loop: self.order_ok.then_some(self.loop_depth > 0),
         });

@@ -467,6 +467,15 @@ pub fn map_cons(
             site,
             from: if from == NO_NODE { NO_NODE } else { n(from) },
         },
+        OwnComputedKey { key, val } => OwnComputedKey {
+            key: n(key),
+            val: n(val),
+        },
+        ProtoKeySet { target, val, site } => ProtoKeySet {
+            target,
+            val: n(val),
+            site,
+        },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,

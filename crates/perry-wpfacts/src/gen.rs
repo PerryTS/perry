@@ -144,6 +144,10 @@ pub struct Gen<'a> {
     pub path_index: FxHashMap<String, u32>,
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
+    /// U8: the key value each `js_object_literal_to_property_key` result
+    /// converts (7.1.19 ToPropertyKey: a String key is itself), for the
+    /// literal's computed own key (`Cons::OwnComputedKey`).
+    pub(crate) prop_key_of: FxHashMap<NodeId, NodeId>,
     pub thrown: NodeId,
     /// The realm error a failed runtime operation throws (`Model::runtime_error`,
     /// held by `thrown`), for a site that throws it into its own region.
@@ -674,6 +678,7 @@ impl<'a> Gen<'a> {
             path_index,
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
+            prop_key_of: FxHashMap::default(),
             thrown,
             runtime_error: rterr,
             cjs_registry,

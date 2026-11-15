@@ -307,6 +307,23 @@ impl Model {
         n
     }
 
+    /// U8: the key node `n` of a computed own key may be `"__proto__"`
+    /// (7.1.19 ToPropertyKey): a String entry that is or may be it, or an
+    /// object (ToPrimitive may yield any String); a Number, Symbol, boolean,
+    /// `null` or `undefined` key names another key.
+    pub(super) fn key_may_be_proto(&mut self, n: NodeId) -> bool {
+        let node = &self.nodes[n as usize];
+        if node.pts.is_empty() && node.prim & prim::STR == 0 {
+            return false;
+        }
+        match self.key_entry_shapes(n) {
+            Some(es) => es.iter().any(|&(a, s)| {
+                self.atoms[a as usize] == "__proto__" || self.key_may_name_str(Key::Any(s), "__proto__")
+            }),
+            None => true,
+        }
+    }
+
     /// Object spread of source `s` into target `d` (`{...s}`,
     /// `Object.assign(d, s)`): every own enumerable key of `s`
     /// (`enum_own`), now and later, is stored under the same key on `d`; computed keys and getter results
@@ -314,6 +331,19 @@ impl Model {
     /// keys unknown; an unmodeled target takes `s`'s values.
     pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
         self.rest_used(s);
+        // U8: an `Object.assign` copy writes each own key by Set(d, key, v,
+        // true) (20.1.2.1 step 3.a.iii.2.b): a computed own key of `s` that
+        // may be `"__proto__"` runs the setter (B.2.2.1.2) on `d`
+        // (`Cons::ProtoKeySet`). A spread / rest copy defines (13.2.5.5).
+        if s != TOP && d != TOP && self.stores.get(site as usize).is_some_and(|x| x.assign) {
+            let e = self.assign_into.entry(s).or_default();
+            if !e.contains(&(d, site)) {
+                e.push((d, site));
+                for (k, v) in self.own_computed.get(&s).cloned().unwrap_or_default() {
+                    self.cons(k, Cons::ProtoKeySet { target: d, val: v, site });
+                }
+            }
+        }
         if !self.spread_done.insert((s, d)) {
             return;
         }

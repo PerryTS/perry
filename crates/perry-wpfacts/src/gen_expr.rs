@@ -1729,6 +1729,7 @@ impl<'a> Gen<'a> {
                 for s in sources {
                     let sv = self.expr(fx, s);
                     let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);
+                    self.m.stores[site as usize].assign = true;
                     self.m.cons(sv, Cons::Spread { into: t, site });
                 }
                 t

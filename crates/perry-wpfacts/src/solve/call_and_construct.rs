@@ -591,6 +591,7 @@ impl Model {
             key_value: None,
             in_loop: None,
             proto_named: false,
+            assign: false,
             proto_of: None,
         });
         id

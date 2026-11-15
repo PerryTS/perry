@@ -1440,6 +1440,10 @@ pub struct StoreSite {
     /// as its own named store `D["__proto__"] = S["__proto__"]` (another
     /// site); this site's store gives no prototype.
     pub proto_named: bool,
+    /// An `Object.assign` copy (20.1.2.1): each key is written by
+    /// Set(to, key, v, true), so a source own key `"__proto__"` runs the
+    /// Object.prototype setter; a spread / rest copy defines (13.2.5.5).
+    pub assign: bool,
     /// SKINROOT12: on the named store `D["__proto__"] = S["__proto__"]` of
     /// a same-key copy, the copy's site. That store runs into a receiver
     /// only when the copy's key may be `"__proto__"` there: when the copy's
@@ -2568,6 +2572,13 @@ pub struct Model {
     /// SKINROOT12: (same-key copy site, receiver) pairs whose copy store
     /// may name `__proto__` (`StoreSite::proto_of`).
     pub proto_copy_hit: crate::pts::FxHashSet<(SiteId, Tok)>,
+    /// U8: the computed own keys (key node, value node) of each object
+    /// (`Cons::OwnComputedKey`), and the `Object.assign` copies (target,
+    /// site) each object is a source of; a key node's relinks done
+    /// (`Cons::ProtoKeySet`).
+    pub own_computed: FxHashMap<Tok, Vec<(NodeId, NodeId)>>,
+    pub assign_into: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
+    pub proto_key_set: crate::pts::FxHashSet<(NodeId, Tok, SiteId)>,
     /// SKINROOT12: a copy's named `__proto__` stores (value node, site) into
     /// a receiver whose copy store has not reached `__proto__` yet.
     pub proto_copy_wait: crate::pts::FxHashMap<(SiteId, Tok), Vec<(NodeId, SiteId)>>,

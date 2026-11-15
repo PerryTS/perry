@@ -368,6 +368,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         // Iteration, spread, enumeration.
         Cons::Spread { .. }
         | Cons::SpreadFrom { .. }
+        | Cons::OwnComputedKey { .. }
+        | Cons::ProtoKeySet { .. }
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::ForInBody { .. }

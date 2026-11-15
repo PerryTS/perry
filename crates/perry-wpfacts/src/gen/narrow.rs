@@ -1426,6 +1426,12 @@ impl<'a> Gen<'a> {
         let end = self.tmp("assigned-end");
         self.zs_carrier(end);
         self.m.edge(start, end);
+        // U8: a local holding a ToPropertyKey result holds its key
+        // (`Gen::prop_key_of`).
+        if let Some(&k) = self.prop_key_of.get(&vn) {
+            self.prop_key_of.insert(start, k);
+            self.prop_key_of.insert(end, k);
+        }
         self.m.cur_fn = prev;
         self.narrow.push(Narrow {
             mi,

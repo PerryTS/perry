@@ -772,6 +772,16 @@ pub enum Cons {
         site: SiteId,
         from: NodeId,
     },
+    /// The node is an object literal: each of its objects has an own key
+    /// of computed name (`key`: the node of the key's values) whose value
+    /// is `val` (13.2.5.5: CreateDataPropertyOrThrow, no setter runs).
+    OwnComputedKey { key: NodeId, val: NodeId },
+    /// The node is the key of a computed own key of an `Object.assign`
+    /// source: once it may be `"__proto__"`, the copy's Set(target,
+    /// "__proto__", v, true) runs the Object.prototype setter (20.1.2.1
+    /// step 3.a.iii.2.b, B.2.2.1.2): `val`'s objects (or null) become
+    /// prototypes of `target`, as a `__proto__` store gives them.
+    ProtoKeySet { target: Tok, val: NodeId, site: SiteId },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -975,6 +985,8 @@ impl Cons {
             Cons::ArgInto { .. } => "arginto",
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
+            Cons::OwnComputedKey { .. } => "owncomputedkey",
+            Cons::ProtoKeySet { .. } => "protokeyset",
             Cons::ThisInst { .. } => "thisinst",
             Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",

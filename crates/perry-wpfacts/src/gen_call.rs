@@ -925,6 +925,14 @@ impl<'a> Gen<'a> {
                     birth_tm,
                     birth_tm.is_some(),
                 );
+                // U8: the literal's own key of computed name: an
+                // `Object.assign` copy of it may be a `__proto__` Set.
+                if name == "js_object_literal_set_computed" {
+                    if let Some(k) = arg(1) {
+                        let k = self.prop_key_of.get(&k).copied().unwrap_or(k);
+                        self.m.cons(o, Cons::OwnComputedKey { key: k, val: v });
+                    }
+                }
                 // Method closures see the object as `this`.
                 if name != "js_object_literal_define" && name != "js_object_literal_set_computed" {
                     self.m.cons(v, Cons::ThisFrom { recv: o });
@@ -1108,6 +1116,11 @@ impl<'a> Gen<'a> {
                 }
                 let out = self.tmp("rt-prim");
                 self.m.add_prim(out, prim::ALL);
+                if name == "js_object_literal_to_property_key" {
+                    if let Some(k) = arg(0) {
+                        self.prop_key_of.insert(out, k);
+                    }
+                }
                 if name == "js_weakset_add" {
                     if let Some(v) = arg(0) {
                         self.m.edge(v, out);

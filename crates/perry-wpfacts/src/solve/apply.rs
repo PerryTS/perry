@@ -2389,6 +2389,27 @@ impl Model {
                     self.spread_into(src, d, site, from);
                 }
             }
+            Cons::OwnComputedKey { key, val } => {
+                for &t in toks {
+                    if t == TOP {
+                        continue;
+                    }
+                    let e = self.own_computed.entry(t).or_default();
+                    if e.contains(&(key, val)) {
+                        continue;
+                    }
+                    e.push((key, val));
+                    for (d, site) in self.assign_into.get(&t).cloned().unwrap_or_default() {
+                        self.cons(key, Cons::ProtoKeySet { target: d, val, site });
+                    }
+                }
+            }
+            Cons::ProtoKeySet { target, val, site } => {
+                if self.key_may_be_proto(n) && self.proto_key_set.insert((n, target, site)) {
+                    let pk = Key::Named(self.atom("__proto__"));
+                    self.store_into(target, pk, val, site);
+                }
+            }
             Cons::NativeThis { call, f } => self.native_this(call, f, toks, prim),
             Cons::ThisInst { call, ft } => {
                 for &t in toks {

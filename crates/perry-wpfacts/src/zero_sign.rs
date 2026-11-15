@@ -170,6 +170,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::BirthField { .. }
         | Cons::Spread { .. }
         | Cons::SpreadFrom { .. }
+        | Cons::OwnComputedKey { .. }
+        | Cons::ProtoKeySet { .. }
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::IndexHole

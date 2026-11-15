@@ -3008,6 +3008,7 @@ fn ns_method_inner(
             let c = m.calls[call as usize].clone();
             if let Some(&t) = c.args.first() {
                 let site = m.anon_post_site("Object.assign (value call)");
+                m.stores[site as usize].assign = true;
                 for &s in c.args.iter().skip(1) {
                     m.cons(s, Cons::Spread { into: t, site });
                 }

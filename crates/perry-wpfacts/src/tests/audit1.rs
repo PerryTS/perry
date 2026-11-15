@@ -220,6 +220,15 @@ fn audit1_u8_object_assign_proto_key_relinks_class() {
     let z = v(src, "zz", false);
     assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "b.x is undefined in JS (C constructs): {x:?} {z:?}");
 }
+/// U8 keep: a source without a key that may be `__proto__` relinks nothing: B keeps A as parent.
+#[test]
+fn audit1_u8_keep_plain_and_other_computed_key() {
+    for a in ["Object.assign(B, { a: 1 });", "const k = g() ? \"a\" : \"b\";\nObject.assign(B, { [k]: C });", "const q: any = { ...{ [\"__proto__\"]: C } };\nq;"] {
+        let src = format!("class A {{ x: any = {{ zz: 1 }}; }}\nclass C {{}}\nclass B extends A {{}}\nclass D extends B {{}}\nconst go = () => {{ const b: any = new D(); b.x.zz; }};\n{a}\ngo();\n");
+        let x = v(&src, "x", false);
+        assert!(has(&x, "T0Mono"), "{a}: {x:?}");
+    }
+}
 /// U8 control: the same relink by `Object.setPrototypeOf` is seen (green).
 #[test]
 fn audit1_u8_control_set_prototype_of() {

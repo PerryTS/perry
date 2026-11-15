@@ -435,6 +435,7 @@ impl Model {
             deep: false,
             key_value: None,
             proto_named: false,
+            assign: false,
             proto_of: None,
             in_loop: None,
         });
@@ -454,6 +455,7 @@ impl Model {
             deep: false,
             key_value: None,
             proto_named: false,
+            assign: false,
             proto_of: None,
             in_loop: None,
         });
