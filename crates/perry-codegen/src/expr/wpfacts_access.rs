@@ -1630,9 +1630,28 @@ pub(crate) fn proven_method_fn(
             .map(|(name, _)| name.clone()),
     );
     let mut found: Option<(String, String)> = None;
+    let mut stub_named = false;
     for class in names {
         let c = ctx.classes.get(&class)?;
         let method = c.methods.iter().rev().find(|m| m.name == property)?;
+        // ONCHANGE4: a class imported here is a structural stub
+        // (`codegen/mod.rs` imported_class_stubs: every method id 0, no
+        // params, no body). Its entry is the holder module's own name
+        // (method_registry.rs Phase F: `symbol_names::method(source prefix,
+        // class, m)`, declared `double(double this, double x params)`), and
+        // the facts' symbol was checked against that module's body
+        // (`method_symbol_in`: the last method `m` is `F`, ordinary). The
+        // name must give the facts' symbol; the call takes the facts' ABI.
+        // A local class never passes as a stub: its body `F` has the id the
+        // facts name, else `method_symbol_in` named no symbol.
+        let stub = method.id == 0 && method.params.is_empty() && method.body.is_empty() && fid != 0;
+        if stub {
+            if *ctx.methods.get(&(class.clone(), property.to_string()))? != symbol {
+                return None;
+            }
+            stub_named = true;
+            continue;
+        }
         if method.id != fid
             || method.is_generator
             || method.is_async
@@ -1652,6 +1671,8 @@ pub(crate) fn proven_method_fn(
     }
     match found {
         Some((class, f)) => Some((Some(class), f, abi)),
+        // Named here only by an imported stub: the entry is declared already.
+        None if stub_named => Some((None, symbol, abi)),
         None => {
             let params = vec![DOUBLE; abi.params as usize + 1];
             ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
