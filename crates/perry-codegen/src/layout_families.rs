@@ -1300,6 +1300,63 @@ mod parents;
 
 /// Every class chain is resolved over the whole program, with the owning
 /// module retained at every step (local ids and names are module scoped).
+/// The classes that are not families because `Reflect.construct(Q, args, P)`
+/// may name two different classes. ECMA-262 28.1.2 and 10.1.13: the object
+/// gets `P.prototype` (OrdinaryCreateFromConstructor on newTarget) and its
+/// keys are the stores Q's constructor chain runs, in that order: neither
+/// P's layout nor Q's. Such objects are ordinary objects, so neither class
+/// is a family (one layout per family class, D-CG1). Decided from the whole
+/// program: CLOSED-WORLD PREMISE (no eval / dynamic code): every
+/// `Reflect.construct` of the program is in its HIR. When the newTarget may
+/// be a class this cannot name, every class the program uses as a value is
+/// not a family. Without a newTarget, with the same class twice, or with a
+/// function expression as the newTarget (the object is the target's own,
+/// prototype relinked) the target stays a family.
+fn reflect_construct_classes(modules: &[(&str, &HirModule)]) -> BTreeSet<String> {
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    let mut values: BTreeSet<String> = BTreeSet::new();
+    let mut unbounded = false;
+    for (_, hir) in modules {
+        let bindings = class_bindings(hir);
+        let class_of = |e: &Expr| match e {
+            Expr::ClassRef(n) => Some(n.clone()),
+            Expr::LocalGet(id) => bindings.get(id).cloned(),
+            _ => None,
+        };
+        for body in module_bodies(hir) {
+            visit_stmts(body, &mut |_| {}, &mut |e| match e {
+                Expr::ClassRef(n) => {
+                    values.insert(n.clone());
+                }
+                Expr::ReflectConstruct {
+                    target, new_target, ..
+                } => {
+                    if matches!(**new_target, Expr::Undefined | Expr::Closure { .. }) {
+                        return;
+                    }
+                    let t = class_of(target);
+                    let nt = class_of(new_target);
+                    if t.is_some() && t == nt {
+                        return;
+                    }
+                    named.extend(t);
+                    match nt {
+                        Some(n) => {
+                            named.insert(n);
+                        }
+                        None => unbounded = true,
+                    }
+                }
+                _ => {}
+            });
+        }
+    }
+    if unbounded {
+        named.extend(values);
+    }
+    named
+}
+
 fn program_families(
     modules: &[(&str, &HirModule)],
     reexports: &BTreeMap<(String, String), String>,
@@ -1327,8 +1384,13 @@ fn program_families(
         })
         .collect();
     let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
+    let reflect_made = reflect_construct_classes(modules);
     let mut out = Vec::new();
     'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
+        if reflect_made.contains(&c.name) {
+            refuse(c, "reflect-construct-new-target");
+            continue 'class;
+        }
         // The chain, leaf first.
         let mut chain: Vec<&Class> = vec![c];
         let mut cur = c;
