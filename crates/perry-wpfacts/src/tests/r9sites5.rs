@@ -184,3 +184,23 @@ console.log( g( b ).tj );
     eprintln!("R9SITES5 RP10 tj recv={r:?}");
     assert!(r.contains(&"B".to_string()) && r.contains(&"C".to_string()), "RP10: {r:?}");
 }
+
+// RP11 RED, the summarized shape: loggers with a hook branch and a
+// stack-trace branch (summarized callers expand the helper's body,
+// `summary/compose.rs` `expand`): each still gets its own array back.
+#[test]
+fn r9sites5_rp11_composed_identity_helper() {
+    let pf = facts(&format!(
+        "{HEAD}{ENH}
+let hook: any = null;
+if ( process.argv.length > 9 ) hook = ( ...q: any[] ) => q.length;
+function w( ...ps: any[] ) {{ ps = enh( ps ); const m = 'T.' + ps.shift(); if ( hook ) {{ hook( 'warn', m, ...ps ); }} else {{ const st = ps[ 0 ]; if ( st && st.isStackTrace ) {{ console.warn( st.getError( m ) ); }} else {{ console.warn( m, ...ps ); }} }} }}
+function e( ...ps: any[] ) {{ ps = enh( ps ); const m = 'T.' + ps.shift(); if ( hook ) {{ hook( 'error', m, ...ps ); }} else {{ const st = ps[ 0 ]; if ( st && st.isStackTrace ) {{ console.error( st.getError( m ) ); }} else {{ console.error( m, ...ps ); }} }} }}
+class P {{ bind( t: any ) {{ if ( ! t ) {{ e( 'P: no node', this, [ a ] ); return; }} w( 'P: ok' ); }} }}
+new P().bind( process.argv.length > 3 ? null : a ); w( 'x', a ); e( 'y', [ a ] );
+"
+    ));
+    let r = recv(&pf, "tj");
+    eprintln!("R9SITES5 RP11 tj recv={r:?}");
+    assert!(r.is_empty(), "RP11 toJSON runs: {r:?}");
+}

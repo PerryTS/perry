@@ -150,7 +150,13 @@ pub(super) fn compose(
                         false => Vec::new(),
                     };
                     let elem = m.elem_key();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem, &slot_keys);
+                    // RULE RP (`gen/ret_param.rs`): the expanded call's
+                    // result is its own argument, not `g`'s result.
+                    let rp = m.funcs[g as usize]
+                        .ret_param
+                        .filter(|_| !m.funcs[g as usize].no_summary)
+                        .map(|i| i as usize);
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem, &slot_keys, rp);
                     any = true;
                     n += 1;
                 }
@@ -173,7 +179,10 @@ pub(super) fn compose(
 /// not the call's argument (DECISIONS 117, 127). A spread entry is the
 /// List CreateListFromIterable built (13.3.8.1): it is read at its
 /// elements (`elem`), never at a member of a prototype chain; a rest
-/// array stores its arguments at `elem` too.
+/// array stores its arguments at `elem` too. `ret_param`: `g` returns
+/// that parameter at every completion (RULE RP, `Model::ret_param_into`):
+/// the call's result is the call's argument there (`undefined` when it
+/// passes fewer), unless a spread or a capture slot decides the position.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn expand(
     s: &mut Summary,
@@ -184,6 +193,7 @@ pub(super) fn expand(
     rest_store: Option<(SiteId, usize)>,
     elem: Key,
     slot_keys: &[Key],
+    ret_param: Option<usize>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -314,8 +324,26 @@ pub(super) fn expand(
         }
     }
     let r = tr(g.ret);
-    if r != NO_NODE && call.ret != NO_NODE {
-        s.edges.push((r, call.ret));
+    let rp = ret_param
+        .filter(|&i| call.spread.is_empty() && caps.get(i).copied().flatten().is_none());
+    if call.ret != NO_NODE {
+        match rp {
+            Some(i) if i < call.args.len() => {
+                if call.args[i] != NO_NODE {
+                    s.edges.push((call.args[i], call.ret));
+                }
+            }
+            Some(_) => {
+                if undef == NO_NODE {
+                    undef = fresh(s);
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
+                }
+                s.edges.push((undef, call.ret));
+            }
+            None if r != NO_NODE => s.edges.push((r, call.ret)),
+            None => {}
+        }
     }
     if !s.cons_reach.is_empty() || !s.call_reach.is_empty() {
         s.cons_reach.resize(s.cons.len(), reach);
