@@ -145,6 +145,9 @@ pub(crate) fn from_entries(m: &mut Model, it: NodeId, inner: NodeId, t: Tok) {
     let zero = Key::Named(m.atom("0"));
     let k = m.node_l("fromEntries key");
     m.cons(it, Cons::Load { key: zero, dst: k });
+    // 20.1.2.7 (CreateDataPropertyOrThrow of ToPropertyKey(k), 7.1.19): an
+    // object key's `@@toPrimitive`, `toString` or `valueOf` runs.
+    super::collections::to_prim(m, k, "fromEntries key ToPropertyKey");
     let o = m.node_l("fromEntries object");
     m.add_tok(o, t);
     m.cons(o, Cons::OwnComputedKey { key: k, val: inner });

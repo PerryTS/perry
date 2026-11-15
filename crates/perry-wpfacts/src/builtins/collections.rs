@@ -1157,6 +1157,29 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         Some(&n) => ThisArg::Node(n),
         None => ThisArg::Undef,
     };
+    // The index operands each method's own algorithm converts with
+    // ToIntegerOrInfinity (7.1.5: ToNumber, so an object's `@@toPrimitive`,
+    // `valueOf` or `toString` runs): `at` (23.1.3.1) its index; `flat`
+    // (23.1.3.13) its depth; `slice` (23.1.3.28), `splice` (23.1.3.31) and
+    // `toSpliced` (23.1.3.35) start and end / deleteCount; `copyWithin`
+    // (23.1.3.4) target, start and end; `with` (23.1.3.39) its index;
+    // `lastIndexOf` (23.1.3.20) fromIndex. The other operands (items,
+    // values, the searched element) are not converted. A spread may place
+    // any argument at an index position.
+    let index_operands: &[usize] = match name {
+        Some("at" | "flat" | "with") => &[0],
+        Some("slice" | "splice" | "toSpliced") => &[0, 1],
+        Some("copyWithin") => &[0, 1, 2],
+        Some("lastIndexOf") => &[1],
+        _ => &[],
+    };
+    if !index_operands.is_empty() {
+        let spread = c.spread.iter().copied();
+        let at = index_operands.iter().filter_map(|&i| c.args.get(i).copied());
+        for a in at.chain(spread) {
+            to_prim(m, a, "array index operand ToIntegerOrInfinity");
+        }
+    }
     match name {
         // `[Symbol.iterator]()`: a fresh iterator over the elements.
         Some(WK_ITERATOR) => {

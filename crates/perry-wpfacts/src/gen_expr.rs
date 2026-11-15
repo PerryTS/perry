@@ -1602,7 +1602,18 @@ impl<'a> Gen<'a> {
                     }
                     Expr::IndexGet { object, index, .. } => {
                         let o = self.expr(fx, object);
-                        let _ = self.expr(fx, index);
+                        let k = self.expr(fx, index);
+                        // 13.5.1.2 step 5: the reference's key is
+                        // ToPropertyKey'd (7.1.19): `@@toPrimitive`,
+                        // `toString` or `valueOf` of an object key runs.
+                        let pk = self.m.reason("ToPropertyKey");
+                        self.m.cons(
+                            k,
+                            Cons::Implicit {
+                                reason: pk,
+                                proto: Protocol::ToPrimitive,
+                            },
+                        );
                         self.m.cons(
                             o,
                             Cons::Hard {
