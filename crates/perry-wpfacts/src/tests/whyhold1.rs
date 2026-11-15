@@ -35,3 +35,51 @@ fn chain_from_hold_reaches_the_seed() {
         assert!(w[0].work >= w[1].work, "{:?}", w);
     }
 }
+
+fn chain_with(src: &str, env: &[(&str, &str)]) -> Vec<crate::provenance::WhyHop> {
+    for (k, v) in env {
+        std::env::set_var(k, v);
+    }
+    let path = "t.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
+    let _ = crate::provenance::take_chain();
+    let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
+    for (k, _) in env {
+        std::env::remove_var(k);
+    }
+    let c = crate::provenance::take_chain();
+    for h in &c {
+        eprintln!("{h}");
+    }
+    c
+}
+
+/// WHYHOLD2: `PERRY_FACTS_STOP=wide` with a name selector stops at the
+/// first ⊤ arrival at the named parameter (unit tests read the record; no
+/// exit), and the chain starts there.
+#[test]
+fn stop_wide_by_parameter_name() {
+    const W: &str = "declare function sink(x: any): any;\nfunction take(rootUuid: any) {\n  return rootUuid;\n}\nconst v = sink(1);\ntake(v);\n";
+    let c = chain_with(W, &[("PERRY_FACTS_STOP", "wide"), ("PERRY_FACTS_WHY_AT", "take#rootUuid")]);
+    let v: Vec<(&str, &str, &str)> = c.iter().map(|h| (h.label.as_str(), h.value.as_str(), h.end)).collect();
+    assert!(!c.is_empty(), "no wide stop");
+    // The second solve stops at a summary instance's copy of the parameter
+    // (selected through its original: `by=instance`).
+    assert!((c[0].func.ends_with(":take") || c[0].label == "inst") && c[0].value == "t0:Top", "{v:?}");
+    assert_eq!(c.last().map(|h| h.end), Some("seed"), "{v:?}");
+}
+
+/// WHYHOLD2: a load's hop names the receiver token that the load read the
+/// value from (recorded at delivery, not the source's latest arrival).
+#[test]
+fn load_hop_records_the_receiver() {
+    const L: &str = "declare function sink(x: any): void;\nfunction rd(o: any) {\n  return o.f;\n}\nconst g = rd({ f: sink });\ng(1);\n";
+    let c = chain_with(L, &[("PERRY_FACTS_WHY", "1")]);
+    let v: Vec<(&str, &str)> = c.iter().map(|h| (h.label.as_str(), h.via.as_str())).collect();
+    let h = c.iter().find(|h| h.via.contains("|recv=t")).unwrap_or_else(|| panic!("no recorded receiver: {v:?}"));
+    // The receiver named is the object literal's token.
+    let t: u32 = h.via.split("|recv=t").nth(1).and_then(|x| x.split('|').next()).and_then(|x| x.parse().ok()).expect("tok");
+    assert!(c.iter().all(|x| x.value != "t0:Top" || x.end != "norec"), "{v:?}");
+    assert!(h.via.contains("load"), "the edge was made by a load: {:?} (tok {t})", h);
+}

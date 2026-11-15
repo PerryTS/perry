@@ -18,7 +18,7 @@
 //!   template node.
 //! - `add@<file:line>`: a birth or direct add (generation, natives).
 
-use crate::model::{Cons, Model, NodeId, Tok, NO_NODE, TOP};
+use crate::model::{Cons, Key, Model, NodeId, Tok, NO_NODE, TOP};
 use std::io::Write;
 use std::panic::Location;
 
@@ -35,6 +35,9 @@ pub(crate) struct EdgeOrigin {
     loc: &'static Location<'static>,
     call: u32,
     rule: Option<(NodeId, Cons)>,
+    /// The constraint's input token when it made the edge, plus one (a
+    /// load's or store's receiver; 0: none).
+    tok: u32,
 }
 
 pub struct Prov {
@@ -65,16 +68,35 @@ impl Prov {
             }
             _ => None,
         };
-        let stop = std::env::var("PERRY_FACTS_STOP").ok();
-        let stop_hold = stop.as_deref() == Some("hold");
-        let why = (stop_hold || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1")).then(|| {
+        let stop = match std::env::var("PERRY_FACTS_STOP").ok().as_deref() {
+            Some("hold") => STOP_HOLD,
+            Some("realm") => STOP_REALM,
+            Some("wide") => STOP_WIDE,
+            _ => STOP_NONE,
+        };
+        let why = (stop != STOP_NONE || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1")).then(|| {
+            let solve = SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let sel = parse_sel();
+            let mut sel_nodes: crate::pts::FxHashMap<NodeId, usize> = Default::default();
+            for (i, x) in sel.iter().enumerate() {
+                if let Some(n) = x.node {
+                    sel_nodes.insert(n, i);
+                    eprintln!("WHY select n{n} solve={solve} sel={} by=id", x.raw);
+                }
+            }
             WhyRec {
-                solve: SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
-                stop_hold,
+                solve,
+                stop,
                 held: false,
+                realm_done: false,
+                wide_done: false,
+                pending: None,
                 first: Default::default(),
                 by_node: Default::default(),
                 mods: mods(),
+                sel,
+                sel_nodes,
+                sel_checked: Default::default(),
             }
         });
         if out.is_none() && why.is_none() {
@@ -91,9 +113,18 @@ fn short(f: &str) -> &str {
 impl Model {
     /// Record where the new edge `a -> b` was made.
     pub(crate) fn prov_edge(&mut self, a: NodeId, b: NodeId, loc: &'static Location<'static>) {
-        let (call, rule) = (self.prov_call, self.prov_rule);
+        let (call, rule, tok) = (self.prov_call, self.prov_rule, self.prov_in);
         if let Some(p) = self.prov.as_mut() {
-            p.edges.entry((a, b)).or_insert(EdgeOrigin { loc, call, rule });
+            p.edges.entry((a, b)).or_insert(EdgeOrigin { loc, call, rule, tok });
+        }
+    }
+
+    /// The constraint being applied now works on input token `t` (the
+    /// recorded cause of what it delivers).
+    #[inline(always)]
+    pub(crate) fn prov_tok(&mut self, t: Tok) {
+        if self.prov.is_some() {
+            self.prov_in = t + 1;
         }
     }
 
@@ -248,16 +279,102 @@ pub(crate) struct Parent {
     call: u32,
     work: u64,
     loc: &'static Location<'static>,
+    /// A rule's input token at delivery, plus one (0: none recorded).
+    cause: u32,
+}
+
+pub(crate) const STOP_NONE: u8 = 0;
+pub(crate) const STOP_HOLD: u8 = 1;
+pub(crate) const STOP_REALM: u8 = 2;
+pub(crate) const STOP_WIDE: u8 = 3;
+
+/// A `PERRY_FACTS_WHY_AT` selector: `n<id>`, or `<fn-substring>#<label |
+/// parameter name | p<index>>`; `:prim` also stops at a non-string
+/// primitive.
+pub(crate) struct Sel {
+    raw: String,
+    node: Option<NodeId>,
+    fnsub: String,
+    what: String,
+    prim: bool,
+}
+
+fn parse_sel() -> Vec<Sel> {
+    let Ok(v) = std::env::var("PERRY_FACTS_WHY_AT") else {
+        return Vec::new();
+    };
+    v.split(',')
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(|x| {
+            let (body, prim) = match x.strip_suffix(":prim") {
+                Some(b) => (b, true),
+                None => (x, false),
+            };
+            let node = body.strip_prefix('n').and_then(|d| d.parse::<NodeId>().ok());
+            let (fnsub, what) = match body.split_once('#') {
+                Some((f, w)) => (f.to_string(), w.to_string()),
+                None => (String::new(), body.to_string()),
+            };
+            Sel { raw: x.to_string(), node, fnsub, what, prim }
+        })
+        .collect()
+}
+
+/// A hold seen under `STOP=realm`: what the realm flip that follows prints.
+#[derive(Clone, Copy)]
+struct Pending {
+    kind: &'static str,
+    call: u32,
+    t: Option<Tok>,
+    reason: u32,
+    start: NodeId,
+    rule: Option<(NodeId, Cons)>,
+    work: u64,
 }
 
 pub(crate) struct WhyRec {
     solve: u32,
-    stop_hold: bool,
+    stop: u8,
     held: bool,
+    realm_done: bool,
+    wide_done: bool,
+    pending: Option<Pending>,
     first: crate::pts::FxHashMap<(NodeId, WVal), Parent>,
     /// Per node, its first arrivals in solve order (work, value).
     by_node: crate::pts::FxHashMap<NodeId, Vec<(u64, WVal)>>,
     mods: Vec<String>,
+    sel: Vec<Sel>,
+    /// Selected node -> its selector (`sel`).
+    sel_nodes: crate::pts::FxHashMap<NodeId, usize>,
+    /// Nodes already matched against the label selectors.
+    sel_checked: crate::pts::FxHashSet<NodeId>,
+}
+
+/// The constraint reads or writes a key no constant names.
+fn cons_key_any(c: &Cons) -> bool {
+    match c {
+        Cons::Load { key, .. }
+        | Cons::Store { key, .. }
+        | Cons::MCall { key, .. }
+        | Cons::Chain { key, .. }
+        | Cons::ChainUnion { key, .. } => matches!(key, Key::Any(_)),
+        _ => false,
+    }
+}
+
+impl Prov {
+    /// A summary instance's slot `copy` of `orig`: selected when `orig` is.
+    pub(crate) fn why_copy_sel(&mut self, copy: NodeId, orig: NodeId) {
+        let Some(w) = self.why.as_mut() else {
+            return;
+        };
+        if let Some(&i) = w.sel_nodes.get(&orig) {
+            w.sel_nodes.insert(copy, i);
+            w.sel_checked.insert(copy);
+            eprintln!("WHY select n{copy} solve={} copy-of=n{orig} sel={} by=instance", w.solve, w.sel[i].raw);
+        }
+    }
 }
 
 /// One hop of a printed chain (the record API).
@@ -307,6 +424,7 @@ impl Model {
         loc: &'static Location<'static>,
     ) {
         let (mode, rule, call, work) = (self.prov_mode, self.prov_rule, self.prov_call, self.work.get());
+        let cause = if mode == PM_RULE && !adopted { self.prov_in } else { 0 };
         let Some(p) = self.prov.as_mut() else {
             return;
         };
@@ -314,10 +432,89 @@ impl Model {
         let Some(w) = p.why.as_mut() else {
             return;
         };
+        let mut check = false;
         if let std::collections::hash_map::Entry::Vacant(e) = w.first.entry((n, v)) {
-            e.insert(Parent { src, mode, adopted, rule, edge, call, work, loc });
+            e.insert(Parent { src, mode, adopted, rule, edge, call, work, loc, cause });
             w.by_node.entry(n).or_default().push((work, v));
+            check = w.stop == STOP_WIDE && !w.wide_done;
         }
+        if check {
+            self.why_wide_check(n, v);
+        }
+    }
+
+    /// A parameter `pname` (index `idx`) of `fname`: selected when a
+    /// `<fn>#<name>` or `<fn>#p<idx>` selector names it.
+    pub(crate) fn why_param(&mut self, n: NodeId, fname: &str, pname: &str, idx: usize) {
+        let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
+            return;
+        };
+        if w.stop != STOP_WIDE {
+            return;
+        }
+        let pi = format!("p{idx}");
+        let Some(i) = w
+            .sel
+            .iter()
+            .position(|s| s.node.is_none() && fname.contains(s.fnsub.as_str()) && (s.what == pname || s.what == pi))
+        else {
+            return;
+        };
+        w.sel_nodes.insert(n, i);
+        w.sel_checked.insert(n);
+        eprintln!("WHY select n{n} solve={} fn={fname} label=param:{pname} sel={} by=param", w.solve, w.sel[i].raw);
+    }
+
+    /// `STOP=wide`: `v` is the first arrival of `v` at `n`. A selected node
+    /// that gets the any-string entry, ⊤ or (`:prim`) a non-string
+    /// primitive prints the chain and exits 86.
+    fn why_wide_check(&mut self, n: NodeId, v: WVal) {
+        let Some(w) = self.prov.as_ref().and_then(|p| p.why.as_ref()) else {
+            return;
+        };
+        if !w.sel_checked.contains(&n) && w.sel.iter().any(|s| s.node.is_none()) {
+            let label = self.labels.get(n as usize).copied().unwrap_or("?");
+            let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
+            let fname = (f != crate::model::NO_FN)
+                .then(|| self.funcs.get(f as usize).map(|fi| fi.name.clone()))
+                .flatten();
+            let shown = self.why_fn(n);
+            let w = self.prov.as_mut().and_then(|p| p.why.as_mut()).unwrap();
+            w.sel_checked.insert(n);
+            if let Some(fname) = fname {
+                if let Some(i) =
+                    w.sel.iter().position(|s| s.node.is_none() && fname.contains(s.fnsub.as_str()) && s.what == label)
+                {
+                    w.sel_nodes.insert(n, i);
+                    eprintln!("WHY select n{n} solve={} fn={shown} label={label} sel={} by=label", w.solve, w.sel[i].raw);
+                }
+            }
+        }
+        let w = self.prov.as_mut().and_then(|p| p.why.as_mut()).unwrap();
+        let Some(&i) = w.sel_nodes.get(&n) else {
+            return;
+        };
+        let wide = match v {
+            WVal::AnyStr => true,
+            WVal::Tok(t) => t == TOP,
+            WVal::Prim(b) => w.sel[i].prim && b != crate::model::prim::STR,
+            WVal::Str(_) => false,
+        };
+        if !wide {
+            return;
+        }
+        w.wide_done = true;
+        let (solve, raw) = (w.solve, w.sel[i].raw.clone());
+        let header = format!(
+            "WHY solve={} WIDE n{n} sel={} fn={} label={} value={} work={}",
+            solve,
+            raw,
+            self.why_fn(n),
+            self.labels.get(n as usize).copied().unwrap_or("?"),
+            self.why_val(v),
+            self.work.get()
+        );
+        self.why_emit(header, n, vec![v], true);
     }
 
     pub(crate) fn why_prim(&mut self, n: NodeId, newp: u16, loc: &'static Location<'static>) {
@@ -405,14 +602,28 @@ impl Model {
                 if p.src != NO_NODE {
                     via.push_str(&format!("<-n{}", p.src));
                 }
+                if p.mode == PM_RULE && !p.adopted {
+                    if p.cause != 0 {
+                        via.push_str(&format!("|in=t{}", p.cause - 1));
+                    }
+                    if p.rule.is_some_and(|(_, c)| cons_key_any(&c)) {
+                        via.push_str("|key=any");
+                    }
+                }
                 let mut call = if p.call != 0 { p.call - 1 } else { u32::MAX };
                 if let Some(e) = p.edge {
                     via.push_str(&format!("|edge@{}:{}", short(e.loc.file()), e.loc.line()));
                     if call == u32::MAX && e.call != 0 {
                         call = e.call - 1;
                     }
-                    if let Some((_, c)) = e.rule {
-                        via.push_str(&format!("|{}", c.kind_name()));
+                    if let Some((rn, c)) = e.rule {
+                        via.push_str(&format!("|{}@n{rn}", c.kind_name()));
+                        if cons_key_any(&c) {
+                            via.push_str("|key=any");
+                        }
+                    }
+                    if e.tok != 0 {
+                        via.push_str(&format!("|recv=t{}", e.tok - 1));
                     }
                 }
                 (via, self.why_site(call), p.work, format!("{}:{}", short(p.loc.file()), p.loc.line()))
@@ -457,9 +668,16 @@ impl Model {
                 return;
             }
             let same = w.first.get(&(p.src, v)).is_some_and(|q| q.work <= p.work);
-            let next = if same {
+            let recorded = (p.cause != 0)
+                .then(|| WVal::Tok(p.cause - 1))
+                .filter(|c| w.first.contains_key(&(p.src, *c)));
+            let mut heur = false;
+            let next = if let Some(c) = recorded {
+                Some(c)
+            } else if same {
                 Some(v)
             } else {
+                heur = true;
                 w.by_node.get(&p.src).and_then(|l| {
                     let i = l.partition_point(|&(wk, _)| wk <= p.work);
                     l[..i].last().map(|&(_, x)| x)
@@ -469,7 +687,11 @@ impl Model {
                 hops.push(self.why_hop(solve, d, n, v, Some(&p), "seed"));
                 return;
             };
-            hops.push(self.why_hop(solve, d, n, v, Some(&p), ""));
+            let mut h = self.why_hop(solve, d, n, v, Some(&p), "");
+            if heur {
+                h.via.push_str("|heur");
+            }
+            hops.push(h);
             (n, v, d) = (p.src, nv, d + 1);
         }
     }
@@ -486,15 +708,46 @@ impl Model {
     /// when the node holds ⊤ beside it, with ⊤ too; with no value given,
     /// with ⊤ when the node holds it, else with every token it holds.
     pub(crate) fn why_hold_r(&mut self, kind: &'static str, call: u32, t: Option<Tok>, reason: u32) {
+        let start = self.prov_rule.map(|(n, _)| n).unwrap_or(self.cur_src);
+        let (rule0, work) = (self.prov_rule, self.work.get());
         let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
             return;
         };
         if w.held {
             return;
         }
+        match w.stop {
+            // The realm flip that follows (`why_realm`) prints this cause;
+            // its own `hold_realm` / `interp` record never replaces one.
+            STOP_REALM => {
+                if w.pending.is_none() || !matches!(kind, "hold_realm" | "interp") {
+                    w.pending = Some(Pending { kind, call, t, reason, start, rule: rule0, work });
+                }
+                return;
+            }
+            STOP_WIDE => return,
+            _ => {}
+        }
         w.held = true;
-        let (solve, stop) = (w.solve, w.stop_hold);
-        let start = self.prov_rule.map(|(n, _)| n).unwrap_or(self.cur_src);
+        let (solve, stop) = (w.solve, w.stop == STOP_HOLD);
+        let vals = self.why_vals(start, t);
+        let rule = rule0.map_or("-".to_string(), |(rn, c)| format!("{}@n{rn}", c.kind_name()));
+        let f = crate::unksrc::call_fn(self, call);
+        let fname = self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone());
+        let header = format!(
+            "WHY solve={solve} HOLD kind={kind} site={} fn={fname} start=n{start} rule={rule} work={work} values={} reason={}",
+            self.why_site(call),
+            vals.len(),
+            self.reasons.get(reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_")
+        );
+        self.why_emit(header, start, vals, stop);
+    }
+
+    /// The values a hold's walk starts with at `start`: the value given
+    /// (the callee token; an escaping token) and ⊤ when the node holds it
+    /// beside it; with none given, ⊤ when the node holds it, else every
+    /// token it holds.
+    fn why_vals(&self, start: NodeId, t: Option<Tok>) -> Vec<WVal> {
         let mut vals: Vec<WVal> = Vec::new();
         let has_top = start != NO_NODE && self.nodes[start as usize].pts.contains_tok(TOP);
         match t {
@@ -512,25 +765,76 @@ impl Model {
             }
             None => {}
         }
-        let rule = self.prov_rule.map_or("-".to_string(), |(rn, c)| format!("{}@n{rn}", c.kind_name()));
-        let f = crate::unksrc::call_fn(self, call);
+        vals
+    }
+
+    /// `STOP=realm`: the realm becomes held now (`hold_realm`,
+    /// `builtin_fields_interp`). Print the chain from the hold that caused
+    /// it (the last one recorded before; else the current constraint's
+    /// node) and exit 86.
+    pub(crate) fn why_realm(&mut self, flip: &'static str) {
+        let here = self.prov_rule.map(|(n, _)| n).unwrap_or(self.cur_src);
+        let (rule0, work) = (self.prov_rule, self.work.get());
+        let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
+            return;
+        };
+        if w.stop != STOP_REALM || w.realm_done {
+            return;
+        }
+        w.realm_done = true;
+        let solve = w.solve;
+        let p = w.pending.take().unwrap_or(Pending {
+            kind: flip,
+            call: u32::MAX,
+            t: None,
+            reason: u32::MAX,
+            start: here,
+            rule: rule0,
+            work,
+        });
+        let vals = self.why_vals(p.start, p.t);
+        let rule = p.rule.map_or("-".to_string(), |(rn, c)| format!("{}@n{rn}", c.kind_name()));
+        let f = crate::unksrc::call_fn(self, p.call);
         let fname = self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone());
-        eprintln!(
-            "WHY solve={solve} HOLD kind={kind} site={} fn={fname} start=n{start} rule={rule} work={} values={} reason={}",
-            self.why_site(call),
-            self.work.get(),
+        let tok = p.t.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+        let header = format!(
+            "WHY solve={solve} REALM flip={flip} work={work} cause={} cause_work={} site={} fn={fname} start=n{} rule={rule} tok={tok} values={} reason={}",
+            p.kind,
+            p.work,
+            self.why_site(p.call),
+            p.start,
             vals.len(),
-            self.reasons.get(reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_")
+            self.reasons.get(p.reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_")
         );
+        self.why_emit(header, p.start, vals, true);
+    }
+
+    /// Print `header`, the chain of the first value and a count line for
+    /// the rest; keep the chain for `take_chain`; exit 86 when `stop`
+    /// (never in unit tests: they read the record).
+    fn why_emit(&mut self, header: String, start: NodeId, vals: Vec<WVal>, stop: bool) {
+        let solve = self.prov.as_ref().and_then(|p| p.why.as_ref()).map_or(0, |w| w.solve);
+        eprintln!("{header}");
         let mut hops = Vec::new();
         let mut seen = crate::pts::FxHashSet::default();
+        let (mut more, mut more_hops) = (0usize, 0usize);
         if start != NO_NODE {
-            for v in vals {
-                self.why_walk(solve, start, v, &mut hops, &mut seen);
+            for (i, v) in vals.into_iter().enumerate() {
+                if i == 0 {
+                    self.why_walk(solve, start, v, &mut hops, &mut seen);
+                } else {
+                    let mut h = Vec::new();
+                    self.why_walk(solve, start, v, &mut h, &mut seen);
+                    more += 1;
+                    more_hops += h.len();
+                }
             }
         }
         for h in &hops {
             eprintln!("{h}");
+        }
+        if more > 0 {
+            eprintln!("WHY solve={solve} MORE values={more} hops={more_hops} (chains of the other values not printed)");
         }
         let (recs, nodes) = self
             .prov
@@ -539,7 +843,7 @@ impl Model {
             .map_or((0, 0), |w| (w.first.len(), w.by_node.len()));
         eprintln!("WHY solve={solve} END hops={} records={recs} nodes={nodes}", hops.len());
         *LAST.lock().unwrap_or_else(|e| e.into_inner()) = hops;
-        if stop {
+        if stop && !cfg!(test) {
             use std::io::Write as _;
             let _ = std::io::stderr().flush();
             std::process::exit(86);

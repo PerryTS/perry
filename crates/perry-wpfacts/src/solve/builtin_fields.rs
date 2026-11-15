@@ -219,6 +219,7 @@ impl Model {
         }
         if self.prov.is_some() {
             self.why_hold("hold_realm", u32::MAX, None);
+            self.why_realm("hold_realm");
         }
         self.realm_held = true;
         self.realm_widen_strs();
@@ -284,6 +285,7 @@ impl Model {
         }
         if !self.realm_held && self.prov.is_some() {
             self.why_hold("interp", u32::MAX, None);
+            self.why_realm("interp");
         }
         self.realm_held = true;
         self.realm_widen_strs();

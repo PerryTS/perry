@@ -10,6 +10,7 @@ impl Model {
                 // receiver's read keeps the receiver's own root cause instead of being
                 // booked to the String/Number/Boolean.prototype chain it also reads.
                 for &t in toks {
+                    self.prov_tok(t);
                     self.load_from(t, t, key, dst);
                 }
                 if prim != 0 {
@@ -18,6 +19,7 @@ impl Model {
             }
             Cons::ProtoKey { key, dst } => {
                 for &t in toks {
+                    self.prov_tok(t);
                     self.proto_key(t, key, dst);
                 }
                 if prim != 0 {
@@ -76,22 +78,26 @@ impl Model {
             Cons::Store { key, src, site } => {
                 self.store_at = Some(n);
                 for &t in toks {
+                    self.prov_tok(t);
                     self.store_into(t, key, src, site);
                 }
                 self.store_at = None;
             }
             Cons::Call { call } => {
                 for &t in toks {
+                    self.prov_tok(t);
                     self.call_tok(call, t, None);
                 }
             }
             Cons::CallThis { call, this } => {
                 for &t in toks {
+                    self.prov_tok(t);
                     self.call_tok(call, t, Some(this));
                 }
             }
             Cons::New { call } => {
                 for &t in toks {
+                    self.prov_tok(t);
                     self.construct(call, t);
                 }
             }
@@ -143,11 +149,13 @@ impl Model {
                     self.with_native(call, |m| builtins::prim_method(m, prim, key, call));
                 }
                 for &t in toks {
+                    self.prov_tok(t);
                     self.method_on(t, key, call);
                 }
             }
             Cons::Chain { origin, key, act } => {
                 for &p in toks {
+                    self.prov_tok(p);
                     self.chain_step(n, origin, p, key, act);
                 }
             }
@@ -893,6 +901,7 @@ impl Model {
                 builtin,
             } => {
                 for &q in toks {
+                    self.prov_tok(q);
                     if !builtin && self.is_builtin_proto(q) {
                         continue;
                     }

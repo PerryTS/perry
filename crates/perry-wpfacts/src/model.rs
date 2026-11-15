@@ -2193,6 +2193,9 @@ pub struct Model {
     pub(crate) prov_rule: Option<(NodeId, Cons)>,
     /// The call being bound, plus one (0: none; provenance only).
     pub(crate) prov_call: u32,
+    /// The input token of the constraint being applied, plus one (0: none;
+    /// provenance only: the recorded cause of a rule's output).
+    pub(crate) prov_in: u32,
     /// Relation phase tag: b'G' generation (inputs), b'S' solver rules
     /// (re-derived by the checker), b'B' builtin summaries (axioms).
     pub rel_phase: u8,

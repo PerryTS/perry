@@ -1380,8 +1380,11 @@ impl<'a> Gen<'a> {
         let mut arguments = None;
         // DEADFN15 C3 (c): `this` and the parameters but the rest one.
         self.m.rest_front_watch(this, fx);
-        for p in params {
+        for (pi, p) in params.iter().enumerate() {
             let n = self.local(mi, p.id);
+            if self.m.prov.is_some() {
+                self.m.why_param(n, name, &p.name, pi);
+            }
             if !p.is_rest {
                 self.m.rest_front_watch(n, fx);
             }

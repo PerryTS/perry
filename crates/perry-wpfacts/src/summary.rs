@@ -900,6 +900,9 @@ impl Model {
                     if let Some(d) = &mut self.diagnostic {
                         d.inst_orig.insert(n, s.orig[i as usize]);
                     }
+                    if let Some(p) = &mut self.prov {
+                        p.why_copy_sel(n, s.orig[i as usize]);
+                    }
                     n
                 }
                 _ if ctx == NO_CTX => s.orig[i as usize],

@@ -86,6 +86,7 @@ impl Model {
 
     /// `add` with the string constants `strs` for a string in `prim` (a
     /// copy of another node's value: `Node::strs`).
+    #[track_caller]
     pub(crate) fn add_s(&mut self, n: NodeId, toks: &[Tok], prim: u16, strs: StrSet) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Seed(
@@ -711,6 +712,7 @@ impl Model {
         self.add(n, &[t], 0);
     }
 
+    #[track_caller]
     pub fn add_prim(&mut self, n: NodeId, p: u16) {
         if self.rel_phase != b'S' {
             self.rel(|| format!("prim {n} {p}"));
@@ -954,12 +956,12 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
-        let pv = (self.prov_mode, self.prov_rule);
+        let pv = (self.prov_mode, self.prov_rule, self.prov_in);
         if self.prov.is_some() {
-            (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+            (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_RULE, Some((n, c)), 0);
         }
         self.with_s(|m| m.apply(n, &c, &toks, prim));
-        (self.prov_mode, self.prov_rule) = pv;
+        (self.prov_mode, self.prov_rule, self.prov_in) = pv;
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -1093,7 +1095,7 @@ impl Model {
             // interval (`add_tokens`).
             self.cur_range = Some(self.rg(n));
             if self.prov.is_some() {
-                (self.prov_mode, self.prov_rule) = (crate::provenance::PM_COPY, None);
+                (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_COPY, None, 0);
             }
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
@@ -1164,7 +1166,7 @@ impl Model {
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
                 if self.prov.is_some() {
-                    (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+                    (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_RULE, Some((n, c)), 0);
                 }
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
             }
@@ -1172,7 +1174,7 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
-        (self.prov_mode, self.prov_rule) = (crate::provenance::PM_ADD, None);
+        (self.prov_mode, self.prov_rule, self.prov_in) = (crate::provenance::PM_ADD, None, 0);
         #[cfg(debug_assertions)]
         self.assert_shadowed_complete();
     }
