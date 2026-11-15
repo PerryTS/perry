@@ -390,6 +390,11 @@ pub struct Gen<'a> {
     /// tokens whose use beyond the contract is a census report.
     pub stand_ins: FxHashMap<String, (NodeId, TmplId, Vec<Tok>)>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
+    /// R9BIRTH3 rule M: classes whose instances run another method at an
+    /// ancestor constructor's followed `this.m()` call (a class from them up
+    /// to that ancestor defines `m`): that ancestor's constructor leaks
+    /// `this` for them (`Gen::settle_rule_m`).
+    pub m_override_leaks: crate::pts::FxHashSet<TmplId>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
@@ -798,6 +803,7 @@ impl<'a> Gen<'a> {
             view: None,
             stand_ins: FxHashMap::default(),
             ctor_phase: FxHashMap::default(),
+            m_override_leaks: crate::pts::FxHashSet::default(),
             fn_inst_of: FxHashMap::default(),
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),

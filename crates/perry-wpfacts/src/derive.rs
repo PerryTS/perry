@@ -588,6 +588,62 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
 
 /// The static prototype chain tokens of a template (plus every prototype
 /// object a `new f()` / literal `__proto__` can name).
+/// R9BIRTH3 rule M, against the solved program: for each method `k` a
+/// constructor on `tm`'s chain (class `Q`) follows (`Model::rule_m`), every
+/// instance of `tm` has `tm`'s prototype as its [[Prototype]] (no
+/// `Reflect.construct` with another new target, 10.2.2 / 10.1.13), no
+/// prototype of a class from `tm` up to below `Q` holds a value or accessor
+/// under `k` or an unknown key, and `Q`'s prototype holds exactly one value
+/// under `k` (its method: nothing stored another there) and no accessor.
+/// Else the followed call may run other code: the chain is not stable.
+fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
+    let proto = |q: TmplId| m.tok_index.get(&TokKind::Proto(q)).copied();
+    let pts_len = |n: Option<&NodeId>| n.map_or(0, |&n| m.nodes[n as usize].pts.to_sorted().len());
+    let mut below: Vec<TmplId> = Vec::new();
+    let mut cur = Some(tm);
+    let mut checked_instances = false;
+    while let Some(q) = cur {
+        if let Some(names) = m.rule_m.get(&q) {
+            if !checked_instances {
+                checked_instances = true;
+                let own = proto(tm);
+                for t in ts {
+                    if let Some(&pn) = m.proto_node.get(t) {
+                        let ps = m.nodes[pn as usize].pts.to_sorted();
+                        if own.is_none() || ps.iter().any(|&p| Some(p) != own) {
+                            return Some("rule M: an instance's prototype is not its class's".into());
+                        }
+                    }
+                }
+            }
+            for &a in names {
+                for &d in &below {
+                    if let Some(p) = proto(d) {
+                        if pts_len(m.fields.get(&(p, a))) != 0
+                            || m.accessors.contains_key(&(p, a))
+                            || pts_len(m.field_any.get(&p)) != 0
+                        {
+                            return Some(format!("rule M: a prototype below holds {}", m.atoms[a as usize]));
+                        }
+                    }
+                }
+                let Some(p) = proto(q) else {
+                    return Some("rule M: no prototype token".into());
+                };
+                if pts_len(m.fields.get(&(p, a))) != 1
+                    || m.accessors.contains_key(&(p, a))
+                    || pts_len(m.field_any.get(&p)) != 0
+                {
+                    return Some(format!("rule M: prototype member {} not the method alone", m.atoms[a as usize]));
+                }
+            }
+        }
+        below.push(q);
+        cur = m.tmpls[q as usize].parent;
+    }
+    None
+}
+
 fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut stack = Vec::new();
@@ -948,6 +1004,9 @@ fn template_facts(
         chain_problem.get_or_insert(r);
     }
     let escape = global.clone().or(escape);
+    if chain_problem.is_none() {
+        chain_problem = rule_m_problem(m, tm, &ts);
+    }
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
     // A named store the solve counted as a key add while the class had only
     // its own birth keys is no add when the settled layout (the parent unit's

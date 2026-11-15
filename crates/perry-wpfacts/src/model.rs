@@ -1891,6 +1891,10 @@ pub struct Model {
     /// (target fns node, bound this, bound args)
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
+    /// R9BIRTH3 rule M: per class, the methods its constructor's followed
+    /// `this.m()` calls name (`CtorPhase::m_calls`), checked against the
+    /// solved prototypes (`derive::rule_m_problem`).
+    pub rule_m: FxHashMap<TmplId, Vec<Atom>>,
     pub field_any: FxHashMap<Tok, NodeId>,
     /// JSON tree positions (`solve::json_pos`): the position class each
     /// JSON token stands for. A fact of the token, keyed by the token.

@@ -70,6 +70,37 @@ pub struct CtorPhase {
     /// 10.1.6.3 ValidateAndApplyPropertyDescriptor step 2: `current`
     /// undefined, the key is created with the descriptor's attributes).
     pub birth_defines: BTreeMap<usize, Vec<(String, u8)>>,
+    /// R9BIRTH3 rule M: the class's own methods `m` whose `this.m(..)` call
+    /// the walk followed into the method body (`W::callees`). Exact only
+    /// while every instance that runs the call finds this class's method
+    /// there (ECMA-262 10.1.8 [[Get]] from its prototype): no subclass on
+    /// the way defines `m` (`Gen::m_override_leaks`), and the prototypes
+    /// keep it (`derive::rule_m_problem`). CLOSED-WORLD PREMISE (owner
+    /// 2026-11-14): no eval / dynamic code; every override is in the program.
+    pub m_calls: BTreeSet<String>,
+    /// Identity of the construction-phase stores inside a followed method
+    /// body (a subset of `phase_stores`).
+    pub m_stores: BTreeSet<usize>,
+}
+
+impl CtorPhase {
+    /// Rule M: the phase with its followed calls (`self`) and the phase that
+    /// treats each as a leak (`off`) give the instance the same birth: the
+    /// same keys, definite and stored keys, order and construction-phase
+    /// stores outside the followed bodies. Then only the leak differs, and
+    /// a subclass whose instances run another method there leaks at it
+    /// (`Gen::m_override_leaks`) with the same birth keys as this class.
+    pub fn same_birth(&self, off: &CtorPhase) -> bool {
+        let outside: BTreeSet<usize> = self.phase_stores.difference(&self.m_stores).copied().collect();
+        self.assigned_order == off.assigned_order
+            && self.definite == off.definite
+            && self.stored == off.stored
+            && self.late_fields == off.late_fields
+            && self.out_of_order == off.out_of_order
+            && self.disordered == off.disordered
+            && self.birth_defines == off.birth_defines
+            && outside == off.phase_stores
+    }
 }
 
 #[derive(Clone)]
@@ -123,6 +154,63 @@ struct W<'a> {
     alias_pending: BTreeSet<perry_hir::types::LocalId>,
     /// Pending aliases a closure (a hoisted function declaration) captured.
     alias_early: BTreeSet<perry_hir::types::LocalId>,
+    /// R9BIRTH3 rule M: the class's own plain instance methods a `this.m()`
+    /// call may be followed into (`own_callees`); empty: rule M off.
+    callees: &'a BTreeMap<String, &'a perry_hir::Function>,
+    /// The followed methods the walk is inside (a call to one of them again
+    /// is a leak: no recursion is followed).
+    visiting: Vec<String>,
+}
+
+/// Rule M: the methods of `c` a `this.m()` in its constructor may be
+/// followed into: a plain instance method (no async or generator body, no
+/// `return` in it: a return would leave the method, not the constructor,
+/// past its later stores), whose name is no accessor or field of the class
+/// (a field is an own key, an accessor wins the name) and is declared once.
+fn own_callees(c: &Class) -> BTreeMap<String, &perry_hir::Function> {
+    let mut out = BTreeMap::new();
+    let mut dup = BTreeSet::new();
+    for m in &c.methods {
+        if out.insert(m.name.clone(), m).is_some() {
+            dup.insert(m.name.clone());
+        }
+    }
+    out.retain(|name, f| {
+        !dup.contains(name)
+            && !f.is_async
+            && !f.is_generator
+            && !has_return(&f.body)
+            && !c.getters.iter().any(|(k, _)| k == name)
+            && !c.setters.iter().any(|(k, _)| k == name)
+            && !c.fields.iter().any(|x| &x.name == name)
+    });
+    out
+}
+
+/// A `return` statement in `ss` (not in a nested function: closures are
+/// expressions).
+fn has_return(ss: &[Stmt]) -> bool {
+    ss.iter().any(|s| match s {
+        Stmt::Return(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => has_return(then_branch) || else_branch.as_ref().is_some_and(|e| has_return(e)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => has_return(body),
+        Stmt::Labeled { body, .. } => has_return(std::slice::from_ref(body.as_ref())),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            has_return(body)
+                || catch.as_ref().is_some_and(|c| has_return(&c.body))
+                || finally.as_ref().is_some_and(|f| has_return(f))
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| has_return(&c.body)),
+        _ => false,
+    })
 }
 
 pub fn analyze(c: &Class) -> CtorPhase {
@@ -165,6 +253,18 @@ pub fn analyze_in_present(
     shapes: &BTreeMap<String, Vec<String>>,
     present: &BTreeSet<String>,
 ) -> CtorPhase {
+    analyze_in_present_m(c, shapes, present, true)
+}
+
+/// [`analyze_in_present`] with rule M on or off (`rule_m`: off, every
+/// `this.m()` call is a leak, as before R9BIRTH3).
+pub fn analyze_in_present_m(
+    c: &Class,
+    shapes: &BTreeMap<String, Vec<String>>,
+    present: &BTreeSet<String>,
+    rule_m: bool,
+) -> CtorPhase {
+    let callees = if rule_m { own_callees(c) } else { BTreeMap::new() };
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
         .iter()
@@ -194,7 +294,7 @@ pub fn analyze_in_present(
         }
         m
     });
-    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true, present);
+    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -202,7 +302,7 @@ pub fn analyze_in_present(
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true, present).definite;
+    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true, present, &callees).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     ph
 }
@@ -219,7 +319,8 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
     // A closure or function names no class: no class shape to read
     // (`plain_shapes`).
     let shapes = BTreeMap::new();
-    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new());
+    let none = BTreeMap::new();
+    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new(), &none);
     if !ctor_order() || ph.assigned_order.is_empty() {
         return ph;
     }
@@ -229,20 +330,24 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
         .enumerate()
         .map(|(i, k)| (k.clone(), i))
         .collect();
-    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new())
+    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new(), &none)
 }
 
-fn analyze_body(
-    shapes: &BTreeMap<String, Vec<String>>,
+#[allow(clippy::too_many_arguments)]
+fn analyze_body<'a>(
+    shapes: &'a BTreeMap<String, Vec<String>>,
     fields: &[(&Option<Expr>, Option<&str>)],
     methods: BTreeSet<String>,
     params: &[perry_hir::Param],
     body: &[Stmt],
     order: Option<BTreeMap<String, usize>>,
     class_ctor: bool,
-    present: &BTreeSet<String>,
+    present: &'a BTreeSet<String>,
+    callees: &'a BTreeMap<String, &'a perry_hir::Function>,
 ) -> CtorPhase {
     let mut w = W {
+        callees,
+        visiting: Vec::new(),
         present,
         class_ctor,
         shapes,
@@ -292,18 +397,7 @@ fn analyze_body(
     // at the top of the body, ECMA-262 10.2.11 step 36), ahead of the
     // alias's own statement; its capture of the alias is a use of `this`
     // from the alias's statement on (`alias_early`).
-    for s in body {
-        if let Stmt::Let {
-            id,
-            mutable: false,
-            init: Some(Expr::This),
-            ..
-        } = s
-        {
-            w.aliases.insert(*id);
-            w.alias_pending.insert(*id);
-        }
-    }
+    w.prescan_aliases(body);
     w.stmts(&mut st, body);
     w.exits.push(st.assigned.clone());
     w.ph.disordered |= st.disordered;
@@ -341,6 +435,33 @@ fn analyze_body(
 }
 
 impl W<'_> {
+    /// Rule L's pre-scan: `body`'s top-level `const x = this` aliases.
+    fn prescan_aliases(&mut self, body: &[Stmt]) {
+        for s in body {
+            if let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::This),
+                ..
+            } = s
+            {
+                self.aliases.insert(*id);
+                self.alias_pending.insert(*id);
+            }
+        }
+    }
+
+    /// Rule M: `this.<key>(..)` may be followed into the class's own
+    /// method: `this` is unobserved here, the method is not one the walk is
+    /// in, and `key` is no own key yet (the [[Get]] finds the prototype's
+    /// method: an own key would shadow it).
+    fn followable(&self, st: &St, key: &str) -> bool {
+        st.open
+            && self.callees.contains_key(key)
+            && !self.visiting.iter().any(|k| k == key)
+            && !st.assigned.contains(key)
+            && !self.is_present(st, key)
+    }
 
     /// The (key, value) parts of object literal `e` (an `Expr::Object` or a
     /// plain `__AnonShape_*` construction), or `None`: a spread, a computed
@@ -616,6 +737,9 @@ impl W<'_> {
         self.order_store(st, key);
         if st.open {
             self.ph.phase_stores.insert(e as *const Expr as usize);
+            if !self.visiting.is_empty() {
+                self.ph.m_stores.insert(e as *const Expr as usize);
+            }
             st.assigned.insert(key.to_string());
         } else {
             self.late.insert(key.to_string());
@@ -648,6 +772,40 @@ impl W<'_> {
     fn expr(&mut self, st: &mut St, e: &Expr) {
         match e {
             Expr::This => self.leak(st),
+            // R9BIRTH3 rule M: `this.m(args)` with `m` the class's own method
+            // (`followable`). The call reads `this.m` (the prototype's
+            // method: no code runs), evaluates the arguments, then runs the
+            // method's body with this `this` (ECMA-262 13.3.6.1 / 10.2.1):
+            // the walk follows that body at the call's place, its stores in
+            // their order, its uses of `this` judged as the constructor's.
+            Expr::Call { callee, args, .. }
+                if matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
+                    if matches!(object.as_ref(), Expr::This) && self.followable(st, property)) =>
+            {
+                let Expr::PropertyGet { property, .. } = callee.as_ref() else {
+                    return;
+                };
+                for a in args {
+                    self.expr(st, a);
+                }
+                let f = self.callees[property.as_str()];
+                // A run that left the phase in the arguments makes the call
+                // with an observed `this`: a leak, as before.
+                if !st.open {
+                    self.leak(st);
+                    return;
+                }
+                self.ph.m_calls.insert(property.clone());
+                self.visiting.push(property.clone());
+                for p in &f.params {
+                    if let Some(d) = &p.default {
+                        self.expr(st, d);
+                    }
+                }
+                self.prescan_aliases(&f.body);
+                self.stmts(st, &f.body);
+                self.visiting.pop();
+            }
             // `this.m(...)`: the callee runs with `this` as its receiver.
             Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }

@@ -47,6 +47,7 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, ph);
             }
         }
+        self.settle_rule_m(&modules, None);
         self.ctor_phase_present(&modules);
         // The push-filled births (`push_fills`), with the birth lengths.
         if self.m.push_fills
@@ -461,6 +462,10 @@ impl<'a> Gen<'a> {
         }
         self.m.tmpls[tm as usize].declared = declared;
         if let Some(ph) = phase {
+            if !ph.m_calls.is_empty() {
+                let names: Vec<Atom> = ph.m_calls.iter().map(|k| self.m.atom(k)).collect();
+                self.m.rule_m.insert(tm, names);
+            }
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
@@ -623,11 +628,102 @@ impl<'a> Gen<'a> {
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             let ph = crate::ctor_phase::analyze_in_present(c, &shapes, &present);
+            let followed = !ph.m_calls.is_empty();
             self.ctor_phase.insert(tm, ph);
+            if followed {
+                self.settle_rule_m(modules, Some((tm, &present)));
+            }
         }
     }
 
+    /// R9BIRTH3 rule M. A class `P` whose constructor's `this.m()` call the
+    /// phase followed (`CtorPhase::m_calls`) keeps it when no class below
+    /// `P` defines `m` (every instance that runs the call finds P's method:
+    /// 10.1.8 from its own prototype, a subclass's prototype first), or when
+    /// the birth is the same with the call taken as a leak
+    /// (`CtorPhase::same_birth`): then a subclass whose prototype holds
+    /// another `m` only leaks at the call (`m_override_leaks`). Otherwise
+    /// the phase takes the call as a leak, as before. `only`: settle this
+    /// class (with its parent chain's present keys, rule C) instead of all.
+    /// CLOSED-WORLD PREMISE (owner 2026-11-14): every class is in the program.
+    fn settle_rule_m(
+        &mut self,
+        modules: &[(&str, &'a Module)],
+        only: Option<(TmplId, &std::collections::BTreeSet<String>)>,
+    ) {
+        let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+        for mi in 0..modules.len() {
+            for c in self.classes_of(mi) {
+                by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+            }
+        }
+        let defines = |c: &Class, k: &str| {
+            c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+        };
+        let mut tms: Vec<TmplId> = by_tm.keys().copied().collect();
+        tms.sort_unstable();
+        let empty = std::collections::BTreeSet::new();
+        let todo: Vec<(TmplId, &std::collections::BTreeSet<String>)> = match only {
+            Some((tm, present)) => vec![(tm, present)],
+            None => tms.iter().map(|&tm| (tm, &empty)).collect(),
+        };
+        for (tm, present) in todo {
+            let calls = match self.ctor_phase.get(&tm) {
+                Some(ph) if !ph.m_calls.is_empty() => ph.m_calls.clone(),
+                _ => continue,
+            };
+            // Some class below `tm` defines a followed method.
+            let overridden = tms.iter().any(|&d| {
+                let mut cur = Some(d);
+                let mut between = Vec::new();
+                while let Some(x) = cur {
+                    if x == tm {
+                        return between.iter().any(|b: &TmplId| {
+                            by_tm.get(b).is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
+                        });
+                    }
+                    between.push(x);
+                    cur = self.m.tmpls[x as usize].parent;
+                }
+                false
+            });
+            if !overridden {
+                continue;
+            }
+            let (mi, c) = by_tm[&tm];
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
+            let off = crate::ctor_phase::analyze_in_present_m(c, &shapes, present, false);
+            if !self.ctor_phase[&tm].same_birth(&off) {
+                self.ctor_phase.insert(tm, off);
+            }
+        }
+        // The classes that reach a followed call with another method there.
+        let mut leaks = crate::pts::FxHashSet::default();
+        for &c in &tms {
+            let mut seen: Vec<TmplId> = vec![c];
+            let mut cur = self.m.tmpls[c as usize].parent;
+            while let Some(p) = cur {
+                if let Some(ph) = self.ctor_phase.get(&p) {
+                    if ph.m_calls.iter().any(|k| {
+                        seen.iter().any(|s| by_tm.get(s).is_some_and(|(_, sc)| defines(sc, k)))
+                    }) {
+                        leaks.insert(c);
+                        break;
+                    }
+                }
+                seen.push(p);
+                cur = self.m.tmpls[p as usize].parent;
+            }
+        }
+        self.m_override_leaks = leaks;
+    }
+
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
+        if self.m_override_leaks.contains(&tm) {
+            return true;
+        }
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;
         }
