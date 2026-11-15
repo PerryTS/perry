@@ -1,0 +1,1 @@
+Tests: `perry-stdlib`'s `typed_arrays_are_not_named_parameter_objects` installs the typed-array runtime family before creating a typed array, as a compiled program does; with the family left out, the constructor's empty slot aborts (`family_never`). No behavior change.
