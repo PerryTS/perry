@@ -2,7 +2,7 @@
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
 use super::perex_owner::{BuildError, GcProgram, HeapSubject};
-use super::perex_runtime::{self as host, CaptureMode, EngineError, Match};
+use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
@@ -750,9 +750,9 @@ fn execute_rooted_output<P: OutputProjection>(
         .filter(|index| captures.as_ref().is_some_and(|slots| *index < slots.len()));
     let (array, groups) = if let Some(index) = projected {
         let fresh = bind_heap_subject(*input)?;
-        let found = Match { full, captures };
+        let slots = captures.as_deref();
         let array = caught(|| {
-            super::perex_results::materialize_capture(&fresh, &found, position, index, budget, poll)
+            super::perex_results::materialize_capture(&fresh, slots, position, index, budget, poll)
         })??;
         (array, std::ptr::null_mut())
     } else {
@@ -760,7 +760,7 @@ fn execute_rooted_output<P: OutputProjection>(
         // the result as its receiver, exposing every capture and metadata.
         match output {
             ExecOutput::Object => {
-                let found = Match { full, captures };
+                let slots = captures.as_deref();
                 let scope = RuntimeHandleScope::new();
                 let fresh;
                 let (bound_subject, bound_program) = match reused {
@@ -786,7 +786,8 @@ fn execute_rooted_output<P: OutputProjection>(
                         input,
                         bound_subject,
                         bound_program,
-                        &found,
+                        full,
+                        slots,
                         position,
                         has_indices,
                         budget,
