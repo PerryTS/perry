@@ -41,6 +41,10 @@ pub(crate) struct Baseline {
     pre_tls: Vec<u8>,
     /// `class_image::snap_image_table_size` at the baseline.
     classes: usize,
+    /// Hot-slot claims at the baseline.
+    claims_from: u32,
+    /// Names claimed since, read first at the cut (the capture claims its own).
+    claims: Vec<(Vec<u8>, u32)>,
 }
 
 static BASELINE: AtomicPtr<Baseline> = AtomicPtr::new(std::ptr::null_mut());
@@ -98,6 +102,8 @@ pub extern "C" fn js_snap_image_begin(
         pre_data,
         pre_tls,
         classes: crate::object::class_image::snap_image_table_size(),
+        claims_from: crate::tls_hot::js_tls_hot_claimed_slots(),
+        claims: Vec::new(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
@@ -128,6 +134,7 @@ pub extern "C" fn js_snap_image_cut() {
 
 /// Copy the data range and the TLS block into the buffers `begin` made.
 fn take_pre(b: &mut Baseline) {
+    b.claims = crate::tls_hot::claims_in_order(b.claims_from);
     for (lo, buf) in [(b.data.0, &mut b.pre_data), (b.tls.0, &mut b.pre_tls)] {
         // SAFETY: the range `begin` copied; the buffer has the same length.
         unsafe { std::ptr::copy_nonoverlapping(lo as *const u8, buf.as_mut_ptr(), buf.len()) };
@@ -400,6 +407,19 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>) -> Image 
         }
     }
     if let Some(b) = base {
+        img.claims_from = b.claims_from;
+        for (k, i) in &b.claims {
+            if k.len() > 4096 || std::str::from_utf8(k).is_err() && !k.starts_with(b"anonymous:") {
+                img.stops.push(Stop {
+                    cell: *i,
+                    obj_type: 0,
+                    kind: format::STOP_CLAIM_KEY,
+                    off: 0,
+                    value: 0,
+                });
+            }
+            img.claims.push(k.clone());
+        }
         let now = crate::object::class_image::snap_image_table_size();
         if now != b.classes {
             img.stops.push(Stop {

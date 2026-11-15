@@ -49,6 +49,8 @@ fn sample() -> Image {
             value: 0,
         }],
         pending: PENDING,
+        claims_from: 5,
+        claims: vec![b"a::B@1:2".to_vec(), b"anonymous:4096".to_vec()],
     }
 }
 
@@ -172,6 +174,8 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
         pre_data: Vec::new(),
         pre_tls: Vec::new(),
         classes: crate::object::class_image::snap_image_table_size(),
+        claims_from: 0,
+        claims: Vec::new(),
     };
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
@@ -264,6 +268,8 @@ fn probe_baseline(pre_is_baseline: bool) -> (Baseline, usize) {
         pre_data,
         pre_tls,
         classes: crate::object::class_image::snap_image_table_size(),
+        claims_from: 0,
+        claims: Vec::new(),
     };
     (b, tls_lo)
 }
@@ -323,4 +329,58 @@ fn growth_of_the_class_tables_stops_the_image() {
     let grew = build(Some(&base), Vec::new());
     let s = grew.stops.iter().find(|s| s.kind == STOP_CLASS_TABLES);
     assert_eq!(s.map(|s| s.value), Some(3));
+}
+
+#[test]
+fn the_claim_record_lists_late_claims_in_order_and_replays_to_the_same_indices() {
+    let from = crate::tls_hot::js_tls_hot_claimed_slots();
+    let (n1, n2) = (b"snap_test::LATE_A@1:1", b"snap_test::LATE_B@2:2");
+    // SAFETY: names of readable bytes; an anonymous claim has `len` 0.
+    let (i1, i2, i3) = unsafe {
+        (
+            crate::tls_hot::js_tls_hot_claim_slot(n1.as_ptr(), n1.len(), 0),
+            crate::tls_hot::js_tls_hot_claim_slot(n2.as_ptr(), n2.len(), 0),
+            crate::tls_hot::js_tls_hot_claim_slot(std::ptr::null(), 0, 0x1000),
+        )
+    };
+    assert_eq!((i1, i2, i3), (from, from + 1, from + 2));
+    let now = crate::tls_hot::claims_in_order(from);
+    let rec: Vec<Vec<u8>> = now.iter().map(|e| e.0.clone()).collect();
+    assert_eq!(rec[0], n1);
+    assert_eq!(rec[1], n2);
+    assert_eq!(rec[2], b"anonymous:4096");
+    assert_eq!(parse_claims_blob(&claims_blob(&rec)), Some(rec.clone()));
+    assert!(claims_replay_matches(from, &rec, &now));
+    // A fresh process that claimed one name first hands out shifted indices.
+    let shifted: Vec<(Vec<u8>, u32)> = now.iter().map(|e| (e.0.clone(), e.1 + 1)).collect();
+    assert!(!claims_replay_matches(from, &rec, &shifted));
+    let mut swapped = now.clone();
+    swapped.swap(0, 1);
+    assert!(!claims_replay_matches(from, &rec, &swapped));
+}
+
+#[test]
+fn the_capture_takes_the_claims_before_its_own_code_runs() {
+    let (mut base, _) = probe_baseline(false);
+    let n = b"snap_test::CAPTURE_LATE@9:9";
+    // SAFETY: a readable name.
+    let i = unsafe { crate::tls_hot::js_tls_hot_claim_slot(n.as_ptr(), n.len(), 0) };
+    base.claims_from = i;
+    take_pre(&mut base);
+    let img = build(Some(&base), Vec::new());
+    assert_eq!(img.claims_from, i);
+    assert_eq!(img.claims.first().map(|k| k.as_slice()), Some(&n[..]));
+}
+
+#[test]
+fn a_claim_key_over_four_kib_stops_the_image() {
+    let (mut base, _) = probe_baseline(false);
+    let long = vec![b'k'; 5000];
+    // SAFETY: a readable name of 5000 bytes.
+    let i = unsafe { crate::tls_hot::js_tls_hot_claim_slot(long.as_ptr(), long.len(), 0) };
+    base.claims_from = i;
+    take_pre(&mut base);
+    let img = build(Some(&base), Vec::new());
+    let s = img.stops.iter().find(|s| s.kind == STOP_CLAIM_KEY);
+    assert_eq!(s.map(|s| s.cell), Some(i));
 }

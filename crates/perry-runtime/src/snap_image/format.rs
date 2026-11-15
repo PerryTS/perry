@@ -20,6 +20,8 @@ pub const STOP_SLOT_OUTSIDE: u8 = 1;
 pub const STOP_NOT_CELL_START: u8 = 2;
 /// The class tables grew between the baseline and the cut (`value` = rows).
 pub const STOP_CLASS_TABLES: u8 = 3;
+/// A slot-claim key longer than 4 KiB or not UTF-8 (`cell` = claim index).
+pub const STOP_CLAIM_KEY: u8 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stop {
@@ -96,6 +98,10 @@ pub struct Image {
     /// naming an address that is not a cell).
     pub stops: Vec<Stop>,
     pub pending: u32,
+    /// Hot-slot claims at the baseline, and the names claimed from then on
+    /// until the cut, in claim order (index = `claims_from` + position).
+    pub claims_from: u32,
+    pub claims: Vec<Vec<u8>>,
 }
 
 fn put_val(o: &mut Vec<u8>, v: &Val) {
@@ -164,6 +170,45 @@ pub fn encode(img: &Image) -> Vec<u8> {
         o.extend(t.value.to_le_bytes());
     }
     o.extend(img.pending.to_le_bytes());
+    o.extend(img.claims_from.to_le_bytes());
+    o.extend(claims_blob(&img.claims));
 
     o
+}
+
+/// The claim record as section bytes: count, then (length, bytes) per name.
+pub fn claims_blob(claims: &[Vec<u8>]) -> Vec<u8> {
+    let mut o = (claims.len() as u32).to_le_bytes().to_vec();
+    for k in claims {
+        o.extend((k.len() as u32).to_le_bytes());
+        o.extend(k);
+    }
+    o
+}
+
+/// The names of a claim blob (bytes after it are ignored).
+pub fn parse_claims_blob(b: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let u32_at = |o: usize| -> Option<usize> {
+        b.get(o..o + 4)
+            .map(|s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])) as usize)
+    };
+    let n = u32_at(0)?;
+    let (mut o, mut v) = (4usize, Vec::new());
+    for _ in 0..n {
+        let l = u32_at(o)?;
+        v.push(b.get(o + 4..o + 4 + l)?.to_vec());
+        o += 4 + l;
+    }
+    Some(v)
+}
+
+/// Whether `claims` (claimed since index `from` in some process) are exactly
+/// what this process has claimed since `from`, with the same indices.
+pub fn claims_replay_matches(from: u32, claims: &[Vec<u8>], now: &[(Vec<u8>, u32)]) -> bool {
+    claims.len() == now.len()
+        && claims
+            .iter()
+            .zip(now)
+            .enumerate()
+            .all(|(i, (k, (nk, ni)))| k == nk && *ni == from + i as u32)
 }

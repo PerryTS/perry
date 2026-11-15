@@ -432,7 +432,7 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
     let ptr = |n: &str| format!("i64 ptrtoint (ptr @{n} to i64)");
     let mut ll = String::from("; Perry image run: the captured heap as link-time data\n\n");
     ll += &format!(
-        "@perry_snap_image = global <{{ i64, i64, i64, i64, i64, i64, i64, i64 }}> <{{ i64 {}, i64 {nc}, i64 {}, i64 {}, i64 {}, {}, {}, {} }}>, section \"{SECTION}\", align 8\n",
+        "@perry_snap_image = global <{{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }}> <{{ i64 {}, i64 {nc}, i64 {}, i64 {}, i64 {}, {}, {}, {}, {}, i64 {} }}>, section \"{SECTION}\", align 8\n",
         SECTION_MAGIC as i64,
         slot_rows.len(),
         word_rows.len(),
@@ -440,11 +440,17 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
         ptr("perry_snap_cells"),
         ptr("perry_snap_slots"),
         ptr("perry_snap_words"),
+        ptr("perry_snap_claims"),
+        img.claims_from,
+    );
+    ll += &format!(
+        "@perry_snap_claims = global {}, section \"{SECTION}\", align 8\n",
+        bytes_ll(&format::claims_blob(&img.claims))
     );
     ll += &table("perry_snap_cells", nc, 2, &cell_rows);
     ll += &table("perry_snap_slots", slot_rows.len(), 3, &slot_rows);
     ll += &table("perry_snap_words", word_rows.len(), 4, &word_rows);
-    for n in ["perry_snap_cells", "perry_snap_slots", "perry_snap_words"] {
+    for n in ["perry_snap_cells", "perry_snap_slots", "perry_snap_words", "perry_snap_claims"] {
         used.push(format!("@{n}"));
     }
     ll += &cells;
@@ -489,8 +495,12 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
     }
     let (nc, ns, nw, pending) = (rd(8)?, rd(16)?, rd(24)?, rd(32)?);
     let (tc, ts, tw) = (at(rd(40)?)?, at(rd(48)?)?, at(rd(56)?)?);
+    let (cp, cf) = (at(rd(64)?)? as usize, rd(72)?);
     let mut img = Image {
         pending: pending as u32,
+        claims_from: cf as u32,
+        claims: format::parse_claims_blob(sec.get(cp..).ok_or("the claim record is outside the section")?)
+            .ok_or("the claim record is malformed")?,
         ..Image::default()
     };
     let mut user: std::collections::HashMap<u64, u32> = Default::default();
@@ -771,6 +781,8 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         words: c.kept,
         stops: Vec::new(),
         pending: img.pending,
+        claims_from: img.claims_from,
+        claims: img.claims,
     };
     Ok(Prepared {
         object,
@@ -984,20 +996,24 @@ mod tests {
     #[test]
     fn the_section_decodes_to_its_image() {
         let v = 0x1000_0000u64;
-        let mut s = vec![0u8; 168];
+        let mut s = vec![0u8; 200];
         let mut put = |o: usize, x: u64| s[o..o + 8].copy_from_slice(&x.to_le_bytes());
-        for (o, x) in [(0, SECTION_MAGIC), (8, 1), (16, 1), (24, 1), (32, 7), (40, v + 64), (48, v + 80), (56, v + 104)] {
+        for (o, x) in [(0, SECTION_MAGIC), (8, 1), (16, 1), (24, 1), (32, 7), (40, v + 80), (48, v + 96), (56, v + 120)] {
             put(o, x);
         }
-        put(64, v + 136);
-        put(72, 2 | 0x15 << 8 | 24 << 32);
-        put(80, 0);
-        put(88, 8);
-        put(96, 1);
-        for (o, x) in [(104, 0), (112, 0x600010), (120, 0), (128, 5)] {
+        put(64, v + 176);
+        put(72, 3);
+        put(80, v + 152);
+        put(88, 2 | 0x15 << 8 | 24 << 32);
+        put(96, 0);
+        put(104, 8);
+        put(112, 1);
+        for (o, x) in [(120, 0), (128, 0x600010), (136, 0), (144, 5)] {
             put(o, x);
         }
-        put(144, (0x7FFDu64 << 48) | (v + 136 + 8));
+        put(160, (0x7FFDu64 << 48) | (v + 152 + 8));
+        let blob = format::claims_blob(&[b"ab".to_vec(), b"c".to_vec()]);
+        s[176..176 + blob.len()].copy_from_slice(&blob);
         let b = Bases { strings: 0, layouts: 0, atoms: 0, exe: 0x400000, data_start: 0x600000 };
         let got = decode_section(&s, v, &b).expect("decode");
         let mut bytes = vec![0u8; 24];
@@ -1007,6 +1023,8 @@ mod tests {
             words: vec![word(format::WORD_DATA, 0x10, Val::Scalar(5))],
             stops: vec![],
             pending: 7,
+            claims_from: 3,
+            claims: vec![b"ab".to_vec(), b"c".to_vec()],
         };
         assert_eq!(got, want);
     }

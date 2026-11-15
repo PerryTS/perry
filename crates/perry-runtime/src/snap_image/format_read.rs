@@ -4,6 +4,9 @@ use super::format::*;
 struct Rd<'a>(&'a [u8], usize);
 
 impl Rd<'_> {
+    fn left(&self) -> usize {
+        self.0.len() - self.1
+    }
     fn take(&mut self, n: usize) -> Result<&[u8], String> {
         let end = self
             .1
@@ -100,6 +103,9 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
         });
     }
     img.pending = r.u32()?;
+    img.claims_from = r.u32()?;
+    let rest = r.take(r.left())?;
+    img.claims = parse_claims_blob(rest).ok_or("bad claim record")?;
     Ok(img)
 }
 
