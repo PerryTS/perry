@@ -110,6 +110,9 @@ pub(crate) fn test_materialize_realm_owned_roots() {
     // The generator towers are born by their own family's first
     // observation, not by %Global%'s: observe it.
     crate::object::global_this::ensure_generator_intrinsics();
+    // %TypedArray% is born by a typed-array family observation, not by
+    // %Global%'s (Buffer no longer births Uint8Array at setup): observe it.
+    let _ = crate::object::global_this::ensure_typed_array_intrinsic();
     // The storage areas are made by the first read of their globals.
     crate::web_storage::test_read_storage_globals();
     unsafe {
