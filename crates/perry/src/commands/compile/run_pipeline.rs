@@ -8801,7 +8801,18 @@ pub fn run_with_parse_cache(
         report.check()?;
     }
 
-    let link_cache_status = build_and_run_link(
+    // Image run (`PERRY_SNAP_IMAGE_RUN`): link B0, run it to the cut, then link
+    // B1 with the image section (see `snap_image_emit`).
+    let mut image_objs = obj_paths.clone();
+    let mut image_fps = obj_fingerprints.clone();
+    let mut image_prep = None;
+    let image_old_args = std::env::var("PERRY_EXTRA_LINK_ARGS").ok();
+    if perry_codegen::stubs::snap_image_run()
+        && target.is_none()
+        && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+    {
+        let b0 = PathBuf::from(format!("{}.b0", exe_path.display()));
+        build_and_run_link(
         &args.input,
         &ctx,
         target.as_deref(),
@@ -8814,11 +8825,60 @@ pub fn run_with_parse_cache(
         &optimized_libs.well_known_libs,
         optimized_libs.prefer_well_known_before_stdlib,
         &wasm_host_lib,
+        &b0,
+        format,
+        args.debug_symbols,
+        verbose,
+    )?;
+        match super::snap_image_emit::prepare(&b0, &object_output_dir, target.as_deref()) {
+            Ok(p) => {
+                image_objs.push(p.object.clone());
+                image_fps.push(None);
+                std::env::set_var(
+                    "PERRY_EXTRA_LINK_ARGS",
+                    format!(
+                        "{} -Wl,--section-start=perry_snap_image={:#x}",
+                        image_old_args.as_deref().unwrap_or(""),
+                        p.section_addr
+                    ),
+                );
+                image_prep = Some(p);
+            }
+            Err(why) => eprintln!("perry: snap image: no image: {why}"),
+        }
+    }
+
+    let link_cache_status = build_and_run_link(
+        &args.input,
+        &ctx,
+        target.as_deref(),
+        &image_objs,
+        &image_fps,
+        &compiled_features,
+        &runtime_lib,
+        &stdlib_lib,
+        geisterhand_libs.as_ref(),
+        &optimized_libs.well_known_libs,
+        optimized_libs.prefer_well_known_before_stdlib,
+        &wasm_host_lib,
         &exe_path,
         format,
         args.debug_symbols,
         verbose,
     )?;
+    if let Some(p) = image_prep.take() {
+        match &image_old_args {
+            Some(v) => std::env::set_var("PERRY_EXTRA_LINK_ARGS", v),
+            None => std::env::remove_var("PERRY_EXTRA_LINK_ARGS"),
+        }
+        match super::snap_image_emit::verify(&exe_path, &p) {
+            Ok(report) => {
+                let _ = fs::write(format!("{}.snapimg.txt", exe_path.display()), report);
+            }
+            Err(why) => return Err(anyhow::anyhow!("snap image: {why}")),
+        }
+    }
+
 
     // Approved Node-API payloads are a relocatable authenticated sibling of
     // the executable. Run this even on a link-cache hit so a changed payload
