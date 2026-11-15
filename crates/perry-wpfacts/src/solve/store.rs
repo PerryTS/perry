@@ -947,6 +947,9 @@ impl Model {
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
+                    if matches!(self.toks[t as usize], TokKind::Obj(..)) {
+                        self.tok_writers.entry((tm, a)).or_default().insert(t);
+                    }
                     // Writers per object: an instance's, the class object's,
                     // the prototype's.
                     let w = match self.toks[t as usize] {

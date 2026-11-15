@@ -3160,6 +3160,24 @@ fn lookup(
     lookup_holders(m, tf, t, key, a).map(|hs| hs.into_iter().map(|(_, n)| n).collect())
 }
 
+/// Rule U (ONCHANGE1): instance token `t` of template `tm` is a birth site
+/// (`Obj(tm, ctx)`, not the template-wide token) that no named store of key
+/// `a` reaches, and no store reaches the template-wide token either. Its
+/// objects never get an own property `a` (ECMA-262 10.1.9: [[Set]] and
+/// [[DefineOwnProperty]] are the only adds; an any-key store is refused by
+/// the `computed` test of the walk): a read of `a` on them is the chain's.
+fn unwritten_here(m: &Model, tm: TmplId, t: Tok, a: Atom) -> bool {
+    if !matches!(m.toks[t as usize], TokKind::Obj(x, c) if x == tm && c != crate::model::NO_CTX) {
+        return false;
+    }
+    m.tok_writers.get(&(tm, a)).is_none_or(|ws| {
+        !ws.contains(&t)
+            && !ws.iter().any(
+                |&w| matches!(m.toks[w as usize], TokKind::Obj(_, c) if c == crate::model::NO_CTX),
+            )
+    })
+}
+
 /// The F5 chain walk of [`lookup`], each value node with the object that
 /// holds the key (`t` itself for a definite own data field).
 fn lookup_holders(
@@ -3189,7 +3207,15 @@ fn lookup_holders(
             return Ok(holds(t).into_iter().map(|n| (t, n)).collect());
         }
         Some(f) if !f.data_field => return Err("accessor key (E25)".into()),
-        Some(f) if f.writers_ctor + f.writers_post > 0 || tf.birth_keys.contains(&f.key) => {
+        // Rule U (ONCHANGE1): post-birth stores of the key reach other birth
+        // sites only: this one holds no own property of it (`unwritten_here`),
+        // so OrdinaryGet (10.1.8.1) climbs the chain below.
+        Some(f)
+            if (f.writers_ctor + f.writers_post > 0 || tf.birth_keys.contains(&f.key))
+                && !(f.writers_ctor == 0
+                    && !tf.birth_keys.contains(&f.key)
+                    && unwritten_here(m, tf.id, t, a)) =>
+        {
             return Err("key not a definite birth field".into());
         }
         _ if holds(t).is_some() => return Err("key not a definite birth field".into()),

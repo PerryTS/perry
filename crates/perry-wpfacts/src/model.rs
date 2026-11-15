@@ -2039,6 +2039,11 @@ pub struct Model {
     pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
+    /// ONCHANGE1 rule U: per instance key, the instance tokens a named store
+    /// of it reaches (`writers` counts the stores per template). A birth
+    /// site no store of the key reaches holds no own property of it for
+    /// life (ECMA-262 10.1.9: only [[Set]] / [[DefineOwnProperty]] add one).
+    pub tok_writers: FxHashMap<(TmplId, Atom), crate::pts::FxHashSet<Tok>>,
     /// RPG1b: the functions whose body runs at most once per evaluation of
     /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
     /// with reload (the runtime's path registry may evaluate the module
