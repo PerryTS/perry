@@ -347,7 +347,10 @@ pub extern "C" fn js_realm_complete() -> f64 {
 /// bound. Everything that can observe the global object as a value, a name
 /// phase B binds, an undeclared name, or that stores to the global, gets it
 /// from here.
+// Never inlined into the runtime's own callers: one copy, as before (its body
+// used to be too large to inline; ~0.9 KB of copies otherwise).
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn js_get_global_this() -> f64 {
     let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
     if mine != 0 {
