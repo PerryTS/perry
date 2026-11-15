@@ -1431,7 +1431,18 @@ impl Model {
                     if t != TOP
                         && (self.enum_free(t)
                             || self.enum_obj(t)
-                            || builtins::enum_free_instance(self, t))
+                            || builtins::enum_free_instance(self, t)
+                            // SKINROOT20: a built-in instance whose
+                            // enumerable own properties are the program's
+                            // (plus a typed array's index elements, never
+                            // "__proto__") and whose built-in chain holds no
+                            // enumerable built-in property, the
+                            // `Object.prototype.__proto__` accessor among
+                            // them (clause 18, 20.1.3.8, 10.4.5.6): for-in
+                            // yields "__proto__" only from a property the
+                            // program made enumerable, so the read is the
+                            // enumerable read, never the accessor.
+                            || builtins::enum_free_link_obj(self, t))
                     {
                         self.enum_read_key(n, t, key, dst);
                     } else {
