@@ -192,12 +192,12 @@ fn source_map_prototype() -> f64 {
             (
                 4,
                 "payload",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.payload.<get>")] export crate::process::node_module::source_map::source_map_payload_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.payload.<get>")] export crate::process::node_module::source_map::source_map_payload_getter, 0; with_name("get payload"), with_declared(0)),
             ),
             (
                 3,
                 "lineLengths",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.lineLengths.<get>")] export crate::process::node_module::source_map::source_map_line_lengths_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.lineLengths.<get>")] export crate::process::node_module::source_map::source_map_line_lengths_getter, 0; with_name("get lineLengths"), with_declared(0)),
             ),
         ] {
             let getter = source_map_getter(name, info);

@@ -1488,6 +1488,7 @@ pub(super) fn current_init() -> u32 {
 
 fn set_mode_for_top(st: &mut State) {
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
+    super::inventory::frame_changed(top as u32);
     if st.mark {
         // A syscall trace (strace) attributes what follows to this init.
         unsafe {

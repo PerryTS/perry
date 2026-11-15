@@ -2,7 +2,7 @@
 """Cut-point inventory fixtures.
 
   check_inv.py last-init PROBE_REPORT          print the id of the last init the program entered
-  check_inv.py check NAME REPORT BINARY        assert the inventory of fixture NAME (i1 i2 i3)
+  check_inv.py check NAME REPORT BINARY        assert the inventory of fixture NAME (i1 .. i6)
   check_inv.py print REPORT BINARY             totals and the symbolised word list
 
 REPORT is the census output prefix; the inventory is REPORT.inventory.tsv.
@@ -37,6 +37,26 @@ def load(report):
         elif f[0] == "#total":
             totals = dict(p.split("=") for p in f[1:])
     return head, cells, types, words, wc, totals
+
+
+def live_rows(report):
+    """The live-mark rows of the inventory (PERRY_SNAP_INVENTORY_LIVE=1)."""
+    r = dict(live=[], garbage=[], special=[], slots={}, src={}, handle=[], tot={})
+    for l in open(report + ".inventory.tsv"):
+        f = l.rstrip("\n").split("\t")
+        if f[0] == "live":
+            r["live"].append(dict(t=int(f[1]), name=f[2], form=f[3], init=int(f[4]), n=int(f[5]), b=int(f[6])))
+        elif f[0] == "garbage":
+            r["garbage"].append(dict(t=int(f[1]), name=f[2], n=int(f[3]), b=int(f[4])))
+        elif f[0] == "special":
+            r["special"].append(dict(t=int(f[1]), name=f[2], state=f[3], init=int(f[4]), holder=f[5], hinit=int(f[6]), n=int(f[7])))
+        elif f[0] == "slot_target":
+            r["slots"][f[1]] = int(f[2])
+        elif f[0] == "root_src":
+            r["src"][f[1]] = (int(f[2]), int(f[3]))
+        elif f[0] in ("#live", "#garbage", "#live_birth"):
+            r["tot"][f[0]] = dict(x.split("=") for x in f[1:])
+    return r
 
 
 def symbols(binary):
@@ -112,6 +132,22 @@ def main():
     elif name == "i3":
         need(any(w["region"] == "tls-program" for w, n in names), "no changed program TLS word")
         need(any(t["name"] == "promise" and t["n"] >= 1 for t in types), "no promise cell")
+    elif name in ("i4", "i5", "i6"):
+        lv = live_rows(report)
+        need(lv["tot"].get("#live", {}).get("n", "0") != "0", "no live rows (knob not on?)")
+        liven = lambda tn: sum(x["n"] for x in lv["live"] if x["name"] == tn)
+        garbn = lambda tn: sum(x["n"] for x in lv["garbage"] if x["name"] == tn)
+        if name == "i4":
+            need(garbn("array") >= 19000, "the dropped arrays are not garbage: %d" % garbn("array"))
+            need(liven("array") < 5000, "the dropped arrays count as live: %d" % liven("array"))
+        elif name == "i5":
+            need(liven("object") >= 3000, "objects held by a module global are not live: %d" % liven("object"))
+            need(liven("array") >= 3000, "arrays held by a module global are not live: %d" % liven("array"))
+        else:
+            sp = [x for x in lv["special"] if x["name"] == "interpreted_function"]
+            need(len(sp) >= 1, "no interpreted function cell")
+            need(any(x["state"] == "live" and x["init"] >= 1 for x in sp),
+                 "no live interpreted function with a birth init: " + repr(sp))
     else:
         fails.append("unknown fixture " + name)
     print(f"{name} ok" if not fails else f"{name} FAIL: " + "; ".join(fails))
