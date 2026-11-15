@@ -1085,6 +1085,16 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    // A key that names no method of the array's intrinsic chain
+    // (`Array.prototype`, then `Object.prototype`) has no builtin callee:
+    // the lookup (7.3.2 GetMethod, 7.3.14 Call) finds a program-written
+    // function, which the chain read runs (`own_method_inner`), or nothing.
+    // A protocol that probes such a key (`[inspect.custom]`, `toJSON` on a
+    // plain Array) then calls nothing; a source call throws. Neither runs
+    // a builtin on the receiver.
+    if name.is_some_and(|n| !matches!(members::member(Family::Array, n), Some(Mem::Fn))) {
+        return;
+    }
     // I32 at rest (PR B): a builtin method touches the elements undecoded,
     // but the fused fill of an at-rest birth (`rest_elems`) and the negative
     // control `restelem`.
