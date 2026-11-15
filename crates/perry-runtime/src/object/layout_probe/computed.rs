@@ -464,6 +464,21 @@ pub(crate) unsafe fn table_add_admitted(
     key: u64,
     hash: u64,
 ) -> bool {
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    table_add_admitted_meta(obj, r, key, hash, meta)
+}
+
+/// [`table_add_admitted`] with the receiver's meta (null when it has none)
+/// already read.
+#[inline(always)]
+unsafe fn table_add_admitted_meta(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+    meta: *const crate::object::ObjectMeta,
+) -> bool {
     if !names_no_key(r)
         || key & TAG_MASK != STRING_TAG
         || hash == super::write::PROTO_KEY_HASH
@@ -493,8 +508,6 @@ pub(crate) unsafe fn table_add_admitted(
     {
         return false;
     }
-    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -511,8 +524,22 @@ pub(crate) unsafe fn table_add_admitted(
         super::super::PROTO_ID_DEFAULT => {
             !crate::object::descriptor_state::object_proto_may_intercept_any()
         }
-        _ => super::write::chain_admits_add(super::super::ordinary_dir_addr(), obj, r, key, hash),
+        _ => user_chain_admits_add(obj, r, key, hash),
     }
+}
+
+/// [`table_add_admitted`]'s chain below a prototype that is neither null nor
+/// the realm default (`Object.create(P)`): every hop's current layout and
+/// table ([`super::write::chain_admits_add`]). Out of line, so the default and
+/// null arms keep a small frame.
+#[inline(never)]
+unsafe fn user_chain_admits_add(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    super::write::chain_admits_add(super::super::ordinary_dir_addr(), obj, r, key, hash)
 }
 
 /// The keyed add of an overflowed receiver whose layout names no key
@@ -533,8 +560,13 @@ pub(crate) unsafe fn table_append(
     hash: u64,
     value: f64,
 ) -> bool {
-    let t = crate::object::overflow::table(obj);
-    if t.is_null() || (*t).length >= (*t).capacity || !table_add_admitted(obj, r, key, hash) {
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).overflow == 0 {
+        return false;
+    }
+    let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
+    if (*t).length >= (*t).capacity || !table_add_admitted_meta(obj, r, key, hash, meta) {
         return false;
     }
     crate::object::overflow::append_plain(t, key, super::store_bits(value));
