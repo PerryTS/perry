@@ -2186,7 +2186,9 @@ pub unsafe extern "C" fn perry_probe_set(
 ) -> i32 {
     match own_set(dir, obj_bits, key_bits, hash, value) {
         OwnSet::Stored => 1,
-        OwnSet::Slot(obj, address, slot) => probe_set_slot_any(obj, address, slot, store_bits(value)),
+        OwnSet::Slot(obj, address, slot) => {
+            probe_set_slot_any(obj, address, slot, store_bits(value))
+        }
         OwnSet::Table(t, address) => probe_set_table_barrier(t, address, store_bits(value)),
         OwnSet::Absent(r) => probe_set_add(dir, obj_bits, r, key_bits, hash, value),
         // The overflow owns every own key: the complete probe declines too
@@ -2201,7 +2203,13 @@ pub unsafe extern "C" fn perry_probe_set(
 /// needs (a hole fill, a spilled slot, a prototype's store note, a TEXT
 /// entry's text, an underived probe word, an attributed slot).
 #[inline(never)]
-unsafe fn probe_set_rest(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, value: f64) -> i32 {
+unsafe fn probe_set_rest(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> i32 {
     match set_plan(dir, obj_bits, key_bits, hash, value) {
         SetPlan::Stored(stored) => stored,
         SetPlan::Add(obj, r, bits) => i32::from(probe_add(dir, obj, r, key_bits, hash, bits)),
@@ -2241,7 +2249,12 @@ pub(crate) unsafe fn own_list_complete(r: *const ShapeRecord) -> bool {
 /// [`perry_probe_set`]'s barriered store of a value other than a finite
 /// Number into an own slot of lane ANY ([`OwnSet::Slot`]).
 #[inline(never)]
-unsafe fn probe_set_slot_any(obj: *mut ObjectHeader, address: *mut u64, slot: u32, bits: u64) -> i32 {
+unsafe fn probe_set_slot_any(
+    obj: *mut ObjectHeader,
+    address: *mut u64,
+    slot: u32,
+    bits: u64,
+) -> i32 {
     own_slot_store_any(obj, address, slot, bits);
     // Opaque: a known constant return lets IPO take the call out of tail position.
     core::hint::black_box(1)
@@ -2265,7 +2278,12 @@ unsafe fn probe_set_table_barrier(
 /// # Safety
 /// `address` is slot `slot` of live ordinary `obj`, of lane ANY.
 #[inline(always)]
-pub(crate) unsafe fn own_slot_store_any(obj: *mut ObjectHeader, address: *mut u64, slot: u32, bits: u64) {
+pub(crate) unsafe fn own_slot_store_any(
+    obj: *mut ObjectHeader,
+    address: *mut u64,
+    slot: u32,
+    bits: u64,
+) {
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(
         obj as usize,
         address as usize,
@@ -2316,7 +2334,13 @@ pub(crate) fn store_bits(value: f64) -> u64 {
 /// # Safety
 /// As for [`perry_probe_set`].
 #[inline(always)]
-pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, value: f64) -> OwnSet {
+pub(crate) unsafe fn own_set(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> OwnSet {
     if obj_bits & TAG_MASK != POINTER_TAG {
         return OwnSet::Rest;
     }
@@ -2369,7 +2393,12 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
     // The hit takes the receiver from its value bits and computes the
     // stored word itself, so the index loop holds neither.
     match own_store_slot(r, key_bits, hash) {
-        Ok(slot) => own_slot_hit((obj_bits & POINTER_MASK) as usize as *mut ObjectHeader, r, slot, value),
+        Ok(slot) => own_slot_hit(
+            (obj_bits & POINTER_MASK) as usize as *mut ObjectHeader,
+            r,
+            slot,
+            value,
+        ),
         Err(true) => OwnSet::Absent(r),
         Err(false) => OwnSet::Rest,
     }
@@ -2379,7 +2408,12 @@ pub(crate) unsafe fn own_set(dir: *const u8, obj_bits: u64, key_bits: u64, hash:
 /// property): a finite Number in a lane that takes it is stored here; a
 /// hole (an absent key), a spilled slot or a tail lane is the rest.
 #[inline(always)]
-unsafe fn own_slot_hit(obj: *mut ObjectHeader, r: *const ShapeRecord, slot: u32, value: f64) -> OwnSet {
+unsafe fn own_slot_hit(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    slot: u32,
+    value: f64,
+) -> OwnSet {
     if slot >= (*r).live_inline_slot_count || slot >= crate::object::field_rep::REP_SLOTS {
         return OwnSet::Rest;
     }
@@ -2462,7 +2496,8 @@ unsafe fn own_store_slot(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Resul
                 KeyIndex::word(table, p)
             } else {
                 // The list is read at the entry, not held across the loop.
-                *(crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64).add(p as usize)
+                *(crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64)
+                    .add(p as usize)
             };
             if w == key_bits {
                 return if e & WRITE_ENTRY != 0 {
