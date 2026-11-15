@@ -137,89 +137,122 @@ fn sym_at(v: &[Sym], a: u64) -> Option<&Sym> {
         .find(|s| a < s.addr.saturating_add(s.size.max(1)))
 }
 
-/// Statics that stay as the runtime start-up leaves them: the allocator's
-/// internals and the runtime's caches (each re-validated on use) and thread
-/// identity. A changed word inside one is not imaged.
+/// The exact path of a symbol: a Rust name demangled without its hash and
+/// without the linker's local-copy suffix; a C name as it is.
+fn sym_path(name: &str) -> String {
+    let base = name.split('.').next().unwrap_or(name);
+    format!("{:#}", rustc_demangle::demangle(base))
+}
+
+/// `path` is `p` or lies under it (whole path components, never a substring).
+fn under(path: &str, p: &str) -> bool {
+    path.strip_prefix(p)
+        .is_some_and(|r| r.is_empty() || r.starts_with("::"))
+}
+
+/// Statics that stay as the runtime start-up leaves them, by exact path: the
+/// allocator's internals and the runtime's caches (each re-validated on use),
+/// process state every run derives again (clock origins, entry path, one-shot
+/// installs, policy caches read from the environment, the lazily built stack
+/// maps, the arena reservation, hash seeds, the random-source entry). A
+/// changed word inside one is not imaged.
 const PRISTINE: &[&str] = &[
     "heap_main",
     "theap_main",
+    "__mi_theap_main",
     "mi_options",
-    "mimalloc",
-    "LEARNED_INLINE_FIELDS",
-    "PRIVATE_NAME_MEMO",
-    "PRIVATE_NAME_STORAGE",
-    "PRIVATE_NAME_PROOF",
-    "READ_STUB",
-    "KEY_PREFIX_CACHE",
-    "CONCAT_MEMO",
-    "TYPEOF_CACHE",
-    "REGEX_CACHE",
-    "CANONICAL_KEYS",
-    "birth_memo",
-    "THREAD_TOKEN",
-    "CURRENT_THREAD_ID",
-    "perry_ic",
-    // Allocator internals (its per-process sub-heap records).
-    "subproc",
-    // Process state the start-up of every run derives again: clock origins,
-    // entry path, one-shot installs, the policy and feature caches read from
-    // the environment, the lazily built stack maps, the arena reservation
-    // (ASLR), the hash seeds and the random-source entry.
-    "PERF_CLOCK",
-    "process_epoch_us",
-    "PROCESS_ENTRY_PATH",
-    "ignore_sigpipe_at_startup",
-    "maybe_install_stats_hook",
-    "allocator_purge_enabled",
-    "gc_scavenge_nursery_cap_bytes",
-    "lazy_stack_maps_enabled",
-    "STACK_MAPS",
-    "reservation",
-    "CLAIM_LOCK",
-    "get_fixed_seeds",
-    "GETRANDOM_FN",
-    "5timer5store5STORE",
-    "PRIMARY_IMAGE",
+    "subproc_main",
+    "subprocs_lock",
+    "subprocs",
+    "perry_runtime::object::spill::LEARNED_INLINE_FIELDS",
+    "perry_runtime::object::field_get_set::ic_miss::PRIVATE_NAME_MEMO",
+    "perry_runtime::object::read_stub::READ_STUB",
+    "perry_runtime::json::stringify_record_output::KEY_PREFIX_CACHE",
+    "perry_runtime::string::concat::CONCAT_MEMO",
+    "perry_runtime::string::concat::CONCAT_MEMO_TAGS",
+    "perry_runtime::builtins::arithmetic::TYPEOF_CACHE",
+    "perry_runtime::regex::perex_cache::REGEX_CACHE",
+    "perry_runtime::object::canonical_keys::CANONICAL_KEYS",
+    "perry_runtime::node_stream::constructors::birth_memo",
+    "perry_runtime::native_handle::current_thread_id::CURRENT_THREAD_ID",
+    "perry_runtime::perf_clock::PERF_CLOCK",
+    "perry_runtime::gc::instruments::process_epoch_us",
+    "perry_runtime::os::PROCESS_ENTRY_PATH",
+    "perry_runtime::process_startup::ignore_sigpipe_at_startup",
+    "perry_runtime::tls_hot::maybe_install_stats_hook",
+    "perry_runtime::gc::cycle_malloc_trim::allocator_purge_enabled",
+    "perry_runtime::gc::policy::gc_scavenge_nursery_cap_bytes",
+    "perry_runtime::gc::roots::stack_maps::lazy_stack_maps_enabled",
+    "perry_runtime::gc::roots::stack_maps::STACK_MAPS",
+    "perry_runtime::gc::roots::stack_maps::STACK_MAPS_INITIALIZED",
+    "perry_runtime::gc::roots::stack_maps::STACK_MAPS_REBUILD_OWED",
+    "perry_runtime::arena::region::reservation::RESERVATION",
+    "perry_runtime::arena::region::reservation::INITIAL",
+    "perry_runtime::arena::region::reservation::SERIAL",
+    "perry_runtime::timer::store::STORE",
+    "ahash::random_state::get_fixed_seeds",
+    "getrandom::backends::linux_android_with_fallback",
 ];
 
-fn pristine(name: &str) -> bool {
-    name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|p| name.contains(p))
+/// The published counters of the primary agent's timer store: nonzero means a
+/// timer or check callback is pending.
+const TIMER_COUNTERS: &[&str] = &[
+    "perry_runtime::timer::store::PRIMARY_REFED_TIMERS",
+    "perry_runtime::timer::store::PRIMARY_REFED_CHECK",
+    "perry_runtime::timer::store::PRIMARY_CHECK_PENDING",
+    "perry_runtime::timer::store::PRIMARY_ANY_PENDING",
+];
+
+/// What a changed word of a static means for the image.
+#[derive(Debug, PartialEq)]
+enum Judge {
+    /// The start-up of B1 leaves it as it was: not imaged.
+    Pristine,
+    /// Imaged by value (or by its own form).
+    Keep,
+    /// No image: the reason.
+    Stop(&'static str),
 }
 
-/// The symbols that cover some byte of the word at `a`.
-fn overlapping(v: &[Sym], a: u64) -> Vec<&Sym> {
-    let i = v.partition_point(|s| s.addr < a + 8);
-    v[..i]
-        .iter()
-        .rev()
-        .take(32)
-        .filter(|s| s.size > 0 && s.addr + s.size > a)
-        .collect()
-}
-
-/// Per-module state flags the code generator emits as single bytes: a word
-/// that covers only these holds flag bytes, never an address.
-fn flag_sym(n: &str) -> bool {
-    n.starts_with("__perry_init_done_")
-        || n.starts_with("__perry_agent_strings_ready_")
-        || n.starts_with("__perry_literals_ready_")
-        || n == "completed.0"
-        || n == "PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"
+fn judge(name: &str, v: &Val) -> Judge {
+    let p = sym_path(name);
+    let is = |q: &str| under(&p, q);
+    if is("perry_runtime::object::class_image::PRIMARY_IMAGE") {
+        Judge::Stop("the class tables are filled by module init and the image has no form that restores them")
+    } else if is("perry_runtime::tls_hot::CLAIM_LOCK") {
+        Judge::Stop("the hot-slot claims are indices the imaged declarations cache, and the image has no form that restores the claim table")
+    } else if TIMER_COUNTERS.iter().any(|q| is(q)) && *v != Val::Scalar(0) {
+        Judge::Stop("a timer or check callback is pending at the cut")
+    } else if is("perry_runtime::object::field_get_set::class_object_template::NEXT_THREAD_TOKEN") {
+        // The primary claims token 1 in the image run and again in B1: sound
+        // only while that was the one claim before the cut.
+        if *v == Val::Scalar(2) {
+            Judge::Pristine
+        } else {
+            Judge::Stop("more than one thread claimed a class-template token before the cut")
+        }
+    } else if name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|q| is(q)) {
+        Judge::Pristine
+    } else {
+        Judge::Keep
+    }
 }
 
 struct Classified {
     kept: Vec<Word>,
     dropped: usize,
+    dropped_by: std::collections::BTreeMap<String, usize>,
     unresolved: Vec<String>,
 }
 
 /// Name every changed root word. A word in a pristine static is dropped; a
-/// word no symbol covers, or one that holds a heap or stack address outside
-/// a pristine static, is unresolved.
+/// word no symbol covers, one a static's rule stops, or one that holds a heap,
+/// stack or symbol-space address outside a pristine static, is unresolved.
 fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
     let mut c = Classified {
         kept: Vec::new(),
         dropped: 0,
+        dropped_by: Default::default(),
         unresolved: Vec::new(),
     };
     for w in words {
@@ -234,25 +267,22 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
                 .push(format!("{kind}+{:#x}: no symbol names it", w.off));
             continue;
         };
-        if pristine(&s.name) {
-            c.dropped += 1;
-        } else if let Val::Opaque(x) = w.val {
-            let ov = if tls { Vec::new() } else { overlapping(&st.mem, a) };
-            if !ov.is_empty() && ov.iter().all(|o| flag_sym(&o.name)) {
-                c.kept.push(Word {
-                    val: Val::Scalar(x),
-                    ..w.clone()
-                });
-                continue;
+        let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, sym_path(&s.name), a - s.addr);
+        match judge(&s.name, &w.val) {
+            Judge::Pristine => {
+                c.dropped += 1;
+                *c.dropped_by.entry(sym_path(&s.name)).or_default() += 1;
             }
-            c.unresolved.push(format!(
-                "{kind}+{:#x} ({}+{:#x}): holds {x:#x}, a heap or stack address, and no pristine form covers it",
-                w.off,
-                s.name,
-                a - s.addr
-            ));
-        } else {
-            c.kept.push(w.clone());
+            Judge::Stop(why) => c.unresolved.push(format!("{at}: {why}")),
+            Judge::Keep => match w.val {
+                Val::Opaque(x) => c.unresolved.push(format!(
+                    "{at}: holds {x:#x}, a heap or stack address, and no pristine form covers it"
+                )),
+                Val::Sym(x) => c.unresolved.push(format!(
+                    "{at}: holds {x:#x}, a symbol-space address, and the symbol space has no image form"
+                )),
+                _ => c.kept.push(w.clone()),
+            },
         }
     }
     c
@@ -300,6 +330,9 @@ fn val_ll(v: &Val, ncells: usize) -> Result<(u64, String), String> {
         }
         Val::Opaque(x) => {
             return Err(format!("a value holds {x:#x}, a heap or stack address"));
+        }
+        Val::Sym(x) => {
+            return Err(format!("a value holds {x:#x}, a symbol-space address"));
         }
     })
 }
@@ -604,16 +637,60 @@ pub(super) struct Prepared {
     expected: Image,
     b0_secs: Vec<Sec>,
     b0_syms: [u64; 3],
+    b0_phdrs: Vec<(u64, String)>,
     dropped: usize,
+    dropped_by: String,
     total_words: usize,
     b0_dump: String,
 }
 
-fn probe(b: &Path) -> Result<(Symtab, Vec<Sec>), String> {
+fn probe(b: &Path) -> Result<(Symtab, Vec<Sec>, Vec<(u64, String)>), String> {
     let p = b.to_string_lossy();
     let st = parse_syms(&tool("readelf", &["-sW", &p])?);
     let secs = parse_secs(&tool("readelf", &["-SW", &p])?);
-    Ok((st, secs))
+    let phs = parse_phdrs(&tool("readelf", &["-lW", &p])?);
+    Ok((st, secs, phs))
+}
+
+/// The program header rows of `readelf -lW` as (virtual address, normalised row).
+fn parse_phdrs(text: &str) -> Vec<(u64, String)> {
+    let mut out = Vec::new();
+    let mut on = false;
+    for l in text.lines() {
+        if l.starts_with("Program Headers") {
+            on = true;
+        } else if on && l.trim().is_empty() {
+            break;
+        } else if on {
+            let t: Vec<&str> = l.split_whitespace().collect();
+            if t.get(1).is_some_and(|x| x.starts_with("0x")) {
+                out.push((t.get(2).and_then(|x| num(x)).unwrap_or(0), t.join(" ")));
+            }
+        }
+    }
+    out
+}
+
+/// Every program header of B0 is B1's, apart from the image section's own
+/// segment (its file contents and size differ by design).
+fn phdr_proof(b0: &[(u64, String)], b1: &[(u64, String)]) -> Result<usize, String> {
+    let rows = |v: &[(u64, String)]| -> Vec<String> {
+        v.iter().filter(|r| r.0 != IMAGE_ADDR).map(|r| r.1.clone()).collect()
+    };
+    let (r0, r1) = (rows(b0), rows(b1));
+    if !b0.iter().any(|r| r.0 == IMAGE_ADDR) || !b1.iter().any(|r| r.0 == IMAGE_ADDR) || r0.is_empty() {
+        return Err("a program header table has no image segment or no rows".to_string());
+    }
+    if r0 != r1 {
+        let d: Vec<String> = r0
+            .iter()
+            .filter(|r| !r1.contains(r))
+            .map(|r| format!("B0 only: {r}"))
+            .chain(r1.iter().filter(|r| !r0.contains(r)).map(|r| format!("B1 only: {r}")))
+            .collect();
+        return Err(format!("program headers differ: {}", d.join("; ")));
+    }
+    Ok(r0.len())
 }
 
 /// Run B0 to the cut, name the words, build the image object.
@@ -642,7 +719,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
             t.off
         ));
     }
-    let (syms, secs) = probe(b0)?;
+    let (syms, secs, phdrs) = probe(b0)?;
     let need = |n: &str| find_sym(&syms, n).ok_or_else(|| format!("B0 has no symbol {n} (symbols stripped?)"));
     let (data_start, end, exe_start) = (need("__data_start")?, need("_end")?, need("__executable_start")?);
     check_b0_layout(&secs, end)?;
@@ -681,7 +758,9 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         expected,
         b0_secs: secs,
         b0_syms: [data_start, end, exe_start],
+        b0_phdrs: phdrs,
         dropped: c.dropped,
+        dropped_by: c.dropped_by.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; "),
         total_words,
         b0_dump,
     })
@@ -690,8 +769,9 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
 /// Check B1: nothing moved, the section is where it was put, and it decodes
 /// to the image the dump holds. Returns the report text.
 pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
-    let (st, secs) = probe(b1)?;
+    let (st, secs, phs) = probe(b1)?;
     let n = proof(&p.b0_secs, &secs)?;
+    let np = phdr_proof(&p.b0_phdrs, &phs)?;
     let sym = |n: &str| find_sym(&st, n).unwrap_or(0);
     let now = [sym("__data_start"), sym("_end"), sym("__executable_start")];
     if now != p.b0_syms {
@@ -738,11 +818,12 @@ pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
         ));
     }
     Ok(format!(
-        "proof sections-equal={n} boundary-symbols-equal=yes section-at={:#x}\ndecoded-equals-image=yes\nwords total={} dropped-pristine={} kept={}\n-- B0 dump --\n{}-- section dump --\n{}",
+        "proof sections-equal={n} program-headers-equal={np} boundary-symbols-equal=yes section-at={:#x}\ndecoded-equals-image=yes\nwords total={} dropped-pristine={} kept={}\ndropped-by-static: {}\n-- B0 dump --\n{}-- section dump --\n{}",
         s.addr,
         p.total_words,
         p.dropped,
         got.words.len(),
+        p.dropped_by,
         p.b0_dump,
         format_read::dump(&got)
     ))
@@ -791,17 +872,60 @@ mod tests {
         Cell { obj_type: 2, flags: 0x15, reserved: 0, size: 24, bytes: vec![7; 24], slots }
     }
 
+    const RES: &str = "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation11RESERVATION.0.llvm.1171";
+
     #[test]
-    fn init_flag_bytes_are_scalar_words() {
-        let t = parse_syms("    1: 0000000000600030     1 OBJECT  LOCAL  DEFAULT   24 __perry_init_done_m\n    2: 0000000000600031     1 OBJECT  LOCAL  DEFAULT   24 __perry_literals_ready_m\n    3: 0000000000600038     8 OBJECT  LOCAL  DEFAULT   24 OTHER\n");
-        let ws = [
-            word(format::WORD_DATA, 0x30, Val::Opaque(0x0101_0100)),
-            word(format::WORD_DATA, 0x38, Val::Opaque(0x0101_0100)),
-        ];
+    fn pristine_names_match_exact_paths_not_substrings() {
+        let o = Val::Opaque(0x7f00_0000_1000);
+        assert_eq!(judge(RES, &o), Judge::Pristine);
+        assert_eq!(judge("x_reservation_y", &o), Judge::Keep);
+        let longer = "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation13RESERVATION_X";
+        assert_eq!(judge(longer, &o), Judge::Keep, "a longer last component is another static");
+        assert_eq!(judge("heap_main", &o), Judge::Pristine);
+        assert_eq!(judge("not_heap_main_x", &o), Judge::Keep);
+    }
+
+    #[test]
+    fn the_unsound_pristine_entries_stop_the_image() {
+        let pi = "_RNvNtNtCsXbwMRDrjNy_13perry_runtime6object11class_image13PRIMARY_IMAGE";
+        let cl = "_RNvNtCsXbwMRDrjNy_13perry_runtime7tls_hot10CLAIM_LOCK";
+        for v in [Val::Scalar(0x77), Val::Opaque(0x7f00_0000_1000)] {
+            assert!(matches!(judge(pi, &v), Judge::Stop(_)), "class tables");
+            assert!(matches!(judge(cl, &v), Judge::Stop(_)), "claim lock");
+        }
+    }
+
+    #[test]
+    fn a_pending_timer_stops_and_an_empty_store_does_not() {
+        let t = "_RNvNtNtCsXbwMRDrjNy_13perry_runtime5timer5store20PRIMARY_REFED_TIMERS";
+        assert!(matches!(judge(t, &Val::Scalar(1)), Judge::Stop(_)));
+        assert_eq!(judge(t, &Val::Scalar(0)), Judge::Keep);
+    }
+
+    #[test]
+    fn the_thread_token_is_pristine_only_when_the_primary_alone_claimed() {
+        let n = "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime6object13field_get_set21class_object_template17NEXT_THREAD_TOKEN";
+        assert_eq!(judge(n, &Val::Scalar(2)), Judge::Pristine);
+        assert!(matches!(judge(n, &Val::Scalar(3)), Judge::Stop(_)));
+    }
+
+    #[test]
+    fn a_symbol_space_word_outside_a_pristine_static_is_unresolved() {
+        let t = parse_syms("    3: 0000000000600038     8 OBJECT  LOCAL  DEFAULT   24 OTHER\n");
+        let ws = [word(format::WORD_DATA, 0x38, Val::Sym(0x7c07_79e0_0010))];
         let c = classify(&ws, &t, 0x600000);
-        assert_eq!(c.kept.len(), 1, "{:?}", c.unresolved);
-        assert_eq!(c.kept[0].val, Val::Scalar(0x0101_0100));
-        assert_eq!(c.unresolved.len(), 1, "a word of another static is not a flag word");
+        assert!(c.kept.is_empty());
+        assert!(c.unresolved[0].contains("symbol-space"), "{:?}", c.unresolved);
+    }
+
+    #[test]
+    fn program_headers_must_be_equal_apart_from_the_image_segment() {
+        let t0 = "Program Headers:\n  Type Offset VirtAddr PhysAddr FileSiz MemSiz Flg Align\n  LOAD 0x000000 0x0000000000400000 0x0000000000400000 0x001000 0x001000 R E 0x1000\n  LOAD 0x001000 0x0000000040000000 0x0000000040000000 0x000008 0x000008 RW  0x1000\n\nSection to Segment mapping:\n";
+        let t1 = t0.replace("0x000008 0x000008", "0x000a00 0x000a00");
+        let (a, b) = (parse_phdrs(t0), parse_phdrs(&t1));
+        assert_eq!(phdr_proof(&a, &b), Ok(1), "only the image segment differs");
+        let t2 = t0.replace("0x001000 0x001000 R E", "0x002000 0x002000 R E");
+        assert!(phdr_proof(&a, &parse_phdrs(&t2)).is_err(), "a moved segment must fail");
     }
 
     #[test]

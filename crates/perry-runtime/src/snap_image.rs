@@ -105,8 +105,9 @@ pub extern "C" fn js_snap_image_cut() {
     BASELINE.store(std::ptr::null_mut(), Relaxed);
     // SAFETY: leaked in `begin`, never freed.
     let b = unsafe { &*p };
+    let pre = read_maps();
     crate::gc::js_gc_collect();
-    let img = build(Some(b));
+    let img = build(Some(b), pre);
     let ok = std::fs::write(&out, format::encode(&img)).is_ok();
     std::process::exit(if ok { 0 } else { 70 });
 }
@@ -136,19 +137,26 @@ struct Where {
     sections: [(usize, usize); 3],
     exe: (usize, usize),
     tls: (usize, usize),
+    /// Sorted, merged address ranges of the process (`/proc/self/maps`).
+    maps: Vec<(usize, usize)>,
+    /// The persistent-symbol space.
+    sym: (usize, usize),
 }
 
 impl Where {
     fn val(&self, bits: u64) -> Result<Val, u64> {
         use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
         let tag = bits & TAG_MASK;
+        // Strip the NaN-box tag: the payload is what could be an address.
         let (hi, bare, a) = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
             ((bits >> 48) as u16, false, (bits & POINTER_MASK) as usize)
-        } else if (0x10000..(1u64 << 47)).contains(&bits) {
-            (0, true, bits as usize)
         } else {
-            return Ok(Val::Scalar(bits));
+            (0, true, bits as usize)
         };
+        // A payload outside every mapping cannot be dereferenced: a scalar.
+        if !self.mapped(a) {
+            return Ok(Val::Scalar(bits));
+        }
         let i = self.cells.partition_point(|c| c.1 <= a);
         if i > 0 {
             let (user, header, size) = self.cells.get(i - 1).copied().unwrap_or((0, 0, 0));
@@ -191,7 +199,17 @@ impl Where {
                 off: (a - self.exe.0) as u64,
             });
         }
+        if a >= self.sym.0 && a < self.sym.1 {
+            return Ok(Val::Sym(bits));
+        }
         Ok(Val::Opaque(bits))
+    }
+
+    fn mapped(&self, a: usize) -> bool {
+        let i = self.maps.partition_point(|r| r.0 <= a);
+        i.checked_sub(1)
+            .and_then(|j| self.maps.get(j))
+            .is_some_and(|r| a < r.1)
     }
 }
 
@@ -232,9 +250,11 @@ fn cell_headers() -> Vec<usize> {
 
 /// The image of the heap now and, with a baseline, of the root words that
 /// changed since `begin`.
-pub(crate) fn build(base: Option<&Baseline>) -> Image {
+pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>) -> Image {
     use crate::gc::{GcHeader, GC_HEADER_SIZE};
     let headers = cell_headers();
+    let mut maps = pre;
+    maps.extend(read_maps());
     let sect = |lo: &u8, hi: &u8| (lo as *const u8 as usize, hi as *const u8 as usize);
     // SAFETY: linker-defined section bounds.
     let w = unsafe {
@@ -256,6 +276,8 @@ pub(crate) fn build(base: Option<&Baseline>) -> Image {
             ],
             exe: sect(&__executable_start, &_end),
             tls: base.map_or((0, 0), |b| (b.tls.0, b.tls.0 + b.tls.1.len())),
+            maps: merged(maps),
+            sym: crate::symbol::snap_image_space(),
         }
     };
     let mut img = Image::default();
@@ -350,4 +372,45 @@ pub(crate) fn build(base: Option<&Baseline>) -> Image {
     }
     img.pending = format::PENDING;
     img
+}
+
+/// The address ranges of `/proc/self/maps` now.
+fn read_maps() -> Vec<(usize, usize)> {
+    use std::os::unix::ffi::OsStrExt;
+    let text = std::fs::read(std::ffi::OsStr::from_bytes(b"/proc/self/maps")).unwrap_or_default();
+    parse_maps(&text)
+}
+
+fn parse_maps(text: &[u8]) -> Vec<(usize, usize)> {
+    let hex = |s: &[u8]| {
+        s.iter().try_fold(0usize, |a, &c| {
+            (c as char)
+                .to_digit(16)
+                .map(|d| a.wrapping_mul(16).wrapping_add(d as usize))
+        })
+    };
+    let mut v = Vec::new();
+    for line in text.split(|&c| c == b'\n') {
+        let range = line.split(|&c| c == b' ').next().unwrap_or_default();
+        let mut it = range.split(|&c| c == b'-');
+        if let (Some(lo), Some(hi)) = (it.next().and_then(hex), it.next().and_then(hex)) {
+            if lo < hi {
+                v.push((lo, hi));
+            }
+        }
+    }
+    v
+}
+
+/// Sorted ranges with overlapping or touching ones joined.
+fn merged(mut v: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    v.sort_unstable();
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for r in v {
+        match out.last_mut() {
+            Some(l) if r.0 <= l.1 => l.1 = l.1.max(r.1),
+            _ => out.push(r),
+        }
+    }
+    out
 }

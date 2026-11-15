@@ -59,6 +59,9 @@ pub enum Val {
     /// An address that is neither a cell nor in the binary (malloc, stack).
     /// Never valid inside a cell; a word of this kind needs a form of its own.
     Opaque(u64),
+    /// An address inside the persistent-symbol space (a symbol cell): no
+    /// form of its own yet, so a word of this kind stops the image.
+    Sym(u64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +119,10 @@ fn put_val(o: &mut Vec<u8>, v: &Val) {
         }
         Val::Opaque(x) => {
             o.push(3);
+            o.extend(x.to_le_bytes());
+        }
+        Val::Sym(x) => {
+            o.push(4);
             o.extend(x.to_le_bytes());
         }
     }

@@ -84,7 +84,7 @@ fn array_cell_names_its_string_and_zeroes_the_slot() {
     let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let mut arr = crate::array::js_array_alloc(2);
     arr = crate::array::js_array_push_f64(arr, crate::value::js_nanbox_string(s as i64));
-    let img = build(None);
+    let img = build(None, Vec::new());
     let si = string_cell(&img, text).expect("string cell captured");
     let ai = img
         .cells
@@ -129,7 +129,7 @@ fn shaped_object_keeps_its_slots_inside_the_cell() {
     let v = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let key = crate::string::js_string_from_bytes(b"probeKey".as_ptr(), 8);
     crate::object::js_object_set_field_by_name(o, key, crate::value::js_nanbox_string(v as i64));
-    let img = build(None);
+    let img = build(None, Vec::new());
     let si = string_cell(&img, text).expect("value cell captured");
     let oi = img
         .cells
@@ -174,7 +174,7 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
     unsafe { probe.write_volatile(crate::value::js_nanbox_string(s as i64).to_bits()) };
-    let img = build(Some(&base));
+    let img = build(Some(&base), Vec::new());
     let want = (probe as usize - lo) as u64;
     let w = img
         .words
@@ -201,4 +201,40 @@ fn print_image_file() {
     };
     let img = decode(&std::fs::read(p).unwrap()).unwrap();
     println!("\n{}", dump(&img));
+}
+
+fn probe_where() -> Where {
+    Where {
+        cells: Vec::new(),
+        sections: [(0, 0); 3],
+        exe: (0x40_0000, 0x40_1000),
+        tls: (0, 0),
+        maps: vec![(0x40_0000, 0x50_0000), (0x7000_0000_0000, 0x7000_0001_0000)],
+        sym: (0x7000_0000_8000, 0x7000_0001_0000),
+    }
+}
+
+#[test]
+fn maps_text_is_parsed_and_merged() {
+    let t = b"00400000-00452000 r-xp 00000000 00:00 0 /x\n00452000-00460000 rw-p 0 0:0 0\n7ffc00000000-7ffc00001000 rw-p 0 0:0 0 [stack]\n";
+    assert_eq!(
+        merged(parse_maps(t)),
+        vec![(0x40_0000, 0x46_0000), (0x7ffc_0000_0000, 0x7ffc_0000_1000)]
+    );
+    assert!(read_maps().len() > 3, "this process has mappings");
+}
+
+#[test]
+fn a_word_outside_every_mapping_is_a_scalar_and_a_tagged_symbol_word_is_sym() {
+    let w = probe_where();
+    // A flag-byte word (0x01010100) is a number, not an address.
+    assert_eq!(w.val(0x0101_0100), Ok(Val::Scalar(0x0101_0100)));
+    assert_eq!(w.val(crate::value::POINTER_TAG | 0x1234), Ok(Val::Scalar(crate::value::POINTER_TAG | 0x1234)));
+    // An untagged and a tagged address inside the symbol space.
+    let a = 0x7000_0000_9000u64;
+    assert_eq!(w.val(a), Ok(Val::Sym(a)));
+    assert_eq!(w.val(crate::value::POINTER_TAG | a), Ok(Val::Sym(crate::value::POINTER_TAG | a)));
+    // Inside a mapping but neither a cell nor the symbol space: opaque.
+    let m = 0x7000_0000_2000u64;
+    assert_eq!(w.val(crate::value::STRING_TAG | m), Ok(Val::Opaque(crate::value::STRING_TAG | m)));
 }

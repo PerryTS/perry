@@ -47,6 +47,7 @@ impl Rd<'_> {
                 }
             }
             3 => Val::Opaque(self.u64()?),
+            4 => Val::Sym(self.u64()?),
             k => return Err(format!("bad value kind {k}")),
         })
     }
@@ -126,6 +127,7 @@ pub fn dump(img: &Image) -> String {
             Val::Cell { .. } => "cell",
             Val::Ext { .. } => "ext",
             Val::Opaque(_) => "opaque",
+            Val::Sym(_) => "sym",
         };
         *w.entry((x.region, k)).or_default() += 1;
     }
