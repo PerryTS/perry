@@ -446,10 +446,13 @@ pub unsafe extern "C" fn js_put_value_set_dynamic(
     // the leaf resolves no atom for leaves at once for the complete keyed
     // store. Then the static store's own-slot leaf with the atom; every
     // other case is one tail call that continues from the atom.
-    let Some((atom, hash)) = (unsafe { crate::object::layout_probe::keyed_leaf(dir, key.to_bits()) }) else {
+    let Some((atom, hash)) =
+        (unsafe { crate::object::layout_probe::keyed_leaf(dir, key.to_bits()) })
+    else {
         return set_dynamic_unresolved(target, key, value, strict);
     };
-    match unsafe { crate::object::layout_probe::own_set(dir, target.to_bits(), atom, hash, value) } {
+    match unsafe { crate::object::layout_probe::own_set(dir, target.to_bits(), atom, hash, value) }
+    {
         OwnSet::Stored => value,
         OwnSet::Slot(obj, address, slot) => set_dynamic_slot_any(obj, address, slot, value),
         OwnSet::Table(t, address) => set_dynamic_table_barrier(t, address, value),
@@ -462,7 +465,12 @@ pub unsafe extern "C" fn js_put_value_set_dynamic(
 /// [`js_put_value_set_dynamic`]'s barriered own-slot store
 /// ([`crate::object::layout_probe::OwnSet::Slot`]).
 #[inline(never)]
-fn set_dynamic_slot_any(obj: *mut crate::ObjectHeader, address: *mut u64, slot: u32, value: f64) -> f64 {
+fn set_dynamic_slot_any(
+    obj: *mut crate::ObjectHeader,
+    address: *mut u64,
+    slot: u32,
+    value: f64,
+) -> f64 {
     unsafe {
         crate::object::layout_probe::own_slot_store_any(
             obj,
@@ -478,7 +486,11 @@ fn set_dynamic_slot_any(obj: *mut crate::ObjectHeader, address: *mut u64, slot: 
 /// [`js_put_value_set_dynamic`]'s barrier for an overflow value word the
 /// leaf wrote ([`crate::object::layout_probe::OwnSet::Table`]).
 #[inline(never)]
-fn set_dynamic_table_barrier(t: *mut crate::object::overflow::Table, address: *mut u64, value: f64) -> f64 {
+fn set_dynamic_table_barrier(
+    t: *mut crate::object::overflow::Table,
+    address: *mut u64,
+    value: f64,
+) -> f64 {
     crate::gc::runtime_write_barrier_slot(
         t as usize,
         address as usize,
@@ -542,7 +554,13 @@ fn set_dynamic_overflow_miss(
 /// the complete resolution, then the keyed store.
 #[inline(never)]
 fn set_dynamic_unresolved(target: f64, key: f64, value: f64, strict: i32) -> f64 {
-    let store = unsafe { crate::object::layout_probe::probe_store_keyed_complete(target.to_bits(), key.to_bits(), value) };
+    let store = unsafe {
+        crate::object::layout_probe::probe_store_keyed_complete(
+            target.to_bits(),
+            key.to_bits(),
+            value,
+        )
+    };
     set_dynamic_after(store, target, key, value, strict)
 }
 
@@ -551,7 +569,9 @@ fn set_dynamic_unresolved(target: f64, key: f64, value: f64, strict: i32) -> f64
 #[inline(never)]
 fn set_dynamic_rest_atom(target: f64, atom: u64, hash: u64, value: f64, strict: i32) -> f64 {
     let dir = crate::object::shapes::ordinary_dir_addr();
-    let store = unsafe { crate::object::layout_probe::probe_store_atom(dir, target.to_bits(), atom, hash, value) };
+    let store = unsafe {
+        crate::object::layout_probe::probe_store_atom(dir, target.to_bits(), atom, hash, value)
+    };
     set_dynamic_after(store, target, f64::from_bits(atom), value, strict)
 }
 

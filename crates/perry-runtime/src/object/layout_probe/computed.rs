@@ -742,7 +742,11 @@ pub(crate) unsafe fn probe_store_keyed(obj_bits: u64, key_bits: u64, value: f64)
 /// # Safety
 /// Any value bits.
 #[inline(always)]
-pub(crate) unsafe fn probe_store_keyed_complete(obj_bits: u64, key_bits: u64, value: f64) -> KeyedStore {
+pub(crate) unsafe fn probe_store_keyed_complete(
+    obj_bits: u64,
+    key_bits: u64,
+    value: f64,
+) -> KeyedStore {
     let dir = super::super::ordinary_dir_addr();
     let Some((key, hash)) = computed_key_complete(dir, key_bits) else {
         return KeyedStore::Unresolved;
@@ -755,7 +759,13 @@ pub(crate) unsafe fn probe_store_keyed_complete(obj_bits: u64, key_bits: u64, va
 /// # Safety
 /// Any value bits; `dir` is the agent's shape directory.
 #[inline(always)]
-pub(crate) unsafe fn probe_store_atom(dir: *const u8, obj_bits: u64, key: u64, hash: u64, value: f64) -> KeyedStore {
+pub(crate) unsafe fn probe_store_atom(
+    dir: *const u8,
+    obj_bits: u64,
+    key: u64,
+    hash: u64,
+    value: f64,
+) -> KeyedStore {
     match super::set_plan(dir, obj_bits, key, hash, value) {
         super::SetPlan::Stored(stored) if stored != 0 => KeyedStore::Stored,
         super::SetPlan::Add(obj, r, _) => {
