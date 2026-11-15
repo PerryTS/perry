@@ -1587,6 +1587,66 @@ pub(crate) fn proven_accessor_fn(
     Some(symbol)
 }
 
+/// ONCHANGE2: the method body a named call `object.property( ... )` at
+/// `offset` runs, when the facts prove it (`ElisionFacts::method_calls`):
+/// every receiver is an object (the member read cannot throw, 13.3.6.2) and
+/// the key's value at every receiver is the one method body `F` of the
+/// holder class (an ordinary method: not a generator, not async, not an
+/// accessor). 7.3.14 Call then runs `F` with the receiver as `this`; the
+/// call is direct, with no guard and no fallback beside it. Returns the
+/// holder class (the class that declares `F`) and `F`'s public entry, the
+/// one the dispatch tower's case arm calls. `None`: the site keeps its
+/// ordinary lowering.
+pub(crate) fn proven_method_fn(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+) -> Option<(String, String)> {
+    if ctx.wpfacts_off
+        || ctx.wpfacts.interp_guard
+        || offset == 0
+        || property.starts_with('#')
+        || ctx.is_static_class_this(object)
+    {
+        return None;
+    }
+    let &(cid, fid) = ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?;
+    // The holder's names in this module (as `proven_accessor_fn`): each must
+    // declare `F` itself under `property` and give the same entry.
+    let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
+    names.extend(
+        ctx.class_ids
+            .iter()
+            .filter(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut found: Option<(String, String)> = None;
+    for class in names {
+        let c = ctx.classes.get(&class)?;
+        let method = c.methods.iter().rev().find(|m| m.name == property)?;
+        if method.id != fid
+            || method.is_generator
+            || method.is_async
+            || crate::codegen::helpers::body_has_fixed_generator_state(&method.body)
+            || super::property_get::class_has_evaluated_accessor(ctx, &class)
+            || c.static_accessor_names.iter().any(|n| n == property)
+        {
+            return None;
+        }
+        let f = ctx.methods.get(&(class.clone(), property.to_string()))?;
+        if f.starts_with("perry_static_") {
+            return None;
+        }
+        match &found {
+            Some((_, g)) if g != f => return None,
+            Some(_) => {}
+            None => found = Some((class, f.clone())),
+        }
+    }
+    found
+}
+
 /// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's
 /// direct call with the receiver as `this`; its result is the read's value.
 pub(crate) fn try_lower_proven_getter(
