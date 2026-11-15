@@ -559,3 +559,31 @@ mod ffi_sso_header_tests {
         assert!(!child.status.success());
     }
 }
+
+#[cfg(test)]
+mod box_receiver_word_tests {
+    use super::box_receiver_word;
+    use crate::value::JSValue;
+
+    #[test]
+    fn an_address_is_boxed_as_a_pointer() {
+        let addr: u64 = 0x0000_7f00_dead_b000;
+        assert_eq!(
+            box_receiver_word(addr).to_bits(),
+            JSValue::pointer(addr as *const u8).bits()
+        );
+    }
+
+    #[test]
+    fn a_number_or_tagged_word_is_kept() {
+        let words = [
+            16777215.0f64.to_bits(),
+            (-16777215.0f64).to_bits(),
+            f64::NAN.to_bits(),
+            JSValue::pointer(0x0000_7f00_dead_b000 as *const u8).bits(),
+        ];
+        for w in words {
+            assert_eq!(box_receiver_word(w).to_bits(), w);
+        }
+    }
+}
