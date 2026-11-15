@@ -65,6 +65,31 @@ pub(crate) fn wrap_async_gen_step_body(
     ]
 }
 
+/// The fixed-state record body under its completion catch: a throw that
+/// leaves the body marks the generator completed and not executing, then
+/// propagates (27.5.3.3 steps 8-9: the abrupt completion completes the
+/// generator). The re-entrancy and completed tests stay with the caller,
+/// which owns `executing`/`done` before the call.
+pub(crate) fn wrap_fixed_state_completion(
+    body: Vec<Stmt>,
+    executing_id: LocalId,
+    done_id: LocalId,
+    catch_id: LocalId,
+) -> Vec<Stmt> {
+    vec![Stmt::Try {
+        body,
+        catch: Some(CatchClause {
+            param: Some((catch_id, "__gen_exec_e".to_string())),
+            body: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                Stmt::Throw(Expr::LocalGet(catch_id)),
+            ],
+        }),
+        finally: None,
+    }]
+}
+
 pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
     Stmt::If {
         condition: Expr::LocalGet(executing_id),
