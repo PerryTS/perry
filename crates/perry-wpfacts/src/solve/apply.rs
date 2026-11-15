@@ -481,9 +481,13 @@ impl Model {
                     }
                 }
             }
-            Cons::Defined { dst } | Cons::NotNullish { dst } | Cons::NotUndefined { dst } => {
+            Cons::Defined { dst }
+            | Cons::NotNullish { dst }
+            | Cons::NotUndefined { dst }
+            | Cons::NotNull { dst } => {
                 let strip = match c {
                     Cons::Defined { .. } | Cons::NotUndefined { .. } => prim::UNDEF,
+                    Cons::NotNull { .. } => prim::NULL,
                     _ => prim::NULL | prim::UNDEF,
                 };
                 for &t in toks {

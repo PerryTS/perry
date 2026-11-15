@@ -2182,3 +2182,4 @@ mod whyhold1;
 mod skinroot32;
 mod skinroot39;
 mod skinroot35;
+mod r6next;

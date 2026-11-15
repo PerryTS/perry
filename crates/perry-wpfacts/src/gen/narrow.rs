@@ -737,6 +737,8 @@ pub(crate) enum Presence {
     /// Not `undefined` (`Cons::NotUndefined`): one that is not
     /// `=== undefined`.
     NotUndefined,
+    /// Not `null` (`Cons::NotNull`, rule T1): one that is not `=== null`.
+    NotNull,
     /// `local.key` decided by a test of the read (`Cons::FieldTruthy`):
     /// rule G2 `guard::TRUTHY` (truthy), rule G1 `guard::IS_FALSE`/
     /// `NOT_FALSE`/`IS_TRUE`/`NOT_TRUE` (`=== false`/`true` decided). Neither
@@ -923,7 +925,9 @@ fn implied<'p>(
         }
         // `local == null` (`undefined`) false, `local != null` true: not
         // nullish. `local === undefined` false, `!==` true: not
-        // `undefined`. (`=== null` decides no presence a filter keeps.)
+        // `undefined`. Rule T1: `local === null` false, `!==` true: not
+        // `null` (7.2.16: only `null` is strictly equal to `null`;
+        // `undefined` passes). `!= null` excludes both (7.2.15 steps 2-3).
         Expr::Compare { op, left, right }
             if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
                 || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
@@ -941,6 +945,7 @@ fn implied<'p>(
                 {
                     Some(Presence::NotUndefined)
                 }
+                (CompareOp::Eq, false) | (CompareOp::Ne, true) => Some(Presence::NotNull),
                 _ => None,
             };
             if let (Some(p), Some(Bound::Local(id))) = (presence, bound_of(x, subst)) {
@@ -1280,6 +1285,9 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::NotUndefined) => {
                     self.m.cons(src, Cons::NotUndefined { dst: start })
+                }
+                Implied::Present(_, Presence::NotNull) => {
+                    self.m.cons(src, Cons::NotNull { dst: start })
                 }
                 Implied::Present(_, Presence::NotBuffer(shared)) => {
                     self.m.cons(src, Cons::NotBuffer { shared, dst: start });

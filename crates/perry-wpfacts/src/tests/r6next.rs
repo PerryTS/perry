@@ -1,0 +1,228 @@
+// R6NEXT1 (2026-11-15): RED fixtures for the two largest no-loader reason
+// groups of r1/r2/r3/r6/r9a (/root/PEELM/WORKLIST-NOLOADER.md):
+// "Throws" (a nullish-only receiver under a guard that excludes it) and
+// "key not a definite birth field". Small JS, no three.js. Proven = a verdict
+// that is neither No(..) nor Throws (Dead and OwnDataOrAbsent count).
+use super::*;
+use perry_hir::Module;
+
+fn hirs(src: &str) -> Vec<(String, Module)> {
+    let path = "a.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "a", &path).expect("lowers");
+    vec![(path, hir)]
+}
+
+/// Every verdict of the reads (calls: `call`) of `key` in a.ts.
+fn verdicts(src: &str, key: &str, call: bool) -> Vec<crate::Verdict> {
+    let h = hirs(src);
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let cfg = FactsConfig {
+        unit_io: true,
+        ..Default::default()
+    };
+    let pf = crate::compute(&list, &cfg);
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && s.is_call == call)
+        .map(|s| s.verdict.clone())
+        .collect();
+    // A body the solve never activates has no site: Dead.
+    if v.is_empty() {
+        vec![crate::Verdict::Dead]
+    } else {
+        v
+    }
+}
+fn proven(v: &crate::Verdict) -> bool {
+    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws)
+}
+fn all_proven(src: &str, key: &str, call: bool) {
+    let v = verdicts(src, key, call);
+    assert!(v.iter().all(proven), ".{key}: {v:?}");
+}
+fn some_unproven(src: &str, key: &str, call: bool) {
+    let v = verdicts(src, key, call);
+    assert!(v.iter().any(|v| !proven(v)), ".{key} must stay unproven: {v:?}");
+}
+
+// ---- group T: Throws (receiver holds only null/undefined) ----
+// T1 (Object3D.updateMatrix `const pivot = this.pivot; if (pivot !== null) pivot.x`):
+// a strict `!== null` test of a local (7.2.16 IsStrictlyEqual: only null is `=== null`).
+const T1: &str = "class P { constructor() { this.pivot = null; this.k = 0; }
+  upd() { const pivot = this.pivot; if (pivot !== null) { this.k = pivot.px; } return this.k; } }
+const p = new P(); console.log(p.upd());";
+#[test]
+fn r6next_t1_strict_not_null_local_guard_is_dead() {
+    all_proven(T1, "px", false);
+}
+// keep: `!== undefined` does not exclude null: the read runs and throws.
+const T1K: &str = "class P { constructor() { this.pivot = null; this.k = 0; }
+  upd() { const pivot = this.pivot; if (pivot !== undefined) { this.k = pivot.px; } return this.k; } }
+const p = new P(); console.log(p.upd());";
+#[test]
+fn r6next_t1_keep_not_undefined_on_null_throws() {
+    some_unproven(T1K, "px", false);
+}
+// keep: `!== null` does not exclude undefined (7.2.16: different types, not
+// equal): an undefined-only local still throws on the read.
+const T1U: &str = "class P { constructor() { this.pivot = undefined; this.k = 0; }
+  upd() { const pivot = this.pivot; if (pivot !== null) { this.k = pivot.px; } return this.k; } }
+const p = new P(); console.log(p.upd());";
+#[test]
+fn r6next_t1_keep_not_null_on_undefined_throws() {
+    some_unproven(T1U, "px", false);
+}
+// `!= null` excludes both null and undefined (7.2.15 steps 2-3).
+const T1L: &str = "class P { constructor() { this.pivot = undefined; this.q = null; this.k = 0; }
+  upd() { const pivot = this.pivot; const q = this.q; if (pivot != null) { this.k = pivot.px; }
+    if (q != null) { this.k = q.px; } return this.k; } }
+const p = new P(); console.log(p.upd());";
+#[test]
+fn r6next_t1_loose_not_null_excludes_both() {
+    all_proven(T1L, "px", false);
+}
+
+// T2 (OrthographicCamera.updateProjectionMatrix `this.view !== null && this.view.enabled`):
+// the guard tests a member path of `this`; the read is the same member path.
+const T2: &str = "class C { constructor() { this.view = null; this.w = 1; }
+  upd() { let w = this.w; if (this.view !== null && this.view.enabled) { w = w * this.view.fw; } return w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+#[ignore = "rule T2 not built"]
+fn r6next_t2_member_path_guard_enabled_is_dead() {
+    all_proven(T2, "enabled", false);
+}
+#[test]
+#[ignore = "rule T2 not built"]
+fn r6next_t2_member_path_guard_body_is_dead() {
+    all_proven(T2, "fw", false);
+}
+// keep: a call between the test and the read may store the member.
+const T2K: &str = "class C { constructor() { this.view = null; this.w = 1; }
+  reset() { this.view = null; }
+  upd() { let w = this.w; if (this.view !== null) { this.reset(); w = this.view.fw; } return w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+fn r6next_t2_keep_call_between_guard_and_read() {
+    some_unproven(T2K, "fw", false);
+}
+
+// T3 (PerspectiveCamera.updateProjectionMatrix: `const view = this.view;
+// if (this.view !== null && this.view.enabled) { view.fullWidth }`): alias read before the guard.
+const T3: &str = "class C { constructor() { this.view = null; this.w = 1; }
+  upd() { let w = this.w; const view = this.view; if (this.view !== null && this.view.enabled) { w = view.fw2; } return w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+#[ignore = "rule T3 not built"]
+fn r6next_t3_alias_read_before_guard_is_dead() {
+    all_proven(T3, "fw2", false);
+}
+
+// T4 (Material.setValues: for-in, `this[key]`, `=== undefined` continue, `c && c.isColor`).
+const T4: &str = "class M { constructor() { this.map = null; this.n = 1; }
+  setValues(values) { for (const key in values) { const nv = values[key]; if (nv === undefined) continue;
+    const cv = this[key]; if (cv === undefined) continue;
+    if (cv && cv.isColor) { cv.n = nv; } else { this[key] = nv; } } } }
+const m = new M(); m.setValues({ map: null, n: 2 }); console.log(m.n);";
+#[test]
+fn r6next_t4_truthy_guard_in_for_in_is_dead() {
+    all_proven(T4, "isColor", false);
+}
+
+// T5 (`typeof __THREE_DEVTOOLS__ !== 'undefined'` then `__THREE_DEVTOOLS__.dispatchEvent(..)`):
+// an undeclared global behind a typeof guard (13.5.3 step 2: unresolvable -> "undefined").
+const T5: &str = "if (typeof __DEVT__ !== \"undefined\") { __DEVT__.ping(1); }
+console.log(1);";
+#[test]
+#[ignore = "rule T5 (DESIGN-R6NEXT) not built"]
+fn r6next_t5_typeof_guarded_global_is_dead() {
+    all_proven(T5, "ping", true);
+}
+
+// ---- group B: key not a definite birth field ----
+// B1 (Object3D constructor: Object.defineProperties(this, { position: { configurable,
+// enumerable, value } })): 20.1.2.3.1 ObjectDefineProperties, each named data descriptor.
+const B1: &str = "class V { constructor() { this.x = 1; } }
+class O { constructor() { const position = new V();
+  Object.defineProperties(this, { position: { configurable: true, enumerable: true, value: position } }); this.k = 0; }
+  upd() { return this.position.x; } }
+const o = new O(); console.log(o.upd() + o.position.x);";
+#[test]
+#[ignore = "rule B1 (DESIGN-R6NEXT) not built"]
+fn r6next_b1_define_properties_named_data_is_birth_field() {
+    all_proven(B1, "position", false);
+}
+// keep: a defineProperties accessor key is not a data field.
+const B1K: &str = "class O { constructor() { Object.defineProperties(this, { pos: { get() { return 3; } } }); this.k = 0; } }
+const o = new O(); console.log(o.pos);";
+#[test]
+fn r6next_b1_keep_define_properties_accessor() {
+    some_unproven(B1K, "pos", false);
+}
+// keep: a defineProperties on one path only is not definite.
+const B1C: &str = "class V { constructor() { this.x = 1; } }
+class O { constructor(f) { if (f) { Object.defineProperties(this, { position: { value: new V() } }); } this.k = 0; } }
+const o = new O(Math.random() > 2); console.log(o.position.x);";
+#[test]
+fn r6next_b1_keep_conditional_define_properties() {
+    some_unproven(B1C, "position", false);
+}
+
+// B2 (BufferAttribute: `if (Array.isArray(array)) throw ..;` and a defineProperty
+// before the stores; subclass through super).
+const B2: &str = "let nid = 0;
+class E { constructor() {} }
+class A extends E { constructor(array, s) { super(); if (Array.isArray(array)) { throw new TypeError(\"t\"); }
+  Object.defineProperty(this, \"id\", { value: nid++ });
+  this.array = array; this.itemSize = s; }
+  getX(i) { return this.array[i * this.itemSize]; } }
+class F extends A { constructor(a, s) { super(new Float32Array(a), s); } }
+const a = new F([1, 2], 1); const b = new A(new Uint16Array(2), 1); console.log(a.getX(0) + b.getX(1));";
+#[test]
+fn r6next_b2_store_after_throwing_branch_is_birth_field() {
+    all_proven(B2, "itemSize", false);
+}
+
+// B3 (Vector2.clone `new this.constructor(this.x, this.y)`): the class prototype's own
+// `constructor` (15.7.14 ClassDefinitionEvaluation, 10.2.5 MakeConstructor).
+const B3: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const v = new V(1); console.log(v.clone().x);";
+#[test]
+#[ignore = "rule B3 not built"]
+fn r6next_b3_prototype_constructor_read() {
+    all_proven(B3, "constructor", false);
+}
+// keep: an instance that may get an own `constructor` by a named store.
+const B3N: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const v = new V(1); const w = new V(2); w.constructor = V; console.log(v.clone().x + w.clone().x);";
+#[test]
+fn r6next_b3_keep_named_own_constructor_store() {
+    some_unproven(B3N, "constructor", false);
+}
+// keep: an unknown-key store on an instance may name `constructor`.
+const B3C: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const v = new V(1); const k = String(Math.random()); v[k] = V; console.log(v.clone().x);";
+#[test]
+fn r6next_b3_keep_computed_own_store() {
+    some_unproven(B3C, "constructor", false);
+}
+// keep: an unknown-key store on the prototype may replace `constructor`.
+const B3P: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const v = new V(1); const k = String(Math.random()); V.prototype[k] = function () {}; console.log(v.clone().x);";
+#[test]
+fn r6next_b3_keep_computed_proto_store() {
+    some_unproven(B3P, "constructor", false);
+}
+
+// B4 keep (Quaternion._onChangeCallback: a proto method for some instances, an own key
+// stored after birth by `_onChange(cb)` on others): two outcomes, stays unproven.
+const B4K: &str = "class Q { constructor() { this.x = 0; } _onChange(cb) { this._cb = cb; return this; } _cb() {}
+  set(x) { this.x = x; this._cb(); return this; } }
+const q1 = new Q(); const q2 = new Q()._onChange(() => console.log(1)); q1.set(1); q2.set(2);";
+#[test]
+fn r6next_b4_keep_post_birth_own_or_proto() {
+    some_unproven(B4K, "_cb", true);
+}

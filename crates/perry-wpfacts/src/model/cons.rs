@@ -284,6 +284,12 @@ pub enum Cons {
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
     /// like `NotNullish`.
     NotUndefined { dst: NodeId },
+    /// Rule T1: a local `x` where `x !== null` held (`x === null` failed):
+    /// its values but `null` flow into `dst` (ECMA-262 7.2.16
+    /// IsStrictlyEqual: values of different types are never strictly
+    /// equal, and the Null type has the one value `null`; `undefined`
+    /// passes). A rule of the program text, like `NotNullish`.
+    NotNull { dst: NodeId },
     /// A failed `x instanceof ArrayBuffer` (`shared`: `SharedArrayBuffer`)
     /// of the intrinsic binding: the values but the built-in buffer objects
     /// of that kind flow into `dst`. The compiled program answers the bare
@@ -849,6 +855,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
+                | Cons::NotNull { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -870,6 +877,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
+                | Cons::NotNull { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -914,6 +922,7 @@ impl Cons {
             Cons::Fulfil { .. } => "fulfil",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
+            Cons::NotNull { .. } => "notnull",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Hard { .. } => "hard",

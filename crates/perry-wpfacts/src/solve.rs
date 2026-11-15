@@ -337,6 +337,7 @@ impl Model {
                 | Cons::Falsy { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
+                | Cons::NotNull { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
                 | Cons::RuntimeStore { .. }
@@ -1989,6 +1990,7 @@ impl Model {
             Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
+            Cons::NotNull { dst } => format!("notnull {n} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
