@@ -1507,6 +1507,14 @@ pub struct FieldWriters {
     pub post: Vec<SiteId>,
 }
 
+/// The computed-key writers of a template (`Model::any_writers`): birth
+/// sites, and post-birth sites with the key each stored under.
+#[derive(Clone, Debug, Default)]
+pub struct AnyWriters {
+    pub ctor: Vec<SiteId>,
+    pub post: Vec<(SiteId, Key)>,
+}
+
 /// Where the solve work went (PERRY_FACTS_PROFILE only): by the popped node
 /// it was spent for (or the phase outside the worklist), by rule kind
 /// (inclusive of what the rule triggers), by propagation step, and a growth
@@ -2038,7 +2046,10 @@ pub struct Model {
     /// different objects (FVA Q3), and a prototype member is neither.
     pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
-    pub any_writers: FxHashMap<TmplId, FieldWriters>,
+    /// Computed-key stores per template, each post-birth one with the key it
+    /// stored under: a shaped key creates only the names its shape admits
+    /// (`Model::key_may_name`).
+    pub any_writers: FxHashMap<TmplId, AnyWriters>,
     /// ONCHANGE1 rule U: per instance key, the instance tokens a named store
     /// of it reaches (`writers` counts the stores per template). A birth
     /// site no store of the key reaches holds no own property of it for

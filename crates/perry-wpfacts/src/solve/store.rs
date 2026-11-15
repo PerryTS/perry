@@ -995,7 +995,9 @@ impl Model {
                     if birth {
                         w.ctor.push(site);
                     } else {
-                        w.post.push(site);
+                        if !w.post.contains(&(site, key)) {
+                            w.post.push((site, key));
+                        }
                         // A store effect (DECISIONS 188): its defining unit
                         // opens the key set, performing it.
                         if !effect {

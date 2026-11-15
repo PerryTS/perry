@@ -449,7 +449,7 @@ pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
     };
     if m.any_writers
         .get(&tm)
-        .is_some_and(|w| w.ctor.iter().chain(&w.post).any(|s| !numeric_key(s)))
+        .is_some_and(|w| w.ctor.iter().chain(w.post.iter().map(|(s, _)| s)).any(|s| !numeric_key(s)))
     {
         return true;
     }

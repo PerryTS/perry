@@ -1058,10 +1058,16 @@ fn template_facts(
             slot_ok = false;
         }
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
+        // R9BIRTH1 rule A: a computed-key store after birth writes key `a`
+        // only when its key may be `a` (ToPropertyKey of a value of the
+        // key's shape, ECMA-262 13.15.2 / 10.1.9.2: OrdinarySet creates or
+        // changes only property P); a key of unknown content (shape 0) may
+        // be any key.
+        let any_post = any.post.iter().filter(|&&(_, k)| m.key_may_name(k, a)).count();
         let readonly = escape.is_none()
             && hard.is_none()
             && w.post.is_empty()
-            && any.post.is_empty()
+            && any_post == 0
             && !is_accessor;
         let mut kind = field_kind(m, &ts, a, definite);
         if escape.is_some() {
@@ -1147,7 +1153,7 @@ fn template_facts(
             data_field: !is_accessor,
             readonly,
             writers_ctor: w.ctor.len(),
-            writers_post: w.post.len() + any.post.len(),
+            writers_post: w.post.len() + any_post,
             kind,
         });
     }
@@ -3200,6 +3206,22 @@ fn lookup_holders(
     };
     if computed(t) {
         return Err("a computed key may hold it".into());
+    }
+    // Diagnostic (off: one env read): `PERRY_FACTS_WHY_LOOKUP=<key>` prints
+    // the lookup clause inputs for that key.
+    static WHY_LOOKUP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if WHY_LOOKUP.get_or_init(|| std::env::var("PERRY_FACTS_WHY_LOOKUP").ok()).as_deref() == Some(key) {
+        let row = tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a)));
+        let h = m.fields.get(&(t, a)).copied();
+        eprintln!(
+            "WHY_LOOKUP {} .{key} t={t} row={:?} birth={} field={:?} prim={:#x} pts={}",
+            tf.display,
+            row.map(|f| (f.definite, f.data_field, f.slot, f.writers_ctor, f.writers_post)),
+            tf.birth_keys.iter().any(|k| k == key),
+            h,
+            h.map_or(0, |n| m.nodes[n as usize].prim),
+            h.map_or(0, |n| m.nodes[n as usize].pts.len()),
+        );
     }
     // A key the layout never writes (a read names it) is the chain's.
     match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
