@@ -294,6 +294,17 @@ impl<'a> Gen<'a> {
         for e in ends {
             self.m.edge(vn, e);
         }
+        // Rule DA: the write reaches the collector of every `if`/`switch`
+        // being walked that writes the local on each normal completion.
+        let cs: Vec<NodeId> = self
+            .def_collect
+            .iter()
+            .filter(|c| c.0 == mi && c.1 == id && c.2 == f)
+            .map(|c| c.3)
+            .collect();
+        for c in cs {
+            self.m.edge(vn, c);
+        }
     }
 
     /// Before walking a branch of an `if`: each narrowing's `written`.
@@ -1585,5 +1596,179 @@ impl<'a> Gen<'a> {
         for _ in 0..k {
             self.narrow.pop();
         }
+    }
+}
+
+/// How a statement leaves for a local `x` (rule DA, `Gen::def_assign_begin`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Da {
+    /// Every way out of it that lands at the statement after it has written
+    /// `x`, and it may land there.
+    Assigns,
+    /// It never lands at the statement after it: `return`, `throw`, an
+    /// unlabeled `continue`, or (outside the `switch` being judged) an
+    /// unlabeled `break`; they land past the statement list.
+    Exits,
+    /// It may complete normally without writing `x`.
+    Through,
+    /// It may land after the judged statement without writing `x` (a
+    /// `break` of the judged `switch`, any labeled jump).
+    Escape,
+}
+
+/// `ss` in order: the first statement that does not complete normally
+/// without writing `x` decides. `sw`: inside a clause of the judged
+/// `switch`, where an unlabeled `break` lands after it.
+fn da_list(ss: &[Stmt], x: u32, sw: bool) -> Da {
+    for s in ss {
+        match da_stmt(s, x, sw) {
+            Da::Through => {}
+            d => return d,
+        }
+    }
+    Da::Through
+}
+
+fn da_stmt(s: &Stmt, x: u32, sw: bool) -> Da {
+    match s {
+        Stmt::Expr(Expr::LocalSet(l, _)) if *l == x => Da::Assigns,
+        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
+        Stmt::Break if sw => Da::Escape,
+        Stmt::Break => Da::Exits,
+        Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => Da::Escape,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let a = da_list(then_branch, x, sw);
+            let b = else_branch.as_deref().map_or(Da::Through, |e| da_list(e, x, sw));
+            match (a, b) {
+                (Da::Escape, _) | (_, Da::Escape) => Da::Escape,
+                (Da::Exits, Da::Exits) => Da::Exits,
+                (Da::Assigns | Da::Exits, Da::Assigns | Da::Exits) => Da::Assigns,
+                _ => Da::Through,
+            }
+        }
+        Stmt::Switch { cases, .. } => da_switch(cases, x),
+        // Any other statement is not followed inside: it may complete
+        // without writing `x`, and it escapes when a jump in it may land
+        // after the judged statement.
+        _ => {
+            let one = std::slice::from_ref(s);
+            if !jumps_leave(one) || (sw && breaks_out(one)) {
+                Da::Escape
+            } else {
+                Da::Through
+            }
+        }
+    }
+}
+
+/// A `switch` (ECMA-262 14.12.4): with a `default` clause every run enters
+/// some clause and runs the clauses from it on until a `break` (which lands
+/// after the `switch`) or an abrupt completion. Each entry decides like a
+/// statement list over the bodies from its clause on.
+fn da_switch(cases: &[perry_hir::SwitchCase], x: u32) -> Da {
+    if !cases.iter().all(|c| jumps_leave(&c.body)) {
+        return Da::Escape;
+    }
+    if !cases.iter().any(|c| c.test.is_none()) {
+        return Da::Through;
+    }
+    let mut all_exit = true;
+    for i in 0..cases.len() {
+        let mut d = Da::Through;
+        for s in cases[i..].iter().flat_map(|c| c.body.iter()) {
+            d = da_stmt(s, x, true);
+            if d != Da::Through {
+                break;
+            }
+        }
+        match d {
+            Da::Assigns => all_exit = false,
+            Da::Exits => {}
+            // A `break` of this switch, or falling off its end.
+            _ => return Da::Through,
+        }
+    }
+    if all_exit {
+        Da::Exits
+    } else {
+        Da::Assigns
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// Rule DA (definite assignment). ECMA-262 14.2.2: the statement after
+    /// `s` in a statement list runs only when `s` completes normally (14.6
+    /// `if`, 14.12 `switch`); an arm that completes abruptly (14.14 `throw`,
+    /// `return`, a `break`/`continue` that lands past the list) never
+    /// reaches it. When every normal completion of the `if`/`switch` `s`
+    /// has run a write `x = e` of a local of the body being walked that no
+    /// other code can write (`scope_locals`), a read of `x` after `s`, until
+    /// the next write, holds a value one of the writes in `s` produced, and
+    /// never the value `x` held before `s` (a `let x;` declaration's
+    /// `undefined`, 14.3.1). Before `s` is walked: one collector node per
+    /// such local, which every write of it in `s` reaches
+    /// (`narrowed_write`); `def_assign_end` makes it the version after `s`.
+    /// Whether the local's own node holds the earlier values is unchanged.
+    pub(crate) fn def_assign_begin(&mut self, fx: &Fx, s: &Stmt) -> usize {
+        if !matches!(s, Stmt::If { .. } | Stmt::Switch { .. }) {
+            return 0;
+        }
+        let Some((f, scope)) = self.narrow_scope.as_ref() else {
+            return 0;
+        };
+        if *f != fx.f {
+            return 0;
+        }
+        let mut ids: Vec<u32> = Vec::new();
+        stmt_has(s, &mut |e| {
+            if let Expr::LocalSet(l, _) = e {
+                if scope.contains(l) && !ids.contains(l) {
+                    ids.push(*l);
+                }
+            }
+            false
+        });
+        ids.retain(|&x| da_stmt(s, x, false) == Da::Assigns);
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        for &x in &ids {
+            let c = self.tmp("defassign");
+            self.zs_carrier(c);
+            self.def_collect.push((fx.module, x, fx.f, c));
+        }
+        self.m.cur_fn = prev;
+        ids.len()
+    }
+
+    /// After `s` (`def_assign_begin` pushed `k`): each collector becomes
+    /// the start of a version of its local for the rest of the list, as an
+    /// assignment's (`narrow_assigned`). How many it pushed.
+    pub(crate) fn def_assign_end(&mut self, fx: &Fx, k: usize) -> usize {
+        let at = self.def_collect.len() - k;
+        let done: Vec<_> = self.def_collect.drain(at..).collect();
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        for &(mi, id, f, start) in &done {
+            let end = self.tmp("defassign-end");
+            self.zs_carrier(end);
+            self.m.edge(start, end);
+            self.narrow.push(Narrow {
+                mi,
+                id,
+                f,
+                start,
+                end,
+                written: false,
+                in_update: false,
+                jumps: self.jumps,
+                tries: self.tries,
+                below_length: None,
+                assigned: true,
+            });
+        }
+        self.m.cur_fn = prev;
+        done.len()
     }
 }

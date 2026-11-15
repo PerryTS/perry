@@ -312,6 +312,9 @@ pub struct Gen<'a> {
     pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
+    /// Rule DA collectors of the `if`/`switch` statements being walked
+    /// (module, local, function body, node): `narrow::Gen::def_assign_begin`.
+    pub(crate) def_collect: Vec<(u32, u32, FnIdx, NodeId)>,
     /// In-bounds index stores (`gen/in_bounds.rs`).
     pub(crate) in_bounds: in_bounds::InBounds,
     /// The function body being walked and its locals a guard may narrow
@@ -763,6 +766,7 @@ impl<'a> Gen<'a> {
             for_binding: None,
             last_local_set: None,
             narrow: Vec::new(),
+            def_collect: Vec::new(),
             in_bounds: Default::default(),
             narrow_scope: None,
             narrow_consts: Default::default(),

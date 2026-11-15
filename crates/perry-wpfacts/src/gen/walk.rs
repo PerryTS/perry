@@ -1186,8 +1186,10 @@ impl<'a> Gen<'a> {
                 continue;
             }
             self.last_local_set = None;
+            let da = self.def_assign_begin(fx, &ss[i]);
             self.stmt(fx, &ss[i]);
             pushed += self.narrow_assigned(fx, &ss[i]);
+            pushed += self.def_assign_end(fx, da);
             // An `if` whose one branch always leaves: what follows runs
             // under the other outcome of its test (`narrow_guard`).
             if let Stmt::If {

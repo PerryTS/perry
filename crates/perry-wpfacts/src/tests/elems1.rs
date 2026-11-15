@@ -343,3 +343,64 @@ fn elems1_i6_keep_prototype_index_past_the_end() {
     let d = "Array.prototype[5] = process.argv[2]; for (let i = 0; i < 6; i++) { x.elements[0] = y.elements[i]; }";
     assert_eq!(elem_kind(&src("", "", &[], d)), "boxed");
 }
+
+// ELEM3: three.core.js Matrix4.makeOrthographic / makePerspective: `let c;`
+// without initializer (ECMA-262 14.3.1: `undefined` when the declaration is
+// evaluated), assigned in every arm of an `if / else if / else` whose last
+// arm throws (14.14: it never reaches the statement after the `if`), then
+// stored. Only the arms' values reach the store. U-fixtures from the real
+// shape; KEEPs where `undefined` (or the declaration's value) can reach it.
+
+const ORTHO_DRIVER: &str = "x.ortho(Number(process.argv[2]));";
+
+fn ortho(body: &str) -> String {
+    let m = format!("ortho(k) {{ const te = this.elements; let c; {body} return this; }}");
+    src("", "", &[&m], ORTHO_DRIVER)
+}
+
+#[test]
+fn elems1_u1_let_assigned_in_every_arm_but_a_throwing_else() {
+    let s = ortho("if (k === 1) { c = 1; } else if (k === 2) { c = 2; } else { throw new Error(\"x\"); } te[0] = c;");
+    expect(&s, F4);
+}
+
+#[test]
+fn elems1_u2_let_assigned_in_every_arm() {
+    let s = ortho("if (k === 1) { c = 1; } else if (k === 2) { c = 2; } else { c = 3; } te[0] = c;");
+    expect(&s, F4);
+}
+
+#[test]
+fn elems1_u3_keep_no_final_else() {
+    // KEEP: no final `else`: when k is neither, the store reads `undefined`.
+    let s = ortho("if (k === 1) { c = 1; } else if (k === 2) { c = 2; } te[0] = c;");
+    assert_eq!(elem_kind(&s), "boxed");
+}
+
+#[test]
+fn elems1_u4_keep_closure_reads_before_the_assignment() {
+    // KEEP: the closure runs before the `if` assigns `c`: it returns
+    // `undefined`.
+    let s = ortho("const f = () => c; te[1] = f(); if (k === 1) { c = 1; } else { c = 2; } te[0] = c;");
+    assert_eq!(elem_kind(&s), "boxed");
+}
+
+#[test]
+fn elems1_u5_keep_loop_read_before_the_first_assignment() {
+    // KEEP: the first iteration reads `c` before the `if` assigns it.
+    let s = ortho("for (let i = 0; i < k; i++) { te[0] = c; if (k === 1) { c = 1; } else { c = 2; } }");
+    assert_eq!(elem_kind(&s), "boxed");
+}
+
+#[test]
+fn elems1_u6_switch_with_throwing_default() {
+    let s = ortho("switch (k) { case 1: c = 1; break; case 2: c = 2; break; default: throw new Error(\"x\"); } te[0] = c;");
+    expect(&s, F4);
+}
+
+#[test]
+fn elems1_u7_keep_switch_break_before_the_assignment() {
+    // KEEP: `break` before `c = 1` leaves the switch with `c` undefined.
+    let s = ortho("switch (k) { case 1: if (k > Number(process.argv[3])) break; c = 1; break; default: c = 2; } te[0] = c;");
+    assert_eq!(elem_kind(&s), "boxed");
+}
