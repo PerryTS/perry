@@ -129,7 +129,7 @@ mod tests {
     /// What a reader can tell two arrays apart by: the layout bits, the
     /// length, the capacity, the element-kind word and every slot word.
     unsafe fn image(arr: *mut ArrayHeader) -> (u16, u32, u32, u32, u32, Vec<u64>) {
-        let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let header = crate::array::array_gc_header(arr).expect("a live array head");
         let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader);
         let words = (0..(*arr).capacity as usize)
             .map(|i| *slots.add(i))

@@ -80,15 +80,6 @@ fn handle(v: f64) -> *mut ArrayHeader {
     crate::array::clean_arr_ptr_mut((v.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader)
 }
 
-/// The GC header of array head `arr`.
-unsafe fn gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
-    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let h = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (crate::gc_type_is_array!((*h).obj_type)).then_some(h)
-}
-
 /// The array's header says its slots are I32 words.
 ///
 /// # Safety
@@ -266,7 +257,7 @@ pub extern "C" fn js_array_rest_encode(arr: f64) -> f64 {
         }
         crate::array::clear_array_numeric_layout(a);
         crate::gc::mark_payload_pointer_free(a as usize);
-        if let Some(h) = gc_header(a) {
+        if let Some(h) = crate::array::array_gc_header(a) {
             (*h)._reserved |= GC_ARRAY_I32_LAYOUT;
         }
     }
@@ -309,7 +300,7 @@ pub extern "C" fn js_array_rest_push(
     len: u32,
 ) -> *mut ArrayHeader {
     let first = crate::array::clean_arr_ptr_mut(arr);
-    if first.is_null() || unsafe { gc_header(first) }.is_none() {
+    if first.is_null() || unsafe { crate::array::array_gc_header(first) }.is_none() {
         return crate::array::js_array_push_f64(arr, value);
     }
     unsafe {
@@ -346,7 +337,7 @@ pub extern "C" fn js_array_rest_push(
 /// # Safety
 /// `a` is a live array head.
 unsafe fn reserve(a: *mut ArrayHeader, cap: u32) -> *mut ArrayHeader {
-    if gc_header(a).is_none() || cap <= (*a).capacity {
+    if crate::array::array_gc_header(a).is_none() || cap <= (*a).capacity {
         return a;
     }
     crate::array::reserve_capacity(a, cap)

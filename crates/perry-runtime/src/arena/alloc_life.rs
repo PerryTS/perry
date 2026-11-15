@@ -511,7 +511,7 @@ pub(crate) fn birth(bits: u64) {
         return;
     }
     let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if addr < crate::gc::GC_HEADER_SIZE {
+    if !crate::value::addr_class::is_plausible_heap_addr(addr) {
         let _ = with(|s| s.births_other += 1);
         return;
     }
@@ -527,8 +527,8 @@ pub(crate) fn birth(bits: u64) {
                 settle(s, COVERED, x);
             }
             None => {
-                let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                let size = unsafe { (*header).size as u64 };
+                let size = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+                    .map_or(0, |h| h.size as u64);
                 s.claims_outside[0] += 1;
                 s.claims_outside[1] += size;
                 if !first {
