@@ -2243,6 +2243,10 @@ pub struct Model {
     pub inst_lose: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
+    /// The `join` calls of the Array.prototype.toString model (ECMA-262
+    /// 23.1.3.36 step 3): a callee without [[Call]] is no throw there, the
+    /// result is the String of Object.prototype.toString (20.1.3.6).
+    pub tostring_join_calls: crate::pts::FxHashSet<CallId>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.

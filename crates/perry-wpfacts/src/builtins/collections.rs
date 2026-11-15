@@ -1066,6 +1066,7 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
                         dst: f,
                     },
                 );
+                m.tostring_join_calls.insert(jc);
                 m.cons(f, Cons::Call { call: jc });
             });
             let r = m.calls[jc as usize].ret;

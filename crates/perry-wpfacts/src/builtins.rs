@@ -3445,6 +3445,12 @@ fn ns_method_inner(
                 true,
             )
         }
+        // %TypedArray%.from / .of (ECMA-262 23.2.2.1 step 2, 23.2.2.2
+        // step 3): a this value that is no constructor (IsConstructor,
+        // 7.2.4) is a TypeError before any step reads an argument: no code
+        // runs, nothing is handed on, the realm is not held.
+        (BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_), "from" | "of")
+            if this_no_constructor(m, call) => {}
         (_, n) => {
             let recv = if statics_ignore_this(ns) && members::ns_own_fn(ns, n) {
                 Recv::Ignored
@@ -3471,6 +3477,16 @@ fn ns_method_inner(
 /// `%TypedArray%.from` / `of`, which construct with the this value; and a
 /// member found on the namespace's chain (`Function.prototype.call`) is no
 /// own static.
+/// The this value of `call` is no constructor: the receiver token the call
+/// runs on is an object without [[Call]] (`Model::no_call_tok`), or the call
+/// has no receiver (`undefined`).
+fn this_no_constructor(m: &Model, call: CallId) -> bool {
+    match m.cur_this {
+        Some(t) => m.no_call_tok(t),
+        None => matches!(m.calls[call as usize].this, ThisArg::Undef),
+    }
+}
+
 fn statics_ignore_this(ns: BuiltinNs) -> bool {
     matches!(
         ns,

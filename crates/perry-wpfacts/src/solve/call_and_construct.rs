@@ -142,8 +142,33 @@ impl Model {
                 // A parameter marker stands for the caller's values: one may
                 // be a function.
                 self.mark_escape_why(t, &|_| "call: of a non-callable".into());
+                // Array.prototype.toString (23.1.3.36 step 3): `join` is
+                // called only if IsCallable; otherwise the result is the
+                // String of Object.prototype.toString (20.1.3.6), no throw.
+                if self.tostring_join_calls.contains(&call) && !self.is_marker(t) {
+                    let ret = self.calls[call as usize].ret;
+                    self.add_prim(ret, prim::STR);
+                }
             }
         }
+    }
+
+    /// ECMA-262 7.3.14 Call step 2 / 7.2.4 IsConstructor: token `t` is an
+    /// ordinary object without [[Call]] and so without [[Construct]] (an
+    /// object literal, an array, a plain instance, a class prototype object,
+    /// a builtin prototype, a module namespace): calling it, or a builtin
+    /// step that requires it to be a constructor, only throws a TypeError.
+    /// A parameter marker stands for the caller's values (one may be a
+    /// function), so it is none.
+    pub(crate) fn no_call_tok(&self, t: Tok) -> bool {
+        matches!(
+            self.toks[t as usize],
+            TokKind::Obj(_, _)
+                | TokKind::Proto(_)
+                | TokKind::ObjectProto
+                | TokKind::NativeProto(..)
+                | TokKind::ModNs(_)
+        ) && !self.is_marker(t)
     }
 
     /// The own parameters marker `t` stands for (DECISIONS 140): its
