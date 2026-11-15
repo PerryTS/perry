@@ -131,6 +131,82 @@ pub(crate) fn add_tree_converts_silently(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// `e` is a guard-free facts read whose kind mask holds only Number, Boolean,
+/// null and undefined. No recursion: a mask lookup.
+pub(crate) fn prim_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    prim_read_mask(ctx, e).is_some()
+}
+
+fn prim_read_mask(ctx: &FnCtx<'_>, e: &Expr) -> Option<u16> {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    else {
+        return None;
+    };
+    read_kinds(ctx, object, property).filter(|m| m & !K_PRIMS == 0)
+}
+
+/// `left op right` for `-` `*` `/` whose operands are Numbers or
+/// primitive-kind reads (`operand`): both are evaluated left to right, then
+/// converted (ToNumeric of Number, Boolean, null and undefined is a Number,
+/// 7.1.3; no user code, no BigInt arm, no throw), then one `fsub` / `fmul` /
+/// `fdiv`. No dynamic helper.
+///
+/// A read whose mask is Number and undefined only converts with ONE test and
+/// no branch: `select(is_number(v), v, NaN)`. The test is needed: `undefined`
+/// is the NaN-boxed word `TAG_UNDEFINED` = 0x7FFC_0000_0000_0001
+/// (`nanbox.rs`), a quiet NaN, and IEEE 754 propagates a NaN operand's
+/// payload, so `fmul(x, undefined)` would return that very word: `undefined`,
+/// not the Number NaN. A Number has one encoding in such a field (the plain
+/// double, `FieldProof::number`), so every word that fails the plain-number
+/// test is `undefined` and becomes the canonical NaN 0x7FF8_0000_0000_0000.
+/// The result of an IEEE operation on plain doubles is a plain double (an
+/// input NaN's payload, or a default NaN: both below the tag band; see
+/// `emit_js_value_is_number`). A mask with Boolean or null keeps
+/// `emit_prim_to_number` (its cold leaf `js_number_coerce`).
+pub(crate) fn try_lower_arith(
+    ctx: &mut FnCtx<'_>,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<Option<String>> {
+    if !matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div) {
+        return Ok(None);
+    }
+    let (Some(lk), Some(rk)) = (operand(ctx, left), operand(ctx, right)) else {
+        return Ok(None);
+    };
+    let l_raw = lower_expr(ctx, left)?;
+    let l = arith_to_number(ctx, left, lk, &l_raw)?;
+    let r_raw = lower_expr(ctx, right)?;
+    let r = arith_to_number(ctx, right, rk, &r_raw)?;
+    let blk = ctx.block();
+    Ok(Some(match op {
+        BinaryOp::Sub => blk.fsub(&l, &r),
+        BinaryOp::Mul => blk.fmul(&l, &r),
+        _ => blk.fdiv(&l, &r),
+    }))
+}
+
+fn arith_to_number(ctx: &mut FnCtx<'_>, e: &Expr, k: Operand, raw: &str) -> Result<String> {
+    if k == Operand::Number {
+        return Ok(raw.to_string());
+    }
+    if prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0) {
+        crate::expr::facts_canonical::witness(
+            ctx,
+            raw,
+            crate::expr::facts_canonical::Num::NumberOrUndefined,
+            "arith operand",
+        )?;
+        let is_num = crate::stmt::emit_js_value_is_number(ctx, raw);
+        let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
+        return Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
+    }
+    Ok(emit_prim_to_number(ctx, raw))
+}
+
 /// `ToNumber` of a primitive-kind value: the plain-number case is the value,
 /// every other case (undefined, null, a Boolean, an INT32 box) is the leaf
 /// `js_number_coerce`.

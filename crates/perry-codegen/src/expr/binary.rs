@@ -1559,6 +1559,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_prim =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bool_expr(ctx, right);
                 if !(l_prim && r_prim) {
+                    // CLS D2: Numbers and primitive-kind reads the facts
+                    // prove: converted inline, no dynamic helper.
+                    if let Some(value) =
+                        super::facts_number::try_lower_arith(ctx, *op, left, right)?
+                    {
+                        return Ok(value);
+                    }
                     // Non-BigInt inline fast path (the bcryptjs `_encipher`
                     // Feistel lever): for the six BITWISE ops, when BOTH
                     // operands are provably-not-BigInt we skip the dynamic
