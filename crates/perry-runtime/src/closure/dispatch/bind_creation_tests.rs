@@ -139,6 +139,9 @@ fn compact_birth_traces_target_and_receiver_across_full_collection() {
 fn compact_partials_are_traced_and_length_is_a_snapshot() {
     let _agent = crate::state::state();
     let _lock = crate::gc::global_side_table_test_lock();
+    // Compiled programs initialize GC before the first safepoint; this test
+    // collects, so it states that precondition as its neighbour above does.
+    crate::gc::gc_init();
     let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     for count in 1..=4 {
         let target = js_closure_alloc(&COMPILED, 0);
