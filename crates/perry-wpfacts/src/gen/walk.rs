@@ -786,6 +786,10 @@ impl<'a> Gen<'a> {
         ctor_of: Option<TmplId>,
     ) {
         let fn_ctor = class.is_none() && ctor_of.is_none();
+        if let Some(ks) = crate::born_with::store_only_keys(f) {
+            let ks = ks.iter().map(|k| self.m.atom(k)).collect();
+            self.m.store_only.insert(fxi, ks);
+        }
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
@@ -1333,6 +1337,14 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
+        // ONCHANGE3 rule A: the born-with runs of this list (`born_with.rs`).
+        for r in crate::born_with::runs(ss) {
+            let e = self.local(fx.module, r.e);
+            let news = r.news.iter().map(|&x| self.local(fx.module, x)).collect();
+            let calls = r.calls.iter().map(|(o, k, on_e)| (*o, self.m.atom(k), *on_e)).collect();
+            let module = fx.module;
+            self.m.born_recs.push(crate::born_with::BornRec { module, e, news, calls });
+        }
         let mut pushed = 0;
         let mut i = 0;
         // A local derived below a guarded counter in this block

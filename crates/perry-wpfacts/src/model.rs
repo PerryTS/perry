@@ -2078,6 +2078,12 @@ pub struct Model {
     /// site no store of the key reaches holds no own property of it for
     /// life (ECMA-262 10.1.9: only [[Set]] / [[DefineOwnProperty]] add one).
     pub tok_writers: FxHashMap<(TmplId, Atom), crate::pts::FxHashSet<Tok>>,
+    /// ONCHANGE3 rule A (`born_with.rs`): the runs generation saw, the
+    /// store-only bodies with the keys they store, and (after the solve,
+    /// before the sites) the birth tokens with each key they are born with.
+    pub born_recs: Vec<crate::born_with::BornRec>,
+    pub store_only: FxHashMap<FnIdx, Vec<Atom>>,
+    pub born_with: crate::pts::FxHashSet<(Tok, Atom)>,
     /// RPG1b: the functions whose body runs at most once per evaluation of
     /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
     /// with reload (the runtime's path registry may evaluate the module

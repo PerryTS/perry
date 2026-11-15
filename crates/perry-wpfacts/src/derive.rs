@@ -1454,6 +1454,9 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -
 }
 
 fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
+    // ONCHANGE3 rule A: the born-with keys, before any site reads them.
+    let born = crate::born_with::derive(g, tfs);
+    g.m.born_with = born;
     let m = &g.m;
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
@@ -1887,6 +1890,10 @@ fn judge(
     // slot that may hold the hole.
     let mut not_definite_slot = false;
     let mut fixed_shape = true;
+    // Rule A (ONCHANGE3): a call receiver read by its born-with own slot,
+    // and one read on the chain. Both together stay generic (owner
+    // 2026-11-15: mixed sites are unproven).
+    let (mut born_own, mut chain_read) = (false, false);
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
     // Reads of a class object's constant static (3.4).
@@ -1983,8 +1990,17 @@ fn judge(
                     fixed_shape = false;
                 }
                 if s.is_call {
-                    match lookup(m, tf, t, key, s.key) {
-                        Ok(ns) => callee.extend(ns),
+                    match lookup_holders(m, tf, t, key, s.key) {
+                        Ok(hs) => {
+                            for (h, n) in hs {
+                                if h == t && m.born_with.contains(&(t, s.key)) {
+                                    born_own = true;
+                                } else if h != t {
+                                    chain_read = true;
+                                }
+                                callee.push(n);
+                            }
+                        }
                         Err(why) => {
                             verdict.get_or_insert(Verdict::No(why));
                         }
@@ -2156,6 +2172,9 @@ fn judge(
             }
         }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
+    }
+    if born_own && chain_read {
+        verdict.get_or_insert(Verdict::No("mixed: born-with own slot and chain receivers".into()));
     }
     let mut targets = FxHashMap::default();
     let verdict = match verdict {
@@ -3348,7 +3367,7 @@ fn body_name(m: &Model, f: FnIdx) -> String {
 /// prototype on the stable chain that holds the key (F5). The nodes whose
 /// values the read gives; a holder that does not have the key and ends its
 /// chain makes the read `undefined`, which no call admits.
-fn lookup(
+pub(crate) fn lookup(
     m: &Model,
     tf: &TemplateFacts,
     t: Tok,
@@ -3421,6 +3440,13 @@ fn lookup_holders(
             return Ok(holds(t).into_iter().map(|n| (t, n)).collect());
         }
         Some(f) if !f.data_field => return Err("accessor key (E25)".into()),
+        // Rule A (ONCHANGE3, `born_with.rs`): every object of this birth
+        // site holds an own data property `a` before it can be observed:
+        // OrdinaryGet (10.1.8.1) finds it first; its values are the stores
+        // of `a` that reach the token.
+        _ if m.born_with.contains(&(t, a)) && holds(t).is_some() => {
+            return Ok(holds(t).into_iter().map(|n| (t, n)).collect());
+        }
         // Rule U (ONCHANGE1): post-birth stores of the key reach other birth
         // sites only: this one holds no own property of it (`unwritten_here`),
         // so OrdinaryGet (10.1.8.1) climbs the chain below.
