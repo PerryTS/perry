@@ -236,3 +236,50 @@ fn d3_subclass_static_block_both_constants() {
     );
     has(&s, prim::NUM | prim::TRUE);
 }
+
+/// Rule G2-true for primitive receivers: on the true side of `x.key`, a
+/// primitive `x` stays only if its read of `key` (7.3.2 GetV: the wrapper
+/// chain, whatever the program stored there) may be truthy.
+fn g2t(key: &str, proto: &str, extra: &str, arg: &str) -> String {
+    format!(
+        "class Box {{ v: any; constructor(v: any) {{ this.v = v; }} }}
+         class V {{ x: any; {proto} constructor() {{ this.x = 0; }}
+           set(x: any) {{ this.x = x; return this; }} copy(v: any) {{ this.x = v.x; return this; }} }}
+         const t = new V();
+         function look(x: any) {{ if (x.{key}) t.copy(x); else t.set(x); }}
+         look(new V());
+         look({arg});
+         {extra}
+         const b = new Box(t.x);
+         console.log(b.v);"
+    )
+}
+
+const ISV: &str = "static { (V.prototype as any).isV = true; }";
+
+#[test]
+fn g2t_number_leaves_true_side() {
+    let s = g2t("isV", ISV, "", "Number(process.argv[2])");
+    let (p, o, pf) = boxv(&s);
+    assert!(!o && p == prim::NUM, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+}
+
+#[test]
+fn g2t_keep_builtin_member() {
+    has(&g2t("toFixed", ISV, "", "Number(process.argv[2])"), prim::UNDEF);
+}
+
+#[test]
+fn g2t_keep_number_prototype_store() {
+    has(&g2t("isV", ISV, "(Number.prototype as any).isV = true;", "Number(process.argv[2])"), prim::UNDEF);
+}
+
+#[test]
+fn g2t_keep_object_prototype_computed_store() {
+    has(&g2t("isV", ISV, "(Object.prototype as any)[process.argv[2]] = 1;", "Number(process.argv[2])"), prim::UNDEF);
+}
+
+#[test]
+fn g2t_keep_string_length() {
+    has(&g2t("length", ISV, "", "String(Math.random())"), prim::UNDEF);
+}

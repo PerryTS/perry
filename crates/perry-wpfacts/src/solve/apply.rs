@@ -543,14 +543,34 @@ impl Model {
             Cons::FieldTruthy { key, test, dst } => {
                 // Rule G2: `x` where `x.key` was truthy; rule G1: where
                 // `x.key === b` (a Boolean constant) was decided. Reading `key` on
-                // `null`/`undefined` throws, so neither reaches `dst`; every
-                // other primitive kind passes (its truthiness is not known).
+                // `null`/`undefined` throws, so neither reaches `dst`. Every
+                // other primitive kind is judged like a token, per kind: its
+                // read of `key` is GetV (7.3.2: ToObject, then the wrapper
+                // prototype's chain; a String's own index and `length` keys),
+                // the solver's primitive load (`builtins::prim_load`: builtin
+                // members, program stores on the chain, a computed-key store,
+                // replayed on a later store). The kind, with the host's
+                // interval and constants, passes once that read may pass `test`.
                 let strip = prim::NULL | prim::UNDEF;
-                if prim & !strip != 0 {
+                let mut kinds = prim & !strip;
+                while kinds != 0 {
+                    let k = kinds & kinds.wrapping_neg();
+                    kinds &= !k;
+                    let one = self.node_l("field-truthy-prim");
                     let strs = self.nodes[n as usize].strs;
                     let saved = self.cur_range.replace(self.rg(n));
-                    self.add_s(dst, &[], prim & !strip, strs);
+                    self.add_s(one, &[], k, strs);
                     self.cur_range = saved;
+                    let read = self.node_l("field-truthy-prim-read");
+                    self.cons(
+                        read,
+                        Cons::Guard {
+                            test,
+                            from: one,
+                            dst,
+                        },
+                    );
+                    self.cons(one, Cons::Load { key, dst: read });
                 }
                 for &t in toks {
                     if t == TOP || self.is_marker(t) {
