@@ -114,6 +114,11 @@ struct W<'a> {
     /// data properties on every run (`analyze_in_present`): present once
     /// `super()` has returned.
     present: &'a BTreeSet<String>,
+    /// R9BIRTH2 rule L: `const` locals initialised with `this`
+    /// (`const scope = this`). Binding one observes nothing; any other use
+    /// of it is a use of `this` (a leak): a read of the local, a closure
+    /// that captures it.
+    aliases: BTreeSet<perry_hir::types::LocalId>,
 }
 
 pub fn analyze(c: &Class) -> CtorPhase {
@@ -243,6 +248,7 @@ fn analyze_body(
         read_before: BTreeSet::new(),
         exits: Vec::new(),
         order,
+        aliases: BTreeSet::new(),
     };
     let mut st = St {
         open: true,
@@ -273,6 +279,21 @@ fn analyze_body(
     for p in params {
         if let Some(d) = &p.default {
             w.expr(&mut st, d);
+        }
+    }
+    // Rule L: the body's top-level `const x = this` aliases, known before
+    // the walk: a function declaration is hoisted (its closure is created
+    // at the top of the body, ECMA-262 10.2.11 step 36), ahead of the
+    // alias's own statement, and a capture of the alias there is a use.
+    for s in body {
+        if let Stmt::Let {
+            id,
+            mutable: false,
+            init: Some(Expr::This),
+            ..
+        } = s
+        {
+            w.aliases.insert(*id);
         }
     }
     w.stmts(&mut st, body);
@@ -389,6 +410,13 @@ impl W<'_> {
 
     fn stmt(&mut self, st: &mut St, s: &Stmt) {
         match s {
+            // Rule L: `const scope = this` binds the value and runs no code.
+            Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::This),
+                ..
+            } if self.aliases.contains(id) => {}
             Stmt::Let { init, .. } => {
                 if let Some(e) = init {
                     self.expr(st, e);
@@ -745,12 +773,19 @@ impl W<'_> {
             Expr::Closure {
                 captures_this,
                 body,
+                captures,
+                mutable_captures,
                 ..
             } => {
-                if *captures_this || body_mentions_this(body) {
+                if *captures_this
+                    || body_mentions_this(body)
+                    || captures.iter().chain(mutable_captures).any(|c| self.aliases.contains(c))
+                {
                     self.leak(st);
                 }
             }
+            // Rule L: the value of a `this` alias is `this`.
+            Expr::LocalGet(id) if self.aliases.contains(id) => self.leak(st),
             _ => {
                 walk_expr_children(e, &mut |c| self.expr(st, c));
             }

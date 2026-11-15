@@ -1806,6 +1806,10 @@ fn judge(
     let mut slots: Vec<Option<u32>> = Vec::new();
     // Receivers read by an own data lookup or `undefined` (OwnDataOrAbsent).
     let mut own_or_absent = 0usize;
+    // A slot in `slots` that is not a definite own data field: one a
+    // private-name lookup reads (not [[Get]]), or a declared / reserved
+    // slot that may hold the hole.
+    let mut not_definite_slot = false;
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
@@ -1883,6 +1887,7 @@ fn judge(
                     if !s.is_call {
                         if let Some(slot) = private_own_slot(m, tf, t, key, s.key) {
                             slots.push(Some(slot));
+                            not_definite_slot = true;
                             // This proves one slot, not a fixed full layout.
                             fixed_shape = false;
                             continue;
@@ -1924,6 +1929,9 @@ fn judge(
                             && f.data_field
                             && f.slot.is_some() =>
                     {
+                        // A declared or reserved slot may hold the hole
+                        // (the key absent: [[Get]] goes on up the chain).
+                        not_definite_slot |= !f.definite;
                         slots.push(f.slot)
                     }
                     Some(f) if !f.data_field => match accessor_one(m, t, s.key, false) {
@@ -2129,6 +2137,14 @@ fn judge(
                 } else {
                     Verdict::T0Set
                 }
+            } else if !not_definite_slot && !m.is_private_atom(s.key) && !m.optimistic_json_key {
+                // Each entry is one receiver's [[Get]] outcome (10.1.8.1):
+                // `Some` a definite own data field (found first, whatever
+                // the chain holds), `None` a key absent from the object and
+                // its whole chain (`undefined`). Different slots, or a slot
+                // beside an absent key, are still an own data value or
+                // `undefined` on every receiver: the `own_or_absent` outcome.
+                Verdict::OwnDataOrAbsent
             } else {
                 Verdict::No("slots differ across the receiver set".into())
             }
