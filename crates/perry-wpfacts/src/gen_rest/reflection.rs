@@ -120,6 +120,9 @@ impl<'a> Gen<'a> {
                 };
                 self.store(fx, t, key, v, "Reflect.set".into(), None, false);
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
+                // 28.1.12: target.[[Set]](key, v, receiver); a setter found on
+                // target's chain runs with this = receiver (10.1.9.2 step 7).
+                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Store(v) });
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectDelete { target, key } => {

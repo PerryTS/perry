@@ -230,3 +230,9 @@ fn audit1_u3_keep_receiver_is_target() {
     let r = v("class P { m() { return 1; } get gg(): any { return this.m(); } }\nconst p = new P();\nReflect.get(p, \"gg\", p);\n", "m", true);
     assert!(has(&r, "T0Mono"), "this.m() calls P::m alone: {r:?}");
 }
+/// U4 keep: `Reflect.set` with receiver = target keeps the setter's `this.m()` proven.
+#[test]
+fn audit1_u4_keep_receiver_is_target() {
+    let r = v("class P { m() { return 1; } set ss(x: any) { this.m(); } }\nconst p = new P();\nReflect.set(p, \"ss\", 1, p);\n", "m", true);
+    assert!(has(&r, "T0Mono"), "this.m() calls P::m alone: {r:?}");
+}
