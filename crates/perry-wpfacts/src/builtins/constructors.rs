@@ -21,6 +21,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             site: c.site,
             region: m.thrown,
         });
+        m.why_mint(c2, None, u32::MAX);
         return new_builtin_ns(m, ns, c2);
     }
     match ns {

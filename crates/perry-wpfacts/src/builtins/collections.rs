@@ -317,6 +317,7 @@ pub(super) fn cb_call(
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let site = m.calls.len() as CallId;
+    m.why_mint_by(site, by);
     m.chain_call(
         by,
         0,
@@ -422,6 +423,7 @@ fn member_call(
         region: m.thrown,
     });
     m.recv_calls.insert((t, key, get), call);
+    m.why_mint(call, Some(t), u32::MAX);
     (call, true)
 }
 

@@ -101,6 +101,8 @@ impl Prov {
                 sel,
                 sel_nodes,
                 sel_checked: Default::default(),
+                mints: Default::default(),
+                implicit_by: Default::default(),
             }
         });
         if out.is_none() && why.is_none() {
@@ -382,6 +384,40 @@ pub(crate) struct WhyRec {
     sel_nodes: crate::pts::FxHashMap<NodeId, usize>,
     /// Nodes already matched against the label selectors.
     sel_checked: crate::pts::FxHashSet<NodeId>,
+    /// Calls minted outside generation (`Model::why_mint`).
+    mints: crate::pts::FxHashMap<u32, Mint>,
+    /// (node, reason) -> the model call whose `implicit_args` touched it.
+    implicit_by: crate::pts::FxHashMap<(NodeId, u32), u32>,
+}
+
+/// Where a call without a source site was minted (the solver or a builtin
+/// model), what it was made for and what was being applied then.
+#[derive(Clone, Copy)]
+pub(crate) struct Mint {
+    loc: &'static Location<'static>,
+    src: NodeId,
+    rule: Option<(NodeId, Cons)>,
+    tok: Option<Tok>,
+    reason: u32,
+    /// The call it runs for (a builtin's callback call), u32::MAX: none.
+    by: u32,
+}
+
+/// The call a call-carrying constraint names, and its kind.
+fn cons_call(c: &Cons) -> Option<u32> {
+    match *c {
+        Cons::Call { call }
+        | Cons::CallThis { call, .. }
+        | Cons::New { call }
+        | Cons::NewProgram { call }
+        | Cons::ReflectNew { call, .. }
+        | Cons::ReflectNewTarget { call, .. }
+        | Cons::NewNamed { call, .. }
+        | Cons::MCall { call, .. }
+        | Cons::ProtoMethods { call, .. }
+        | Cons::SuperCtor { call, .. } => Some(call),
+        _ => None,
+    }
 }
 
 /// The constraint reads or writes a key no constant names.
@@ -426,6 +462,11 @@ pub struct WhyHop {
     /// "" (the walk goes on), "seed" (no parent: a maker, a builtin model,
     /// a literal), "seen" (printed already), "norec" (no record).
     pub end: &'static str,
+    /// The hop's call (u32::MAX: none), the rule's node and the receiver
+    /// token its edge was made for: what `why_calls` explains.
+    pub call: u32,
+    pub rule_node: NodeId,
+    pub recv: Option<Tok>,
 }
 
 impl std::fmt::Display for WhyHop {
@@ -616,6 +657,24 @@ impl Model {
     }
 
     fn why_hop(&self, solve: u32, depth: u32, n: NodeId, v: WVal, p: Option<&Parent>, end: &'static str) -> WhyHop {
+        let (mut hcall, mut hrule, mut hrecv) = (u32::MAX, NO_NODE, None);
+        if let Some(p) = p {
+            hcall = if p.call != 0 { p.call - 1 } else { u32::MAX };
+            if let Some((rn, _)) = p.rule {
+                hrule = rn;
+            }
+            if let Some(e) = p.edge {
+                if hcall == u32::MAX && e.call != 0 {
+                    hcall = e.call - 1;
+                }
+                if let Some((rn, _)) = e.rule {
+                    hrule = rn;
+                }
+                if e.tok != 0 {
+                    hrecv = Some(e.tok - 1);
+                }
+            }
+        }
         let (via, site, work, at) = match p {
             None => ("-".to_string(), "-".to_string(), 0, "-".to_string()),
             Some(p) => {
@@ -674,6 +733,193 @@ impl Model {
             work,
             at,
             end,
+            call: hcall,
+            rule_node: hrule,
+            recv: hrecv,
+        }
+    }
+
+    /// `PERRY_FACTS_STOP` / `PERRY_FACTS_WHY` only: note where `call`, a
+    /// call without a source site, was minted. Off: one `Option` test.
+    #[track_caller]
+    pub(crate) fn why_mint(&mut self, call: u32, tok: Option<Tok>, reason: u32) {
+        let (src, rule) = (self.cur_src, self.prov_rule);
+        if let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) {
+            w.mints.insert(call, Mint { loc: Location::caller(), src, rule, tok, reason, by: u32::MAX });
+        }
+    }
+
+    /// `why_mint` of a call a builtin model makes while it runs for `by`.
+    #[track_caller]
+    pub(crate) fn why_mint_by(&mut self, call: u32, by: u32) {
+        let (src, rule) = (self.cur_src, self.prov_rule);
+        if let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) {
+            w.mints.insert(call, Mint { loc: Location::caller(), src, rule, tok: None, reason: u32::MAX, by });
+        }
+    }
+
+    /// Diagnostic only: model call `call` puts a protocol touch with
+    /// `reason` on argument node `n` (`builtins::implicit_args`).
+    pub(crate) fn why_implicit(&mut self, n: NodeId, reason: u32, call: u32) {
+        if let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) {
+            w.implicit_by.entry((n, reason)).or_insert(call);
+        }
+    }
+
+    /// A node: label, owner function, first values.
+    fn why_node(&self, n: NodeId) -> String {
+        if n == NO_NODE || n as usize >= self.nodes.len() {
+            return "-".into();
+        }
+        let vals = self.why_vals(n, None);
+        let vs: Vec<String> = vals.iter().take(3).map(|&v| self.why_val(v)).collect();
+        let more = if vals.len() > 3 { format!(",+{}", vals.len() - 3) } else { String::new() };
+        let label = self.labels.get(n as usize).copied().unwrap_or("?").replace(char::is_whitespace, "_");
+        format!("n{n}[{label}|{}|{}{more}]", self.why_fn(n), vs.join(","))
+    }
+
+    /// For each call of the chain (and the calls their minting traces back
+    /// to): owner, callee, receiver, arguments, and where it was minted.
+    fn why_calls(&self, solve: u32, hops: &[WhyHop]) {
+        let Some(w) = self.prov.as_ref().and_then(|p| p.why.as_ref()) else {
+            return;
+        };
+        // Node -> (call, role), and call -> callee constraints: one scan.
+        let mut role: crate::pts::FxHashMap<NodeId, Vec<(u32, &'static str)>> = Default::default();
+        for (i, c) in self.calls.iter().enumerate() {
+            let i = i as u32;
+            if let crate::model::ThisArg::Node(n) = c.this {
+                role.entry(n).or_default().push((i, "this"));
+            }
+            for &a in &c.args {
+                role.entry(a).or_default().push((i, "arg"));
+            }
+            for &a in &c.spread {
+                role.entry(a).or_default().push((i, "spread"));
+            }
+            role.entry(c.ret).or_default().push((i, "ret"));
+        }
+        let mut callee: crate::pts::FxHashMap<u32, Vec<(NodeId, &'static str)>> = Default::default();
+        for (n, node) in self.nodes.iter().enumerate() {
+            for c in &node.cons {
+                if let Some(k) = cons_call(c) {
+                    callee.entry(k).or_default().push((n as NodeId, c.kind_name()));
+                }
+            }
+        }
+        let in_calls = |n: NodeId| -> String {
+            role.get(&n).map_or("-".into(), |v| {
+                v.iter().take(4).map(|(c, r)| format!("c{c}:{r}")).collect::<Vec<_>>().join(",")
+            })
+        };
+        let mut queue: Vec<u32> = Vec::new();
+        for h in hops {
+            if h.call != u32::MAX {
+                queue.push(h.call);
+            }
+            if h.rule_node != NO_NODE {
+                let recv = h.recv.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+                let back = h
+                    .recv
+                    .and_then(|t| w.first.get(&(h.rule_node, WVal::Tok(t))))
+                    .map_or("-".to_string(), |p| {
+                        format!("n{}<-{} work={} at={}:{}", h.rule_node, self.why_node(p.src), p.work, short(p.loc.file()), p.loc.line())
+                    });
+                eprintln!(
+                    "WHY solve={solve} RULE hop={} node={} in={} recv={recv} recv-from={back}",
+                    h.depth,
+                    self.why_node(h.rule_node),
+                    in_calls(h.rule_node)
+                );
+                for &(c, _) in role.get(&h.rule_node).into_iter().flatten().take(2) {
+                    queue.push(c);
+                }
+            }
+        }
+        let mut done = crate::pts::FxHashSet::default();
+        let mut touch_from: Vec<u32> = Vec::new();
+        let mut k = 0;
+        while k < queue.len() && done.len() < 16 {
+            let id = queue[k];
+            k += 1;
+            if !done.insert(id) {
+                continue;
+            }
+            let Some(c) = self.calls.get(id as usize) else { continue };
+            let this = match c.this {
+                crate::model::ThisArg::Undef => "undef".to_string(),
+                crate::model::ThisArg::Node(n) => self.why_node(n),
+                crate::model::ThisArg::Tok(t) => format!("tok:{}", self.why_val(WVal::Tok(t))),
+            };
+            let args: Vec<String> = c.args.iter().take(3).map(|&a| self.why_node(a)).collect();
+            let spread: Vec<String> = c.spread.iter().take(2).map(|&a| self.why_node(a)).collect();
+            let ce: Vec<String> = callee
+                .get(&id)
+                .map(|v| v.iter().take(3).map(|&(n, kn)| format!("{kn}@{}", self.why_node(n))).collect())
+                .unwrap_or_default();
+            let kind = match w.mints.get(&id) {
+                Some(m) => format!("synth@{}:{}", short(m.loc.file()), m.loc.line()),
+                None if c.site == id && self.call_place.contains_key(&id) => "gen".to_string(),
+                None if c.site == id => "model-or-instance(site=self,no-place)".to_string(),
+                None => format!("copy-of-site-c{}", c.site),
+            };
+            let owner = match self.call_place.get(&id) {
+                Some(&(f, _)) => self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone()),
+                None => self.why_fn(c.ret),
+            };
+            eprintln!(
+                "WHY solve={solve} CALL c{id} site=s{} kind={kind} owner={owner} callee=[{}] this={this} args=[{}] spread=[{}] ret={}",
+                c.site,
+                ce.join(";"),
+                args.join(";"),
+                spread.join(";"),
+                self.why_node(c.ret)
+            );
+            if let Some(m) = w.mints.get(&id) {
+                let tok = m.tok.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+                let reason = self.reasons.get(m.reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_");
+                let rule = m.rule.map_or("-".to_string(), |(rn, rc)| format!("{}@{} in={}", rc.kind_name(), self.why_node(rn), in_calls(rn)));
+                let from = match m.rule {
+                    Some((rn, Cons::Implicit { reason: r, .. })) => w.implicit_by.get(&(rn, r)).copied(),
+                    _ => None,
+                };
+                if let Some(x) = from {
+                    queue.push(x);
+                    touch_from.push(x);
+                }
+                if m.by != u32::MAX {
+                    queue.push(m.by);
+                }
+                eprintln!(
+                    "WHY solve={solve} MINT c{id} for={tok} reason={reason} while={rule} touch-from-model-call={} by={} src={} src-in={}",
+                    from.map_or("-".to_string(), |x| format!("c{x}")),
+                    if m.by == u32::MAX { "-".to_string() } else { format!("c{}", m.by) },
+                    self.why_node(m.src),
+                    in_calls(m.src)
+                );
+                for n in [m.rule.map_or(NO_NODE, |(rn, _)| rn), m.src] {
+                    for &(c2, _) in role.get(&n).into_iter().flatten().take(2) {
+                        queue.push(c2);
+                    }
+                }
+            }
+        }
+        // The model call that put the touch: every value of its callee
+        // nodes (a method call's receiver), each with its chain.
+        let mut walked = crate::pts::FxHashSet::default();
+        for x in touch_from {
+            for &(n, kn) in callee.get(&x).into_iter().flatten().take(3) {
+                let vals = self.why_vals(n, None);
+                let vs: Vec<String> = vals.iter().take(16).map(|&v| self.why_val(v)).collect();
+                eprintln!("WHY solve={solve} FROM c{x} callee={kn}@n{n} values={} [{}]", vals.len(), vs.join(";"));
+                for &v in vals.iter().take(16) {
+                    let mut h = Vec::new();
+                    self.why_walk(solve, n, v, &mut h, &mut walked);
+                    for hp in &h {
+                        eprintln!("WHY solve={solve} FROM c{x} {hp}");
+                    }
+                }
+            }
         }
     }
 
@@ -866,6 +1112,7 @@ impl Model {
         for h in &hops {
             eprintln!("{h}");
         }
+        self.why_calls(solve, &hops);
         if more > 0 {
             eprintln!("WHY solve={solve} MORE values={more} hops={more_hops} (chains of the other values not printed)");
         }

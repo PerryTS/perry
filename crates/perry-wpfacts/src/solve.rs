@@ -1876,6 +1876,7 @@ impl Model {
             region: self.thrown,
         });
         self.protocol_calls.insert(call);
+        self.why_mint(call, Some(t), reason);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         if implsrc_on() {
             eprintln!(

@@ -1914,6 +1914,7 @@ impl Model {
             site: 0,
             region: self.thrown,
         });
+        self.why_mint(call, None, u32::MAX);
         self.rel(|| format!("accessorcall {call} {holder} {f} {}", setter as u8));
         self.cons(recv, Cons::NativeThis { call, f });
     }

@@ -422,6 +422,7 @@ fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
     for &a in c.args.iter().chain(c.spread.iter()) {
+        m.why_implicit(a, r, call);
         m.cons(a, Cons::Implicit { reason: r, proto });
     }
 }

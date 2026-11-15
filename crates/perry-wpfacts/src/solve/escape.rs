@@ -852,6 +852,7 @@ impl Model {
             region: self.esc_raise,
         });
         self.contract_new.insert(call);
+        self.why_mint(call, None, u32::MAX);
         self.construct(call, cobj);
         // ... and read its fields: they leave key by key, described by the
         // class contract (`Gen::fields_leave`, DECISIONS 88).
@@ -912,6 +913,7 @@ impl Model {
             site: 0,
             region: self.esc_raise,
         });
+        self.why_mint(call, Some(t), reason);
         self.construct(call, t);
         self.sink_node(ret, reason);
     }
@@ -1217,6 +1219,7 @@ impl Model {
                     site: 0,
                     region: self.esc_raise,
                 });
+                self.why_mint(call, Some(t), reason);
                 self.construct(call, t);
                 let esc = self.escaped_classes;
                 self.add_tok(esc, t);
