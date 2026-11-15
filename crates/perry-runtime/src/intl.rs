@@ -16,7 +16,7 @@ use crate::StringHeader;
 use crate::{builtins, closure, feature_hooks, gc, object, string, symbol, value};
 use closure::ClosureHeader;
 use object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
+    js_object_alloc, js_object_get_field_by_name_f64,
     set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
 };
 use string::{js_string_from_bytes, str_bytes_from_jsvalue};
