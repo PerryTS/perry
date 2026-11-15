@@ -2195,6 +2195,7 @@ mod key2;
 mod r9key1;
 mod r9key2;
 mod r9sites1;
+mod r9sites3;
 mod nocall1;
 mod skinfa8;
 mod local_versions;

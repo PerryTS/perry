@@ -49,8 +49,13 @@ impl Model {
                 // The run reads no key.
                 Some(NO_NODE) => {}
                 // A fresh slot: the run's key (its key variable's copy holds
-                // the key's atom, `instance`).
-                Some(p) if self.nodes[p as usize].frame == inst + 1 => self.add_prim(p, prim::STR),
+                // the key's atom, `instance`). The run binds that one String
+                // (14.7.5.10 %ForInIteratorPrototype%.next): a String
+                // constant, so `'x ' + key` in the run is a constant too.
+                Some(p) if self.nodes[p as usize].frame == inst + 1 => {
+                    let set = self.str_set(&[k]);
+                    self.add_s(p, &[], prim::STR, set);
+                }
                 _ => {
                     self.for_in_every_key(call, ft);
                     return None;
@@ -98,8 +103,17 @@ impl Model {
     }
 
     /// Run for-in body `ft` once with every key (the loop as it is).
+    #[track_caller]
     pub(crate) fn for_in_every_key(&mut self, call: CallId, ft: Tok) {
+        if for_in_diag() {
+            eprintln!("perry: wpfacts forindiag every-key body={} at={}", self.funcs[self.tok_fn(ft) as usize].name, std::panic::Location::caller());
+        }
         if self.for_in_any.insert((call, ft)) {
+            // The loop as it is: its key is any String key of the value
+            // (14.7.5.10: a String, never a Symbol).
+            if let Some(&k) = self.calls[call as usize].args.first() {
+                self.add_prim(k, prim::STR);
+            }
             self.call_tok(call, ft, None);
         }
     }

@@ -366,8 +366,10 @@ impl<'a> Gen<'a> {
         }
         let on = self.local(mi, f.obj);
         let gn = self.tok_node(tok);
+        // The template call's key: any String only once a run with every
+        // key is made (`Model::for_in_every_key`); a per-key run binds its
+        // own constant key.
         let k = self.tmp("forin-key");
-        self.m.add_prim(k, prim::STR);
         let (call, _) = self.new_call(ThisArg::Undef, vec![k], vec![]);
         self.m.cons(gn, Cons::ForInBody { obj: on, call });
     }

@@ -807,7 +807,49 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) => self.prim_kids(
+            // A template substitution `${ x }` (ECMA-262 13.2.8.6: ToString,
+            // 7.1.17): a String is itself, a Number its text, an object its
+            // ToPrimitive (hint string) result's ToString, a Symbol throws.
+            // Its Strings are those of `"" + x` (13.15.3, rule M3,
+            // `plus_strs`): the same for every primitive; for an object
+            // `"" + x` (hint default) holds every text hint string gives
+            // (`excl_parts`: any string, or a NativeFunction text whose
+            // valueOf / toString the program does not write). So
+            // `x '${ key }'` over constant keys is constants.
+            Expr::TemplateStringCoerce(x) => {
+                let v = self.expr(fx, x);
+                let r = self.m.reason("primitive builtin operand");
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let empty = self.str_literal("");
+                let out = self.tmp("template-str");
+                let (nl, nr) = (self.tmp("plus-num"), self.tmp("plus-num"));
+                self.m.cons(
+                    empty,
+                    Cons::Plus {
+                        str: out,
+                        num: nl,
+                        other: v,
+                        right: false,
+                    },
+                );
+                self.m.cons(
+                    v,
+                    Cons::Plus {
+                        str: out,
+                        num: nr,
+                        other: empty,
+                        right: true,
+                    },
+                );
+                out
+            }
+            Expr::StringCoerce(..) => self.prim_kids(
                 fx,
                 e,
                 prim::STR,
