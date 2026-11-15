@@ -739,18 +739,53 @@ impl Model {
                     // another unit's layout the accessor is beyond its contract
                     // in any case: the census breaks it.)
                     match self.toks[t as usize] {
-                        TokKind::Obj(tm, _) if !data => {
+                        //
+                        // Rule D2: a DATA descriptor under a named key the
+                        // template neither holds at birth nor has on its
+                        // prototype (ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3
+                        // step 2: `current` undefined) creates that key
+                        // alone, with the descriptor's value (stored by
+                        // `define_by_data`) and attributes, on a class
+                        // instance or a literal: a key added after birth
+                        // (`adds_keys`: no exact key list, no fixed layout),
+                        // no other own key created, changed or removed, no
+                        // accessor installed. Reads and stores of the key
+                        // itself see an accessor atom (`add_accessor_atom`),
+                        // never a plain slot (`defined_keys`, key-scoped);
+                        // the key does not enter `accessor_keys`, which
+                        // would refuse every key. A
+                        // non-extensible target makes the define throw
+                        // (10.1.6.3 step 2.a) and creates nothing.
+                        TokKind::Obj(tm, _) => {
                             let tpl = &self.tmpls[tm as usize];
-                            let new_key = matches!(
-                                tpl.kind,
-                                TmplKind::Lit { .. }
-                                    | TmplKind::Class {
-                                        literal_shape: true,
-                                        ..
-                                    }
-                            ) && !tpl.birth_keys.contains(&key);
+                            let birth = tpl.birth_keys.contains(&key);
+                            let new_key = !birth
+                                && if data {
+                                    matches!(
+                                        tpl.kind,
+                                        TmplKind::Lit { .. } | TmplKind::Class { .. }
+                                    ) && !tpl.proto_members.contains(&key)
+                                } else {
+                                    matches!(
+                                        tpl.kind,
+                                        TmplKind::Lit { .. }
+                                            | TmplKind::Class {
+                                                literal_shape: true,
+                                                ..
+                                            }
+                                    )
+                                };
                             if new_key {
                                 *self.adds_keys.entry(tm).or_default() += 1;
+                                if data {
+                                    self.virt_revoke(t, Some(key));
+                                    let ks = self.defined_keys.entry(tm).or_default();
+                                    if !ks.contains(&key) {
+                                        ks.push(key);
+                                    }
+                                }
+                            } else if data {
+                                self.mark_hard_as(t, Hard::E5DefineProperty, reason, false);
                             } else {
                                 self.mark_hard(t, Hard::E5DefineProperty, reason);
                             }

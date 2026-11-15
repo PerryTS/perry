@@ -2433,6 +2433,13 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     if let Some(k) = m.accessor_keys.get(&t).filter(|k| !k.is_empty()) {
         return Err(format!("accessor keys on the token ({})", k.len()));
     }
+    if m
+        .tmpl_of(t)
+        .and_then(|tm| m.defined_keys.get(&tm))
+        .is_some_and(|ks| ks.contains(&a))
+    {
+        return Err("the key was defined by a data descriptor (its attributes)".into());
+    }
     if !m
         .tmpl_of(t)
         .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())

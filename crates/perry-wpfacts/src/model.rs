@@ -2010,6 +2010,13 @@ pub struct Model {
     /// against the settled birth keys (`derive`), where an inherited birth key
     /// is no add.
     pub adds_named: FxHashMap<(TmplId, Atom), u32>,
+    /// The keys a named data descriptor created after birth on a template's
+    /// objects (rule D2, ECMA-262 10.1.6.3 step 2): data under the
+    /// descriptor's attributes (absent = false: non-writable, non-enumerable,
+    /// non-configurable), so no read or store of such a key is one of a
+    /// plain own data slot (`derive::own_data_or_absent_why`, key-scoped;
+    /// the template's other keys keep their facts).
+    pub defined_keys: FxHashMap<TmplId, Vec<Atom>>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     /// Tokens HARD only through named data definitions (rule D1): their
     /// any-key field has no "written by unknown code" seed yet; the first
