@@ -113,6 +113,24 @@ pub extern "C" fn js_nanbox_pointer(ptr: i64) -> f64 {
     box_unusual_pointer_word(bits)
 }
 
+/// Box the receiver word of a by-name entry (`js_object_get_field_by_name`
+/// and its siblings), which is a raw address or an already-boxed value: the
+/// generic read hands a primitive number its own bits. A word whose top 16
+/// bits are zero is an address and is boxed as [`js_nanbox_pointer`] boxes
+/// it; any other word is a NaN-box tag or the bits of a number and is kept,
+/// so a number never becomes a `POINTER_TAG` value whose header is read.
+#[inline]
+pub(crate) fn box_receiver_word(bits: u64) -> f64 {
+    const LOW: u64 = crate::value::addr_class::HANDLE_BAND_MAX as u64;
+    if bits.wrapping_sub(LOW) < (1u64 << 48) - LOW {
+        return f64::from_bits(JSValue::pointer(bits as *const u8).bits());
+    }
+    if bits >> 48 == 0 {
+        return box_unusual_pointer_word(bits);
+    }
+    f64::from_bits(bits)
+}
+
 /// The words [`js_nanbox_pointer`] does not box as a `POINTER_TAG`:
 /// - a word that already carries a NaN-box tag (top bits in the NaN range:
 ///   JS_HANDLE, STRING, POINTER, ...) is preserved as-is, so a tag is never

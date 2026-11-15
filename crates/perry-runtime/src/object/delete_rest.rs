@@ -32,7 +32,7 @@ pub extern "C" fn js_object_delete_field(
 ) -> i32 {
     if !key.is_null() {
         if let Some(result) = super::deferred_namespace::with_key_target(
-            crate::value::js_nanbox_pointer(obj as i64),
+            crate::value::box_receiver_word(obj as u64),
             crate::value::js_nanbox_string(key as i64),
             |target, key| {
                 js_object_delete_field_ordinary(
