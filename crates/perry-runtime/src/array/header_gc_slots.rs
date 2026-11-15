@@ -310,10 +310,9 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     // #7480: this is the post-hoc funnel most bulk element mutators use —
     // Generic `shift`, `unshift`, `splice`, `fill`, `copyWithin`, and `reverse`
     // mutate slots with bare `ptr::write` / `ptr::copy` and then land here.
-    // NOT `sort`: its default path writes the rank permutation back through
-    // `RootedArrayElems::set`, so it revokes through the STORE funnel
-    // (`layout_note_slot`) instead — established by sabotage in #7608's
-    // matrix (removing the revoke here leaves the sort test green). They are permutations or arbitrary
+    // `sort`'s default path writes the rank permutation back through
+    // `RootedArrayElems::set` and then clears through the same
+    // `clear_element_shape` funnel (`sort_default_rooted`). They are permutations or arbitrary
     // rewrites, so the element-shape proof is dropped conservatively; a
     // still-homogeneous array re-earns it on the next `ensure`.
     super::element_shape::clear_element_shape(arr);

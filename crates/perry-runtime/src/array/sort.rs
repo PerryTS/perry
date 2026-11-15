@@ -259,6 +259,11 @@ unsafe fn sort_default_rooted(vals: &RootedArrayElems<'_>, n: usize) {
     for (i, &src) in order.iter().enumerate() {
         vals.set(i, snapshot[src as usize]);
     }
+    // A bulk in-place rewrite drops the element-shape proof through the
+    // one clear funnel, as every other bulk mutator does
+    // (`rebuild_array_layout`, `finish_array_dense_move_layout`): the
+    // permutation's same-class slot stores alone keep it.
+    super::element_shape::clear_element_shape(vals.arr());
 }
 
 /// Sort the first `count` element slots of `temp` (a dense collection array
