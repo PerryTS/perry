@@ -68,6 +68,14 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
         crate::array::note_object_prototype_intrinsic(proto as usize);
+        // %Object%'s [[Intrinsics]] entry is this birth's, like every
+        // family's (`birth_family` notes its own): the constructor cell is
+        // bound the moment the pair exists.
+        crate::array::note_realm_intrinsic(
+            crate::object::BuiltinConstructorIdentity::Object,
+            proto as usize,
+            ctor as usize,
+        );
         // Complete: every later write to it is the program's.
         crate::object::builtin_proto::seal_built_intrinsic(
             crate::object::builtin_proto::BuiltinProto::Object,
