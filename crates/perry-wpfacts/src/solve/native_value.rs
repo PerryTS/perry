@@ -32,7 +32,7 @@ impl Model {
         if let Some(e) = builtins::declared_member(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_native(call, |m| builtins::run_member(m, e, t, call));
+                self.with_native(call, |m, call| builtins::run_member(m, e, t, call));
             }
             return true;
         }
@@ -45,7 +45,7 @@ impl Model {
         if let Some(e) = builtins::declared_static(identity) {
             if self.bind_done.insert((call, t, u32::MAX - 7)) {
                 self.diagnostic_callee(call, t);
-                self.with_native(call, |m| builtins::run_function(m, e, call));
+                self.with_native(call, |m, call| builtins::run_function(m, e, call));
             }
             return true;
         }
@@ -114,7 +114,7 @@ impl Model {
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
-            self.with_native(call, |m| {
+            self.with_native(call, |m, call| {
                 builtins::native_prototype_call(m, fam, r, key, call)
             });
         }
@@ -157,7 +157,7 @@ impl Model {
         };
         if self.bind_done.insert((call, t, u32::MAX - 7)) {
             self.diagnostic_callee(call, t);
-            self.with_native(call, |m| builtins::run_function(m, e, call));
+            self.with_native(call, |m, call| builtins::run_function(m, e, call));
         }
         true
     }
@@ -220,7 +220,7 @@ impl Model {
             }
             let why = self.reason("ToString(this) of a String.prototype method");
             self.implicit(r, why, Protocol::ToPrimitive);
-            self.with_native(call, |m| {
+            self.with_native(call, |m, call| {
                 builtins::prim_method(m, prim::STR, Key::Named(key), call)
             });
         }
@@ -299,7 +299,7 @@ impl Model {
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let own = prim & builtins::native_prims(fam);
         if own != 0 {
-            self.with_native(call, |m| {
+            self.with_native(call, |m, call| {
                 builtins::prim_method(m, own, Key::Named(key), call)
             });
         }
@@ -337,7 +337,7 @@ impl Model {
                     if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
                         self.diagnostic_callee(call, f);
                         if lookup {
-                            self.with_native(call, |m| builtins::annexb_lookup_prim(m, k, call, setter));
+                            self.with_native(call, |m, call| builtins::annexb_lookup_prim(m, k, call, setter));
                         }
                     }
                 }
@@ -371,7 +371,7 @@ impl Model {
                 let k = b & b.wrapping_neg();
                 b &= !k;
                 if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
-                    self.with_native(call, |m| builtins::method_on_prim(m, fam, k, key, call));
+                    self.with_native(call, |m, call| builtins::method_on_prim(m, fam, k, key, call));
                 }
             }
             // `Object.prototype.toLocaleString` is Invoke(this, "toString")
@@ -383,7 +383,7 @@ impl Model {
                 local = foreign & !boxed & builtins::ARRAY_BOXED_PRIMS;
                 if local != 0 && self.bind_done.insert((call, f, u32::MAX - 6)) {
                     let ts = self.atom("toString");
-                    self.with_native(call, |m| builtins::prim_method(m, local, Key::Named(ts), call));
+                    self.with_native(call, |m, call| builtins::prim_method(m, local, Key::Named(ts), call));
                 }
             }
             if foreign & !boxed & !local != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {
@@ -394,7 +394,7 @@ impl Model {
             && self.bind_done.insert((call, f, u32::MAX - 6))
         {
             self.diagnostic_callee(call, f);
-            self.with_native(call, |m| {
+            self.with_native(call, |m, call| {
                 builtins::prim_method(m, prim::STR, Key::Named(key), call)
             });
         }

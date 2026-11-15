@@ -2540,7 +2540,7 @@ pub(crate) fn native_namespace_call(
     {
         m.diagnostic_callee(call, t);
         let prev = std::mem::replace(&mut m.cur_this, this_tok);
-        m.with_native(call, |m| ns_method_inner(m, ns, Some(name), call, true));
+        m.with_native(call, |m, call| ns_method_inner(m, ns, Some(name), call, true));
         m.cur_this = prev;
     }
     true

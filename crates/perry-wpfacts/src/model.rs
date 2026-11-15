@@ -2309,6 +2309,9 @@ pub struct Model {
     pub solver_made: u64,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, u8), CallId>,
+    /// A call with spread arguments -> the call a builtin model reads
+    /// (`Model::builtin_args_view`); a view maps to itself.
+    pub spread_view: FxHashMap<CallId, CallId>,
     /// Solver-made call → the call its chain of solver-made calls started
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.

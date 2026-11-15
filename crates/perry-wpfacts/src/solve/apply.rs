@@ -176,7 +176,7 @@ impl Model {
                 // the container is a value of its own at every ⊤ site the
                 // result reaches: one per call site, each with field storage.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
-                    self.with_native(call, |m| builtins::prim_method(m, prim, key, call));
+                    self.with_native(call, |m, call| builtins::prim_method(m, prim, key, call));
                 }
                 for &t in toks {
                     self.prov_tok(pv, t);
@@ -1015,7 +1015,7 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(..)
                     ) {
-                        self.with_native(call, |m| builtins::proto_method(m, q, origin, key, call));
+                        self.with_native(call, |m, call| builtins::proto_method(m, q, origin, key, call));
                     }
                 }
             }
@@ -1055,7 +1055,7 @@ impl Model {
                         },
                     );
                     if self.tmpls[class as usize].native_parent.is_some() {
-                        self.with_native(call, |m| {
+                        self.with_native(call, |m, call| {
                             crate::builtins::native_parent_ctor(m, class, call, t)
                         });
                     }
@@ -1156,15 +1156,15 @@ impl Model {
             }
             Cons::AnnexBDefine { call, setter } => {
                 for &t in toks {
-                    self.with_native(call, |m| builtins::annexb_define(m, t, call, setter));
+                    self.with_native(call, |m, call| builtins::annexb_define(m, t, call, setter));
                 }
             }
             Cons::AnnexBLookup { call, setter } => {
                 for &t in toks {
-                    self.with_native(call, |m| builtins::annexb_lookup(m, Some(t), call, setter));
+                    self.with_native(call, |m, call| builtins::annexb_lookup(m, Some(t), call, setter));
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.with_native(call, |m| builtins::annexb_lookup_prim(m, prim, call, setter));
+                    self.with_native(call, |m, call| builtins::annexb_lookup_prim(m, prim, call, setter));
                 }
             }
             Cons::AccessorInstall {
@@ -1695,7 +1695,7 @@ impl Model {
                 // Primitive receivers (`MCall`'s rule): a number key calls
                 // a key a store into ⊤ wrote on their prototype.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
-                    self.with_native(call, |m| builtins::prim_plain_key(m, prim, call));
+                    self.with_native(call, |m, call| builtins::prim_plain_key(m, prim, call));
                     let p = prim & !(prim::NULL | prim::UNDEF);
                     if p != 0 && self.idx_done.insert((idx, TOP, call, IDX_MCALL_PRIM | p)) {
                         self.cons(
@@ -1749,7 +1749,7 @@ impl Model {
                 };
                 if named && self.idx_done.insert((n, obj, call, rule)) {
                     match obj {
-                        TOP => self.with_native(call, |m| {
+                        TOP => self.with_native(call, |m, call| {
                             builtins::prim_method(m, recv_prim, Key::Any(shape), call)
                         }),
                         _ => self.method_on(obj, Key::Any(shape), call),

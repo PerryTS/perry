@@ -2153,7 +2153,7 @@ impl Model {
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => {
-                    self.with_native(call, |m| crate::builtins::native_method_at(m, r, key, call))
+                    self.with_native(call, |m, call| crate::builtins::native_method_at(m, r, key, call))
                 }
             }
         }

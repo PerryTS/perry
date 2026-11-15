@@ -49,6 +49,14 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
+        // A builtin reads its arguments by position: with a spread, it
+        // reads the positional view of the argument list (`with_native`
+        // gives the same view to the models it runs).
+        let call = if matches!(self.toks[t as usize], TokKind::BuiltinFn(_) | TokKind::Builtin(_)) {
+            self.builtin_args_view(call)
+        } else {
+            call
+        };
         let prev = self.cur_native_call.replace(call);
         let native = self.native_call(call, t, this_tok);
         self.cur_native_call = prev;
@@ -543,6 +551,67 @@ impl Model {
         self.edge(ret, c.ret);
     }
 
+    /// The argument list a builtin model reads for `call` (ECMA-262
+    /// 13.3.8.1 ArgumentListEvaluation, 20.2.3.1 Function.prototype.apply
+    /// with 7.3.19 CreateListFromArrayLike, 28.1.1 Reflect.apply): the
+    /// models read positions, and a spread puts its elements at positions
+    /// no one knows. Without a spread: `call` itself. With one: a call with
+    /// the same receiver, spreads, result and region whose every position
+    /// `i` holds each spread's elements (index keys and the any-index
+    /// field: an array of unknown length can put any element anywhere) and
+    /// every argument `args[j]` with `j <= i` (a spread before it shifts it
+    /// right); a first argument no spread precedes stays alone at 0. The
+    /// positions are the call's own and the widest positional read of a
+    /// builtin model (`BUILTIN_ARG_POSITIONS`); the variadic models read
+    /// the spreads, which the view keeps. The user-function binding reads
+    /// a spread the same way (`bind_args`). One view per call; a view is
+    /// its own view.
+    pub(crate) fn builtin_args_view(&mut self, call: CallId) -> CallId {
+        if self.calls[call as usize].spread.is_empty() {
+            return call;
+        }
+        if let Some(&v) = self.spread_view.get(&call) {
+            return v;
+        }
+        let c = self.calls[call as usize].clone();
+        let elems = self.node_l("spread-view-elems");
+        for &s in &c.spread {
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: elems });
+        }
+        let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
+        let n = c.args.len().max(BUILTIN_ARG_POSITIONS);
+        let mut args = Vec::with_capacity(n);
+        for i in 0..n {
+            if i < fixed {
+                args.push(c.args[i]);
+                continue;
+            }
+            let p = self.node_l("spread-view-arg");
+            self.edge(elems, p);
+            let hi = (i + 1).min(c.args.len());
+            for j in fixed.min(hi)..hi {
+                self.edge(c.args[j], p);
+            }
+            args.push(p);
+        }
+        let v = self.solver_call_raw(
+            call,
+            CallSite {
+                first_arg_fixed: false,
+                this: c.this.clone(),
+                args,
+                spread: c.spread.clone(),
+                ret: c.ret,
+                site: c.site,
+                region: c.region,
+            },
+        );
+        self.spread_view.insert(call, v);
+        self.spread_view.insert(v, v);
+        v
+    }
+
     pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
         self.rest_elem_node(arr_node, None)
     }
@@ -610,7 +679,7 @@ impl Model {
             return;
         }
         let name = self.atoms[name as usize].clone();
-        self.with_native(call, |m| builtins::construct_named(m, &name, call));
+        self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 
     /// The token `new` at `call` gives template `tm`: one per birth site. A
@@ -744,7 +813,7 @@ impl Model {
             {
                 let e = builtins::declared_construct(identity).expect("guarded");
                 self.diagnostic_callee(call, t);
-                self.with_native(call, |m| builtins::run_construct(m, e, call));
+                self.with_native(call, |m, call| builtins::run_construct(m, e, call));
             }
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
@@ -812,7 +881,7 @@ impl Model {
                 self.cons(target, Cons::New { call: call2 });
             }
             TokKind::Builtin(ns) => {
-                self.with_native(call, |m| builtins::new_builtin_ns(m, ns, call))
+                self.with_native(call, |m, call| builtins::new_builtin_ns(m, ns, call))
             }
             _ => {}
         }
@@ -969,7 +1038,7 @@ impl Model {
                 self.add_tok(receiver, inst);
             }
             (None, None, Some(_)) => {
-                self.with_native(call, |m| builtins::native_parent_ctor(m, tm, call, inst))
+                self.with_native(call, |m, call| builtins::native_parent_ctor(m, tm, call, inst))
             }
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
@@ -1269,3 +1338,10 @@ impl Model {
         self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 }
+
+/// The widest position a hand-written builtin model reads by index (the
+/// `thisArg` of `Array.from(items, mapfn, thisArg)` and of the callback
+/// methods), plus one: the positions a spread view fills beyond the
+/// call's own arguments. A declared effect reads the spread itself
+/// (`builtins::effects`, `RealmSlotRoot::Arg`).
+pub(crate) const BUILTIN_ARG_POSITIONS: usize = 3;

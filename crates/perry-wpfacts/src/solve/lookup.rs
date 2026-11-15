@@ -347,7 +347,7 @@ impl Model {
             }
             ChainAct::Call(call) => {
                 if own_members {
-                    self.with_native(call, |m| builtins::own_method(m, t, key, call));
+                    self.with_native(call, |m, call| builtins::own_method(m, t, key, call));
                 }
                 // Methods on the chain (shared) and builtin prototype
                 // methods.
@@ -1591,7 +1591,7 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
-                self.with_native(call, |m| {
+                self.with_native(call, |m, call| {
                     builtins::proto_method(m, start, origin, key, call)
                 });
                 if !self.stops_at(start, key) {
