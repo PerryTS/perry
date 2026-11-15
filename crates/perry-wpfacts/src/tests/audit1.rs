@@ -223,3 +223,10 @@ fn audit1_u2d_proto_store_destructuring() {
     let r = v("class A { m() { return 1; } }\nconst a: any = new A();\n({ x: a.__proto__ } = { x: { m: g } });\na.m();\n", "m", true);
     assert!(!has(&r, "T0Mono"), "a.m() calls g in JS: {r:?}");
 }
+
+/// U3 keep: `Reflect.get` with receiver = target keeps the getter's `this.m()` proven (P::m alone).
+#[test]
+fn audit1_u3_keep_receiver_is_target() {
+    let r = v("class P { m() { return 1; } get gg(): any { return this.m(); } }\nconst p = new P();\nReflect.get(p, \"gg\", p);\n", "m", true);
+    assert!(has(&r, "T0Mono"), "this.m() calls P::m alone: {r:?}");
+}

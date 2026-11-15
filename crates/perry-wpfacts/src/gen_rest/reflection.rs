@@ -86,6 +86,11 @@ impl<'a> Gen<'a> {
                     }
                     _ => self.load(t, key),
                 };
+                // 28.1.5: target.[[Get]](key, receiver); an accessor found on
+                // target's chain runs with this = receiver (10.1.8.1 step 7):
+                // the lookup starts at target itself, each token of the
+                // receiver its `this` (the `super.x` form, `Cons::SuperFrom`).
+                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Load(out) });
                 if self.m.is_proto_key(key) {
                     self.m.cons(rv, Cons::ProtoOf { dst: out });
                 }
