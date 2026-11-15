@@ -1509,6 +1509,16 @@ impl Model {
                     self.accessor_walk(t, t, key, ChainAct::Lookup { dst: probe, setter });
                 }
             }
+            Cons::OwnDescAcc { setter, dst } => {
+                for &t in toks {
+                    if t == TOP {
+                        // The object is unknown: so are its accessors.
+                        self.add_tok(dst, TOP);
+                        continue;
+                    }
+                    self.own_accessor_lookup(t, Key::any(), dst, setter);
+                }
+            }
             Cons::ForInMeet { other, src, gate } => {
                 let hit = toks.iter().any(|&t| {
                     t == TOP

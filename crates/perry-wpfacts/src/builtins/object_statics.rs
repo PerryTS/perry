@@ -93,22 +93,40 @@ pub(crate) fn define_all(
 
 /// The descriptor object `t` of an own property of `o`: its value, getter
 /// or setter (`vals`, every own value), the accessors handed out.
+///
+/// SKINDESC1 (ECMA-262 20.1.2.8, 20.1.2.9, 28.1.7 -> 10.1.5
+/// [[GetOwnProperty]] -> 6.2.6.4 FromPropertyDescriptor): the descriptor is
+/// a fresh object whose `value` is the property's own data value, `get` /
+/// `set` its own accessor functions (`Cons::OwnDescAcc`, no prototype
+/// walk) or `undefined`, the rest booleans. Nothing is ⊤ and nothing of `o`
+/// escapes: a handed-out getter is a program value, a later `d.get()` an
+/// ordinary call. `value` is every OWN value of `o` (`Cons::OwnValues`: own
+/// fields, own getters run, a sound superset of the own data values; an
+/// object whose own properties are not modelled gives ⊤ there, with its
+/// reason). An unknown `o` (⊤) gives ⊤ accessors.
+/// CLOSED-WORLD PREMISE (owner 2026-11-14): no eval or dynamic code
+/// installs an accessor the model does not see.
+/// The descriptor's own properties are exactly its six named fields
+/// (6.2.6.4): `value`, `get`, `set` (each `undefined` when the property
+/// has the other kind) and the booleans `writable`, `enumerable`,
+/// `configurable`. The caller adds `undefined` to the result when the
+/// property may be absent (20.1.2.8 step 4).
 pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
-    let r = m.reason("getOwnPropertyDescriptor (accessors handed out)");
-    m.cons(
-        o,
-        Cons::Implicit {
-            reason: r,
-            proto: Protocol::Any,
-        },
-    );
-    m.cons(o, Cons::Load { key: Key::any(), dst: vals });
-    let fa = m.field_any(t);
-    m.edge(vals, fa);
-    // get/set functions of the object: handed to user code without a
-    // receiver — ⊤-called.
-    m.add_tok(fa, TOP);
-    m.add_prim(fa, prim::ALL);
+    m.cons(o, Cons::OwnValues { dst: vals });
+    let value = m.atom("value");
+    let fv = m.field(t, value);
+    m.edge(vals, fv);
+    m.add_prim(fv, prim::UNDEF);
+    for (setter, name) in [(false, "get"), (true, "set")] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.cons(o, Cons::OwnDescAcc { setter, dst: f });
+    }
+    for name in ["writable", "enumerable", "configurable"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::BOOL);
+    }
 }
 
 /// `fromEntries`: each entry `it`'s `"0"` and `"1"` (`inner`, a [[Get]]
@@ -304,6 +322,8 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             let vals = node(m, call, "b-load");
             own_descriptor(m, o, vals, t);
             ret_tok(m, call, t);
+            // 20.1.2.8 step 4: an absent property gives `undefined`.
+            ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Object, "getOwnPropertyDescriptors") => {
             let Some(o) = arg(m, call, 0) else { return true };

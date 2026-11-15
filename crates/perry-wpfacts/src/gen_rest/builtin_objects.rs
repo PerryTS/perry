@@ -114,7 +114,10 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 self.to_property_key(kn);
-                self.descriptor_of(mi, on)
+                let d = self.descriptor_of(mi, on);
+                // 20.1.2.8 / 28.1.7: an absent property gives `undefined`.
+                self.m.add_prim(d, prim::UNDEF);
+                d
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);

@@ -552,6 +552,11 @@ pub enum Cons {
         setter: bool,
         probe: NodeId,
     },
+    /// SKINDESC1: the property descriptors of this node's values
+    /// (`Object.getOwnPropertyDescriptor`, ECMA-262 6.2.6.4
+    /// FromPropertyDescriptor): per value, its OWN getters (or setters),
+    /// no prototype walk (`Model::own_accessor_lookup`), into `dst`.
+    OwnDescAcc { setter: bool, dst: NodeId },
     /// F-A: a value of this node that is ⊤ or also in `other` (with
     /// `other` `NO_NODE`: any value but a built-in function) opens the
     /// gate: `src` flows into `gate`, whose loads are the ordinary reads.
@@ -906,6 +911,7 @@ impl Cons {
             Cons::EnumChain { .. } => "enumchain",
             Cons::EnumLoad { .. } => "enumload",
             Cons::ForInAcc { .. } => "forinacc",
+            Cons::OwnDescAcc { .. } => "owndescacc",
             Cons::ForInMeet { .. } => "forinmeet",
             Cons::ProtoGiven { .. } => "protogiven",
             Cons::ParentGiven { .. } => "parentgiven",

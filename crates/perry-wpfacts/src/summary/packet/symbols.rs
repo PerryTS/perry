@@ -341,6 +341,7 @@ impl Model {
             Cons::ForInAcc { key, setter, probe } => {
                 format!("ForInAcc key={key:?} setter={setter} probe={probe:?}")
             }
+            Cons::OwnDescAcc { setter, dst } => format!("OwnDescAcc setter={setter} dst={dst:?}"),
             Cons::ForInMeet { other, src, gate } => {
                 format!("ForInMeet other={other:?} src={src:?} gate={gate:?}")
             }

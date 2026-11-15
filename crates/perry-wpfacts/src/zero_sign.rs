@@ -234,6 +234,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::EnumChain { .. }
         | Cons::EnumLoad { .. }
         | Cons::ForInAcc { .. }
+        | Cons::OwnDescAcc { .. }
         | Cons::ForInMeet { .. }
         | Cons::IdxLoad { .. }
         | Cons::IdxOwnLoad { .. }

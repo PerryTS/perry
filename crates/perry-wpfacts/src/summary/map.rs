@@ -294,6 +294,7 @@ pub fn map_cons(
             setter,
             probe: n(probe),
         },
+        OwnDescAcc { setter, dst } => OwnDescAcc { setter, dst: n(dst) },
         ForInMeet { other, src, gate } => ForInMeet {
             other: if other == NO_NODE { NO_NODE } else { n(other) },
             src: n(src),
@@ -579,6 +580,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | EnumChain { .. }
             | EnumLoad { .. }
             | ForInAcc { .. }
+            | OwnDescAcc { .. }
             | ForInMeet { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }

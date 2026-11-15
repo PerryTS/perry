@@ -2074,6 +2074,7 @@ impl Model {
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::EnumLoad { dst, .. } => format!("enumload {n} {dst}"),
             Cons::ForInAcc { probe, .. } => format!("forinacc {n} {probe}"),
+            Cons::OwnDescAcc { dst, .. } => format!("owndescacc {n} {dst}"),
             Cons::ForInMeet { other, gate, .. } => format!("forinmeet {n} {other} {gate}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
             Cons::ElemUndef { obj, key, dst } => format!("elemundef {n} {obj} {key} {dst}"),
