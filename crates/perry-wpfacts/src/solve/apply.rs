@@ -1550,10 +1550,29 @@ impl Model {
                 // under every key the key may be (the rule of `Cons::Load`):
                 // a String's index keys are its one-character Strings, its
                 // `length` a Number (10.4.3.5), any other key a member of
-                // the prototype chain of the kind.
+                // the prototype chain of the kind. A for-in run's key is
+                // that one name; any other key is decided by its values
+                // (`Cons::IdxKey` with `obj` ⊤, rule NUM-KEY-PRIM).
                 if prim != 0 {
-                    let key = self.prim_index_key(idx, shape);
-                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
+                    match self.key_nodes.get(&idx) {
+                        Some(&a) => self.with_b(|m| builtins::prim_load(m, prim, Key::Named(a), dst)),
+                        None => {
+                            let p = prim & !(prim::NULL | prim::UNDEF);
+                            if p != 0
+                                && self.idx_done.insert((idx, TOP, dst, crate::model::IDX_PRIM_KEY | p))
+                            {
+                                self.cons(
+                                    idx,
+                                    Cons::IdxKey {
+                                        obj: TOP,
+                                        prim: p,
+                                        dst,
+                                        shape,
+                                    },
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Cons::EnumLoad { key, dst } => {
@@ -1700,7 +1719,52 @@ impl Model {
             // Refutation markers have their own replay path, not value deltas.
             Cons::OwnGate { .. } => {}
             Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
-            Cons::IdxKey { obj, dst, shape } => {
+            Cons::IdxKey {
+                obj: TOP,
+                prim: recv,
+                dst,
+                shape,
+            } => {
+                // Rule NUM-KEY-PRIM (ECMA-262 7.3.2 GetV, 7.1.19
+                // ToPropertyKey, 6.1.6.1.20 Number::toString): `p[k]` of a
+                // primitive `p`. A String, Symbol or object key (⊤ among
+                // them) may spell any name: the read under the site's shape.
+                // A Number or BigInt key is ToString of one, a numeric
+                // name ("12", "-0.5", "1e+21", "NaN", "Infinity"), which no
+                // member of an intrinsic prototype has: a String's
+                // one-character Strings or `undefined`, and only a number
+                // key a store into ⊤ wrote on the prototype (`NUM_KEY`,
+                // as `Cons::IdxMCall`'s `prim_plain_key`). `true`, `false`,
+                // `null`, `undefined` are their names (rule K8).
+                if index_needs_general_key(toks, prim)
+                    && self.idx_done.insert((n, TOP, dst, crate::model::IDX_PRIM_GENERAL | recv))
+                {
+                    self.with_b(|m| builtins::prim_load(m, recv, Key::Any(shape), dst));
+                }
+                if index_has_numeric_key(prim)
+                    && self.idx_done.insert((n, TOP, dst, crate::model::IDX_PRIM_NUM | recv))
+                {
+                    // A String's index is one of its characters (10.4.3.5).
+                    if recv & prim::STR != 0 {
+                        self.add_prim(dst, prim::STR | prim::UNDEF);
+                    }
+                    let num = self.atom(crate::model::NUM_KEY);
+                    self.with_b(|m| builtins::prim_load(m, recv, Key::Named(num), dst));
+                }
+                for (bit, keys) in [
+                    (prim::BOOL, &["true", "false"][..]),
+                    (prim::NULL, &["null"][..]),
+                    (prim::UNDEF, &["undefined"][..]),
+                ] {
+                    if prim & bit != 0 {
+                        for k in keys {
+                            let a = self.atom(k);
+                            self.with_b(|m| builtins::prim_load(m, recv, Key::Named(a), dst));
+                        }
+                    }
+                }
+            }
+            Cons::IdxKey { obj, dst, shape, .. } => {
                 let named = index_needs_general_key(toks, prim);
                 // Rule M3: a key of string constants and known prefixes
                 // reads, per entry, the names that entry admits; any other

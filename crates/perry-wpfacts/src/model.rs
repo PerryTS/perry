@@ -46,6 +46,12 @@ pub const YIELD_VALUE: &str = "#yield";
 /// computed call's full lookup and numeric own fields, and (plus the primitive bit) a call under
 /// ToPropertyKey of `true`/`null`/`undefined`.
 pub const IDX_PROTO_VALUE: u16 = 32;
+/// A primitive receiver's computed read (`Cons::IdxLoad`, plus the receiver's
+/// primitive mask): its key rule attached (`Cons::IdxKey` with `obj` ⊤), a
+/// general key's read, a number key's read.
+pub const IDX_PRIM_KEY: u16 = 1 << 12;
+pub const IDX_PRIM_GENERAL: u16 = 1 << 13;
+pub const IDX_PRIM_NUM: u16 = 1 << 14;
 pub const IDX_PLAIN_LOAD: u16 = 33;
 pub const IDX_PLAIN_CALL: u16 = 34;
 pub const IDX_NUM_OWN: u16 = 35;

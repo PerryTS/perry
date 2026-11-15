@@ -515,8 +515,11 @@ pub enum Cons {
     /// symbol or object key runs the full lookup. It is never taken to be
     /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
     /// an unknown string key; only the named forms read it).
+    /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds
+    /// (`Cons::IdxLoad`'s primitive read, decided by the key's values).
     IdxKey {
         obj: Tok,
+        prim: u16,
         dst: NodeId,
         shape: KeyShapeId,
     },

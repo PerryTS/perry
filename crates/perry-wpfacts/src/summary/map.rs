@@ -309,8 +309,9 @@ pub fn map_cons(
             src: n(src),
             gate: n(gate),
         },
-        IdxKey { obj, dst, shape } => IdxKey {
+        IdxKey { obj, prim, dst, shape } => IdxKey {
             obj,
+            prim,
             dst: n(dst),
             shape,
         },

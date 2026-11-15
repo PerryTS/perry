@@ -2206,6 +2206,7 @@ mod r9sites1;
 mod r9sites3;
 mod r9sites5;
 mod r9sites6;
+mod r9sites7;
 mod nocall1;
 mod skinfa8;
 mod local_versions;

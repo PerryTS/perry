@@ -156,7 +156,7 @@ impl Model {
                 }
             }
             self.plain_key(t, ChainAct::Load(dst));
-            self.cons(idx, Cons::IdxKey { obj: t, dst, shape });
+            self.cons(idx, Cons::IdxKey { obj: t, prim: 0, dst, shape });
         }
     }
 

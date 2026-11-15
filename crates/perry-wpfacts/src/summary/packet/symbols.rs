@@ -362,7 +362,7 @@ impl Model {
                 key,
                 dst
             ),
-            Cons::IdxKey { obj, dst, shape } => format!(
+            Cons::IdxKey { obj, dst, shape, .. } => format!(
                 "IdxKey obj={:?} dst={:?} shape={:?}",
                 self.packet_token(obj, packet),
                 dst,
