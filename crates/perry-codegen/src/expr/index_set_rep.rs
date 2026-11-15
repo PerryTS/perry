@@ -37,6 +37,9 @@
 //! - No pointer is retired or stored: no barrier, no layout
 //!   note, and the element kind (F64 or Any) admits a plain double.
 //!
+//! With every test proven (storage that never moves, a dense key below the
+//! floor, a proven plain value) there is no miss and no miss arm.
+//!
 //! Every miss (forwarded, out of the capacity, a hole, a growing store, a
 //! key at or past 2^31, a boxed value) takes the caller's exact store, which
 //! is the store the site had before.
@@ -142,6 +145,26 @@ pub(super) fn emit(
     }
     let plain_value = int_value || value_plain;
     diag(ctx, read, !plain_value);
+    let floor_key = read.in_floor && r.floor > 0;
+    if r.unmoved() && floor_key && r.dense && plain_value {
+        // No test is left: the store is the address and the raw store.
+        super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+        let idx = blk.zext(I32, idx_i32, I64);
+        let offset = blk.shl(I64, &idx, "3");
+        let base = blk.add(
+            I64,
+            &handle,
+            &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
+        );
+        let addr = blk.add(I64, &base, &offset);
+        let slot = blk.inttoptr(I64, &addr);
+        // GC_STORE_AUDIT(POINTER_FREE): as below.
+        blk.store(DOUBLE, val_double, &slot);
+        return Ok(());
+    }
     let cold_idx = ctx.new_block("arep.set.cold");
     let merge_idx = ctx.new_block("arep.set.merge");
     let cold_label = ctx.block_label(cold_idx);
@@ -164,7 +187,6 @@ pub(super) fn emit(
     }
     // A key in `[0, floor)` is inside the storage (`ArrRep` C:
     // `capacity >= floor`); `floor > 0` then also fixes the element base.
-    let floor_key = read.in_floor && r.floor > 0;
     let capacity = if floor_key {
         None
     } else {
