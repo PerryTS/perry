@@ -265,8 +265,9 @@ fn realm_accessor_into(m: &mut Model, dst: NodeId) {
 /// now or when it arrives (`NativeMiss::Lookup`).
 fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, setter: bool) {
     // The realm's own accessors on this holder: those its declaration may
-    // hold under a key of unknown string. Such a key never names `__proto__`
-    // (DECISIONS 217, `is_proto_key`), so `Object.prototype` holds none; a
+    // hold under a key of unknown string. Such a key may name `__proto__`,
+    // the own accessor of `Object.prototype` (20.1.3.8, B.2.2.1): its get and
+    // set are realm accessors; a
     // primitive member may be an accessor (`Map.prototype.size`); a family
     // without a member table or a namespace may hold any.
     // The shared field object of the builtin functions (`Shared::BuiltinFn`)
@@ -286,7 +287,8 @@ fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, set
         TokKind::Builtin(_) => None,
         _ => return,
     };
-    if family.is_none_or(|f| members::any_member(f).1 != 0) {
+    let object_proto = matches!(m.toks[holder as usize], TokKind::ObjectProto);
+    if object_proto || family.is_none_or(|f| members::any_member(f).1 != 0) {
         realm_accessor_into(m, dst);
     }
     let star = m.atom(crate::STAR_KEY);

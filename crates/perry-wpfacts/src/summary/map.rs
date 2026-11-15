@@ -33,6 +33,7 @@ pub fn map_cons(
         Load { key, dst } => Load { key, dst: n(dst) },
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
+        OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
         IndexHole => IndexHole,
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
@@ -549,6 +550,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }
+            | OwnDescValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
             | Store { .. }
@@ -640,6 +642,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         Load { dst, .. }
         | ProtoKey { dst, .. }
         | OwnValues { dst }
+        | OwnDescValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }

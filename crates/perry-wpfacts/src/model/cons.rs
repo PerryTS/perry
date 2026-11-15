@@ -104,6 +104,15 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// The `value` field of an own-property descriptor of each t (20.1.2.8,
+    /// 10.1.5.1 OrdinaryGetOwnProperty): `OwnValues`, plus the own data
+    /// properties the realm makes, which `OwnValues` (EnumerableOwnProperties
+    /// of a namespace or a function) leaves out: a function's `name` and
+    /// `length` (10.2.9, 10.2.10), its `prototype` (10.2.5), a namespace's
+    /// members (`Math.PI`, 21.3.1.6), the methods of `Object.prototype`, a
+    /// String's `length` (10.4.3). Those values are read by an any-key [[Get]]
+    /// on the intrinsic-bearing object (a superset of its own data values).
+    OwnDescValues { dst: NodeId },
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
@@ -872,6 +881,7 @@ impl Cons {
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
             Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",

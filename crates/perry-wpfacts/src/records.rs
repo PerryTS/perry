@@ -376,7 +376,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::ForInKeys { .. }
         | Cons::EnumKeyStore { .. }
         | Cons::EnumKeyAny { .. }
-        | Cons::OwnValues { .. } => Reject(R5Iterate(c.kind_name().into())),
+        | Cons::OwnValues { .. }
+        | Cons::OwnDescValues { .. } => Reject(R5Iterate(c.kind_name().into())),
         // Accessors.
         Cons::Accessor { .. }
         | Cons::AccessorInstall { .. }

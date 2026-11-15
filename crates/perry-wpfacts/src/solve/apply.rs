@@ -76,6 +76,26 @@ impl Model {
                     self.own_values_of(t, dst);
                 }
             }
+            Cons::OwnDescValues { dst } => {
+                // A String's own properties: its characters and `length`.
+                if prim & prim::STR != 0 {
+                    self.add_prim(dst, prim::STR | prim::NUM);
+                }
+                for &t in toks {
+                    self.own_values_of(t, dst);
+                    let fun = matches!(
+                        self.toks[t as usize],
+                        TokKind::Func(..) | TokKind::ClassObj(_) | TokKind::Bound(_) | TokKind::BuiltinFn(_)
+                    );
+                    if fun {
+                        // `name` (a String) and `length` (a Number).
+                        self.add_prim(dst, prim::STR | prim::NUM);
+                    }
+                    if fun || matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::Builtin(_)) {
+                        self.load_from(t, t, Key::any(), dst);
+                    }
+                }
+            }
             Cons::Store { key, src, site } => {
                 self.store_at = Some(n);
                 for &t in toks {

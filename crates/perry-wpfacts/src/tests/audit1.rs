@@ -277,3 +277,11 @@ fn audit1_u4_keep_receiver_is_target() {
     let r = v("class P { m() { return 1; } set ss(x: any) { this.m(); } }\nconst p = new P();\nReflect.set(p, \"ss\", 1, p);\n", "m", true);
     assert!(has(&r, "T0Mono"), "this.m() calls P::m alone: {r:?}");
 }
+/// U5 KEEP: the descriptor of a user object own data property gives its value only:
+/// `X.m()` has the verdict of `o.a` (or `undefined`) read directly.
+#[test]
+fn audit1_u5_keep_user_data_descriptor() {
+    let r = v("const o = { a: { m() { return 1; } } };\nconst X: any = (Object.getOwnPropertyDescriptor(o, \"a\") as any).value;\nX.m();\n", "m", true);
+    let w = v("const o = { a: { m() { return 1; } } };\nconst X: any = g() ? o.a : undefined;\nX.m();\n", "m", true);
+    assert!(r == w && !has(&r, "Throws"), "X is o.a or undefined: {r:?} {w:?}");
+}

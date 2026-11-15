@@ -112,7 +112,7 @@ pub(crate) fn define_all(
 /// `configurable`. The caller adds `undefined` to the result when the
 /// property may be absent (20.1.2.8 step 4).
 pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
-    m.cons(o, Cons::OwnValues { dst: vals });
+    m.cons(o, Cons::OwnDescValues { dst: vals });
     let value = m.atom("value");
     let fv = m.field(t, value);
     m.edge(vals, fv);

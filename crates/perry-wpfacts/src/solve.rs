@@ -1920,6 +1920,7 @@ impl Model {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
             }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexKept => format!("indexkept {n}"),
             Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),

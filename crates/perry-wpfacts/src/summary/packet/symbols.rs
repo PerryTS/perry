@@ -39,6 +39,7 @@ impl Model {
             ),
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
+            Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
