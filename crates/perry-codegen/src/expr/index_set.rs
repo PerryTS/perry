@@ -883,10 +883,13 @@ pub(crate) fn lower(
             // every statically-typed array / typed-array / object fast path below
             // is preserved.
             let recv_ty = crate::type_analysis::static_type_of(ctx, object);
+            // A receiver the facts give an Arr rep with Number elements takes
+            // the rep-keyed store (`index_set_rep`) below, whatever its key.
+            let rep_store = super::index_set_rep::fact(ctx, object.as_ref(), expr);
             let recv_unknown = matches!(
                 recv_ty,
                 None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
-            );
+            ) && rep_store.is_none();
             // The index may be numeric, a runtime string, or (rarely) a runtime
             // symbol — `js_dyn_index_set` triages all three. We only keep the
             // statically-known string-literal / symbol keys on their dedicated
@@ -1080,8 +1083,9 @@ pub(crate) fn lower(
                     )
                 });
             }
-            if is_array_expr(ctx, object)
-                && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+            if rep_store.is_some() && !is_string_expr(ctx, index)
+                || is_array_expr(ctx, object)
+                    && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
             {
                 return lower_array_index_set_via_runtime_key(
                     ctx,
