@@ -912,8 +912,9 @@ enum Bounds {
     /// The automaton cannot answer this search; the evaluator does.
     Declined,
     /// The program tries one start and its groups are wanted: no bounds
-    /// pass, the automaton's capture pass answers at the search's start.
-    OneStart,
+    /// pass; the automaton's capture pass answered at the search's start,
+    /// in the same view.
+    OneStart(Captured),
 }
 
 /// What the automaton's capture pass said about the match that begins at a
@@ -987,12 +988,14 @@ fn tries_one_start(words: &[u32]) -> bool {
 /// that tries a single start (the evaluator then runs one attempt either way,
 /// so bounds first would only add work). Neither allocates nor collects.
 #[inline(always)]
-fn program_bounds<P, S>(
+fn program_bounds<'mem, P, S>(
     resources: &BoundResources<'_, P, S>,
     start: usize,
     follows: bool,
     mode: CaptureMode,
     budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<Captures<'mem>>,
 ) -> Result<Bounds, EngineError>
 where
     P: CellProgram,
@@ -1024,7 +1027,10 @@ where
             if dfa::captures_declined(cache) {
                 return Ok(Bounds::Declined);
             }
-            return Ok(Bounds::OneStart);
+            // The capture pass runs inside this view, over the program and
+            // subject it just bound: one view per search, not two.
+            return capture_pass(program, input, cache, start, budget, memory, captures)
+                .map(Bounds::OneStart);
         }
         let found = loop {
             let found = dfa::find(program, input, start, &mut *cache, budget);
@@ -1077,40 +1083,55 @@ where
             return Ok(Captured::Declined);
         }
         // SAFETY: as in `program_bounds`.
-        let Some(mut cache) = (unsafe { super::perex_owner::cell_dfa_cache(program) }) else {
+        let Some(cache) = (unsafe { super::perex_owner::cell_dfa_cache(program) }) else {
             return Ok(Captured::Declined);
         };
-        #[cfg(test)]
-        DFA_CAPTURE_PASSES.with(|n| n.set(n.get() + 1));
-        let output = Slots::put(captures, memory, program.capture_count())?;
-        let found = loop {
-            let found = dfa::captures(program, input, start, &mut *cache, budget, output);
-            if let Ok(dfa::Found::Declined(why)) = found {
-                if let Some(storage) = storage_for(program, cache, why) {
-                    cache = storage;
-                    continue;
-                }
-            }
-            break found;
-        };
-        match found {
-            Ok(dfa::Found::Match(span)) => {
-                #[cfg(test)]
-                DFA_CAPTURE_ANSWERS.with(|n| n.set(n.get() + 1));
-                Ok(Captured::Match(span))
-            }
-            Ok(dfa::Found::NoMatch) => Ok(Captured::NoMatch),
-            Ok(dfa::Found::Declined(_)) => {
-                *captures = None;
-                Ok(Captured::Declined)
-            }
-            Err(error) => Err(EngineError::Execution(error)),
-        }
+        capture_pass(program, input, cache, start, budget, memory, captures)
     });
     match answered {
         Ok(answer) => answer,
         Err(PairError::Program(error)) => Err(EngineError::Program(program_error(error))),
         Err(PairError::Subject(error)) => Err(EngineError::Subject(subject_error(error))),
+    }
+}
+
+/// The automaton's capture pass inside an open view: the groups of the match
+/// that begins at `start`, written into `captures` when it answers.
+#[inline(always)]
+fn capture_pass<'mem>(
+    program: perex::program::Program<'_>,
+    input: perex::input::Input<'_>,
+    mut cache: &mut [u32],
+    start: usize,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<Captures<'mem>>,
+) -> Result<Captured, EngineError> {
+    #[cfg(test)]
+    DFA_CAPTURE_PASSES.with(|n| n.set(n.get() + 1));
+    let output = Slots::put(captures, memory, program.capture_count())?;
+    let found = loop {
+        let found = dfa::captures(program, input, start, &mut *cache, budget, output);
+        if let Ok(dfa::Found::Declined(why)) = found {
+            if let Some(storage) = storage_for(program, cache, why) {
+                cache = storage;
+                continue;
+            }
+        }
+        break found;
+    };
+    match found {
+        Ok(dfa::Found::Match(span)) => {
+            #[cfg(test)]
+            DFA_CAPTURE_ANSWERS.with(|n| n.set(n.get() + 1));
+            Ok(Captured::Match(span))
+        }
+        Ok(dfa::Found::NoMatch) => Ok(Captured::NoMatch),
+        Ok(dfa::Found::Declined(_)) => {
+            *captures = None;
+            Ok(Captured::Declined)
+        }
+        Err(error) => Err(EngineError::Execution(error)),
     }
 }
 
@@ -1143,7 +1164,7 @@ where
     S::Error: HostResourceError,
     H: PollRoots,
 {
-    let answer = program_bounds(resources, start, follows, mode, budget)?;
+    let answer = program_bounds(resources, start, follows, mode, budget, memory, captures)?;
     let (start, bounds) = match answer {
         Bounds::NoMatch => return Ok((None, None)),
         Bounds::Match(span, groups, pass) => match mode {
@@ -1174,7 +1195,7 @@ where
             }
         },
         Bounds::Declined => (start, None),
-        Bounds::OneStart => match program_captures(resources, start, budget, memory, captures)? {
+        Bounds::OneStart(captured) => match captured {
             Captured::Match(found) => return Ok((Some(found), None)),
             Captured::NoMatch => return Ok((None, None)),
             Captured::Declined => (start, None),
