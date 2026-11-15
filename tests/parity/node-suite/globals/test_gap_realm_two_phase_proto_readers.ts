@@ -18,7 +18,7 @@ function depth(value: any): number {
   return n;
 }
 let depths = 0, arrays = 0, objects = 0, functions = 0, methods = 0, instances = 0;
-const rounds = Number(process.argv[2] ?? 2000);
+const rounds = 2000;
 for (let i = 0; i < rounds; i++) {
   for (const s of samples) {
     depths += depth(s);
