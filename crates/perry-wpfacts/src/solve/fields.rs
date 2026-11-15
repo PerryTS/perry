@@ -687,7 +687,7 @@ impl Model {
 
     /// May `t` be a String wrapper born at a site of this unit, whose own
     /// index properties are the characters of its string?
-    fn may_wrap_string(&self, t: Tok) -> bool {
+    pub(super) fn may_wrap_string(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {

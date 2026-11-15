@@ -2345,6 +2345,20 @@ impl Model {
                         self.spread_source(tm, site, Vec::new());
                     }
                 }
+                // A String source is ToObject'd (20.1.2.1 step 3.a.i, 13.2.5.5
+                // CopyDataProperties): its own enumerable keys are its indices,
+                // their values its one-character Strings (10.4.3.5); each
+                // target gets a String under an index key.
+                if prim & prim::STR != 0
+                    && self
+                        .idx_done
+                        .insert((n, TOP, into, crate::model::IDX_SPREAD_STR))
+                {
+                    let v = self.node_l("spread-string-chars");
+                    self.add_prim(v, prim::STR);
+                    let key = self.elem_key();
+                    self.cons(into, Cons::Store { key, src: v, site });
+                }
                 for &s in toks {
                     self.cons(
                         into,

@@ -104,6 +104,11 @@ impl Model {
             self.add_tok(dst, TOP);
             return;
         }
+        // A String wrapper's index keys are own properties whose values are
+        // its one-character Strings (10.4.3.5 StringGetOwnProperty).
+        if self.may_wrap_string(t) {
+            self.add_prim(dst, prim::STR);
+        }
         // An object's own fields: by the key's values (`IdxKey`: a number
         // key names only its numeric fields). A marker's fields are its
         // reach markers under any key; another value (the global object, a

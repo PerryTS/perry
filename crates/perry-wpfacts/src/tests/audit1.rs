@@ -156,6 +156,12 @@ fn audit1_u6_string_source_index_keys() {
     let c = v("const f = { a() { return 1; } };\nconst t: any = new String(\"ab\");\n(f as any)[t[0]] = g;\nf.a();\n", "a", true);
     assert!(!has(&a, "T0Mono") && !has(&b, "T0Mono") && !has(&c, "T0Mono"), "f.a() calls g: {a:?} {b:?} {c:?}");
 }
+/// U6 KEEP: an object source copies its own keys only: `t.a` is the method, `f.a()` keeps its callee.
+#[test]
+fn audit1_u6_keep_object_source() {
+    let r = v("const f = { a() { return 1; } };\nconst t: any = Object.assign({}, { b: 1 });\nconst c = t.b;\nf.a();\n", "a", true);
+    assert!(has(&r, "T0Mono"), "f.a() calls its own method only: {r:?}");
+}
 /// U7: `Object.fromEntries([[\"a\", {q:1}]]).a` is the object (20.1.2.7): `.zz` is `undefined`, no TypeError.
 #[test]
 fn audit1_u7_from_entries_named_read() {
