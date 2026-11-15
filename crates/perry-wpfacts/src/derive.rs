@@ -2844,6 +2844,13 @@ fn lookup(
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut todo = vec![t];
     while let Some(h) = todo.pop() {
+        // A prototype set that may hold `null` (`x.__proto__ = null`,
+        // `Object.setPrototypeOf(x, null)`, `Object.create(null)`: 10.1.2.1)
+        // may end the chain at `h`, which lacks the key: the read may be
+        // `undefined` (10.1.8.1) and the call may throw (13.3.6).
+        if m.proto_node.get(&h).is_some_and(|&pn| m.nodes[pn as usize].prim != 0) {
+            return Err("the chain may end at a null prototype".into());
+        }
         let protos: Vec<Tok> = m
             .proto_node
             .get(&h)
