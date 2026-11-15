@@ -38,12 +38,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
-/// the whole pass costs a few seconds at most. With `this` bound per
+/// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`):
+/// 1,000 million (owner 2026-11-15; was 200 million). With `this` bound per
 /// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
 /// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
 /// bound and gets no facts.
-const DEFAULT_MAX_WORK: u64 = 200_000_000;
+const DEFAULT_MAX_WORK: u64 = 1_000_000_000;
 
 pub(crate) fn contracts_requested() -> bool {
     std::env::var("PERRY_CHECK_CONTRACTS")
