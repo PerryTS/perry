@@ -39,8 +39,8 @@ pub(crate) struct Baseline {
     /// no cut copy: every change counts as the program's.
     pre_data: Vec<u8>,
     pre_tls: Vec<u8>,
-    /// `class_image::snap_image_table_size` at the baseline.
-    classes: usize,
+    /// `class_image::snap_image_table_sizes` at the baseline.
+    classes: [usize; format::CLASS_TABLE_COUNT],
     /// Hot-slot claims at the baseline.
     claims_from: u32,
     /// Names claimed since, read first at the cut (the capture claims its own).
@@ -105,7 +105,7 @@ pub extern "C" fn js_snap_image_begin(
         tls: copy(tls_lo, tls_lo + tls_len),
         pre_data,
         pre_tls,
-        classes: crate::object::class_image::snap_image_table_size(),
+        classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: crate::tls_hot::js_tls_hot_claimed_slots(),
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_counts(),
@@ -447,15 +447,17 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             }
             img.claims.push(k.clone());
         }
-        let now = crate::object::class_image::snap_image_table_size();
-        if now != b.classes {
-            img.stops.push(Stop {
-                cell: 0,
-                obj_type: 0,
-                kind: format::STOP_CLASS_TABLES,
-                off: 0,
-                value: now.wrapping_sub(b.classes) as u64,
-            });
+        let now = crate::object::class_image::snap_image_table_sizes();
+        for (i, (n, was)) in now.iter().zip(b.classes.iter()).enumerate() {
+            if n != was {
+                img.stops.push(Stop {
+                    cell: i as u32,
+                    obj_type: 0,
+                    kind: format::STOP_CLASS_TABLES,
+                    off: 0,
+                    value: n.wrapping_sub(*was) as u64,
+                });
+            }
         }
     }
     match base {

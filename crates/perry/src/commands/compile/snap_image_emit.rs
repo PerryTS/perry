@@ -837,11 +837,8 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
             }
         }
     }
-    if let Some(t) = img.stops.iter().find(|t| t.kind == format::STOP_CLASS_TABLES) {
-        return Err(format!(
-            "the class tables grew by {} row(s) between the baseline and the cut, and the image has no form that restores them",
-            t.value
-        ));
+    if let Some(m) = class_table_message(&img.stops) {
+        return Err(m);
     }
     if !img.stops.is_empty() {
         return Err(stop_summary(&img.stops));
@@ -1260,6 +1257,14 @@ fn stop_summary(stops: &[format::Stop]) -> String {
 mod unit_tests {
     use super::*;
 
+    #[test]
+    fn the_class_table_stop_names_each_growing_table() {
+        let st = |cell: u32, value: u64| format::Stop { cell, obj_type: 0, kind: format::STOP_CLASS_TABLES, off: 0, value };
+        assert!(class_table_message(&[]).is_none());
+        let m = class_table_message(&[st(0, 5), st(18, 7)]).unwrap();
+        assert!(m.contains("12 row(s)") && m.contains("declarations +5") && m.contains("names +7"), "{m}");
+    }
+
     const SY: &str = "Symbol table '.symtab' contains 5 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000    48 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5ATOMS\n    11: 0000000000600030     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern4SLOT\n    12: 0000000000600040   256 OBJECT  LOCAL  DEFAULT   24 perry_concat_site_dep__1\n    13: 0000000000600200    16 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5STATE\n    14: 0000000000000040     8 TLS     LOCAL  DEFAULT   20 perry_tls_y\n";
 
     fn w(region: u8, off: u64, val: Val) -> Word {
@@ -1312,4 +1317,21 @@ mod unit_tests {
         let r = classify_with(&ws, &t, 0x600000, true);
         assert_eq!((r.dropped, r.unresolved.len()), (0, 1), "{:?}", r.unresolved);
     }
+}
+
+/// The class-table stop text: the total rows and which table grew by how many.
+fn class_table_message(stops: &[format::Stop]) -> Option<String> {
+    let rows: Vec<_> = stops.iter().filter(|t| t.kind == format::STOP_CLASS_TABLES).collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let total: u64 = rows.iter().map(|t| t.value).sum();
+    let per: Vec<String> = rows
+        .iter()
+        .map(|t| format!("{} +{}", format::CLASS_TABLE_NAMES.get(t.cell as usize).copied().unwrap_or("?"), t.value))
+        .collect();
+    Some(format!(
+        "the class tables grew by {total} row(s) between the baseline and the cut ({}), and the image has no form that restores them",
+        per.join(", ")
+    ))
 }

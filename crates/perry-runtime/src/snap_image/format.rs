@@ -18,7 +18,32 @@ pub const PENDING: u32 = 0b111;
 pub const STOP_NO_FORM: u8 = 0;
 pub const STOP_SLOT_OUTSIDE: u8 = 1;
 pub const STOP_NOT_CELL_START: u8 = 2;
-/// The class tables grew between the baseline and the cut (`value` = rows).
+/// Names of the class tables, in the order `snap_image_table_sizes` reports them.
+pub const CLASS_TABLE_NAMES: [&str; 20] = [
+    "declarations",
+    "parent_dense",
+    "static_methods",
+    "static_accessors",
+    "string_member_orders",
+    "method_bind_lengths",
+    "static_method_bind_lengths",
+    "registered_class_ids",
+    "parents",
+    "fetch_parent_kind",
+    "generic_origin",
+    "extends_error",
+    "has_instance",
+    "to_string_tag",
+    "constructors",
+    "constructor_flags",
+    "extends_data_view",
+    "extends_typed_array",
+    "names",
+    "lengths",
+];
+pub const CLASS_TABLE_COUNT: usize = CLASS_TABLE_NAMES.len();
+/// A class table grew between the baseline and the cut (`cell` = table index in
+/// `CLASS_TABLE_NAMES`, `value` = rows added); one stop per growing table.
 pub const STOP_CLASS_TABLES: u8 = 3;
 /// A slot-claim key longer than 4 KiB or not UTF-8 (`cell` = claim index).
 pub const STOP_CLAIM_KEY: u8 = 4;

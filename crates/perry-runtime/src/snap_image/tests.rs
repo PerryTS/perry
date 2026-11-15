@@ -174,7 +174,7 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
         tls: (0, Vec::new()),
         pre_data: vec![0u8; hi - lo],
         pre_tls: Vec::new(),
-        classes: crate::object::class_image::snap_image_table_size(),
+        classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: 0,
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_counts(),
@@ -269,7 +269,7 @@ fn probe_baseline() -> (Baseline, usize) {
         tls,
         pre_data,
         pre_tls,
-        classes: crate::object::class_image::snap_image_table_size(),
+        classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: 0,
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_counts(),
@@ -364,10 +364,11 @@ fn growth_of_the_class_tables_stops_the_image() {
     let (mut base, _) = probe_baseline();
     let none = build(Some(&base), Vec::new(), false);
     assert!(none.stops.iter().all(|s| s.kind != STOP_CLASS_TABLES));
-    base.classes = base.classes.wrapping_sub(3);
+    base.classes[4] = base.classes[4].wrapping_sub(3);
     let grew = build(Some(&base), Vec::new(), false);
-    let s = grew.stops.iter().find(|s| s.kind == STOP_CLASS_TABLES);
-    assert_eq!(s.map(|s| s.value), Some(3));
+    let s: Vec<_> = grew.stops.iter().filter(|s| s.kind == STOP_CLASS_TABLES).collect();
+    assert_eq!(s.len(), 1, "one stop per growing table");
+    assert_eq!((s[0].cell, s[0].value), (4, 3), "the stop names the table and its rows");
 }
 
 #[test]
