@@ -731,9 +731,16 @@ fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHe
     let Some(parent) = crate::object::BuiltinConstructorIdentity::for_name(parent) else {
         return;
     };
-    let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent);
+    // The `extends` rule: the child's birth observes its parent. Reading the
+    // parent's constructor births the parent family (its first observation),
+    // so the constructor edge exists whichever family was observed first.
+    let parent_ctor = if constructor_inherits {
+        crate::array::intrinsic_constructor_addr(parent)
+    } else {
+        0
+    };
     let parent_proto = crate::array::intrinsic_prototype_addr(parent);
-    if constructor_inherits && parent_ctor != 0 {
+    if parent_ctor != 0 {
         crate::closure::closure_set_static_prototype(
             closure_ptr as usize,
             crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
