@@ -39,7 +39,7 @@ pub(crate) use site::{add_site, create_site, holder_read, site};
 use models::plain_data;
 pub(crate) use models::{Add, Create, CreateState, HolderRead, Site};
 pub use models::{ExportFact, ImageEntry, ImageKey, ProtoExports};
-use models::{ACCESSOR, HAS_GET, HAS_SET, NON_CONFIGURABLE, NON_ENUMERABLE, NON_WRITABLE};
+use models::{ACCESSOR, HAS_GET, HAS_SET, NON_ENUMERABLE};
 
 mod proto_exports;
 use proto_exports::program_exports;
@@ -788,53 +788,9 @@ fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
     literal_descriptor_attrs(&fields)
 }
 
-/// The attribute entry a literal property descriptor with these fields
-/// (name, value) gives a NEW key: getter and setter presence, and literal
-/// booleans (absent ones default to false). `None` when a field is not one
-/// the compiler reads. Shared by prototype images and class families
-/// (`layout_families`: a constructor's `Object.defineProperty(this, ...)`).
-pub(crate) fn literal_descriptor_attrs(fields: &[(&str, &Expr)]) -> Option<u8> {
-    let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
-    let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
-    let mut accessor = 0u8;
-    let mut data = false;
-    for &(name, value) in fields {
-        let flag = match value {
-            Expr::Bool(b) => Some(*b),
-            _ => None,
-        };
-        match name {
-            "get" if function(value) => accessor |= ACCESSOR | HAS_GET,
-            "set" if function(value) => accessor |= ACCESSOR | HAS_SET,
-            "value" => data = true,
-            "writable" => {
-                data = true;
-                if flag? {
-                    attrs &= !NON_WRITABLE;
-                }
-            }
-            "enumerable" => {
-                if flag? {
-                    attrs &= !NON_ENUMERABLE;
-                }
-            }
-            "configurable" => {
-                if flag? {
-                    attrs &= !NON_CONFIGURABLE;
-                }
-            }
-            _ => return None,
-        }
-    }
-    if accessor != 0 {
-        if data {
-            return None;
-        }
-        // An accessor has no [[Writable]].
-        return Some(accessor | (attrs & !NON_WRITABLE));
-    }
-    Some(attrs)
-}
+/// The attribute entry of a literal property descriptor: one definition,
+/// shared with the whole-program facts (`perry_hir::descriptor`).
+pub(crate) use perry_hir::descriptor::literal_descriptor_attrs;
 
 /// A literal's facts: the keys that are or may be accessors, the string
 /// keys it names, whether it may hold keys it does not name, and its own

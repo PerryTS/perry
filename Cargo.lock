@@ -5453,6 +5453,7 @@ name = "perry-hir"
 version = "0.5.1663"
 dependencies = [
  "anyhow",
+ "perry-abi",
  "perry-api-manifest",
  "perry-diagnostics",
  "perry-dispatch",

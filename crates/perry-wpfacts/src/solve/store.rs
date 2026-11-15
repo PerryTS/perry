@@ -367,6 +367,24 @@ impl Model {
         self.edge(src, n);
     }
 
+    /// Rule BD-A: `a` is a birth key of `tm` (definite) that a constructor
+    /// on its chain defined non-writable and non-configurable
+    /// (`Model::birth_attrs`).
+    pub(crate) fn birth_immutable(&self, tm: TmplId, a: Atom) -> bool {
+        if self.birth_attrs.is_empty() || !self.tmpls[tm as usize].definite.contains(&a) {
+            return false;
+        }
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if let Some(&attrs) = self.birth_attrs.get(&(c, a)) {
+                let fixed = perry_abi::LAYOUT_KEY_NON_WRITABLE | perry_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+                return attrs & fixed == fixed;
+            }
+            cur = self.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // SKINROOT12: a same-key copy's named `__proto__` store runs into
         // `t` only once the copy's own store into `t` may name `__proto__`
@@ -775,6 +793,20 @@ impl Model {
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => Some(tm),
             _ => None,
         };
+        // Rule BD-A: a key the constructor defined non-writable AND
+        // non-configurable is an own data property of every instance from
+        // birth on that no delete (10.1.10.1 step 4) or redefinition
+        // (10.1.6.3 step 5) can change; [[Set]] finds it first and stores
+        // nothing (10.1.9.2 OrdinarySetWithOwnDescriptor step 2.a: no setter
+        // runs, strict code throws a TypeError). A configurable one may be
+        // redefined writable or deleted (by code the object escapes to as
+        // well): its stores flow as any store's.
+        if let (Key::Named(a), TokKind::Obj(otm, _)) = (&key, &self.toks[t as usize]) {
+            let define = self.stores.get(site as usize).and_then(|s| s.define_attrs);
+            if define.is_none() && self.birth_immutable(*otm, *a) {
+                return;
+            }
+        }
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
         // performs (decision 17) with what the stored value's contract
@@ -902,8 +934,14 @@ impl Model {
         }
         match key {
             Key::Named(a) => {
+                // A BD-A define of a non-enumerable key makes no for-in key
+                // (`field_r`, as a method definition).
+                let hidden = self.stores.get(site as usize).and_then(|s| s.define_attrs).is_some_and(
+                    |attrs| attrs & perry_abi::LAYOUT_KEY_NON_ENUMERABLE != 0,
+                );
                 let f = match slot {
                     Some(i) => self.index_slot(t, i),
+                    None if hidden => self.field_r(t, a),
                     None => self.field(t, a),
                 };
                 self.edge(src, f);

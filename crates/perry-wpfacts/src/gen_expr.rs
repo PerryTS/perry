@@ -219,7 +219,7 @@ impl<'a> Gen<'a> {
     }
 
     /// Is this store a construction-phase writer of the current ctor?
-    fn phase_owner(&self, fx: &Fx, e: &Expr, object: &Expr) -> Option<TmplId> {
+    pub(crate) fn phase_owner(&self, fx: &Fx, e: &Expr, object: &Expr) -> Option<TmplId> {
         let tm = fx.ctor_of?;
         if !matches!(object, Expr::This) {
             return None;

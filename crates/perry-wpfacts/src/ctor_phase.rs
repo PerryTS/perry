@@ -61,6 +61,15 @@ pub struct CtorPhase {
     /// Some run may leave the constructor with an out-of-order add behind
     /// it: a subclass's keys are then added to an object an overflow orders.
     pub disordered: bool,
+    /// Rule BD-A: the `Object.defineProperty(this, "k", L)` /
+    /// `Object.defineProperties(this, {k: L, ..})` statements (identity of
+    /// the call expr, in `phase_stores` too) that define fresh keys with
+    /// literal data descriptors (`literal_defines`) on every exit before
+    /// `this` can be observed: each key is a birth key with the attribute
+    /// entry the descriptor gives it (ECMA-262 20.1.2.3 / 20.1.2.4 ->
+    /// 10.1.6.3 ValidateAndApplyPropertyDescriptor step 2: `current`
+    /// undefined, the key is created with the descriptor's attributes).
+    pub birth_defines: BTreeMap<usize, Vec<(String, u8)>>,
 }
 
 #[derive(Clone)]
@@ -92,6 +101,9 @@ struct W<'a> {
     late: BTreeSet<String>,
     read_before: BTreeSet<String>,
     exits: Vec<BTreeSet<String>>,
+    /// A class constructor (rule BD-A applies; a constructor function's
+    /// defines stay post-birth adds).
+    class_ctor: bool,
     /// The layout position of each key the class names (its fields in
     /// construction order); `None` for a constructor function, whose order
     /// is not tracked.
@@ -154,7 +166,7 @@ pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhas
         }
         m
     });
-    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone());
+    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -162,7 +174,7 @@ pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhas
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(shapes, &valued, methods, params, body, order).definite;
+    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     ph
 }
@@ -179,7 +191,7 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
     // A closure or function names no class: no class shape to read
     // (`plain_shapes`).
     let shapes = BTreeMap::new();
-    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None);
+    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false);
     if !ctor_order() || ph.assigned_order.is_empty() {
         return ph;
     }
@@ -189,7 +201,7 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
         .enumerate()
         .map(|(i, k)| (k.clone(), i))
         .collect();
-    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order))
+    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false)
 }
 
 fn analyze_body(
@@ -199,8 +211,10 @@ fn analyze_body(
     params: &[perry_hir::Param],
     body: &[Stmt],
     order: Option<BTreeMap<String, usize>>,
+    class_ctor: bool,
 ) -> CtorPhase {
     let mut w = W {
+        class_ctor,
         shapes,
         ph: CtorPhase::default(),
         methods,
@@ -257,6 +271,21 @@ fn analyze_body(
         // Declared fields are reported by the caller; keep ctor keys only.
         .filter(|k| w.ph.assigned_order.contains(k))
         .collect();
+    // BD-A holds only for a define whose keys are all definite: one some run
+    // skips (a branch, a loop body) or that runs after an observation is a
+    // define on an object that may lack the key, as before (a post-birth add).
+    let dropped: Vec<usize> = w
+        .ph
+        .birth_defines
+        .iter()
+        .filter(|(_, ks)| !ks.iter().all(|(k, _)| w.ph.definite.contains(k)))
+        .map(|(&id, _)| id)
+        .collect();
+    for id in dropped {
+        let ks = w.ph.birth_defines.remove(&id).unwrap_or_default();
+        w.ph.phase_stores.remove(&id);
+        w.ph.assigned_order.retain(|k| !ks.iter().any(|(x, _)| x == k));
+    }
     w.ph
 }
 
@@ -266,18 +295,21 @@ impl W<'_> {
     /// plain `__AnonShape_*` construction), or `None`: a spread, a computed
     /// key, a method or accessor is no such literal.
     fn literal_parts<'e>(&'e self, e: &'e Expr) -> Option<Vec<(&'e str, &'e Expr)>> {
-        match e {
-            Expr::Object(ps) => Some(ps.iter().map(|(k, v)| (k.as_str(), v)).collect()),
-            Expr::New {
-                class_name, args, ..
-            } => {
-                let keys = self.shapes.get(class_name)?;
-                (keys.len() == args.len())
-                    .then(|| keys.iter().map(|k| k.as_str()).zip(args.iter()).collect())
-            }
-            _ => None,
-        }
+        literal_parts(self.shapes, e)
     }
+
+    /// Rule BD-A: `k` may become a birth key by a define here: no earlier
+    /// store, read or define of it, not a method of the class (a method is
+    /// the prototype's), not `__proto__` / `constructor`.
+    fn fresh_define(&self, k: &str) -> bool {
+        k != "__proto__"
+            && k != "constructor"
+            && !self.ph.assigned_order.iter().any(|x| x == k)
+            && !self.read_before.contains(k)
+            && !self.late.contains(k)
+            && !self.methods.contains(k)
+    }
+
 
     /// An object literal of only the data-descriptor fields `value`,
     /// `writable`, `enumerable`, `configurable` (ECMA-262 6.2.6.5): no
@@ -563,6 +595,37 @@ impl W<'_> {
                 }
                 self.store(st, e, property);
             }
+            // Rule BD-A: a define of fresh keys with literal data
+            // descriptors while `this` is unobserved creates each key
+            // (10.1.6.3 step 2) with the descriptor's value: a birth store
+            // that runs no code (no setter: [[DefineOwnProperty]]). Its
+            // position is the family layout's (codegen `define_stores`), not
+            // the [[Set]] order `order_store` tracks.
+            Expr::ObjectDefineProperty(t, ..) | Expr::ObjectDefineProperties(t, ..)
+                if self.class_ctor
+                    && st.open
+                    && matches!(t.as_ref(), Expr::This)
+                    && literal_defines(self.shapes, e)
+                        .is_some_and(|ds| ds.iter().all(|d| self.fresh_define(d.0))) =>
+            {
+                let ds = literal_defines(self.shapes, e).unwrap_or_default();
+                for d in &ds {
+                    for v in &d.3 {
+                        self.expr(st, v);
+                    }
+                }
+                if st.open {
+                    let id = e as *const Expr as usize;
+                    for d in &ds {
+                        self.ph.assigned_order.push(d.0.to_string());
+                        st.assigned.insert(d.0.to_string());
+                    }
+                    self.ph.phase_stores.insert(id);
+                    self.ph
+                        .birth_defines
+                        .insert(id, ds.iter().map(|d| (d.0.to_string(), d.1)).collect());
+                }
+            }
             // ECMA-262 20.1.2.4 Object.defineProperty / 20.1.2.3
             // Object.defineProperties on `this` with plain data-descriptor
             // literals: `this` as the target is no leak. ToPropertyDescriptor
@@ -606,6 +669,75 @@ impl W<'_> {
                 walk_expr_children(e, &mut |c| self.expr(st, c));
             }
         }
+    }
+}
+
+/// The (key, value) parts of object literal `e` (an `Expr::Object` or a
+/// plain `__AnonShape_*` construction, `plain_shapes`), or `None`: a spread,
+/// a computed key, a method or accessor is no such literal.
+pub(crate) fn literal_parts<'e>(
+    shapes: &'e BTreeMap<String, Vec<String>>,
+    e: &'e Expr,
+) -> Option<Vec<(&'e str, &'e Expr)>> {
+    match e {
+        Expr::Object(ps) => Some(ps.iter().map(|(k, v)| (k.as_str(), v)).collect()),
+        Expr::New {
+            class_name, args, ..
+        } => {
+            let keys = shapes.get(class_name)?;
+            (keys.len() == args.len())
+                .then(|| keys.iter().map(|k| k.as_str()).zip(args.iter()).collect())
+        }
+        _ => None,
+    }
+}
+
+/// One key a define statement creates (rule BD-A): its name, its attribute
+/// entry (`perry_abi::LAYOUT_KEY_*`), and the descriptor's field values in
+/// evaluation order (`value` among them, or none: `undefined`).
+pub(crate) type BirthDefine<'e> = (&'e str, u8, Option<&'e Expr>, Vec<&'e Expr>);
+
+/// The keys `e` defines when it is `Object.defineProperty(this, "k", L)` or
+/// `Object.defineProperties(this, {k: L, ..})` and every `L` is a literal
+/// DATA descriptor with literal attributes (`perry_hir::descriptor::
+/// literal_descriptor_attrs`, the definition the family layout uses), in
+/// definition order. `None` for any other expr, an accessor, a computed,
+/// duplicated or array-index key (`defineProperties` defines index keys
+/// first, 20.1.2.3.1 step 3 OwnPropertyKeys order).
+pub(crate) fn literal_defines<'e>(
+    shapes: &'e BTreeMap<String, Vec<String>>,
+    e: &'e Expr,
+) -> Option<Vec<BirthDefine<'e>>> {
+    let one = |k: &'e str, d: &'e Expr| -> Option<BirthDefine<'e>> {
+        if k.parse::<u32>().is_ok() {
+            return None;
+        }
+        let fields = literal_parts(shapes, d)?;
+        let attrs = perry_hir::descriptor::literal_descriptor_attrs(&fields)?;
+        if attrs & perry_abi::LAYOUT_KEY_ACCESSOR != 0 {
+            return None;
+        }
+        let value = fields.iter().find(|(n, _)| *n == "value").map(|(_, v)| *v);
+        Some((k, attrs, value, fields.into_iter().map(|(_, v)| v).collect()))
+    };
+    match e {
+        Expr::ObjectDefineProperty(t, k, d) if matches!(t.as_ref(), Expr::This) => {
+            let Expr::String(k) = k.as_ref() else {
+                return None;
+            };
+            Some(vec![one(k.as_str(), d)?])
+        }
+        Expr::ObjectDefineProperties(t, ps) if matches!(t.as_ref(), Expr::This) => {
+            let mut out: Vec<BirthDefine<'e>> = Vec::new();
+            for (k, d) in literal_parts(shapes, ps)? {
+                if out.iter().any(|x| x.0 == k) {
+                    return None;
+                }
+                out.push(one(k, d)?);
+            }
+            Some(out)
+        }
+        _ => None,
     }
 }
 

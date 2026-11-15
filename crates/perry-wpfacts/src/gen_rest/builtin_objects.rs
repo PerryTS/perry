@@ -112,6 +112,14 @@ impl<'a> Gen<'a> {
                 self.name_fold_call(r, "FinalizationRegistry", "unregister", vec![t], out);
                 out
             }
+            // Rule BD-A (`CtorPhase::birth_defines`): the constructor's
+            // define creates fresh keys on the unobserved instance; each
+            // is a birth store of the descriptor's value (or `undefined`).
+            Expr::ObjectDefineProperty(o, ..) | Expr::ObjectDefineProperties(o, ..)
+                if self.birth_define_owner(fx, e, o).is_some() =>
+            {
+                self.birth_define(fx, e, o)
+            }
             Expr::ObjectDefineProperty(o, k, d)
             | Expr::ReflectDefineProperty {
                 target: o,
@@ -932,5 +940,74 @@ impl<'a> Gen<'a> {
             }
             _ => unreachable!("internal compiler error: expr_rest: not a builtin_objects variant"),
         }
+    }
+
+    /// Rule BD-A: the class whose constructor's birth define `e` is
+    /// (`CtorPhase::birth_defines`), when every key it defines is new to the
+    /// whole chain: no ancestor's birth key (a redefinition runs 10.1.6.3
+    /// on an existing property: the general define, HARD) and no member of a
+    /// prototype on the chain (an own data key would shadow it: the general
+    /// define handles that as before).
+    fn birth_define_owner(&self, fx: &Fx, e: &Expr, o: &Expr) -> Option<TmplId> {
+        let tm = self.phase_owner(fx, e, o)?;
+        let ks = self.ctor_phase.get(&tm)?.birth_defines.get(&(e as *const Expr as usize))?;
+        let mut cur = Some(tm);
+        let mut own = true;
+        while let Some(c) = cur {
+            let t = &self.m.tmpls[c as usize];
+            for (k, _) in ks {
+                let a = self.m.atom_index.get(k.as_str()).copied();
+                let held = a.is_some_and(|a| {
+                    (!own && t.birth_keys.contains(&a))
+                        || t.proto_members.contains(&a)
+                        || t.accessor_keys.contains(&a)
+                });
+                if held {
+                    return None;
+                }
+            }
+            if t.parent_value.is_some() && t.parent.is_none() {
+                return None;
+            }
+            own = false;
+            cur = t.parent;
+        }
+        Some(tm)
+    }
+
+    /// Rule BD-A lowering: the descriptor fields are evaluated (in order),
+    /// then each key is stored at birth with its value, its site carrying
+    /// the attribute entry (`StoreSite::define_attrs`).
+    fn birth_define(&mut self, fx: &Fx, e: &Expr, o: &Expr) -> NodeId {
+        let mi = fx.module;
+        let on = self.expr(fx, o);
+        let Some(tm) = self.birth_define_owner(fx, e, o) else {
+            return on;
+        };
+        let shapes = crate::ctor_phase::plain_shapes(&self.modules[mi as usize].1.classes);
+        let ds = crate::ctor_phase::literal_defines(&shapes, e).unwrap_or_default();
+        for (k, attrs, value, values) in ds {
+            let mut vn = None;
+            for v in values {
+                let n = self.expr(fx, v);
+                if value.is_some_and(|x| std::ptr::eq(x, v)) {
+                    vn = Some(n);
+                }
+            }
+            let src = vn.unwrap_or_else(|| self.prim_node(prim::UNDEF));
+            let a = self.m.atom(k);
+            self.m.birth_attrs.insert((tm, a), attrs);
+            let site = self.store_site(mi, fx.f, format!("define {k}"), Some(tm), false);
+            self.m.stores[site as usize].define_attrs = Some(attrs);
+            self.m.cons(
+                on,
+                Cons::Store {
+                    key: Key::Named(a),
+                    src,
+                    site,
+                },
+            );
+        }
+        on
     }
 }

@@ -438,6 +438,7 @@ impl Model {
             assign: false,
             proto_of: None,
             in_loop: None,
+            define_attrs: None,
         });
         id
     }
@@ -458,6 +459,7 @@ impl Model {
             assign: false,
             proto_of: None,
             in_loop: None,
+            define_attrs: None,
         });
         id
     }

@@ -1491,6 +1491,11 @@ pub struct StoreSite {
     /// body walk ordered (a birth definition, a replay, a parameter
     /// default, a synthetic store); it is never an ordered writer.
     pub in_loop: Option<bool>,
+    /// Rule BD-A: the birth store of a constructor's literal-descriptor
+    /// define (`CtorPhase::birth_defines`), with the key's attribute entry
+    /// (`perry_abi::LAYOUT_KEY_*`): it creates the key, runs no setter, and
+    /// a non-enumerable one makes no for-in key.
+    pub define_attrs: Option<u8>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -2060,6 +2065,10 @@ pub struct Model {
     /// plain own data slot (`derive::own_data_or_absent_why`, key-scoped;
     /// the template's other keys keep their facts).
     pub defined_keys: FxHashMap<TmplId, Vec<Atom>>,
+    /// Rule BD-A: the attribute entry of each birth key a class's
+    /// constructor defines with a literal data descriptor
+    /// (`CtorPhase::birth_defines`), on the defining class's template.
+    pub birth_attrs: FxHashMap<(TmplId, Atom), u8>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     /// Tokens HARD only through named data definitions (rule D1): their
     /// any-key field has no "written by unknown code" seed yet; the first

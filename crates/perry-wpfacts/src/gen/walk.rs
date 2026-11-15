@@ -1141,6 +1141,7 @@ impl<'a> Gen<'a> {
             assign: false,
             proto_of: None,
             in_loop: self.order_ok.then_some(self.loop_depth > 0),
+            define_attrs: None,
         });
         id
     }
