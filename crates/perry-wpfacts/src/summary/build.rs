@@ -1177,7 +1177,14 @@ fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
                 return false;
             }
         }
-        keyed
+        // Rule KEY-ARG (SKINBLD1): a key the body passes on unchanged as an
+        // argument (`getDependencies( type ) { this.cache.get( type ) }`)
+        // is that one value in the callee too (10.2.1), so the run is keyed
+        // by it as the callee's is: a run per key entry (`called_val`,
+        // `switch_vals`), finite (the entries are the program's literals
+        // and the shapes made from them), and an argument that gains an
+        // entry binds that entry's run as well (`settle_val_runs`).
+        keyed || s.calls.iter().any(|(_, cs)| cs.args.iter().any(|x| k.contains(x)))
     };
     (0..s.params.len()).find(|&j| only_keyed(j)).map(|j| j as u32)
 }
