@@ -43,6 +43,30 @@ fn all_proven(src: &str, key: &str, call: bool) {
     let v = verdicts(src, key, call);
     assert!(v.iter().all(proven), ".{key}: {v:?}");
 }
+/// Every read of `key` keeps `null` among its receivers (the guard must not
+/// drop the null a later store, getter or iteration gives): a receiver set of
+/// objects and `null` is proven with its TypeError arm, so the verdict alone
+/// cannot show a wrong narrowing.
+fn keeps_null(src: &str, key: &str) {
+    let h = hirs(src);
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let cfg = FactsConfig {
+        unit_io: true,
+        ..Default::default()
+    };
+    let pf = crate::compute(&list, &cfg);
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let r: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && !s.is_call)
+        .map(|s| (s.verdict.clone(), s.receivers.clone()))
+        .collect();
+    assert!(
+        !r.is_empty() && r.iter().all(|(_, rs)| rs.iter().any(|x| x.starts_with("primitive:null"))),
+        ".{key} must keep null: {r:?}"
+    );
+}
 fn some_unproven(src: &str, key: &str, call: bool) {
     let v = verdicts(src, key, call);
     assert!(v.iter().any(|v| !proven(v)), ".{key} must stay unproven: {v:?}");
@@ -91,23 +115,67 @@ const T2: &str = "class C { constructor() { this.view = null; this.w = 1; }
   upd() { let w = this.w; if (this.view !== null && this.view.enabled) { w = w * this.view.fw; } return w; } }
 const c = new C(); console.log(c.upd());";
 #[test]
-#[ignore = "rule T2 not built"]
 fn r6next_t2_member_path_guard_enabled_is_dead() {
     all_proven(T2, "enabled", false);
 }
 #[test]
-#[ignore = "rule T2 not built"]
 fn r6next_t2_member_path_guard_body_is_dead() {
     all_proven(T2, "fw", false);
 }
-// keep: a call between the test and the read may store the member.
+// keep (i): a call between the test and the read stores null after the
+// test passed (`open` made the guard pass): the read throws on that path.
 const T2K: &str = "class C { constructor() { this.view = null; this.w = 1; }
-  reset() { this.view = null; }
+  open() { this.view = { fw: 2 }; } reset() { this.view = null; }
   upd() { let w = this.w; if (this.view !== null) { this.reset(); w = this.view.fw; } return w; } }
-const c = new C(); console.log(c.upd());";
+const c = new C(); c.open(); console.log(c.upd());";
 #[test]
 fn r6next_t2_keep_call_between_guard_and_read() {
-    some_unproven(T2K, "fw", false);
+    keeps_null(T2K, "fw");
+}
+// keep (ii): `view` is an accessor: the test's read and the later read are
+// two getter calls; the second gives null.
+const T2A: &str = "class C { constructor() { this.n = 0; this.w = 1; }
+  get view() { this.n = this.n + 1; return this.n > 1 ? null : { fw: 2 }; }
+  upd() { let w = this.w; if (this.view !== null) { w = this.view.fw; } return w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+fn r6next_t2_keep_accessor_member() {
+    keeps_null(T2A, "fw");
+}
+// keep (iii): a closure created under the guard runs after a store of null.
+const T2C: &str = "class C { constructor() { this.view = null; this.w = 1; } open() { this.view = { fw: 2 }; }
+  upd() { if (this.view !== null) { const g = () => this.view.fw; this.view = null; return g(); } return 0; } }
+const c = new C(); c.open(); console.log(c.upd());";
+#[test]
+fn r6next_t2_keep_closure_in_guarded_code() {
+    keeps_null(T2C, "fw");
+}
+// keep (iv): in a loop, a read BEFORE the guard sees the null the end of the
+// previous iteration stored.
+const T2L: &str = "class C { constructor() { this.view = { fw: 2, fw2: 3 }; this.w = 0; }
+  upd() { for (let i = 0; i < 2; i++) { this.w = this.w + this.view.fw;
+    if (this.view !== null) { this.w = this.w + this.view.fw2; } this.view = null; } return this.w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+fn r6next_t2_keep_loop_read_before_guard() {
+    keeps_null(T2L, "fw");
+}
+// The same path guard, `!= null` and `!== undefined` forms (7.2.15, 7.2.16).
+const T2F: &str = "class C { constructor() { this.view = null; this.u = undefined; this.w = 1; }
+  upd() { let w = this.w; if (this.view != null) { w = this.view.fa; }
+    if (this.u !== undefined) { w = this.u.fa; } if (this.view === null) { return w; } return this.view.fa; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+fn r6next_t2_member_path_guard_forms_are_dead() {
+    all_proven(T2F, "fa", false);
+}
+// keep: `!== null` passes an undefined-only member: the read throws.
+const T2U: &str = "class C { constructor() { this.view = undefined; this.w = 1; }
+  upd() { let w = this.w; if (this.view !== null) { w = this.view.fu; } return w; } }
+const c = new C(); console.log(c.upd());";
+#[test]
+fn r6next_t2_keep_not_null_passes_undefined() {
+    some_unproven(T2U, "fu", false);
 }
 
 // T3 (PerspectiveCamera.updateProjectionMatrix: `const view = this.view;

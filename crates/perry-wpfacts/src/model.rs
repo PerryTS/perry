@@ -130,6 +130,10 @@ pub mod guard {
     pub const IS_STR: u8 = 18;
     pub const IS_NUM: u8 = 19;
     pub const IS_NULL: u8 = 20;
+    /// Rule T2: `x.key !== null` true (`=== null` false): every value but
+    /// `null` is not strictly equal to `null` (ECMA-262 7.2.16 step 1, the
+    /// Null type has one value); `undefined` and every object pass.
+    pub const NOT_NULL: u8 = 21;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -159,6 +163,7 @@ pub mod guard {
             IS_STR => p::STR,
             IS_NUM => p::NUM,
             IS_NULL => p::NULL,
+            NOT_NULL => p::ALL & !p::NULL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -168,7 +173,7 @@ pub mod guard {
     pub fn objects(test: u8) -> bool {
         matches!(
             test,
-            NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR | NOT_FALSE | NOT_TRUE
+            NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR | NOT_FALSE | NOT_TRUE | NOT_NULL
         )
     }
 }

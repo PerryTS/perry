@@ -923,6 +923,42 @@ fn implied<'p>(
                 out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
             }
         }
+        // Rule T2: `host.key !== null` true (`=== null` false), `!==
+        // undefined`, `!= null` (`undefined`) true (`==` false): the host
+        // holds only the values whose read of `key` may yield a value the
+        // comparison passes (ECMA-262 7.2.16 step 1; 7.2.15 steps 2-3: `==
+        // null` holds for `null` and `undefined` only, an object is never
+        // loosely equal to them, no conversion runs). It narrows the host
+        // (an object whose read of `key` never passes never runs the
+        // guarded code), not the value a later read gives: a store, call or
+        // getter between the test and a later `host.key` read changes
+        // nothing here, that read takes every value of the key.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Ne | CompareOp::LooseNe) == positive)
+            && matches!(
+                (left.as_ref(), right.as_ref()),
+                (Expr::PropertyGet { .. }, Expr::Null | Expr::Undefined)
+                    | (Expr::Null | Expr::Undefined, Expr::PropertyGet { .. })
+            ) =>
+        {
+            use crate::model::guard;
+            let ((Expr::PropertyGet { object, property, .. }, nil)
+            | (nil, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            let test = match (op, nil) {
+                (CompareOp::LooseEq | CompareOp::LooseNe, _) => guard::NOT_NULLISH,
+                (_, Expr::Null) => guard::NOT_NULL,
+                _ => guard::NOT_UNDEF,
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
         // `local == null` (`undefined`) false, `local != null` true: not
         // nullish. `local === undefined` false, `!==` true: not
         // `undefined`. Rule T1: `local === null` false, `!==` true: not
