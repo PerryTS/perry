@@ -593,13 +593,20 @@ fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     else {
         return true;
     };
+    // A left `+` converts SILENTLY when every leaf of it is a Number, a
+    // primitive-kind read, or the result of `-` `*` `/` `%` `**` over such
+    // operands (`facts_number::add_tree_converts_silently`): ToPrimitive of a
+    // primitive returns it (7.1.1) and ToNumeric of Number, Boolean, null and
+    // undefined is a Number (7.1.3), so its conversions run no user code and
+    // cannot throw (no String, no BigInt, no Symbol, no object). Reading a
+    // late leaf before them is then invisible, whatever that leaf is.
     let left_converts = matches!(
         left.as_ref(),
         Expr::Binary {
             op: BinaryOp::Add,
             ..
         }
-    );
+    ) && !super::facts_number::add_tree_converts_silently(ctx, left);
     if left_converts {
         let mut late = Vec::new();
         add_tree_leaves(right, &mut late);

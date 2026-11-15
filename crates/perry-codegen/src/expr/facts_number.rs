@@ -101,6 +101,36 @@ pub(crate) fn add_is_number(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> bool 
     operand(ctx, left).is_some() && operand(ctx, right).is_some()
 }
 
+/// The value of `e` is a Number, or `e` throws while it is evaluated: a
+/// Number or primitive-kind operand (`operand`), or `-` `*` `/` `%` `**` over
+/// two such values. Those operators apply ToNumeric to both operands
+/// (13.15.3), which for Number, Boolean, null and undefined is a Number
+/// (7.1.3), so the BigInt arm is never taken and the result is a Number.
+pub(crate) fn kind_number(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::Binary {
+            op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow,
+            left,
+            right,
+        } => kind_number(ctx, left) && kind_number(ctx, right),
+        _ => operand(ctx, e).is_some(),
+    }
+}
+
+/// Every leaf of the `+` tree `e` is `kind_number`: the tree's ToPrimitive
+/// and ToNumeric steps run no user code and cannot throw, and its value is a
+/// Number.
+pub(crate) fn add_tree_converts_silently(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } => add_tree_converts_silently(ctx, left) && add_tree_converts_silently(ctx, right),
+        _ => kind_number(ctx, e),
+    }
+}
+
 /// `ToNumber` of a primitive-kind value: the plain-number case is the value,
 /// every other case (undefined, null, a Boolean, an INT32 box) is the leaf
 /// `js_number_coerce`.
