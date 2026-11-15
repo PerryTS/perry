@@ -213,7 +213,7 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_MAX_PTS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
+                .unwrap_or(2_000_000_000),
         ),
         export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
