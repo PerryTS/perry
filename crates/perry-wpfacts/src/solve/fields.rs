@@ -1123,6 +1123,25 @@ impl Model {
         self.fields.get(&(obj, a)).copied()
     }
 
+    /// 22.2.7.2 RegExpBuiltinExec steps 22, 33: the match Array `rec` is
+    /// born with every index 0 ..= the pattern's group count (a capture
+    /// that did not participate is an own `undefined`, its slot's value).
+    /// A read of `rec` under the constant index `key` up to that count is
+    /// an in-bounds read (`Model::kept_read`: withdrawn once `rec` may
+    /// shrink); a pending record (rule M7) waits for its pattern, which
+    /// gives an index it does not derive any capture (`exec_attach`).
+    pub(crate) fn exec_index_present(&self, rec: Tok, key: NodeId) -> bool {
+        let Some(i) = self.num_literal_index(key) else {
+            return false;
+        };
+        if self.regexp_pending_recs.contains(&rec) {
+            return true;
+        }
+        self.regexp_exec_tail
+            .get(&rec)
+            .is_some_and(|&p| i == 0 || self.regexp_tails[p as usize].derived().contains(&i))
+    }
+
     /// The one array index key node `key` holds: a numeric literal
     /// (`Gen::num_literal`) of one integer in index range.
     pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {

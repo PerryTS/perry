@@ -214,6 +214,16 @@ impl Model {
         self.atoms[a as usize].strip_prefix(INFIX_MARK).and_then(|r| r.chars().next())
     }
 
+    /// Node `n` holds Strings only, each a program constant (no prefix,
+    /// suffix, infix or exclusion entry, no other value).
+    pub(crate) fn const_str_key(&self, n: NodeId) -> bool {
+        let node = &self.nodes[n as usize];
+        node.prim == prim::STR
+            && node.pts.is_empty()
+            && node.strs >= STRS_SET0
+            && self.str_atoms(node.strs).iter().all(|&a| !self.atom_is_mark(a))
+    }
+
     /// Is the entry a solver spelling (a prefix or an infix), not a
     /// program constant (`str_const_atom`)?
     pub(crate) fn atom_is_mark(&self, a: Atom) -> bool {

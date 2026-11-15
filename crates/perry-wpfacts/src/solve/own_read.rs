@@ -125,8 +125,16 @@ impl Model {
         // The in-bounds read (`gen/in_bounds.rs`): the key was below the
         // length of an Array that only grows, so the read is past its end
         // only under a key that is no index (`Model::kept_read`).
-        let kept = kept && self.kept_read(t);
-        if !watched && !kept {
+        let kept = (kept || self.exec_index_present(t, idx)) && self.kept_read(t);
+        // A key of String constants only (`const_str_key`) reads, per
+        // constant, the named [[Get]] (`IdxKey`), which decides the absent
+        // key's `undefined` itself; any other key may name a key `t` lacks.
+        // A key that holds nothing yet is decided by `IdxKey` when it does.
+        let key_decides = !self.is_arr(t) && {
+            let k = &self.nodes[idx as usize];
+            (k.prim == 0 && k.pts.is_empty()) || self.const_str_key(idx)
+        };
+        if !watched && !kept && !key_decides {
             self.add_prim(dst, prim::UNDEF);
         }
         if self.idx_done.insert((idx, t, dst, 0)) {

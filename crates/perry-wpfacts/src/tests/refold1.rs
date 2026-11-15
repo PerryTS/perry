@@ -278,3 +278,42 @@ fn refold1_probe_plain_pipeline() {
         eprintln!("REFOLD1 {tag}: y={:?} x={:?} xrows={:?}", recv(&pf, "y"), recv(&pf, "x"), rows(&pf, "x"));
     }
 }
+
+
+/// F1's program with pattern `pat` (a string constant), subject `subject`
+/// and the capture index `g` as the key.
+fn f1p(pat: &str, subject: &str, g: u32) -> ProgramFacts {
+    facts(&format!(
+        r#"class V {{ x = 1; }}
+class T {{ position: any = new V(); other(): number {{ return 1; }} }}
+const re = new RegExp( {pat} );
+const m: any = re.exec( {subject} );
+const k: any = m[ {g} ];
+const t: any = new T();
+const v: any = t[ k ];
+console.log( v.x );
+"#
+    ))
+}
+
+// FOLDFIX1 KEEP: an optional group that does not take part in the match
+// is an own `undefined` (22.2.7.2 step 33): `t[undefined]` reads the absent
+// key `"undefined"`, so `v.x` keeps its TypeError arm.
+#[test]
+fn foldfix1_optional_group_unmatched_is_undefined() {
+    let pf = f1p(r#""^(\\w+)?\\.(\\w+)$""#, r#"".position""#, 1);
+    let v = recv(&pf, "x");
+    // `m[ 1 ]` is exactly `undefined`: `v` is only `undefined` and `v.x` throws.
+    let r = rows(&pf, "x");
+    assert!(v.is_empty() && r.iter().all(|x| x.ends_with("verdict=Throws")) && !r.is_empty(), "{r:?}");
+}
+
+// FOLDFIX1 KEEP: a constant subject the pattern cannot match: `exec` is
+// `null` (22.2.7.2 step 12.a), `m[ 2 ]` only throws, and no key reaches
+// `t[ k ]`.
+#[test]
+fn foldfix1_no_match_is_null_only() {
+    let pf = f1p(r#""^(\\w+)\\.(\\w+)$""#, r#""nodots""#, 2);
+    let v = recv(&pf, "x");
+    assert!(v.is_empty(), "{:?}", rows(&pf, "x"));
+}

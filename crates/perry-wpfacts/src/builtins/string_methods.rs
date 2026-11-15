@@ -649,7 +649,9 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
         // the captures (String or undefined) with `index`, `input` and
         // `groups` (an object of String or undefined, or undefined).
         "exec" => {
-            let rec = site_tmpl(m, call, "Array");
+            // Born hole-free: steps 22 and 33 define every index 0 ..= the
+            // group count (`Model::exec_index_present`).
+            let rec = site_tmpl_born(m, call, "Array", true, false);
             let fa = m.field_any(rec);
             m.add_prim(fa, prim::STR | prim::UNDEF);
             for (key, p) in [

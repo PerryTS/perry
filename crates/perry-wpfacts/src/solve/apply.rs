@@ -1681,11 +1681,24 @@ impl Model {
                 // Rule M3: a key of string constants and known prefixes
                 // reads, per entry, the names that entry admits; any other
                 // key reads under the site's shape.
+                // ECMA-262 13.3.2.1, 7.1.19: `o[k]` of a String constant
+                // `k` is the named [[Get]] of `k` (OrdinaryGet 10.1.8.1):
+                // the named read, which decides presence (`load_from`). A
+                // non-Array object read under such a key got no `undefined`
+                // up front (`idx_load_tok`); once the key holds anything
+                // else, it does.
+                if !self.is_arr(obj) && !self.const_str_key(n) {
+                    self.add_prim(dst, prim::UNDEF);
+                }
                 match named.then(|| self.key_entry_shapes(n)).flatten() {
                     Some(entries) => {
                         for (a, s) in entries {
                             if self.idx_atom_done.insert((n, obj, dst, a)) {
-                                self.load_from(obj, obj, Key::Any(s), dst);
+                                let key = match self.atom_is_mark(a) {
+                                    true => Key::Any(s),
+                                    false => Key::Named(a),
+                                };
+                                self.load_from(obj, obj, key, dst);
                             }
                         }
                     }
