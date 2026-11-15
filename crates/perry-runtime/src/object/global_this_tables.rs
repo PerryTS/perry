@@ -227,7 +227,7 @@ builtin_constructors! {
     SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true,
     // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
     Iterator => CONSTRUCT_ONLY_INFO,
-    Buffer => NOOP_CONSTRUCTOR_INFO; statics ["from", "alloc", "allocUnsafe", "allocUnsafeSlow", "concat", "of", "isBuffer", "isEncoding", "byteLength", "compare", "copyBytesFrom", "poolSize"],
+    Buffer => crate::object::native_module::BUFFER_CONSTRUCTOR_INFO; statics ["from", "alloc", "allocUnsafe", "allocUnsafeSlow", "concat", "of", "isBuffer", "isEncoding", "byteLength", "compare", "copyBytesFrom", "poolSize"],
 }
 
 /// Is `name` one of the built-in CONSTRUCTORS installed on `globalThis`?

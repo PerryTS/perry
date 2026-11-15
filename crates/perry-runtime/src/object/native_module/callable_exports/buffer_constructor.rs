@@ -2,13 +2,29 @@
 
 use super::*;
 
-pub(crate) fn buffer_constructor_value() -> f64 {
-    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
-        let cached = slot.get();
-        if cached != 0 {
-            return f64::from_bits(cached);
-        }
+/// Buffer's own constructor info: the realm row's (`global_this_tables.rs`),
+/// so the constructor setup binds is Buffer's own closure.
+pub(crate) const BUFFER_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
+    crate::fn_info!(#[realm(Buffer, kind = constructor, capture = [ref(Buffer.prototype)], extends = Uint8Array, attrs = {prototype = writable}, members = { from, attrs = writable | enumerable | configurable; alloc, attrs = writable | enumerable | configurable; allocUnsafe, attrs = writable | enumerable | configurable; allocUnsafeSlow, attrs = writable | enumerable | configurable; concat, attrs = writable | enumerable | configurable; of, attrs = writable | enumerable | configurable; isBuffer, attrs = writable | enumerable | configurable; isEncoding, attrs = writable | enumerable | configurable; byteLength, attrs = writable | enumerable | configurable; compare, attrs = writable | enumerable | configurable; copyBytesFrom, attrs = writable | enumerable | configurable; poolSize = 65536.0, attrs = writable | enumerable | configurable; [Symbol.species] = accessor(get = "Buffer[\"@@species\"].<get>"); })] export crate::object::native_module::callable_exports::buffer_constructor_thunk, 3; with_declared(3));
 
+/// `%Buffer%`. Buffer is a lazy family: asking for its constructor value is
+/// an observation, and births it (`birth_lazy_family`).
+pub(crate) fn buffer_constructor_value() -> f64 {
+    let cached = BUFFER_CONSTRUCTOR_VALUE.with(std::cell::Cell::get);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    crate::object::birth_lazy_family(crate::object::BuiltinConstructorIdentity::Buffer);
+    match BUFFER_CONSTRUCTOR_VALUE.with(std::cell::Cell::get) {
+        0 => f64::from_bits(crate::value::TAG_UNDEFINED),
+        bits => f64::from_bits(bits),
+    }
+}
+
+/// Buffer's birth on its realm constructor `closure` (from
+/// `birth_lazy_family`, under its no-move scope).
+pub(crate) fn birth_buffer_family(closure: *mut crate::closure::ClosureHeader) {
+    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
         // #6924: the statics minted below are BOUND_METHOD closures that
         // dispatch by name through the "buffer.Buffer" namespace, and that
         // dispatch resolves via the per-module registry
@@ -21,11 +37,6 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // mint, mirroring `install_native_module_vtable()` above.
         crate::object::native_module_registry::js_nm_install_buffer();
 
-        let func_ptr = crate::fn_info!(#[realm(Buffer, kind = constructor, capture = [ref(Buffer.prototype)], extends = Uint8Array, attrs = {prototype = writable}, members = { from, attrs = writable | enumerable | configurable; alloc, attrs = writable | enumerable | configurable; allocUnsafe, attrs = writable | enumerable | configurable; allocUnsafeSlow, attrs = writable | enumerable | configurable; concat, attrs = writable | enumerable | configurable; of, attrs = writable | enumerable | configurable; isBuffer, attrs = writable | enumerable | configurable; isEncoding, attrs = writable | enumerable | configurable; byteLength, attrs = writable | enumerable | configurable; compare, attrs = writable | enumerable | configurable; copyBytesFrom, attrs = writable | enumerable | configurable; poolSize = 65536.0, attrs = writable | enumerable | configurable; [Symbol.species] = accessor(get = "Buffer[\"@@species\"].<get>"); })] export crate::object::native_module::callable_exports::buffer_constructor_thunk, 3; with_declared(3));
-        let closure = crate::closure::js_closure_alloc(func_ptr, 1);
-        if closure.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
         let scope = crate::gc::RuntimeHandleScope::new();
         let closure = scope.root_raw_mut_ptr(closure);
         closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
@@ -109,27 +120,21 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // #11193: `Buffer[Symbol.species]` (FastBuffer). After the slot is
         // set, so a re-entrant read of `Buffer` during the install sees it.
         buffer_species::install_buffer_species(value);
-        // `class Buffer extends Uint8Array`: the birth links both edges
-        // (#9173), from Uint8Array's own family cells.
+        // `class Buffer extends Uint8Array`: Buffer's birth links both edges
+        // to Uint8Array's own family cells, which births Uint8Array (#9173).
         let uint8 = crate::object::BuiltinConstructorIdentity::Uint8Array;
-        // Buffer.prototype -> Uint8Array.prototype is linked here only when
-        // Uint8Array is born; else the first prototype walk that reaches
-        // Buffer.prototype births it (`buffer_intrinsic_prototype_parent`).
-        // The constructor edge needs Uint8Array's constructor, not its birth.
-        let uint8_proto = crate::array::intrinsic_prototype_addr_if_bound(uint8);
-        let uint8_ctor = match crate::array::intrinsic_constructor_addr_if_bound(uint8) {
-            0 => crate::array::intrinsic_constructor_addr(uint8),
-            ctor => ctor,
-        };
+        let uint8_proto = crate::array::intrinsic_prototype_addr(uint8);
+        let uint8_ctor = crate::array::intrinsic_constructor_addr(uint8);
         let ctor = crate::value::JSValue::from_bits(slot.get());
-        if let Some(proto) = cached_buffer_intrinsic_prototype_value() {
-            let proto = crate::value::JSValue::from_bits(proto.to_bits());
-            if proto.is_pointer() && uint8_proto != 0 {
-                crate::object::prototype_chain::object_set_static_prototype(
-                    proto.as_pointer::<ObjectHeader>() as usize,
-                    crate::value::js_nanbox_pointer(uint8_proto as i64).to_bits(),
-                );
-            }
+        let proto = cached_buffer_intrinsic_prototype_value()
+            .map(|proto| crate::value::JSValue::from_bits(proto.to_bits()))
+            .filter(|proto| proto.is_pointer())
+            .map_or(0, |proto| proto.as_pointer::<u8>() as usize);
+        if proto != 0 && uint8_proto != 0 {
+            crate::object::prototype_chain::object_set_static_prototype(
+                proto,
+                crate::value::js_nanbox_pointer(uint8_proto as i64).to_bits(),
+            );
         }
         if uint8_ctor != 0 {
             crate::closure::closure_set_static_prototype(
@@ -137,7 +142,11 @@ pub(crate) fn buffer_constructor_value() -> f64 {
                 crate::value::js_nanbox_pointer(uint8_ctor as i64).to_bits(),
             );
         }
-        f64::from_bits(slot.get())
+        crate::array::note_realm_intrinsic(
+            crate::object::BuiltinConstructorIdentity::Buffer,
+            proto,
+            ctor.as_pointer::<u8>() as usize,
+        );
     })
 }
 
@@ -183,17 +192,6 @@ pub(crate) fn buffer_intrinsic_prototype_value() -> f64 {
         crate::object::prototype_chain::object_set_static_prototype(addr, parent.get_nanbox_f64().to_bits());
     }
     proto.get_nanbox_f64()
-}
-
-pub(crate) fn buffer_intrinsic_prototype_parent(owner: usize) -> Option<f64> {
-    let value =
-        crate::value::JSValue::from_bits(cached_buffer_intrinsic_prototype_value()?.to_bits());
-    if !value.is_pointer() || value.as_pointer::<u8>() as usize != owner {
-        return None;
-    }
-    let proto = crate::value::JSValue::from_bits(buffer_intrinsic_prototype_value().to_bits());
-    crate::object::prototype_chain::object_static_prototype(proto.as_pointer::<u8>() as usize)
-        .map(f64::from_bits)
 }
 
 /// `Buffer.prototype`'s methods and its `parent` / `offset` accessors, in

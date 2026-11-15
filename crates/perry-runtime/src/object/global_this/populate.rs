@@ -198,7 +198,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     };
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
-        if name == "Buffer" {
+        // A `vm` realm shares the thread's Buffer (named residual: the vm
+        // realm's eager loop); the thread realm binds Buffer's own unborn
+        // constructor like every lazy family.
+        if name == "Buffer" && !super::is_thread_realm_global(singleton()) {
             let name_bytes = name.as_bytes();
             let name_key = super::global_name_key(name_bytes);
             let ctor_value = super::super::native_module::buffer_constructor_value();
@@ -1137,7 +1140,7 @@ fn unborn_constructor(
 /// `Buffer`). Its prototype and its constructor namespace are sealed by that
 /// birth (`seal_born_family`), never by `seal_realm`.
 pub(crate) fn born_by_its_observation(declaration: &BuiltinConstructorDeclaration) -> bool {
-    declaration.lazy && !is_own_builder_family(declaration.name)
+    declaration.lazy
 }
 
 fn is_own_builder_family(name: &str) -> bool {
@@ -1173,9 +1176,6 @@ fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
         // Born before %Global%: the thread realm's constructor is made here,
         // as setup makes it. `Object` and `Buffer` are made by their own
         // builders, never by `alloc_builtin_constructor`.
-        if is_own_builder_family(declaration.name) {
-            return;
-        }
         let _no_move = crate::gc::GcSuppressScope::new();
         let closure_ptr = super::super::global_this_tables::alloc_builtin_constructor(identity);
         if closure_ptr.is_null() {
@@ -1211,12 +1211,16 @@ fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
         },
     };
     super::super::own_override::as_builtin_definition(|| {
-        birth_family(
-            declaration,
-            ctor as *mut crate::closure::ClosureHeader,
-            &global,
-            &mut state,
-        );
+        if is_own_builder_family(declaration.name) {
+            super::super::native_module::birth_buffer_family(ctor as *mut crate::closure::ClosureHeader);
+        } else {
+            birth_family(
+                declaration,
+                ctor as *mut crate::closure::ClosureHeader,
+                &global,
+                &mut state,
+            );
+        }
         unsafe { crate::object::builtin_proto::seal_born_family(declaration.name, identity) };
     });
     BIRTHING.with(|c| c.set(outer));
