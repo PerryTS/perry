@@ -236,6 +236,23 @@ thread_local! {
     static CLUSTER_EMITTER: RefCell<ClusterEmitter> = RefCell::new(ClusterEmitter::default());
 }
 
+/// [`cluster_default_value`] for the generic native-module paths
+/// (`cjs_default_export_value`), which every program links: a slot that
+/// `js_nm_install_cluster` fills, so the cluster default export (an
+/// EventEmitter) is linked only with the cluster module. Empty, it fails
+/// loudly instead of building a cluster object without its prototype.
+static DEFAULT_VALUE: crate::feature_hooks::Hook<fn() -> f64> = crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_default_value() {
+    DEFAULT_VALUE.set(cluster_default_value);
+}
+
+pub(crate) fn cluster_default_value_installed() -> f64 {
+    DEFAULT_VALUE
+        .get()
+        .expect("the cluster default export in a program compiled without the cluster module")()
+}
+
 /// The `cluster.default` namespace object — the value bound by
 /// `import cluster from "node:cluster"`. Cached (see
 /// `should_cache_native_module_namespace`), so EventEmitter methods can return
@@ -247,11 +264,10 @@ pub(crate) fn cluster_default_value() -> f64 {
         "cluster.default".len(),
     ));
     // The export declaration owns EventEmitter and its statics (no events
-    // attach hook is installed by a cluster-only program); it is read through
-    // the slot the events install fills (`js_nm_install_cluster` runs it).
-    let event_emitter = scope.root_nanbox_f64(
-        crate::stream_hooks::event_emitter_constructor_value("EventEmitter"),
-    );
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
+        "EventEmitter",
+    ));
     if let Some(event_emitter_proto) =
         crate::object::ordinary_function_prototype_value_for_read(event_emitter.get_nanbox_f64())
     {
@@ -758,9 +774,7 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     // The export declaration owns EventEmitter and its statics (no events
-    // attach hook is installed by a cluster-only program). Named directly:
-    // only the cluster `Worker` export reaches this, and a synthetic cluster
-    // module reads its static exports before it runs `js_nm_install_cluster`.
+    // attach hook is installed by a cluster-only program).
     let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
