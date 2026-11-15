@@ -162,6 +162,9 @@ pub(super) fn compile_module_entry(
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
     let entry_in_init = is_entry && (llmod.program_has_worker || cross_module.program_has_tla);
+    // Image run (`PERRY_SNAP_IMAGE_RUN` set while compiling): a plain program
+    // only; one with top-level await or a worker has no image.
+    let snap_image = crate::stubs::snap_image_run() && !entry_in_init;
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -195,6 +198,15 @@ pub(super) fn compile_module_entry(
         for prefix in non_entry_module_prefixes {
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
             llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
+        }
+        if is_entry && snap_image {
+            llmod.declare_function("js_snap_image_begin", VOID, &[PTR, PTR, PTR, PTR]);
+            llmod.declare_function("js_snap_image_cut", VOID, &[]);
+            if !std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                for anchor in crate::stubs::SNAP_TLS_ANCHORS {
+                    llmod.add_external_tls_global(anchor, "i8", "localexec");
+                }
+            }
         }
         if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
             llmod.declare_function("js_snap_entry_body", VOID, &[]);
@@ -816,6 +828,15 @@ pub(super) fn compile_module_entry(
             if !entry_in_init {
                 blk.store(I8, "1", &format!("@__perry_init_done_{module_prefix}"));
             }
+            // Image run: the baseline is taken after the runtime prelude, right before
+            // the first literal-prepare call, so the prelude is never program state.
+            if snap_image {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_image_begin",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
+            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -844,6 +865,9 @@ pub(super) fn compile_module_entry(
                 && std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
             {
                 blk.call_void("js_snap_entry_body", &[]);
+            }
+            if snap_image {
+                blk.call_void("js_snap_image_cut", &[]);
             }
         }
         // Mark the boundary between init prelude and user code so

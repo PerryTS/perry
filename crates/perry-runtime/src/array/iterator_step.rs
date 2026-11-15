@@ -91,6 +91,15 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
     step_from_result(result, out)
 }
 
+/// A for-of step the compiler emits over a proven sync generator whose body
+/// re-yielded a `yield*` inner result object: the step is that object's
+/// IteratorComplete and IteratorValue, as [`js_iterator_step`] reads it.
+#[no_mangle]
+#[cold]
+pub unsafe extern "C-unwind" fn js_iterator_step_inner_result(result: f64, out: *mut f64) -> i32 {
+    step_from_result(result, out)
+}
+
 /// IteratorComplete then (when not done) IteratorValue of a returned result:
 /// validated as an Object, members read by ordinary [[Get]].
 unsafe fn step_from_result(result: f64, out: *mut f64) -> i32 {
