@@ -2206,11 +2206,32 @@ impl Model {
                 let iv = if op == RangeOp::ToNumber {
                     self.to_number_range(n)
                 } else {
-                    let me = self.range_input(n);
+                    // Rule NUM-PART: of an operand holding Numbers and
+                    // Strings only, its Numbers alone take part (a) in a
+                    // Number sum (ECMA-262 13.15.3 step 1.c: a pair with a
+                    // String is a concatenation) and (b) as the guarded
+                    // value of a clip (the clip bounds the guarded value's
+                    // Numbers; its Strings pass as they are). A clip's bound
+                    // operand converts (7.2.13, 7.2.14), so it keeps
+                    // `range_input`.
+                    let clip = matches!(op, RangeOp::Clip(_));
+                    let input = |m: &Self, x: NodeId, part: bool| {
+                        let nd = &m.nodes[x as usize];
+                        if part
+                            && nd.pts.is_empty()
+                            && nd.prim & prim::NUM != 0
+                            && nd.prim & !(prim::NUM | prim::STR) == 0
+                        {
+                            nd.range
+                        } else {
+                            m.range_input(x)
+                        }
+                    };
+                    let me = input(self, n, op == RangeOp::Add || (clip && !right));
                     let ot = if other == NO_NODE {
                         Iv::EMPTY
                     } else {
-                        self.range_input(other)
+                        input(self, other, op == RangeOp::Add || (clip && right))
                     };
                     let (l, r) = if right { (ot, me) } else { (me, ot) };
                     if self.range_sabotage && op == RangeOp::Add {
