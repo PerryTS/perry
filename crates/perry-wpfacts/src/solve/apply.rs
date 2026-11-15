@@ -1720,6 +1720,19 @@ impl Model {
                             if self.idx_atom_done.insert((n, obj, dst, a)) {
                                 let key = match self.atom_is_mark(a) {
                                     true => Key::Any(s),
+                                    // Rule NUM-CONST-KEY: on an array-like
+                                    // receiver (an Array 10.4.2, arguments,
+                                    // a typed array 10.4.5, a builtin with
+                                    // internal entries) a constant that
+                                    // spells a Number key reads as that
+                                    // Number does: the element read.
+                                    false if self.is_array_like(obj)
+                                        && crate::solve::numeric_key(&self.atoms[a as usize]) =>
+                                    {
+                                        self.elem_key()
+                                    }
+                                    // An ordinary object's "1" is its named
+                                    // property "1" (10.1.8.1 OrdinaryGet).
                                     false => Key::Named(a),
                                 };
                                 self.load_from(obj, obj, key, dst);

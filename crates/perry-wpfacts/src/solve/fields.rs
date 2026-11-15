@@ -320,7 +320,8 @@ impl Model {
         }
         match self.key_entry_shapes(n) {
             Some(es) => es.iter().any(|&(a, s)| {
-                self.atoms[a as usize] == "__proto__" || self.key_may_name_str(Key::Any(s), "__proto__")
+                self.atoms[a as usize] == "__proto__"
+                    || self.atom_is_mark(a) && self.key_may_name_str(Key::Any(s), "__proto__")
             }),
             None => true,
         }

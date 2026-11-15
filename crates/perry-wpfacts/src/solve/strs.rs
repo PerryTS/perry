@@ -423,8 +423,13 @@ impl Model {
         let atoms = self.str_atoms(node.strs).to_vec();
         let mut out = Vec::with_capacity(atoms.len());
         for a in atoms {
+            // Rule NUM-CONST-KEY: a program constant names itself (7.1.19),
+            // also one that spells a Number key ("1", "1e1"), for which
+            // `key_shape` keeps no shape (`may_be_numeric`): only a solver
+            // spelling (`atom_is_mark`) is read by its shape, and one with
+            // no shape is any key.
             match self.entry_key_shape(a) {
-                0 => return None,
+                0 if self.atom_is_mark(a) => return None,
                 s => out.push((a, s)),
             }
         }
