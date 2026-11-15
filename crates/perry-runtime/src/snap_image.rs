@@ -280,9 +280,15 @@ pub(crate) fn build(base: Option<&Baseline>) -> Image {
         let mut slots: Vec<(u32, Val)> = Vec::new();
         // SAFETY: visits the traced slots of a live cell.
         unsafe {
-            crate::gc::image_cells::visit_cell_slots_raw(hp, &mut |slot, bits| {
-                let off = slot - h;
-                let Some(word) = bytes.get_mut(off..off + 8) else {
+            crate::gc::image_cells::visit_cell_slots_raw(hp, &mut |slot, bits, own| {
+                // A shape record word (keys, prototype) lives in the shape
+                // table: its form is the shape slab (a `format::PENDING`
+                // bit), not this cell.
+                if !own {
+                    return;
+                }
+                let off = slot.wrapping_sub(h);
+                let Some(word) = off.checked_add(8).and_then(|end| bytes.get_mut(off..end)) else {
                     img.stops.push(Stop {
                         cell: i as u32,
                         obj_type: t,

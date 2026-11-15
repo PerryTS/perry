@@ -122,6 +122,41 @@ fn native_payload_types_have_no_image_form() {
     assert!(!no_form(crate::gc::GC_TYPE_STRING));
 }
 
+#[test]
+fn shaped_object_keeps_its_slots_inside_the_cell() {
+    let o = crate::object::js_object_alloc(0, 0);
+    let text = b"shaped object probe value, long enough to stay a heap cell";
+    let v = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let key = crate::string::js_string_from_bytes(b"probeKey".as_ptr(), 8);
+    crate::object::js_object_set_field_by_name(o, key, crate::value::js_nanbox_string(v as i64));
+    let img = build(None);
+    let si = string_cell(&img, text).expect("value cell captured");
+    let oi = img
+        .cells
+        .iter()
+        .position(|c| {
+            c.obj_type == crate::gc::GC_TYPE_OBJECT
+                && c.slots
+                    .iter()
+                    .any(|(_, v)| matches!(v, Val::Cell { index, .. } if *index as usize == si))
+        })
+        .expect("the object names its value");
+    let c = &img.cells[oi];
+    assert!(
+        c.slots
+            .iter()
+            .all(|(off, _)| (*off as usize) + 8 <= c.bytes.len()),
+        "{:?}",
+        c.slots
+    );
+    assert!(
+        img.stops.iter().all(|s| s.cell as usize != oi),
+        "{:?}",
+        img.stops
+    );
+    std::hint::black_box(o);
+}
+
 #[used]
 static mut PROBE: u64 = 0x1234_5678;
 
