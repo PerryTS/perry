@@ -1946,7 +1946,7 @@ impl Model {
                         );
                     }
                 }
-                if index && self.index_store_done.insert((n, site, 1)) {
+                if index && self.index_store_done.insert((n, o, src, site, 1)) {
                     // A key that is one numeric literal and nothing else
                     // writes that index alone: a rest array's index slot
                     // (`store_into`), any other holder's elements.
@@ -1973,7 +1973,7 @@ impl Model {
                         true => (3, Cons::IndexKept),
                         false => (4, Cons::IndexHole),
                     };
-                    if self.index_store_done.insert((n, site, kind)) {
+                    if self.index_store_done.insert((n, o, src, site, kind)) {
                         self.cons(o, c);
                     }
                 }
@@ -1995,14 +1995,14 @@ impl Model {
                 // pop's or an earlier one's) is every name's.
                 if shape == 0
                     && (any
-                        || self.index_store_done.contains(&(n, site, 0))
-                        || self.index_store_done.contains(&(n, site, 2)))
+                        || self.index_store_done.contains(&(n, o, src, site, 0))
+                        || self.index_store_done.contains(&(n, o, src, site, 2)))
                 {
                     names.clear();
                     prefixed.clear();
                 }
                 for (a, s) in prefixed {
-                    if self.str_store_done.insert((n, site, a)) {
+                    if self.str_store_done.insert((n, o, src, site, a)) {
                         self.cons(
                             o,
                             Cons::Store {
@@ -2014,7 +2014,7 @@ impl Model {
                     }
                 }
                 for a in names {
-                    if self.str_store_done.insert((n, site, a)) {
+                    if self.str_store_done.insert((n, o, src, site, a)) {
                         self.cons(
                             o,
                             Cons::Store {
@@ -2030,11 +2030,11 @@ impl Model {
                     false => (0, shape),
                 };
                 if digits {
-                    if self.index_store_done.insert((n, site, 5)) {
+                    if self.index_store_done.insert((n, o, src, site, 5)) {
                         let key = self.digits_key();
                         self.cons(o, Cons::Store { key, src, site });
                     }
-                } else if any && self.index_store_done.insert((n, site, kind)) {
+                } else if any && self.index_store_done.insert((n, o, src, site, kind)) {
                     self.cons(
                         o,
                         Cons::Store {

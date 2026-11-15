@@ -2475,16 +2475,19 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
-    /// (key node, store site, index) a `StoreIndexed` store has been added
-    /// for: `true` the index store, `false` the computed-key one. A shared
-    /// body's replay has its own key node.
-    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, u8)>,
+    /// (key node, receiver node, value node, store site, index) a
+    /// `StoreIndexed` store has been added for: `true` the index store,
+    /// `false` the computed-key one. A shared body's replay has its own key
+    /// node; a captured key is one node for every run, whose receivers
+    /// differ (13.15.2: each evaluation performs its own PutValue).
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, NodeId, NodeId, SiteId, u8)>,
     /// (value, store site) a typed array element store has run its value's
     /// ToNumber / ToBigInt for (`typed_array_element_store`).
     pub ta_store_done: crate::pts::FxHashSet<(NodeId, SiteId)>,
-    /// (key node, store site, atom) a `StoreIndexed` named store has been
-    /// added for, by a string constant of the key (`Node::strs`).
-    pub str_store_done: crate::pts::FxHashSet<(NodeId, SiteId, Atom)>,
+    /// (key node, receiver node, value node, store site, atom) a
+    /// `StoreIndexed` named store has been added for, by a string constant
+    /// of the key (`Node::strs`).
+    pub str_store_done: crate::pts::FxHashSet<(NodeId, NodeId, NodeId, SiteId, Atom)>,
     /// (key node, holder, destination, entry) a rule-M3 `IdxKey` read has
     /// been made for: one per string constant or known prefix of the key.
     pub idx_atom_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, Atom)>,
