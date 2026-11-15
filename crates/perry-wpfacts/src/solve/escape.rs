@@ -1413,6 +1413,17 @@ impl Model {
         if lock_delete {
             return;
         }
+        // Rule B1E: an exposed buffer (B1: a `.buffer` read, a view over a
+        // buffer another holder has) lets others write the view's BYTES
+        // only, read back through an integer index as Numbers (BigInts,
+        // 10.4.5.15 TypedArrayGetElement); no buffer write reaches a named
+        // key (10.4.5.2-5), so its named keys keep the program's stores.
+        let b1e = seed && kind == Hard::B1Exposed && self.typed_array_elements(t);
+        if b1e {
+            let e = self.field_any(t);
+            self.add_prim(e, prim::NUM | prim::BIGINT);
+        }
+        let seed = seed && !b1e;
         if self.hard.contains_key(&t) {
             // HARD so far only through named data definitions: this mark is
             // the first that may write any field (rule D1).
