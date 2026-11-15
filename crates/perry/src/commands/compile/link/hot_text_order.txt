@@ -865,6 +865,7 @@ js_realm_complete
 perry_realm_complete
 perry_realm_core_entry
 js_get_global_this
+_RNvNtNtNtCs_13perry_runtime6object11global_this13fetch_globals23global_this_first_touch
 js_get_global_this_builtin_value
 js_nanbox_get_pointer
 js_object_alloc

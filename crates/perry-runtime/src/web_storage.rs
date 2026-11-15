@@ -323,7 +323,7 @@ fn install_method(
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true)] export crate::web_storage::storage_length_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true)] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0)),
         0,
     );
     if getter.is_null() {

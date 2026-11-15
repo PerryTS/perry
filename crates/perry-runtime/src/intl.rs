@@ -1788,7 +1788,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         // `format` is an accessor (getter) per ECMA-402, not a plain method.
         &[(
             "format",
-            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>")] export crate::intl::number_format::number_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>")] export crate::intl::number_format::number_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
         )],
     );
     install_constructor(
@@ -1821,7 +1821,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         ],
         &[(
             "format",
-            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>")] export crate::intl::date_collator::date_time_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>")] export crate::intl::date_collator::date_time_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
         )],
     );
     install_constructor(
@@ -1836,7 +1836,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         )],
         &[(
             "compare",
-            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>", effects = { returns(islot(this, boundCompare)) })] export crate::intl::date_collator::collator_compare_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>", effects = { returns(islot(this, boundCompare)) })] export crate::intl::date_collator::collator_compare_getter_thunk, 0; with_name("get compare"), with_declared(0)),
         )],
     );
     install_constructor(
