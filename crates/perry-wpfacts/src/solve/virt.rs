@@ -199,6 +199,7 @@ impl Model {
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
         let r = self.reason("passed to an unknown function");
         self.sink_node(args_all, r);

@@ -19,6 +19,7 @@ mod native_result;
 mod once;
 mod own_guard;
 mod own_store;
+pub(crate) mod ret_param;
 mod param_key;
 pub(crate) use own_guard::Region;
 mod primitives;
@@ -886,6 +887,8 @@ impl<'a> Gen<'a> {
                     f,
                 ));
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
+                let suspends = f.is_async || f.is_generator || f.was_plain_async;
+                self.m.funcs[fx as usize].ret_param = ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1536,6 +1539,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
             forwarded: false,
+            ret_param: None,
         });
         #[cfg(test)]
         self.m.packet_end(packet_prior, false);
@@ -1914,6 +1918,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
         #[cfg(test)]
         self.m.packet_end(packet_prior, false);

@@ -458,10 +458,46 @@ impl Model {
         }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
+        if self.ret_param_into(call, f as FnIdx) {
+            return;
+        }
         let params = self.funcs[f].params.clone();
         if !self.rel_into(call, FN_RUN | f as u32, &params) {
             self.edge(fret, cret);
         }
+    }
+
+    /// RULE RP (`gen/ret_param.rs`): `f` returns its unreassigned plain
+    /// parameter `i` at every completion, so this call's result is the
+    /// argument this call passes at `i` (`undefined` when it passes fewer),
+    /// ECMA-262 10.2.1.3, not the return node every call of `f` shares.
+    /// The binding is per callee: a call whose callee set holds other
+    /// functions takes each one's result from its own binding. Out: `new`
+    /// (10.2.2: the result is the object unless the value is one), a spread
+    /// argument (the position is unknown), a hidden capture parameter, and
+    /// a function whose parameters something outside the call protocol
+    /// writes (`no_summary`). Arguments reach the parameter by position
+    /// through the same `CallSite::args` (`bind_args_bound`).
+    pub(crate) fn ret_param_into(&mut self, call: CallId, f: FnIdx) -> bool {
+        let Some(i) = self.funcs[f as usize].ret_param.map(|i| i as usize) else {
+            return false;
+        };
+        let c = call as usize;
+        if self.funcs[f as usize].no_summary
+            || self.ctor_calls.contains(&call)
+            || !self.calls[c].spread.is_empty()
+            || i >= self.funcs[f as usize].params.len()
+            || self.capture_param(f, i).is_some()
+        {
+            return false;
+        }
+        let cret = self.calls[c].ret;
+        self.rel(|| format!("retparam {call} {f} {i}"));
+        match self.calls[c].args.get(i).copied() {
+            Some(a) => self.edge(a, cret),
+            None => self.add_prim(cret, prim::UNDEF),
+        }
+        true
     }
 
     /// Calling a bound function: its target with the bound this; bound +

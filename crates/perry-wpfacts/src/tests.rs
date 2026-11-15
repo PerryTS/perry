@@ -1631,6 +1631,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let a = m.tok(TokKind::ModNs(7));
@@ -1704,6 +1705,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let mk = m.param_marker_tok(0, 0);
     let v = m.node_l("v");
@@ -1766,6 +1768,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let mk = m.param_marker_tok(0, 0);
     // `r2` is a member of `r1` (an instance parameter passed on); `mk`
@@ -1822,6 +1825,7 @@ fn marker_model() -> crate::model::Model {
         parent: NO_FN,
         captures: Vec::new(),
         forwarded: false,
+        ret_param: None,
     });
     m
 }
@@ -2196,6 +2200,7 @@ mod r9key1;
 mod r9key2;
 mod r9sites1;
 mod r9sites3;
+mod r9sites5;
 mod nocall1;
 mod skinfa8;
 mod local_versions;

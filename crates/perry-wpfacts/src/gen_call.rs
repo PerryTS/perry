@@ -447,6 +447,8 @@ impl<'a> Gen<'a> {
             body,
         );
         let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
+        self.m.funcs[f as usize].ret_param =
+            crate::gen::ret_param::ret_param(params, body, *is_async || *is_generator);
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule

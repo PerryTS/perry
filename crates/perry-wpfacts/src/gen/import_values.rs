@@ -733,6 +733,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded: c.closed.is_none(),
+            ret_param: None,
         });
         // Registered before its result is built: a result layout whose
         // field holds this function reaches it again (`stand_in_class`).

@@ -1749,6 +1749,9 @@ impl Model {
             return;
         }
         let cret = self.calls[c].ret;
+        if self.ret_param_into(call, f) {
+            return;
+        }
         if !self.rel_into(call, inst + 1, &terms) {
             // A summary consisting only of an unwritten parameter copied
             // to its return passes this call's value back. Its shared

@@ -1379,6 +1379,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded,
+            ret_param: None,
         });
         if sink_args {
             self.m.sink_node(args_all, reason);

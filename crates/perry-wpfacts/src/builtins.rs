@@ -782,6 +782,7 @@ fn settle_fn(m: &mut Model, name: &str, dst: NodeId, plain: bool) -> (Tok, NodeI
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     m.add_prim(ret, prim::UNDEF);
     (tok, p)
@@ -834,6 +835,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     m.other_accessor = Some(tok);
     tok

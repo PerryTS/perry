@@ -340,6 +340,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: fx.f,
             forwarded: false,
+            ret_param: None,
         });
         // The enclosing `this`, read as an arrow reads it.
         if f.body.iter().any(crate::gen_call::stmt_reads_this) {

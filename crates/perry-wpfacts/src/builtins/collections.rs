@@ -567,6 +567,7 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     m.add_prim(ret, prim::UNDEF);
     m.executors.insert(settled, tok);

@@ -753,6 +753,10 @@ pub struct FuncInfo {
     /// closed one, whose users its owner knows): published onward, it
     /// leaves with that contract (DECISIONS 120, `Model::escape`).
     pub forwarded: bool,
+    /// RULE RP (`gen/ret_param.rs`): every completion of the body returns
+    /// the unreassigned plain parameter at this position, so a direct call
+    /// returns the argument it passes there (ECMA-262 10.2.1.3).
+    pub ret_param: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
