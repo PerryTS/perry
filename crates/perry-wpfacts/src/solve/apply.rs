@@ -638,6 +638,11 @@ impl Model {
                         self.add_tok(dst, t);
                     }
                 }
+                // Rule KEY2c, ECMA-262 7.1.2 ToBoolean: the one falsy String
+                // is "": a host of constants without "" gives no String,
+                // any other host "" alone.
+                let str_falsy = p & prim::STR != 0;
+                p &= !prim::STR;
                 if p != 0 {
                     // The host's falsy Numbers: within its interval unless ⊤
                     // or a marker adds falsy values of its own.
@@ -646,6 +651,20 @@ impl Model {
                     let saved = std::mem::replace(&mut self.cur_range, host);
                     self.add_prim(dst, p);
                     self.cur_range = saved;
+                }
+                if str_falsy {
+                    let x = &self.nodes[n as usize];
+                    let plain = !x.pts.contains_tok(TOP) && x.strs >= STRS_SET0;
+                    let may_empty = !plain
+                        || self
+                            .str_atoms(x.strs)
+                            .iter()
+                            .any(|&a| self.atom_is_mark(a) || self.atoms[a as usize].is_empty());
+                    if may_empty {
+                        let e = self.atom("");
+                        let s = self.str_set(&[e]);
+                        self.add_s(dst, &[], prim::STR, s);
+                    }
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {

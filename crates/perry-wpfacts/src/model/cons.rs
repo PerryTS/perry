@@ -882,6 +882,7 @@ impl Cons {
                 | Cons::StrReplace { .. }
                 | Cons::StrIndex { .. }
                 | Cons::StrSubstring { .. }
+                | Cons::Falsy { .. }
                 | Cons::ClassReplace { .. }
                 | Cons::RegExpPattern { .. }
                 | Cons::RequireSpec { .. }
