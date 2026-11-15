@@ -1563,3 +1563,16 @@ mod tests {
         >());
     }
 }
+
+/// The claimed names from claim index `from` on, in index order (image run
+/// capture and its replay check).
+pub(crate) fn claims_in_order(from: u32) -> Vec<(Vec<u8>, u32)> {
+    let m = CLAIM_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut v: Vec<(Vec<u8>, u32)> = m
+        .iter()
+        .filter(|(_, &i)| i >= from)
+        .map(|(k, &i)| (k.clone(), i))
+        .collect();
+    v.sort_by_key(|e| e.1);
+    v
+}
