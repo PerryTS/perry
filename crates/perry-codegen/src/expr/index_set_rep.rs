@@ -16,7 +16,9 @@
 //!   the storage;
 //! - the slot is no hole: with the `[length, capacity)` hole invariant an
 //!   own slot is below the length, and overwriting an own element asks
-//!   nothing of the prototype chain;
+//!   nothing of the prototype chain. A key in `[0, floor)` of a `dense` rep
+//!   needs no test: `ArrRep` (D) says no index below the floor is ever a
+//!   hole, and (L) `length >= floor` makes it an own element;
 //! - the value is a plain double (tested at run time unless it is widened
 //!   from a native integer: the facts say a Number, its encoding may still
 //!   be an INT32 box), with a NaN made the canonical one;
@@ -174,15 +176,26 @@ pub(super) fn emit(
         }
     };
     let slot = ctx.block().inttoptr(I64, &addr);
-    let old = ctx.block().load(I64, &slot);
-    let mut own = ctx.block().icmp_ne(I64, &old, TAG_HOLE_I64);
+    // The slot holds an own element: tested unless the facts prove it
+    // (`ArrRep` D, L: a dense key below the floor).
+    let mut own = if floor_key && r.dense {
+        None
+    } else {
+        let old = ctx.block().load(I64, &slot);
+        Some(ctx.block().icmp_ne(I64, &old, TAG_HOLE_I64))
+    };
     if !int_value {
         let blk = ctx.block();
         let val_bits = blk.bitcast_double_to_i64(val_double);
         let plain = crate::codegen::emit_plain_number_bits_test(blk, &val_bits);
-        own = blk.and(I1, &own, &plain);
+        own = Some(match own {
+            Some(own) => blk.and(I1, &own, &plain),
+            None => plain,
+        });
     }
-    step(ctx, &own, "arep.set.store");
+    if let Some(own) = own {
+        step(ctx, &own, "arep.set.store");
+    }
     super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
     {
         let blk = ctx.block();
