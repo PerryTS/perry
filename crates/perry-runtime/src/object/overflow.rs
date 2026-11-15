@@ -165,12 +165,20 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         index_capacity,
         summary: 0,
     });
+    if index_capacity == SMALLEST_INDEX {
+        // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-8 table, EMPTY=u32::MAX, in one fixed-size store (no memset call).
+        index(t).cast::<[u32; SMALLEST_INDEX as usize]>().write_unaligned([EMPTY; SMALLEST_INDEX as usize]);
+        return t;
+    }
     for i in 0..index_capacity as usize {
         // GC_STORE_AUDIT(POINTER_FREE): index(t) returns *mut u32 scalar slot-index column; writes EMPTY=u32::MAX, not the key/value columns.
         index(t).add(i).write(EMPTY);
     }
     t
 }
+
+/// The index of the smallest indexed table (capacity 8: `(2 * 8).next_power_of_two()`).
+const SMALLEST_INDEX: u32 = 16;
 
 /// A key atom is canonicalized before entry lookup, including long keys.
 #[inline]
