@@ -115,6 +115,16 @@ struct Census {
     fn_of_local: RefCell<FxHashMap<u32, u32>>,
     /// Local -> the callee of the call that initialises it.
     init_call: RefCell<FxHashMap<u32, Expr>>,
+    /// Direct calls with local arguments: (callee, argument local by
+    /// position), the helper edge (`module_groups`).
+    arg_calls: RefCell<Vec<(Expr, Vec<Option<u32>>)>>,
+    /// Function -> its parameters (rest excluded), by position.
+    params: RefCell<FxHashMap<u32, Vec<u32>>>,
+    /// Locals assigned after their declaration.
+    writes: RefCell<BTreeSet<u32>>,
+    /// `const alias = local` declarations (an inlined helper's parameter):
+    /// (alias, local).
+    aliases: RefCell<Vec<(u32, u32)>>,
     /// Function -> the one local it returns (`None`: more than one).
     returns: RefCell<FxHashMap<u32, Option<u32>>>,
     /// Locals initialised by `new`.
@@ -382,6 +392,9 @@ impl Census {
                     ..
                 } = s
                 {
+                    if let Expr::LocalGet(src) = init {
+                        self.aliases.borrow_mut().push((*id, *src));
+                    }
                     if factory_form(init) {
                         self.factories
                             .borrow_mut()
@@ -418,71 +431,112 @@ impl Census {
                     }
                 }
             },
-            &mut |e| match e {
-                Expr::PropertyGet {
-                    object, property, ..
-                } => self.access(this_class, object, property, false),
-                Expr::PropertySet {
-                    object, property, ..
-                }
-                | Expr::PropertyUpdate {
-                    object, property, ..
-                } => self.access(this_class, object, property, true),
-                Expr::PutValueSet {
-                    target,
-                    key,
-                    receiver,
-                    ..
-                } if std::mem::discriminant(target.as_ref())
-                    == std::mem::discriminant(receiver.as_ref()) =>
-                {
-                    if let Expr::String(k) = key.as_ref() {
-                        self.access(this_class, target, k, true)
+            &mut |e| {
+                self.note_edges(e);
+                match e {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => self.access(this_class, object, property, false),
+                    Expr::PropertySet {
+                        object, property, ..
                     }
-                }
-                Expr::Closure { func_id, body, .. } => self.note_returns(*func_id, body),
-                Expr::LocalSet(id, v) if factory_form(v) => {
-                    self.factories
-                        .borrow_mut()
-                        .assigns
-                        .entry(*id)
-                        .or_default()
-                        .push((**v).clone());
-                }
-                Expr::Object(_) | Expr::New { .. } => {
-                    // A closed-shape literal lowers to `new __AnonShape_<hash>(values)`,
-                    // its keys the synthesized class's fields in order.
-                    let props: Vec<(&String, &Expr)> = match e {
-                        Expr::Object(props) => props.iter().map(|(k, v)| (k, v)).collect(),
-                        Expr::New {
-                            class_name, args, ..
-                        } => match self.anon_fields.get(class_name) {
-                            Some(fields) if fields.len() == args.len() => {
-                                fields.iter().zip(args.iter()).collect()
-                            }
-                            _ => Vec::new(),
-                        },
-                        _ => Vec::new(),
-                    };
-                    let mut f = self.factories.borrow_mut();
-                    for (name, v) in props {
-                        let func = match v {
-                            Expr::Closure { func_id, .. } => Some(*func_id),
-                            Expr::FuncRef(id) => Some(*id),
-                            Expr::LocalGet(l) => {
-                                f.named_locals.entry(name.clone()).or_default().push(*l);
-                                None
-                            }
-                            _ => None,
-                        };
-                        if let Some(func) = func {
-                            f.named.entry(name.clone()).or_default().push(func);
+                    | Expr::PropertyUpdate {
+                        object, property, ..
+                    } => self.access(this_class, object, property, true),
+                    Expr::PutValueSet {
+                        target,
+                        key,
+                        receiver,
+                        ..
+                    } if std::mem::discriminant(target.as_ref())
+                        == std::mem::discriminant(receiver.as_ref()) =>
+                    {
+                        if let Expr::String(k) = key.as_ref() {
+                            self.access(this_class, target, k, true)
                         }
                     }
+                    Expr::Closure { func_id, body, .. } => self.note_returns(*func_id, body),
+                    Expr::LocalSet(id, v) if factory_form(v) => {
+                        self.factories
+                            .borrow_mut()
+                            .assigns
+                            .entry(*id)
+                            .or_default()
+                            .push((**v).clone());
+                    }
+                    Expr::Object(_) | Expr::New { .. } => {
+                        // A closed-shape literal lowers to `new __AnonShape_<hash>(values)`,
+                        // its keys the synthesized class's fields in order.
+                        let props: Vec<(&String, &Expr)> = match e {
+                            Expr::Object(props) => props.iter().map(|(k, v)| (k, v)).collect(),
+                            Expr::New {
+                                class_name, args, ..
+                            } => match self.anon_fields.get(class_name) {
+                                Some(fields) if fields.len() == args.len() => {
+                                    fields.iter().zip(args.iter()).collect()
+                                }
+                                _ => Vec::new(),
+                            },
+                            _ => Vec::new(),
+                        };
+                        let mut f = self.factories.borrow_mut();
+                        for (name, v) in props {
+                            let func = match v {
+                                Expr::Closure { func_id, .. } => Some(*func_id),
+                                Expr::FuncRef(id) => Some(*id),
+                                Expr::LocalGet(l) => {
+                                    f.named_locals.entry(name.clone()).or_default().push(*l);
+                                    None
+                                }
+                                _ => None,
+                            };
+                            if let Some(func) = func {
+                                f.named.entry(name.clone()).or_default().push(func);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             },
         );
+    }
+
+    /// The facts of the helper edge: direct calls passing locals, function
+    /// parameters, reassigned locals.
+    fn note_edges(&self, e: &Expr) {
+        match e {
+            Expr::Call { callee, args, .. }
+                if matches!(callee.as_ref(), Expr::FuncRef(_) | Expr::LocalGet(_)) =>
+            {
+                let locals: Vec<Option<u32>> = args
+                    .iter()
+                    .map(|a| match a {
+                        Expr::LocalGet(l) => Some(*l),
+                        _ => None,
+                    })
+                    .collect();
+                if locals.iter().any(Option::is_some) {
+                    self.arg_calls
+                        .borrow_mut()
+                        .push(((**callee).clone(), locals));
+                }
+            }
+            Expr::Closure {
+                func_id, params, ..
+            } => {
+                self.params.borrow_mut().entry(*func_id).or_insert_with(|| {
+                    params
+                        .iter()
+                        .take_while(|p| !p.is_rest)
+                        .map(|p| p.id)
+                        .collect()
+                });
+            }
+            Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+                self.writes.borrow_mut().insert(*id);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -509,7 +563,27 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
             .entry(f.name.clone())
             .or_default()
             .push(f.id);
+        c.params.borrow_mut().insert(
+            f.id,
+            f.params
+                .iter()
+                .take_while(|p| !p.is_rest)
+                .map(|p| p.id)
+                .collect(),
+        );
     }
+    let literal_names: BTreeSet<&str> = hir
+        .classes
+        .iter()
+        .filter(|cl| cl.is_literal_shape())
+        .map(|cl| cl.name.as_str())
+        .collect();
+    let literal_ids: BTreeSet<u32> = hir
+        .classes
+        .iter()
+        .filter(|cl| cl.is_literal_shape())
+        .map(|cl| cl.id)
+        .collect();
     c.body(&hir.init, None, None);
     for f in &hir.functions {
         c.body(&f.body, None, Some(f.id));
@@ -598,6 +672,27 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
             g.creation = true;
         }
     }
+    // A literal birth passed to a helper is a creation group even when this
+    // body never names one of its keys (the helper edge below fills it).
+    let arg_calls = c.arg_calls.into_inner();
+    let params = c.params.into_inner();
+    let writes = c.writes.into_inner();
+    let aliases = c.aliases.into_inner();
+    let alias_args: Vec<Option<u32>> = aliases.iter().map(|(_, a)| Some(*a)).collect();
+    for args in arg_calls
+        .iter()
+        .map(|(_, args)| args)
+        .chain(std::iter::once(&alias_args))
+    {
+        for a in args.iter().flatten() {
+            if born.contains(a)
+                && matches!(init_expr.get(a), Some(Expr::New { class_name, .. })
+                    if literal_names.contains(class_name.as_str()))
+            {
+                locals.entry(*a).or_default();
+            }
+        }
+    }
     for id in born {
         if let Some(g) = locals.get_mut(&id) {
             g.creation = true;
@@ -623,6 +718,60 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
         if !classes.is_empty() {
             g.creation = true;
             g.classes = classes;
+        }
+    }
+    // DYNP R2c, the helper edge: a creation local of literal families passed
+    // by position to a direct call of a module function or closure takes the
+    // stores the callee makes through that unreassigned parameter, after its
+    // own, in the callee's first-store order. Capacity and order evidence
+    // only: a key never stored stays a hole, and a fill out of layout order
+    // takes the object's overflow (`layout_desc::fill_in_order`), whose key
+    // list keeps the insertion order exact.
+    // An inlined helper binds its parameter as `const p = x`: the same edge.
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    for (callee, args) in &arg_calls {
+        let f = match callee {
+            Expr::FuncRef(f) => *f,
+            Expr::LocalGet(l) => match fn_of_local.get(l) {
+                Some(f) => *f,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let Some(ps) = params.get(&f) else {
+            continue;
+        };
+        for (p, a) in ps.iter().zip(args.iter()) {
+            if let Some(a) = a {
+                pairs.push((*p, *a));
+            }
+        }
+    }
+    pairs.extend(aliases.iter().copied());
+    {
+        for (p, a) in pairs.iter().map(|(p, a)| (p, a)) {
+            if p == a || writes.contains(p) || writes.contains(a) {
+                continue;
+            }
+            let Some(stores) = locals.get(p).map(|g| g.stores.clone()) else {
+                continue;
+            };
+            let Some(g) = locals.get_mut(a) else {
+                continue;
+            };
+            if !g.creation
+                || g.classes.is_empty()
+                || !g.classes.iter().all(|c| literal_ids.contains(c))
+            {
+                continue;
+            }
+            for k in stores {
+                if !g.stores.contains(&k) {
+                    g.keys.insert(k.clone());
+                    *g.sites.entry(k.clone()).or_default() += 1;
+                    g.stores.push(k);
+                }
+            }
         }
     }
     for (id, lits) in init_literals {
