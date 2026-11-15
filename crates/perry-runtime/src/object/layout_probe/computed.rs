@@ -552,7 +552,7 @@ unsafe fn user_chain_admits_add(
 /// # Safety
 /// `obj` is the leaf's overflowed receiver, `r` its record, `key` a property
 /// atom with hash `hash`.
-#[inline(never)]
+#[inline(always)]
 pub(crate) unsafe fn table_append(
     obj: *mut ObjectHeader,
     r: *const ShapeRecord,
@@ -569,7 +569,7 @@ pub(crate) unsafe fn table_append(
     if (*t).length >= (*t).capacity || !table_add_admitted_meta(obj, r, key, hash, meta) {
         return false;
     }
-    crate::object::overflow::append_plain(t, key, super::store_bits(value));
+    crate::object::overflow::append_plain(t, key, hash, super::store_bits(value));
     true
 }
 

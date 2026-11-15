@@ -191,8 +191,18 @@ unsafe fn place(t: *mut Table, slot: u32) {
     if key == TAG_HOLE || super::key_attrs::entry_is_private(*attrs_at(t, slot) as u8) {
         return;
     }
+    place_hashed(t, slot, key, key_hash(key));
+}
+
+/// [`place`] of entry `slot`, a live key `key` that is no private name, by
+/// `hash`, the key's [`key_hash`] (the hash every lookup of it probes with).
+#[inline(always)]
+unsafe fn place_hashed(t: *mut Table, slot: u32, key: u64, hash: u64) {
+    if (*t).index_capacity == 0 {
+        return;
+    }
     let mask = (*t).index_capacity as usize - 1;
-    let mut p = key_hash(key) as usize & mask;
+    let mut p = hash as usize & mask;
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
         if *key_at(t, previous) == key {
@@ -560,9 +570,10 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
 /// The append of a plain writable data entry `key` (a property atom the
 /// table does not hold) with `value` into table `t`, which has room
 /// (`length < capacity`). No allocation, no collection: the caller proved the
-/// receiver admits the add (`layout_probe::table_append`).
+/// receiver admits the add (`layout_probe::table_append`). `hash` is the
+/// key's hash, as the caller's lookup of it computed (`key_hash`).
 #[inline(always)]
-pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, value: u64) {
+pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, hash: u64, value: u64) {
     let slot = (*t).length;
     // GC_STORE_AUDIT(BARRIERED): new entry's key atom; the resolved-slot barrier below covers it.
     *key_at(t, slot) = key;
@@ -571,7 +582,7 @@ pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, value: u64) {
     // GC_STORE_AUDIT(POINTER_FREE): attributes word, scalar.
     *attrs_at(t, slot) = 0;
     (*t).length = slot + 1;
-    place(t, slot);
+    place_hashed(t, slot, key, hash);
     crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
     crate::gc::runtime_write_barrier_resolved_slot(t as usize, value_at(t, slot) as usize, value);
 }

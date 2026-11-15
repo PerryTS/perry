@@ -521,7 +521,7 @@ fn set_dynamic_absent(
         // table (`overflow::ensure_adding`) and is appended to it, under the
         // admission of every later table add.
         if crate::object::layout_probe::table_add_admitted(obj, r, atom, hash) {
-            return table_first_append(obj, r, atom, value);
+            return table_first_append(obj, r, atom, hash, value);
         }
         if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
             if let Some(stored) = keyed_append(obj, atom, value) {
@@ -690,12 +690,14 @@ unsafe fn keyed_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> 
 /// is started and the entry appended to it, with no migration and no note.
 ///
 /// # Safety
-/// `obj`'s layout names no key and it admits the add of `atom` (absent).
+/// `obj`'s layout names no key and it admits the add of `atom` (absent),
+/// whose hash is `hash`.
 #[inline(never)]
 unsafe fn table_first_append(
     obj: *mut crate::ObjectHeader,
     r: *const crate::object::layout_probe::ShapeRecord,
     atom: u64,
+    hash: u64,
     value: f64,
 ) -> f64 {
     let live = crate::object::layout_probe::record_live_inline_slots(r);
@@ -710,6 +712,7 @@ unsafe fn table_first_append(
         crate::object::overflow::append_plain(
             t,
             key.get_nanbox_u64(),
+            hash,
             crate::object::layout_probe::store_bits(value.get_nanbox_f64()),
         );
         return value.get_nanbox_f64();
