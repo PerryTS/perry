@@ -198,6 +198,8 @@ impl InfoExports {
                     let first = || scalar(args[0]);
                     info = match method {
                         "plain" => info.plain(),
+                        // The name text is static data of the record, not an ABI fact.
+                        "with_name" => info,
                         "with_declared" => info.with_declared(
                             u16::try_from(first()?).map_err(|_| "declared overflow")?,
                         ),
