@@ -259,9 +259,10 @@ fn probe_baseline() -> (Baseline, usize) {
     let mut fs = 0usize;
     // SAFETY: ARCH_GET_FS stores the thread pointer.
     unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1003, &mut fs as *mut usize) };
-    let tls_lo = fs - executable_tls_size();
+    let (memsz, align) = executable_tls_size();
+    let (tls_lo, tls_len) = tls_window(fs, memsz, align);
     let data = copy(lo, hi);
-    let tls = copy(tls_lo, fs);
+    let tls = copy(tls_lo, tls_lo + tls_len);
     let (pre_data, pre_tls) = (vec![0u8; data.1.len()], vec![0u8; tls.1.len()]);
     let b = Baseline {
         data,
@@ -524,4 +525,12 @@ fn the_file_carries_derived_words_and_the_registry() {
         factory: None,
     }];
     assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+}
+
+#[test]
+fn the_tls_window_is_the_executables_block_without_the_gap_above_it() {
+    let (lo, len) = super::tls_window(0x10_0000, 0x2ed70, 0x40);
+    assert_eq!(lo, 0x10_0000 - 0x2ed80);
+    assert_eq!(len, 0x2ed70, "the padding up to fs holds libc blocks");
+    assert_eq!(super::tls_window(0x10_0000, 0x100, 8), (0x10_0000 - 0x100, 0x100));
 }

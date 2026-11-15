@@ -62,7 +62,7 @@ fn copy(lo: usize, hi: usize) -> (usize, Vec<u8>) {
 
 /// Size of the executable's static TLS block (x86-64 variant II: the block
 /// ends at the thread pointer).
-fn executable_tls_size() -> usize {
+fn executable_tls_size() -> (usize, usize) {
     unsafe extern "C" fn each(
         info: *mut libc::dl_phdr_info,
         _size: libc::size_t,
@@ -73,13 +73,13 @@ fn executable_tls_size() -> usize {
             let ph = unsafe { &*info.dlpi_phdr.add(i) };
             if ph.p_type == libc::PT_TLS {
                 let align = (ph.p_align as usize).max(1);
-                unsafe { *(data as *mut usize) = (ph.p_memsz as usize).div_ceil(align) * align };
+                unsafe { *(data as *mut (usize, usize)) = (ph.p_memsz as usize, align) };
             }
         }
         1
     }
-    let mut size = 0usize;
-    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut usize).cast()) };
+    let mut size = (0usize, 1usize);
+    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut (usize, usize)).cast()) };
     size
 }
 
@@ -94,14 +94,15 @@ pub extern "C" fn js_snap_image_begin(
     let mut fs = 0usize;
     // SAFETY: ARCH_GET_FS stores the thread pointer.
     unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1003, &mut fs as *mut usize) };
-    let tls_lo = fs.saturating_sub(executable_tls_size());
+    let (memsz, align) = executable_tls_size();
+    let (tls_lo, tls_len) = tls_window(fs, memsz, align);
     let lo = std::ptr::addr_of!(__data_start) as usize;
     let hi = std::ptr::addr_of!(_end) as usize;
     let pre_data = vec![0u8; hi - lo];
-    let pre_tls = vec![0u8; fs - tls_lo];
+    let pre_tls = vec![0u8; tls_len];
     let b = Box::new(Baseline {
         data: copy(lo, hi),
-        tls: copy(tls_lo, fs),
+        tls: copy(tls_lo, tls_lo + tls_len),
         pre_data,
         pre_tls,
         classes: crate::object::class_image::snap_image_table_size(),
@@ -692,4 +693,13 @@ fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
         out.push(format::RegRec { key: key.into_bytes(), init_off, status, exports, factory });
     }
     out
+}
+
+/// The executable's own TLS block: variant II places it at
+/// `[fs - roundup(memsz, align), + memsz)`; the gap above it up to `fs` holds
+/// the C library's blocks (errno among them), so it is not part of the window.
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+fn tls_window(fs: usize, memsz: usize, align: usize) -> (usize, usize) {
+    let lo = fs.saturating_sub(memsz.div_ceil(align.max(1)) * align.max(1));
+    (lo, memsz.min(fs - lo))
 }

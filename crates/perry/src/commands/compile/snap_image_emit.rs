@@ -231,6 +231,8 @@ fn judge(name: &str, v: &Val) -> Judge {
         } else {
             Judge::Stop("more than one thread claimed a class-template token before the cut")
         }
+    } else if name.starts_with("perry_concat_site_") {
+        concat_site_word(v)
     } else if name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|q| is(q)) {
         Judge::Pristine
     } else {
@@ -258,7 +260,23 @@ fn covered_by_record(path: &str) -> bool {
         .any(|s| s == "MODULE_PATH_REGISTRY" || s == "PATH_MODULE_INIT_ADDRS")
 }
 
+/// One static as the judge sees it: every changed word of one symbol.
+struct Unit {
+    path: String,
+    size: u64,
+    kind: &'static str,
+    first: u64,
+    pristine: Vec<Word>,
+    bad: Vec<String>,
+    kept: Vec<Word>,
+}
+
 /// `classify`; with `record` the statics the replay record covers are dropped.
+/// The unit of judgement is the static (one symbol), never the word: a static
+/// with a stopped or unresolved word stops as a whole, a static with a
+/// pristine word is pristine as a whole, and the scalar words of a runtime
+/// container static (lengths, bump pointers, table sizes, slot indices) are
+/// never kept by value on their own.
 fn classify_with(words: &[Word], st: &Symtab, data_start: u64, record: bool) -> Classified {
     let mut c = Classified {
         kept: Vec::new(),
@@ -266,6 +284,8 @@ fn classify_with(words: &[Word], st: &Symtab, data_start: u64, record: bool) -> 
         dropped_by: Default::default(),
         unresolved: Vec::new(),
     };
+    let mut units: Vec<Unit> = Vec::new();
+    let mut index: std::collections::BTreeMap<(bool, u64), usize> = Default::default();
     for w in words {
         let tls = w.region & format::WORD_TLS != 0;
         let (kind, a) = if tls {
@@ -274,31 +294,75 @@ fn classify_with(words: &[Word], st: &Symtab, data_start: u64, record: bool) -> 
             ("data", data_start.wrapping_add(w.off))
         };
         let Some(s) = sym_at(if tls { &st.tls } else { &st.mem }, a) else {
-            c.unresolved
-                .push(format!("{kind}+{:#x}: no symbol names it", w.off));
+            c.unresolved.push(if tls {
+                format!("{kind}+{:#x}: unnamed TLS word (outside every named TLS symbol)", w.off)
+            } else {
+                format!("{kind}+{:#x}: no symbol names it", w.off)
+            });
             continue;
         };
-        let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, sym_path(&s.name), a - s.addr);
-        let j = if record && covered_by_record(&sym_path(&s.name)) {
+        let path = sym_path(&s.name);
+        let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, path, a - s.addr);
+        let j = if record && covered_by_record(&path) {
             Judge::Pristine
         } else {
             judge(&s.name, &w.val)
         };
+        let at_unit = *index.entry((tls, s.addr)).or_insert_with(|| {
+            units.push(Unit {
+                path: path.clone(),
+                size: s.size,
+                kind,
+                first: w.off,
+                pristine: Vec::new(),
+                bad: Vec::new(),
+                kept: Vec::new(),
+            });
+            units.len() - 1
+        });
+        let Some(u) = units.get_mut(at_unit) else {
+            continue;
+        };
         match j {
-            Judge::Pristine => {
-                c.dropped += 1;
-                *c.dropped_by.entry(sym_path(&s.name)).or_default() += 1;
-            }
-            Judge::Stop(why) => c.unresolved.push(format!("{at}: {why}")),
+            Judge::Pristine => u.pristine.push(w.clone()),
+            Judge::Stop(why) => u.bad.push(format!("{at}: {why}")),
             Judge::Keep => match w.val {
-                Val::Opaque(x) => c.unresolved.push(format!(
+                Val::Opaque(x) => u.bad.push(format!(
                     "{at}: holds {x:#x}, a heap or stack address, and no pristine form covers it"
                 )),
-                Val::Sym(x) => c.unresolved.push(format!(
+                Val::Sym(x) => u.bad.push(format!(
                     "{at}: holds {x:#x}, a symbol-space address, and the symbol space has no image form"
                 )),
-                _ => c.kept.push(w.clone()),
+                _ => u.kept.push(w.clone()),
             },
+        }
+    }
+    for u in units {
+        if !u.bad.is_empty() {
+            c.unresolved.extend(u.bad);
+            if !u.kept.is_empty() {
+                c.unresolved.push(format!(
+                    "{}+{:#x} ({}): {} scalar word(s) are not kept by value; the static stops as one unit",
+                    u.kind,
+                    u.first,
+                    u.path,
+                    u.kept.len()
+                ));
+            }
+        } else if !u.pristine.is_empty() {
+            let n = u.pristine.len() + u.kept.len();
+            c.dropped += n;
+            *c.dropped_by.entry(u.path).or_default() += n;
+        } else if runtime_container(&u.path, u.size) {
+            c.unresolved.push(format!(
+                "{}+{:#x} ({}): {} scalar word(s) of a runtime container static; no declaration says they may be kept by value",
+                u.kind,
+                u.first,
+                u.path,
+                u.kept.len()
+            ));
+        } else {
+            c.kept.extend(u.kept);
         }
     }
     c
@@ -895,6 +959,32 @@ pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
     ))
 }
 
+/// A runtime static (a Rust path) of more than one word: a container whose
+/// scalar words only mean something with its pointers.
+fn runtime_container(path: &str, size: u64) -> bool {
+    path.contains("::") && size > 8
+}
+
+/// A per-site concat table is a cache: slot k is 0 or the string the miss arm
+/// builds, so a changed word must be a string value (short string or string
+/// cell) and is then pristine; anything else stops.
+const STRING_TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+const SHORT_STRING_BITS: u64 = 0x7FF9_0000_0000_0000;
+const STRING_BITS: u64 = 0x7FFF_0000_0000_0000;
+
+fn concat_site_word(v: &Val) -> Judge {
+    let string = match v {
+        Val::Scalar(x) => x & STRING_TAG_MASK == SHORT_STRING_BITS,
+        Val::Cell { hi, bare, .. } => !*bare && u64::from(*hi) << 48 == STRING_BITS,
+        _ => false,
+    };
+    if string {
+        Judge::Pristine
+    } else {
+        Judge::Stop("a concat-site slot holds a value that is not a string")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1164,4 +1254,54 @@ fn stop_summary(stops: &[format::Stop]) -> String {
         });
     }
     parts.join("; ")
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    const SY: &str = "Symbol table '.symtab' contains 5 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000    48 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5ATOMS\n    11: 0000000000600030     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern4SLOT\n    12: 0000000000600040   256 OBJECT  LOCAL  DEFAULT   24 perry_concat_site_dep__1\n    13: 0000000000600200    16 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5STATE\n    14: 0000000000000040     8 TLS     LOCAL  DEFAULT   20 perry_tls_y\n";
+
+    fn w(region: u8, off: u64, val: Val) -> Word {
+        Word { region, off, val }
+    }
+
+    #[test]
+    fn a_scalar_word_of_a_stopped_static_is_not_kept() {
+        let t = parse_syms(SY);
+        let ws = [
+            w(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000)),
+            w(format::WORD_DATA, 0x18, Val::Scalar(0x2be)),
+            w(format::WORD_DATA, 0x30, Val::Scalar(0x3e)),
+        ];
+        let c = classify(&ws, &t, 0x600000);
+        assert_eq!(c.kept.len(), 1, "only the single-word static stays: {:?}", c.unresolved);
+        assert!(c.unresolved.iter().any(|u| u.contains("ATOMS") && u.contains("stops as one unit")));
+    }
+
+    #[test]
+    fn the_scalar_words_of_a_runtime_container_are_not_kept() {
+        let t = parse_syms(SY);
+        let ws = [w(format::WORD_DATA, 0x208, Val::Scalar(5)), w(format::WORD_DATA, 0x30, Val::Scalar(7))];
+        let c = classify(&ws, &t, 0x600000);
+        assert_eq!(c.kept.len(), 1, "{:?}", c.unresolved);
+        assert!(c.unresolved.len() == 1 && c.unresolved[0].contains("STATE"));
+    }
+
+    #[test]
+    fn a_concat_site_slot_is_pristine_only_while_it_holds_a_string() {
+        let t = parse_syms(SY);
+        let s = Val::Scalar(0x7FF9_0000_0000_6e30);
+        let ok = classify(&[w(format::WORD_DATA, 0x40, s.clone()), w(format::WORD_DATA, 0x48, s)], &t, 0x600000);
+        assert!(ok.unresolved.is_empty() && ok.dropped == 2, "{:?}", ok.unresolved);
+        let bad = classify(&[w(format::WORD_DATA, 0x40, Val::Scalar(0x2a))], &t, 0x600000);
+        assert!(bad.unresolved.iter().any(|u| u.contains("not a string")), "{:?}", bad.unresolved);
+    }
+
+    #[test]
+    fn a_tls_word_outside_every_named_symbol_is_unnamed() {
+        let t = parse_syms(SY);
+        let c = classify(&[w(format::WORD_TLS, 0x2ef88, Val::Scalar(2))], &t, 0x600000);
+        assert!(c.unresolved.iter().any(|u| u.contains("unnamed TLS word")), "{:?}", c.unresolved);
+    }
 }
