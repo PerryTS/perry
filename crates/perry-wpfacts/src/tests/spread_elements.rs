@@ -30,7 +30,7 @@ fn a_spread_array_passes_its_elements() {
 /// node (`hostList = [{ size: 9 }]`): prints `9`.
 #[test]
 fn a_spread_top_value_passes_top() {
-    let v = verdict("const xs: any = (globalThis as any).hostList; console.log(g(...xs));");
+    let v = verdict("const xs: any = (globalThis as any)[process.argv[2]]; console.log(g(...xs));");
     assert!(!proven(&v), "{v:?}");
 }
 

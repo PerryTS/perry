@@ -113,7 +113,7 @@ fn a_returned_thenable_is_adopted() {
 #[test]
 fn an_unknown_return_reaches_the_reaction() {
     let v = ax(r#"
-        async function af(): Promise<any> { return (globalThis as any).unknownHostValue; }
+        async function af(): Promise<any> { return (globalThis as any)[process.argv[2]]; }
         af().then((r: any) => console.log(r.ax));
     "#);
     assert!(!proven(&v), "{v:?}");
@@ -123,7 +123,7 @@ fn an_unknown_return_reaches_the_reaction() {
 #[test]
 fn an_unknown_thenable_reaches_the_reaction() {
     let v = ax(r#"
-        const aa = async () => (globalThis as any).unknownHostValue;
+        const aa = async () => (globalThis as any)[process.argv[2]];
         aa().then((r: any) => console.log(r.ax));
     "#);
     assert!(!proven(&v), "{v:?}");
@@ -134,7 +134,7 @@ fn an_unknown_thenable_reaches_the_reaction() {
 #[test]
 fn a_throw_rejects_the_promise() {
     let v = ax(r#"
-        async function af(): Promise<any> { throw (globalThis as any).unknownHostValue; }
+        async function af(): Promise<any> { throw (globalThis as any)[process.argv[2]]; }
         af().catch((e: any) => console.log(e.ax));
     "#);
     assert!(!proven(&v), "{v:?}");
