@@ -1041,6 +1041,9 @@ fn implied<'p>(
                     (CompareOp::Le, true) | (CompareOp::Gt, false) => CLIP_LE,
                     (CompareOp::Gt, true) | (CompareOp::Le, false) => CLIP_GT,
                     (CompareOp::Ge, true) | (CompareOp::Lt, false) => CLIP_GE,
+                    (CompareOp::Ne | CompareOp::LooseNe, true) | (CompareOp::Eq | CompareOp::LooseEq, false) => {
+                        crate::model::range::CLIP_NE
+                    }
                     _ => return None,
                 })
             };
@@ -1052,16 +1055,17 @@ fn implied<'p>(
                 o => o.clone(),
             };
             let (l, r) = (bound_of(left, subst), bound_of(right, subst));
+            let ne_char = |kind: u8, b: &Bound| kind == crate::model::range::CLIP_NE && matches!(b, Bound::Char(_));
             if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
                 if !b.reads(*id) {
-                    if let Some(kind) = k(op, positive) {
+                    if let Some(kind) = k(op, positive).filter(|&kd| !ne_char(kd, b)) {
                         out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
             if let (Some(Bound::Local(id)), Some(b)) = (&r, &l) {
                 if !b.reads(*id) {
-                    if let Some(kind) = k(&mirror(op), positive) {
+                    if let Some(kind) = k(&mirror(op), positive).filter(|&kd| !ne_char(kd, b)) {
                         out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
