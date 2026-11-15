@@ -275,3 +275,71 @@ fn elems1_e5d_from_array_of_a_field() {
     let s = src("", "", &[FROM], "const z = new M().fromArray(x.elements); x.mul(x, z);");
     expect(&s, F4);
 }
+
+// ELEM2: a computed-key store and read inside the bounds of a dense Array.
+// The store `a[i] = v` under a Number key marked a hole at once, so a read
+// of the same Array under a computed key read `undefined` from the hole
+// (ECMA-262 10.4.2.1: a store below the length writes that element; only an
+// index past the end leaves holes). I-fixtures are in bounds; KEEPs reach
+// the end, take an unknown offset, shrink the Array or put an index key on
+// Array.prototype.
+
+#[test]
+fn elems1_i1_loop_read_store_in_bounds() {
+    // `a[i]` read and stored for i in [0, 3] on a length-4 Array, then
+    // carried into M.elements: no hole, no `undefined`.
+    let d = "const a = [1, 2, 3, 4]; for (let i = 0; i < 4; i++) { a[i] = a[i] + 1; x.elements[i] = a[i]; }";
+    expect(&src("", "", &[], d), F4);
+}
+
+#[test]
+fn elems1_i2_from_array_of_another_instance() {
+    // three.js Matrix4.fromArray(m.elements) with the default offset, both
+    // ways between two instances: each Array is read and stored under `i`.
+    let s = src("", "", &[FROM], "const w = new M(); w.fromArray(x.elements); x.fromArray(w.elements); x.mul(x, w);");
+    expect(&s, F4);
+}
+
+#[test]
+fn elems1_i3_keep_unknown_offset() {
+    // KEEP: `i + offset` with an unknown offset may be past the end.
+    let s = src(
+        "",
+        "",
+        &[FROM],
+        "const z = new M().fromArray(y.elements, Number(process.argv[2])); x.mul(x, z);",
+    );
+    assert_eq!(elem_kind(&s), "boxed");
+}
+
+#[test]
+fn elems1_i4_keep_one_past_the_end() {
+    // KEEP: `i <= 4` reads index 4 of a length-4 Array: `undefined`.
+    let s = src("", "", &[], "for (let i = 0; i <= 4; i++) { x.elements[0] = y.elements[i]; }");
+    assert_eq!(elem_kind(&s), "boxed");
+}
+
+#[test]
+fn elems1_i5_keep_shrunk_array() {
+    // KEEP: a `length` store may shrink the Array: the length's lower bound
+    // is no longer 4, so `i < 4` is no proof the read is in bounds.
+    let d = "y.elements.length = Number(process.argv[2]); for (let i = 0; i < 4; i++) { x.elements[i] = y.elements[i]; }";
+    assert_eq!(elem_kind(&src("", "", &[], d)), "boxed");
+}
+
+#[test]
+fn elems1_i5b_grown_array_floor_holds() {
+    // A `push` only grows the Array: the floor 4 is a true lower bound of
+    // its length at every read, so the read in [0, 3] is in bounds (the
+    // length is not fixed).
+    let d = "y.elements.push(5); for (let i = 0; i < 4; i++) { x.elements[i] = y.elements[i]; }";
+    assert_eq!(elem_kind(&src("", "", &[], d)), "f64");
+}
+
+#[test]
+fn elems1_i6_keep_prototype_index_past_the_end() {
+    // KEEP: past the end the read goes to Array.prototype, whose index key
+    // the program wrote (10.1.8 OrdinaryGet): the String reaches M.elements.
+    let d = "Array.prototype[5] = process.argv[2]; for (let i = 0; i < 6; i++) { x.elements[0] = y.elements[i]; }";
+    assert_eq!(elem_kind(&src("", "", &[], d)), "boxed");
+}
