@@ -599,10 +599,24 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            // `String.raw` (22.1.2.4) reads `raw`, its `length` and elements
-            // and ToStrings them and the substitutions; a spread
-            // `fromCharCode` iterates its operand: a String.
-            Expr::StringRaw { .. } | Expr::StringFromCharCodeSpread(..) => {
+            // `String.raw` (22.1.2.4): `string_methods::string_raw`, a String.
+            Expr::StringRaw {
+                call_site,
+                substitutions,
+            } => {
+                let template = self.expr(fx, call_site);
+                let subs = self.tmp("String.raw-substitution");
+                for x in substitutions {
+                    let v = self.expr(fx, x);
+                    self.m.edge(v, subs);
+                }
+                crate::builtins::string_methods::string_raw(&mut self.m, template, subs);
+                let out = self.tmp("primop");
+                self.m.add_prim(out, prim::STR);
+                out
+            }
+            // A spread `fromCharCode` iterates its operand: a String.
+            Expr::StringFromCharCodeSpread(..) => {
                 self.prim_kids(fx, e, prim::STR, "primitive builtin operand", Protocol::Any)
             }
             Expr::PathFormat(..)

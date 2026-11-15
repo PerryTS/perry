@@ -122,6 +122,40 @@ pub(crate) fn read_prim(m: &mut Model, recv: NodeId, key: &str, why: &str) {
     to_prim(m, dst, why);
 }
 
+/// `String.raw(template, ...substitutions)` (ECMA-262 22.1.2.4): ToObject
+/// of the template, Get `raw` and ToObject of it, LengthOfArrayLike (Get
+/// `length`, ToLength: ToPrimitive, 7.1.20), Get of each index and ToString
+/// of it (7.1.17: ToPrimitive), ToString of each substitution. No other key
+/// is read, no read value is called or handed on; the result is a String.
+/// One rule for a call of the builtin and the lowered `Expr::StringRaw`.
+pub(crate) fn string_raw(m: &mut Model, template: NodeId, substitutions: NodeId) {
+    let ra = m.atom("raw");
+    let raw = m.node_l("String.raw-raw");
+    m.cons(
+        template,
+        Cons::Load {
+            key: Key::Named(ra),
+            dst: raw,
+        },
+    );
+    read_prim(m, raw, "length", "String.raw segments length ToLength");
+    let i = m.node_l("String.raw-index");
+    m.add_prim(i, prim::NUM);
+    let seg = m.node_l("String.raw-segment");
+    m.cons(
+        raw,
+        Cons::IdxLoad {
+            idx: i,
+            dst: seg,
+            shape: 0,
+            enumerable: false,
+            kept: false,
+        },
+    );
+    to_prim(m, seg, "String.raw segment ToString");
+    to_prim(m, substitutions, "String.raw substitution ToString");
+}
+
 /// `Get(recv, key)` whose value is only tested (IsRegExp reads `@@match`).
 pub(crate) fn read_only(m: &mut Model, recv: NodeId, key: &str) {
     let a = m.atom(key);

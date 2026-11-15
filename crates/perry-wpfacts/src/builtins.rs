@@ -3271,10 +3271,25 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::BIGINT);
         }
-        // `String.raw` (22.1.2.4) reads `raw`, its `length` and elements and
-        // ToStrings them and the substitutions: a String.
+        // `String.raw` (22.1.2.4, `string_methods::string_raw`): a String.
         (BuiltinNs::String, "raw") => {
-            implicit_args(m, call, "String.raw template", Protocol::Any);
+            let c = m.calls[call as usize].clone();
+            let cooked = m.node_l("String.raw-template");
+            let subs = m.node_l("String.raw-substitution");
+            if let Some(&a0) = c.args.first() {
+                m.edge(a0, cooked);
+            }
+            for &a in c.args.iter().skip(1) {
+                m.edge(a, subs);
+            }
+            let ek = m.elem_key();
+            for &s in &c.spread {
+                m.cons(s, Cons::Load { key: ek, dst: subs });
+                if c.args.is_empty() {
+                    m.cons(s, Cons::Load { key: ek, dst: cooked });
+                }
+            }
+            string_methods::string_raw(m, cooked, subs);
             ret_prim(m, call, prim::STR);
         }
         (BuiltinNs::Number, _) if name == "raw" => {

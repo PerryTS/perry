@@ -3,6 +3,7 @@
 mod any_key_builtin_read;
 mod absent_key;
 mod audit1;
+mod raw1;
 mod inspect1;
 mod audit2;
 mod accessor_after_data_store;
