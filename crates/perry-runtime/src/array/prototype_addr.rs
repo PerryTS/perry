@@ -160,6 +160,37 @@ const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUC
 /// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
 pub(crate) struct RealmIntrinsics {
     entries: [IntrinsicEntry; INTRINSIC_ENTRY_COUNT],
+    /// The realm's function intrinsics that no family owns (`%parseFloat%`,
+    /// `%parseInt%`): the same cell algebra as the family cells.
+    functions: [Cell<usize>; REALM_FUNCTION_INTRINSIC_COUNT],
+}
+
+/// A function intrinsic with its own [[Intrinsics]] cell: `%parseFloat%` is
+/// both `globalThis.parseFloat` and `Number.parseFloat` (ECMA-262 21.1.2.12),
+/// so whichever of the two is observed first births it.
+#[derive(Clone, Copy)]
+pub(crate) enum RealmFunctionIntrinsic {
+    ParseFloat = 0,
+    ParseInt = 1,
+}
+const REALM_FUNCTION_INTRINSIC_COUNT: usize = 2;
+
+/// This realm's function intrinsic `which` if born, else 0.
+#[inline]
+pub(crate) fn realm_function_intrinsic_if_bound(which: RealmFunctionIntrinsic) -> usize {
+    let cell = &crate::state::state().realm_intrinsics.functions[which as usize];
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// Record the birth of the function intrinsic `which` (first birth wins).
+pub(crate) fn note_realm_function_intrinsic(which: RealmFunctionIntrinsic, addr: usize) {
+    let cell = &crate::state::state().realm_intrinsics.functions[which as usize];
+    if cell.get() == 0 {
+        cell.set(addr);
+    }
 }
 
 /// One builtin's realm intrinsics: its constructor and its prototype.
@@ -289,6 +320,9 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
     for entry in &crate::state::state().realm_intrinsics.entries {
         rewrite_prototype_addr_slot(&entry.prototype, visitor);
         rewrite_prototype_addr_slot(&entry.constructor, visitor);
+    }
+    for cell in &crate::state::state().realm_intrinsics.functions {
+        rewrite_prototype_addr_slot(cell, visitor);
     }
 }
 

@@ -386,16 +386,14 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 false,
             ),
             // #2905: standard global helper functions.
-            "parseInt" => (
-                crate::fn_info!(#[realm(parseInt)] export crate::object::global_this::builtin_thunks::global_this_parse_int_thunk, 2; with_declared(2)),
-                2,
-                false,
-            ),
-            "parseFloat" => (
-                crate::fn_info!(#[realm(parseFloat)] export crate::object::global_this::builtin_thunks::global_this_parse_float_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
+            "parseInt" => {
+                let (info, arity) = realm_parse_function_info(crate::array::RealmFunctionIntrinsic::ParseInt);
+                (info, arity, false)
+            }
+            "parseFloat" => {
+                let (info, arity) = realm_parse_function_info(crate::array::RealmFunctionIntrinsic::ParseFloat);
+                (info, arity, false)
+            }
             "isNaN" => (
                 crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_declared(1)),
                 1,
@@ -440,23 +438,24 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             ),
             _ => continue,
         };
-        let closure_ptr = crate::closure::js_closure_alloc(info, 0);
+        // %parseFloat% / %parseInt% are the thread realm's [[Intrinsics]]
+        // (born by whichever of the global or `Number`'s statics is observed
+        // first); a `vm` realm makes its own.
+        let parse = match name {
+            "parseInt" => Some(crate::array::RealmFunctionIntrinsic::ParseInt),
+            "parseFloat" => Some(crate::array::RealmFunctionIntrinsic::ParseFloat),
+            _ => None,
+        };
+        let closure_ptr = match parse {
+            Some(which) if super::is_thread_realm_global(singleton()) => {
+                crate::value::js_nanbox_get_pointer(realm_parse_function(which))
+                    as *mut crate::closure::ClosureHeader
+            }
+            _ => global_helper_closure(info, name, arity),
+        };
         if closure_ptr.is_null() {
             continue;
         }
-        unsafe {
-            crate::builtins::register_function_name(&*info, name.as_bytes());
-        }
-        super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
-        // Every global helper installed here (parseInt/parseFloat/isNaN/
-        // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
-        // built-in *non-constructor* function: per spec it has no `.prototype`
-        // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
-        // closure so the `new`/`.prototype` paths honor that — otherwise these
-        // functions defaulted to an ordinary `.prototype` object and silently
-        // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
-        // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
-        super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
@@ -476,8 +475,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // singleton. A value-read of `Number.parseFloat` resolves to the Number
     // constructor's own `parseFloat` field (see expr_member.rs reroute-undo),
     // which now holds the identical closure the bare `parseFloat` resolves to.
-    alias_number_static_to_global_function(singleton(), "parseFloat");
-    alias_number_static_to_global_function(singleton(), "parseInt");
+    // The thread realm's Number reads the same cells (its statics install
+    // `realm_parse_function`); a `vm` realm (the eager vm-realm residual,
+    // per-thread [[Intrinsics]]) re-points its own Number here.
+    if !super::is_thread_realm_global(singleton()) {
+        alias_number_static_to_global_function(singleton(), "parseFloat");
+        alias_number_static_to_global_function(singleton(), "parseInt");
+    }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
         let name_bytes = name.as_bytes();
@@ -1283,6 +1287,70 @@ pub(super) fn alias_typed_array_proto_to_string() {
     );
 }
 
+
+/// The info and spec length of the function intrinsic `which`.
+fn realm_parse_function_info(
+    which: crate::array::RealmFunctionIntrinsic,
+) -> (*const crate::closure::JsFunctionInfo, u32) {
+    match which {
+        crate::array::RealmFunctionIntrinsic::ParseInt => (
+            crate::fn_info!(#[realm(parseInt)] export crate::object::global_this::builtin_thunks::global_this_parse_int_thunk, 2; with_declared(2)),
+            2,
+        ),
+        crate::array::RealmFunctionIntrinsic::ParseFloat => (
+            crate::fn_info!(#[realm(parseFloat)] export crate::object::global_this::builtin_thunks::global_this_parse_float_thunk, 1; with_declared(1)),
+            1,
+        ),
+    }
+}
+
+/// A built-in global helper function (`parseInt`, `isNaN`, ...): its closure,
+/// name, length, and non-constructor mark.
+fn global_helper_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    name: &str,
+    arity: u32,
+) -> *mut crate::closure::ClosureHeader {
+    let closure_ptr = crate::closure::js_closure_alloc(info, 0);
+    if closure_ptr.is_null() {
+        return closure_ptr;
+    }
+    unsafe {
+        crate::builtins::register_function_name(&*info, name.as_bytes());
+    }
+    super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
+        // Every global helper installed here (parseInt/parseFloat/isNaN/
+        // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
+        // built-in *non-constructor* function: per spec it has no `.prototype`
+        // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
+        // closure so the `new`/`.prototype` paths honor that — otherwise these
+        // functions defaulted to an ordinary `.prototype` object and silently
+        // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
+        // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
+    super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
+    closure_ptr
+}
+
+/// `%parseFloat%` / `%parseInt%` of the thread realm: its cell when born,
+/// else its birth (first observation: the global binding or `Number`'s
+/// statics). One closure is both `parseFloat` and `Number.parseFloat`.
+pub(crate) fn realm_parse_function(which: crate::array::RealmFunctionIntrinsic) -> f64 {
+    let bound = crate::array::realm_function_intrinsic_if_bound(which);
+    if bound != 0 {
+        return crate::value::js_nanbox_pointer(bound as i64);
+    }
+    let (info, arity) = realm_parse_function_info(which);
+    let name = match which {
+        crate::array::RealmFunctionIntrinsic::ParseInt => "parseInt",
+        crate::array::RealmFunctionIntrinsic::ParseFloat => "parseFloat",
+    };
+    let closure_ptr = global_helper_closure(info, name, arity);
+    if closure_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::array::note_realm_function_intrinsic(which, closure_ptr as usize);
+    crate::value::js_nanbox_pointer(closure_ptr as i64)
+}
 /// Re-point a `Number.<name>` static at the global function of the same name so
 /// the two are the identical object (`Number.parseFloat === parseFloat`). Both
 /// the global helper and the `Number` constructor are already installed on the

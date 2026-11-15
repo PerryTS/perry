@@ -656,15 +656,18 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(#[realm(Number.isSafeInteger)] export crate::object::global_this::bigint_promise::number_is_safe_integer_thunk, 1; with_declared(1)),
                 1,
             );
-            s.method(
+            // `Number.parseFloat === parseFloat` (ECMA-262 21.1.2.12/13): the
+            // realm's own function intrinsics, born here if Number is
+            // observed first.
+            s.data(
                 "parseFloat",
-                crate::fn_info!(number_parse_float_thunk, 1; with_declared(1)),
-                1,
+                super::populate::realm_parse_function(crate::array::RealmFunctionIntrinsic::ParseFloat),
+                STATIC_METHOD_ATTRS,
             );
-            s.method(
+            s.data(
                 "parseInt",
-                crate::fn_info!(number_parse_int_thunk, 2; with_declared(2)),
-                2,
+                super::populate::realm_parse_function(crate::array::RealmFunctionIntrinsic::ParseInt),
+                STATIC_METHOD_ATTRS,
             );
             for (name, value) in NUMBER_STATIC_DATA {
                 s.data(

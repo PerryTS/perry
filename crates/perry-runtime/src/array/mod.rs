@@ -282,7 +282,8 @@ pub(crate) use self::prototype_addr::{
     intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
     note_realm_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
     object_prototype_addr_matches, object_prototype_cell, function_prototype_addr_if_bound,
-    primitive_wrapper_prototype_addr, RealmIntrinsics,
+    primitive_wrapper_prototype_addr, RealmIntrinsics, note_realm_function_intrinsic,
+    realm_function_intrinsic_if_bound, RealmFunctionIntrinsic,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
