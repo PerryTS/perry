@@ -2177,4 +2177,6 @@ mod skinfa8;
 mod local_versions;
 mod skinroot31;
 mod whyhold1;
+mod skinroot32;
+mod skinroot39;
 mod skinroot35;

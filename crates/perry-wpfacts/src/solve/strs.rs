@@ -408,42 +408,44 @@ impl Model {
         let atoms = self.str_atoms(node.strs).to_vec();
         let mut out = Vec::with_capacity(atoms.len());
         for a in atoms {
-            // Rule K7: an infix entry reads the names of glob `*c*`.
-            if let Some(c) = self.atom_infix(a) {
-                out.push((a, self.infix_shape(c)));
-                continue;
-            }
-            // A known prefix reads the names of its glob `p*`, and the
-            // elements and numeric keys only when `p` may begin ToString of
-            // a Number (`glob_may_be_numeric`): never any key.
-            if let Some(p) = self.atom_prefix(a) {
-                let glob = vec![p.to_string(), String::new()];
-                out.push((a, self.glob_shape(glob)));
-                continue;
-            }
-            // Rule EXCL-KEY (ECMA-262 7.1.19: a String key is itself): an
-            // exclusion entry `X + s`, X free of E, reads exactly the names
-            // that end with `s` after a part free of E's characters (and
-            // the elements and numeric keys only when such a string may be
-            // a Number key). No character excluded and no suffix: any
-            // String (below).
-            if let Some((e, s)) = self.atom_excl(a).filter(|&(e, s)| self.atom_pfx_excl(a).is_none() && (e != 0 || !s.is_empty())) {
-                let s = s.to_string();
-                out.push((a, self.free_shape(e, &s)));
-                continue;
-            }
-            // Rule M4: a known suffix reads the names of its glob `*s`.
-            if let Some(s) = self.atom_suffix(a) {
-                let glob = vec![String::new(), s.to_string()];
-                out.push((a, self.glob_shape(glob)));
-                continue;
-            }
-            match self.atom_key_shape(a) {
+            match self.entry_key_shape(a) {
                 0 => return None,
                 s => out.push((a, s)),
             }
         }
         Some(out)
+    }
+
+    /// Rule STORE-ENTRY (with M3, K7, EXCL-KEY, M4; ECMA-262 7.1.19: a
+    /// String key is itself): the names one String entry of a computed
+    /// key may spell, the same for a read (`key_entry_shapes`) and a store
+    /// (`Cons::StoreIndexed`); 0: any name.
+    pub(crate) fn entry_key_shape(&mut self, a: Atom) -> KeyShapeId {
+        // Rule K7: an infix entry names the keys of glob `*c*`.
+        if let Some(c) = self.atom_infix(a) {
+            return self.infix_shape(c);
+        }
+        // A known prefix names its glob `p*`, and the elements and numeric
+        // keys only when `p` may begin ToString of a Number
+        // (`glob_may_be_numeric`): never any key.
+        if let Some(p) = self.atom_prefix(a) {
+            let glob = vec![p.to_string(), String::new()];
+            return self.glob_shape(glob);
+        }
+        // Rule EXCL-KEY: an exclusion entry `X + s`, X free of E, names
+        // exactly the keys that end with `s` after a part free of E's
+        // characters (and the numeric keys only when such a string may be
+        // a Number key). No character excluded and no suffix: any String.
+        if let Some((e, s)) = self.atom_excl(a).filter(|&(e, s)| self.atom_pfx_excl(a).is_none() && (e != 0 || !s.is_empty())) {
+            let s = s.to_string();
+            return self.free_shape(e, &s);
+        }
+        // Rule M4: a known suffix names the keys of its glob `*s`.
+        if let Some(s) = self.atom_suffix(a) {
+            let glob = vec![String::new(), s.to_string()];
+            return self.glob_shape(glob);
+        }
+        self.atom_key_shape(a)
     }
 
     /// Rule M3, ECMA-262 13.15.3: the strings `l + r` may be. A String left

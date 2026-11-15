@@ -1892,7 +1892,9 @@ impl Model {
                     for i in 0..self.str_atoms(strs).len() {
                         let a = self.str_atoms(strs)[i];
                         if self.atom_is_mark(a) {
-                            match self.atom_key_shape(a) {
+                            // Rule STORE-ENTRY: an entry writes the names it
+                            // may spell, as its read reads them.
+                            match self.entry_key_shape(a) {
                                 0 => any_prefix = true,
                                 s => prefixed.push((a, s)),
                             }
