@@ -13,8 +13,8 @@
 use std::sync::Once;
 
 use perry_ffi::{
-    alloc_string, get_handle, js_array_alloc, js_array_push, ArrayHeader, Handle, JsValue,
-    StringHeader, TransientRootScope, TransientRootedNanbox,
+    alloc_string, js_array_alloc, js_array_push, ArrayHeader, Handle, JsValue, StringHeader,
+    TransientRootScope, TransientRootedNanbox,
 };
 
 use crate::{SqliteDbHandle, SqliteStmtHandle};
@@ -82,7 +82,7 @@ fn string_ptr(value: f64) -> *const StringHeader {
 /// Dispatch one method; `None` means "not claimed".
 unsafe fn call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
     let undefined = JsValue::UNDEFINED;
-    if get_handle::<SqliteDbHandle>(handle).is_some() {
+    if perry_ffi::with_handle::<SqliteDbHandle, _, _>(handle, |_| ()).is_some() {
         return Some(match name {
             "prepare" => {
                 let stmt = crate::js_sqlite_prepare(handle, string_ptr(arg(args, 0)));
@@ -103,7 +103,7 @@ unsafe fn call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
             _ => return None,
         });
     }
-    if get_handle::<SqliteStmtHandle>(handle).is_some() {
+    if perry_ffi::with_handle::<SqliteStmtHandle, _, _>(handle, |_| ()).is_some() {
         return Some(match name {
             "raw" => {
                 crate::js_sqlite_stmt_raw(handle);
@@ -196,32 +196,24 @@ unsafe extern "C" fn sqlite_method_dispatch_ext(
 /// Statement. Perry hands both to JS as handle ids, so a property read has no
 /// object to find them on and arrives here instead.
 unsafe fn property_of(handle: Handle, name: &str) -> Option<f64> {
-    if let Some(db) = get_handle::<SqliteDbHandle>(handle) {
+    let database = perry_ffi::with_handle::<SqliteDbHandle, _, _>(handle, |db| {
         let conn = db.conn.lock().ok()?;
+        let path = conn.path();
+        Some((
+            path.filter(|p| !p.is_empty())
+                .unwrap_or(":memory:")
+                .to_string(),
+            !conn.is_autocommit(),
+            path.is_none_or(|p| p.is_empty() || p == ":memory:"),
+        ))
+    })
+    .flatten();
+    if let Some((path, in_transaction, memory)) = database {
         return Some(match name {
-            // `Connection::path` is None for a temporary database and
-            // ":memory:" for an in-memory one, which is what better-sqlite3
-            // reports verbatim.
-            "name" => {
-                // rusqlite reports an in-memory database as None or "";
-                // better-sqlite3 reports it as ":memory:".
-                let path = match conn.path() {
-                    None | Some("") => ":memory:".to_string(),
-                    Some(p) => p.to_string(),
-                };
-                bits(JsValue::from_string_ptr(
-                    alloc_string(&path).as_raw() as *mut StringHeader
-                ))
-            }
-            // The handle resolved, so the database is open; `close()` drops it.
+            "name" => bits(JsValue::from_string_ptr(alloc_string(&path).as_raw())),
             "open" => bits(JsValue::from_bool(true)),
-            "inTransaction" => bits(JsValue::from_bool(!conn.is_autocommit())),
-            "memory" => bits(JsValue::from_bool(
-                conn.path().is_none_or(|p| p.is_empty() || p == ":memory:"),
-            )),
-            // `js_sqlite_open` always opens read-write (`Connection::open`),
-            // and no flag here can request otherwise, so this is false by
-            // construction. It needs revisiting if open flags are honoured.
+            "inTransaction" => bits(JsValue::from_bool(in_transaction)),
+            "memory" => bits(JsValue::from_bool(memory)),
             "readonly" => bits(JsValue::from_bool(false)),
             _ if DB_METHODS.contains(&name) => js_class_method_bind(
                 bits(JsValue::from_handle(handle as u64)),
@@ -231,29 +223,24 @@ unsafe fn property_of(handle: Handle, name: &str) -> Option<f64> {
             _ => return None,
         });
     }
-    if let Some(stmt) = get_handle::<SqliteStmtHandle>(handle) {
+    if let Some((sql, db_handle, _, _)) = crate::statement_snapshot(handle) {
         return Some(match name {
-            // Already stored: this is the statement's own SQL text.
-            "source" => bits(JsValue::from_string_ptr(
-                alloc_string(&stmt.sql).as_raw() as *mut StringHeader
-            )),
-            // `reader` is "this statement returns rows"; `readonly` is "it
-            // writes nothing". Both come from a fresh prepare, since the
-            // handle stores only the SQL.
+            "source" => bits(JsValue::from_string_ptr(alloc_string(&sql).as_raw())),
             "reader" | "readonly" => {
-                let db = get_handle::<SqliteDbHandle>(stmt.db_handle)?;
-                let conn = db.conn.lock().ok()?;
-                let prepared = conn.prepare(&stmt.sql).ok()?;
-                bits(JsValue::from_bool(if name == "reader" {
-                    prepared.column_count() > 0
-                } else {
-                    prepared.readonly()
-                }))
+                let value = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db_handle, |db| {
+                    let conn = db.conn.lock().ok()?;
+                    let prepared = conn.prepare(&sql).ok()?;
+                    Some(if name == "reader" {
+                        prepared.column_count() > 0
+                    } else {
+                        prepared.readonly()
+                    })
+                })
+                .flatten()?;
+                bits(JsValue::from_bool(value))
             }
-            // No statement is left stepping between calls here, so a
-            // statement is never busy once a call has returned.
             "busy" => bits(JsValue::from_bool(false)),
-            "database" => bits(JsValue::from_handle(stmt.db_handle as u64)),
+            "database" => bits(JsValue::from_handle(db_handle as u64)),
             _ if STMT_METHODS.contains(&name) => js_class_method_bind(
                 bits(JsValue::from_handle(handle as u64)),
                 name.as_ptr(),
@@ -318,6 +305,6 @@ mod tests {
         let path = alloc_string(":memory:");
         let db = unsafe { crate::js_sqlite_open(path.as_raw() as *const _) };
         assert_eq!(dispatch(db, b"close"), 1);
-        assert!(get_handle::<SqliteDbHandle>(db).is_none());
+        assert!(perry_ffi::with_handle::<SqliteDbHandle, _, _>(db, |_| ()).is_none());
     }
 }

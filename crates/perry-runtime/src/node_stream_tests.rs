@@ -1334,7 +1334,11 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 
 #[test]
 fn callable_stream_constructor_autoinstantiates_passthrough() {
-    let ctor = crate::object::bound_native_callable_export_value("stream", "PassThrough");
+    let ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "PassThrough",
+    );
     let stream = unsafe {
         crate::closure::js_native_call_value(
             ctor,

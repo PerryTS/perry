@@ -319,7 +319,7 @@ pub(super) fn install(proto: *mut ObjectHeader) {
     ] {
         prototype::accessor(proto, name, info, None, true);
     }
-    let method = crate::object::install_proto_method(proto, "initMessageEvent", crate::fn_info!(#[realm(MessageEvent.prototype.initMessageEvent)] export crate::event_target::message_event::init, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)), 1);
+    let method = crate::object::install_proto_method(proto, "initMessageEvent", crate::fn_info!(#[realm(MessageEvent.prototype.initMessageEvent, spec = {length = 1}, emit = metadata(realm_messageevent_init_metadata))] export crate::event_target::message_event::init, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)), 1);
     crate::object::set_builtin_property_attrs(
         proto as usize,
         "initMessageEvent".to_owned(),
@@ -327,6 +327,6 @@ pub(super) fn install(proto: *mut ObjectHeader) {
     );
     crate::object::native_module::set_builtin_closure_length(
         crate::value::js_nanbox_get_pointer(method) as usize,
-        1,
+        realm_messageevent_init_metadata!(length),
     );
 }

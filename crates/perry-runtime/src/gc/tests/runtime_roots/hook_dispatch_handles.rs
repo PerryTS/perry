@@ -136,9 +136,10 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
     let arg = test_string_value(b"bound-timer-arg");
     let arg_original = (arg.to_bits() & POINTER_MASK) as usize;
 
-    let module_name = b"timers";
-    let namespace =
-        crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    let namespace = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::timers::NM_TIMERS,
+        "timers",
+    );
     let bound = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 3);
     crate::closure::js_closure_set_capture_f64(bound, 0, namespace);
     let method = b"setTimeout";

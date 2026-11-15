@@ -564,19 +564,12 @@ accessor	navigator	userAgent	Navigator.prototype.userAgent.<get>
 accessor	node:assert.strict	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:async_hooks.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:buffer.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:buffer.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:buffer.default.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:child_process.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:cluster.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:cluster.default._events	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:console.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:constants.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:crypto.Certificate	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:crypto.X509Certificate.prototype	issuerCertificate	node:crypto.X509Certificate.prototype.issuerCertificate.<get>
 accessor	node:crypto.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:crypto.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:crypto.default.Certificate	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:crypto.default.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:crypto.subtle	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:crypto.webcrypto	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:crypto.webcrypto	subtle	Crypto.prototype.subtle.<get>
@@ -585,19 +578,11 @@ accessor	node:diagnostics_channel.default	__proto__	Object.prototype.__proto__.<
 accessor	node:dns.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:dns.promises	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:domain._stack	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:domain.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:domain.default._stack	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:events.EventEmitterAsyncResource.prototype	asyncId	node:events.EventEmitterAsyncResource.prototype.asyncId.<get>
 accessor	node:events.EventEmitterAsyncResource.prototype	asyncResource	node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>
 accessor	node:events.EventEmitterAsyncResource.prototype	triggerAsyncId	node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>
 accessor	node:fs.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:fs.default	FileReadStream	node:fs.default.FileReadStream.<get>	node:fs.default.FileReadStream.<set>
-accessor	node:fs.default	FileWriteStream	node:fs.default.FileWriteStream.<get>	node:fs.default.FileWriteStream.<set>
-accessor	node:fs.default	ReadStream	node:fs.default.ReadStream.<get>	node:fs.default.ReadStream.<set>
-accessor	node:fs.default	Utf8Stream	node:fs.default.Utf8Stream.<get>
-accessor	node:fs.default	WriteStream	node:fs.default.WriteStream.<get>	node:fs.default.WriteStream.<set>
-accessor	node:fs.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:fs.default	promises	node:fs.default.promises.<get>
 accessor	node:fs.promises	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http.IncomingMessage.prototype	connection	node:http.IncomingMessage.prototype.connection.<get>	node:http.IncomingMessage.prototype.connection.<set>
 accessor	node:http.IncomingMessage.prototype	headers	node:http.IncomingMessage.prototype.headers.<get>	node:http.IncomingMessage.prototype.headers.<set>
@@ -619,15 +604,11 @@ accessor	node:http.OutgoingMessage.prototype	writableLength	node:http.OutgoingMe
 accessor	node:http.OutgoingMessage.prototype	writableNeedDrain	node:http.OutgoingMessage.prototype.writableNeedDrain.<get>
 accessor	node:http.OutgoingMessage.prototype	writableObjectMode	node:http.OutgoingMessage.prototype.writableObjectMode.<get>
 accessor	node:http.STATUS_CODES	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:http.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http.globalAgent	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http.globalAgent.freeSockets	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http.globalAgent.requests	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http.globalAgent.sockets	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:http2.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:http2.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:http2.default.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:https.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:https.globalAgent	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:https.globalAgent.freeSockets	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:https.globalAgent.requests	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -647,13 +628,17 @@ accessor	node:module.SourceMap.prototype	payload	node:module.SourceMap.prototype
 accessor	node:module._extensions	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:module.builtinModules	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:net.BlockList.prototype	rules	node:net.BlockList.prototype.rules.<get>
-accessor	node:net.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:os.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:os.constants.dlopen	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:os.constants.errno	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:os.constants.priority	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:os.constants.signals	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:os.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:path.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:path.posix	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:path.win32	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:perf_hooks.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:perf_hooks.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:process._events	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:process._preload_modules	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:process.allowedNodeEnvironmentFlags	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -672,8 +657,8 @@ accessor	node:process.features	__proto__	Object.prototype.__proto__.<get>	Object
 accessor	node:process.moduleLoadList	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:process.release	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:process.versions	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:punycode	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:querystring.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:readline.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:readline.promises	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:repl.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:sea.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -721,7 +706,6 @@ accessor	node:streams	__proto__	Object.prototype.__proto__.<get>	Object.prototyp
 accessor	node:string_decoder.StringDecoder.prototype	lastChar	node:string_decoder.StringDecoder.prototype.lastChar.<get>
 accessor	node:string_decoder.StringDecoder.prototype	lastNeed	node:string_decoder.StringDecoder.prototype.lastNeed.<get>
 accessor	node:string_decoder.StringDecoder.prototype	lastTotal	node:string_decoder.StringDecoder.prototype.lastTotal.<get>
-accessor	node:string_decoder.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:sys.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:sys.inspect.colors	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:sys.inspect.colors.bgBlack	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -779,24 +763,16 @@ accessor	node:test/reporters.default	__proto__	Object.prototype.__proto__.<get>	
 accessor	node:timers.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:timers.promises	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:timers/promises.scheduler	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:tls.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:trace_events.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:tty.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:url.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:v8.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:v8.default.promiseHooks	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:v8.default.startupSnapshot	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:v8.promiseHooks	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:v8.startupSnapshot	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:vm.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:wasi.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:worker_threads.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:worker_threads.default.resourceLimits	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:worker_threads.locks	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:worker_threads.resourceLimits	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:zlib.codes	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:zlib.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
-accessor	node:zlib.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	performance	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	performance	timeOrigin	Performance.prototype.timeOrigin.<get>
 accessor	process	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -3776,35 +3752,6 @@ native	node:buffer.constants	propertyIsEnumerable	Object.prototype.propertyIsEnu
 native	node:buffer.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:buffer.constants	toString	Object.prototype.toString
 native	node:buffer.constants	valueOf	Object.prototype.valueOf
-native	node:buffer.default	Blob	Blob
-native	node:buffer.default	Buffer	Buffer
-native	node:buffer.default	File	File
-native	node:buffer.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:buffer.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:buffer.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:buffer.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:buffer.default	atob	node:buffer.atob
-native	node:buffer.default	btoa	node:buffer.btoa
-native	node:buffer.default	constructor	Object
-native	node:buffer.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:buffer.default	isAscii	node:buffer.isAscii
-native	node:buffer.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:buffer.default	isUtf8	node:buffer.isUtf8
-native	node:buffer.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:buffer.default	toLocaleString	Object.prototype.toLocaleString
-native	node:buffer.default	toString	Object.prototype.toString
-native	node:buffer.default	valueOf	Object.prototype.valueOf
-native	node:buffer.default.constants	__defineGetter__	Object.prototype.__defineGetter__
-native	node:buffer.default.constants	__defineSetter__	Object.prototype.__defineSetter__
-native	node:buffer.default.constants	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:buffer.default.constants	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:buffer.default.constants	constructor	Object
-native	node:buffer.default.constants	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:buffer.default.constants	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:buffer.default.constants	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:buffer.default.constants	toLocaleString	Object.prototype.toLocaleString
-native	node:buffer.default.constants	toString	Object.prototype.toString
-native	node:buffer.default.constants	valueOf	Object.prototype.valueOf
 native	node:child_process	ChildProcess	node:child_process.ChildProcess
 native	node:child_process	_forkChild	node:child_process._forkChild
 native	node:child_process	exec	node:child_process.exec
@@ -3914,42 +3861,6 @@ native	node:console	timeLog	console.timeLog
 native	node:console	timeStamp	console.timeStamp
 native	node:console	trace	console.trace
 native	node:console	warn	console.warn
-native	node:console.default	Console	console.Console
-native	node:console.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:console.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:console.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:console.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:console.default	assert	console.assert
-native	node:console.default	clear	console.clear
-native	node:console.default	constructor	Object
-native	node:console.default	context	console.context
-native	node:console.default	count	console.count
-native	node:console.default	countReset	console.countReset
-native	node:console.default	createTask	console.createTask
-native	node:console.default	debug	console.debug
-native	node:console.default	dir	console.dir
-native	node:console.default	dirxml	console.dirxml
-native	node:console.default	error	console.error
-native	node:console.default	group	console.group
-native	node:console.default	groupCollapsed	console.groupCollapsed
-native	node:console.default	groupEnd	console.groupEnd
-native	node:console.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:console.default	info	console.info
-native	node:console.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:console.default	log	console.log
-native	node:console.default	profile	console.profile
-native	node:console.default	profileEnd	console.profileEnd
-native	node:console.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:console.default	table	console.table
-native	node:console.default	time	console.time
-native	node:console.default	timeEnd	console.timeEnd
-native	node:console.default	timeLog	console.timeLog
-native	node:console.default	timeStamp	console.timeStamp
-native	node:console.default	toLocaleString	Object.prototype.toLocaleString
-native	node:console.default	toString	Object.prototype.toString
-native	node:console.default	trace	console.trace
-native	node:console.default	valueOf	Object.prototype.valueOf
-native	node:console.default	warn	console.warn
 native	node:constants.default	__defineGetter__	Object.prototype.__defineGetter__
 native	node:constants.default	__defineSetter__	Object.prototype.__defineSetter__
 native	node:constants.default	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -3961,6 +3872,7 @@ native	node:constants.default	propertyIsEnumerable	Object.prototype.propertyIsEn
 native	node:constants.default	toLocaleString	Object.prototype.toLocaleString
 native	node:constants.default	toString	Object.prototype.toString
 native	node:constants.default	valueOf	Object.prototype.valueOf
+native	node:crypto	Certificate	node:crypto.Certificate
 native	node:crypto	Cipheriv	node:crypto.Cipheriv
 native	node:crypto	Decipheriv	node:crypto.Decipheriv
 native	node:crypto	DiffieHellman	node:crypto.DiffieHellman
@@ -4025,17 +3937,10 @@ native	node:crypto	setFips	node:crypto.setFips
 native	node:crypto	sign	node:crypto.sign
 native	node:crypto	timingSafeEqual	node:crypto.timingSafeEqual
 native	node:crypto	verify	node:crypto.verify
-native	node:crypto.Certificate	__defineGetter__	Object.prototype.__defineGetter__
-native	node:crypto.Certificate	__defineSetter__	Object.prototype.__defineSetter__
-native	node:crypto.Certificate	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:crypto.Certificate	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:crypto.Certificate	constructor	Object
-native	node:crypto.Certificate	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:crypto.Certificate	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:crypto.Certificate	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:crypto.Certificate	toLocaleString	Object.prototype.toLocaleString
-native	node:crypto.Certificate	toString	Object.prototype.toString
-native	node:crypto.Certificate	valueOf	Object.prototype.valueOf
+native	node:crypto.Certificate.prototype	constructor	node:crypto.Certificate
+native	node:crypto.Certificate.prototype	exportChallenge	node:crypto.Certificate.exportChallenge
+native	node:crypto.Certificate.prototype	exportPublicKey	node:crypto.Certificate.exportPublicKey
+native	node:crypto.Certificate.prototype	verifySpkac	node:crypto.Certificate.verifySpkac
 native	node:crypto.Cipheriv.prototype	constructor	node:crypto.Cipheriv
 native	node:crypto.Decipheriv.prototype	constructor	node:crypto.Decipheriv
 native	node:crypto.Hash.prototype	constructor	node:crypto.Hash.prototype.constructor
@@ -4055,104 +3960,6 @@ native	node:crypto.constants	propertyIsEnumerable	Object.prototype.propertyIsEnu
 native	node:crypto.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:crypto.constants	toString	Object.prototype.toString
 native	node:crypto.constants	valueOf	Object.prototype.valueOf
-native	node:crypto.default	Cipheriv	node:crypto.Cipheriv
-native	node:crypto.default	Decipheriv	node:crypto.Decipheriv
-native	node:crypto.default	DiffieHellman	node:crypto.DiffieHellman
-native	node:crypto.default	DiffieHellmanGroup	node:crypto.DiffieHellmanGroup
-native	node:crypto.default	ECDH	node:crypto.ECDH
-native	node:crypto.default	Hash	node:crypto.Hash
-native	node:crypto.default	Hmac	node:crypto.Hmac
-native	node:crypto.default	KeyObject	node:crypto.KeyObject
-native	node:crypto.default	Sign	node:crypto.Sign
-native	node:crypto.default	Verify	node:crypto.Verify
-native	node:crypto.default	X509Certificate	node:crypto.X509Certificate
-native	node:crypto.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:crypto.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:crypto.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:crypto.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:crypto.default	argon2	node:crypto.argon2
-native	node:crypto.default	argon2Sync	node:crypto.argon2Sync
-native	node:crypto.default	checkPrime	node:crypto.checkPrime
-native	node:crypto.default	checkPrimeSync	node:crypto.checkPrimeSync
-native	node:crypto.default	constructor	Object
-native	node:crypto.default	createCipheriv	node:crypto.createCipheriv
-native	node:crypto.default	createDecipheriv	node:crypto.createDecipheriv
-native	node:crypto.default	createDiffieHellman	node:crypto.createDiffieHellman
-native	node:crypto.default	createDiffieHellmanGroup	node:crypto.createDiffieHellmanGroup
-native	node:crypto.default	createECDH	node:crypto.createECDH
-native	node:crypto.default	createHash	node:crypto.createHash
-native	node:crypto.default	createHmac	node:crypto.createHmac
-native	node:crypto.default	createPrivateKey	node:crypto.createPrivateKey
-native	node:crypto.default	createPublicKey	node:crypto.createPublicKey
-native	node:crypto.default	createSecretKey	node:crypto.createSecretKey
-native	node:crypto.default	createSign	node:crypto.createSign
-native	node:crypto.default	createVerify	node:crypto.createVerify
-native	node:crypto.default	decapsulate	node:crypto.decapsulate
-native	node:crypto.default	diffieHellman	node:crypto.diffieHellman
-native	node:crypto.default	encapsulate	node:crypto.encapsulate
-native	node:crypto.default	generateKey	node:crypto.generateKey
-native	node:crypto.default	generateKeyPair	node:crypto.generateKeyPair
-native	node:crypto.default	generateKeyPairSync	node:crypto.generateKeyPairSync
-native	node:crypto.default	generateKeySync	node:crypto.generateKeySync
-native	node:crypto.default	generatePrime	node:crypto.generatePrime
-native	node:crypto.default	generatePrimeSync	node:crypto.generatePrimeSync
-native	node:crypto.default	getCipherInfo	node:crypto.getCipherInfo
-native	node:crypto.default	getCiphers	node:crypto.getCiphers
-native	node:crypto.default	getCurves	node:crypto.getCurves
-native	node:crypto.default	getDiffieHellman	node:crypto.getDiffieHellman
-native	node:crypto.default	getFips	node:crypto.getFips
-native	node:crypto.default	getHashes	node:crypto.getHashes
-native	node:crypto.default	getRandomValues	node:crypto.getRandomValues
-native	node:crypto.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:crypto.default	hash	node:crypto.hash
-native	node:crypto.default	hkdf	node:crypto.hkdf
-native	node:crypto.default	hkdfSync	node:crypto.hkdfSync
-native	node:crypto.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:crypto.default	pbkdf2	node:crypto.pbkdf2
-native	node:crypto.default	pbkdf2Sync	node:crypto.pbkdf2Sync
-native	node:crypto.default	privateDecrypt	node:crypto.privateDecrypt
-native	node:crypto.default	privateEncrypt	node:crypto.privateEncrypt
-native	node:crypto.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:crypto.default	publicDecrypt	node:crypto.publicDecrypt
-native	node:crypto.default	publicEncrypt	node:crypto.publicEncrypt
-native	node:crypto.default	randomBytes	node:crypto.randomBytes
-native	node:crypto.default	randomFill	node:crypto.randomFill
-native	node:crypto.default	randomFillSync	node:crypto.randomFillSync
-native	node:crypto.default	randomInt	node:crypto.randomInt
-native	node:crypto.default	randomUUID	node:crypto.randomUUID
-native	node:crypto.default	randomUUIDv7	node:crypto.default.randomUUIDv7
-native	node:crypto.default	scrypt	node:crypto.scrypt
-native	node:crypto.default	scryptSync	node:crypto.scryptSync
-native	node:crypto.default	secureHeapUsed	node:crypto.secureHeapUsed
-native	node:crypto.default	setFips	node:crypto.setFips
-native	node:crypto.default	sign	node:crypto.sign
-native	node:crypto.default	timingSafeEqual	node:crypto.timingSafeEqual
-native	node:crypto.default	toLocaleString	Object.prototype.toLocaleString
-native	node:crypto.default	toString	Object.prototype.toString
-native	node:crypto.default	valueOf	Object.prototype.valueOf
-native	node:crypto.default	verify	node:crypto.verify
-native	node:crypto.default.Certificate	__defineGetter__	Object.prototype.__defineGetter__
-native	node:crypto.default.Certificate	__defineSetter__	Object.prototype.__defineSetter__
-native	node:crypto.default.Certificate	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:crypto.default.Certificate	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:crypto.default.Certificate	constructor	Object
-native	node:crypto.default.Certificate	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:crypto.default.Certificate	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:crypto.default.Certificate	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:crypto.default.Certificate	toLocaleString	Object.prototype.toLocaleString
-native	node:crypto.default.Certificate	toString	Object.prototype.toString
-native	node:crypto.default.Certificate	valueOf	Object.prototype.valueOf
-native	node:crypto.default.constants	__defineGetter__	Object.prototype.__defineGetter__
-native	node:crypto.default.constants	__defineSetter__	Object.prototype.__defineSetter__
-native	node:crypto.default.constants	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:crypto.default.constants	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:crypto.default.constants	constructor	Object
-native	node:crypto.default.constants	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:crypto.default.constants	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:crypto.default.constants	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:crypto.default.constants	toLocaleString	Object.prototype.toLocaleString
-native	node:crypto.default.constants	toString	Object.prototype.toString
-native	node:crypto.default.constants	valueOf	Object.prototype.valueOf
 native	node:crypto.subtle	__defineGetter__	Object.prototype.__defineGetter__
 native	node:crypto.subtle	__defineSetter__	Object.prototype.__defineSetter__
 native	node:crypto.subtle	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -4394,20 +4201,6 @@ native	node:domain._stack	unshift	Array.prototype.unshift
 native	node:domain._stack	valueOf	Object.prototype.valueOf
 native	node:domain._stack	values	Array.prototype.values
 native	node:domain._stack	with	Array.prototype.with
-native	node:domain.default	Domain	node:domain.Domain
-native	node:domain.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:domain.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:domain.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:domain.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:domain.default	constructor	Object
-native	node:domain.default	create	node:domain.create
-native	node:domain.default	createDomain	node:domain.create
-native	node:domain.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:domain.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:domain.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:domain.default	toLocaleString	Object.prototype.toLocaleString
-native	node:domain.default	toString	Object.prototype.toString
-native	node:domain.default	valueOf	Object.prototype.valueOf
 native	node:domain.default._stack	@@iterator	Array.prototype.values
 native	node:domain.default._stack	__defineGetter__	Object.prototype.__defineGetter__
 native	node:domain.default._stack	__defineSetter__	Object.prototype.__defineSetter__
@@ -4600,112 +4393,6 @@ native	node:fs.constants	propertyIsEnumerable	Object.prototype.propertyIsEnumera
 native	node:fs.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:fs.constants	toString	Object.prototype.toString
 native	node:fs.constants	valueOf	Object.prototype.valueOf
-native	node:fs.default	Dir	node:fs.Dir
-native	node:fs.default	Dirent	node:fs.Dirent
-native	node:fs.default	Stats	node:fs.Stats
-native	node:fs.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:fs.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:fs.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:fs.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:fs.default	_toUnixTimestamp	node:fs._toUnixTimestamp
-native	node:fs.default	access	node:fs.access
-native	node:fs.default	accessSync	node:fs.accessSync
-native	node:fs.default	appendFile	node:fs.appendFile
-native	node:fs.default	appendFileSync	node:fs.appendFileSync
-native	node:fs.default	chmod	node:fs.chmod
-native	node:fs.default	chmodSync	node:fs.chmodSync
-native	node:fs.default	chown	node:fs.chown
-native	node:fs.default	chownSync	node:fs.chownSync
-native	node:fs.default	close	node:fs.close
-native	node:fs.default	closeSync	node:fs.closeSync
-native	node:fs.default	constructor	Object
-native	node:fs.default	copyFile	node:fs.copyFile
-native	node:fs.default	copyFileSync	node:fs.copyFileSync
-native	node:fs.default	cp	node:fs.cp
-native	node:fs.default	cpSync	node:fs.cpSync
-native	node:fs.default	createReadStream	node:fs.createReadStream
-native	node:fs.default	createWriteStream	node:fs.createWriteStream
-native	node:fs.default	exists	node:fs.exists
-native	node:fs.default	existsSync	node:fs.existsSync
-native	node:fs.default	fchmod	node:fs.fchmod
-native	node:fs.default	fchmodSync	node:fs.fchmodSync
-native	node:fs.default	fchown	node:fs.fchown
-native	node:fs.default	fchownSync	node:fs.fchownSync
-native	node:fs.default	fdatasync	node:fs.fdatasync
-native	node:fs.default	fdatasyncSync	node:fs.fdatasyncSync
-native	node:fs.default	fstat	node:fs.fstat
-native	node:fs.default	fstatSync	node:fs.fstatSync
-native	node:fs.default	fsync	node:fs.fsync
-native	node:fs.default	fsyncSync	node:fs.fsyncSync
-native	node:fs.default	ftruncate	node:fs.ftruncate
-native	node:fs.default	ftruncateSync	node:fs.ftruncateSync
-native	node:fs.default	futimes	node:fs.futimes
-native	node:fs.default	futimesSync	node:fs.futimesSync
-native	node:fs.default	glob	node:fs.glob
-native	node:fs.default	globSync	node:fs.globSync
-native	node:fs.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:fs.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:fs.default	lchown	node:fs.lchown
-native	node:fs.default	lchownSync	node:fs.lchownSync
-native	node:fs.default	link	node:fs.link
-native	node:fs.default	linkSync	node:fs.linkSync
-native	node:fs.default	lstat	node:fs.lstat
-native	node:fs.default	lstatSync	node:fs.lstatSync
-native	node:fs.default	lutimes	node:fs.lutimes
-native	node:fs.default	lutimesSync	node:fs.lutimesSync
-native	node:fs.default	mkdir	node:fs.mkdir
-native	node:fs.default	mkdirSync	node:fs.mkdirSync
-native	node:fs.default	mkdtemp	node:fs.mkdtemp
-native	node:fs.default	mkdtempDisposableSync	node:fs.mkdtempDisposableSync
-native	node:fs.default	mkdtempSync	node:fs.mkdtempSync
-native	node:fs.default	open	node:fs.open
-native	node:fs.default	openAsBlob	node:fs.openAsBlob
-native	node:fs.default	openSync	node:fs.openSync
-native	node:fs.default	opendir	node:fs.opendir
-native	node:fs.default	opendirSync	node:fs.opendirSync
-native	node:fs.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:fs.default	read	node:fs.read
-native	node:fs.default	readFile	node:fs.readFile
-native	node:fs.default	readFileSync	node:fs.readFileSync
-native	node:fs.default	readSync	node:fs.readSync
-native	node:fs.default	readdir	node:fs.readdir
-native	node:fs.default	readdirSync	node:fs.readdirSync
-native	node:fs.default	readlink	node:fs.readlink
-native	node:fs.default	readlinkSync	node:fs.readlinkSync
-native	node:fs.default	readv	node:fs.readv
-native	node:fs.default	readvSync	node:fs.readvSync
-native	node:fs.default	realpath	node:fs.realpath
-native	node:fs.default	realpathSync	node:fs.realpathSync
-native	node:fs.default	rename	node:fs.rename
-native	node:fs.default	renameSync	node:fs.renameSync
-native	node:fs.default	rm	node:fs.rm
-native	node:fs.default	rmSync	node:fs.rmSync
-native	node:fs.default	rmdir	node:fs.rmdir
-native	node:fs.default	rmdirSync	node:fs.rmdirSync
-native	node:fs.default	stat	node:fs.stat
-native	node:fs.default	statSync	node:fs.statSync
-native	node:fs.default	statfs	node:fs.statfs
-native	node:fs.default	statfsSync	node:fs.statfsSync
-native	node:fs.default	symlink	node:fs.symlink
-native	node:fs.default	symlinkSync	node:fs.symlinkSync
-native	node:fs.default	toLocaleString	Object.prototype.toLocaleString
-native	node:fs.default	toString	Object.prototype.toString
-native	node:fs.default	truncate	node:fs.truncate
-native	node:fs.default	truncateSync	node:fs.truncateSync
-native	node:fs.default	unlink	node:fs.unlink
-native	node:fs.default	unlinkSync	node:fs.unlinkSync
-native	node:fs.default	unwatchFile	node:fs.unwatchFile
-native	node:fs.default	utimes	node:fs.utimes
-native	node:fs.default	utimesSync	node:fs.utimesSync
-native	node:fs.default	valueOf	Object.prototype.valueOf
-native	node:fs.default	watch	node:fs.watch
-native	node:fs.default	watchFile	node:fs.watchFile
-native	node:fs.default	write	node:fs.write
-native	node:fs.default	writeFile	node:fs.writeFile
-native	node:fs.default	writeFileSync	node:fs.writeFileSync
-native	node:fs.default	writeSync	node:fs.writeSync
-native	node:fs.default	writev	node:fs.writev
-native	node:fs.default	writevSync	node:fs.writevSync
 native	node:fs.promises	__defineGetter__	Object.prototype.__defineGetter__
 native	node:fs.promises	__defineSetter__	Object.prototype.__defineSetter__
 native	node:fs.promises	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -4908,32 +4595,6 @@ native	node:http.ServerResponse.prototype	writeEarlyHints	node:http.ServerRespon
 native	node:http.ServerResponse.prototype	writeHead	node:http.ServerResponse.prototype.writeHead
 native	node:http.ServerResponse.prototype	writeInformation	node:http.ServerResponse.prototype.writeInformation
 native	node:http.ServerResponse.prototype	writeProcessing	node:http.ServerResponse.prototype.writeProcessing
-native	node:http.default	Agent	node:http.Agent
-native	node:http.default	ClientRequest	node:http.ClientRequest
-native	node:http.default	IncomingMessage	node:http.IncomingMessage
-native	node:http.default	OutgoingMessage	node:http.OutgoingMessage
-native	node:http.default	Server	node:http.Server
-native	node:http.default	ServerResponse	node:http.ServerResponse
-native	node:http.default	WebSocket	WebSocket
-native	node:http.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:http.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:http.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:http.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:http.default	_connectionListener	node:http._connectionListener
-native	node:http.default	constructor	Object
-native	node:http.default	createServer	node:http.createServer
-native	node:http.default	get	node:http.get
-native	node:http.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:http.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:http.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:http.default	request	node:http.request
-native	node:http.default	setGlobalProxyFromEnv	node:http.setGlobalProxyFromEnv
-native	node:http.default	setMaxIdleHTTPParsers	node:http.setMaxIdleHTTPParsers
-native	node:http.default	toLocaleString	Object.prototype.toLocaleString
-native	node:http.default	toString	Object.prototype.toString
-native	node:http.default	validateHeaderName	node:http.validateHeaderName
-native	node:http.default	validateHeaderValue	node:http.validateHeaderValue
-native	node:http.default	valueOf	Object.prototype.valueOf
 native	node:http.globalAgent	__defineGetter__	Object.prototype.__defineGetter__
 native	node:http.globalAgent	__defineSetter__	Object.prototype.__defineSetter__
 native	node:http.globalAgent	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -5007,37 +4668,6 @@ native	node:http2.constants	propertyIsEnumerable	Object.prototype.propertyIsEnum
 native	node:http2.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:http2.constants	toString	Object.prototype.toString
 native	node:http2.constants	valueOf	Object.prototype.valueOf
-native	node:http2.default	Http2ServerRequest	node:http2.Http2ServerRequest
-native	node:http2.default	Http2ServerResponse	node:http2.Http2ServerResponse
-native	node:http2.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:http2.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:http2.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:http2.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:http2.default	connect	node:http2.connect
-native	node:http2.default	constructor	Object
-native	node:http2.default	createSecureServer	node:http2.createSecureServer
-native	node:http2.default	createServer	node:http2.createServer
-native	node:http2.default	getDefaultSettings	node:http2.getDefaultSettings
-native	node:http2.default	getPackedSettings	node:http2.getPackedSettings
-native	node:http2.default	getUnpackedSettings	node:http2.getUnpackedSettings
-native	node:http2.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:http2.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:http2.default	performServerHandshake	node:http2.performServerHandshake
-native	node:http2.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:http2.default	toLocaleString	Object.prototype.toLocaleString
-native	node:http2.default	toString	Object.prototype.toString
-native	node:http2.default	valueOf	Object.prototype.valueOf
-native	node:http2.default.constants	__defineGetter__	Object.prototype.__defineGetter__
-native	node:http2.default.constants	__defineSetter__	Object.prototype.__defineSetter__
-native	node:http2.default.constants	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:http2.default.constants	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:http2.default.constants	constructor	Object
-native	node:http2.default.constants	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:http2.default.constants	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:http2.default.constants	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:http2.default.constants	toLocaleString	Object.prototype.toLocaleString
-native	node:http2.default.constants	toString	Object.prototype.toString
-native	node:http2.default.constants	valueOf	Object.prototype.valueOf
 native	node:https	Agent	node:https.Agent
 native	node:https	Server	node:https.Server
 native	node:https	createServer	node:https.createServer
@@ -5045,22 +4675,6 @@ native	node:https	get	node:https.get
 native	node:https	request	node:https.request
 native	node:https.Agent.prototype	constructor	node:https.Agent
 native	node:https.Server.prototype	constructor	node:https.Server
-native	node:https.default	Agent	node:https.Agent
-native	node:https.default	Server	node:https.Server
-native	node:https.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:https.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:https.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:https.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:https.default	constructor	Object
-native	node:https.default	createServer	node:https.createServer
-native	node:https.default	get	node:https.get
-native	node:https.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:https.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:https.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:https.default	request	node:https.request
-native	node:https.default	toLocaleString	Object.prototype.toLocaleString
-native	node:https.default	toString	Object.prototype.toString
-native	node:https.default	valueOf	Object.prototype.valueOf
 native	node:https.globalAgent	__defineGetter__	Object.prototype.__defineGetter__
 native	node:https.globalAgent	__defineSetter__	Object.prototype.__defineSetter__
 native	node:https.globalAgent	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -5387,34 +5001,6 @@ native	node:net.BlockList.prototype	fromJSON	node:net.BlockList.prototype.fromJS
 native	node:net.BlockList.prototype	toJSON	node:net.BlockList.prototype.toJSON
 native	node:net.Server.prototype	constructor	node:net.Server
 native	node:net.Socket.prototype	constructor	node:net.Socket
-native	node:net.default	BlockList	node:net.BlockList
-native	node:net.default	Server	node:net.Server
-native	node:net.default	Socket	node:net.Socket
-native	node:net.default	SocketAddress	node:net.SocketAddress
-native	node:net.default	Stream	node:net.Socket
-native	node:net.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:net.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:net.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:net.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:net.default	_createServerHandle	node:net._createServerHandle
-native	node:net.default	_normalizeArgs	node:net._normalizeArgs
-native	node:net.default	connect	node:net.connect
-native	node:net.default	constructor	Object
-native	node:net.default	createConnection	node:net.createConnection
-native	node:net.default	createServer	node:net.createServer
-native	node:net.default	getDefaultAutoSelectFamily	node:net.getDefaultAutoSelectFamily
-native	node:net.default	getDefaultAutoSelectFamilyAttemptTimeout	node:net.getDefaultAutoSelectFamilyAttemptTimeout
-native	node:net.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:net.default	isIP	node:net.isIP
-native	node:net.default	isIPv4	node:net.isIPv4
-native	node:net.default	isIPv6	node:net.isIPv6
-native	node:net.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:net.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:net.default	setDefaultAutoSelectFamily	node:net.setDefaultAutoSelectFamily
-native	node:net.default	setDefaultAutoSelectFamilyAttemptTimeout	node:net.setDefaultAutoSelectFamilyAttemptTimeout
-native	node:net.default	toLocaleString	Object.prototype.toLocaleString
-native	node:net.default	toString	Object.prototype.toString
-native	node:net.default	valueOf	Object.prototype.valueOf
 native	node:os	arch	node:os.arch
 native	node:os	availableParallelism	node:os.availableParallelism
 native	node:os	cpus	node:os.cpus
@@ -5446,6 +5032,50 @@ native	node:os.constants	propertyIsEnumerable	Object.prototype.propertyIsEnumera
 native	node:os.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:os.constants	toString	Object.prototype.toString
 native	node:os.constants	valueOf	Object.prototype.valueOf
+native	node:os.constants.dlopen	__defineGetter__	Object.prototype.__defineGetter__
+native	node:os.constants.dlopen	__defineSetter__	Object.prototype.__defineSetter__
+native	node:os.constants.dlopen	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:os.constants.dlopen	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:os.constants.dlopen	constructor	Object
+native	node:os.constants.dlopen	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:os.constants.dlopen	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:os.constants.dlopen	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:os.constants.dlopen	toLocaleString	Object.prototype.toLocaleString
+native	node:os.constants.dlopen	toString	Object.prototype.toString
+native	node:os.constants.dlopen	valueOf	Object.prototype.valueOf
+native	node:os.constants.errno	__defineGetter__	Object.prototype.__defineGetter__
+native	node:os.constants.errno	__defineSetter__	Object.prototype.__defineSetter__
+native	node:os.constants.errno	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:os.constants.errno	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:os.constants.errno	constructor	Object
+native	node:os.constants.errno	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:os.constants.errno	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:os.constants.errno	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:os.constants.errno	toLocaleString	Object.prototype.toLocaleString
+native	node:os.constants.errno	toString	Object.prototype.toString
+native	node:os.constants.errno	valueOf	Object.prototype.valueOf
+native	node:os.constants.priority	__defineGetter__	Object.prototype.__defineGetter__
+native	node:os.constants.priority	__defineSetter__	Object.prototype.__defineSetter__
+native	node:os.constants.priority	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:os.constants.priority	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:os.constants.priority	constructor	Object
+native	node:os.constants.priority	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:os.constants.priority	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:os.constants.priority	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:os.constants.priority	toLocaleString	Object.prototype.toLocaleString
+native	node:os.constants.priority	toString	Object.prototype.toString
+native	node:os.constants.priority	valueOf	Object.prototype.valueOf
+native	node:os.constants.signals	__defineGetter__	Object.prototype.__defineGetter__
+native	node:os.constants.signals	__defineSetter__	Object.prototype.__defineSetter__
+native	node:os.constants.signals	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:os.constants.signals	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:os.constants.signals	constructor	Object
+native	node:os.constants.signals	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:os.constants.signals	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:os.constants.signals	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:os.constants.signals	toLocaleString	Object.prototype.toLocaleString
+native	node:os.constants.signals	toString	Object.prototype.toString
+native	node:os.constants.signals	valueOf	Object.prototype.valueOf
 native	node:os.default	__defineGetter__	Object.prototype.__defineGetter__
 native	node:os.default	__defineSetter__	Object.prototype.__defineSetter__
 native	node:os.default	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -5610,6 +5240,28 @@ native	node:perf_hooks.constants	propertyIsEnumerable	Object.prototype.propertyI
 native	node:perf_hooks.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:perf_hooks.constants	toString	Object.prototype.toString
 native	node:perf_hooks.constants	valueOf	Object.prototype.valueOf
+native	node:perf_hooks.default	Performance	Performance
+native	node:perf_hooks.default	PerformanceEntry	PerformanceEntry
+native	node:perf_hooks.default	PerformanceMark	PerformanceMark
+native	node:perf_hooks.default	PerformanceMeasure	PerformanceMeasure
+native	node:perf_hooks.default	PerformanceObserver	PerformanceObserver
+native	node:perf_hooks.default	PerformanceObserverEntryList	PerformanceObserverEntryList
+native	node:perf_hooks.default	PerformanceResourceTiming	PerformanceResourceTiming
+native	node:perf_hooks.default	__defineGetter__	Object.prototype.__defineGetter__
+native	node:perf_hooks.default	__defineSetter__	Object.prototype.__defineSetter__
+native	node:perf_hooks.default	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:perf_hooks.default	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:perf_hooks.default	constructor	Object
+native	node:perf_hooks.default	createHistogram	performance.createHistogram
+native	node:perf_hooks.default	eventLoopUtilization	performance.eventLoopUtilization
+native	node:perf_hooks.default	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:perf_hooks.default	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:perf_hooks.default	monitorEventLoopDelay	performance.monitorEventLoopDelay
+native	node:perf_hooks.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:perf_hooks.default	timerify	performance.timerify
+native	node:perf_hooks.default	toLocaleString	Object.prototype.toLocaleString
+native	node:perf_hooks.default	toString	Object.prototype.toString
+native	node:perf_hooks.default	valueOf	Object.prototype.valueOf
 native	node:process	_debugEnd	process._debugEnd
 native	node:process	_debugProcess	process._debugProcess
 native	node:process	_fatalException	process._fatalException
@@ -6116,6 +5768,21 @@ native	node:process.versions	propertyIsEnumerable	Object.prototype.propertyIsEnu
 native	node:process.versions	toLocaleString	Object.prototype.toLocaleString
 native	node:process.versions	toString	Object.prototype.toString
 native	node:process.versions	valueOf	Object.prototype.valueOf
+native	node:punycode	__defineGetter__	Object.prototype.__defineGetter__
+native	node:punycode	__defineSetter__	Object.prototype.__defineSetter__
+native	node:punycode	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:punycode	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:punycode	constructor	Object
+native	node:punycode	decode	node:punycode.decode
+native	node:punycode	encode	node:punycode.encode
+native	node:punycode	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:punycode	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:punycode	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:punycode	toASCII	node:punycode.toASCII
+native	node:punycode	toLocaleString	Object.prototype.toLocaleString
+native	node:punycode	toString	Object.prototype.toString
+native	node:punycode	toUnicode	node:punycode.toUnicode
+native	node:punycode	valueOf	Object.prototype.valueOf
 native	node:querystring	decode	node:querystring.decode
 native	node:querystring	encode	node:querystring.encode
 native	node:querystring	escape	node:querystring.escape
@@ -6147,17 +5814,6 @@ native	node:readline	createInterface	node:readline.createInterface
 native	node:readline	cursorTo	node:readline.cursorTo
 native	node:readline	emitKeypressEvents	node:readline.emitKeypressEvents
 native	node:readline	moveCursor	node:readline.moveCursor
-native	node:readline.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:readline.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:readline.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:readline.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:readline.default	constructor	Object
-native	node:readline.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:readline.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:readline.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:readline.default	toLocaleString	Object.prototype.toLocaleString
-native	node:readline.default	toString	Object.prototype.toString
-native	node:readline.default	valueOf	Object.prototype.valueOf
 native	node:readline.promises	Interface	node:readline/promises.Interface
 native	node:readline.promises	Readline	node:readline/promises.Readline
 native	node:readline.promises	__defineGetter__	Object.prototype.__defineGetter__
@@ -6290,8 +5946,10 @@ native	node:stream.Stream.promises	__defineSetter__	Object.prototype.__defineSet
 native	node:stream.Stream.promises	__lookupGetter__	Object.prototype.__lookupGetter__
 native	node:stream.Stream.promises	__lookupSetter__	Object.prototype.__lookupSetter__
 native	node:stream.Stream.promises	constructor	Object
+native	node:stream.Stream.promises	finished	node:stream/promises.finished
 native	node:stream.Stream.promises	hasOwnProperty	Object.prototype.hasOwnProperty
 native	node:stream.Stream.promises	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:stream.Stream.promises	pipeline	node:stream/promises.pipeline
 native	node:stream.Stream.promises	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	node:stream.Stream.promises	toLocaleString	Object.prototype.toLocaleString
 native	node:stream.Stream.promises	toString	Object.prototype.toString
@@ -6416,17 +6074,6 @@ native	node:string_decoder.StringDecoder.prototype	constructor	node:string_decod
 native	node:string_decoder.StringDecoder.prototype	end	node:string_decoder.StringDecoder.prototype.end
 native	node:string_decoder.StringDecoder.prototype	text	node:string_decoder.StringDecoder.prototype.text
 native	node:string_decoder.StringDecoder.prototype	write	node:string_decoder.StringDecoder.prototype.write
-native	node:string_decoder.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:string_decoder.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:string_decoder.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:string_decoder.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:string_decoder.default	constructor	Object
-native	node:string_decoder.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:string_decoder.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:string_decoder.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:string_decoder.default	toLocaleString	Object.prototype.toLocaleString
-native	node:string_decoder.default	toString	Object.prototype.toString
-native	node:string_decoder.default	valueOf	Object.prototype.valueOf
 native	node:sys	MIMEParams	node:sys.MIMEParams
 native	node:sys	MIMEType	node:sys.MIMEType
 native	node:sys	TextDecoder	TextDecoder
@@ -8859,29 +8506,6 @@ native	node:tls.TLSSocket.prototype	getPeerX509Certificate	node:tls.TLSSocket.pr
 native	node:tls.TLSSocket.prototype	getSharedSigalgs	node:tls.TLSSocket.prototype.getSharedSigalgs
 native	node:tls.TLSSocket.prototype	getX509Certificate	node:tls.TLSSocket.prototype.getX509Certificate
 native	node:tls.TLSSocket.prototype	setKeyCert	node:tls.TLSSocket.prototype.setKeyCert
-native	node:tls.default	SecureContext	node:tls.SecureContext
-native	node:tls.default	Server	node:tls.Server
-native	node:tls.default	TLSSocket	node:tls.TLSSocket
-native	node:tls.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:tls.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:tls.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:tls.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:tls.default	checkServerIdentity	node:tls.checkServerIdentity
-native	node:tls.default	connect	node:tls.connect
-native	node:tls.default	constructor	Object
-native	node:tls.default	convertALPNProtocols	node:tls.convertALPNProtocols
-native	node:tls.default	createSecureContext	node:tls.createSecureContext
-native	node:tls.default	createServer	node:tls.createServer
-native	node:tls.default	getCACertificates	node:tls.getCACertificates
-native	node:tls.default	getCertificateCompressionAlgorithms	node:tls.getCertificateCompressionAlgorithms
-native	node:tls.default	getCiphers	node:tls.getCiphers
-native	node:tls.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:tls.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:tls.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:tls.default	setDefaultCACertificates	node:tls.setDefaultCACertificates
-native	node:tls.default	toLocaleString	Object.prototype.toLocaleString
-native	node:tls.default	toString	Object.prototype.toString
-native	node:tls.default	valueOf	Object.prototype.valueOf
 native	node:trace_events.default	__defineGetter__	Object.prototype.__defineGetter__
 native	node:trace_events.default	__defineSetter__	Object.prototype.__defineSetter__
 native	node:trace_events.default	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -8909,20 +8533,6 @@ native	node:tty.WriteStream.prototype	getColorDepth	node:tty.WriteStream.prototy
 native	node:tty.WriteStream.prototype	getWindowSize	node:tty.WriteStream.prototype.getWindowSize
 native	node:tty.WriteStream.prototype	hasColors	node:tty.WriteStream.prototype.hasColors
 native	node:tty.WriteStream.prototype	moveCursor	node:tty.WriteStream.prototype.moveCursor
-native	node:tty.default	ReadStream	node:tty.ReadStream
-native	node:tty.default	WriteStream	node:tty.WriteStream
-native	node:tty.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:tty.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:tty.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:tty.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:tty.default	constructor	Object
-native	node:tty.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:tty.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:tty.default	isatty	node:tty.isatty
-native	node:tty.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:tty.default	toLocaleString	Object.prototype.toLocaleString
-native	node:tty.default	toString	Object.prototype.toString
-native	node:tty.default	valueOf	Object.prototype.valueOf
 native	node:url	URL	URL
 native	node:url	URLPattern	URLPattern
 native	node:url	URLSearchParams	URLSearchParams
@@ -9061,63 +8671,18 @@ native	node:v8	takeCoverage	node:v8.takeCoverage
 native	node:v8	writeHeapSnapshot	node:v8.writeHeapSnapshot
 native	node:v8.GCProfiler.prototype	@@dispose	node:v8.GCProfiler.prototype["@@dispose"]
 native	node:v8.GCProfiler.prototype	constructor	node:v8.GCProfiler
-native	node:v8.default	DefaultDeserializer	node:v8.DefaultDeserializer
-native	node:v8.default	DefaultSerializer	node:v8.DefaultSerializer
-native	node:v8.default	Deserializer	node:v8.Deserializer
-native	node:v8.default	GCProfiler	node:v8.GCProfiler
-native	node:v8.default	Serializer	node:v8.Serializer
-native	node:v8.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:v8.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:v8.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:v8.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:v8.default	cachedDataVersionTag	node:v8.cachedDataVersionTag
-native	node:v8.default	constructor	Object
-native	node:v8.default	deserialize	node:v8.deserialize
-native	node:v8.default	getHeapCodeStatistics	node:v8.getHeapCodeStatistics
-native	node:v8.default	getHeapSnapshot	node:v8.getHeapSnapshot
-native	node:v8.default	getHeapSpaceStatistics	node:v8.getHeapSpaceStatistics
-native	node:v8.default	getHeapStatistics	node:v8.getHeapStatistics
-native	node:v8.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:v8.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:v8.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:v8.default	serialize	node:v8.serialize
-native	node:v8.default	setFlagsFromString	node:v8.setFlagsFromString
-native	node:v8.default	setHeapSnapshotNearHeapLimit	node:v8.setHeapSnapshotNearHeapLimit
-native	node:v8.default	stopCoverage	node:v8.stopCoverage
-native	node:v8.default	takeCoverage	node:v8.takeCoverage
-native	node:v8.default	toLocaleString	Object.prototype.toLocaleString
-native	node:v8.default	toString	Object.prototype.toString
-native	node:v8.default	valueOf	Object.prototype.valueOf
-native	node:v8.default	writeHeapSnapshot	node:v8.writeHeapSnapshot
-native	node:v8.default.promiseHooks	__defineGetter__	Object.prototype.__defineGetter__
-native	node:v8.default.promiseHooks	__defineSetter__	Object.prototype.__defineSetter__
-native	node:v8.default.promiseHooks	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:v8.default.promiseHooks	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:v8.default.promiseHooks	constructor	Object
-native	node:v8.default.promiseHooks	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:v8.default.promiseHooks	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:v8.default.promiseHooks	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:v8.default.promiseHooks	toLocaleString	Object.prototype.toLocaleString
-native	node:v8.default.promiseHooks	toString	Object.prototype.toString
-native	node:v8.default.promiseHooks	valueOf	Object.prototype.valueOf
-native	node:v8.default.startupSnapshot	__defineGetter__	Object.prototype.__defineGetter__
-native	node:v8.default.startupSnapshot	__defineSetter__	Object.prototype.__defineSetter__
-native	node:v8.default.startupSnapshot	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:v8.default.startupSnapshot	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:v8.default.startupSnapshot	constructor	Object
-native	node:v8.default.startupSnapshot	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:v8.default.startupSnapshot	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:v8.default.startupSnapshot	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:v8.default.startupSnapshot	toLocaleString	Object.prototype.toLocaleString
-native	node:v8.default.startupSnapshot	toString	Object.prototype.toString
-native	node:v8.default.startupSnapshot	valueOf	Object.prototype.valueOf
 native	node:v8.promiseHooks	__defineGetter__	Object.prototype.__defineGetter__
 native	node:v8.promiseHooks	__defineSetter__	Object.prototype.__defineSetter__
 native	node:v8.promiseHooks	__lookupGetter__	Object.prototype.__lookupGetter__
 native	node:v8.promiseHooks	__lookupSetter__	Object.prototype.__lookupSetter__
 native	node:v8.promiseHooks	constructor	Object
+native	node:v8.promiseHooks	createHook	node:v8.promiseHooks.createHook
 native	node:v8.promiseHooks	hasOwnProperty	Object.prototype.hasOwnProperty
 native	node:v8.promiseHooks	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:v8.promiseHooks	onAfter	node:v8.promiseHooks.onAfter
+native	node:v8.promiseHooks	onBefore	node:v8.promiseHooks.onBefore
+native	node:v8.promiseHooks	onInit	node:v8.promiseHooks.onInit
+native	node:v8.promiseHooks	onSettled	node:v8.promiseHooks.onSettled
 native	node:v8.promiseHooks	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	node:v8.promiseHooks	toLocaleString	Object.prototype.toLocaleString
 native	node:v8.promiseHooks	toString	Object.prototype.toString
@@ -9126,10 +8691,14 @@ native	node:v8.startupSnapshot	__defineGetter__	Object.prototype.__defineGetter_
 native	node:v8.startupSnapshot	__defineSetter__	Object.prototype.__defineSetter__
 native	node:v8.startupSnapshot	__lookupGetter__	Object.prototype.__lookupGetter__
 native	node:v8.startupSnapshot	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:v8.startupSnapshot	addDeserializeCallback	node:v8.startupSnapshot.addDeserializeCallback
+native	node:v8.startupSnapshot	addSerializeCallback	node:v8.startupSnapshot.addSerializeCallback
 native	node:v8.startupSnapshot	constructor	Object
 native	node:v8.startupSnapshot	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:v8.startupSnapshot	isBuildingSnapshot	node:v8.startupSnapshot.isBuildingSnapshot
 native	node:v8.startupSnapshot	isPrototypeOf	Object.prototype.isPrototypeOf
 native	node:v8.startupSnapshot	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:v8.startupSnapshot	setDeserializeMainFunction	node:v8.startupSnapshot.setDeserializeMainFunction
 native	node:v8.startupSnapshot	toLocaleString	Object.prototype.toLocaleString
 native	node:v8.startupSnapshot	toString	Object.prototype.toString
 native	node:v8.startupSnapshot	valueOf	Object.prototype.valueOf
@@ -9142,26 +8711,6 @@ native	node:vm	measureMemory	node:vm.measureMemory
 native	node:vm	runInContext	node:vm.runInContext
 native	node:vm	runInNewContext	node:vm.runInNewContext
 native	node:vm	runInThisContext	node:vm.runInThisContext
-native	node:vm.default	Script	node:vm.Script
-native	node:vm.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:vm.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:vm.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:vm.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:vm.default	compileFunction	node:vm.compileFunction
-native	node:vm.default	constructor	Object
-native	node:vm.default	createContext	node:vm.createContext
-native	node:vm.default	createScript	node:vm.createScript
-native	node:vm.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:vm.default	isContext	node:vm.isContext
-native	node:vm.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:vm.default	measureMemory	node:vm.measureMemory
-native	node:vm.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:vm.default	runInContext	node:vm.runInContext
-native	node:vm.default	runInNewContext	node:vm.runInNewContext
-native	node:vm.default	runInThisContext	node:vm.runInThisContext
-native	node:vm.default	toLocaleString	Object.prototype.toLocaleString
-native	node:vm.default	toString	Object.prototype.toString
-native	node:vm.default	valueOf	Object.prototype.valueOf
 native	node:wasi	WASI	node:wasi.WASI
 native	node:wasi.WASI.prototype	constructor	node:wasi.WASI
 native	node:wasi.WASI.prototype	finalizeBindings	node:wasi.WASI.prototype.finalizeBindings
@@ -9193,29 +8742,6 @@ native	node:worker_threads	postMessageToThread	node:worker_threads.postMessageTo
 native	node:worker_threads	receiveMessageOnPort	node:worker_threads.receiveMessageOnPort
 native	node:worker_threads	setEnvironmentData	node:worker_threads.setEnvironmentData
 native	node:worker_threads.Worker.prototype	constructor	node:worker_threads.Worker
-native	node:worker_threads.default	BroadcastChannel	BroadcastChannel
-native	node:worker_threads.default	MessageChannel	MessageChannel
-native	node:worker_threads.default	MessagePort	MessagePort
-native	node:worker_threads.default	Worker	node:worker_threads.Worker
-native	node:worker_threads.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:worker_threads.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:worker_threads.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:worker_threads.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:worker_threads.default	constructor	Object
-native	node:worker_threads.default	getEnvironmentData	node:worker_threads.getEnvironmentData
-native	node:worker_threads.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:worker_threads.default	isMarkedAsUntransferable	node:worker_threads.isMarkedAsUntransferable
-native	node:worker_threads.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:worker_threads.default	markAsUncloneable	node:worker_threads.markAsUncloneable
-native	node:worker_threads.default	markAsUntransferable	node:worker_threads.markAsUntransferable
-native	node:worker_threads.default	moveMessagePortToContext	node:worker_threads.moveMessagePortToContext
-native	node:worker_threads.default	postMessageToThread	node:worker_threads.postMessageToThread
-native	node:worker_threads.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:worker_threads.default	receiveMessageOnPort	node:worker_threads.receiveMessageOnPort
-native	node:worker_threads.default	setEnvironmentData	node:worker_threads.setEnvironmentData
-native	node:worker_threads.default	toLocaleString	Object.prototype.toLocaleString
-native	node:worker_threads.default	toString	Object.prototype.toString
-native	node:worker_threads.default	valueOf	Object.prototype.valueOf
 native	node:worker_threads.default.resourceLimits	__defineGetter__	Object.prototype.__defineGetter__
 native	node:worker_threads.default.resourceLimits	__defineSetter__	Object.prototype.__defineSetter__
 native	node:worker_threads.default.resourceLimits	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -9329,62 +8855,6 @@ native	node:zlib.constants	propertyIsEnumerable	Object.prototype.propertyIsEnume
 native	node:zlib.constants	toLocaleString	Object.prototype.toLocaleString
 native	node:zlib.constants	toString	Object.prototype.toString
 native	node:zlib.constants	valueOf	Object.prototype.valueOf
-native	node:zlib.default	BrotliCompress	node:zlib.BrotliCompress
-native	node:zlib.default	BrotliDecompress	node:zlib.BrotliDecompress
-native	node:zlib.default	Deflate	node:zlib.Deflate
-native	node:zlib.default	DeflateRaw	node:zlib.DeflateRaw
-native	node:zlib.default	Gunzip	node:zlib.Gunzip
-native	node:zlib.default	Gzip	node:zlib.Gzip
-native	node:zlib.default	Inflate	node:zlib.Inflate
-native	node:zlib.default	InflateRaw	node:zlib.InflateRaw
-native	node:zlib.default	Unzip	node:zlib.Unzip
-native	node:zlib.default	ZstdCompress	node:zlib.ZstdCompress
-native	node:zlib.default	ZstdDecompress	node:zlib.ZstdDecompress
-native	node:zlib.default	__defineGetter__	Object.prototype.__defineGetter__
-native	node:zlib.default	__defineSetter__	Object.prototype.__defineSetter__
-native	node:zlib.default	__lookupGetter__	Object.prototype.__lookupGetter__
-native	node:zlib.default	__lookupSetter__	Object.prototype.__lookupSetter__
-native	node:zlib.default	brotliCompress	node:zlib.brotliCompress
-native	node:zlib.default	brotliCompressSync	node:zlib.brotliCompressSync
-native	node:zlib.default	brotliDecompress	node:zlib.brotliDecompress
-native	node:zlib.default	brotliDecompressSync	node:zlib.brotliDecompressSync
-native	node:zlib.default	constructor	Object
-native	node:zlib.default	crc32	node:zlib.crc32
-native	node:zlib.default	createBrotliCompress	node:zlib.createBrotliCompress
-native	node:zlib.default	createBrotliDecompress	node:zlib.createBrotliDecompress
-native	node:zlib.default	createDeflate	node:zlib.createDeflate
-native	node:zlib.default	createDeflateRaw	node:zlib.createDeflateRaw
-native	node:zlib.default	createGunzip	node:zlib.createGunzip
-native	node:zlib.default	createGzip	node:zlib.createGzip
-native	node:zlib.default	createInflate	node:zlib.createInflate
-native	node:zlib.default	createInflateRaw	node:zlib.createInflateRaw
-native	node:zlib.default	createUnzip	node:zlib.createUnzip
-native	node:zlib.default	createZstdCompress	node:zlib.createZstdCompress
-native	node:zlib.default	createZstdDecompress	node:zlib.createZstdDecompress
-native	node:zlib.default	deflate	node:zlib.deflate
-native	node:zlib.default	deflateRaw	node:zlib.deflateRaw
-native	node:zlib.default	deflateRawSync	node:zlib.deflateRawSync
-native	node:zlib.default	deflateSync	node:zlib.deflateSync
-native	node:zlib.default	gunzip	node:zlib.gunzip
-native	node:zlib.default	gunzipSync	node:zlib.gunzipSync
-native	node:zlib.default	gzip	node:zlib.gzip
-native	node:zlib.default	gzipSync	node:zlib.gzipSync
-native	node:zlib.default	hasOwnProperty	Object.prototype.hasOwnProperty
-native	node:zlib.default	inflate	node:zlib.inflate
-native	node:zlib.default	inflateRaw	node:zlib.inflateRaw
-native	node:zlib.default	inflateRawSync	node:zlib.inflateRawSync
-native	node:zlib.default	inflateSync	node:zlib.inflateSync
-native	node:zlib.default	isPrototypeOf	Object.prototype.isPrototypeOf
-native	node:zlib.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
-native	node:zlib.default	toLocaleString	Object.prototype.toLocaleString
-native	node:zlib.default	toString	Object.prototype.toString
-native	node:zlib.default	unzip	node:zlib.unzip
-native	node:zlib.default	unzipSync	node:zlib.unzipSync
-native	node:zlib.default	valueOf	Object.prototype.valueOf
-native	node:zlib.default	zstdCompress	node:zlib.zstdCompress
-native	node:zlib.default	zstdCompressSync	node:zlib.zstdCompressSync
-native	node:zlib.default	zstdDecompress	node:zlib.zstdDecompress
-native	node:zlib.default	zstdDecompressSync	node:zlib.zstdDecompressSync
 native	performance	__defineGetter__	Object.prototype.__defineGetter__
 native	performance	__defineSetter__	Object.prototype.__defineSetter__
 native	performance	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -10251,6 +9721,11 @@ ns	node:cluster.fork	length
 ns	node:cluster.fork	name
 ns	node:cluster.setupMaster	length
 ns	node:cluster.setupMaster	name
+ns	node:crypto.Certificate	exportChallenge
+ns	node:crypto.Certificate	exportPublicKey
+ns	node:crypto.Certificate	length
+ns	node:crypto.Certificate	name
+ns	node:crypto.Certificate	verifySpkac
 ns	node:crypto.Cipheriv	length
 ns	node:crypto.Cipheriv	name
 ns	node:crypto.Cipheriv	prototype
@@ -10317,8 +9792,6 @@ ns	node:crypto.createVerify	length
 ns	node:crypto.createVerify	name
 ns	node:crypto.decapsulate	length
 ns	node:crypto.decapsulate	name
-ns	node:crypto.default.randomUUIDv7	length
-ns	node:crypto.default.randomUUIDv7	name
 ns	node:crypto.diffieHellman	length
 ns	node:crypto.diffieHellman	name
 ns	node:crypto.encapsulate	length
@@ -11228,6 +10701,14 @@ ns	node:process.threadCpuUsage	length
 ns	node:process.threadCpuUsage	name
 ns	node:process.umask	length
 ns	node:process.umask	name
+ns	node:punycode.decode	length
+ns	node:punycode.decode	name
+ns	node:punycode.encode	length
+ns	node:punycode.encode	name
+ns	node:punycode.toASCII	length
+ns	node:punycode.toASCII	name
+ns	node:punycode.toUnicode	length
+ns	node:punycode.toUnicode	name
 ns	node:querystring.decode	length
 ns	node:querystring.decode	name
 ns	node:querystring.encode	length
@@ -11738,6 +11219,16 @@ ns	node:v8.getHeapStatistics	length
 ns	node:v8.getHeapStatistics	name
 ns	node:v8.isStringOneByteRepresentation	length
 ns	node:v8.isStringOneByteRepresentation	name
+ns	node:v8.promiseHooks.createHook	length
+ns	node:v8.promiseHooks.createHook	name
+ns	node:v8.promiseHooks.onAfter	length
+ns	node:v8.promiseHooks.onAfter	name
+ns	node:v8.promiseHooks.onBefore	length
+ns	node:v8.promiseHooks.onBefore	name
+ns	node:v8.promiseHooks.onInit	length
+ns	node:v8.promiseHooks.onInit	name
+ns	node:v8.promiseHooks.onSettled	length
+ns	node:v8.promiseHooks.onSettled	name
 ns	node:v8.queryObjects	length
 ns	node:v8.queryObjects	name
 ns	node:v8.serialize	length
@@ -11748,6 +11239,14 @@ ns	node:v8.setHeapSnapshotNearHeapLimit	length
 ns	node:v8.setHeapSnapshotNearHeapLimit	name
 ns	node:v8.startCpuProfile	length
 ns	node:v8.startCpuProfile	name
+ns	node:v8.startupSnapshot.addDeserializeCallback	length
+ns	node:v8.startupSnapshot.addDeserializeCallback	name
+ns	node:v8.startupSnapshot.addSerializeCallback	length
+ns	node:v8.startupSnapshot.addSerializeCallback	name
+ns	node:v8.startupSnapshot.isBuildingSnapshot	length
+ns	node:v8.startupSnapshot.isBuildingSnapshot	name
+ns	node:v8.startupSnapshot.setDeserializeMainFunction	length
+ns	node:v8.startupSnapshot.setDeserializeMainFunction	name
 ns	node:v8.stopCoverage	length
 ns	node:v8.stopCoverage	name
 ns	node:v8.takeCoverage	length
@@ -12058,8 +11557,7 @@ object	node:async_hooks	asyncWrapProviders	node:async_hooks.asyncWrapProviders
 object	node:async_hooks	default	node:async_hooks.default
 object	node:async_hooks.default	asyncWrapProviders	node:async_hooks.asyncWrapProviders
 object	node:buffer	constants	node:buffer.constants
-object	node:buffer	default	node:buffer.default
-object	node:buffer.default	constants	node:buffer.default.constants
+object	node:buffer	default	%NativeNamespace:buffer%
 object	node:child_process	default	node:child_process.default
 object	node:cluster	default	node:cluster.default
 object	node:cluster	settings	node:cluster.settings
@@ -12067,17 +11565,12 @@ object	node:cluster	workers	node:cluster.workers
 object	node:cluster.default	_events	node:cluster.default._events
 object	node:cluster.default	settings	node:cluster.settings
 object	node:cluster.default	workers	node:cluster.workers
-object	node:console	default	node:console.default
+object	node:console	default	console
 object	node:constants	default	node:constants.default
-object	node:crypto	Certificate	node:crypto.Certificate
 object	node:crypto	constants	node:crypto.constants
-object	node:crypto	default	node:crypto.default
+object	node:crypto	default	%NativeNamespace:crypto%
 object	node:crypto	subtle	node:crypto.subtle
 object	node:crypto	webcrypto	node:crypto.webcrypto
-object	node:crypto.default	Certificate	node:crypto.default.Certificate
-object	node:crypto.default	constants	node:crypto.default.constants
-object	node:crypto.default	subtle	node:crypto.subtle
-object	node:crypto.default	webcrypto	node:crypto.webcrypto
 object	node:dgram	default	node:dgram.default
 object	node:diagnostics_channel	default	node:diagnostics_channel.default
 object	node:dns	default	node:dns.default
@@ -12085,31 +11578,24 @@ object	node:dns	promises	node:dns.promises
 object	node:dns.default	promises	node:dns.promises
 object	node:dns/promises	default	node:dns.promises
 object	node:domain	_stack	node:domain._stack
-object	node:domain	default	node:domain.default
-object	node:domain.default	_stack	node:domain.default._stack
+object	node:domain	default	%NativeNamespace:domain%
 object	node:fs	constants	node:fs.constants
-object	node:fs	default	node:fs.default
+object	node:fs	default	%NativeNamespace:fs%
 object	node:fs	promises	node:fs.promises
-object	node:fs.default	constants	node:fs.constants
 object	node:fs.promises	constants	node:fs.constants
 object	node:fs/promises	constants	node:fs.constants
 object	node:fs/promises	default	node:fs.promises
 object	node:http	METHODS	node:http.METHODS
 object	node:http	STATUS_CODES	node:http.STATUS_CODES
-object	node:http	default	node:http.default
+object	node:http	default	%NativeNamespace:http%
 object	node:http	globalAgent	node:http.globalAgent
-object	node:http.default	METHODS	node:http.METHODS
-object	node:http.default	STATUS_CODES	node:http.STATUS_CODES
-object	node:http.default	globalAgent	node:http.globalAgent
 object	node:http.globalAgent	freeSockets	node:http.globalAgent.freeSockets
 object	node:http.globalAgent	requests	node:http.globalAgent.requests
 object	node:http.globalAgent	sockets	node:http.globalAgent.sockets
 object	node:http2	constants	node:http2.constants
-object	node:http2	default	node:http2.default
-object	node:http2.default	constants	node:http2.default.constants
-object	node:https	default	node:https.default
+object	node:http2	default	%NativeNamespace:http2%
+object	node:https	default	%NativeNamespace:https%
 object	node:https	globalAgent	node:https.globalAgent
-object	node:https.default	globalAgent	node:https.globalAgent
 object	node:https.globalAgent	freeSockets	node:https.globalAgent.freeSockets
 object	node:https.globalAgent	requests	node:https.globalAgent.requests
 object	node:https.globalAgent	sockets	node:https.globalAgent.sockets
@@ -12131,9 +11617,13 @@ object	node:module	_pathCache	node:module._pathCache
 object	node:module	builtinModules	node:module.builtinModules
 object	node:module	constants	node:module.constants
 object	node:module.constants	compileCacheStatus	node:module.constants.compileCacheStatus
-object	node:net	default	node:net.default
+object	node:net	default	%NativeNamespace:net%
 object	node:os	constants	node:os.constants
 object	node:os	default	node:os.default
+object	node:os.constants	dlopen	node:os.constants.dlopen
+object	node:os.constants	errno	node:os.constants.errno
+object	node:os.constants	priority	node:os.constants.priority
+object	node:os.constants	signals	node:os.constants.signals
 object	node:os.default	constants	node:os.constants
 object	node:path	default	node:path.default
 object	node:path	posix	node:path.posix
@@ -12149,8 +11639,10 @@ object	node:path/posix	win32	node:path.win32
 object	node:path/win32	posix	node:path.posix
 object	node:path/win32	win32	node:path.win32
 object	node:perf_hooks	constants	node:perf_hooks.constants
-object	node:perf_hooks	default	performance.default
+object	node:perf_hooks	default	node:perf_hooks.default
 object	node:perf_hooks	performance	performance
+object	node:perf_hooks.default	constants	node:perf_hooks.constants
+object	node:perf_hooks.default	performance	performance
 object	node:process	_events	node:process._events
 object	node:process	_preload_modules	node:process._preload_modules
 object	node:process	allowedNodeEnvironmentFlags	node:process.allowedNodeEnvironmentFlags
@@ -12174,8 +11666,10 @@ object	node:process.config.target_defaults	defines	node:process.config.target_de
 object	node:process.config.target_defaults	include_dirs	node:process.config.target_defaults.include_dirs
 object	node:process.config.target_defaults	libraries	node:process.config.target_defaults.libraries
 object	node:process.config.target_defaults.configurations	Release	node:process.config.target_defaults.configurations.Release
+object	node:punycode	default	%NativeNamespace:punycode.default%
+object	node:punycode	ucs2	%NativeNamespace:punycode.ucs2%
 object	node:querystring	default	node:querystring.default
-object	node:readline	default	node:readline.default
+object	node:readline	default	%NativeNamespace:readline%
 object	node:readline	promises	node:readline.promises
 object	node:readline/promises	default	node:readline.promises
 object	node:repl	builtinModules	node:module.builtinModules
@@ -12187,7 +11681,7 @@ object	node:stream.promises	default	node:stream.promises
 object	node:stream/consumers	default	node:stream/consumers.default
 object	node:stream/promises	default	node:stream.promises
 object	node:stream/web	default	node:stream/web.default
-object	node:string_decoder	default	node:string_decoder.default
+object	node:string_decoder	default	%NativeNamespace:string_decoder%
 object	node:sys	default	node:sys.default
 object	node:sys	types	node:sys.types
 object	node:sys.default	types	node:sys.types
@@ -12245,32 +11739,25 @@ object	node:timers	promises	node:timers.promises
 object	node:timers.promises	scheduler	node:timers/promises.scheduler
 object	node:timers/promises	default	node:timers.promises
 object	node:timers/promises	scheduler	node:timers/promises.scheduler
-object	node:tls	default	node:tls.default
+object	node:tls	default	%NativeNamespace:tls%
 object	node:trace_events	default	node:trace_events.default
-object	node:tty	default	node:tty.default
+object	node:tty	default	%NativeNamespace:tty%
 object	node:url	default	node:url.default
 object	node:util	default	node:sys.default
 object	node:util	types	node:sys.types
 object	node:util/types	default	node:sys.types
-object	node:v8	default	node:v8.default
+object	node:v8	default	%NativeNamespace:v8%
 object	node:v8	promiseHooks	node:v8.promiseHooks
 object	node:v8	startupSnapshot	node:v8.startupSnapshot
-object	node:v8.default	promiseHooks	node:v8.default.promiseHooks
-object	node:v8.default	startupSnapshot	node:v8.default.startupSnapshot
 object	node:vm	constants	node:vm.constants
-object	node:vm	default	node:vm.default
-object	node:vm.default	constants	node:vm.constants
+object	node:vm	default	%NativeNamespace:vm%
 object	node:wasi	default	node:wasi.default
-object	node:worker_threads	default	node:worker_threads.default
+object	node:worker_threads	default	%NativeNamespace:worker_threads%
 object	node:worker_threads	locks	node:worker_threads.locks
 object	node:worker_threads	resourceLimits	node:worker_threads.resourceLimits
-object	node:worker_threads.default	locks	node:worker_threads.locks
-object	node:worker_threads.default	resourceLimits	node:worker_threads.default.resourceLimits
 object	node:zlib	codes	node:zlib.codes
 object	node:zlib	constants	node:zlib.constants
-object	node:zlib	default	node:zlib.default
-object	node:zlib.default	codes	node:zlib.codes
-object	node:zlib.default	constants	node:zlib.constants
+object	node:zlib	default	%NativeNamespace:zlib%
 proto	Function.prototype	apply
 proto	Function.prototype	arguments
 proto	Function.prototype	bind

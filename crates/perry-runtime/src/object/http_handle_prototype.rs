@@ -15,8 +15,8 @@ fn kind_of(handle_id: usize) -> Option<HttpServerHandleKind> {
 /// The node prototype of the http server handle `handle_id`, ignoring any
 /// recorded prototype. `None` for any other handle.
 fn native_prototype(handle_id: usize) -> Option<f64> {
-    let (module, export) = kind_of(handle_id)?.constructor();
-    let proto = super::object_ops::native_export_prototype_value(module, export);
+    let (vt, module, export) = kind_of(handle_id)?.constructor();
+    let proto = super::object_ops::native_export_prototype_value(vt, module, export);
     JSValue::from_bits(proto.to_bits())
         .is_pointer()
         .then_some(proto)

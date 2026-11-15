@@ -229,18 +229,18 @@ pub unsafe fn payload_mut<'a, T>(
     }
 }
 
-/// Allocate on the family's prototype in `module` (empty for an internal
+/// Allocate on the family's prototype for `export` (`None` for an internal
 /// family with no export), then define `own` fields in order.
 /// # Safety
 /// T is the descriptor's payload type.
 pub unsafe fn alloc_in<T>(
     family: &'static PayloadFamily,
-    module: &str,
+    export: Option<(&'static ModuleVtable, &str)>,
     payload: T,
     bytes: usize,
     own_fields: &[(&str, f64)],
 ) -> f64 {
-    let proto = prototype(family, module);
+    let proto = prototype(family, export);
     let value = alloc(family, payload, proto, bytes);
     for &(key, field) in own_fields {
         own(value, key, field);

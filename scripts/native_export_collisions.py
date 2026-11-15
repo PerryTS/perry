@@ -421,6 +421,11 @@ def source_exports(sources):
     """
     all_defs, all_macros, bodies, parsed, excluded = {}, {}, {}, {}, set()
     layouts, positional, matchers = {}, {}, {}
+    # A multi-arm macro whose exporting arm is picked by a leading keyword
+    # (`realm_decl! { namespace ... }`): only an invocation that starts with
+    # that keyword exports; its other arms (and same-named macros of other
+    # crates) emit no symbol.
+    discriminators = {}
     for path, source in sources.items():
         parsed[path], test_modules = production_tokens(tokens(source))
         parent = Path(path).parent if Path(path).stem in ("lib", "mod") else Path(path).with_suffix("")
@@ -472,6 +477,9 @@ def source_exports(sources):
                     if any(g.startswith("$") and frags.get(g[1:]) != "ident" for g in generated):
                         raise ValueError(f"{path}: {name} exports a non-first ident parameter")
                     matchers[name] = nodes
+            arm = exporting_arm(definition)
+            if arm and arm[0] and re.fullmatch(r"[A-Za-z_]\w*", arm[0][0]) and not any(g.startswith("$") for g in generated):
+                discriminators[name] = arm[0][0]
             signature = tuple(sorted(set(generated)))
             if name in all_defs and all_defs[name] != signature:
                 raise ValueError(f"{path}: conflicting export macro {name}")
@@ -479,6 +487,7 @@ def source_exports(sources):
     for path, definitions in all_macros.items():
         for name, definition in definitions.items():
             if name not in all_defs and any(definition[i] in all_defs and definition[i + 1] == "!"
+                                            and not (definition[i] in discriminators and definition[i + 3:i + 4] != [discriminators[definition[i]]])
                                             for i in range(len(definition) - 1)):
                 raise ValueError(f"{path}: wrapper macro {name} invokes an export macro; add expansion support")
     callbacks = {}
@@ -512,6 +521,9 @@ def source_exports(sources):
             if ts[i] in all_defs and ts[i + 1] == "!" and ts[i + 2] in ("(", "{", "["):
                 end = closing(ts, i + 2)
                 args = ts[i + 3:end]
+                if ts[i] in discriminators and args[:1] != [discriminators[ts[i]]]:
+                    i = end + 1
+                    continue
                 # Skip attributes (including doc attributes) preceding the name.
                 while args[:2] == ["#", "["]:
                     args = args[closing(args, 1) + 1:]
@@ -630,6 +642,16 @@ def self_test():
         pass
     else:
         raise AssertionError("export wrapper macro went unnoticed")
+    keyed = ('macro_rules! decl { (info $i:expr) => { fn _f() {} }; (namespace $v:ident = $o:literal) => { #[export_name = concat!("perry_nm_vt_", stringify!($v))] static $v: u8 = 0; }; } '
+             'decl!(info 1); decl!(namespace NM_A = "a"); macro_rules! outer { () => { decl!(info 2); }; }')
+    assert list(source_exports({"crates/a/src/lib.rs": keyed})) == ["perry_nm_vt_*"]
+    assert not source_exports({"crates/a/src/lib.rs": keyed.split(" decl!(info 1)")[0], "crates/b/src/lib.rs": "decl!(info 3);"})
+    try:
+        source_exports({"x": keyed + ' macro_rules! bad { () => { decl!(namespace NM_B = "b"); }; }'})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("keyword-picked export wrapper went unnoticed")
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

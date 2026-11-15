@@ -184,3 +184,9 @@ initializer calls record the same operation symbols consumed by their emitters.
 A constructor declaration's calls cover its construct path as well as its bare
 call entry, just as its births do. Live Map construction therefore reaches the
 iterable initializer's declared adder read without bypassing the global binding.
+
+Native namespace shapes carry the module-specific vtable: its declared keys,
+default namespace, and base namespace remain direct immutable facts of that
+vtable. Shared dispatch operations live in one immutable operations record
+referenced by the vtable. Default namespaces reference their base vtable
+directly, so resolving the base needs no generated function or name lookup.

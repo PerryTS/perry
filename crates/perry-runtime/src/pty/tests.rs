@@ -76,7 +76,8 @@ fn aliases_share_native_spawn_and_paused_output_precedes_exit() {
         EXITS.with(|e| e.borrow_mut().clear());
         REMOVED_CALLS.with(|n| n.set(0));
         let scope = crate::gc::RuntimeHandleScope::new();
-        let ns = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
+        let ns = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace_vt(
+            &crate::object::native_module::module_keys::NM_NODE_PTY,
             alias.as_ptr(),
             alias.len(),
         ));

@@ -12,6 +12,7 @@ mod call_entry;
 pub(crate) mod closure_births;
 pub mod codegen;
 pub(crate) mod collectors;
+pub use collectors::life_census::enabled as life_census_enabled;
 pub(crate) mod concat_site_cache;
 pub mod debug_info;
 #[cfg(feature = "llvm-inprocess")]
@@ -122,7 +123,7 @@ pub use codegen::{
     BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape,
     ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep, FactsBody, FactsClass,
     FactsElemRep, FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
-    FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,
     FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
     ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
@@ -340,9 +341,9 @@ mod lower_array_record_length;
 /// Canonical linker symbol constructors for JavaScript names.
 pub mod symbol_names;
 
-/// Build-time runtime facts; WRT3a does not use them in emission.
+/// Build-time realm declarations and native namespace vtable symbols.
 pub mod realm_manifest {
-    pub use perry_realm_table::{REALM, REALM_MANIFEST_VERSION};
+    pub use perry_realm_table::{NATIVE_NAMESPACE_VTABLES, REALM, REALM_MANIFEST_VERSION};
 
     #[test]
     fn temporal_reach_closes_the_generated_family_without_selecting_top() {

@@ -24,13 +24,33 @@
 //!    nowhere else — the inliner's default-parameter expansion after a
 //!    supplied argument;
 //! 2. finds `let f = <arrow literal>` where the arrow is synchronous, has
-//!    only plain parameters, no mutable captures, no `new.target` capture,
-//!    and a single `return <expr>` body, and where every use of `f` in the
-//!    rest of the list is a direct call with exactly the declared number of
-//!    trivial arguments (locals, globals, literals — evaluated once either
-//!    way, so substitution preserves order and count of effects);
+//!    only plain parameters, none of which the body writes, no mutable
+//!    captures, no `new.target` capture, and a single `return <expr>` body,
+//!    and where every use of `f` in the rest of the list is a direct call
+//!    with exactly the declared number of stable arguments;
 //! 3. replaces each such call with the arrow's return expression, parameters
 //!    substituted by the arguments, and deletes the `let`.
+//!
+//! Substitution puts the argument expression where the body reads the
+//! parameter, so it is only the call's meaning when the argument has one
+//! value from the call to the end of the body and no effect of its own: a
+//! literal, or a read of a local the module census (`local_occurrences`)
+//! shows is never written. A read of a local that anything writes could see
+//! a write the body makes before the read (`f = (a) => bump() + a; f(m)`,
+//! `bump` writing `m`), and a global read is not known to be unwritten. A
+//! parameter the body writes is rejected too: substitution renames the
+//! write onto the argument's local, which would change the caller's binding
+//! (`f = (a) => (a = a + 10); f(x)` must leave `x` alone).
+//!
+//! Module init is handled too, in the statement lists nested inside its
+//! statements (loop bodies, blocks, branches) and in closure bodies there,
+//! never in the top-level init list itself, whose bindings are module
+//! globals that any function may read. A function declared in such a list
+//! is hoisted out of `module.init` into `module.functions`, so a scan of the
+//! list does not see its uses: there a candidate must occur nowhere outside
+//! `module.init` by the census, which makes every occurrence one of the
+//! list's own, all counted by the scan. A module with top-level await is
+//! left alone, because its init becomes an async body.
 //!
 //! Because the arrow is lexically scoped, `this`, captured locals and
 //! `arguments` inside its body already denote the enclosing function's
@@ -45,48 +65,104 @@ use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{CompareOp, Expr, Function, Module, Stmt};
 
 use crate::inline::substitute_locals;
+use crate::local_occurrences::{count_list_occurrences, count_module_occurrences, WriteCensus};
 
-pub fn run(module: &mut Module) {
-    let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
-    for f in &mut module.functions {
-        run_function(f, &mut next_local_id);
-    }
-    for c in &mut module.classes {
-        if let Some(ctor) = &mut c.constructor {
-            run_function(ctor, &mut next_local_id);
-        }
-        for m in &mut c.methods {
-            run_function(m, &mut next_local_id);
-        }
-        for m in &mut c.static_methods {
-            run_function(m, &mut next_local_id);
-        }
-        for (_, g) in &mut c.getters {
-            run_function(g, &mut next_local_id);
-        }
-        for (_, s) in &mut c.setters {
-            run_function(s, &mut next_local_id);
-        }
+/// What the list rewrite knows about the module.
+struct Census {
+    /// The shared write census. The rewrite keeps it true: it copies bodies
+    /// that write only locals already counted, and it never reduces an arrow
+    /// whose parameter is written.
+    writes: WriteCensus,
+    /// In module init only: occurrences outside `module.init` (whole-module
+    /// census minus the init census, taken before init is rewritten; init
+    /// rewrites do not change it). A candidate with any is kept.
+    outside_init: Option<HashMap<LocalId, usize>>,
+}
+
+impl Census {
+    fn used_outside_list(&self, set: &[LocalId]) -> bool {
+        self.outside_init
+            .as_ref()
+            .is_some_and(|outside| set.iter().any(|id| outside.contains_key(id)))
     }
 }
 
-fn run_function(f: &mut Function, next_local_id: &mut LocalId) {
+pub fn run(module: &mut Module) {
+    let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
+    let census = Census {
+        writes: WriteCensus::of(module),
+        outside_init: None,
+    };
+    for f in &mut module.functions {
+        run_function(f, &census, &mut next_local_id);
+    }
+    for c in &mut module.classes {
+        if let Some(ctor) = &mut c.constructor {
+            run_function(ctor, &census, &mut next_local_id);
+        }
+        for m in &mut c.methods {
+            run_function(m, &census, &mut next_local_id);
+        }
+        for m in &mut c.static_methods {
+            run_function(m, &census, &mut next_local_id);
+        }
+        for (_, g) in &mut c.getters {
+            run_function(g, &census, &mut next_local_id);
+        }
+        for (_, s) in &mut c.setters {
+            run_function(s, &census, &mut next_local_id);
+        }
+    }
+    run_init(module, census.writes, &mut next_local_id);
+}
+
+/// The lists nested in module init and the closure bodies there; the
+/// top-level list stays as it is. Census taken after the bodies above were
+/// rewritten, so `outside_init` is exact.
+fn run_init(module: &mut Module, writes: WriteCensus, next_local_id: &mut LocalId) {
+    if module.has_top_level_await {
+        return;
+    }
+    let mut outside = count_module_occurrences(module);
+    for (id, n) in count_list_occurrences(&module.init) {
+        if let Some(total) = outside.get_mut(&id) {
+            *total -= n;
+            if *total == 0 {
+                outside.remove(&id);
+            }
+        }
+    }
+    let census = Census {
+        writes,
+        outside_init: Some(outside),
+    };
+    for s in module.init.iter_mut() {
+        for inner in nested_stmt_lists(s) {
+            process_stmts(inner, &census, next_local_id);
+        }
+        for_each_expr_in_stmt_mut(s, &mut |e| {
+            process_closure_bodies(e, &census, next_local_id)
+        });
+    }
+}
+
+fn run_function(f: &mut Function, census: &Census, next_local_id: &mut LocalId) {
     // The async/generator transforms rewrite these bodies into state machines
     // whose locals are boxed cells; keep the shapes they expect.
     if f.is_async || f.is_generator {
         return;
     }
-    process_stmts(&mut f.body, next_local_id);
+    process_stmts(&mut f.body, census, next_local_id);
 }
 
-fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
+fn process_stmts(stmts: &mut Vec<Stmt>, census: &Census, next_local_id: &mut LocalId) {
     // Inner lists and closure bodies first, so a nested helper is reduced in
     // its own scope before the enclosing list is examined.
     for s in stmts.iter_mut() {
         for inner in nested_stmt_lists(s) {
-            process_stmts(inner, next_local_id);
+            process_stmts(inner, census, next_local_id);
         }
-        for_each_expr_in_stmt_mut(s, &mut |e| process_closure_bodies(e, next_local_id));
+        for_each_expr_in_stmt_mut(s, &mut |e| process_closure_bodies(e, census, next_local_id));
     }
 
     remove_dead_default_guards(stmts);
@@ -98,7 +174,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
                 id,
                 init: Some(init),
                 ..
-            } => arrow_candidate(*id, init),
+            } => arrow_candidate(*id, init, &census.writes),
             _ => None,
         };
         let Some((id, params, body_expr)) = candidate else {
@@ -113,7 +189,11 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
         // its initializer leaves those live boxes uninitialized even though
         // every later use is an inlineable call (#9721). Earlier calls must
         // also retain their original TDZ behavior.
-        let mut earlier_uses = Uses::with_arity(params.len());
+        if census.used_outside_list(&set) {
+            i += 1;
+            continue;
+        }
+        let mut earlier_uses = Uses::new(params.len(), &census.writes);
         for s in &stmts[..i] {
             collect_uses_in_stmt(s, &set, &mut earlier_uses);
         }
@@ -121,7 +201,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
             i += 1;
             continue;
         }
-        let mut uses = Uses::with_arity(params.len());
+        let mut uses = Uses::new(params.len(), &census.writes);
         for s in &stmts[i + 1..] {
             collect_uses_in_stmt(s, &set, &mut uses);
         }
@@ -142,18 +222,22 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
     }
 }
 
-fn process_closure_bodies(expr: &mut Expr, next_local_id: &mut LocalId) {
+fn process_closure_bodies(expr: &mut Expr, census: &Census, next_local_id: &mut LocalId) {
     if let Expr::Closure { body, .. } = expr {
-        process_stmts(body, next_local_id);
+        process_stmts(body, census, next_local_id);
     }
     walk_expr_children_mut(expr, &mut |child| {
-        process_closure_bodies(child, next_local_id)
+        process_closure_bodies(child, census, next_local_id)
     });
 }
 
 /// `let f = (a, b) => <expr>` with the admission rules from the module doc.
 /// Returns the binding, its parameter ids, and the return expression.
-fn arrow_candidate(id: LocalId, init: &Expr) -> Option<(LocalId, Vec<LocalId>, Expr)> {
+fn arrow_candidate(
+    id: LocalId,
+    init: &Expr,
+    writes: &WriteCensus,
+) -> Option<(LocalId, Vec<LocalId>, Expr)> {
     let Expr::Closure {
         params,
         body,
@@ -177,6 +261,9 @@ fn arrow_candidate(id: LocalId, init: &Expr) -> Option<(LocalId, Vec<LocalId>, E
         || params
             .iter()
             .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
+        // Parameter ids are the arrow's own, so a census write is a write
+        // in this body.
+        || params.iter().any(|p| writes.may_be_written(p.id))
     {
         return None;
     }
@@ -211,22 +298,6 @@ fn arrow_candidate(id: LocalId, init: &Expr) -> Option<(LocalId, Vec<LocalId>, E
         return None;
     }
     Some((id, params.iter().map(|p| p.id).collect(), expr.clone()))
-}
-
-/// An argument that substitution may duplicate or drop without changing
-/// the program's effects: a binding read or a literal.
-fn is_trivial_expr(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Integer(_)
-            | Expr::Number(_)
-            | Expr::Bool(_)
-            | Expr::String(_)
-            | Expr::Null
-            | Expr::Undefined
-            | Expr::LocalGet(_)
-            | Expr::GlobalGet(_)
-    )
 }
 
 /// `id` plus every local that is a plain copy of it (`let y = id;`,
@@ -281,7 +352,7 @@ fn remove_alias_lets_in_stmt(stmt: &mut Stmt, set: &[LocalId]) {
     }
 }
 
-struct Uses {
+struct Uses<'a> {
     /// The arrow's declared parameter count. A call with a different
     /// argument count is not rewritten by `rewrite_calls`, so it must veto
     /// the reduction here; otherwise the `let` is deleted while that call
@@ -292,15 +363,17 @@ struct Uses {
     calls: usize,
     bad_arity: bool,
     other: bool,
+    writes: &'a WriteCensus,
 }
 
-impl Uses {
-    fn with_arity(arity: usize) -> Self {
+impl<'a> Uses<'a> {
+    fn new(arity: usize, writes: &'a WriteCensus) -> Self {
         Uses {
             arity,
             calls: 0,
             bad_arity: false,
             other: false,
+            writes,
         }
     }
 }
@@ -330,7 +403,7 @@ fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
         Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
-            if args.len() != uses.arity || !args.iter().all(is_trivial_expr) {
+            if args.len() != uses.arity || !args.iter().all(|a| uses.writes.is_stable_arg(a)) {
                 uses.bad_arity = true;
             }
             for a in args {
@@ -709,6 +782,18 @@ mod tests {
     use perry_hir::types::Type;
     use perry_hir::Param;
 
+    /// Run the list rewrite with the write census of a module whose only
+    /// code is `stmts`, as `run` computes it for the whole module.
+    fn reduce(stmts: &mut Vec<Stmt>, next: &mut LocalId) {
+        let mut module = Module::new("test");
+        module.init = stmts.clone();
+        let census = Census {
+            writes: WriteCensus::of(&module),
+            outside_init: None,
+        };
+        process_stmts(stmts, &census, next);
+    }
+
     fn param(id: LocalId, name: &str) -> Param {
         Param {
             id,
@@ -808,7 +893,7 @@ mod tests {
             },
         ];
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(stmts.len(), 1, "let and guard removed: {stmts:?}");
         let Stmt::If { condition, .. } = &stmts[0] else {
             panic!("expected the if");
@@ -852,7 +937,7 @@ mod tests {
             },
         ];
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(stmts.len(), 1, "{stmts:?}");
         let rendered = format!("{stmts:?}");
         assert!(
@@ -906,7 +991,7 @@ mod tests {
             },
         ];
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         let rendered = format!("{stmts:?}");
         assert_eq!(stmts.len(), 1, "{rendered}");
         assert!(!rendered.contains("LocalGet(10)"), "{rendered}");
@@ -943,7 +1028,7 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
     }
 
@@ -972,7 +1057,7 @@ mod tests {
             Stmt::Expr(call_local(F, vec![Expr::Integer(2)])),
         ];
         let before = format!("{stmts:?}");
-        process_stmts(&mut stmts, &mut 100);
+        reduce(&mut stmts, &mut 100);
         assert_eq!(format!("{stmts:?}"), before);
     }
 
@@ -991,7 +1076,7 @@ mod tests {
             Stmt::Expr(call_local(F, vec![Expr::Integer(2)])),
         ];
         let before = format!("{stmts:?}");
-        process_stmts(&mut stmts, &mut 100);
+        reduce(&mut stmts, &mut 100);
         assert_eq!(format!("{stmts:?}"), before);
     }
 
@@ -1010,7 +1095,7 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
 
         // Captured by a nested closure that calls it later.
@@ -1040,7 +1125,7 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
     }
 
@@ -1059,7 +1144,7 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
     }
 
@@ -1084,7 +1169,7 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
     }
 
@@ -1103,7 +1188,201 @@ mod tests {
         ];
         let before = stmts.clone();
         let mut next = 100;
-        process_stmts(&mut stmts, &mut next);
+        reduce(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    fn let_f(init: Expr) -> Stmt {
+        Stmt::Let {
+            id: F,
+            name: "f".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
+    /// `f = (a) => (a = 5); f(x)`: substitution renames the write onto the
+    /// argument's local, so the caller's `x` would change. Its twin with a
+    /// parameter that is only read is reduced.
+    #[test]
+    fn a_parameter_written_in_the_body_keeps_the_closure() {
+        let written = arrow(
+            1,
+            vec![param(P, "a")],
+            Expr::LocalSet(P, Box::new(Expr::Integer(5))),
+            false,
+        );
+        let mut stmts = vec![
+            let_f(written),
+            Stmt::Expr(call_local(F, vec![Expr::LocalGet(ENTITY)])),
+        ];
+        let before = stmts.clone();
+        reduce(&mut stmts, &mut 100);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+
+        let read = arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false);
+        let mut stmts = vec![
+            let_f(read),
+            Stmt::Expr(call_local(F, vec![Expr::LocalGet(ENTITY)])),
+        ];
+        reduce(&mut stmts, &mut 100);
+        assert_eq!(
+            format!("{stmts:?}"),
+            format!("{:?}", vec![Stmt::Expr(Expr::LocalGet(ENTITY))])
+        );
+    }
+
+    /// `f(m)` where something writes `m`: the read would move to where the
+    /// body reads the parameter, after any write the body makes first. A
+    /// write anywhere in the module keeps the call; its unwritten twin is
+    /// reduced (above).
+    #[test]
+    fn an_argument_local_written_anywhere_keeps_the_closure() {
+        const M: LocalId = 2;
+        let mut stmts = vec![
+            let_f(arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false)),
+            Stmt::Expr(call_local(F, vec![Expr::LocalGet(M)])),
+            Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::Integer(2)))),
+        ];
+        let before = stmts.clone();
+        reduce(&mut stmts, &mut 100);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    /// A global read is not known to be unwritten, so it is not a stable
+    /// argument; a literal is.
+    #[test]
+    fn a_global_argument_keeps_the_closure_and_a_literal_does_not() {
+        let mut stmts = vec![
+            let_f(arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false)),
+            Stmt::Expr(call_local(F, vec![Expr::GlobalGet(7)])),
+        ];
+        let before = stmts.clone();
+        reduce(&mut stmts, &mut 100);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+
+        let mut stmts = vec![
+            let_f(arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false)),
+            Stmt::Expr(call_local(F, vec![Expr::Integer(3)])),
+        ];
+        reduce(&mut stmts, &mut 100);
+        assert_eq!(
+            format!("{stmts:?}"),
+            format!("{:?}", vec![Stmt::Expr(Expr::Integer(3))])
+        );
+    }
+
+    /// `let f = () => entity; f();` inside a module-init loop.
+    fn init_loop() -> Stmt {
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![
+                let_f(arrow(1, vec![], Expr::LocalGet(ENTITY), false)),
+                Stmt::Expr(call_local(F, vec![])),
+            ],
+        }
+    }
+
+    fn module_with_init(init: Vec<Stmt>) -> Module {
+        let mut module = Module::new("test");
+        module.init = init;
+        module
+    }
+
+    fn function_calling_f() -> Function {
+        Function {
+            id: 3,
+            name: "h".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(call_local(F, vec![])))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: vec![F],
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    #[test]
+    fn folds_a_call_in_a_list_nested_in_module_init() {
+        let mut module = module_with_init(vec![init_loop()]);
+        run(&mut module);
+        let expected = Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![Stmt::Expr(Expr::LocalGet(ENTITY))],
+        };
+        assert_eq!(
+            format!("{:?}", module.init),
+            format!("{:?}", vec![expected])
+        );
+    }
+
+    /// The top-level init list declares module globals: left as it is.
+    #[test]
+    fn the_top_level_init_list_is_untouched() {
+        let Stmt::While { body, .. } = init_loop() else {
+            unreachable!()
+        };
+        let mut module = module_with_init(body);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// A function declared in the loop is hoisted into `module.functions`,
+    /// where the list scan cannot see its call; the census can.
+    #[test]
+    fn a_use_from_a_hoisted_function_keeps_the_closure() {
+        let mut module = module_with_init(vec![init_loop()]);
+        module.functions.push(function_calling_f());
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// Init with top-level await becomes an async body: left alone.
+    #[test]
+    fn init_with_top_level_await_is_untouched() {
+        let mut module = module_with_init(vec![init_loop()]);
+        module.has_top_level_await = true;
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// The must-not cases of a function body hold in init too: a written
+    /// parameter, or an argument local written elsewhere in the module.
+    #[test]
+    fn init_keeps_a_written_parameter_or_argument() {
+        const M: LocalId = 2;
+        let loop_with = |init: Expr, arg: Expr| Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![let_f(init), Stmt::Expr(call_local(F, vec![arg]))],
+        };
+        let written_param = arrow(
+            1,
+            vec![param(P, "a")],
+            Expr::LocalSet(P, Box::new(Expr::Integer(5))),
+            false,
+        );
+        let mut module = module_with_init(vec![loop_with(written_param, Expr::LocalGet(ENTITY))]);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+
+        let read = arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false);
+        let mut module = module_with_init(vec![
+            loop_with(read, Expr::LocalGet(M)),
+            Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::Integer(2)))),
+        ]);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
     }
 }

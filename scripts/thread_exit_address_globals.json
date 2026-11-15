@@ -541,10 +541,18 @@
   {
    "file": "crates/perry-runtime/src/object/native_module.rs",
    "names": [
-    "NATIVE_MODULE_VTABLE_PTR"
+    "NATIVE_MODULE_ROWS"
    ],
    "verdict": "no_heap_address",
-   "why": "Address of the static NATIVE_MODULE_VTABLE_IMPL, stored by install_native_module_vtable (native_module.rs:544); address of a static."
+   "why": "Address of the codegen-emitted (name, vtable) row array, a constant of the program image, stored once by js_nm_set_module_table at program entry; address of a static."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "NATIVE_MODULE_ROW_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Length of that row array, stored by js_nm_set_module_table; a count."
   },
   {
    "file": "crates/perry-runtime/src/object/native_module.rs",

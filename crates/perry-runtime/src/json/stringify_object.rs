@@ -312,6 +312,7 @@ unsafe fn stringify_object_walk(
         && num_fields >= 5
         && !has_overflow_fields
         && crate::object::key_attrs::object_summary(obj) == 0
+        && class_plain_record
         && !inherited_to_json_possible
         // A private field (#11791) is an own key no template may emit.
         && crate::object::key_attrs::object_summary(obj)
@@ -422,6 +423,7 @@ unsafe fn stringify_object_walk(
         || (actual_fields == 1
             && super::stringify_primitive_object::field_is_primitive(read_field_bits(0))))
         && !has_overflow_fields
+        && class_plain_record
         && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
         // A private field (#11791) is an own key the raw walk would emit.
@@ -515,7 +517,18 @@ unsafe fn stringify_object_walk(
     // slots were last derived. The probe can do both even when it finds no
     // `toJSON` (a getter-valued `toJSON`, the first `Object.prototype` lookup).
     let mut keys_stale = false;
-    if (has_closure_field || inherited_to_json_possible || has_own_accessors) && !to_json_resolved {
+    // With no inherited `toJSON` possible, only an own key can supply one:
+    // the own-key half of `to_json_definitely_absent` decides it without the
+    // inherited half the walk has already answered.
+    let to_json_possible = inherited_to_json_possible
+        || ((has_closure_field || has_own_accessors)
+            && super::stringify_tojson_probe::keys_array_may_carry_to_json(keys_view));
+    if !to_json_possible && (has_closure_field || has_own_accessors) && !to_json_resolved {
+        // What `object_get_to_json` does when it proves `toJSON` absent:
+        // consume a `toJSON` result's one-shot suppression, then answer none.
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
+    if to_json_possible && !to_json_resolved {
         *global_proof = false;
         if let Some(to_json_val) = object_get_to_json(ptr) {
             if depth > MAX_FAST_DEPTH {
@@ -551,6 +564,25 @@ unsafe fn stringify_object_walk(
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0
             || (crate::object::object_has_descriptors(ptr as usize));
+    // An ordinary object keeps every attribute in its keys' entries, and its
+    // shape summary is the OR of them: without a non-enumerable or accessor
+    // entry no own key can be skipped or read through a getter, so the
+    // by-bytes descriptor lookups below are not asked. The summary is re-read
+    // per key: user code (a getter, a member's `toJSON`) can reshape `obj`.
+    let attrs_in_keys = filter_non_enum
+        && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+        });
+    let key_attr_summary = || -> u8 {
+        if attrs_in_keys {
+            obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                crate::object::key_attrs::object_summary(obj)
+            })
+        } else {
+            crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
+                | crate::object::key_attrs::SUMMARY_ACCESSOR
+        }
+    };
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
@@ -581,9 +613,10 @@ unsafe fn stringify_object_walk(
         {
             continue;
         }
+        let attr_summary = if filter_non_enum { key_attr_summary() } else { 0 };
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
-        if filter_non_enum
+        if attr_summary & crate::object::key_attrs::SUMMARY_NON_ENUMERABLE != 0
             && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 json_key_non_enumerable(obj, f64::from_bits(key_bits))
             })
@@ -597,7 +630,7 @@ unsafe fn stringify_object_walk(
         // (`Object.defineProperty(o, k, { get })`). Gated on the descriptor flag.
         // The getter is USER CODE: every pointer below is re-derived from the
         // rooted handle after it returns.
-        if filter_non_enum {
+        if attr_summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0 {
             *global_proof = false;
             let getter_value = obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 crate::object::json_object_getter_value(obj, f64::from_bits(key_bits))

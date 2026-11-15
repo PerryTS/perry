@@ -43,7 +43,6 @@
 "%Layout:REGEX_EXEC_NAMED%",
 "%Layout:REGEX_INDICES_GROUPS_NAMED%",
 "%NativeNamespace:buffer.Buffer%",
-"%NativeNamespace:console%",
 "%SetIteratorPrototype%",
 "%SetIteratorPrototype%.next",
 "%StringIteratorPrototype%",

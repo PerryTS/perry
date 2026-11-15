@@ -52,11 +52,14 @@ pub(super) unsafe fn non_own_field(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
-    let resolved = js_native_module_property_by_name(
+    let resolved = super::native_module_property_by_name_impl(
         module_name.as_ptr(),
         module_name.len(),
         key_ptr,
         key_len,
+        true,
+        // The receiver's shape names its module's vtable.
+        super::object_native_vtable(obj),
     );
     if resolved.to_bits() != crate::value::TAG_UNDEFINED {
         return JSValue::from_bits(resolved.to_bits());

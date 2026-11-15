@@ -27,7 +27,7 @@ fn named_fs_promises_reads_the_parent_named_export_cell() {
         ));
         let hir = format!("{module:?}");
         assert!(
-            hir.contains("js_native_module_named_esm_export_value"),
+            hir.contains("js_native_module_named_esm_export_value_vt"),
             "named object imports must retain the parent export cell: {hir}"
         );
         assert!(
@@ -45,7 +45,7 @@ fn named_fs_promises_reads_the_parent_named_export_cell() {
             .unwrap();
         let body = format!("{:?}", value.body);
         assert!(
-            body.contains("js_native_module_named_esm_export_value"),
+            body.contains("js_native_module_named_esm_export_value_vt"),
             "{body}"
         );
         assert!(
@@ -62,7 +62,7 @@ fn parent_export_snapshot_is_initialized_before_user_mutation() {
     );
     let first = format!("{:?}", module.init.first().unwrap());
     assert!(
-        first.contains("js_native_module_named_esm_export_value"),
+        first.contains("js_native_module_named_esm_export_value_vt"),
         "{first}"
     );
     assert!(
@@ -79,7 +79,7 @@ fn other_native_promises_values_retain_the_parent_export_identity() {
         ));
         let hir = format!("{module:?}");
         assert!(
-            hir.contains("js_native_module_named_esm_export_value")
+            hir.contains("js_native_module_named_esm_export_value_vt")
                 && hir.contains(&format!("String(\"{source}\"), String(\"promises\")")),
             "{hir}"
         );
@@ -108,7 +108,7 @@ fn promises_member_calls_do_not_become_callback_fs_calls() {
             .unwrap();
         let body = format!("{:?}", read.body);
         assert!(
-            body.contains("js_native_module_named_esm_export_value"),
+            body.contains("js_native_module_named_esm_export_value_vt"),
             "{body}"
         );
         assert!(

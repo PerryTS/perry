@@ -126,7 +126,7 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
         ],
         "DefaultSerializer" | "DefaultDeserializer" => {
             let parent_name = name.strip_prefix("Default").unwrap();
-            let parent = crate::object::bound_native_callable_export_value("v8", parent_name);
+            let parent = crate::object::bound_native_callable_export_value(&crate::object::native_module::namespaces::v8::NM_V8, "v8", parent_name);
             return crate::object::native_module::constructor_shapes::link_parent(
                 constructor.get_nanbox_f64(),
                 parent,
@@ -178,7 +178,11 @@ mod attach_reach_tests {
     fn attach_installs_on_the_prototype_of_the_constructor_it_is_given() {
         let _no_gc = crate::gc::GcSuppressScope::new();
         unsafe {
-            let ctor = crate::object::bound_native_callable_export_value("v8", "Serializer");
+            let ctor = crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::v8::NM_V8,
+                "v8",
+                "Serializer",
+            );
             let proto = crate::object::js_function_prototype_value_for_read(ctor);
             let before = crate::object::method_call::spec_get_value(proto, b"writeHeader");
             assert_eq!(
@@ -209,7 +213,11 @@ mod attach_reach_tests {
                 b"Serializer".as_ptr(),
                 10,
             ) as i64);
-            let from_namespace = crate::object::js_native_module_esm_export_value(module, property);
+            let from_namespace = crate::object::js_native_module_esm_export_value_vt(
+                &crate::object::native_module::namespaces::v8::NM_V8,
+                module,
+                property,
+            );
             assert_eq!(
                 from_namespace.to_bits(),
                 ctor.to_bits(),

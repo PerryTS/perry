@@ -39,8 +39,8 @@ pub(super) unsafe fn birth_providers(global: *mut ObjectHeader) {
             value
         } else if name == "performance" {
             crate::perf_hook_slots::performance_namespace()
-        } else if GLOBAL_THIS_BUILTIN_NAMESPACES.contains(&name) {
-            js_create_native_module_namespace(bytes.as_ptr(), bytes.len())
+        } else if let Some(value) = super::populate::global_native_namespace_value(name) {
+            value
         } else {
             continue;
         };

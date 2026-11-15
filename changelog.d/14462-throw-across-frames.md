@@ -1,0 +1,1 @@
+A `throw` caught in a calling function costs about a fifth less: the landing pad skips the managed-stack restores when no stack has an entry to pop, and the handler walk no longer reads the loader's object list for frames of the program itself (it still does for frames in a dynamically loaded library).

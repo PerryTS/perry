@@ -929,6 +929,7 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     _trigger_kind: GcTriggerKind,
     may_speculate: bool,
 ) -> CopiedMinorAttempt {
+    crate::snap_funnel!(Gc);
     let _heap_change = crate::gc::heap_generation::HeapChange::begin(
         crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
     );

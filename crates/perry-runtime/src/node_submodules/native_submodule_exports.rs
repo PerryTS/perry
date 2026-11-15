@@ -58,9 +58,9 @@ macro_rules! native_submodule_exports {
             (js_node_export_fs_promises_constants, "constants", unsafe { &*crate::fn_info!(thunk_fs_promises_constants, 1;with_declared(1)) }),
         ]),
         (SUBMOD_READLINE_PROMISES, "readline/promises", "readline_promises", ReadlinePromises, [
-            (js_node_export_readline_promises_createInterface, "createInterface", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_createInterface, 1;with_declared(1)); realm { "node:readline/promises.createInterface", provider = closure_alloc; } }),
             (js_node_export_readline_promises_Interface, "Interface", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Interface, 1;with_declared(1)); realm { "node:readline/promises.Interface", kind = constructor, provider = closure, extends = "node:readline/promises.Interface.<prototype>", attrs = {prototype = writable}; } }),
             (js_node_export_readline_promises_Readline, "Readline", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Readline, 2;with_declared(2)); realm { "node:readline/promises.Readline", provider = closure_alloc; } }),
+            (js_node_export_readline_promises_createInterface, "createInterface", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_createInterface, 1;with_declared(1)); realm { "node:readline/promises.createInterface", provider = closure_alloc; } }),
         ]),
         (SUBMOD_STREAM_PROMISES, "stream/promises", "stream_promises", StreamPromises, [
             (js_node_export_stream_promises_pipeline, "pipeline", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::stream_promises::thunk_streamP_pipeline, 3;with_rest(2)); realm { "node:stream/promises.pipeline", provider = closure_alloc; } }),

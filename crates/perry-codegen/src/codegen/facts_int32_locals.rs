@@ -8,8 +8,14 @@
 //! (`repsel_benefit`). A double entering that slot is an exact int32, so it
 //! converts with `fptosi` instead of ToInt32 (`store_from_double`).
 //!
+//! The proof's interval is a range proof of the local at every read
+//! (`expr::range_facts::facts_local_range`, `PERRY_FACTS_LOCAL_RANGES=0`
+//! turns that off): an index or an integer chain built from it needs no
+//! dominating guard.
+//!
 //! Check mode (`PERRY_VERIFY_FACTS=1`) witnesses every store: the stored value
-//! must pass the exact-i32 test (`emit_typed_i32_plain_guard_and_raw`). Stores the
+//! must pass the exact-i32 test (`emit_typed_i32_plain_guard_and_raw`) and lie
+//! in the interval the range proofs read. Stores the
 //! ordinary lowering would compute natively in i32 take the double path
 //! there, so no store escapes the witness (`checked`).
 //!
@@ -96,6 +102,24 @@ pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u
         let nz = ctx.block().icmp_eq(I64, &bits, "-9223372036854775808");
         exact = ctx.block().or(I1, &exact, &nz);
     }
+    // The interval the body's range proofs read for this local
+    // (`range_facts::facts_local_range`): the stored value lies in it. A
+    // tolerated `-0` compares as 0.
+    if let Some(range) = crate::expr::facts_local_range(ctx, id) {
+        let blk = ctx.block();
+        let ge = blk.fcmp(
+            "oge",
+            value,
+            &crate::nanbox::double_literal(range.min as f64),
+        );
+        let le = blk.fcmp(
+            "ole",
+            value,
+            &crate::nanbox::double_literal(range.max as f64),
+        );
+        let inside = blk.and(I1, &ge, &le);
+        exact = blk.and(I1, &exact, &inside);
+    }
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("int32.input.verify_miss");
     let next = ctx.new_block("int32.input.admitted");
@@ -141,3 +165,7 @@ pub(crate) fn store_from_double(
 #[cfg(test)]
 #[path = "facts_int32_locals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "facts_local_ranges_tests.rs"]
+mod range_tests;

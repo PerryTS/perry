@@ -761,7 +761,11 @@ pub extern "C" fn js_repl_repl_server_new(options: f64) -> f64 {
     set_field(
         server,
         "constructor",
-        crate::object::bound_native_callable_export_value("repl", "REPLServer"),
+        crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::repl::NM_REPL,
+            "repl",
+            "REPLServer",
+        ),
     );
     set_field(
         server,

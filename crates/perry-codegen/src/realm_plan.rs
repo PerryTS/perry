@@ -86,9 +86,9 @@ impl RealmPlan {
             } else if name.starts_with("%NativeNamespace:")
                 && declaration.native_namespace.is_some()
             {
-                result
-                    .native_namespaces
-                    .insert(name.clone(), declaration.clone());
+                let mut selected = declaration.clone();
+                select_properties(&mut selected, reach, index, &executing)?;
+                result.native_namespaces.insert(name.clone(), selected);
             } else if declaration.header.is_some() {
                 let mut selected = declaration.clone();
                 if !index

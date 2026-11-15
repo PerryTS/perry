@@ -7,6 +7,7 @@ fn secure_context_factory_and_constructor_share_registered_prototype() {
     crate::object::static_shapes::js_shape_run_static_seed();
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::tls::NM_TLS,
         "tls",
         "SecureContext",
     ));

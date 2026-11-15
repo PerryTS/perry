@@ -505,6 +505,14 @@ pub(super) fn compile_module_entry(
                 cross_module.app_metadata.module_source_path.as_deref(),
             );
         }
+        // A program that reaches a builtin by a runtime string
+        // (`process.getBuiltinModule(id)`, `require(expr)`, `createRequire`)
+        // carries the `(name, vtable)` rows of every native module; no other
+        // program names a module it does not import.
+        let native_module_table = cross_module
+            .app_metadata
+            .native_module_table
+            .then(|| crate::nm_install::emit_native_module_table(llmod));
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -648,6 +656,9 @@ pub(super) fn compile_module_entry(
             }
             // #10428/#10429: linked providers register their module-export
             // dispatchers before any module init (see `native_provider_installs`).
+            if let Some((table, count)) = &native_module_table {
+                blk.call_void("js_nm_set_module_table", &[(PTR, table), (I64, count)]);
+            }
             for install in &cross_module.app_metadata.native_provider_installs {
                 blk.call_void(install, &[]);
             }
@@ -935,6 +946,7 @@ pub(super) fn compile_module_entry(
             current_block: 0,
             discard_expr_value: false,
             discard_this_expr: false,
+            snap_lowering: Default::default(),
             literal_chunk_fill: false,
             truthy_call_result_requested: false,
             pending_truthy_call_result: None,
@@ -1122,6 +1134,7 @@ pub(super) fn compile_module_entry(
             spec_i32_params: std::collections::HashSet::new(),
             spec_bool_params: std::collections::HashSet::new(),
             sig_return: None,
+            sig_record_return: None,
             typed_methods: &cross_module.typed_methods,
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
@@ -1217,6 +1230,8 @@ pub(super) fn compile_module_entry(
             buffer_hazard_reasons: HashMap::new(),
             native_i32_aliases: HashMap::new(),
             int_range_aliases: HashMap::new(),
+            int32_shadow_plan: std::collections::HashSet::new(),
+            int32_shadows: std::collections::HashMap::new(),
             int_range_facts: Vec::new(),
             next_loop_proof_scope_id: 0,
             nonnegative_integer_locals: HashSet::new(),

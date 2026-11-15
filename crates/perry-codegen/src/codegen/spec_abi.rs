@@ -160,6 +160,10 @@ pub(crate) struct SpecFnPlan {
     /// P2 (CWN 11-09): the public symbol main emitted for this function; a
     /// typed function's boxed entry takes that symbol's inline attributes.
     pub sig_public: MainPublic,
+    /// DESIGN-p4l4 VR-3b: a slot of the function is a value record
+    /// (`record_sig`); `signature`, `reps`, `guards` and `sig_defaults` are
+    /// then per lane.
+    pub record: Option<super::record_sig::RecordPlan>,
 }
 
 /// The public symbol main emits for a function (`compile_function`). `F$sig`

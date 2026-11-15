@@ -11,11 +11,11 @@ readFile();
         .expect("source lowers");
     let dump = format!("{:#?}", hir.init);
     assert!(
-        dump.contains("js_native_module_named_esm_export_value"),
+        dump.contains("js_native_module_named_esm_export_value_vt"),
         "named call must read the synchronized ESM cell: {dump}"
     );
     assert!(
-        dump.matches("js_native_module_named_esm_export_value")
+        dump.matches("js_native_module_named_esm_export_value_vt")
             .count()
             >= 2,
         "named import must initialize its ESM cell before the dynamic call: {dump}"
@@ -37,7 +37,7 @@ fn callee_only_builtin_import_does_not_materialize_an_export_cell() {
         let dump = format!("{:?}", hir.init);
         assert!(dump.contains("readFileSync"), "call must remain: {dump}");
         assert!(
-            !dump.contains("js_native_module_named_esm_export_value"),
+            !dump.contains("js_native_module_named_esm_export_value_vt"),
             "unused cell: {dump}"
         );
     }
@@ -50,7 +50,7 @@ fn escaped_builtin_import_keeps_its_initial_binding() {
     let hir = super::super::lower_module(&ast, "value", "value.ts").unwrap();
     let dump = format!("{:?}", hir.init);
     assert_eq!(
-        dump.matches("js_native_module_named_esm_export_value")
+        dump.matches("js_native_module_named_esm_export_value_vt")
             .count(),
         2
     );
@@ -68,7 +68,7 @@ fn native_stream_heritage_keeps_its_import_cell() {
         .is_some_and(|p| p.0 == "node_stream")));
     let dump = format!("{:?}", hir.init);
     assert!(
-        dump.contains("js_native_module_named_esm_export_value"),
+        dump.contains("js_native_module_named_esm_export_value_vt"),
         "missing constructor initialization: {dump}"
     );
 }
@@ -80,7 +80,7 @@ fn named_constructor_apply_is_a_value_call() {
     let hir = super::super::lower_module(&ast, "apply", "apply.ts").unwrap();
     let dump = format!("{:?}", hir.init);
     assert!(
-        dump.contains("js_native_module_named_esm_export_value"),
+        dump.contains("js_native_module_named_esm_export_value_vt"),
         "{dump}"
     );
     assert!(!dump.contains("stream.apply is not implemented"), "{dump}");

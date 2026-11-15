@@ -108,7 +108,7 @@ fn f7_plan_keeps_the_bind_time_constructor_prototype() {
 fn pure_console_and_unnamed_function_roots_have_structural_chains() {
     let index = RealmIndex::new(crate::realm_manifest::REALM);
     for (roots, own, expected) in [
-        (&["console", "console.log"][..], true, (10, 5, 5)),
+        (&["console", "console.log"][..], true, (9, 4, 5)),
         (&["Function"][..], false, (5, 0, 5)),
     ] {
         let mut reach = RealmReach::default();
@@ -327,7 +327,7 @@ fn hello_has_no_constructor_cells_or_kept_prototype_members() {
     }
     assert_eq!(
         (r.names.len(), r.whole.len(), r.structure.len()),
-        (10, 5, 5)
+        (9, 4, 5)
     );
 }
 
@@ -462,7 +462,13 @@ fn startup_path_hook_births_the_global_from_its_emitted_input() {
         ] {
             assert!(!r.names.contains(&format!("%Layout:{layout}%")), "{r:?}");
         }
-        assert!(r.structure.contains("node:async_hooks.AsyncLocalStorage"));
+        // Unknown keys name the members of the held native receiver. The
+        // hook alone writes the identity without naming the value's body.
+        if unknown {
+            assert!(r.whole.contains("node:async_hooks.AsyncLocalStorage"), "{r:?}");
+        } else {
+            assert!(r.structure.contains("node:async_hooks.AsyncLocalStorage"), "{r:?}");
+        }
         assert!(r.names.contains("%Layout:GLOBAL_OBJECT%"));
         RealmPlan::from_reach(&r).unwrap();
     }

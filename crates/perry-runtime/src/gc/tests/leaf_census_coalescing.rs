@@ -52,15 +52,63 @@ fn near_full_eden_coalesces_repeated_leaf_censuses_from_owed_checks() {
             "small pressure must not repeatedly census young cells for tiny leaf recovery"
         );
         assert!(crate::arena::young_large_in_use_bytes() >= 3 * LEAF);
+        // The fourth fills the batch. Eden is more than half its window
+        // (CAP - LEAF / 2 of CAP), so the window left is smaller than the
+        // Eden the census would read: the copying minor runs instead and
+        // retires the dead leaves itself.
+        let collections = gc_collection_count();
         leaves.push(owed_leaf_birth());
-        assert_eq!(super::super::leaf_service::leaf_services_run(), before + 1);
+        assert_eq!(
+            super::super::leaf_service::leaf_services_run(),
+            before,
+            "with less window left than Eden, no leaf-only census"
+        );
+        assert!(
+            gc_collection_count() > collections,
+            "the copying minor must run in the census's place"
+        );
         assert_eq!(crate::arena::young_large_in_use_bytes(), 0);
+        assert!(crate::arena::copying_from_space_in_use_bytes() < CAP - LEAF / 2);
         for p in leaves {
             assert_eq!(
                 crate::arena::classify_heap_space(p),
                 crate::arena::HeapSpace::Unknown
             );
         }
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn leaf_service_runs_while_the_window_left_covers_eden() {
+    std::thread::spawn(|| unsafe {
+        let _heap = CopyingNurseryTestGuard::new(0);
+        let _pacing = policy::force_moving_gc_pacing();
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        // Eden is two fifths of the window: the window left (three fifths)
+        // covers Eden, so the leaf-only service is the collection, not a
+        // copying minor.
+        fill_small_to(CAP * 2 / 5);
+        let _cap = policy::ScavengeNurseryCapTestGuard::due_at_bytes(CAP);
+        let services = super::super::leaf_service::leaf_services_run();
+        let collections = gc_collection_count();
+        let small = crate::arena::copying_from_space_in_use_bytes();
+        for _ in 0..CAP / LEAF {
+            owed_leaf_birth();
+            if super::super::leaf_service::leaf_services_run() > services {
+                assert_eq!(super::super::leaf_service::leaf_services_run(), services + 1);
+                assert_eq!(
+                    gc_collection_count(),
+                    collections,
+                    "a leaf-only service, not a copying minor"
+                );
+                assert_eq!(crate::arena::young_large_in_use_bytes(), 0);
+                assert!(crate::arena::copying_from_space_in_use_bytes() >= small);
+                return;
+            }
+        }
+        panic!("leaves filling the window must run the leaf service");
     })
     .join()
     .unwrap();

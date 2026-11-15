@@ -780,7 +780,11 @@ mod callable_export_arity_table_tests {
 
     #[test]
     fn tls_constructor_prototypes_match_node_parent_classes() {
-        let server = bound_native_callable_export_value("tls", "Server");
+        let server = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::tls::NM_TLS,
+            "tls",
+            "Server",
+        );
         let server_addr = (server.to_bits() & crate::value::POINTER_MASK) as usize;
         let server_proto = crate::closure::closure_get_dynamic_prop(server_addr, "prototype");
         assert!(tls_constructor_prototype_is_instance_of(
@@ -791,13 +795,21 @@ mod callable_export_arity_table_tests {
             crate::object::js_instanceof(server_proto, 0xFFFF_0076).to_bits(),
             crate::value::TAG_TRUE
         );
-        let event_emitter = bound_native_callable_export_value("events", "EventEmitter");
+        let event_emitter = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        );
         assert_eq!(
             crate::object::js_instanceof_dynamic(server_proto, event_emitter).to_bits(),
             crate::value::TAG_TRUE
         );
 
-        let socket = bound_native_callable_export_value("tls", "TLSSocket");
+        let socket = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::tls::NM_TLS,
+            "tls",
+            "TLSSocket",
+        );
         let socket_addr = (socket.to_bits() & crate::value::POINTER_MASK) as usize;
         let socket_proto = crate::closure::closure_get_dynamic_prop(socket_addr, "prototype");
         assert!(tls_constructor_prototype_is_instance_of(
@@ -817,7 +829,11 @@ mod callable_export_arity_table_tests {
             crate::object::js_instanceof(socket_proto, 0xFFFF_0073).to_bits(),
             crate::value::TAG_TRUE
         );
-        let duplex = bound_native_callable_export_value("stream", "Duplex");
+        let duplex = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Duplex",
+        );
         assert_eq!(
             crate::object::js_instanceof_dynamic(socket_proto, duplex).to_bits(),
             crate::value::TAG_TRUE

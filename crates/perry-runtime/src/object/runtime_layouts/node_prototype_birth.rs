@@ -235,7 +235,7 @@ mod tests {
                 crate::node_stream::event_emitter_prototype_value("EventEmitter").to_bits();
             assert_eq!(proto_bits & !POINTER_MASK, POINTER_TAG);
             let ee = (proto_bits & POINTER_MASK) as usize;
-            let _ = crate::object::bound_native_callable_export_value("stream", "Readable");
+            let _ = crate::object::bound_native_callable_export_value(&crate::object::native_module::namespaces::stream::NM_STREAM, "stream", "Readable");
             let stream = super::node_prototype_of_serial(
                 crate::closure::shape::INTRINSIC_SERIAL_STREAM_PROTOTYPE,
             )

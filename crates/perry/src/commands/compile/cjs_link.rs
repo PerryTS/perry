@@ -138,7 +138,7 @@ fn drop_unused_loader_preloads(module: &mut Module) {
     });
     module.init.retain(|s| {
         !matches!(s, Stmt::Expr(Expr::Call { callee, args, .. })
-            if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_native_module_named_esm_export_value")
+            if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_native_module_named_esm_export_value_vt")
                 && matches!(args.as_slice(), [Expr::String(src), Expr::String(imported)]
                     if builtin(src) && unused.contains(&imported)))
     });

@@ -747,19 +747,9 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
         }
         entries
     };
-    let mut special = 0u32;
-    for slot in 0..32 {
-        if (rep >> (slot * 2)) & 3 == 3 {
-            special |= 1 << slot;
-        }
-    }
-    let covered = constfn
-        .iter()
-        .filter(|entry| entry.slot < 32)
-        .fold(0u32, |mask, entry| mask | (1 << entry.slot));
-    if special != covered {
-        return None;
-    }
+    // A `11` lane without a body entry is an I32 lane (`field_rep`: a `11`
+    // lane outside the ConstFn mask is I32 at rest), so a body needs a `11`
+    // lane (checked above) but a `11` lane does not need a body.
     Some((
         id,
         BirthShape {

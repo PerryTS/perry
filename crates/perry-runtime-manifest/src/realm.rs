@@ -215,6 +215,10 @@ pub struct RealmDeclaration {
     /// values in the array it makes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<String>,
+    /// The object's other names (references to this declaration, never
+    /// cells of their own).
+    #[serde(default)]
+    pub names: Vec<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
     /// The native namespace that owns this source birth and its own-value graph.

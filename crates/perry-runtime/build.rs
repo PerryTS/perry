@@ -595,11 +595,38 @@ mod realm_info_exports;
 #[path = "src/object/native_module/static_exports_build.rs"]
 mod static_exports_build;
 
+/// `(module, vtable path)` of every native namespace the realm declares with a
+/// vtable of its own, the table codegen reads at each birth.
+fn native_namespace_vtables(
+    realm: &perry_runtime_manifest::realm_json::Value,
+) -> std::collections::BTreeMap<String, String> {
+    let mut vtables = std::collections::BTreeMap::new();
+    for d in realm
+        .get("declarations")
+        .and_then(|d| d.array())
+        .unwrap_or_default()
+    {
+        let (Some(module), Some(vtable)) = (
+            d.get("native_namespace").and_then(|v| v.string()),
+            d.get("exotic_vtable").and_then(|v| v.string()),
+        ) else {
+            continue;
+        };
+        vtables.insert(module.to_string(), vtable.to_string());
+    }
+    vtables
+}
+
 fn main() {
-    static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");
+    let vtables = native_namespace_vtables(&realm);
+    static_exports_build::emit(&out, &|module| {
+        vtables.get(module).cloned().unwrap_or_else(|| {
+            "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL".to_string()
+        })
+    });
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");

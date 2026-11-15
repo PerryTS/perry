@@ -1487,6 +1487,10 @@ pub(crate) fn refresh_process_env(value: f64) -> f64 {
         .into_iter()
         .map(|(name, value)| (env_cache_name_for_set(&name), value))
         .collect();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if crate::snap_census::runner_on_for_inputs() {
+        crate::snap_census::record_input_value("env_block", &vars);
+    }
     let names: std::collections::HashSet<_> = vars.iter().map(|(name, _)| name.as_str()).collect();
     with_env_cache_mutation(|| {
         let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(

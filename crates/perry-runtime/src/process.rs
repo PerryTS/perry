@@ -186,7 +186,7 @@ pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
 /// Builtin modules the dynamic resolvers must route through the
 /// `node_submodules` registry (submodule-spec exports) instead of a
 /// native-module namespace. These have no native-module dispatch bucket —
-/// `js_create_native_module_namespace` would hand back a method-dead object.
+/// `js_create_native_module_namespace_vt` would hand back a method-dead object.
 /// The registry key differs from the module name (`/` → `_`).
 pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
     match module_name {
@@ -424,6 +424,7 @@ pub(crate) fn module_builtin_modules_array() -> f64 {
 
 fn process_exec_argv_value() -> f64 {
     crate::effect!(host_read, argv);
+    crate::snap_funnel!(ExecArgv);
     static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
     let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
@@ -470,6 +471,7 @@ pub(crate) fn process_argv0_string() -> String {
 /// example, after unlinking the executable). Windows already supplies an
 /// absolute path, and canonicalize would introduce a verbatim-path prefix.
 pub(crate) fn process_exec_path_string() -> String {
+    crate::snap_funnel!(ExecPath);
     std::env::current_exe()
         .map(|exe| {
             #[cfg(unix)]
@@ -869,7 +871,10 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
         "argv0" => module_string_value(&process_argv0_string()),
-        "execPath" => module_string_value(&process_exec_path_string()),
+        "execPath" => {
+            crate::snap_host_value!(2);
+            module_string_value(&process_exec_path_string())
+        }
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),

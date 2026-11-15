@@ -78,6 +78,14 @@ fn deferred_import_keeps_the_site_and_adds_the_runtime_specifier() {
 
 #[test]
 fn deferred_builtin_imports_still_resolve() {
+    // A program with a dynamic import carries the `(name, vtable)` rows of its
+    // builtins (codegen emits them when the program has a `DynamicImport`);
+    // a builtin named by a runtime string resolves through them.
+    let rows = [("os", &crate::object::native_module::namespaces::os::NM_OS)];
+    crate::object::native_module::with_test_module_rows(&rows, deferred_builtins_resolve);
+}
+
+fn deferred_builtins_resolve() {
     for specifier in ["os", "node:os", "node:fs/promises"] {
         let scope = crate::gc::RuntimeHandleScope::new();
         let specifier = scope.root_nanbox_f64(string_value(specifier));

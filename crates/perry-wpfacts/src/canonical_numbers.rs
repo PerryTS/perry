@@ -25,11 +25,35 @@ pub fn enabled() -> bool {
     )
 }
 
-/// Fill `ModuleBindings::number_element_reads` (module docs).
-pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
+/// `PERRY_FACTS_INT32_READS=0` exports no `int32_element_reads`.
+pub fn int32_reads_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_INT32_READS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// Fill `ModuleBindings::number_element_reads` and `int32_element_reads`
+/// (module docs). An element read is an **int32 read** when it qualifies
+/// and, at every copy, the interval of the Numbers its value node holds
+/// lies in the int32 range: every Number the read yields is an int32 (a
+/// consumer that takes ToInt32 of it converts with one truncation).
+/// `sabotage == Some("int32read")` (the negative control) claims it for
+/// every Number read. `probe`: one `# int32_read module= offset=` line per
+/// site, for the dump.
+pub(crate) fn collect(
+    g: &Gen<'_>,
+    bindings: &mut [ModuleBindings],
+    sabotage: Option<&str>,
+    mut probe: Option<&mut Vec<String>>,
+) {
     if g.m.aborted {
         return;
     }
+    let int32_on = int32_reads_enabled();
+    let claim_all = sabotage == Some("int32read");
+    // (module, offset) -> every copy's Numbers are int32s.
+    let mut int32: std::collections::BTreeMap<(u32, u32), bool> = Default::default();
     // (module, offset) -> Some(may be undefined), or None once a copy fails.
     let mut sites: std::collections::BTreeMap<(u32, u32), Option<bool>> = Default::default();
     // A summarized body's value node has one copy per instance
@@ -51,6 +75,13 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
             && node.prim & prim::NUM != 0
             && node.prim & !(prim::NUM | prim::UNDEF) == 0;
         let undef = node.prim & prim::UNDEF != 0;
+        let in_int32 = claim_all
+            || !node.range.is_top()
+                && !node.range.is_empty()
+                && node.range.lo >= i64::from(i32::MIN)
+                && node.range.hi <= i64::from(i32::MAX);
+        let all = int32.entry((mi, offset)).or_insert(true);
+        *all = *all && in_int32;
         let entry = sites.entry((mi, offset)).or_insert(Some(false));
         *entry = match (*entry, number) {
             (Some(prev), true) => Some(prev || undef),
@@ -60,6 +91,15 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     for ((mi, offset), fact) in sites {
         if let (Some(undef), Some(mb)) = (fact, bindings.get_mut(mi as usize)) {
             mb.number_element_reads.push((offset, undef));
+            if int32_on && int32.get(&(mi, offset)).copied().unwrap_or(false) {
+                mb.int32_element_reads.push(offset);
+                if let Some(p) = probe.as_deref_mut() {
+                    p.push(format!(
+                        "# int32_read module={mi} offset={offset} undef={}",
+                        u8::from(undef)
+                    ));
+                }
+            }
         }
     }
 }

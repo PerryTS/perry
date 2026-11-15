@@ -37,7 +37,11 @@ fn native_constructor_export_parent_links_declared_prototype() {
 
     // The bound `events.EventEmitter` export — a BOUND_METHOD closure whose
     // `.prototype` object is materialized on demand, not at mint time.
-    let ee_ctor = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    let ee_ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "events",
+        "EventEmitter",
+    );
 
     // The raw dynamic `prototype` slot used to be undefined here, which is
     // what made the dynamic-parent registration throw before the fix. The
@@ -65,7 +69,11 @@ fn native_constructor_export_parent_links_declared_prototype() {
     // object an ordinary `EE.prototype` read resolves to — so `instanceof`
     // and inherited `emit`/`on` work through the chain.
     let ee_proto = super::function_prototype::ordinary_function_prototype_value_for_read(
-        crate::object::bound_native_callable_export_value("events", "EventEmitter"),
+        crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        ),
     )
     .expect("EventEmitter export must expose a prototype object");
     let decl_proto_addr = (decl_proto.to_bits() & crate::value::POINTER_MASK) as usize;

@@ -34,7 +34,7 @@ pub(crate) static SESSION_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_SESSION,
     links_owner: false,
     name: "Session",
-    constructor_export: Some(("sqlite", "Session")),
+    constructor_export: Some((&perry_runtime::object::NM_SQLITE, "sqlite", "Session")),
     constructor_length: 0,
     install_prototype: install_session_prototype,
 };

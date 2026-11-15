@@ -1038,6 +1038,10 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+        if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(ctx.block().sitofp(I32, &v, DOUBLE));
+        }
         // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
         // is `l` and `r` is never evaluated. (An in-window read under a
         // packed-loop index fact, a proven raw-f64 field, a numeric local.)
@@ -1311,6 +1315,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // BigInt-capable lowering; every guard miss retains that lowering
             // in the peephole's slow arm.
             if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
+                return Ok(value);
+            }
+            // Operands the facts hold as int32 words (an I32 lane, an at-rest
+            // or int32 element) stay i32 through the operator.
+            if let Some(value) = super::int32_operand::try_lower_bitwise(ctx, *op, left, right)? {
                 return Ok(value);
             }
             if matches!(op, BinaryOp::Add) {

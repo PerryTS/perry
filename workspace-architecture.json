@@ -155,7 +155,7 @@
     },
     "perry-codegen-glance": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-js": {
       "category": "codegen-adapter",
@@ -163,7 +163,7 @@
     },
     "perry-codegen-swiftui": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-wasm": {
       "category": "codegen-adapter",
@@ -171,7 +171,7 @@
     },
     "perry-codegen-wear-tiles": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-component-host": {
       "category": "runtime-core",
@@ -395,7 +395,7 @@
     },
     "perry-ui-windows-winui": {
       "category": "platform-adapter",
-      "decision": "merge"
+      "decision": "keep"
     },
     "perry-update-manifest": {
       "category": "compiler-core",

@@ -39,6 +39,8 @@ pub(super) fn static_shape_id_refused_abort(requested: ShapeId, proto_id: u64) -
 #[optimize(size)]
 #[inline(never)]
 pub(super) fn shape_id_exhausted_abort() -> ! {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    super::snap22::snapshot("abort", 0);
     write(b"Perry ShapeId space exhausted; refusing to publish an untracked object shape\n");
     std::process::abort()
 }

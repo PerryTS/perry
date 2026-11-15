@@ -33,6 +33,11 @@ only through the regeneration command, run with main's compiler:
 
 `--self-test` feeds the plainly built dumper's compile log to the restricted
 check, which must refuse it.
+
+
+Full native namespace walks additionally emit identity and member-order records.
+Their minting set must equal MINTING; Node's shared-key order must disagree on
+exactly ORDER_DISAGREES. Missing and repeated records fail both checks.
 """
 import argparse
 import json
@@ -78,8 +83,8 @@ def import_name(specifier):
     compiler's realm-reach scan (perry-hir realm_reach.rs native_module) adds
     the module's `node:<module>` namespace entry and its members. A native
     receiver cell (%NativeNamespace:...%) is a different root: the runtime
-    spells it (path/posix's is %NativeNamespace:path.posix%) and some modules
-    (node:fs) have none. The dumper keys its native roots by this name
+    spells it (path/posix's is %NativeNamespace:path.posix%, not its
+    specifier). The dumper keys its native roots by this name
     (`nativeRoots` in realm_dump.ts; the gate tests hold the two together)."""
     return "node:" + specifier.removeprefix("node:")
 
@@ -87,8 +92,103 @@ def import_name(specifier):
 NATIVE_IMPORT = re.compile(r'^import \* as (realm_native_\d+) from "([^"]+)";$', re.M)
 
 
+# A2-DESIGN §9 Q6: 11 namespaces and 6 sub-namespaces mint per access.
+MINTING = sorted(["console"] + ["%NativeNamespace:" + m + "%" for m in [
+    "buffer", "crypto", "domain", "readline", "string_decoder", "tls", "tty", "v8",
+    "worker_threads", "zlib"]] + ["node:buffer.constants", "node:crypto.constants",
+    "node:http2.constants", "node:perf_hooks.constants", "node:v8.promiseHooks",
+    "node:v8.startupSnapshot"])
+
+
+NODE_ORDER = REFS / "native-order.node.json"
+# Cells whose shared members are in a different relative order than Node's.
+# None is one of the A2 namespace declarations: the module value is a function
+# with own statics (assert, events, module), a submodule export object
+# (diagnostics_channel, fs/promises, stream/consumers, stream/web,
+# test/reporters) or the util object served for sys. Each leaves the list when
+# its export order is fixed forward.
+ORDER_DISAGREES = sorted([
+    "node:assert", "node:diagnostics_channel", "node:events", "node:fs/promises", "node:module",
+    "node:stream/consumers", "node:stream/web", "node:sys", "node:test/reporters"])
+
+
 class GateError(Exception):
     pass
+
+
+def identities(stdout):
+    return [json.loads(line[len("@identity "):]) for line in stdout.splitlines()
+            if line.startswith("@identity ")]
+
+
+def check_identity(records):
+    """Each declaration is recorded once; the minting set equals MINTING."""
+    names = [r["name"] for r in records]
+    if not names or len(set(names)) != len(names):
+        raise GateError(f"identity records are missing or repeat a declaration: {names}")
+    minting = sorted(r["name"] for r in records if not r["one"])
+    if minting != MINTING:
+        raise GateError(f"minting set differs from MINTING: starts {sorted(set(minting) - set(MINTING))}, "
+                        f"stops {sorted(set(MINTING) - set(minting))}")
+    return minting
+
+
+def orders(stdout):
+    return [json.loads(line[len("@order "):]) for line in stdout.splitlines()
+            if line.startswith("@order ")]
+
+
+def shared_order(keys, other):
+    both = set(keys) & set(other)
+    return [k for k in keys if k in both]
+
+
+def check_order(records, node):
+    """Every cell has a Node entry; a null entry is a cell with no Node value
+    (listed); every other cell's shared members are in Node's relative order,
+    except exactly ORDER_DISAGREES."""
+    names = [r["name"] for r in records]
+    if not names or len(set(names)) != len(names):
+        raise GateError(f"order records are missing or repeat a cell: {names}")
+    missing = [n for n in names if n not in node]
+    if missing:
+        raise GateError(f"cells with no entry in {NODE_ORDER.name} (regenerate with node): {missing}")
+    no_node, agree, disagree = [], [], []
+    for r in records:
+        theirs = node[r["name"]]
+        if theirs is None or r["keys"] is None:
+            no_node.append(r["name"])
+        elif shared_order(r["keys"], theirs) == shared_order(theirs, r["keys"]):
+            agree.append(r["name"])
+        else:
+            disagree.append(r["name"])
+    if sorted(disagree) != sorted(ORDER_DISAGREES):
+        raise GateError(f"member order differs from Node's beyond ORDER_DISAGREES: starts "
+                        f"{sorted(set(disagree) - set(ORDER_DISAGREES))}, stops "
+                        f"{sorted(set(ORDER_DISAGREES) - set(disagree))}")
+    return agree, no_node
+
+
+NODE_ORDER_PROBE = r"""
+const subjects = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const out = {};
+for (const s of subjects) {
+  let value;
+  try { const root = require(s.spec); value = s.key === "" ? root : root[s.key]; } catch { value = undefined; }
+  out[s.name] = (typeof value === "object" && value !== null) || typeof value === "function" ? Object.keys(value) : null;
+}
+process.stdout.write(JSON.stringify(out, null, 0));
+"""
+
+
+def node_order(node, records):
+    """Node's Object.keys over each record's access path (null: no value)."""
+    subjects = [{"name": r["name"], "spec": r["spec"], "key": r["key"]} for r in records]
+    run = subprocess.run([node, "-e", NODE_ORDER_PROBE], input=json.dumps(subjects),
+                         capture_output=True, text=True, env=RUN_ENV)
+    if run.returncode != 0:
+        raise GateError(f"node order probe failed: {run.stderr[-500:]}")
+    return json.loads(run.stdout)
 
 
 def compile_ts(perry, source, binary, extra_env):
@@ -134,7 +234,9 @@ def reach_of(log):
 
 
 def check_restricted(log, names_file, names):
-    """The dumper was built with this names file, and R is exactly partial."""
+    """The dumper was built with this names file, and R is the closure of
+    exactly the file's names united with the dumper's own (pre-closure) names:
+    the seed the compiler closed is that union, nothing else, and R holds it."""
     took = [l.split() for l in log.splitlines() if l.startswith("[realm-reach-names] ")]
     if took != [["[realm-reach-names]", str(names_file), str(len(names))]]:
         raise GateError(f"the dumper was not built with PERRY_REALM_REACH_NAMES={names_file}")
@@ -151,7 +253,7 @@ def check_restricted(log, names_file, names):
         raise GateError(f"restricted dumper R is not the names file: extra {extra}, missing {missing}")
 
 
-def dump(binary, names=None, walk=False, projection=None, whole=()):
+def dump(binary, names=None, walk=False, projection=None, whole=(), records=None, order=None):
     """Run a dumper; `walk` hands it the names (realm-dump.names) so a
     restricted dumper walks only roots in R. Its output is restricted to
     `names` either way."""
@@ -169,6 +271,10 @@ def dump(binary, names=None, walk=False, projection=None, whole=()):
     if run.returncode != 0:
         raise GateError(f"{binary} exited {run.returncode}: {run.stderr[-500:]}")
     text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names, projection, whole)
+    if records is not None:
+        records.extend(identities(run.stdout))
+    if order is not None:
+        order.extend(orders(run.stdout))
     return text.replace(str(work_dir()), WORK_TOKEN)
 
 
@@ -201,6 +307,9 @@ def main():
     ap.add_argument("--output", type=Path, default=ROOT / "target" / "realm-diff")
     ap.add_argument("--regenerate", action="store_true", help="rewrite realm-dumps/ (base arm only)")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--regenerate-node", action="store_true",
+                    help=f"rewrite realm-dumps/{NODE_ORDER.name} from --node (Node v26.12.1)")
+    ap.add_argument("--node", help="the node binary for --regenerate-node")
     ap.add_argument("--only", nargs="*", help="limit to these programs and/or 'full'")
     args = ap.parse_args()
     out = args.output.resolve()
@@ -243,7 +352,20 @@ def main():
                 (REFS / "full.jsonl").write_text(dump(binary))
                 print("realm_diff_gate: regenerated full")
             elif "full" in wanted:
-                ok &= compare("full", REFS / "full.jsonl", dump(binary), out)
+                records, order = [], []
+                text = dump(binary, records=records, order=order)
+                if args.regenerate_node:
+                    if not args.node:
+                        raise GateError("--regenerate-node needs --node")
+                    NODE_ORDER.write_text(json.dumps(node_order(args.node, order), indent=0, sort_keys=True) + "\n")
+                    print(f"realm_diff_gate: regenerated {NODE_ORDER.name} ({len(order)} cells)")
+                ok &= compare("full", REFS / "full.jsonl", text, out)
+                minting = check_identity(records)
+                print(f"realm_diff_gate: identity: {len(records)} declarations, "
+                      f"{len(minting)} minting = MINTING")
+                agree, no_node = check_order(order, json.loads(NODE_ORDER.read_text()))
+                print(f"realm_diff_gate: order: {len(agree)} cells agree with Node, "
+                      f"{len(ORDER_DISAGREES)} in ORDER_DISAGREES, no Node value: {no_node}")
             if args.self_test:
                 names_file = REFS / "hello.names.json"
                 names = json.loads(names_file.read_text())["names"]

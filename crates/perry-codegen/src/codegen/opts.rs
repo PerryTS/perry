@@ -48,6 +48,9 @@ pub struct AppMetadata {
     /// `createRequire` — already reach the provider's export dispatcher.
     /// (#10428, #10429)
     pub native_provider_installs: Vec<String>,
+    /// The program reaches builtins by runtime strings: the entry emits the
+    /// `(name, vtable)` rows of every native module (`@perry_native_modules`).
+    pub native_module_table: bool,
 }
 
 impl Default for AppMetadata {
@@ -62,6 +65,7 @@ impl Default for AppMetadata {
             module_source_path: None,
             entry_declared_esm: None,
             native_provider_installs: Vec::new(),
+            native_module_table: false,
         }
     }
 }

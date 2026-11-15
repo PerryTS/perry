@@ -1229,7 +1229,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         // `getOwnPropertyNames(fs).forEach(k => defineProperty(copy, k,
         // getOwnPropertyDescriptor(fs, k)))`; with only `__module__` listed,
         // the clone dropped every fs method (`readFileSync` → undefined).
-        // Mirror `Object.keys` (vt_own_keys_array → native_module_enumerable_keys).
+        // Mirror `Object.keys` (vt_own_keys_array → the shape's vtable keys).
         if obj_jv.is_pointer() {
             let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as *const ObjectHeader;
             if !obj_ptr.is_null() {
@@ -1877,7 +1877,7 @@ pub(crate) unsafe fn nm_get_own_descriptor(
     use super::NmMember;
     let module_name = read_native_module_name(obj)?;
     let key_name = key_name?;
-    let member = nm_member(&module_name, key_name)?;
+    let member = nm_member(obj, &module_name, key_name)?;
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     Some(match member {
         NmMember::FsAccessor => {
@@ -1912,18 +1912,22 @@ pub(crate) unsafe fn nm_get_own_descriptor(
     })
 }
 
-/// What the module's tables say about own member `key` of namespace `module`
+/// What the receiver's namespace shape says about own member `key` of `module`
 /// (`None`: no such member, or deleted, or hidden). Reached through
 /// `NmNamespaceOps::member` and from the descriptor above.
 #[inline(never)]
-pub(crate) fn nm_member(module: &str, key: &str) -> Option<super::NmMember> {
+pub(crate) fn nm_member(
+    obj: *const ObjectHeader,
+    module: &str,
+    key: &str,
+) -> Option<super::NmMember> {
     use super::NmMember;
     if let Some(enumerable) =
         super::native_module::zlib_readonly_property_enumerability(module, key)
     {
         return Some(NmMember::ZlibReadonly { enumerable });
     }
-    if !native_module_has_enumerable_key(module, key) {
+    if !unsafe { super::native_module::namespace_has_enumerable_key(obj, module, key) } {
         return None;
     }
     Some(match (module, key) {

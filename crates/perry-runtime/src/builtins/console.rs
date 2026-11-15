@@ -215,7 +215,8 @@ pub extern "C" fn js_console_method_by_value(key: f64) -> f64 {
         None => return f64::from_bits(crate::value::TAG_UNDEFINED),
     };
     unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::console::NM_CONSOLE,
             b"console".as_ptr(),
             "console".len(),
             name.as_ptr(),
@@ -800,6 +801,8 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     // Capture wall-clock start before any string decoding or TLS overhead
     // so the stored Instant reflects the call site, not the bookkeeping cost.
     let start = Instant::now();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.console_time", 0);
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(
         #[inline(never)]

@@ -6,6 +6,7 @@ use super::*;
 fn read_stream_prototype() -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        &crate::fs::namespace::NM_FS,
         "fs",
         "ReadStream",
     ));

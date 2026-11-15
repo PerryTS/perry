@@ -489,10 +489,21 @@ pub(crate) fn test_throw(value: f64) -> ! {
     js_throw(value)
 }
 
-/// The one raise behind `js_throw` and the four typed leaves: store the
-/// value and transport it to the handler.
-#[inline(never)]
-fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
+/// A `throw` whose handler is a scope of the throwing function itself: the
+/// generated code makes the value pending here, restores the managed stacks
+/// (`js_eh_pad_enter`, as the scope's landing pad does) and branches to the
+/// block that pad continues at. No frame is abandoned, so nothing is
+/// transported; everything else a throw does happens exactly as in
+/// [`raise_thrown`].
+#[no_mangle]
+pub extern "C" fn js_throw_local(value: f64) {
+    set_thrown(value, ThrowKind::Compiled);
+}
+
+/// Make `value` the pending exception of this thread: the part of a throw
+/// that does not depend on where its handler is.
+#[inline]
+fn set_thrown(value: f64, kind: ThrowKind) {
     // The throws premise of the generated GC-effects table: a collection never
     // unwinds. Throw path only (see `forbid_throw_in_collection`).
     crate::gc::allocation_pacing::forbid_throw_in_collection();
@@ -512,6 +523,13 @@ fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
     if trace_throw_enabled() {
         trace_throw(value, kind);
     }
+}
+
+/// The one raise behind `js_throw` and the four typed leaves: store the
+/// value and transport it to the handler.
+#[inline(never)]
+fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
+    set_thrown(value, kind);
     #[cfg(target_os = "wasi")]
     crate::eh::raise_wasm_exception();
     #[cfg(not(target_os = "wasi"))]

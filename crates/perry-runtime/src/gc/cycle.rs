@@ -648,6 +648,7 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        crate::snap_funnel!(Gc);
         super::allocation_pacing::begin_full();
         // Build the lazy stack-map index HERE, not only at the entry points.
         //
@@ -843,6 +844,7 @@ impl GcCycleState {
         &mut self,
         budget: GcWorkBudget,
     ) -> GcCycleStepResult {
+        crate::snap_funnel!(Gc);
         let _allocation_guard = super::allocation_pacing::CollectorStepGuard::enter();
         let phase_before = self.phase;
         if self.phase == GcCyclePhase::Complete {

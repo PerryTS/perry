@@ -11,6 +11,11 @@ the systematic version of tracker
 matrix"). Deep *behavioral* parity lives in the hand-authored node-suite
 (`scripts/parity.py`); this harness is a wide, shallow **shape** sweep.
 
+For `perf_hooks`, the module namespace and its CommonJS default export expose
+`constants`. The `performance` singleton has no own `constants` or `default`
+property. Realm declarations use `node:perf_hooks.default` for the default
+namespace and `node:perf_hooks.default.constants` for its constants access path.
+
 ## To check one module fast
 
 ```bash

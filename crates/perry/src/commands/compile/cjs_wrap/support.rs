@@ -132,7 +132,7 @@ export function requireComputed(specifier, dir, reloader) {{
     // A closed program has no computed require (design CJS_LINK §2.5).
     if (__perry_cjs_open()) {{
     // Builtins not hoisted as static imports resolve through createRequire,
-    // which calls js_create_native_module_namespace, as Node's
+    // which births the namespace from the program's module rows, as Node's
     // require("process") does. The original spelling is kept: prefix-only
     // builtins are packages when requested without `node:` (#10410).
     if (__perry_is_builtin(specifier)) return builtin(specifier);

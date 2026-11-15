@@ -42,7 +42,7 @@ pub(crate) static DB_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_DATABASE_SYNC,
     links_owner: true,
     name: "Database",
-    constructor_export: Some(("sqlite", "Database")),
+    constructor_export: Some((&perry_runtime::object::NM_SQLITE, "sqlite", "Database")),
     constructor_length: 1,
     install_prototype: install_db_prototype,
 };

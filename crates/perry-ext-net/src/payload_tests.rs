@@ -48,7 +48,7 @@ fn explicit_socket_close_releases_its_separate_codec_immediately_and_once() {
         let parser = scope.root_nanbox(unsafe {
             perry_ffi::native_payload::alloc_in(
                 &CODEC,
-                "",
+                None,
                 CodecProbe(vec![1; 16 * 1024]),
                 16 * 1024 + std::mem::size_of::<CodecProbe>(),
                 &[],

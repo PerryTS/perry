@@ -412,7 +412,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         if let Some((source, imported)) = ctx.native_import_value_origins.get(name) {
             return Expr::Call {
                 callee: Box::new(Expr::ExternFuncRef {
-                    name: "js_native_module_named_esm_export_value".to_string(),
+                    name: "js_native_module_named_esm_export_value_vt".to_string(),
                     param_types: vec![Type::String, Type::String],
                     return_type: Type::Any,
                 }),
@@ -484,7 +484,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         return Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_native_module_named_esm_export_value".to_string(),
+                name: "js_native_module_named_esm_export_value_vt".to_string(),
                 param_types: vec![Type::String, Type::String],
                 return_type: Type::Any,
             }),

@@ -67,7 +67,10 @@ pub(crate) fn process_emitter_root_scanner(visitor: &mut crate::gc::RuntimeRootV
 }
 
 fn process_namespace_value() -> f64 {
-    crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
+    crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::process::NM_PROCESS,
+        "process",
+    )
 }
 
 /// Coerce a raw NaN-boxed JS value into Node's EventEmitter event-name key

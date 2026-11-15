@@ -34,7 +34,8 @@ Two pad objects per arm, both made of unreferenced SHF_GNU_RETAIN input sections
       binaries and the runtime archive define is reported, and the image ends at the same address.
 
 .eh_frame is padded with one FDE (a retained function in .text.lpad); its marker is the end of that FDE, found
-through the .eh_frame_hdr search table. Sections the runtime walks record by record (perry_*, stack maps)
+through the .eh_frame_hdr search table. Sections the runtime walks record by record (perry_* other than
+perry_js_text, stack maps)
 and the linker-generated .eh_frame_hdr are never padded: their size differences are taken up by the next
 padded section, so the runtime bytes after them still coincide, but the runtime records inside them move
 with the compiled records in front of them.
@@ -44,6 +45,12 @@ import hashlib, json, os, struct, subprocess, sys
 # output section -> (mid input section, flags, fill, marker) and (end input section)
 PADDABLE = {
     ".text": ('.text.lpad', '"axR",@progbits', '0xcc', '__lpad_mid_text', '.text.lpade'),
+    # The compiled JS bodies (codegen's perry_js_text.fn.* inputs, gathered after .text by the JS text link
+    # rule) end the executable segment: a difference in compiled code size moves the runtime's own body there,
+    # the section end and, past a page boundary, the start of the read-only segment that follows. The runtime
+    # reads only the section's bounds (error_stack_frames.rs js_text_bounds), never its records.
+    "perry_js_text": ('perry_js_text.fn.lpad', '"axR",@progbits', '0xcc', '__lpad_mid_perry_js_text',
+                      'perry_js_text.fn.lpade'),
     ".rodata": ('.rodata.lpad', '"aR",@progbits', '0', '__lpad_mid_rodata', '.rodata.lpade'),
     ".gcc_except_table": ('.gcc_except_table.lpad', '"aR",@progbits', '0', '__lpad_mid_gcc_except_table',
                           '.gcc_except_table.lpade'),

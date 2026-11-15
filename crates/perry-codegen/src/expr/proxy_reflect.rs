@@ -937,6 +937,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
             strict,
+            element_offset,
             ..
         } => {
             // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
@@ -1027,7 +1028,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
-                        element_offset: 0,
+                        // The store's own site: its key facts apply
+                        // (`index_key::store_key_fact`). An at-rest store
+                        // was taken above (`rest_elems::write_floor`).
+                        element_offset: *element_offset,
                         byte_offset: 0,
                         byte_end: 0,
                     },

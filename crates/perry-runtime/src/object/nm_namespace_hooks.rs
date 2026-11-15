@@ -44,12 +44,12 @@ pub(crate) struct NmNamespaceOps {
     /// namespace object (`const fn = fs.lstatSync`): NaN-boxed namespace
     /// value + property-name bytes → bound callable (or undefined).
     pub bind_method: unsafe fn(f64, *const u8, usize) -> f64,
-    /// What the module's tables say about an own member (`None`: no such
+    /// What the receiver's namespace shape says about an own member (`None`: no such
     /// member, or deleted, or hidden): see [`NmMember`].
-    pub member: fn(&str, &str) -> Option<NmMember>,
+    pub member: fn(*const ObjectHeader, &str, &str) -> Option<NmMember>,
 }
 
-/// An own member of a namespace as its module's tables describe it: the one
+/// An own member as its namespace shape describes it: the one
 /// classification its descriptor (`nm_get_own_descriptor`) and `delete`
 /// ([`nm_delete_member`]) read.
 #[derive(Clone, Copy)]
@@ -112,7 +112,7 @@ pub(crate) unsafe fn nm_delete_member(obj: f64, key: f64) -> Option<i32> {
         std::str::from_utf8(module).ok()?,
         std::str::from_utf8(name).ok()?,
     );
-    match (ops.member)(module, name) {
+    match (ops.member)(ptr, module, name) {
         Some(member) if !member.configurable() => return Some(0),
         None if name == "__module__"
             || super::native_module::native_namespace_prop_override_get(module, name).is_none() =>

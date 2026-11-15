@@ -151,6 +151,7 @@ mod tests {
         // The names the deleted hand list carried: the table proves them.
         for name in [
             "js_eh_pad_enter",
+            "js_throw_local",
             "js_get_exception",
             "js_clear_exception",
             "js_catch_enter",

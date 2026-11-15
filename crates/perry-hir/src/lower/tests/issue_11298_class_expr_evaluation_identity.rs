@@ -86,7 +86,7 @@ fn native_module_parent_keeps_the_shared_template() {
     );
     assert!(
         body.contains(
-            "evaluated_parent:Some(Call{callee:ExternFuncRef{name:\"js_native_module_named_esm_export_value\""
+            "evaluated_parent:Some(Call{callee:ExternFuncRef{name:\"js_native_module_named_esm_export_value_vt\""
         ) && body.contains("args:[String(\"events\"),String(\"EventEmitter\")]"),
         "the parent must be the evaluated native-module export: {body}"
     );

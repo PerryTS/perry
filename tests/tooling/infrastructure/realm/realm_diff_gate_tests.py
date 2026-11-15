@@ -109,15 +109,16 @@ class ImportNames(unittest.TestCase):
         names = self.names("node-imports")
         self.assertEqual(kept_imports(names), ["node:events", "node:fs", "node:path/posix"])
         # The native receiver cells are spelled by the runtime, not by the
-        # specifier: keyed by them, node:fs and node:path/posix would be lost.
+        # specifier: the dotted path receiver is distinct from its import name.
         self.assertIn("%NativeNamespace:events%", names)
-        self.assertNotIn("%NativeNamespace:fs%", names)
+        self.assertIn("%NativeNamespace:fs%", names)
         self.assertNotIn("%NativeNamespace:path/posix%", names)
         self.assertIn("%NativeNamespace:path.posix%", names)
 
     def test_a_global_receiver_cell_does_not_keep_its_module_import(self):
         names = self.names("hello")
-        self.assertIn("%NativeNamespace:console%", names)
+        self.assertIn("console", names)
+        self.assertNotIn("%NativeNamespace:console%", names)
         self.assertEqual(kept_imports(names), [])
 
 
@@ -162,6 +163,70 @@ class OneSource(unittest.TestCase):
         self.assertEqual(set(sources), {"reference", "check"})
         self.assertIn("is outside R", sources["reference"])
         self.assertEqual(sources["reference"], sources["check"])
+
+class IdentityCheck(unittest.TestCase):
+    def records(self, minting):
+        return [{"name": n, "one": n not in minting} for n in gate.MINTING + ["%NativeNamespace:fs%"]]
+
+    def test_the_minting_set_equals_the_list(self):
+        self.assertEqual(gate.check_identity(self.records(gate.MINTING)), gate.MINTING)
+
+    def test_a_cell_that_stops_or_starts_minting_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "stops"):
+            gate.check_identity(self.records(gate.MINTING[1:]))
+        with self.assertRaisesRegex(gate.GateError, "starts"):
+            gate.check_identity(self.records(gate.MINTING + ["%NativeNamespace:fs%"]))
+
+    def test_a_second_record_or_none_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "repeat"):
+            gate.check_identity(self.records(gate.MINTING) + [{"name": "%NativeNamespace:fs%", "one": True}])
+        with self.assertRaisesRegex(gate.GateError, "missing"):
+            gate.check_identity([])
+
+    def test_identity_lines_are_read_from_the_dump(self):
+        out = '@realm {}\n@identity {"name": "a", "one": true}\n'
+        self.assertEqual(gate.identities(out), [{"name": "a", "one": True}])
+
+
+
+class OrderCheck(unittest.TestCase):
+    # The fixtures are not the runtime's cells: no listed disagreement.
+    def setUp(self):
+        self.saved = gate.ORDER_DISAGREES
+        gate.ORDER_DISAGREES = []
+
+    def tearDown(self):
+        gate.ORDER_DISAGREES = self.saved
+
+    def rec(self, name, keys):
+        return {"name": name, "spec": name, "key": "", "keys": keys}
+
+    def test_shared_members_in_node_order_agree_and_only_one_side_is_not_an_order_question(self):
+        records = [self.rec("node:a", ["x", "perry_only", "y"]), self.rec("node:streams", ["s"])]
+        node = {"node:a": ["x", "node_only", "y"], "node:streams": None}
+        self.assertEqual(gate.check_order(records, node), (["node:a"], ["node:streams"]))
+
+    def test_a_cell_out_of_node_order_fails_by_name(self):
+        with self.assertRaisesRegex(gate.GateError, r"starts \['node:a'\]"):
+            gate.check_order([self.rec("node:a", ["y", "x"])], {"node:a": ["x", "y"]})
+
+    def test_a_listed_disagreement_that_stops_fails(self):
+        gate.ORDER_DISAGREES = ["node:a"]
+        with self.assertRaisesRegex(gate.GateError, r"stops \['node:a'\]"):
+            gate.check_order([self.rec("node:a", ["x", "y"])], {"node:a": ["x", "y"]})
+
+    def test_a_cell_without_a_node_entry_or_a_repeat_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "no entry"):
+            gate.check_order([self.rec("node:a", ["x"])], {})
+        with self.assertRaisesRegex(gate.GateError, "repeat"):
+            gate.check_order([self.rec("node:a", ["x"])] * 2, {"node:a": ["x"]})
+        with self.assertRaisesRegex(gate.GateError, "missing"):
+            gate.check_order([], {})
+
+    def test_order_lines_are_read_from_the_dump(self):
+        out = '@realm {}\n@order {"name": "a", "spec": "a", "key": "", "keys": ["k"]}\n'
+        self.assertEqual(gate.orders(out), [{"name": "a", "spec": "a", "key": "", "keys": ["k"]}])
+
 
 if __name__ == "__main__":
     unittest.main()

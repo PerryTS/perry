@@ -15,7 +15,6 @@
 "%Layout:REGEX_EXEC_INDICES_NAMED%",
 "%Layout:REGEX_EXEC_NAMED%",
 "%Layout:REGEX_INDICES_GROUPS_NAMED%",
-"%NativeNamespace:console%",
 "%StringIteratorPrototype%",
 "%StringIteratorPrototype%.next",
 "AggregateError",

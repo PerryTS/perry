@@ -34,7 +34,7 @@ pub(crate) fn buffer_constructor_value() -> f64 {
 
         for method in BUFFER_STATIC_METHODS {
             let method_value =
-                scope.root_nanbox_f64(bound_native_callable_export_value("buffer.Buffer", method));
+                scope.root_nanbox_f64(bound_native_callable_export_value(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL, "buffer.Buffer", method));
             closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
                 crate::closure::closure_set_dynamic_prop(
                     closure as usize,

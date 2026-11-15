@@ -229,7 +229,7 @@ fn bucketless_sub_namespaces_keep_their_lowering() {
     let h = hir(src);
     assert!(
         h.contains(
-            r#"CallSpread { callee: PropertyGet { object: Call { callee: ExternFuncRef { name: "js_native_module_named_esm_export_value""#
+            r#"CallSpread { callee: PropertyGet { object: Call { callee: ExternFuncRef { name: "js_native_module_named_esm_export_value_vt""#
         ),
         "the named promises import must spread through its export binding: {h}"
     );

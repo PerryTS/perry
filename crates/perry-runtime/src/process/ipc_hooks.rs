@@ -19,7 +19,9 @@ pub(crate) fn process_ipc_property(property: &str) -> Option<f64> {
             }
             "send" | "disconnect" => {
                 return Some(crate::object::bound_native_callable_export_value(
-                    "process", property,
+                    &crate::object::native_module::namespaces::process::NM_PROCESS,
+                    "process",
+                    property,
                 ))
             }
             _ => {}

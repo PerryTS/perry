@@ -40,13 +40,6 @@ pub const RECORD_MAX_WORDS: u16 = 16;
 /// until VR-4b: every operation on a record array is `R6Op` before then.
 pub const RECORD_ARRAY_INTRINSICS: &[&str] = &[];
 
-/// A record crosses a program call in a `Record` signature slot (§5.2):
-/// codegen lowers the record `$sig` ABI from VR-3b. Until then a record
-/// argument or result of a typed call rejects (`R5UntypedCall`), except an
-/// argument whose parameter is Boxed (owner ruling §4.4: the record is
-/// materialized at the call), so no record converts inside the program.
-pub const RECORD_SIGNATURES: bool = false;
-
 /// A record lane's representation in SSA (§1.2); in memory every lane is one
 /// valid JSValue word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -524,6 +517,9 @@ pub(crate) fn derive(
     }
     let mut s = Scan::new(g, sites);
     s.ignore_r2 = ignore_r2;
+    // S0 negative control `vruntyped` (§10.3): R5UntypedCall ignored.
+    s.ignore_untyped = sabotage == Some("vruntyped");
+    s.tmpl_module = templates.iter().map(|t| (t.id, t.module)).collect();
     // S0 negative controls (DESIGN-p4l4 §10.3): an identity route ignored.
     s.ignored_route = match sabotage {
         Some("vrident" | "vrinline") => Some("==="),
@@ -657,6 +653,10 @@ struct Scan<'a, 'g> {
     ignored_route: Option<&'static str>,
     /// The negative control `vrwrite` ignores R2.
     ignore_r2: bool,
+    /// The negative control `vruntyped` ignores R5UntypedCall.
+    ignore_untyped: bool,
+    /// Each template's module (`TemplateFacts::module`).
+    tmpl_module: FxHashMap<TmplId, Option<u32>>,
     /// A method call's receiver node.
     mcall_recv: FxHashMap<CallId, NodeId>,
     /// The `new` calls: their result is the object they birth.
@@ -810,6 +810,8 @@ impl<'a, 'g> Scan<'a, 'g> {
             captured,
             ignored_route: None,
             ignore_r2: false,
+            ignore_untyped: false,
+            tmpl_module: FxHashMap::default(),
             elem_atom,
             holders,
             ctor_this,
@@ -1367,13 +1369,14 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     Use::TypedCall(call) => {
                                         let src = self.source_any(call, n);
                                         match self.typed_target(src) {
+                                            Err(_) if self.ignore_untyped => {}
                                             Err(e) => why = Some(e),
                                             Ok(f) => {
                                                 let arg = match c {
                                                     Cons::ArgInto { i, .. } => Some(*i),
                                                     _ => None,
                                                 };
-                                                why = self.record_slot(src, f, arg, &region);
+                                                why = self.record_slot(src, f, arg, &region, &recs);
                                             }
                                         }
                                     }
@@ -1486,7 +1489,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
             match self.typed_target(c) {
                 Ok(f) => {
-                    if let Some(e) = self.record_slot(c, f, Some(i), region) {
+                    if let Some(e) = self.record_slot(c, f, Some(i), region, recs) {
                         return Some(e);
                     }
                 }
@@ -1499,6 +1502,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                         });
                     }
                 }
+                Err(_) if self.ignore_untyped => {}
                 Err(e) => return Some(e),
             }
         }
@@ -1512,7 +1516,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
             match self.typed_target(c) {
                 Ok(f) => {
-                    if let Some(e) = self.record_slot(c, f, None, region) {
+                    if let Some(e) = self.record_slot(c, f, None, region, recs) {
                         return Some(e);
                     }
                 }
@@ -1531,36 +1535,56 @@ impl<'a, 'g> Scan<'a, 'g> {
         None
     }
 
-    /// `RECORD_SIGNATURES` (VR-3a): a record in a typed call's slot (`arg`:
-    /// argument `i`, `None`: the result) waits for the record `$sig` ABI,
-    /// unless the slot is a Boxed parameter of a helper that receives a
-    /// materialized copy (owner ruling §4.4, `copy_regions`).
+    /// A record in a typed call's slot (`arg`: argument `i`, `None`: the
+    /// result) crosses in the callee's `Record` signature slot (§5.2,
+    /// VR-3b): codegen's typed calls are same-module, and a record's lanes
+    /// are lowered where its literal is born, so the call, the callee and
+    /// the templates `recs` are of one module. A Boxed parameter of a
+    /// helper receives a materialized copy instead (owner ruling §4.4,
+    /// `copy_regions`). With record signatures off
+    /// (`PERRY_FACTS_RECORD_SIGNATURES=0`) every other slot rejects.
     fn record_slot(
         &self,
         c: CallId,
         f: FnIdx,
         arg: Option<u32>,
         region: &FxHashMap<NodeId, FnIdx>,
+        recs: &[TmplId],
     ) -> Option<RecordReject> {
-        if RECORD_SIGNATURES {
-            return None;
-        }
+        let m = &self.g.m;
         let boxed_param = arg.is_some_and(|i| {
-            self.g.m.funcs[f as usize]
+            m.funcs[f as usize]
                 .params
                 .get(i as usize)
                 .is_some_and(|p| region.contains_key(p))
         });
-        (!boxed_param).then(|| {
-            RecordReject::R5UntypedCall(format!(
-                "{} {}: the record signature ABI is VR-3b",
-                self.site(c),
-                match arg {
-                    Some(i) => format!("arg({i})"),
-                    None => "result".to_string(),
-                }
-            ))
-        })
+        if boxed_param {
+            return None;
+        }
+        let slot = match arg {
+            Some(i) => format!("arg({i})"),
+            None => "result".to_string(),
+        };
+        let untyped = |why: &str| {
+            Some(RecordReject::R5UntypedCall(format!(
+                "{} {slot}: {why}",
+                self.site(c)
+            )))
+        };
+        if !m.record_signatures {
+            return untyped("record signatures are off");
+        }
+        let fm = m.funcs[f as usize].module;
+        if self.rec_of.get(&c).is_some_and(|r| r.module != fm) {
+            return untyped("a call from another module");
+        }
+        if recs
+            .iter()
+            .any(|tm| self.tmpl_module.get(tm).copied().flatten() != Some(fm))
+        {
+            return untyped("the literal is born in another module");
+        }
+        None
     }
 
     /// Call `c` is a method call on record arrays of one of `recs` only
@@ -1736,8 +1760,8 @@ pub fn ledger_lines(templates: &[TemplateFacts], arrays: &[RecordArray]) -> Vec<
         out.push(
             "# records-limits natives are default-deny (only realm declarations with effects describe a slot); \
              X | null rejects; two literal sites of one interface are two templates; \
-             a record in a typed call's argument or result waits for the VR-3b signature ABI \
-             (a Boxed helper parameter receives a copy); \
+             a record crosses a typed call of its own module in a Record signature slot \
+             (a Boxed helper parameter receives a copy; PERRY_FACTS_RECORD_SIGNATURES=0 rejects instead); \
              record arrays wait for the VR-4b intrinsics"
                 .to_string(),
         );

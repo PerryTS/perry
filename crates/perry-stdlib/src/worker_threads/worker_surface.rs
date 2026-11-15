@@ -4,7 +4,11 @@ fn worker_notification_process_value() -> f64 {
     unsafe {
         js_nm_install_process();
     }
-    perry_runtime::object::js_create_native_module_namespace(b"process".as_ptr(), 7)
+    perry_runtime::object::js_create_native_module_namespace_vt(
+        &perry_runtime::object::NM_PROCESS,
+        b"process".as_ptr(),
+        7,
+    )
 }
 
 fn call_process_method(method: &[u8], first: f64, second: Option<f64>) -> f64 {

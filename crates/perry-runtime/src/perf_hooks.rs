@@ -1292,7 +1292,11 @@ unsafe fn make_observer_object(id: usize) -> f64 {
         let kp = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
-    crate::object::js_object_set_keys(obj, keys);
+    let obj = crate::object::native_module::set_native_namespace_keys(
+        obj,
+        keys,
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    );
     link_perf_prototype(
         crate::value::js_nanbox_pointer(obj as i64),
         "PerformanceObserver",
@@ -1617,9 +1621,10 @@ pub extern "C" fn js_perf_observer_flush_all(
             // the dispatch bucket would be empty — every method call on the object
             // would resolve to `undefined` and silently do nothing. Arm it here.
             crate::object::js_nm_install_perf();
-            let module = b"perf_observer_list";
-            let list =
-                crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+            let list = crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::perf_hooks::NM_PERF_OBSERVER_LIST,
+                "perf_observer_list",
+            );
             let list = link_perf_prototype(list, "PerformanceObserverEntryList");
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {

@@ -85,15 +85,27 @@ pub(super) fn native_namespace_as_default(submod: &SubmoduleSpec) -> Option<f64>
     {
         return None;
     }
-    let module = match submod.key {
-        "timers_promises" => "timers/promises",
-        "readline_promises" => "readline/promises",
-        "stream_consumers" => "stream/consumers",
-        "stream_web" => "stream/web",
-        _ => return None,
-    };
-    Some(crate::object::js_create_native_module_namespace(
-        module.as_ptr(),
-        module.len(),
-    ))
+    // Site-local vtable choice: the names are this site's own closed set inside one
+    // module family, so reaching this site already reaches the family it names.
+    let (vt, module): (&'static crate::object::native_module::NativeModuleVtable, _) =
+        match submod.key {
+            "timers_promises" => (
+                &crate::object::native_module::namespaces::timers::NM_TIMERS_PROMISES,
+                "timers/promises",
+            ),
+            "readline_promises" => (
+                &crate::object::native_module::namespaces::readline::NM_READLINE_PROMISES,
+                "readline/promises",
+            ),
+            "stream_consumers" => (
+                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                "stream/consumers",
+            ),
+            "stream_web" => (
+                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                "stream/web",
+            ),
+            _ => return None,
+        };
+    Some(crate::object::native_module::create_native_module_namespace(vt, module))
 }

@@ -207,8 +207,9 @@ fn local_names_and_types_are_not_global_references() {
 }
 
 #[test]
-fn restricting_drops_top_and_closes_the_given_names() {
-    // `with` makes R top, and the scan closes it to the whole catalog.
+fn restricting_drops_top_and_closes_the_given_names_with_the_programs_own() {
+    // `with` makes R top, and the scan closes it to the whole catalog; the
+    // program's own names are kept beside it.
     let mut r = reach("new Map(); with ({}) { x; }");
     assert!(r.is_full(), "{r:?}");
     assert_eq!(r.names.len(), CATALOG.len());

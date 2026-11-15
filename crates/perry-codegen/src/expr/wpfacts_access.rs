@@ -458,6 +458,37 @@ pub(crate) fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
         .map(|(name, _)| name.clone())
 }
 
+/// The whole-program half of a field read's proof, from the facts alone:
+/// the receiver binding's class set is known and small, and in every class
+/// the key is a birth data field. `prove` gates on it before it consults
+/// codegen's own layout; the parameter fate (`life_fate`) asks it alone, so
+/// a read the fate calls code-free is a read `prove` admits on the same
+/// predicate. `Ok(true)`: the read is a bare load with no run-time test and
+/// no miss arm (unchecked binding, no interpreted code, every class's field
+/// definite); `Ok(false)`: proven only behind a guard or a hole compare,
+/// whose miss arm is the generic operation (it may run code). `Err`: not
+/// proven, with `prove`'s refusal reason.
+pub(crate) fn facts_read(
+    facts: &crate::codegen::ElisionFacts,
+    recv: &crate::codegen::FactsRecv,
+    property: &str,
+) -> Result<bool, &'static str> {
+    if property.starts_with('#') {
+        return Err("private key requires private-element semantics");
+    }
+    if recv.class_ids.is_empty() || recv.class_ids.len() > 4 {
+        return Err("receiver class set is empty or exceeds four classes");
+    }
+    let mut bare = !recv.checked && !facts.interp_guard;
+    for &cid in &recv.class_ids {
+        let f = facts
+            .field(cid, property)
+            .ok_or("key is not a definite data birth field of every receiver class")?;
+        bare &= !f.declared && !f.reserved;
+    }
+    Ok(bare)
+}
+
 /// The zero-guard proof for `object.property`, if the facts give one.
 pub(crate) fn prove(
     ctx: &FnCtx<'_>,
@@ -481,8 +512,8 @@ pub(crate) fn prove(
         crate::fallback_diag::refuse("receiver has no prefix-stable binding proof");
         None
     })?;
-    if recv.class_ids.is_empty() || recv.class_ids.len() > 4 {
-        crate::fallback_diag::refuse("receiver class set is empty or exceeds four classes");
+    if let Err(why) = facts_read(&ctx.wpfacts, &recv, property) {
+        crate::fallback_diag::refuse(why);
         return None;
     }
     let checked = recv.checked;
@@ -1304,3 +1335,7 @@ impl FieldProof {
         crate::target_layout::HeaderForm::Meta
     }
 }
+
+#[cfg(test)]
+#[path = "wpfacts_access_tests.rs"]
+mod tests;

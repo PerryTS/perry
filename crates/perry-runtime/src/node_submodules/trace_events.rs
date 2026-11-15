@@ -667,7 +667,10 @@ pub extern "C" fn js_trace_events_flush_output() {
 }
 
 fn emit_enabled_trace_warning() {
-    let process = crate::object::js_create_native_module_namespace(b"process".as_ptr(), 7);
+    let process = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::process::NM_PROCESS,
+        "process",
+    );
     let name = js_string_from_bytes(b"emitWarning".as_ptr(), 11);
     let warning = string_value("There are more than 10 enabled Tracing objects");
     let callback = crate::object::js_object_get_field_by_name_f64(

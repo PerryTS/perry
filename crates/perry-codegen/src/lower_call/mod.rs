@@ -600,6 +600,10 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);
     }
+    // DESIGN-p4l4 VR-3b: a typed call of a record `$sig` (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_lower_value_call(ctx, callee, args)? {
+        return Ok(value);
+    }
     // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).
     if let Some(value) =
         crate::codegen::signature_entry::try_lower_typed_method_call(ctx, callee, args)?
@@ -651,7 +655,7 @@ fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
         // constructed a namespace or installed its prototype/static handlers.
         // Install only the named module before caching an undecorated callable
         // (e.g. AsyncResource without its own bind). Preserve module stripping.
-        if name == "js_native_module_named_esm_export_value"
+        if name == "js_native_module_named_esm_export_value_vt"
             && !ctx.import_function_prefixes.contains_key(name)
         {
             if let [Expr::String(module), Expr::String(property)] = args {
@@ -677,6 +681,26 @@ fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
                         ctx.block().call_void(install, &[]);
                     }
                 }
+            }
+            // The read holds no receiver: it names the module's vtable.
+            if let [Expr::String(module), Expr::String(property)] = args {
+                let m = ctx.strings.intern(module);
+                let p = ctx.strings.intern(property);
+                let module_global = format!("@{}", ctx.strings.entry(m).handle_global);
+                let property_global = format!("@{}", ctx.strings.entry(p).handle_global);
+                let vtable = crate::nm_install::nm_vtable_ref(module);
+                let blk = ctx.block();
+                let module_value = blk.load(crate::types::DOUBLE, &module_global);
+                let property_value = blk.load(crate::types::DOUBLE, &property_global);
+                return Ok(blk.call(
+                    crate::types::DOUBLE,
+                    "js_native_module_named_esm_export_value_vt",
+                    &[
+                        (crate::types::PTR, &vtable),
+                        (crate::types::DOUBLE, &module_value),
+                        (crate::types::DOUBLE, &property_value),
+                    ],
+                ));
             }
         }
         if matches!(

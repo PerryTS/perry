@@ -11,7 +11,7 @@ use std::path::Path;
 /// True if `path` is an ELF object file (first four bytes `0x7F 'E' 'L' 'F'`).
 /// Used to skip panic/unwind-symbol localization on ELF, where localizing
 /// `rust_eh_personality` / `DW.ref.rust_eh_personality` breaks PIE relocations
-/// (see [`RUST_PANIC_UNWIND_SYMBOL_PARTS`]).
+/// (see [`super::rewrite_symbols::is_panic_unwind_symbol`]).
 pub(super) fn object_is_elf(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];

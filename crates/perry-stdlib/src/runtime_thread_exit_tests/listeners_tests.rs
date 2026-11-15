@@ -223,7 +223,7 @@ fn thread_exit_drops_the_socket_owned_tls_state() {
             class_id: perry_runtime::native_class_ids::NET_SOCKET,
             links_owner: true,
             name: "Socket",
-            constructor_export: Some(("net", "Socket")),
+            constructor_export: Some((&perry_runtime::object::NM_NET, "net", "Socket")),
             constructor_length: 1,
             install_prototype: |_| {},
         };

@@ -100,7 +100,7 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan SCHEDULED_RESOLVES entries
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let mut q = q.borrow_mut();
-        for (promise_ptr, value) in q.iter_mut() {
+        for (promise_ptr, value, ..) in q.iter_mut() {
             visitor.visit_raw_mut_ptr_slot(promise_ptr);
             visitor.visit_nanbox_f64_slot(value);
         }
@@ -505,7 +505,7 @@ fn scan_scheduled_resolves_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (promise_ptr, value) = &mut q[state.index];
+                let (promise_ptr, value, ..) = &mut q[state.index];
                 match state.slot {
                     0 => visitor.visit_raw_mut_ptr_slot(promise_ptr),
                     1 => visitor.visit_nanbox_f64_slot(value),
@@ -593,7 +593,10 @@ pub(crate) fn test_seed_promise_scanner_roots(
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
+        #[cfg(not(perry_gc_instruments))]
         q.push((promise_ptr, value));
+        #[cfg(perry_gc_instruments)]
+        q.push((promise_ptr, value, 0));
     });
 }
 
@@ -672,7 +675,7 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
     });
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let q = q.borrow();
-        if let Some((promise_ptr, value)) = q.first() {
+        if let Some((promise_ptr, value, ..)) = q.first() {
             snapshot.scheduled_promise_ptr = *promise_ptr as usize;
             snapshot.scheduled_value_bits = value.to_bits();
         }

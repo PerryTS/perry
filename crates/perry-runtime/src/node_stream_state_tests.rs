@@ -163,15 +163,41 @@ fn passthrough_subclass_uses_override_or_identity_transform() {
 
 #[test]
 fn stream_dynamic_instanceof_follows_node_stream_inheritance() {
-    let readable = crate::object::bound_native_callable_export_value("stream", "Readable");
-    let writable = crate::object::bound_native_callable_export_value("stream", "Writable");
-    let duplex = crate::object::bound_native_callable_export_value("stream", "Duplex");
-    let transform_ctor = crate::object::bound_native_callable_export_value("stream", "Transform");
-    let passthrough_ctor =
-        crate::object::bound_native_callable_export_value("stream", "PassThrough");
-    let stream_ctor = crate::object::bound_native_callable_export_value("stream", "Stream");
-    let event_emitter_ctor =
-        crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    let readable = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Readable",
+    );
+    let writable = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Writable",
+    );
+    let duplex = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Duplex",
+    );
+    let transform_ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Transform",
+    );
+    let passthrough_ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "PassThrough",
+    );
+    let stream_ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Stream",
+    );
+    let event_emitter_ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "events",
+        "EventEmitter",
+    );
 
     let transform = js_node_stream_transform_new(f64::from_bits(TAG_UNDEFINED));
     assert_eq!(

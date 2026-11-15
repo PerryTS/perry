@@ -1,9 +1,8 @@
 // DESIGN-p4l4 §4.4: a logging helper called only with records has a Record
-// parameter, carried by its one typed signature. Until the VR-3b signature
-// ABI a record in a typed call slot rejects (`R5UntypedCall`); the output
-// is Node's either way. `show` is self-recursive so that the inliner leaves
-// the calls in place.
-// vr-expect: move,score REJECTED R5UntypedCall
+// parameter, carried by its one typed signature: the record crosses as its
+// lanes (VR-3b) and `console.log` takes a copy. `show` is self-recursive so
+// that the inliner leaves the calls in place.
+// vr-expect: move,score ADMITTED
 function mk(m: number, s: number) {
   return { move: m, score: s };
 }

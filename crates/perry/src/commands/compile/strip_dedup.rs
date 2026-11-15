@@ -30,31 +30,6 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
     "__rdl_alloc_error_handler",
 ];
 
-// Panic / unwind runtime shims. On tier-3 Mach-O targets (tvOS/watchOS) with no
-// prebuilt std, perry-runtime and perry-stdlib are each built with -Zbuild-std,
-// so both bundle std's single-definition panic runtime → `ld64.lld: duplicate
-// symbol` for these; localizing them so only one staticlib provides them fixes
-// that on Mach-O.
-//
-// They are NOT localized on ELF (see `object_is_elf` guard in the well-known
-// localizer): `--localize-symbol rust_eh_personality` also matches the
-// compiler-emitted `DW.ref.rust_eh_personality` (substring), and localizing
-// that breaks its PC32 relocation → `relocation R_X86_64_PC32 against undefined
-// hidden symbol DW.ref.rust_eh_personality can not be used when making a PIE
-// object` at link time. ELF tier-1/2 builds take the panic runtime from the
-// prebuilt std (single definition), so there is no duplicate to dedup anyway.
-const RUST_PANIC_UNWIND_SYMBOL_PARTS: &[&str] = &[
-    "__rust_drop_panic",
-    "__rust_foreign_exception",
-    "rust_begin_unwind",
-    "rust_eh_personality",
-    "__rust_abort",
-    "rust_panic",
-];
-
-/// Panic/unwind personality shims (incl. the compiler-emitted
-/// `DW.ref.rust_eh_personality`, which substring-matches `rust_eh_personality`).
-/// These must not be `--localize-symbol`'d on ELF — it breaks PIE relocations.
 /// The one temp directory this process uses for archive stripping, created on
 /// first use and swept of *other* processes' leftovers at the same time.
 ///
@@ -187,12 +162,6 @@ fn pid_is_live(pid: u32) -> bool {
 fn pid_is_live(_pid: u32) -> bool {
     // No cheap portable probe; err toward "live" and leave the directory.
     true
-}
-
-fn is_panic_unwind_symbol(symbol: &str) -> bool {
-    RUST_PANIC_UNWIND_SYMBOL_PARTS
-        .iter()
-        .any(|part| symbol.contains(part))
 }
 
 fn force_localize_symbol(symbol: &str) -> bool {
@@ -1232,40 +1201,15 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     for (member_index, (member, symbols)) in forced_symbols_by_member.iter().enumerate() {
         let member_path = extracted_archive_member(&extract_dir, member)
             .ok_or_else(|| anyhow::anyhow!("failed to locate extracted archive member {member}"))?;
-        // On ELF, localizing the panic/unwind personality symbols (including the
-        // compiler-emitted `DW.ref.rust_eh_personality`) breaks PIE relocations
-        // → "undefined hidden symbol ... can not be used when making a PIE
-        // object". That dedup is only needed for tier-3 Mach-O (-Zbuild-std);
-        // skip it for ELF members and keep localizing the allocator shims.
-        let skip_panic_unwind = object_is_elf(&member_path);
-        for (symbol_index, symbol) in symbols.iter().enumerate() {
-            if skip_panic_unwind && is_panic_unwind_symbol(symbol) {
-                continue;
-            }
-            // LLVM objcopy does not implement --localize-symbol for COFF, and
-            // --strip-symbol rejects definitions mentioned by relocations
-            // (including their own debug records). Rename the wrapper copy
-            // instead: objcopy updates those relocations, the new name is
-            // unique across archives, and unresolved sibling references keep
-            // binding to the canonical runtime / stdlib definition.
-            let mut command = Command::new(&objcopy);
-            if is_coff {
-                let renamed =
-                    format!("__perry_wrapper_local_{archive_tag}_{member_index}_{symbol_index}");
-                command
-                    .arg("--redefine-sym")
-                    .arg(format!("{symbol}={renamed}"));
-            } else {
-                command.arg("--localize-symbol").arg(symbol);
-            }
-            let out = command.arg(&member_path).output()?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(anyhow::anyhow!(
-                    "failed to rewrite {symbol} in {member}: {stderr}"
-                ));
-            }
-        }
+        rewrite_member_symbols(
+            &objcopy,
+            &member_path,
+            member,
+            symbols,
+            is_coff,
+            &archive_tag,
+            member_index,
+        )?;
     }
 
     let member_paths: Vec<PathBuf> = members
@@ -1891,8 +1835,11 @@ fn requires_bundled_native_companion(symbol: &str) -> bool {
     symbol.trim_start_matches('_').starts_with("ring_core_")
 }
 
+mod rewrite_symbols;
+use rewrite_symbols::{is_panic_unwind_symbol, rewrite_member_symbols};
+
 mod object_format;
-use object_format::{object_is_coff, object_is_elf};
+use object_format::object_is_coff;
 
 mod nm_command;
 mod stub_symbols;

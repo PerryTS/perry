@@ -1,8 +1,9 @@
 // Namespace imports are realm roots: R carries each module's import name
 // ("node:<module>") and its members, and the restricted dumper keeps exactly
-// those imports. node:events has a native receiver cell
-// (%NativeNamespace:events%); node:fs and node:path/posix do not spell one
-// under their specifier, so only the import name ties them to R.
+// those imports. node:events and node:fs have native receiver cells
+// (%NativeNamespace:events%, %NativeNamespace:fs%); node:path/posix's is
+// spelled %NativeNamespace:path.posix%, not by its specifier, so only the
+// import name ties it to R.
 import * as events from "node:events";
 import * as fs from "node:fs";
 import * as posix from "node:path/posix";

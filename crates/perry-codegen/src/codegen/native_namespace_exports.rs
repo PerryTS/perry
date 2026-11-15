@@ -39,10 +39,12 @@ pub(super) fn emit_native_namespace_reexport_getters(
         if let Some(install) = crate::nm_install::nm_install_symbol(source) {
             blk.call_void(install, &[]);
         }
+        let vtable = crate::nm_install::nm_vtable_ref(source);
         let value = blk.call(
             DOUBLE,
-            "js_create_native_module_namespace",
+            "js_create_native_module_namespace_vt",
             &[
+                (PTR, &vtable),
                 (PTR, &format!("@{}", source_global)),
                 (I64, &source_len.to_string()),
             ],

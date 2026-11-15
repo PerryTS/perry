@@ -588,7 +588,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             Ok(ctx.block().bitcast_i64_to_double(bits))
         }
-        Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
+        Expr::Logical { op, left, right } => {
+            // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+            if matches!(op, perry_hir::LogicalOp::Coalesce) {
+                if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+                    return Ok(ctx
+                        .block()
+                        .sitofp(crate::types::I32, &v, crate::types::DOUBLE));
+                }
+            }
+            lower_logical(ctx, *op, left, right)
+        }
 
         // -------- arr.filter(callback) --------
         // Mirrors ArrayMap: takes a closure header pointer, returns

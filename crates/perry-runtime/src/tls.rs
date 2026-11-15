@@ -759,6 +759,7 @@ pub extern "C" fn js_tls_client_attach_socket_prototype(owner: i64) {
     // TLSSocket, just as the value-form import path does.
     crate::object::js_nm_install_tls();
     let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::tls::NM_TLS,
         "tls",
         "TLSSocket",
     ));
@@ -1400,6 +1401,7 @@ pub extern "C" fn js_tls_secure_context_new(options: f64) -> f64 {
     let options = scope.root_nanbox_f64(options);
     validate_secure_context_options(options.get_nanbox_f64());
     let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::tls::NM_TLS,
         "tls",
         "SecureContext",
     ));

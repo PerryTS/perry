@@ -210,7 +210,9 @@ fn legacy_stream_takes_the_emitter_birth() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", "Stream",
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Stream",
     ));
     let proto = crate::closure::closure_get_dynamic_prop(
         (ctor.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,

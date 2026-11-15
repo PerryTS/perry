@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 
 /// Revision of this ABI. Bumped with any signature or descriptor change.
-pub const PERRY_PAYLOAD_ABI_VERSION: u8 = 2;
+pub const PERRY_PAYLOAD_ABI_VERSION: u8 = 3;
 
 /// A family, as a binding declares it. Lives in a `static` of the binding.
 ///
@@ -454,6 +454,7 @@ mod byte_keepalive {
     #[used(compiler)]
     static PAYLOAD_PROTOTYPE: unsafe extern "C" fn(
         *const PerryPayloadFamily,
+        Option<&'static crate::object::native_module::NativeModuleVtable>,
         *const u8,
         usize,
     ) -> f64 = js_perry_payload_prototype;
@@ -518,10 +519,10 @@ mod tests {
             payload_align: std::mem::align_of::<Vec<u8>>(),
         };
         let _no_move = crate::gc::GcSuppressScope::new();
-        let first = unsafe { js_perry_payload_prototype(&family, b"".as_ptr(), 0) };
+        let first = unsafe { js_perry_payload_prototype(&family, None, b"".as_ptr(), 0) };
         assert!(crate::native_payload::any_object(first).is_some());
         let bad = [0xffu8, 0xfe];
-        let again = unsafe { js_perry_payload_prototype(&family, bad.as_ptr(), bad.len()) };
+        let again = unsafe { js_perry_payload_prototype(&family, None, bad.as_ptr(), bad.len()) };
         assert_eq!(again.to_bits(), first.to_bits());
         crate::native_payload::reset_payload_prototypes_for_tests();
     }
@@ -583,6 +584,7 @@ mod tests {
 #[no_mangle]
 pub unsafe extern "C" fn js_perry_payload_prototype(
     family: *const PerryPayloadFamily,
+    vt: Option<&'static crate::object::native_module::NativeModuleVtable>,
     module: *const u8,
     module_len: usize,
 ) -> f64 {
@@ -603,13 +605,14 @@ pub unsafe extern "C" fn js_perry_payload_prototype(
         return bytes_undefined();
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    // An empty module names an internal family (a codec or parser object)
-    // with no export: its prototype hangs off an anonymous constructor.
-    let ctor = scope.root_nanbox_f64(if module.is_empty() {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        crate::native_payload::anonymous_constructor(name, family.constructor_length)
-    } else {
-        crate::object::bound_native_callable_export_value(module, name)
+    // No vtable names an internal family (a codec or parser object) with no
+    // export: its prototype hangs off an anonymous constructor.
+    let ctor = scope.root_nanbox_f64(match vt {
+        Some(vt) => crate::object::bound_native_callable_export_value(vt, module, name),
+        None => {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            crate::native_payload::anonymous_constructor(name, family.constructor_length)
+        }
     });
     let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
         ctor.get_nanbox_f64(),

@@ -140,7 +140,7 @@ pub(crate) fn prune_unused_named_cells(module: &mut Module) {
         let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
             return None;
         };
-        if name != "js_native_module_named_esm_export_value" {
+        if name != "js_native_module_named_esm_export_value_vt" {
             return None;
         }
         let [Expr::String(source), Expr::String(export)] = args.as_slice() else {
@@ -208,7 +208,7 @@ pub(crate) fn prune_unused_named_cells(module: &mut Module) {
             unreachable!()
         };
         let key = (source.clone(), export.clone());
-        *name = "js_native_module_named_esm_export_value".to_string();
+        *name = "js_native_module_named_esm_export_value_vt".to_string();
         uses.contains_key(&key) || reexports.contains(&key)
     });
 }

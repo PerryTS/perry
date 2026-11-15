@@ -135,14 +135,22 @@ impl HttpServerHandleKind {
         })
     }
 
-    /// The `(module, export)` constructor whose `.prototype` this kind has.
-    pub fn constructor(self) -> (&'static str, &'static str) {
+    /// The `(vtable, module, export)` constructor whose `.prototype` this kind has.
+    pub fn constructor(
+        self,
+    ) -> (
+        &'static super::native_module::NativeModuleVtable,
+        &'static str,
+        &'static str,
+    ) {
+        use super::native_module::namespaces::http::NM_HTTP;
+        use crate::node_http2_constants::NM_HTTP2;
         match self {
-            Self::ServerResponse => ("http", "ServerResponse"),
-            Self::IncomingMessage => ("http", "IncomingMessage"),
-            Self::Http2ServerResponse => ("http2", "Http2ServerResponse"),
-            Self::Http2ServerRequest => ("http2", "Http2ServerRequest"),
-            Self::OutgoingMessage => ("http", "OutgoingMessage"),
+            Self::ServerResponse => (&NM_HTTP, "http", "ServerResponse"),
+            Self::IncomingMessage => (&NM_HTTP, "http", "IncomingMessage"),
+            Self::Http2ServerResponse => (&NM_HTTP2, "http2", "Http2ServerResponse"),
+            Self::Http2ServerRequest => (&NM_HTTP2, "http2", "Http2ServerRequest"),
+            Self::OutgoingMessage => (&NM_HTTP, "http", "OutgoingMessage"),
         }
     }
 }
@@ -658,8 +666,8 @@ pub fn http_server_handle_kind_probe() -> Option<HttpServerHandleKindProbeFn> {
 pub extern "C" fn js_http_server_handle_constructor(kind: u8) -> f64 {
     match HttpServerHandleKind::from_probe(kind) {
         Some(kind) => {
-            let (module, export) = kind.constructor();
-            crate::object::bound_native_callable_export_value(module, export)
+            let (vt, module, export) = kind.constructor();
+            crate::object::bound_native_callable_export_value(vt, module, export)
         }
         None => f64::from_bits(TAG_UNDEFINED),
     }

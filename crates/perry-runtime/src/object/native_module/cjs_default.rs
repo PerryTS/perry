@@ -16,37 +16,69 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     perry_dispatch::cjs_default_namespace_name(module_name)
 }
 
-fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
+/// `module_name`'s `<mod>.default` namespace, born with the default vtable
+/// the module's own vtable `base` carries; `None` when the program names no
+/// vtable for the module.
+fn create_cjs_default_namespace(
+    module_name: &str,
+    base: Option<&'static NativeModuleVtable>,
+) -> Option<f64> {
     let name = cjs_default_namespace_name(module_name)?;
-    Some(js_create_native_module_namespace(name.as_ptr(), name.len()))
+    let vt = base?
+        .default_namespace
+        .unwrap_or(&NATIVE_MODULE_VTABLE_IMPL);
+    Some(create_native_module_namespace(vt, name))
 }
 
-pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
+/// The CommonJS `module.exports` of `module_name`. `base` is the module's own
+/// vtable (from the receiver namespace, from codegen, or named by a literal
+/// site; `None` for a runtime string the program has no row for); the
+/// `<mod>.default` namespace is born from its `default_namespace`.
+pub(crate) fn cjs_default_export_value(
+    module_name: &str,
+    base: Option<&'static NativeModuleVtable>,
+) -> Option<f64> {
     match module_name {
         "assert" | "assert/strict" => Some(callable_exports::assert_cjs_export_value(module_name)),
-        "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        "events" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        )),
         // #10431: `stream`'s `module.exports` IS the legacy `Stream` constructor
         // (exports hang off it: `attach_stream_legacy_prototype`).
-        "stream" => Some(bound_native_callable_export_value("stream", "Stream")),
+        "stream" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        )),
         // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
         // bare `import * as` namespace).
         "cluster" => Some(crate::cluster::cluster_default_value()),
-        "module" => Some(bound_native_callable_export_value("module", "Module")),
-        "process" => Some(js_create_native_module_namespace(
-            b"process".as_ptr(),
-            "process".len(),
+        "module" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::module::NM_MODULE,
+            "module",
+            "Module",
         )),
-        "wasi" => Some(js_create_native_module_namespace(
-            b"wasi.default".as_ptr(),
-            "wasi.default".len(),
-        )),
+        "process" => Some(
+            crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::process::NM_PROCESS,
+                "process",
+            ),
+        ),
+        "wasi" => Some(
+            crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::wasi::NM_WASI_DEFAULT,
+                "wasi.default",
+            ),
+        ),
         // #9500: every remaining row of the shared CJS-default table gets its
         // `<mod>.default` namespace — the arms above are the modules whose
         // default export is NOT that namespace (a callable, or the plain
         // namespace itself) and must keep winning.
         other if perry_dispatch::has_cjs_default_namespace(other) => {
-            create_cjs_default_namespace(other)
+            create_cjs_default_namespace(other, base)
         }
         _ => None,
     }
@@ -64,7 +96,6 @@ pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
     // does NOT statically reference `js_nm_install_all` and therefore does not
     // pin every bucket. Static imports keep their precise per-module installs.
     crate::object::native_module_registry::nm_run_install_all_hook();
-    cjs_default_export_value(module_name).unwrap_or_else(|| {
-        js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
-    })
+    cjs_default_export_value(module_name, native_module_vtable_by_name(module_name))
+        .unwrap_or_else(|| native_namespace_by_name(module_name))
 }

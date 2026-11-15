@@ -204,7 +204,11 @@ static ASYNC_RESOURCE_FAMILY: crate::native_payload::NativePayloadFamily =
     crate::native_payload::NativePayloadFamily {
         class_id: ASYNC_RESOURCE_CLASS_ID,
         name: "AsyncResource",
-        constructor_export: Some(("async_hooks", "AsyncResource")),
+        constructor_export: Some((
+            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
+            "async_hooks",
+            "AsyncResource",
+        )),
         constructor_length: 2,
         links_owner: false,
         install_prototype: install_async_resource_prototype,

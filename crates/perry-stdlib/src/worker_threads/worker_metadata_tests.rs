@@ -49,9 +49,12 @@ fn metadata_getters_follow_owner_and_exit_pump() {
             scope.root_raw_mut_ptr(worker_surface::worker_object(id, &WorkerOptions::default()));
         let value = || object_value(worker.get_raw_mut_ptr());
         WORKERS.lock().unwrap().get_mut(&id).unwrap().object_bits = value().to_bits();
-        let constructor = scope.root_nanbox_f64(
-            perry_runtime::object::bound_native_callable_export_value("worker_threads", "Worker"),
-        );
+        let constructor =
+            scope.root_nanbox_f64(perry_runtime::object::bound_native_callable_export_value(
+                &perry_runtime::object::NM_WORKER_THREADS,
+                "worker_threads",
+                "Worker",
+            ));
         assert_eq!(
             perry_runtime::object::js_object_get_prototype_of(value()).to_bits(),
             perry_runtime::object::js_function_prototype_value_for_read(

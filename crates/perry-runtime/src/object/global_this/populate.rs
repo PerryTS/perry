@@ -492,7 +492,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // `js_nm_install_process` / `js_nm_install_console` /
             // `js_install_global_value_surfaces` at every site that can yield
             // one of these values (see perry-codegen `global_value_installs`).
-            js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+            global_native_namespace_value(name).expect("declared Global native namespace")
         } else if name == "Math" {
             crate::value::js_nanbox_pointer(super::web_hooks::math_namespace() as i64)
         } else if name == "JSON" {
@@ -1462,7 +1462,8 @@ const GLOBAL_PERFORMANCE_CONSTRUCTORS: &[&str] = &[
 
 pub(super) fn performance_constructor_value(name: &str) -> Option<f64> {
     GLOBAL_PERFORMANCE_CONSTRUCTORS.contains(&name).then(|| {
-        super::super::native_module::bound_native_callable_export_value("perf_hooks", name)
+        super::super::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS, "perf_hooks", name)
     })
 }
 
@@ -1470,6 +1471,7 @@ pub(super) fn link_performance_intrinsics() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let perf_ctor = scope.root_nanbox_f64(
         super::super::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
             "perf_hooks",
             "Performance",
         ),
@@ -1497,4 +1499,15 @@ pub(super) fn link_performance_intrinsics() {
             );
         }
     }
+}
+
+/// The Global birth site's closed native namespace choices. Both realm arms
+/// pass the vtable declared by this source owner to the same namespace birth.
+pub(super) fn global_native_namespace_value(name: &str) -> Option<f64> {
+    let vt = match name {
+        "console" => &crate::object::native_module::namespaces::console::NM_CONSOLE,
+        "process" => &crate::object::native_module::namespaces::process::NM_PROCESS,
+        _ => return None,
+    };
+    Some(crate::object::native_module::create_native_module_namespace(vt, name))
 }

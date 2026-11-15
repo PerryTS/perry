@@ -200,13 +200,21 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// `getPrototypeOf(socket)` can run before user code has ever read
 /// `net.Socket.prototype`.
 fn net_socket_prototype_value() -> f64 {
-    native_export_prototype_value("net", "Socket")
+    native_export_prototype_value(
+        &crate::object::native_module::namespaces::net::NM_NET,
+        "net",
+        "Socket",
+    )
 }
 
 /// `<module>.<export>.prototype`, read the same way as
 /// [`net_socket_prototype_value`] so it is the object user code sees.
-pub(crate) fn native_export_prototype_value(module: &str, export: &str) -> f64 {
-    let ctor = crate::object::bound_native_callable_export_value(module, export);
+pub(crate) fn native_export_prototype_value(
+    vt: &'static crate::object::native_module::NativeModuleVtable,
+    module: &str,
+    export: &str,
+) -> f64 {
+    let ctor = crate::object::bound_native_callable_export_value(vt, module, export);
     if !crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
