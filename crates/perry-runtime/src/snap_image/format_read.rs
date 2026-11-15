@@ -51,6 +51,7 @@ impl Rd<'_> {
             }
             3 => Val::Opaque(self.u64()?),
             4 => Val::Sym(self.u64()?),
+            5 => Val::Derived(self.u8()?),
             k => return Err(format!("bad value kind {k}")),
         })
     }
@@ -105,7 +106,9 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
     img.pending = r.u32()?;
     img.claims_from = r.u32()?;
     let rest = r.take(r.left())?;
-    img.claims = parse_claims_blob(rest).ok_or("bad claim record")?;
+    let (registry, used) = parse_registry_blob(rest).ok_or("bad registry record")?;
+    img.registry = registry;
+    img.claims = parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
     Ok(img)
 }
 
@@ -134,6 +137,7 @@ pub fn dump(img: &Image) -> String {
             Val::Ext { .. } => "ext",
             Val::Opaque(_) => "opaque",
             Val::Sym(_) => "sym",
+            Val::Derived(_) => "derived",
         };
         *w.entry((x.region, k)).or_default() += 1;
     }
@@ -144,6 +148,10 @@ pub fn dump(img: &Image) -> String {
         );
     }
     s += &format!("words={}\n", img.words.len());
+    s += &format!("registry={}\n", img.registry.len());
+    for r in &img.registry {
+        s += &format!("registry-entry key={} status={}\n", String::from_utf8_lossy(&r.key).escape_debug(), r.status);
+    }
     for t in &img.stops {
         s += &format!(
             "stop cell={} type={} kind={} off={} value={:#x}\n",
@@ -156,4 +164,27 @@ pub fn dump(img: &Image) -> String {
         }
     }
     s
+}
+
+/// The entries of a registry blob and the bytes it took (bytes after it are ignored).
+pub fn parse_registry_blob(b: &[u8]) -> Option<(Vec<RegRec>, usize)> {
+    let mut r = Rd(b, 0);
+    let n = r.u32().ok()?;
+    let mut v = Vec::new();
+    for _ in 0..n {
+        let l = r.u32().ok()? as usize;
+        let key = r.take(l).ok()?.to_vec();
+        let init_off = r.u64().ok()?;
+        let status = r.u8().ok()?;
+        let mut opt = |r: &mut Rd| -> Option<Option<Val>> {
+            match r.u8().ok()? {
+                0 => Some(None),
+                _ => Some(Some(r.val().ok()?)),
+            }
+        };
+        let exports = opt(&mut r)?;
+        let factory = opt(&mut r)?;
+        v.push(RegRec { key, init_off, status, exports, factory });
+    }
+    Some((v, r.1))
 }

@@ -45,6 +45,9 @@ pub(crate) struct Baseline {
     claims_from: u32,
     /// Names claimed since, read first at the cut (the capture claims its own).
     claims: Vec<(Vec<u8>, u32)>,
+    /// Shape counters and the next class-template token at the baseline.
+    shapes: u64,
+    token: u64,
 }
 
 static BASELINE: AtomicPtr<Baseline> = AtomicPtr::new(std::ptr::null_mut());
@@ -104,6 +107,8 @@ pub extern "C" fn js_snap_image_begin(
         classes: crate::object::class_image::snap_image_table_size(),
         claims_from: crate::tls_hot::js_tls_hot_claimed_slots(),
         claims: Vec::new(),
+        shapes: crate::object::shapes::snap_image_shape_counts(),
+        token: crate::object::field_get_set::snap_image_next_token(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
@@ -173,6 +178,7 @@ fn no_form(t: u8) -> bool {
             | GC_TYPE_BUFFER_SECRET_KEY
             | GC_TYPE_BUFFER_CRYPTO_KEY
             | GC_TYPE_PROMISE
+            | GC_TYPE_REGEX_PROGRAM
     ) || crate::gc::gc_type_info(t).is_none()
 }
 
@@ -385,6 +391,7 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 }
             });
         }
+        cell_forms(&w, &headers, i, h, t, &mut bytes, &mut slots, &mut img.stops);
         slots.sort_by_key(|s| s.0);
         img.cells.push(Cell {
             obj_type: t,
@@ -450,7 +457,20 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             });
         }
     }
-    img.pending = format::PENDING;
+    match base {
+        Some(b) => {
+            let (pending, stops) = completeness(
+                b.shapes,
+                crate::object::shapes::snap_image_shape_counts(),
+                b.token,
+                crate::object::field_get_set::snap_image_next_token(),
+            );
+            img.pending = pending;
+            img.stops.extend(stops);
+            img.registry = registry_record(&w, &mut img.stops);
+        }
+        None => img.pending = format::PENDING,
+    }
     img
 }
 
@@ -536,4 +556,140 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
         .zip(marked)
         .filter_map(|(h, m)| m.then_some(h))
         .collect()
+}
+
+/// Which forms the image still lacks, and why it stops: a shape minted between the
+/// baseline and the cut (the shape slab has no form), more than the primary's
+/// class-template token. The atom table has no run-time counter: its bit stays set.
+fn completeness(shapes0: u64, shapes1: u64, tok0: u64, tok1: u64) -> (u32, Vec<Stop>) {
+    let mut pending = format::PENDING_ATOMS;
+    let mut stops = Vec::new();
+    let mut stop = |kind: u8, value: u64| {
+        stops.push(Stop { cell: 0, obj_type: 0, kind, off: 0, value });
+    };
+    if shapes0 != shapes1 {
+        pending |= format::PENDING_SHAPES;
+        stop(format::STOP_SHAPES_MINTED, shapes1.wrapping_sub(shapes0));
+    }
+    if tok1 > 2.max(tok0) {
+        pending |= format::PENDING_TOKENS;
+        stop(format::STOP_TOKENS, tok1);
+    }
+    (pending, stops)
+}
+
+/// The forms of one cell: the Map entries alias and a store's native key indexes are
+/// derived (zeroed, named by a `Derived` slot); any other untraced word that holds an
+/// address outside the binary's own sections stops the image.
+#[allow(clippy::too_many_arguments)]
+fn cell_forms(
+    w: &Where,
+    headers: &[usize],
+    i: usize,
+    h: usize,
+    t: u8,
+    bytes: &mut [u8],
+    slots: &mut Vec<(u32, Val)>,
+    stops: &mut Vec<Stop>,
+) {
+    use crate::gc::{GC_HEADER_SIZE, GC_TYPE_MAP, GC_TYPE_MAP_STORE};
+    let le = |b: &[u8], o: usize| {
+        b.get(o..o + 8)
+            .map_or(0, |s| u64::from_le_bytes(s.try_into().unwrap_or([0; 8])))
+    };
+    let stop = |stops: &mut Vec<Stop>, kind: u8, off: usize, value: u64| {
+        stops.push(Stop { cell: i as u32, obj_type: t, kind, off: off as u32, value });
+    };
+    let f = crate::map::image_form();
+    let mut derived: Vec<(usize, u8)> = Vec::new();
+    let user = h + GC_HEADER_SIZE;
+    if t == GC_TYPE_MAP {
+        let (eo, so) = (GC_HEADER_SIZE + f.header_entries, GC_HEADER_SIZE + f.header_store);
+        let store_user = slots.iter().find(|s| s.0 as usize == so).and_then(|s| match s.1 {
+            Val::Cell { index, .. } => headers.get(index as usize).map(|h| h + GC_HEADER_SIZE),
+            _ => None,
+        });
+        let alias = le(bytes, eo);
+        if store_user.is_some_and(|u| alias == (u + f.inline) as u64) {
+            derived.push((eo, format::DERIVED_MAP_ENTRIES));
+        } else {
+            stop(stops, format::STOP_RAW_HEAP_WORD, eo, alias);
+        }
+    } else if t == GC_TYPE_MAP_STORE {
+        // SAFETY: a store cell the allocators hold.
+        if !unsafe { crate::map::image_keys_derivable(user as *const crate::map::MapStore) } {
+            stop(stops, format::STOP_MAP_KEYS, 0, 0);
+        }
+        let eo = GC_HEADER_SIZE + f.entries;
+        let alias = le(bytes, eo);
+        if alias == (user + f.inline) as u64 {
+            derived.push((eo, format::DERIVED_STORE_ENTRIES));
+        } else {
+            stop(stops, format::STOP_RAW_HEAP_WORD, eo, alias);
+        }
+        let mut o = GC_HEADER_SIZE + f.index.0;
+        while o + 8 <= GC_HEADER_SIZE + f.index.1 {
+            derived.push((o, format::DERIVED_STORE_INDEX));
+            o += 8;
+        }
+    }
+    for &(o, k) in &derived {
+        if let Some(word) = bytes.get_mut(o..o + 8) {
+            word.fill(0);
+        }
+        slots.push((o as u32, Val::Derived(k)));
+    }
+    // Strings, big integers and buffers hold character or byte data, not words.
+    use crate::gc::*;
+    let data = matches!(
+        t,
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_BUFFER_ARRAY_BUFFER | GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER | GC_TYPE_TYPED_ARRAY
+    );
+    if data || no_form(t) {
+        return;
+    }
+    let mut o = GC_HEADER_SIZE;
+    while o + 8 <= bytes.len() {
+        if !slots.iter().any(|s| s.0 as usize == o) {
+            let bits = le(bytes, o);
+            let ok = match w.val(bits) {
+                Ok(Val::Scalar(_)) => true,
+                Ok(Val::Ext { region, .. }) => region != format::REGION_TLS,
+                _ => false,
+            };
+            if !ok {
+                stop(stops, format::STOP_RAW_HEAP_WORD, o, bits);
+            }
+        }
+        o += 8;
+    }
+}
+
+/// The module-path registry entries the module inits added, as a replay record.
+fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
+    let mut out = Vec::new();
+    for (key, init, status, exports, factory) in crate::module_require::snap_image_registry() {
+        let mut bad = |value: u64| {
+            stops.push(Stop { cell: out.len() as u32, obj_type: 0, kind: format::STOP_REGISTRY, off: 0, value });
+        };
+        let val = |bits: Option<u64>| -> Result<Option<Val>, u64> {
+            match bits.map(|b| w.val(b)) {
+                None => Ok(None),
+                Some(Ok(v @ (Val::Scalar(_) | Val::Cell { .. } | Val::Ext { .. }))) => Ok(Some(v)),
+                Some(Ok(_)) => Err(bits.unwrap_or(0)),
+                Some(Err(b)) => Err(b),
+            }
+        };
+        let init_off = init
+            .filter(|a| *a >= w.exe.0 && *a < w.exe.1)
+            .map(|a| (a - w.exe.0) as u64);
+        let (Some(init_off), true, Ok(exports), Ok(factory)) =
+            (init_off, status == 0 || status == 2, val(exports), val(factory))
+        else {
+            bad(u64::from(status));
+            continue;
+        };
+        out.push(format::RegRec { key: key.into_bytes(), init_off, status, exports, factory });
+    }
+    out
 }

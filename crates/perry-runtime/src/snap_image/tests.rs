@@ -51,6 +51,7 @@ fn sample() -> Image {
         pending: PENDING,
         claims_from: 5,
         claims: vec![b"a::B@1:2".to_vec(), b"anonymous:4096".to_vec()],
+        registry: Vec::new(),
     }
 }
 
@@ -176,6 +177,8 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
         classes: crate::object::class_image::snap_image_table_size(),
         claims_from: 0,
         claims: Vec::new(),
+        shapes: crate::object::shapes::snap_image_shape_counts(),
+        token: crate::object::field_get_set::snap_image_next_token(),
     };
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
@@ -268,6 +271,8 @@ fn probe_baseline() -> (Baseline, usize) {
         classes: crate::object::class_image::snap_image_table_size(),
         claims_from: 0,
         claims: Vec::new(),
+        shapes: crate::object::shapes::snap_image_shape_counts(),
+        token: crate::object::field_get_set::snap_image_next_token(),
     };
     (b, tls_lo)
 }
@@ -416,4 +421,107 @@ fn a_claim_key_over_four_kib_stops_the_image() {
     let img = build(Some(&base), Vec::new(), false);
     let s = img.stops.iter().find(|s| s.kind == STOP_CLAIM_KEY);
     assert_eq!(s.map(|s| s.cell), Some(i));
+}
+
+fn forms_of(img: &Image, t: u8) -> Vec<&Cell> {
+    img.cells.iter().filter(|c| c.obj_type == t).collect()
+}
+
+#[test]
+fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
+    let key = crate::string::js_string_from_bytes(b"map-form-key".as_ptr(), 12);
+    let mut m = crate::map::js_map_alloc(4);
+    m = crate::map::js_map_set(m, crate::value::js_nanbox_string(key as i64), 1.5);
+    m = crate::map::js_map_set(m, 7.0, 2.5);
+    let img = build(None, Vec::new(), false);
+    let maps = forms_of(&img, crate::gc::GC_TYPE_MAP);
+    let stores = forms_of(&img, crate::gc::GC_TYPE_MAP_STORE);
+    assert!(!maps.is_empty() && !stores.is_empty());
+    let has = |c: &Cell, k: u8| c.slots.iter().any(|s| s.1 == Val::Derived(k));
+    assert!(maps.iter().all(|c| has(c, DERIVED_MAP_ENTRIES)));
+    assert!(stores.iter().all(|c| has(c, DERIVED_STORE_ENTRIES) && has(c, DERIVED_STORE_INDEX)));
+    // The derived words are zero in the bytes: nothing of this process's heap remains.
+    assert!(maps.iter().all(|c| c.bytes[16..24] == [0; 8]));
+    let bad = |i: &Image| {
+        i.stops
+            .iter()
+            .filter(|s| s.obj_type == crate::gc::GC_TYPE_MAP || s.obj_type == crate::gc::GC_TYPE_MAP_STORE)
+            .map(|s| s.kind)
+            .collect::<Vec<_>>()
+    };
+    assert!(bad(&img).is_empty(), "{:?}", bad(&img));
+    // An object key has no form: the image stops with a named reason.
+    let arr = crate::array::js_array_alloc(1);
+    m = crate::map::js_map_set(m, crate::value::js_nanbox_pointer(arr as i64), 3.5);
+    let img2 = build(None, Vec::new(), false);
+    assert!(bad(&img2).contains(&STOP_MAP_KEYS));
+    let _ = m;
+}
+
+#[test]
+fn an_untraced_raw_address_stops_the_image_and_a_zero_word_does_not() {
+    let mut m = crate::map::js_map_alloc(2);
+    m = crate::map::js_map_set(m, 1.0, 2.0);
+    let count = |img: &Image| {
+        img.stops
+            .iter()
+            .filter(|s| s.kind == STOP_RAW_HEAP_WORD && s.obj_type == crate::gc::GC_TYPE_MAP_STORE)
+            .count()
+    };
+    let before = count(&build(None, Vec::new(), false));
+    // The store's receiver word is untraced and zero: a heap address there has no form.
+    let word = unsafe { (*m).store.cast::<u64>() };
+    let leaked = Box::into_raw(Box::new(5u64)) as u64;
+    unsafe { word.write(leaked) };
+    let after = count(&build(None, Vec::new(), false));
+    unsafe { word.write(0) };
+    assert_eq!((before, after), (0, 1));
+}
+
+#[test]
+fn completeness_names_each_missing_form() {
+    let (p, s) = completeness(5, 5, 1, 2);
+    assert_eq!((p, s.len()), (PENDING_ATOMS, 0));
+    let (p, s) = completeness(5, 8, 1, 2);
+    assert_eq!(p, PENDING_ATOMS | PENDING_SHAPES);
+    assert_eq!(s.iter().map(|s| (s.kind, s.value)).collect::<Vec<_>>(), vec![(STOP_SHAPES_MINTED, 3)]);
+    let (p, s) = completeness(5, 5, 1, 3);
+    assert_eq!(p, PENDING_ATOMS | PENDING_TOKENS);
+    assert_eq!(s.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![STOP_TOKENS]);
+    assert_eq!((completeness(5, 5, 3, 3).1.len(), completeness(5, 5, 3, 4).1.len()), (0, 1));
+}
+
+extern "C" fn registry_probe_init() {}
+
+#[test]
+fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
+    let key = b"\0module-init:img-probe";
+    unsafe {
+        crate::module_require::js_register_path_init(key.as_ptr(), key.len() as i64, registry_probe_init as usize as i64);
+    }
+    let (b, _) = probe_baseline();
+    let img = build(Some(&b), Vec::new(), false);
+    let r = img.registry.iter().find(|r| r.key == key).expect("the entry is in the record");
+    let exe = std::ptr::addr_of!(__executable_start) as usize;
+    assert_eq!(r.init_off, (registry_probe_init as usize - exe) as u64);
+    assert_eq!((r.status, r.exports.clone()), (0, None));
+    let blob = registry_blob(&img.registry);
+    let (back, used) = parse_registry_blob(&blob).expect("parses");
+    assert_eq!((back, used), (img.registry.clone(), blob.len()));
+}
+
+#[test]
+fn the_file_carries_derived_words_and_the_registry() {
+    let mut img = sample();
+    if let Some(c) = img.cells.get_mut(0) {
+        c.slots.push((12, Val::Derived(DERIVED_STORE_INDEX)));
+    }
+    img.registry = vec![RegRec {
+        key: b"k".to_vec(),
+        init_off: 9,
+        status: 2,
+        exports: Some(Val::Cell { hi: 0x7FFD, bare: false, index: 0 }),
+        factory: None,
+    }];
+    assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
 }
