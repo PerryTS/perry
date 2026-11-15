@@ -317,6 +317,11 @@ fn lower_array_index_set_via_runtime_key(
     // tests the value itself, so this is a choice of code, not a proof.
     let value_is_numeric = is_numeric_expr(ctx, value)
         || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number);
+    // The rep-keyed store's value proof (`index_set_rep::emit`): native fp
+    // arithmetic, or a value the facts prove a Number, is a plain double.
+    let value_plain = rep.is_some()
+        && (crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+            || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number));
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
@@ -384,6 +389,7 @@ fn lower_array_index_set_via_runtime_key(
                     &arr_box,
                     &guard_idx_i32,
                     &val_double,
+                    value_plain,
                     read,
                     exact,
                 )?,

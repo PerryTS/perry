@@ -19,9 +19,12 @@
 //!   nothing of the prototype chain. A key in `[0, floor)` of a `dense` rep
 //!   needs no test: `ArrRep` (D) says no index below the floor is ever a
 //!   hole, and (L) `length >= floor` makes it an own element;
-//! - the value is a plain double (tested at run time unless it is widened
-//!   from a native integer: the facts say a Number, its encoding may still
-//!   be an INT32 box), with a NaN made the canonical one;
+//! - the value is a plain double: tested at run time unless it is widened
+//!   from a native integer or the caller proves it (`value_plain`: native
+//!   fp arithmetic, `type_analysis::expr_produces_canonical_raw_f64`, or a
+//!   value the facts prove a Number, `facts_canonical::of`, never an INT32
+//!   box). The element facts say a Number, but a Number's encoding may still
+//!   be an INT32 box, so they alone do not prove the VALUE's word;
 //! - the raw store. No pointer is retired or stored: no barrier, no layout
 //!   note, and the element kind (F64 or Any) admits a plain double.
 //!
@@ -99,6 +102,7 @@ pub(super) fn emit(
     arr_box: &str,
     idx_i32: &str,
     val_double: &str,
+    value_plain: bool,
     read: RepRead,
     fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
 ) -> Result<()> {
@@ -121,7 +125,16 @@ pub(super) fn emit(
         .iter()
         .rev()
         .any(|b| b.widened_i32_source(val_double).is_some());
-    diag(ctx, read, !int_value);
+    if value_plain && !int_value && crate::verify_facts::enabled() {
+        super::facts_canonical::witness(
+            ctx,
+            val_double,
+            super::facts_canonical::Num::Number,
+            "array rep store value",
+        )?;
+    }
+    let plain_value = int_value || value_plain;
+    diag(ctx, read, !plain_value);
     let cold_idx = ctx.new_block("arep.set.cold");
     let merge_idx = ctx.new_block("arep.set.merge");
     let cold_label = ctx.block_label(cold_idx);
@@ -184,7 +197,7 @@ pub(super) fn emit(
         let old = ctx.block().load(I64, &slot);
         Some(ctx.block().icmp_ne(I64, &old, TAG_HOLE_I64))
     };
-    if !int_value {
+    if !plain_value {
         let blk = ctx.block();
         let val_bits = blk.bitcast_double_to_i64(val_double);
         let plain = crate::codegen::emit_plain_number_bits_test(blk, &val_bits);
