@@ -163,17 +163,25 @@ pub(crate) fn try_lower_proven_method_call(
     } else {
         crate::codegen::signature_entry::direct_call_offset()
     };
-    let Some((class, fname)) =
+    let Some((class, fname, abi)) =
         crate::expr::wpfacts_access::proven_method_fn(ctx, object, property, offset)
     else {
         return Ok(None);
     };
-    let key = (class.clone(), property.to_string());
-    let has_rest = matches!(ctx.method_has_rest.get(&key), Some(&true));
-    let has_synthetic_arguments =
-        matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true));
-    let has_user_rest = crate::codegen::arguments::method_has_user_rest(ctx, &class, property);
-    let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+    // A holder named here: this module's registration of it; else the
+    // holder module's own (the facts' `DirectAbi`).
+    let (has_rest, has_synthetic_arguments, has_user_rest, decl) = match &class {
+        Some(class) => {
+            let key = (class.clone(), property.to_string());
+            (
+                matches!(ctx.method_has_rest.get(&key), Some(&true)),
+                matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true)),
+                crate::codegen::arguments::method_has_user_rest(ctx, class, property),
+                ctx.method_param_counts.get(&key).copied().unwrap_or(0),
+            )
+        }
+        None => (abi.rest, abi.synthetic_arguments, abi.user_rest, abi.params as usize),
+    };
     crate::facts_consumed::used();
     let mut roots = crate::rooting::open_rooted_group(1 + args.len());
     let bundles = has_rest || has_synthetic_arguments;

@@ -6676,11 +6676,19 @@ pub fn run_with_parse_cache(
     program_step("births pre-pass", None);
     // ACCBUILD3: a proven accessor site calls the holder's accessor by the
     // symbol its own module emits, named from the holder's module and class.
-    let accessor_symbol = |holder: &str, class_id: u32, func: u32, key: &str, set: bool| {
+    // ONCHANGE3: the same for a proven method call's body entry.
+    let accessor_symbol = |holder: &str, class_id: u32, func: u32, key: &str, member: super::program_facts::Member| {
+        use super::program_facts::Member;
         let hir = ctx.native_modules.get(&PathBuf::from(holder))?;
         let prefix =
             compute_module_prefix(holder, &ctx.project_root, &ctx.module_prefix_overrides);
-        super::program_facts::accessor_symbol_in(hir, &prefix, class_id, func, key, set)
+        match member {
+            Member::Method => super::program_facts::method_symbol_in(hir, &prefix, class_id, func, key),
+            Member::Get | Member::Set => {
+                super::program_facts::accessor_symbol_in(hir, &prefix, class_id, func, key, member == Member::Set)
+                    .map(|s| (s, perry_codegen::DirectAbi::default()))
+            }
+        }
     };
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool

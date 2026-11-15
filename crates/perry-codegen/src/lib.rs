@@ -116,13 +116,15 @@ pub mod wasi_toolchain;
 mod wasm32;
 pub mod workers;
 
+/// ONCHANGE3: the driver names a proven method body only when codegen would call it directly.
+pub use codegen::helpers::body_has_fixed_generator_state;
 pub use codegen::{
     assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
-    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
+    CtorAbi, DefinedClassShape, DirectAbi, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
     FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
     FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
     FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,

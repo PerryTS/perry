@@ -1597,12 +1597,20 @@ pub(crate) fn proven_accessor_fn(
 /// holder class (the class that declares `F`) and `F`'s public entry, the
 /// one the dispatch tower's case arm calls. `None`: the site keeps its
 /// ordinary lowering.
+///
+/// ONCHANGE3: the entry is the facts' symbol, named from the holder's own
+/// module (`program_facts.rs` `method_symbol_in`). The holder's names here,
+/// if any, must give that same entry (else generic: the records disagree);
+/// with no name here (the class is reached through a value or a
+/// re-export), the entry is declared with the signature its module defines
+/// it with (`double (double this, double x params)`, as method_registry.rs
+/// declares an imported class's methods) and called with the facts' ABI.
 pub(crate) fn proven_method_fn(
-    ctx: &FnCtx<'_>,
+    ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     offset: u32,
-) -> Option<(String, String)> {
+) -> Option<(Option<String>, String, crate::DirectAbi)> {
     if ctx.wpfacts_off
         || ctx.wpfacts.interp_guard
         || offset == 0
@@ -1611,7 +1619,7 @@ pub(crate) fn proven_method_fn(
     {
         return None;
     }
-    let &(cid, fid) = ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?;
+    let (cid, fid, symbol, abi) = ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?.clone();
     // The holder's names in this module (as `proven_accessor_fn`): each must
     // declare `F` itself under `property` and give the same entry.
     let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
@@ -1635,16 +1643,21 @@ pub(crate) fn proven_method_fn(
             return None;
         }
         let f = ctx.methods.get(&(class.clone(), property.to_string()))?;
-        if f.starts_with("perry_static_") {
+        if f.starts_with("perry_static_") || *f != symbol {
             return None;
         }
-        match &found {
-            Some((_, g)) if g != f => return None,
-            Some(_) => {}
-            None => found = Some((class, f.clone())),
+        if found.is_none() {
+            found = Some((class, f.clone()));
         }
     }
-    found
+    match found {
+        Some((class, f)) => Some((Some(class), f, abi)),
+        None => {
+            let params = vec![DOUBLE; abi.params as usize + 1];
+            ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
+            Some((None, symbol, abi))
+        }
+    }
 }
 
 /// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's

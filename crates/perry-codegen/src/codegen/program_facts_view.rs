@@ -335,6 +335,21 @@ pub struct FactsNumericFunction {
     pub expression: FactsNumericExpr,
 }
 
+/// ONCHANGE3: what a direct call of a method body's public entry
+/// `perry_method_<prefix>__<Class>__<m>` passes, read from the body's own
+/// parameters exactly as the defining module registers them
+/// (`codegen/mod.rs` `method_param_counts` / `method_has_rest` /
+/// `method_has_synthetic_arguments`): the entry is `double (double this,
+/// double x params)`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct DirectAbi {
+    pub params: u32,
+    pub rest: bool,
+    pub synthetic_arguments: bool,
+    /// A user-written rest parameter (not the synthetic `arguments` one).
+    pub user_rest: bool,
+}
+
 /// The slice-2 elision inputs of one module.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ElisionFacts {
@@ -632,7 +647,10 @@ pub struct ElisionFacts {
     /// (never a primitive, never ⊤) and the key's value at every receiver is
     /// one class method body. Value: (holder class id, the body's HIR
     /// function id). Codegen calls the body with the receiver as `this`.
-    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32)>,
+    /// ONCHANGE3: with the body's public entry symbol named from the
+    /// holder's own module and class (as `accessor_sets`), and the body's
+    /// direct-call ABI read from its own parameters (`DirectAbi`).
+    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi)>,
 }
 
 impl ElisionFacts {

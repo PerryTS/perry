@@ -431,11 +431,66 @@ pub(crate) fn accessor_symbol_in(
     Some(perry_codegen::symbol_names::method(prefix, &c.name, &member))
 }
 
+/// ONCHANGE3: what a proven site calls in the holder's module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Member {
+    Get,
+    Set,
+    Method,
+}
+
+/// The holder's symbol for a proven site (`Member::Get` / `Set`:
+/// `accessor_symbol_in`; `Method`: `method_symbol_in`).
+pub(crate) type HolderSymbol<'a> =
+    dyn Fn(&str, u32, u32, &str, Member) -> Option<(String, perry_codegen::DirectAbi)> + 'a;
+
+/// ONCHANGE3: the public entry of class `class_id`'s method `key` in the
+/// module that defines it, as that module's codegen names it
+/// (`method_registry.rs`: `symbol_names::method(module prefix, class name,
+/// method name)`; importers declare the same name, method_registry.rs:188),
+/// with the ABI its definition has (`DirectAbi`). `None` unless the module
+/// holds one class with that id and name whose last method `key` (the one
+/// codegen registers) is the body `func`, an ordinary method (not a
+/// generator, not async, no fixed generator state), and the class has no
+/// evaluated accessor and no static accessor of that name.
+pub(crate) fn method_symbol_in(
+    hir: &perry_hir::Module,
+    prefix: &str,
+    class_id: u32,
+    func: u32,
+    key: &str,
+) -> Option<(String, perry_codegen::DirectAbi)> {
+    let mut classes = hir.classes.iter().filter(|c| c.id == class_id);
+    let c = classes.next()?;
+    if classes.next().is_some()
+        || hir.classes.iter().filter(|o| o.name == c.name).count() != 1
+        || c.has_evaluated_accessor()
+        || c.static_accessor_names.iter().any(|n| n == key)
+    {
+        return None;
+    }
+    let m = c.methods.iter().rev().find(|m| m.name == key)?;
+    if m.id != func
+        || m.is_generator
+        || m.is_async
+        || perry_codegen::body_has_fixed_generator_state(&m.body)
+    {
+        return None;
+    }
+    let abi = perry_codegen::DirectAbi {
+        params: m.params.len() as u32,
+        rest: m.params.iter().any(|p| p.is_rest),
+        synthetic_arguments: m.params.last().is_some_and(|p| p.arguments_object.is_some()),
+        user_rest: m.params.iter().any(|p| p.is_rest && p.arguments_object.is_none()),
+    };
+    Some((perry_codegen::symbol_names::method(prefix, &c.name, key), abi))
+}
+
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
-    accessor_symbol: &dyn Fn(&str, u32, u32, &str, bool) -> Option<String>,
+    holder_symbol: &HolderSymbol<'_>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -446,7 +501,7 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let elision = elision_for(pf, &key, accessor_symbol);
+    let elision = elision_for(pf, &key, holder_symbol);
     // The bodies this module's code is removed for: its object depends on
     // them, so they join the digest (only with removal on and some inactive).
     let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
@@ -528,7 +583,7 @@ fn elide_enabled() -> bool {
 fn elision_for(
     pf: &perry_wpfacts::ProgramFacts,
     path: &str,
-    accessor_symbol: &dyn Fn(&str, u32, u32, &str, bool) -> Option<String>,
+    holder_symbol: &HolderSymbol<'_>,
 ) -> perry_codegen::ElisionFacts {
     use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
@@ -592,18 +647,24 @@ fn elision_for(
             // them: the read throws first, 13.3.6.2) or ⊤ keeps its site.
             let mut refused_calls: std::collections::BTreeSet<(u32, String)> = Default::default();
             for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
+                // ONCHANGE3: the body's entry is named from its own module
+                // (`method_symbol_in`), so a holder this module never names
+                // (reached through a value or a re-export) is served too.
                 let one = match (&s.verdict, s.holder_class, s.target_fns.as_slice()) {
-                    (perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set, Some(cid), [(_, fid)])
+                    (perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set, Some(cid), &[(hm, fid)])
                         if s.receiver_prims == 0 && !s.top =>
                     {
-                        Some((cid, *fid))
+                        pf.module_paths
+                            .get(hm as usize)
+                            .and_then(|p| holder_symbol(p, cid, fid, &s.key, Member::Method))
+                            .map(|(sym, abi)| (cid, fid, sym, abi))
                     }
                     _ => None,
                 };
                 let at = (s.byte_offset, s.key.clone());
                 match one {
                     Some(v) if !refused_calls.contains(&at) => {
-                        if *out.method_calls.entry(at.clone()).or_insert(v) != v {
+                        if *out.method_calls.entry(at.clone()).or_insert_with(|| v.clone()) != v {
                             out.method_calls.remove(&at);
                             refused_calls.insert(at);
                         }
@@ -628,8 +689,11 @@ fn elision_for(
                     | (perry_wpfacts::Verdict::AccessorGet, false, Some(cid), &[(m, f)]) => pf
                         .module_paths
                         .get(m as usize)
-                        .and_then(|p| accessor_symbol(p, cid, f, &s.key, set))
-                        .map(|sym| (cid, sym)),
+                        .and_then(|p| {
+                            let member = if set { Member::Set } else { Member::Get };
+                            holder_symbol(p, cid, f, &s.key, member)
+                        })
+                        .map(|(sym, _)| (cid, sym)),
                     _ => None,
                 };
                 let map = if set {
