@@ -1488,15 +1488,27 @@ impl Model {
                     {
                         self.accessor_walk(of, q, key, ChainAct::Load(dst));
                         let up = self.proto_node(q);
-                        self.cons(
-                            up,
-                            Cons::EnumChain {
-                                key,
-                                dst,
-                                of,
-                                from: q,
-                            },
-                        );
+                        let link = Cons::EnumChain {
+                            key,
+                            dst,
+                            of,
+                            from: q,
+                        };
+                        // SKINROOT27: one prototype level per queue entry, not
+                        // per Rust frame group (55k levels overflowed r8).
+                        if self.chain_active {
+                            self.chain_defer = true;
+                            self.cons(up, link);
+                        } else {
+                            self.chain_active = true;
+                            self.cons(up, link);
+                            while let Some((n2, c2)) = self.chain_q.pop() {
+                                if !self.aborted {
+                                    self.replay_cons(n2, c2);
+                                }
+                            }
+                            self.chain_active = false;
+                        }
                     }
                 }
             }

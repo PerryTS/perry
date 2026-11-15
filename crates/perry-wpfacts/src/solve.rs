@@ -835,6 +835,7 @@ impl Model {
     }
 
     fn cons_untagged(&mut self, n: NodeId, c: Cons) {
+        let defer = std::mem::take(&mut self.chain_defer);
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;
@@ -912,6 +913,16 @@ impl Model {
             return;
         }
         self.own_refuted_cons(n, c);
+        if defer {
+            // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
+            self.chain_q.push((n, c));
+            return;
+        }
+        self.replay_cons(n, c);
+    }
+
+    /// Apply the attached constraint `c` of `n` to what `n` holds now.
+    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons) {
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
