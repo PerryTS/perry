@@ -1,0 +1,1 @@
+Property stores (`o.k = v`, `o[k] = v`) take their hit path without a call: the store entries decide an own writable slot, a hole fill and an overflow entry in their own frame, and an overflowed receiver's miss declines at once.

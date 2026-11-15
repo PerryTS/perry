@@ -645,12 +645,20 @@ impl ShapeRecord {
     #[inline]
     pub(crate) fn lane(&self, slot: u32) -> u64 {
         if slot < crate::object::field_rep::REP_SLOTS {
-            crate::object::field_rep::slot_rep(self.rep, slot)
+            self.word0_lane(slot)
         } else if tail_constfn_slot(self.constfn_infos(), slot) {
             crate::object::field_rep::REP_SPECIAL
         } else {
             crate::object::field_rep::REP_ANY
         }
+    }
+
+    /// The lane of `slot` below [`crate::object::field_rep::REP_SLOTS`]:
+    /// word 0 alone, no call (the store probe's leaf, DESIGN_R §3).
+    #[inline(always)]
+    pub(crate) fn word0_lane(&self, slot: u32) -> u64 {
+        debug_assert!(slot < crate::object::field_rep::REP_SLOTS);
+        crate::object::field_rep::slot_rep(self.rep, slot)
     }
 
     /// Does the record carry a ConstFn lane at slot >= 32?

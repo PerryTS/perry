@@ -3367,7 +3367,7 @@ js_punycode_to_unicode	f64	f64
 js_punycode_ucs2_decode	f64	f64
 js_punycode_ucs2_encode	f64	f64
 js_put_value_set	f64	f64,f64,f64,f64,i32s
-js_put_value_set_dynamic	f64	f64,f64,f64,i32s
+js_put_value_set_dynamic	f64	ptr,f64,f64,f64,i32s
 js_querystring_escape	f64	f64
 js_querystring_native_dispatch	f64	ptr,usize,ptr,usize
 js_querystring_parse	ptr	f64,f64,f64,f64

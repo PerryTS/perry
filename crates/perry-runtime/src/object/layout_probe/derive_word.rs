@@ -168,6 +168,17 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             },
         };
     }
+    // A store may write a key's slot when no entry of the list blocks one,
+    // else when the key's own entry is plain writable data.
+    let store_plain = |i: usize| {
+        rec.summary()
+            & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
+                | crate::object::key_attrs::SUMMARY_PRIVATE)
+            == 0
+            || crate::object::key_attrs::entry_is_plain_writable_data(
+                crate::object::key_attrs::keys_entry(keys, i as u32),
+            )
+    };
     let slots = KeyIndex::buckets(table) as *mut u32;
     for b in 0..buckets {
         *slots.add(b) = u32::MAX;
@@ -181,12 +192,16 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             b = (b + 1) & (buckets - 1);
         }
         let alias = canon[i].0 != *words.add(i);
+        let direct = direct_position(rec, keys, i as u32);
+        let slot_entry = !direct && slotted(i).is_some();
+        let write = (direct || slot_entry) && store_plain(i);
         *slots.add(b) = i as u32
             | if *text { TEXT_ENTRY } else { 0 }
             | if alias { ALIAS_ENTRY } else { 0 }
-            | if direct_position(rec, keys, i as u32) {
+            | if write { WRITE_ENTRY } else { 0 }
+            | if direct {
                 DIRECT_ENTRY
-            } else if slotted(i).is_some() {
+            } else if slot_entry {
                 SLOT_ENTRY
             } else if !accessor_slots.is_empty() && accessor_slotted(i).is_some() {
                 ACCESSOR_ENTRY
