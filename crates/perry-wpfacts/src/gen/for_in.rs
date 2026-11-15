@@ -331,6 +331,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: true,
             no_summary: false,
+            foreign_params: false,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,

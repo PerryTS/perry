@@ -1622,6 +1622,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1696,6 +1697,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1759,6 +1761,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1816,6 +1819,7 @@ fn marker_model() -> crate::model::Model {
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -2201,6 +2205,7 @@ mod r9key2;
 mod r9sites1;
 mod r9sites3;
 mod r9sites5;
+mod r9sites6;
 mod nocall1;
 mod skinfa8;
 mod local_versions;

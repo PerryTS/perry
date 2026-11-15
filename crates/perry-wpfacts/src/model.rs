@@ -708,6 +708,11 @@ pub struct FuncInfo {
     /// Something outside the call protocol writes the parameters (an object
     /// literal IIFE, a computed accessor): never summarized.
     pub no_summary: bool,
+    /// The same outside writes of the parameters, recorded apart from
+    /// `no_summary` (which the activation pass sets on every function to
+    /// keep one body per function): RULE RP needs the parameters bound by
+    /// the call protocol only, not a summary.
+    pub foreign_params: bool,
     /// The step closure of a transformed generator is the generator object
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
     /// iteration protocol on it run the closure. Its [[Prototype]] is what

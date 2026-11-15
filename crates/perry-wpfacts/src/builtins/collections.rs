@@ -558,6 +558,7 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         ctor_of: None,
         lexical_this: true,
         no_summary: false,
+        foreign_params: false,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,

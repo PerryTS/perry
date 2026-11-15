@@ -85,6 +85,7 @@ impl<'a> Gen<'a> {
                     // Its parameter is the literal's birth, not a call input.
                     let f = self.fn_by_id(fx.module, *func_id);
                     self.m.funcs[f as usize].no_summary = true;
+                    self.m.funcs[f as usize].foreign_params = true;
                 }
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }

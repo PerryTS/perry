@@ -476,14 +476,14 @@ impl Model {
     /// (10.2.2: the result is the object unless the value is one), a spread
     /// argument (the position is unknown), a hidden capture parameter, and
     /// a function whose parameters something outside the call protocol
-    /// writes (`no_summary`). Arguments reach the parameter by position
+    /// writes (`foreign_params`; not `no_summary`, which the activation pass sets on every function: there the call still binds its own argument). Arguments reach the parameter by position
     /// through the same `CallSite::args` (`bind_args_bound`).
     pub(crate) fn ret_param_into(&mut self, call: CallId, f: FnIdx) -> bool {
         let Some(i) = self.funcs[f as usize].ret_param.map(|i| i as usize) else {
             return false;
         };
         let c = call as usize;
-        if self.funcs[f as usize].no_summary
+        if self.funcs[f as usize].foreign_params
             || self.ctor_calls.contains(&call)
             || !self.calls[c].spread.is_empty()
             || i >= self.funcs[f as usize].params.len()
@@ -662,7 +662,9 @@ impl Model {
         let v = self.solver_call_raw(
             call,
             CallSite {
-                first_arg_fixed: false,
+                // No spread leads the list: `args[0]` is still the call's
+                // own first argument, and the view says so.
+                first_arg_fixed: fixed == 1,
                 this: c.this.clone(),
                 args,
                 spread: c.spread.clone(),

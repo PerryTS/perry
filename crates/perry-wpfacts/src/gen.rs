@@ -1530,6 +1530,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this,
             no_summary: false,
+            foreign_params: false,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -1850,6 +1851,7 @@ impl<'a> Gen<'a> {
                 let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
                 self.m.funcs[f as usize].no_summary = true;
+                self.m.funcs[f as usize].foreign_params = true;
                 #[cfg(test)]
                 if self.m.packets_enabled {
                     std::rc::Rc::make_mut(&mut self.m.funcs[f as usize].body_packet)
@@ -1909,6 +1911,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
+            foreign_params: false,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
