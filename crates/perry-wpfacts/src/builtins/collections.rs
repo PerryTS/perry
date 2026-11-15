@@ -49,12 +49,12 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
     };
     let (target, bthis, bargs) = m.bound[b as usize].clone();
     m.add_tok(target, t);
-    match c.args.first() {
+    match c.arg(0) {
         Some(&n) => m.edge(n, bthis),
         None => m.add_prim(bthis, prim::UNDEF),
     }
     let mut extra = Vec::new();
-    for (i, &a) in c.args.iter().skip(1).enumerate() {
+    for (i, &a) in c.args_from(1).iter().enumerate() {
         match bargs.get(i) {
             Some(&p) => m.edge(a, p),
             None => extra.push(a),
@@ -91,7 +91,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             }
         }
         Some("call") => {
-            let this = match c.args.first() {
+            let this = match c.arg(0) {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
@@ -102,7 +102,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 CallSite {
                     first_arg_fixed: false,
                     this,
-                    args: c.args.iter().skip(1).copied().collect(),
+                    args: c.args_from(1).iter().copied().collect(),
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
@@ -113,12 +113,12 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             }
         }
         Some("apply") => {
-            let this = match c.args.first() {
+            let this = match c.arg(0) {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
             let mut spread = c.spread.clone();
-            if let Some(&a) = c.args.get(1) {
+            if let Some(&a) = c.arg(1) {
                 spread.push(a);
             }
             if let Some(call2) = m.solver_call_keyed(
@@ -192,7 +192,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             // (numeric operation, value); public extra arguments are ignored.
             let arg = m.node_l("gen-resume-arg");
             m.nodes[arg as usize].frame = m.call_run(call);
-            match c.args.first() {
+            match c.arg(0) {
                 Some(&value) => m.edge(value, arg),
                 None => m.add_prim(arg, prim::UNDEF),
             }
@@ -726,7 +726,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_tok(m, call, arr);
         }
         Some("forEach" | "some" | "every" | "find" | "map" | "filter" | "flatMap") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, num]);
@@ -759,11 +759,11 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_tok(m, call, it);
         }
         Some("reduce") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let acc = m.node_l("acc");
-            match c.args.get(1) {
+            match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
@@ -1153,7 +1153,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
         m.rest_fill_relays.push(recv);
     }
-    let this_arg = |i: usize| match c.args.get(i) {
+    let this_arg = |i: usize| match c.arg(i) {
         Some(&n) => ThisArg::Node(n),
         None => ThisArg::Undef,
     };
@@ -1235,7 +1235,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // The removed elements, in an array made through the receiver's
         // `constructor`.
         Some("splice") => {
-            for &a in c.args.iter().skip(2) {
+            for &a in c.args_from(2).iter() {
                 m.edge(a, elems);
             }
             let out = site_tmpl(m, call, "Array");
@@ -1285,8 +1285,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let added: &[NodeId] = match name {
                 // Array arguments contribute their elements, others themselves.
                 Some("concat") => &c.args,
-                Some("with") => c.args.get(1..).unwrap_or(&[]),
-                Some("toSpliced") => c.args.get(2..).unwrap_or(&[]),
+                Some("with") => c.args_from(1),
+                Some("toSpliced") => c.args_from(2),
                 _ => &[],
             };
             for &a in added {
@@ -1310,7 +1310,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // toSorted has no interpreted declaration; its comparator's result
         // is converted (ToNumber).
         Some("toSorted") => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
                 m.cons(
@@ -1331,7 +1331,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // (`prim(num) | elems(this)`), an array's is a number. `map` and
         // `filter` run their declarations (`species(this, ...)`).
         Some("forEach" | "findIndex" | "findLast" | "findLastIndex" | "flatMap") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
@@ -1356,11 +1356,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             }
         }
         Some("reduce" | "reduceRight") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let acc = m.node_l("acc");
-            match c.args.get(1) {
+            match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
@@ -1533,7 +1533,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
             // The key is compared by SameValueZero (identity for objects).
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
             for &a in &c.args {
@@ -1545,7 +1545,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
             // A Map's or WeakMap's values, not its keys (24.1.3.6, 24.3.3.3;
@@ -1558,7 +1558,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::UNDEF);
         }
         ("Collection", Some("has" | "delete")) => {
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
             ret_prim(m, call, prim::BOOL)
@@ -1586,10 +1586,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, it);
         }
         ("Collection", Some("forEach")) => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let recv = m.node_l("coll");
                 m.add_tok(recv, t);
-                let this = match c.args.get(1) {
+                let this = match c.arg(1) {
                     Some(&n) => ThisArg::Node(n),
                     None => ThisArg::Undef,
                 };
@@ -1611,9 +1611,9 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             promise_species(m, t, call, exec);
             let thrown = m.thrown;
             let (on_ok, on_err) = match name {
-                Some("then") => (c.args.first().copied(), c.args.get(1).copied()),
-                Some("catch") => (None, c.args.first().copied()),
-                _ => (c.args.first().copied(), c.args.first().copied()),
+                Some("then") => (c.arg(0).copied(), c.arg(1).copied()),
+                Some("catch") => (None, c.arg(0).copied()),
+                _ => (c.arg(0).copied(), c.arg(0).copied()),
             };
             if let Some(f) = on_ok {
                 let arg = if name == Some("finally") {
@@ -1738,7 +1738,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         ("URLSearchParams", Some("sort")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
         ("URLSearchParams", Some("forEach")) if c.spread.is_empty() => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let recv = m.node_l("params");
                 m.add_tok(recv, t);
                 let text = m.node_l("param-string");
@@ -1771,7 +1771,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // BufferSource/destination Uint8Array are validated via internal
         // slots, with no JS property reads or identity handout.
         ("TextCodec", Some("encode" | "encodeInto")) if c.spread.is_empty() => {
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 string_methods::to_prim(m, src, "TextEncoder source USVString");
             }
             if name == Some("encode") {
@@ -1790,7 +1790,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             }
         }
         ("TextCodec", Some("decode")) if c.spread.is_empty() => {
-            if let Some(&options) = c.args.get(1) {
+            if let Some(&options) = c.arg(1) {
                 string_methods::read_only(m, options, "stream");
             } // ToBoolean, no hooks.
             ret_prim(m, call, prim::STR);

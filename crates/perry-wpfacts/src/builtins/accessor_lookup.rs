@@ -39,7 +39,7 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
     m.add_top(c.ret, |_| "result of a realm accessor: a host value".into());
     let has_arg = !c.args.is_empty() || !c.spread.is_empty();
     let v = m.node_l("realm-accessor-arg");
-    if let Some(&a) = c.args.first() {
+    if let Some(&a) = c.arg(0) {
         m.edge(a, v);
     }
     for &s in &c.spread {

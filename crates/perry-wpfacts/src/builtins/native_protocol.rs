@@ -1185,7 +1185,7 @@ pub(super) fn native_method(
             "EventEmitter",
             "on" | "addListener" | "once" | "prependListener" | "prependOnceListener",
         ) => {
-            if let Some(&f) = c.args.get(1) {
+            if let Some(&f) = c.arg(1) {
                 let a = m.atom("#listeners");
                 let fl = m.field(origin, a);
                 m.edge(f, fl);
@@ -1197,7 +1197,7 @@ pub(super) fn native_method(
             // when it is an Error (`event_emitter_error.rs`); otherwise a
             // runtime error (always in `thrown`).
             let thrown = m.calls[call as usize].region;
-            if let Some(&er) = c.args.get(1) {
+            if let Some(&er) = c.arg(1) {
                 m.edge(er, thrown);
             }
             for &s in &c.spread {
@@ -1215,7 +1215,7 @@ pub(super) fn native_method(
                 CallSite {
                     first_arg_fixed: false,
                     this: ThisArg::Tok(origin),
-                    args: c.args.iter().skip(1).copied().collect(),
+                    args: c.args_from(1).iter().copied().collect(),
                     spread: c.spread.clone(),
                     ret,
                     site: call2,

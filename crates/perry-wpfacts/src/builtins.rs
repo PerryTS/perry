@@ -287,7 +287,7 @@ pub(crate) fn function_ctor_runs_code(
     });
     let c = m.calls[call as usize].clone();
     let r = m.reason("ToPrimitive");
-    for &a in c.args.iter().skip(skip) {
+    for &a in c.args_from(skip).iter() {
         m.cons(
             a,
             Cons::Implicit {
@@ -474,7 +474,7 @@ fn ret_tok(m: &mut Model, call: CallId, t: Tok) {
 }
 
 fn arg(m: &Model, call: CallId, i: usize) -> Option<NodeId> {
-    m.calls[call as usize].args.get(i).copied()
+    m.calls[call as usize].arg(i).copied()
 }
 
 /// The elements of every array argument plus every spread array.
@@ -2823,11 +2823,11 @@ fn ns_method_inner(
             m.add_tok(this, global);
             let timed = matches!(name, "setTimeout" | "setInterval");
             if timed {
-                if let Some(&delay) = c.args.get(1) {
+                if let Some(&delay) = c.arg(1) {
                     string_methods::to_prim(m, delay, "timer timeout ToNumber");
                 }
             }
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let args = if name == "queueMicrotask" {
                     vec![]
                 } else {
@@ -3006,10 +3006,10 @@ fn ns_method_inner(
         }
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
-            if let Some(&t) = c.args.first() {
+            if let Some(&t) = c.arg(0) {
                 let site = m.anon_post_site("Object.assign (value call)");
                 m.stores[site as usize].assign = true;
-                for &s in c.args.iter().skip(1) {
+                for &s in c.args_from(1).iter() {
                     m.cons(s, Cons::Spread { into: t, site });
                 }
                 for &s in &c.spread {
@@ -3495,7 +3495,7 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
             m.add_tok(mods, t);
         }
     }
-    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+    if let Some(a0) = m.calls[call as usize].arg(0).copied() {
         m.cons(
             a0,
             Cons::TopIfAny {
@@ -3511,7 +3511,7 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
     let fa = m.field_any(cache);
     let reg = m.cjs_union;
     m.edge(reg, fa);
-    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+    if let Some(a0) = m.calls[call as usize].arg(0).copied() {
         m.cons(
             a0,
             Cons::TopIfAny {
@@ -3570,7 +3570,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             match m.call_lit.get(&call).copied() {
                 Some(a) => require_by_spec(m, call, Some(a)),
                 None => {
-                    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+                    if let Some(a0) = m.calls[call as usize].arg(0).copied() {
                         m.cons(a0, Cons::RequireSpec { call });
                     }
                 }

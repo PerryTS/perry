@@ -773,6 +773,35 @@ pub struct CallSite {
     pub region: NodeId,
 }
 
+impl CallSite {
+    /// Argument position `i` as a builtin model reads it (ECMA-262 13.3.8.1
+    /// ArgumentListEvaluation). Without a spread: `args[i]`. A call with a
+    /// spread reaches a model only as its view (`Model::builtin_args_view`),
+    /// whose last entry holds every spread element and every explicit
+    /// argument no spread fixes: what every later position holds, since an
+    /// array of unknown length can put any element anywhere and shift any
+    /// later argument right. So a position past the entries is the last
+    /// one, and no position is out of reach.
+    pub fn arg(&self, i: usize) -> Option<&NodeId> {
+        match self.args.get(i) {
+            Some(n) => Some(n),
+            None if !self.spread.is_empty() => self.args.last(),
+            None => None,
+        }
+    }
+
+    /// Positions `i..` (`arg`): in a spread view at least the last entry.
+    pub fn args_from(&self, i: usize) -> &[NodeId] {
+        if i < self.args.len() {
+            &self.args[i..]
+        } else if !self.spread.is_empty() && !self.args.is_empty() {
+            &self.args[self.args.len() - 1..]
+        } else {
+            &[]
+        }
+    }
+}
+
 /// What a published class's method did to its receiver (`Model::recv_log`).
 #[derive(Clone, Copy, Debug)]
 pub enum RecvEffect {

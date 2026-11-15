@@ -490,9 +490,9 @@ impl Run {
                     v.nodes.push(spread_elems(m, s));
                 }
             }
-            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.args.get(i as usize)),
+            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.arg(i as usize)),
             RealmSlotRoot::Rest(i) => {
-                v.nodes.extend(self.c.args.iter().skip(i as usize));
+                v.nodes.extend(self.c.args_from(i as usize).iter());
                 for s in self.c.spread.clone() {
                     v.nodes.push(spread_elems(m, s));
                 }

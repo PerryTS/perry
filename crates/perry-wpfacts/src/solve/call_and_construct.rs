@@ -561,9 +561,10 @@ impl Model {
     /// field: an array of unknown length can put any element anywhere) and
     /// every argument `args[j]` with `j <= i` (a spread before it shifts it
     /// right); a first argument no spread precedes stays alone at 0. The
-    /// positions are the call's own and the widest positional read of a
-    /// builtin model (`BUILTIN_ARG_POSITIONS`); the variadic models read
-    /// the spreads, which the view keeps. The user-function binding reads
+    /// entries are the call's own positions, and one more when every own
+    /// position is fixed; the last entry then holds the spread elements and
+    /// every unfixed argument, which is what any later position holds, so
+    /// `CallSite::arg` answers every position from it. The user-function binding reads
     /// a spread the same way (`bind_args`). One view per call; a view is
     /// its own view.
     pub(crate) fn builtin_args_view(&mut self, call: CallId) -> CallId {
@@ -580,7 +581,7 @@ impl Model {
             self.cons(s, Cons::Load { key, dst: elems });
         }
         let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
-        let n = c.args.len().max(BUILTIN_ARG_POSITIONS);
+        let n = c.args.len().max(fixed + 1);
         let mut args = Vec::with_capacity(n);
         for i in 0..n {
             if i < fixed {
@@ -1339,9 +1340,3 @@ impl Model {
     }
 }
 
-/// The widest position a hand-written builtin model reads by index (the
-/// `thisArg` of `Array.from(items, mapfn, thisArg)` and of the callback
-/// methods), plus one: the positions a spread view fills beyond the
-/// call's own arguments. A declared effect reads the spread itself
-/// (`builtins::effects`, `RealmSlotRoot::Arg`).
-pub(crate) const BUILTIN_ARG_POSITIONS: usize = 3;

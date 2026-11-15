@@ -124,6 +124,19 @@ fn audit2_u1b_spread_object_assign_and_concat() {
     ]);
     assert!(bad.is_empty(), "f.a is g in JS: {bad:?}");
 }
+/// A1: a builtin called with a spread reads every position from the spread (13.3.8.1): the value
+/// at spread position 5 lands at position 5 and later (23.1.3.31 splice items, 23.1.2.3
+/// Array.of, 23.1.3.35 toSpliced items, 20.2.3.3 Function.prototype.call into parameter 6).
+#[test]
+fn audit2_u1f_spread_late_position() {
+    let bad = missed(&[
+        "const xs: any[] = []; xs.splice(0, 0, ...([1, 2, 3, 4, 5, g] as any[])); xs.forEach((x: any) => { f.a = x; });",
+        "Array.of(...([1, 2, 3, 4, 5, g] as any[])).forEach((x: any) => { f.a = x; });",
+        "[0].toSpliced(0, 0, ...([1, 2, 3, 4, 5, g] as any[])).forEach((x: any) => { f.a = x; });",
+        "function h(a: any, b: any, c: any, d: any, e: any, k: any) { f.a = k; } h.call(null, ...([1, 2, 3, 4, 5, g] as any[]));",
+    ]);
+    assert!(bad.is_empty(), "f.a is g in JS: {bad:?}");
+}
 /// A1 control: the same without a spread is seen (green); a call that converts nothing keeps
 /// T0Mono, so `reaches_g` can fail.
 #[test]

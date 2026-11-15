@@ -139,14 +139,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // call arm adds the `constructor` read of `RegExp(re)`); surplus
             // operands are ignored.
             let c = m.calls[call as usize].clone();
-            if let Some(&p) = c.args.first() {
+            if let Some(&p) = c.arg(0) {
                 let wk = collections::WK_PREFIX;
                 string_methods::read_only(m, p, &format!("{wk}match"));
                 string_methods::read_prim(m, p, "source", "RegExp pattern source ToString");
                 string_methods::read_prim(m, p, "flags", "RegExp pattern flags ToString");
                 string_methods::to_prim(m, p, "RegExp pattern ToString");
             }
-            if let Some(&f) = c.args.get(1) {
+            if let Some(&f) = c.arg(1) {
                 string_methods::to_prim(m, f, "RegExp flags ToString");
             }
             let o = site_tmpl(m, call, "RegExp");
@@ -155,10 +155,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // object's [[OriginalSource]] with flags "", as a literal's
             // (`Cons::RegExpPattern`, `Model::regexp_pattern`).
             // Rule M9: both operands, for a global one-class pattern.
-            if let (Some(&p), Some(&f)) = (c.args.first(), c.args.get(1)) {
+            if let (Some(&p), Some(&f)) = (c.arg(0), c.arg(1)) {
                 m.regexp_ctor_args.insert(o, (p, f));
             }
-            if let (Some(&p), None) = (c.args.first(), c.args.get(1)) {
+            if let (Some(&p), None) = (c.arg(0), c.arg(1)) {
                 m.regexp_ctor_toks.insert(o);
                 m.cons(p, Cons::RegExpPattern { tok: o });
             }
@@ -181,10 +181,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 _ => "TypedArray",
             };
             let c = m.calls[call as usize].clone();
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 if buffer {
                     string_methods::to_prim(m, src, "ArrayBuffer byteLength ToIndex");
-                    if let Some(&opts) = c.args.get(1) {
+                    if let Some(&opts) = c.arg(1) {
                         string_methods::read_prim(
                             m,
                             opts,
@@ -193,7 +193,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         );
                     }
                 } else if ns == BuiltinNs::DataView {
-                    for &a in c.args.iter().skip(1).take(2) {
+                    for &a in c.args_from(1).iter().take(2) {
                         string_methods::to_prim(m, a, "DataView byteOffset/byteLength ToIndex");
                     }
                 } else {
@@ -203,7 +203,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         vals,
                         "typed-array constructor element ToNumber/ToBigInt",
                     );
-                    for &a in c.args.iter().skip(1).take(2) {
+                    for &a in c.args_from(1).iter().take(2) {
                         string_methods::to_prim(m, a, "typed-array byteOffset/length ToIndex");
                     }
                 }
@@ -217,7 +217,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // one AllocateTypedArray allocates (a DataView needs one).
             if !buffer {
                 let fresh = (what == "TypedArray").then(|| site_tmpl(m, call, "ArrayBuffer"));
-                match m.calls[call as usize].args.first().copied() {
+                match m.calls[call as usize].arg(0).copied() {
                     Some(src) => m.cons(src, Cons::ViewedBuffer { view: o, fresh, share: false }),
                     None => {
                         if let Some(ab) = fresh {
@@ -233,10 +233,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.add_prim(fa, prim::NUM | prim::BIGINT);
             }
             let c = m.calls[call as usize].clone();
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 m.cons(src, Cons::ShareBuffer { ta: o });
             }
-            if buffer && c.args.len() > 1 {
+            if buffer && c.arg(1).is_some() {
                 // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.
                 let r = m.reason("B4 resizable ArrayBuffer");
                 m.mark_hard(o, Hard::B4Resizable, r);
@@ -265,7 +265,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Number | BuiltinNs::String | BuiltinNs::Boolean => {
             let c = m.calls[call as usize].clone();
             if ns != BuiltinNs::Boolean {
-                if let Some(&a) = c.args.first() {
+                if let Some(&a) = c.arg(0) {
                     string_methods::to_prim(
                         m,
                         a,
@@ -347,7 +347,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
         "Proxy" => {
             let c = m.calls[call as usize].clone();
             let r = m.reason("E9 new Proxy (by name)");
-            if let Some(&t) = c.args.first() {
+            if let Some(&t) = c.arg(0) {
                 m.cons(
                     t,
                     Cons::Hard {

@@ -562,7 +562,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
     let c = m.calls[call as usize].clone();
     let recv = m.node_l("regexp");
     m.add_tok(recv, t);
-    if let Some(s) = c.args.first().copied() {
+    if let Some(s) = c.arg(0).copied() {
         to_prim(m, s, "RegExp argument ToString");
     }
     match name {
@@ -574,7 +574,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             return;
         }
         _ => {
-            if let Some(s) = c.args.first().copied() {
+            if let Some(s) = c.arg(0).copied() {
                 read_prim(m, recv, "flags", "RegExp flags ToString");
                 let r = method_call(m, call, recv, "exec", vec![s]);
                 read_match(m, r);
@@ -583,7 +583,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
                 }
             }
             if name == "@@__perry_wk_replace" {
-                if let Some(&rv) = c.args.get(1) {
+                if let Some(&rv) = c.arg(1) {
                     replace_value(m, call, rv);
                     // Rule M9 (`Model::class_replace_strs`): every value the
                     // result depends on runs it again.
@@ -632,7 +632,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             let a = m.atom("groups");
             let f = m.field(rec, a);
             m.add_tok(f, g);
-            exec_captures(m, t, rec, c.args.first().copied());
+            exec_captures(m, t, rec, c.arg(0).copied());
             ret_tok(m, call, rec);
             ret_prim(m, call, prim::NULL);
         }
@@ -685,10 +685,10 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
     );
     let fl = str_node(m);
     let splitter = construct(m, call, sc, vec![recv, fl]);
-    if let Some(&lim) = c.args.get(1) {
+    if let Some(&lim) = c.arg(1) {
         to_prim(m, lim, "@@split limit ToUint32");
     }
-    let Some(&s) = c.args.first() else {
+    let Some(&s) = c.arg(0) else {
         let a = site_tmpl(m, call, "Array");
         ret_tok(m, call, a);
         return;

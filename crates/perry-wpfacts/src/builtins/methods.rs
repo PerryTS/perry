@@ -733,7 +733,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                     let recv = m.node_l("isprototypeof-recv");
                     m.add_tok(recv, origin);
                     m.identity(recv, IdentityRoute::IsPrototypeOf);
-                    if let Some(&a) = m.calls[call as usize].args.first() {
+                    if let Some(&a) = m.calls[call as usize].arg(0) {
                         m.identity(a, IdentityRoute::IsPrototypeOf);
                     }
                 }
@@ -784,7 +784,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     if c.args.len() < 2 && c.spread.is_empty() {
         return;
     }
-    if let Some(&k) = c.args.first() {
+    if let Some(&k) = c.arg(0) {
         let reason = m.reason("ToPropertyKey");
         m.cons(
             k,
@@ -820,7 +820,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         m.add_tok(holder, origin);
         if own {
             // The getter / setter runs with `this` = the receiver.
-            for &f in c.args.iter().skip(1).take(1).chain(&c.spread) {
+            for &f in c.args_from(1).iter().take(1).chain(&c.spread) {
                 m.cons(f, Cons::ThisFrom { recv: holder });
             }
         }
@@ -865,7 +865,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         }
         m.escape(origin, r);
         let r = m.reason("E5 __defineGetter__ argument");
-        for &f in c.args.iter().skip(1).take(1).chain(&c.spread) {
+        for &f in c.args_from(1).iter().take(1).chain(&c.spread) {
             m.sink_node(f, r);
         }
     }

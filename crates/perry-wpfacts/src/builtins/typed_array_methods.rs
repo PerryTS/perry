@@ -176,7 +176,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         }
         // Search element is compared, never coerced; only fromIndex is.
         "includes" | "indexOf" | "lastIndexOf" => {
-            if let Some(&a) = c.args.get(1) {
+            if let Some(&a) = c.arg(1) {
                 to_prim(m, a, "typed-array fromIndex ToIntegerOrInfinity");
             }
             ret_prim(
@@ -190,21 +190,21 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             );
         }
         "set" => {
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 // set does not iterate source, only indexed Get.
                 read_prim(m, src, "length", "typed-array set source ToLength");
                 let ek = m.elem_key();
                 let v = load(m, src, ek);
                 to_prim(m, v, "typed-array set element ToNumber/ToBigInt");
             }
-            if let Some(&off) = c.args.get(1) {
+            if let Some(&off) = c.arg(1) {
                 to_prim(m, off, "typed-array set offset ToIntegerOrInfinity");
             }
             ret_prim(m, call, prim::UNDEF);
         }
         "forEach" | "map" | "filter" | "some" | "every" | "find" | "findLast" | "findIndex"
         | "findLastIndex" => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, this_arg(), vec![elem, num, recv]);
                 if name == "map" {
                     to_prim(m, r, "typed-array map result ToNumber/ToBigInt");
@@ -225,17 +225,17 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         "reduce" | "reduceRight" => {
             let acc = m.node_l("typed-accumulator");
             m.edge(elem, acc);
-            if let Some(&init) = c.args.get(1) {
+            if let Some(&init) = c.arg(1) {
                 m.edge(init, acc);
             }
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elem, num, recv]);
                 m.edge(r, acc);
             }
             m.edge(acc, c.ret); // No coercion or escape of the accumulator.
         }
         "sort" | "toSorted" => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elem, elem]);
                 to_prim(m, r, "typed-array comparator result ToNumber");
             }
@@ -250,7 +250,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             fresh(m, call);
         }
         "join" => {
-            if let Some(&a) = c.args.first() {
+            if let Some(&a) = c.arg(0) {
                 to_prim(m, a, "typed-array separator ToString");
             }
             ret_prim(m, call, prim::STR);
