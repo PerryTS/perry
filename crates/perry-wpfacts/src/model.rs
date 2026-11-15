@@ -2716,6 +2716,8 @@ pub struct Model {
     /// stops and the program gets no facts at all (every fact off: the
     /// sound fallback).
     pub budget: Option<(std::time::Instant, std::time::Duration)>,
+    /// The work counter at the last budget check (`solve`).
+    pub budget_work_at: u64,
     pub aborted: bool,
     /// SKINROOT27: the prototype-chain walk of `Cons::EnumChain` as a
     /// worklist. `chain_active`: an EnumChain application is on the stack;

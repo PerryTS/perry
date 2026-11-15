@@ -16,6 +16,10 @@ pub(crate) mod map_vals;
 mod own_read;
 
 use crate::builtins;
+
+/// Work between two checks of the time budget (beside every 1024 pops).
+const BUDGET_WORK_STEP: u64 = 1 << 22;
+
 mod call_and_construct;
 mod native_value;
 mod reflect_construct;
@@ -1032,7 +1036,14 @@ impl Model {
             if self.profile.is_some() && self.pops & 0x3ffff == 0 {
                 eprintln!("perry: wpfacts progress {}", self.size_line());
             }
-            if self.pops & 0x3ff == 0 {
+            // The time budget is checked every 1024 pops, and also once the
+            // work counter has advanced by `BUDGET_WORK_STEP` since the last
+            // check: a pop can cost millions of work units, and then 1024
+            // pops outlast any budget.
+            if self.pops & 0x3ff == 0
+                || self.work.get() >= self.budget_work_at.saturating_add(BUDGET_WORK_STEP)
+            {
+                self.budget_work_at = self.work.get();
                 let over_time = self
                     .budget
                     .is_some_and(|(start, limit)| start.elapsed() > limit);
