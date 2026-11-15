@@ -178,6 +178,37 @@ impl<'a> Gen<'a> {
         (self.expr_zs(fx, condition), TRUTHY, FALSY)
     }
 
+    /// Rule R2 (ECMA-262 14.6.2: an `if`'s branch runs only when its
+    /// test selects it): inside a branch whose test is a presence test
+    /// (`x === undefined`, `x !== undefined`, `x == null`, `x != null`),
+    /// a read of a local or of `this` holds the read node's values only
+    /// once the tested value can select the branch (`Cons::Guard`, the
+    /// gate the branch's local writes already pass). A branch the test
+    /// never selects reads nothing: its calls find no receiver or callee,
+    /// its stores no object, so none of its effects apply. The gate opens
+    /// once and stays open (values only grow), so the fixpoint is the same
+    /// one. `PERRY_FACTS_GUARD_REGIONS=0` turns it off.
+    pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        use crate::model::guard::*;
+        let Some((t, test)) = fx.guard else {
+            return n;
+        };
+        if !matches!(test, UNDEF | NOT_UNDEF | NULLISH | NOT_NULLISH) || !guard_regions_on() {
+            return n;
+        }
+        let g = self.tmp("guard-read");
+        self.zs_carrier(g);
+        self.m.cons(
+            t,
+            Cons::Guard {
+                test,
+                from: n,
+                dst: g,
+            },
+        );
+        g
+    }
+
     pub(crate) fn fail_closed(&mut self, fx: &Fx, e: &Expr, name: &str) -> NodeId {
         let why = format!("{UNMODELED_OPERAND} {name}");
         let mut kids: Vec<&Expr> = Vec::new();
@@ -619,10 +650,13 @@ impl<'a> Gen<'a> {
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
-                _ => match self.narrowed_read(mi, *id) {
-                    Some(n) => n,
-                    None => self.local(mi, *id),
-                },
+                _ => {
+                    let n = match self.narrowed_read(mi, *id) {
+                        Some(n) => n,
+                        None => self.local(mi, *id),
+                    };
+                    self.region_read(fx, n)
+                }
             },
             // Program code never writes a `const` (lowering throws
             // `Assignment to constant variable`): `undefined` written into
@@ -2223,9 +2257,12 @@ impl<'a> Gen<'a> {
                 let k = self.m.atom(method_name);
                 self.mcall(c, Key::Named(k), a, vec![])
             }
-            Expr::This => self
-                .narrowed_read(fx.module, crate::gen::narrow::THIS_LOCAL)
-                .unwrap_or(fx.this),
+            Expr::This => {
+                let n = self
+                    .narrowed_read(fx.module, crate::gen::narrow::THIS_LOCAL)
+                    .unwrap_or(fx.this);
+                self.region_read(fx, n)
+            }
             Expr::ModuleTopThis => fx.this,
             Expr::SuperCall(args) => {
                 let a = self.evaluate_all(fx, args);
@@ -2276,4 +2313,10 @@ impl<'a> Gen<'a> {
         let s = self.key_shape_of(mi, e, &mut Vec::new());
         self.m.key_shape(s.filter(|s| !s.globs.is_empty()))
     }
+}
+
+/// `PERRY_FACTS_GUARD_REGIONS=0`: branch reads are not gated (rule R2 off).
+fn guard_regions_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_GUARD_REGIONS").as_deref() != Ok("0"))
 }

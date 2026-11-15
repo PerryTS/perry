@@ -267,3 +267,11 @@ fn elems1_g4b_own_to_string_on_array_runs() {
     let s = src("", "", &[], "y.elements.toString = function () { this[0] = \"s\"; return \"m\"; };\nconsole.log(String(y.elements));");
     assert_eq!(elem_kind(&s), "boxed");
 }
+
+#[test]
+fn elems1_e5d_from_array_of_a_field() {
+    // e5's UNDEF without `clone` or the default `offset`: the loop read
+    // `array[i]` (i in [0, 3]) of an `M.elements` array (RED, open).
+    let s = src("", "", &[FROM], "const z = new M().fromArray(x.elements); x.mul(x, z);");
+    expect(&s, F4);
+}
