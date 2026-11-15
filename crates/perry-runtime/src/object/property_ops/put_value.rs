@@ -456,6 +456,7 @@ pub unsafe extern "C" fn js_put_value_set_dynamic(
         OwnSet::Stored => value,
         OwnSet::Slot(obj, address, slot) => set_dynamic_slot_any(obj, address, slot, value),
         OwnSet::Table(t, address) => set_dynamic_table_barrier(t, address, value),
+        OwnSet::Hole(..) => set_dynamic_rest_atom(target, atom, hash, value, strict),
         OwnSet::Absent(r) => set_dynamic_absent(target, value, atom, hash, r, strict),
         OwnSet::OverflowMiss(r) => set_dynamic_overflow_miss(target, value, atom, hash, r, strict),
         OwnSet::Rest => set_dynamic_rest_atom(target, atom, hash, value, strict),
