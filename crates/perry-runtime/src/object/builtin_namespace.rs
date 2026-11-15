@@ -154,31 +154,62 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
             let Some(bits) = global_data_binding(global, name) else {
                 continue;
             };
-            // A constructor without statics has no bag yet: give it one, so
-            // a later write lands in a sealed holder.
-            let addr = (bits & crate::value::POINTER_MASK) as usize;
-            if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-                && crate::closure::is_closure_ptr(addr)
+            // A lazy family's constructor namespace is sealed by its own birth
+            // (`seal_born_family`): a bag made here would be that birth.
+            let name: &str = name;
+            if crate::object::BuiltinConstructorIdentity::for_name(name)
+                .is_some_and(|identity| identity.declaration().lazy)
             {
-                crate::closure::props::bag_ensure(addr);
-            }
-            let obj = holder_of_value(bits);
-            if obj.is_null() {
                 continue;
             }
-            super::builtin_proto::seal_object_family(obj, FIRST + i);
-            if contract_mode() {
-                snapshot_members(i, obj);
-            }
-            trace(name, "sealed", (*obj).parent_class_id);
-            if super::shapes::is_site_matchable_layout_word((*obj).parent_class_id) {
-                crate::agent_ptrs::publish_intrinsic_proto(FIRST + i, obj);
-            } else {
-                // Its word cannot carry the bit: never pristine.
-                crate::agent_ptrs::publish_patched_intrinsic(FIRST + i);
-            }
+            seal_namespace(i, name, bits);
         }
         super::builtin_proto::seal_object_family(global, GLOBAL_FAMILY);
+    }
+}
+
+/// Seal the namespace holder `bits` (the realm's binding of `name`, entry `i`
+/// of `BUILTIN_NAMESPACES`).
+///
+/// # Safety
+/// Under the caller's no-move scope; `bits` is the thread realm's binding.
+unsafe fn seal_namespace(i: usize, name: &str, bits: u64) {
+    // A constructor without statics has no bag yet: give it one, so
+    // a later write lands in a sealed holder.
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr(addr)
+    {
+        crate::closure::props::bag_ensure(addr);
+    }
+    let obj = holder_of_value(bits);
+    if obj.is_null() {
+        return;
+    }
+    super::builtin_proto::seal_object_family(obj, FIRST + i);
+    if contract_mode() {
+        snapshot_members(i, obj);
+    }
+    trace(name, "sealed", (*obj).parent_class_id);
+    if super::shapes::is_site_matchable_layout_word((*obj).parent_class_id) {
+        crate::agent_ptrs::publish_intrinsic_proto(FIRST + i, obj);
+    } else {
+        // Its word cannot carry the bit: never pristine.
+        crate::agent_ptrs::publish_patched_intrinsic(FIRST + i);
+    }
+}
+
+/// Seal the constructor namespace of the lazy family `name` at its birth
+/// (`ctor`: its constructor cell), as `seal_namespaces` seals the eager ones.
+///
+/// # Safety
+/// Called inside the family's birth (collection suppressed).
+pub(crate) unsafe fn seal_born_namespace(name: &str, ctor: usize) {
+    if ctor == 0 {
+        return;
+    }
+    if let Some(i) = crate::codegen_abi::BUILTIN_NAMESPACES.iter().position(|n| *n == name) {
+        seal_namespace(i, name, crate::value::js_nanbox_pointer(ctor as i64).to_bits());
     }
 }
 

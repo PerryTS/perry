@@ -42,13 +42,25 @@ pub(super) fn get_field_from_value_handle(value: &crate::gc::RuntimeHandle<'_>, 
     key.with_const_ptr(|key| js_object_get_field_by_name_f64(object, key))
 }
 
+/// Create the own data property `key` (CreateDataProperty): an installer
+/// defines, never [[Set]]s. A Set walks the target's chain for a setter, and
+/// on a constructor that chain is %Function.prototype%: a birth.
 pub(super) fn set_field(obj: *mut ObjectHeader, key: &str, value: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
+    let name = key;
     let key = scope.root_string_ptr(js_string_from_bytes(key.as_ptr(), key.len() as u32));
     obj.with_mut_ptr(|obj| {
-        key.with_const_ptr(|key| js_object_set_field_by_name(obj, key, value.get_nanbox_f64()))
+        key.with_const_ptr(|key| {
+            crate::object::define_builtin_data_property(
+                obj,
+                key,
+                value.get_nanbox_f64(),
+                name.to_string(),
+                PropertyAttrs::new(true, true, true),
+            )
+        })
     });
 }
 

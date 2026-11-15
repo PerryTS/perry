@@ -213,7 +213,7 @@ pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
         return false;
     }
     let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-    addr != 0 && addr == crate::array::function_prototype_addr()
+    addr != 0 && addr == crate::array::function_prototype_addr_if_bound()
 }
 
 /// This realm's intrinsic `%<name>.prototype%`, or `undefined` when `name`

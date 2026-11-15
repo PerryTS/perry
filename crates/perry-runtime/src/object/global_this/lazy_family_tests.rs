@@ -99,8 +99,12 @@ fn lazy_declarations_are_bornable_late() {
         // Its prototype publishes no identity word (class, serial, sealed or
         // named serial): such a word reads 0 until the birth, and its readers
         // are audited per family before one may be lazy (P1-AUDIT).
+        // Audited (P1-AUDIT): every reader of Array.prototype's identity word
+        // reads its family cell or is `_if_bound`.
+        const IDENTITY_WORD_AUDITED: &[&str] = &["Array"];
         assert!(
-            declaration.prototype_class.is_none()
+            IDENTITY_WORD_AUDITED.contains(&declaration.name)
+                || declaration.prototype_class.is_none()
                 && declaration.prototype_serial.is_none()
                 && declaration.sealed_serial.is_none()
                 && declaration.named_serial.is_none(),

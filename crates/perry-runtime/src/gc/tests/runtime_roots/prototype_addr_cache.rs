@@ -279,51 +279,15 @@ fn prototype_addr_cache_scanner_leaves_the_unset_sentinel_alone() {
 /// accessor can index. Nothing here writes.
 #[test]
 fn the_shipped_cells_are_the_ones_the_scanner_visits() {
+    // One row is left: %Object.prototype%'s (its builder is
+    // `ensure_object_intrinsics`). Every family prototype's one record is its
+    // [[Intrinsics]] cell, which the same scanner rewrites.
     let wiring = crate::array::test_prototype_addr_cache_wiring();
+    assert_eq!(wiring.len(), 1);
     assert_eq!(
-        wiring[0].1, b"Array",
-        "row 0 is what array_prototype_addr() indexes; it must bootstrap from \
-         globalThis.Array"
+        wiring[0].1, b"Object",
+        "the row is what object_prototype_addr() indexes"
     );
-    assert_eq!(
-        wiring[1].1, b"Object",
-        "row 1 is what object_prototype_addr() indexes; it must bootstrap from \
-         globalThis.Object"
-    );
-    assert_eq!(
-        wiring[2].1, b"Function",
-        "row 2 is what function_prototype_addr() indexes; it must bootstrap \
-         from globalThis.Function (#10497)"
-    );
-    assert_ne!(
-        wiring[0].0, wiring[2].0,
-        "Array.prototype and Function.prototype must memoize into different cells"
-    );
-    assert_ne!(
-        wiring[1].0, wiring[2].0,
-        "Object.prototype and Function.prototype must memoize into different cells"
-    );
-    assert_ne!(
-        wiring[0].0, wiring[1].0,
-        "the two intrinsics must memoize into DIFFERENT cells — sharing one \
-         cell makes the second accessor return the first intrinsic's address \
-         and leaves the collector with nothing to rewrite for it (#6981)"
-    );
-    // Rows 3-5: the primitive wrappers' prototypes (#11910), each its own cell.
-    assert_eq!(wiring[3].1, b"String");
-    assert_eq!(wiring[4].1, b"Number");
-    assert_eq!(wiring[5].1, b"Boolean");
-    for i in 0..wiring.len() {
-        for j in i + 1..wiring.len() {
-            assert_ne!(
-                wiring[i].0, wiring[j].0,
-                "rows {i} and {j} must memoize into different cells (#6981)"
-            );
-        }
-    }
-    // The scanner iterates the per-thread cell array itself, so covering every
-    // accessor's row reduces to the array being at least as long as the highest
-    // index an accessor uses.
     let cells = crate::array::test_prototype_addr_cell_count();
     for (row, builtin) in wiring {
         assert!(

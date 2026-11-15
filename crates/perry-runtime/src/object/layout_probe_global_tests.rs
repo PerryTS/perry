@@ -188,7 +188,7 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
             // Every declared key is either checked here or one of the two
             // runtime atoms; the layout's key count is the authority, so a
             // builtin added to the global layout needs no count edited here.
-            assert_eq!(runtime_own, 2, "runtime-owned atoms among the global keys");
+            assert_eq!(runtime_own, 1, "runtime-owned atoms among the global keys");
             assert_eq!(checked + runtime_own, (*desc).key_count as usize);
         })
         .unwrap()

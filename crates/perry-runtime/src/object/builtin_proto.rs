@@ -505,6 +505,10 @@ pub(crate) unsafe fn seal_born_family(
     if let Some((family, _)) = BuiltinProto::ALL.into_iter().find(|(_, n)| *n == name) {
         seal_family_prototype(family, crate::array::intrinsic_prototype_addr_if_bound(identity));
     }
+    super::builtin_namespace::seal_born_namespace(
+        name,
+        crate::array::intrinsic_constructor_addr_if_bound(identity),
+    );
 }
 
 /// Seal one family's intrinsic prototype `proto` (0: none).

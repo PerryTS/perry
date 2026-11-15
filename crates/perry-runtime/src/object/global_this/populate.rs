@@ -671,10 +671,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(false, false, false),
         );
     }
-    // #10497: memoize the intrinsic prototype identities while every
-    // `globalThis.<Builtin>` still names its intrinsic — before any user code
-    // can reassign the writable `globalThis.Function`.
-    crate::array::prime_prototype_addr_cache();
     // #11915: every runtime-owned install and link above is done; from here a
     // mutation of an intrinsic prototype is the program's, and withdraws its
     // family's `Pristine` fact.
@@ -810,6 +806,15 @@ fn birth_family(
         }
         proto
     };
+    // The family cell is the one record of this prototype from its
+    // allocation on: every read during the birth (a member install walking
+    // Array.prototype's chain) gets the object being born, and
+    // `birth_lazy_family` returns at once instead of re-entering.
+    crate::array::note_realm_intrinsic(
+        declaration.identity,
+        proto_obj as usize,
+        closure_ptr as usize,
+    );
     if declaration.prototype_callable {
         // The declaration is immutable birth metadata, independent of the
         // public name/property. Publish the callable shape and header fact.

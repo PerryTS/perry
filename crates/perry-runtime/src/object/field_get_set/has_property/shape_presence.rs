@@ -98,7 +98,7 @@ pub(crate) unsafe fn own_position(
             return None;
         }
         if shape.object_kind != ShapeObjectKind::Ordinary
-            && obj as usize == crate::array::function_prototype_addr()
+            && obj as usize == crate::array::function_prototype_addr_if_bound()
         {
             return None;
         }

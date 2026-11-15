@@ -74,7 +74,7 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
 /// the array element-write paths; cheap (two relaxed atomic loads + compare).
 #[inline]
 pub(crate) fn note_array_index_write(arr: usize) {
-    if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+    if arr != 0 && arr == array_prototype_addr_if_resolved() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         // DEC 250 (i): the program never adds an index to %Array.prototype%.
         crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
@@ -1133,7 +1133,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     // object type — so the obj_type test above already answered both. Only
     // `Array.prototype` itself still needs the address compare: an index
     // write there must flip `ARRAY_PROTO_HAS_INDEX` on the slow path.
-    if raw == array_prototype_addr() {
+    if raw == array_prototype_addr_if_resolved() {
         return None;
     }
     // The raw-f64 layouts store the canonical double (what the general path's
@@ -1235,7 +1235,7 @@ pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     if old_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
     }
-    if raw == array_prototype_addr() {
+    if raw == array_prototype_addr_if_resolved() {
         return None;
     }
     // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout note

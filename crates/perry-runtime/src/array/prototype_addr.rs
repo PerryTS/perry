@@ -66,17 +66,8 @@ use std::cell::Cell;
 /// then covered by both halves automatically.
 const PROTOTYPE_ADDR_CACHE_COUNT: usize = crate::tls_hot::INLINE_PROTOTYPE_ADDR_ROWS;
 
-/// Row index of the `Array.prototype` cell.
-const ARRAY_PROTO_CACHE: usize = 0;
 /// Row index of the `Object.prototype` cell.
 const OBJECT_PROTO_CACHE: usize = 1;
-/// Row index of the `Function.prototype` cell (#10497).
-const FUNCTION_PROTO_CACHE: usize = 2;
-/// Row indices of the primitive wrappers' prototypes (#11910): the method
-/// call site asks whether a primitive receiver's chain holds a getter.
-const STRING_PROTO_CACHE: usize = 3;
-const NUMBER_PROTO_CACHE: usize = 4;
-const BOOLEAN_PROTO_CACHE: usize = 5;
 
 /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
 /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
@@ -144,23 +135,6 @@ pub(crate) fn object_prototype_cell() -> *const usize {
 fn prototype_addrs() -> &'static [Cell<usize>; PROTOTYPE_ADDR_CACHE_COUNT] {
     &crate::tls_hot::hot().prototype_addrs
 }
-
-/// The `globalThis` builtin whose `.prototype` fills each row of
-/// [`PROTOTYPE_ADDRS`], in the same order.
-///
-/// The pairing is POSITIONAL rather than two hand-written accessors so that the
-/// second fact a reader has to trust — "each accessor resolves the builtin its
-/// cell is named for" — is established by construction instead of by a test
-/// that has to mutate a process-global to observe it (#7955).
-static PROTOTYPE_ADDR_BUILTINS: [crate::object::BuiltinConstructorIdentity;
-    PROTOTYPE_ADDR_CACHE_COUNT] = [
-    crate::object::BuiltinConstructorIdentity::Array,
-    crate::object::BuiltinConstructorIdentity::Object,
-    crate::object::BuiltinConstructorIdentity::Function,
-    crate::object::BuiltinConstructorIdentity::String,
-    crate::object::BuiltinConstructorIdentity::Number,
-    crate::object::BuiltinConstructorIdentity::Boolean,
-];
 
 /// How many intrinsic entries a realm has: one per builtin declaration
 /// (`BuiltinConstructorIdentity`, 1-based).
@@ -387,78 +361,50 @@ fn heal_prototype_addr(cache: &Cell<usize>, cached: usize) -> usize {
     resolved
 }
 
-/// Resolve one row of [`PROTOTYPE_ADDRS`]: the memoized address if this thread
-/// already knows it (healed through any forwarding chain), otherwise the
-/// `globalThis` bootstrap, memoized.
+/// %Object.prototype%'s row: written when the intrinsic is built
+/// (`note_object_prototype_intrinsic`), healed through forwarding; 0 while it
+/// is not built. Object is not a lazy family: its one builder is
+/// `ensure_object_intrinsics`, never %Global%. Every other builtin prototype
+/// has one record only: its family cell in [[Intrinsics]].
 #[inline]
-fn resolve_prototype_addr(slot: usize) -> usize {
-    if let Some(addr) = memoized_prototype_addr(&prototype_addrs()[slot]) {
-        return addr;
-    }
-    // #10836: the bootstrap below reads `globalThis.Array` / `globalThis.Object`,
-    // and that read MATERIALIZES the realm global when this thread has none —
-    // allocating the singleton and running `populate_global_this_builtins`, which
-    // its own `[gc-globalthis-bootstrap]` diagnostic measures at ~5 ms. Before the
-    // realm global exists, Array.prototype and Function.prototype have not been
-    // allocated, and %Object.prototype% (which can exist without the realm
-    // global) memoized its row when it was built, so an unmemoized row here
-    // means NO address can be the intrinsic and the honest answer is already known:
-    // "not resolved" (0), which every caller of these accessors handles because
-    // `bootstrap_prototype_addr` can return it anyway.
-    //
-    // The check lives in the INLINED half on purpose. `note_array_index_write`
-    // consults `array_prototype_addr()` on every indexed array write and the cell
-    // stays unresolved for as long as the program has no `globalThis`, so putting
-    // it behind the `#[inline(never)]` cold call would trade a one-off 5 ms for an
-    // out-of-line call per write. Here it is one thread-local load and a branch,
-    // and only on the path that was about to make a cold call regardless.
-    //
-    // The predicate is TRUE from the moment the global object is allocated, i.e.
-    // during population as well as after it, so a caller that runs inside
-    // `populate_global_this_builtins` (the descriptor bookkeeping does) reaches
-    // the bootstrap exactly as it did before.
-    if !crate::object::global_this_is_materialized() {
-        return 0;
-    }
-    bootstrap_prototype_addr(slot)
+fn object_prototype_row() -> usize {
+    memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
 }
 
-/// The cold half of [`resolve_prototype_addr`]: derive the intrinsic's address
-/// from THIS thread's `globalThis` and memoize it.
-///
-/// Out of line so the hot arm — `note_array_index_write` on every indexed array
-/// write — is a slot load, a compare and a branch, with the whole `globalThis`
-/// walk off the fast path.
 #[cold]
 #[inline(never)]
-fn bootstrap_prototype_addr(slot: usize) -> usize {
-    if slot == OBJECT_PROTO_CACHE {
-        // %Object.prototype% is built on its own (`ensure_object_intrinsics`),
-        // which memoizes this row itself; 0 only while that build is running.
-        let (_, proto) = crate::object::ensure_object_intrinsics();
-        return proto as usize;
-    }
-    // The realm's intrinsic, never `globalThis.<Name>.prototype`: user code
-    // may have replaced that writable binding before this row's first use.
-    let addr = intrinsic_prototype_addr(PROTOTYPE_ADDR_BUILTINS[slot]);
-    // Don't poison the cache with 0: while the realm is being populated the
-    // intrinsic may not be recorded yet. Re-derive until it resolves.
-    if addr != 0 {
-        prototype_addrs()[slot].set(addr);
-    }
-    addr
+fn build_object_prototype() -> usize {
+    let (_, proto) = crate::object::ensure_object_intrinsics();
+    proto as usize
 }
 
+/// A family prototype's value: the family cell when born, else its birth
+/// (`intrinsic_prototype_addr`). The born case is one load and a branch.
+#[inline]
+fn family_prototype_addr(identity: crate::object::BuiltinConstructorIdentity) -> usize {
+    match intrinsic_prototype_addr_if_bound(identity) {
+        0 => intrinsic_prototype_addr(identity),
+        addr => addr,
+    }
+}
+
+/// `%Array.prototype%` if born, else 0 (identity questions: an unborn
+/// prototype cannot be the object asked about). Never births.
+#[inline]
 pub(crate) fn array_prototype_addr_if_resolved() -> usize {
-    memoized_prototype_addr(&prototype_addrs()[ARRAY_PROTO_CACHE]).unwrap_or(0)
+    intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::Array)
 }
 
+#[inline]
 pub(crate) fn array_prototype_addr() -> usize {
-    resolve_prototype_addr(ARRAY_PROTO_CACHE)
+    family_prototype_addr(crate::object::BuiltinConstructorIdentity::Array)
 }
 
 pub(crate) fn object_prototype_addr() -> usize {
-    let addr = resolve_prototype_addr(OBJECT_PROTO_CACHE);
+    let addr = match object_prototype_row() {
+        0 => build_object_prototype(),
+        addr => addr,
+    };
     if addr != 0
         && crate::object::OBJECT_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Acquire) == 0
     {
@@ -480,7 +426,7 @@ pub(crate) fn object_prototype_addr_if_resolved() -> usize {
     if crate::object::OBJECT_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Acquire) == 0 {
         return 0;
     }
-    memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
+    object_prototype_row()
 }
 
 /// Drop the memoized root for the shape-only Object.prototype sentinel before
@@ -498,16 +444,16 @@ pub(crate) fn forget_object_prototype_intrinsic() {
 /// the first primitive read cannot change the intrinsic prototype identity.
 pub(crate) fn primitive_wrapper_prototype_addr(value: f64) -> usize {
     let v = crate::value::JSValue::from_bits(value.to_bits());
-    let slot = if v.is_number() {
-        NUMBER_PROTO_CACHE
+    let family = if v.is_number() {
+        crate::object::BuiltinConstructorIdentity::Number
     } else if v.is_any_string() {
-        STRING_PROTO_CACHE
+        crate::object::BuiltinConstructorIdentity::String
     } else if v.is_bool() {
-        BOOLEAN_PROTO_CACHE
+        crate::object::BuiltinConstructorIdentity::Boolean
     } else {
         return 0;
     };
-    resolve_prototype_addr(slot)
+    family_prototype_addr(family)
 }
 
 /// Memoize THIS realm's `%Object.prototype%` the moment it is built, so the
@@ -522,31 +468,13 @@ pub(crate) fn note_object_prototype_intrinsic(addr: usize) {
 /// the row-2 note on [`prototype_addrs`] (#10497).
 #[inline]
 pub(crate) fn function_prototype_addr() -> usize {
-    resolve_prototype_addr(FUNCTION_PROTO_CACHE)
+    family_prototype_addr(crate::object::BuiltinConstructorIdentity::Function)
 }
 
-/// Memoize every row from THIS thread's freshly populated `globalThis`.
-///
-/// Called once, at the end of `populate_global_this_builtins`, while every
-/// `globalThis.<Builtin>` still names its intrinsic. Lazy resolution alone
-/// would memoize whatever `globalThis.Function` holds at the FIRST query, and
-/// user code may have reassigned that global by then; priming pins the
-/// intrinsic. A row that cannot resolve yet stays unresolved and keeps its
-/// lazy fallback, exactly as before.
-pub(crate) fn prime_prototype_addr_cache() {
-    // Every constructor and its prototype already exists in this realm.
-    // Capture all seven intrinsic identities before user code can replace a
-    // global binding, including before its first primitive property read.
-    for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
-        // An unborn family's row stays lazy: its bootstrap reads the realm
-        // intrinsic (never `globalThis`), so its first use births it.
-        if prototype_addrs()[slot].get() == usize::MAX
-            && (slot == OBJECT_PROTO_CACHE
-                || intrinsic_prototype_addr_if_bound(PROTOTYPE_ADDR_BUILTINS[slot]) != 0)
-        {
-            bootstrap_prototype_addr(slot);
-        }
-    }
+/// `%Function.prototype%` if born, else 0. Never births (identity questions).
+#[inline]
+pub(crate) fn function_prototype_addr_if_bound() -> usize {
+    intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::Function)
 }
 
 /// `true` when `addr` is **this realm's** canonical `Object.prototype` (cheap:
@@ -557,7 +485,7 @@ pub(crate) fn prime_prototype_addr_cache() {
 pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
     // Identity-only users may compare against the shape sentinel without
     // making it observable and without materializing method closures.
-    addr != 0 && addr == resolve_prototype_addr(OBJECT_PROTO_CACHE)
+    addr != 0 && addr == object_prototype_row()
 }
 
 /// Test-only handle on the shipped wiring, for the read-only assertion in
@@ -566,49 +494,10 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// The mutating #6981 cases run on cells they own; nothing hands out a writable
 /// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 6] {
-    [
-        (
-            ARRAY_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[ARRAY_PROTO_CACHE].name().as_bytes(),
-        ),
-        (
-            OBJECT_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE]
-                .name()
-                .as_bytes(),
-        ),
-        (
-            FUNCTION_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE]
-                .name()
-                .as_bytes(),
-        ),
-        (
-            STRING_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE]
-                .name()
-                .as_bytes(),
-        ),
-        (
-            NUMBER_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE]
-                .name()
-                .as_bytes(),
-        ),
-        (
-            BOOLEAN_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE]
-                .name()
-                .as_bytes(),
-        ),
-    ]
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 1] {
+    [(OBJECT_PROTO_CACHE, b"Object")]
 }
 
-/// Number of cells this thread owns — i.e. how many
-/// [`scan_prototype_addr_cache_roots_mut`] visits. Read by the wiring test so
-/// "the scanner visits every cell an accessor can index" is asserted rather
-/// than assumed.
 #[cfg(test)]
 pub(crate) fn test_prototype_addr_cell_count() -> usize {
     prototype_addrs().len()
