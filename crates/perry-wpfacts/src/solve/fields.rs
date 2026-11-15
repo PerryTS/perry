@@ -1069,9 +1069,14 @@ impl Model {
     /// DEADFN15: rest array `t` may be shifted twice, reordered, or reached
     /// by another activation: every shift that read its front reads any
     /// element (monotone: the answer only widens).
+    #[track_caller]
     pub(crate) fn rest_front_widen(&mut self, t: Tok) {
         if !self.rest_front_open.insert(t) {
             return;
+        }
+        if rest_front_diag() {
+            let f = self.rest_owner_of(t).and_then(|f| self.funcs.get(f as usize)).map(|fi| fi.name.clone());
+            eprintln!("restfrontdiag widen t{t} fn={f:?} at={}", std::panic::Location::caller());
         }
         let fa = self.field_any(t);
         for r in self.rest_front_reads.get(&t).cloned().unwrap_or_default() {
@@ -1155,4 +1160,10 @@ impl Model {
         let s = &self.atoms[a as usize];
         numeric_key(s) || s == ELEM || s == NUM_KEY
     }
+}
+
+/// `PERRY_WPF_RESTFRONTDIAG`: print where a rest array's front widens.
+fn rest_front_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_RESTFRONTDIAG").is_some())
 }
