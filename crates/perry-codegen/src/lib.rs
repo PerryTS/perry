@@ -368,3 +368,6 @@ pub mod realm_manifest {
 
 /// Compiler-only cell selection and layout facts for the program realm.
 pub mod realm_plan;
+
+#[cfg(test)]
+mod realm_scope_tests;

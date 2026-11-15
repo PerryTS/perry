@@ -29,6 +29,8 @@ pub mod derive;
 mod diagnostics;
 mod dump;
 mod element_floors;
+mod realm_operands;
+pub use realm_operands::OperandFacts;
 mod element_keys;
 pub mod field_read_calls;
 mod gen;
@@ -44,8 +46,8 @@ pub mod pts;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
-pub mod signatures;
 mod rooted;
+pub mod signatures;
 mod solve;
 mod summary;
 #[cfg(test)]
@@ -56,13 +58,13 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
-pub use field_read_calls::{FieldReadCall, FieldReadDefault};
-pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 use perry_hir::Module;
+pub use signatures::Signature;
 
 /// Reserved atom for computed-key accessors ("any key").
 pub(crate) const STAR_KEY: &str = "\u{1}*";
@@ -290,6 +292,9 @@ pub struct ProgramFacts {
     /// Computed member sites in a whole-program solve. Per-unit facts do
     /// not publish values whose token/template ids belong to separate solves.
     pub elements: Vec<ElementFacts>,
+    pub operands: Vec<OperandFacts>,
+    pub realm_solve_complete: bool,
+    pub realm_builtin_writes: std::collections::BTreeSet<(String, Option<String>)>,
     pub stats: Stats,
     /// Interpreted code can run (decision 150), and why. It is no kill: its
     /// data flow is the ⊤ summary node (everything it can receive already
@@ -2242,7 +2247,26 @@ fn compute_act<'a>(
     } else {
         None
     };
+    let realm_solve_complete = !stats.aborted && !stats.widened && !cfg.unit;
+    let operands = if realm_solve_complete {
+        realm_operands::derive(&g)
+    } else {
+        Vec::new()
+    };
+    let realm_builtin_writes =
+        g.m.native_writes
+            .keys()
+            .map(|(token, key)| {
+                (
+                    g.m.tok_name(*token),
+                    key.map(|a| g.m.atoms[a as usize].clone()),
+                )
+            })
+            .collect();
     let mut pf = ProgramFacts {
+        realm_builtin_writes,
+        operands,
+        realm_solve_complete,
         verification_bodies,
         diag_stream: None,
         diagnostics,

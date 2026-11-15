@@ -618,3 +618,63 @@ fn held_runtime_value_readers_close_as_names_without_owning_their_values() {
     assert!(!absent.names.contains("Intermediate"));
     assert!(!absent.names.contains("Ctor.prototype"));
 }
+
+#[test]
+fn realm_scoped_facts_survive_snapshot_merge_and_the_whole_fixpoint() {
+    let index = index();
+    let mut scoped = RealmReach::default();
+    scoped
+        .chain_roots
+        .extend(["Holder".into(), "Ctor.prototype".into()]);
+    scoped.observed_chain.insert("Holder".into());
+    scoped.keyless_on.insert("Holder".into(), KeylessRead::All);
+    scoped
+        .keys_on
+        .entry("Holder".into())
+        .or_default()
+        .insert(("next".into(), false));
+    let mut merged = RealmReach::default();
+    merged.merge(&scoped);
+    merged.close(&index);
+    merged.assert_whole_fixpoint(&index);
+    assert!(merged.whole.contains("Holder"));
+    assert!(!merged.whole.contains("Ctor.prototype"));
+    let snapshot = serde_json::from_str(&serde_json::to_string(&merged).unwrap()).unwrap();
+    let restored = RealmReach::from_snapshot(snapshot, BTreeSet::new(), &index);
+    assert_eq!(merged, restored);
+    let before = merged.clone();
+    merged.close(&index);
+    assert_eq!(before, merged);
+}
+
+#[test]
+fn realm_executing_constructor_keeps_its_runtime_read_prototype_without_a_builtin_identity() {
+    let entries = [
+        row(
+            "Native",
+            RealmKind::Constructor,
+            &["Native.prototype"],
+            &[RealmOwn {
+                key: "prototype",
+                symbol: false,
+                value: RealmOwnValue::Reference("Native.prototype"),
+            }],
+            r#"{"flags":["runtime_key:prototype"],"properties":[{"key":"prototype","value":{"kind":"reference","value":"Native.prototype"}}]}"#,
+        ),
+        row("Native.prototype", RealmKind::Prototype, &[], &[], "{}"),
+    ];
+    let index = RealmIndex::new(&entries);
+    let mut reach = RealmReach::default();
+    reach.own("Native");
+    reach.close(&index);
+    assert!(!index.last("Native").unwrap().has_constructor());
+    assert!(reach.names.contains("Native.prototype"));
+    assert!(!reach.whole.contains("Native.prototype"));
+    let mut unexecuted = RealmReach::default();
+    unexecuted.names.insert("Native".into());
+    unexecuted.close(&index);
+    assert!(
+        !unexecuted.names.contains("Native.prototype"),
+        "a STRUCTURE value is not an executing constructor"
+    );
+}

@@ -323,7 +323,7 @@ impl<'a> FuncEmitCtx<'a> {
                 // 'this' is passed as first parameter (local 0) in methods
                 func.instruction(&Instruction::LocalGet(0));
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 // Call parent constructor: super(args)
                 // this is local 0 in the current constructor
                 let mut called = false;

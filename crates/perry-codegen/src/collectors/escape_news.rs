@@ -343,12 +343,12 @@ fn collect_used_new_fields_in_expr(
         | Expr::PathMatchesGlob(left, right)
         | Expr::PathResolveJoin(left, right)
         | Expr::FsWriteFileSync(left, right)
-        | Expr::JsonParseWithReviver(left, right)
+        | Expr::JsonParseWithReviver(left, right, _)
         | Expr::PathBasenameExt(left, right) => {
             collect_used_new_fields_in_expr(left, non_escaping_news, used);
             collect_used_new_fields_in_expr(right, non_escaping_news, used);
         }
-        Expr::JsonParseReviver { text, reviver } => {
+        Expr::JsonParseReviver { text, reviver, .. } => {
             collect_used_new_fields_in_expr(text, non_escaping_news, used);
             collect_used_new_fields_in_expr(reviver, non_escaping_news, used);
         }
@@ -498,7 +498,7 @@ fn collect_used_new_fields_in_expr(
             }
         }
         Expr::New { args, .. }
-        | Expr::SuperCall(args)
+        | Expr::SuperCall(args, _)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. }
         | Expr::MathMin(args)

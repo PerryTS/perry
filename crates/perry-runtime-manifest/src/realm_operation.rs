@@ -1,4 +1,4 @@
-//! Operations describe calls and writes at their allocation owner, with no cell.
+//! Operations describe calls and slot accesses at their allocation owner, with no cell.
 use super::{facts, info, Token};
 use crate::realm_json::Value;
 use std::collections::BTreeMap;
@@ -35,7 +35,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Value, String> {
                     }
                     Value::String(path)
                 }
-                "writes" => {
+                "writes" | "reads" => {
                     if value.first().is_none_or(|t| t.text != "(")
                         || value.last().is_none_or(|t| t.text != ")")
                     {
@@ -66,6 +66,27 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_read_names_an_existing_slot_without_declaring_a_write() {
+        let ts = super::super::tokens(
+            r#"operation initialize, reads=[("Map.prototype","set","Map.prototype.set")]"#,
+        )
+        .unwrap();
+        let value = parse(&ts).unwrap();
+        assert!(value.get("writes").is_none());
+        assert!(value.get("births").is_none());
+        let access = &value.get("reads").unwrap().array().unwrap()[0];
+        assert_eq!(
+            access.get("holder").and_then(Value::string),
+            Some("Map.prototype")
+        );
+        assert_eq!(access.get("key").and_then(Value::string), Some("set"));
+        assert_eq!(
+            access.get("value").and_then(Value::string),
+            Some("Map.prototype.set")
+        );
+    }
+
     #[test]
     fn layout_demand_has_no_heap_birth_or_holder() {
         let ts =

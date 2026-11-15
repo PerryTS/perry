@@ -365,7 +365,7 @@ impl W {
                 }
                 self.store(st, e, property);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.expr(st, a);
                 }

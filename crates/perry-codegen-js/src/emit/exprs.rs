@@ -564,7 +564,7 @@ impl JsEmitter {
 
             // --- This / Super ---
             Expr::This => self.output.push_str("this"),
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 self.output.push_str("super(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }
@@ -982,7 +982,7 @@ impl JsEmitter {
                 self.emit_expr(space);
                 self.output.push(')');
             }
-            Expr::JsonParseReviver { text, reviver } | Expr::JsonParseWithReviver(text, reviver) => {
+            Expr::JsonParseReviver { text, reviver, .. } | Expr::JsonParseWithReviver(text, reviver, _) => {
                 self.output.push_str("JSON.parse(");
                 self.emit_expr(text);
                 self.output.push_str(", ");

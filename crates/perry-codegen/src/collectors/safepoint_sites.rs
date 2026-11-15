@@ -57,8 +57,8 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }
-            | Expr::SuperCall(_)
-            | Expr::SuperCallSpread(_)
+            | Expr::SuperCall(_, _)
+            | Expr::SuperCallSpread(_, _)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
             | Expr::ObjectSuperMethodCall { .. }

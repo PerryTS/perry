@@ -692,7 +692,7 @@ fn class_d_extends_base() -> Class {
         params: vec![num_param(CTOR_PX, "x"), num_param(CTOR_PZ2, "z")],
         return_type: Type::Void,
         body: vec![
-            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)])),
+            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)], 0)),
             this_store("x", Expr::LocalGet(CTOR_PX)),
         ],
         is_async: false,

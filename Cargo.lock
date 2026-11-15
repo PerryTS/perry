@@ -5101,6 +5101,7 @@ dependencies = [
  "perry-realm-table",
  "perry-runtime-manifest",
  "perry-transform",
+ "perry-wpfacts",
  "serde",
  "serde_json",
  "sha2 0.11.1",

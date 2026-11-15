@@ -154,7 +154,9 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::ObjectIsFrozen(a0) => Expr::ObjectIsFrozen(Shallow::shallow(a0, n)),
         Expr::ObjectIsSealed(a0) => Expr::ObjectIsSealed(Shallow::shallow(a0, n)),
         Expr::ObjectIsExtensible(a0) => Expr::ObjectIsExtensible(Shallow::shallow(a0, n)),
-        Expr::ObjectGetPrototypeOf(a0) => Expr::ObjectGetPrototypeOf(Shallow::shallow(a0, n)),
+        Expr::ObjectGetPrototypeOf(a0, offset) => {
+            Expr::ObjectGetPrototypeOf(Shallow::shallow(a0, n), *offset)
+        }
         Expr::ObjectSetPrototypeOf(a0, a1) => {
             Expr::ObjectSetPrototypeOf(Shallow::shallow(a0, n), Shallow::shallow(a1, n))
         }
@@ -183,13 +185,20 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             ty: ty.clone(),
             ordered_keys: ordered_keys.clone(),
         },
-        Expr::JsonParseReviver { text, reviver } => Expr::JsonParseReviver {
+        Expr::JsonParseReviver {
+            text,
+            reviver,
+            byte_offset,
+        } => Expr::JsonParseReviver {
             text: Shallow::shallow(text, n),
             reviver: Shallow::shallow(reviver, n),
+            byte_offset: *byte_offset,
         },
-        Expr::JsonParseWithReviver(a0, a1) => {
-            Expr::JsonParseWithReviver(Shallow::shallow(a0, n), Shallow::shallow(a1, n))
-        }
+        Expr::JsonParseWithReviver(a0, a1, byte_offset) => Expr::JsonParseWithReviver(
+            Shallow::shallow(a0, n),
+            Shallow::shallow(a1, n),
+            *byte_offset,
+        ),
         Expr::JsonStringify(a0) => Expr::JsonStringify(Shallow::shallow(a0, n)),
         Expr::JsonStringifyPretty {
             value,

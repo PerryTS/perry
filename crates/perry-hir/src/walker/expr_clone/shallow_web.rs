@@ -447,7 +447,9 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
                 key: Shallow::shallow(key, n),
             }
         }
-        Expr::ReflectGetPrototypeOf(a0) => Expr::ReflectGetPrototypeOf(Shallow::shallow(a0, n)),
+        Expr::ReflectGetPrototypeOf(a0, offset) => {
+            Expr::ReflectGetPrototypeOf(Shallow::shallow(a0, n), *offset)
+        }
         Expr::ReflectSetPrototypeOf { target, proto } => Expr::ReflectSetPrototypeOf {
             target: Shallow::shallow(target, n),
             proto: Shallow::shallow(proto, n),

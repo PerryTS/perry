@@ -1794,6 +1794,7 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// #2771 (arbitrary iterables + TypeError on non-iterables).
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
+    crate::realm_decl! { operation js_set_from_iterable, calls = [set_proto_add_thunk], births = [Set], reads = [("Set.prototype", "add", "Set.prototype.add")] }
     set_init_iterable(js_set_alloc(4), value)
 }
 

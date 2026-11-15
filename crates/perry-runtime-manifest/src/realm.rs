@@ -255,6 +255,9 @@ pub struct RealmDeclaration {
     pub runtime_reads: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writes: Vec<RealmWrite>,
+    /// Existing intrinsic slots an executing operation may read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<RealmWrite>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

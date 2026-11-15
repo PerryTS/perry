@@ -260,7 +260,7 @@ fn a_subclass_field_read_early_through_an_override_stays_any() {
             "constructor",
             vec![number_param(1)],
             vec![
-                Stmt::Expr(Expr::SuperCall(Vec::new())),
+                Stmt::Expr(Expr::SuperCall(Vec::new(), 0)),
                 store("x", Expr::LocalGet(1)),
             ],
         )

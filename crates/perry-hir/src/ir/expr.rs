@@ -183,7 +183,7 @@ pub enum Expr {
     /// ctor is invoked at runtime through the CLASS_CONSTRUCTORS registry
     /// with the materialized args array (codegen can't inline a dynamic
     /// arg count).
-    SuperCallSpread(Vec<CallArg>),
+    SuperCallSpread(Vec<CallArg>, u32),
 
     // Named function reference
     FuncRef(FuncId),
@@ -868,7 +868,7 @@ pub enum Expr {
     This,
 
     // Super constructor call: super(args)
-    SuperCall(Vec<Expr>),
+    SuperCall(Vec<Expr>, u32),
 
     // Super method call: super.method(args)
     SuperMethodCall {
@@ -1129,7 +1129,7 @@ pub enum Expr {
     ObjectIsFrozen(Box<Expr>),                  // Object.isFrozen(obj)
     ObjectIsSealed(Box<Expr>),                  // Object.isSealed(obj)
     ObjectIsExtensible(Box<Expr>),              // Object.isExtensible(obj)
-    ObjectGetPrototypeOf(Box<Expr>),            // Object.getPrototypeOf(obj)
+    ObjectGetPrototypeOf(Box<Expr>, u32),       // Object.getPrototypeOf(obj)
     ObjectSetPrototypeOf(Box<Expr>, Box<Expr>), // Object.setPrototypeOf(obj, proto) -> obj
     ObjectDefineProperties(Box<Expr>, Box<Expr>), // Object.defineProperties(target, descriptors)
     ObjectGetOwnPropertySymbols(Box<Expr>),     // Object.getOwnPropertySymbols(obj) -> symbol[]
@@ -1174,8 +1174,9 @@ pub enum Expr {
     JsonParseReviver {
         text: Box<Expr>,
         reviver: Box<Expr>,
+        byte_offset: u32,
     },
-    JsonParseWithReviver(Box<Expr>, Box<Expr>),
+    JsonParseWithReviver(Box<Expr>, Box<Expr>, u32),
     JsonStringify(Box<Expr>), // JSON.stringify(value) -> string
     JsonStringifyPretty {
         value: Box<Expr>,
@@ -2879,7 +2880,7 @@ pub enum Expr {
         target: Box<Expr>,
         key: Box<Expr>,
     },
-    ReflectGetPrototypeOf(Box<Expr>),
+    ReflectGetPrototypeOf(Box<Expr>, u32),
     /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
     /// (false when rejected), unlike `Object.setPrototypeOf` which returns the
     /// object. Lowered separately so it can report failure / throw on bad args.

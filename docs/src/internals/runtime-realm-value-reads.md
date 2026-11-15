@@ -148,10 +148,39 @@ is needed to join an image key with its native birth.
 
 
 The restricted descriptor oracle consumes the compiler's selected RealmPlan
-cells and WHOLE identities from the reach diagnostic. It projects Global and
-STRUCTURE rows by those exact member facts before comparing descriptors,
+cells and WHOLE identities from the reach diagnostic. It projects every image
+cell, including WHOLE rows, by those exact member facts before comparing descriptors,
 order, symbol identities and prototype edges. A chain-held identity does not
 require a Global property. Missing selected slots or prototypes fail the oracle.
 The dumper obtains the Global value through the existing GlobalThisExpr
 materialization and reaches intrinsic roots along the fixture's held paths;
 it does not retain a Global alias to make reflection work.
+
+
+Realm observations retain their source site and operand until the whole-program
+solve finishes. Unguarded solved values scope keyless reads to their own realm
+cells and chain reads to the realm portions of their prototype chains. A keyed
+read stops at the first definite program property or declared realm property.
+The logical close and physical member selection consume these same facts.
+
+Missing sites, unresolved markers, interpreted-code guards and interrupted solves
+retain the conservative observation. Compiled writes to builtin storage invalidate
+assumptions about declared call results; the exported holder/key write facts keep
+those observations conservative when a dependency cannot be proved. Specialized
+getPrototypeOf nodes preserve their source offset and original operand identity.
+The reach census checks that scoped reach is a subset of its conservative close;
+it selects no alternate runtime implementation.
+
+Runtime error summaries do not prove one intrinsic prototype: catches include
+implicit errors from several families. Those receiver observations remain Top;
+concrete program-created error instances retain their own chain proof.
+An executing holder keeps its declared runtime-read slots without promoting
+their values; this includes a native constructor's prototype. A STRUCTURE
+constructor value alone creates no prototype floor. Executing operations declare reads and
+writes of intrinsic slots; those accesses use the same member predicate, and
+only writes can introduce a dynamic alias. Lowered class-value and collection
+initializer calls record the same operation symbols consumed by their emitters.
+
+A constructor declaration's calls cover its construct path as well as its bare
+call entry, just as its births do. Live Map construction therefore reaches the
+iterable initializer's declared adder read without bypassing the global binding.

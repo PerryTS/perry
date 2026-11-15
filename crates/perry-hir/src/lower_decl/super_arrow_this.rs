@@ -44,7 +44,7 @@ pub(super) fn bind_super_argument_arrows(ctx: &mut LoweringContext, stmts: &mut 
                     bind_super_argument_arrows(ctx, else_branch);
                 }
             }
-            Stmt::Expr(Expr::SuperCall(_)) => {
+            Stmt::Expr(Expr::SuperCall(_, _)) => {
                 if bind_before_super(ctx, stmts, i) {
                     // The cell declaration and its assignment were inserted.
                     i += 3;
@@ -67,9 +67,10 @@ fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize
     // so a constructor without one stays exactly as it was.
     let mut before: Vec<Stmt> = stmts[..at].to_vec();
     crate::analysis::substitute_lexical_this_in_stmts(&mut before, &read);
-    let Stmt::Expr(Expr::SuperCall(args)) = &stmts[at] else {
+    let Stmt::Expr(Expr::SuperCall(args, byte_offset)) = &stmts[at] else {
         return false;
     };
+    let byte_offset = *byte_offset;
     let mut args = args.clone();
     for arg in args.iter_mut().filter(|a| is_this_arrow(a)) {
         crate::analysis::substitute_lexical_this_in_expr(arg, &read);
@@ -86,7 +87,7 @@ fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize
         return false;
     }
     stmts.splice(..at, before);
-    stmts[at] = Stmt::Expr(Expr::SuperCall(args));
+    stmts[at] = Stmt::Expr(Expr::SuperCall(args, byte_offset));
     stmts.insert(
         at + 1,
         Stmt::Expr(Expr::PropertySet {

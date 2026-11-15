@@ -170,7 +170,7 @@ where
         | Expr::ObjectIsFrozen(v)
         | Expr::ObjectIsSealed(v)
         | Expr::ObjectIsExtensible(v)
-        | Expr::ObjectGetPrototypeOf(v)
+        | Expr::ObjectGetPrototypeOf(v, _)
         | Expr::ObjectGetOwnPropertySymbols(v)
         | Expr::ObjectKeys(v)
         | Expr::ForInKeys(v)
@@ -277,7 +277,7 @@ where
         | Expr::ObjectRest { object: v, .. }
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
-        | Expr::ReflectGetPrototypeOf(v)
+        | Expr::ReflectGetPrototypeOf(v, _)
         | Expr::ReflectIsExtensible(v)
         | Expr::ReflectPreventExtensions(v)
         | Expr::DateGetTime(v)
@@ -740,7 +740,7 @@ where
         | Expr::ObjectHasOwn(a, b)
         | Expr::ObjectSetPrototypeOf(a, b)
         | Expr::ObjectDefineProperties(a, b)
-        | Expr::JsonParseWithReviver(a, b)
+        | Expr::JsonParseWithReviver(a, b, _)
         | Expr::MathPow(a, b)
         | Expr::MathImul(a, b)
         | Expr::MathAtan2(a, b)
@@ -777,7 +777,7 @@ where
                 f(r);
             }
         }
-        Expr::JsonParseReviver { text, reviver } => {
+        Expr::JsonParseReviver { text, reviver, .. } => {
             f(text);
             f(reviver);
         }
@@ -836,7 +836,7 @@ where
             f(then_expr);
             f(else_expr);
         }
-        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements) => {
+        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements, _) => {
             for e in elements {
                 f(e);
             }
@@ -938,7 +938,7 @@ where
                 }
             }
         }
-        Expr::SuperCallSpread(args) | Expr::SuperMethodCallSpread { args, .. } => {
+        Expr::SuperCallSpread(args, _) | Expr::SuperMethodCallSpread { args, .. } => {
             for a in args {
                 match a {
                     CallArg::Expr(e) | CallArg::Spread(e) => f(e),

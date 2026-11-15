@@ -1578,11 +1578,11 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(replacer, out);
             walk(indent, out);
         }
-        Expr::JsonParseReviver { text, reviver } => {
+        Expr::JsonParseReviver { text, reviver, .. } => {
             walk(text, out);
             walk(reviver, out);
         }
-        Expr::JsonParseWithReviver(a, b) => {
+        Expr::JsonParseWithReviver(a, b, _) => {
             walk(a, out);
             walk(b, out);
         }
@@ -1610,7 +1610,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {

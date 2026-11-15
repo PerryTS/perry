@@ -348,12 +348,12 @@ fn infers_dynamic_passthrough_and_intrinsic_result_types() {
         Type::Number
     );
     assert_eq!(
-        infer_expr_type(&Expr::SuperCall(vec![Expr::Integer(1)]), &env),
+        infer_expr_type(&Expr::SuperCall(vec![Expr::Integer(1)], 0), &env),
         Type::Void
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::SuperCallSpread(vec![CallArg::Spread(Expr::Array(vec![], None))]),
+            &Expr::SuperCallSpread(vec![CallArg::Spread(Expr::Array(vec![], None))], 0),
             &env,
         ),
         Type::Void
@@ -1620,7 +1620,7 @@ fn infers_misc_collection_and_reflection_results() {
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::ObjectGetPrototypeOf(Box::new(Expr::Object(vec![]))),
+            &Expr::ObjectGetPrototypeOf(Box::new(Expr::Object(vec![])), 0),
             &env,
         ),
         Type::Union(vec![Type::Object(ObjectType::default()), Type::Null])

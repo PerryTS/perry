@@ -55,7 +55,7 @@ impl SH for Expr {
             // cache.
             Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::CallSpread { callee, args, type_args,  .. } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
-            Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
+            Expr::SuperCallSpread(args, _) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
             Expr::PodLayoutAlignOf { ty } => { tag(h, 12002); ty.hash(h); }
             Expr::PodLayoutOffsetOf { ty, field_path } => { tag(h, 12003); ty.hash(h); field_path.hash(h); }
@@ -118,7 +118,7 @@ impl SH for Expr {
             Expr::ClassStaticSymbolSet { class_name, key, value, } => { tag(h, 48); class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::StaticMethodCall { class_name, method_name, args, } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
             Expr::This => tag(h, 50),
-            Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
+            Expr::SuperCall(args, _) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
             Expr::SuperMethodCallSpread { method, args } => { tag(h, 12509); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }
@@ -225,7 +225,7 @@ impl SH for Expr {
             Expr::ObjectIsFrozen(e) => { tag(h, 115); e.as_ref().hash(h); }
             Expr::ObjectIsSealed(e) => { tag(h, 116); e.as_ref().hash(h); }
             Expr::ObjectIsExtensible(e) => { tag(h, 117); e.as_ref().hash(h); }
-            Expr::ObjectGetPrototypeOf(e) => { tag(h, 118); e.as_ref().hash(h); }
+            Expr::ObjectGetPrototypeOf(e, _) => { tag(h, 118); e.as_ref().hash(h); }
             Expr::ObjectSetPrototypeOf(a, b) => { tag(h, 453); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectDefineProperties(a, b) => { tag(h, 454); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectGetOwnPropertySymbols(e) => { tag(h, 119); e.as_ref().hash(h); }
@@ -240,8 +240,8 @@ impl SH for Expr {
             Expr::RegExpExecGroups => tag(h, 133),
             Expr::JsonParse(e) => { tag(h, 134); e.as_ref().hash(h); }
             Expr::JsonParseTyped { text, ty, ordered_keys, } => { tag(h, 135); text.as_ref().hash(h); ty.hash(h); ordered_keys.hash(h); }
-            Expr::JsonParseReviver { text, reviver } => { tag(h, 136); text.as_ref().hash(h); reviver.as_ref().hash(h); }
-            Expr::JsonParseWithReviver(a, b) => { tag(h, 137); a.as_ref().hash(h); b.as_ref().hash(h); }
+            Expr::JsonParseReviver { text, reviver, .. } => { tag(h, 136); text.as_ref().hash(h); reviver.as_ref().hash(h); }
+            Expr::JsonParseWithReviver(a, b, _) => { tag(h, 137); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::JsonStringify(e) => { tag(h, 138); e.as_ref().hash(h); }
             Expr::JsonStringifyPretty { value, replacer, space, } => { tag(h, 139); value.as_ref().hash(h); replacer.hash(h); space.as_ref().hash(h); }
             Expr::JsonStringifyFull(a, b, c) => { tag(h, 140); a.as_ref().hash(h); b.as_ref().hash(h); c.as_ref().hash(h); }
@@ -644,7 +644,7 @@ impl SH for Expr {
             Expr::ReflectConstruct { target, args, new_target } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); new_target.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
             Expr::ReflectGetOwnPropertyDescriptor { target, key } => { tag(h, 12505); target.as_ref().hash(h); key.as_ref().hash(h); }
-            Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
+            Expr::ReflectGetPrototypeOf(e, _) => { tag(h, 441); e.as_ref().hash(h); }
             Expr::ReflectSetPrototypeOf { target, proto } => { tag(h, 12230); target.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::ReflectIsExtensible(e) => { tag(h, 12048); e.as_ref().hash(h); }
             Expr::ReflectPreventExtensions(e) => { tag(h, 12046); e.as_ref().hash(h); }

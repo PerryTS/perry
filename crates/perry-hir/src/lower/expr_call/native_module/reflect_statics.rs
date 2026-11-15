@@ -156,7 +156,10 @@ pub(super) fn try_reflect_statics(
                 }
                 "getPrototypeOf" => {
                     let target = args.into_iter().next().unwrap_or(Expr::Undefined);
-                    return Ok(Ok(Expr::ReflectGetPrototypeOf(Box::new(target))));
+                    return Ok(Ok(Expr::ReflectGetPrototypeOf(
+                        Box::new(target),
+                        call.span.lo.0,
+                    )));
                 }
                 "getOwnPropertyDescriptor" => {
                     let mut it = args.into_iter();

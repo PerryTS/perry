@@ -145,7 +145,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Ok(ctx.block().call(DOUBLE, "js_process_umask", &[]))
             }
         }
-        Expr::ObjectGetPrototypeOf(o) => {
+        Expr::ObjectGetPrototypeOf(o, _) => {
             // v0.5.751: route through the runtime helper which walks
             // the class registry's parent_class_id chain for INT32-tagged
             // class refs. Pre-fix this returned the operand unchanged,

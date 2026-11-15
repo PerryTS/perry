@@ -839,7 +839,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(r, candidates, classes, escaped);
             }
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. } => {
             for a in args {
@@ -928,8 +928,9 @@ pub fn check_escapes_in_expr(
         | Expr::JsonParseReviver {
             text: a,
             reviver: b,
+            ..
         }
-        | Expr::JsonParseWithReviver(a, b)
+        | Expr::JsonParseWithReviver(a, b, _)
         | Expr::PathRelative(a, b)
         | Expr::PathMatchesGlob(a, b)
         | Expr::PathResolveJoin(a, b) => {

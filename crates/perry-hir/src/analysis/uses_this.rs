@@ -8,8 +8,8 @@ use crate::walker::{stmt_any_expr, walk_expr_children};
 pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
-        Expr::SuperCall(_)
-        | Expr::SuperCallSpread(_)
+        Expr::SuperCall(_, _)
+        | Expr::SuperCallSpread(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertyGet { .. }

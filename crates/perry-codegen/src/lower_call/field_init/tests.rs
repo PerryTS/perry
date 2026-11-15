@@ -435,7 +435,7 @@ fn named_class(
 }
 
 fn super_call(args: Vec<Expr>) -> Stmt {
-    Stmt::Expr(Expr::SuperCall(args))
+    Stmt::Expr(Expr::SuperCall(args, 0))
 }
 
 fn chain_of(classes: &[Class]) -> std::collections::HashMap<String, &Class> {

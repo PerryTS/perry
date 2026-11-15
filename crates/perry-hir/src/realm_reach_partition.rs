@@ -1,7 +1,7 @@
 //! The shared logical ownership and birth predicates.
 use super::{is_global, primitive_prototype_member};
 use crate::realm_reach_index::{RealmIndex, PRIMITIVE_KINDS};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RealmTop {
@@ -104,6 +104,14 @@ pub struct RealmReach {
     /// [`resolve_cjs_open`](Self::resolve_cjs_open) applies that bit. A part
     /// never resolved is R ([`close`](Self::close), [`is_full`](Self::is_full)).
     pub cjs_open_arm: Option<Box<RealmReach>>,
+    pub observations: Vec<crate::realm_reach_scope::Observation>,
+    pub keyless_on: BTreeMap<String, KeylessRead>,
+    pub any_key_on: BTreeSet<String>,
+    pub any_setter_on: BTreeSet<String>,
+    pub keys_on: BTreeMap<String, BTreeSet<(String, bool)>>,
+    pub observed_chain: BTreeSet<String>,
+    pub scoped_prototypes: BTreeSet<String>,
+    pub prototype_global: bool,
 }
 
 impl RealmReach {
@@ -129,6 +137,25 @@ impl RealmReach {
     }
 
     pub fn merge(&mut self, other: &Self) {
+        self.scoped_prototypes
+            .extend(other.scoped_prototypes.iter().cloned());
+        self.prototype_global |= other.prototype_global;
+        self.observations.extend(other.observations.iter().cloned());
+        for (holder, read) in &other.keyless_on {
+            let current = self.keyless_on.entry(holder.clone()).or_insert(*read);
+            *current = (*current).max(*read);
+        }
+        self.any_key_on.extend(other.any_key_on.iter().cloned());
+        self.any_setter_on
+            .extend(other.any_setter_on.iter().cloned());
+        for (holder, keys) in &other.keys_on {
+            self.keys_on
+                .entry(holder.clone())
+                .or_default()
+                .extend(keys.iter().cloned());
+        }
+        self.observed_chain
+            .extend(other.observed_chain.iter().cloned());
         self.names.extend(other.names.iter().cloned());
         self.own_names.extend(other.own_names.iter().cloned());
         self.receiver_keys
@@ -271,6 +298,7 @@ impl RealmReach {
 
     pub fn close(&mut self, index: &RealmIndex) {
         self.resolve_cjs_open(false);
+        self.resolve_observations(&crate::realm_reach_scope::OperandIndex::default(), index);
         self.whole.clear();
         self.structure.clear();
         if self.is_full() {
@@ -313,6 +341,10 @@ impl RealmReach {
                         }
                     }
                     for (_, _, value) in op.writes() {
+                        self.names.insert(value.into());
+                    }
+                    for (holder, _, value) in op.reads() {
+                        self.names.insert(holder.into());
                         self.names.insert(value.into());
                     }
                 }
@@ -443,7 +475,7 @@ impl RealmReach {
         self.own_names.contains(name)
             || self.owned_member(index, name)
             || value_born.contains(name)
-            || (chain_born.contains(name) && (self.chain_read || self.may_read_prototype()))
+            || (chain_born.contains(name) && self.chain_observed(name, index))
     }
 
     #[cfg(test)]
@@ -552,8 +584,13 @@ impl RealmReach {
         }
         self.is_full()
             || self.owned_member(index, value)
+            || (self.whole.contains(holder.name()) && holder.runtime_spelled_key(key))
+            || self.keys_on.get(holder.name()).is_some_and(|keys| {
+                keys.contains(&(key.into(), false))
+                    || (value.ends_with(".<set>") && keys.contains(&(key.into(), true)))
+            })
             || index.rows().any(|op| {
-                op.writes()
+                op.accesses()
                     .any(|(h, k, v)| h == holder.name() && k == key && v == value)
                     && self.resolve(index, holder.name(), key) == Some(value)
                     && self.executes(index, op)
@@ -561,8 +598,15 @@ impl RealmReach {
             || (self.names.contains(holder.name())
                 && ((key == "prototype" && holder.has_constructor())
                     || self.own_keys.contains(&None)
-                    || self.keyless_read == Some(KeylessRead::All)
-                    || (enumerable && self.keyless_read == Some(KeylessRead::Enumerable))))
+                    || self
+                        .keyless_read
+                        .max(self.keyless_on.get(holder.name()).copied())
+                        == Some(KeylessRead::All)
+                    || (enumerable
+                        && self
+                            .keyless_read
+                            .max(self.keyless_on.get(holder.name()).copied())
+                            == Some(KeylessRead::Enumerable))))
     }
 
     /// The program may change an object's prototype: it owns a member that
@@ -586,7 +630,7 @@ impl RealmReach {
     /// A [[Prototype]] observation exposes chain cells as values. Reading a
     /// slot called `prototype` only keeps that slot; it observes no members
     /// of the value stored there (OrdinaryHasInstance compares its identity).
-    fn may_read_prototype(&self) -> bool {
+    pub(crate) fn may_read_prototype(&self) -> bool {
         [
             "__proto__",
             "getPrototypeOf",
@@ -595,12 +639,17 @@ impl RealmReach {
         ]
         .iter()
         .any(|key| self.receiver_keys.contains(*key))
-            || self.own_names.iter().any(|name| {
-                name.ends_with(".getPrototypeOf")
-                    || name.ends_with(".isPrototypeOf")
-                    || name.ends_with(".setPrototypeOf")
-                    || name.contains("__proto__")
-            })
+            || self.prototype_global
+            || self
+                .own_names
+                .iter()
+                .filter(|name| !self.scoped_prototypes.contains(*name))
+                .any(|name| {
+                    name.ends_with(".getPrototypeOf")
+                        || name.ends_with(".isPrototypeOf")
+                        || name.ends_with(".setPrototypeOf")
+                        || name.contains("__proto__")
+                })
     }
 
     /// Ownership is a naming/read event on a member of a held holder.
@@ -618,14 +667,15 @@ impl RealmReach {
                         // A prototype slot read observes the cell's identity,
                         // not the members/body of the value stored there.
                         && key != "prototype"
-                        && ((self.any_receiver_key && key != "__proto__")
-                            || (setter && self.any_setter_key)
+                        && (((self.any_receiver_key || self.any_key_on.contains(holder.name())) && key != "__proto__")
+                            || (setter && (self.any_setter_key || self.any_setter_on.contains(holder.name())))
                             || holder.runtime_layout_holder()
                             || (self.whole.contains(holder.name())
                                 && (symbol
                                     || key.contains("@@")
                                     || holder.runtime_spelled_key(key)))
                             || self.receiver_keys.contains(key)
+                            || self.keys_on.get(holder.name()).is_some_and(|keys| keys.contains(&(key.into(), false)) || (setter && keys.contains(&(key.into(), true))))
                             || (setter && self.setter_keys.contains(key)))
                 })
             })

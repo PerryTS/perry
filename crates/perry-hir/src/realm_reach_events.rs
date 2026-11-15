@@ -51,9 +51,21 @@ impl Scan<'_> {
     }
     pub(super) fn protocol(&mut self, expr: &ast::Expr, protocol: RealmProtocol) {
         if !primitive(expr) {
-            self.out
-                .receiver_keys
-                .extend(protocol.receiver_keys().iter().map(|k| k.to_string()));
+            let keys = protocol
+                .receiver_keys()
+                .iter()
+                .map(|k| k.to_string())
+                .collect();
+            self.observe(
+                expr.span().lo.0,
+                Operand::Unproved,
+                ScopeKind::Keys { keys, own: false },
+                |scan| {
+                    scan.out
+                        .receiver_keys
+                        .extend(protocol.receiver_keys().iter().map(|k| k.to_string()));
+                },
+            );
         }
     }
 
@@ -98,16 +110,52 @@ impl Scan<'_> {
         !values.is_empty() && (!slot.steps.is_empty() || values.iter().any(|v| !primitive(v)))
     }
 
+    fn scope_slot(slot: &RealmSlot) -> Operand {
+        match slot.root {
+            RealmSlotRoot::This => Operand::This,
+            RealmSlotRoot::Arg(i) => Operand::Arg(i as u32),
+            RealmSlotRoot::Rest(i) => Operand::Rest(i as u32),
+            RealmSlotRoot::Callee => Operand::Callee,
+            _ => Operand::Result,
+        }
+    }
+
     fn read_slot(&mut self, slot: &RealmSlot, callee: &ast::Expr, args: &[ast::ExprOrSpread]) {
         if !self.slot_nonprimitive(slot, callee, args) {
             return;
         }
         // Field steps declare KEY reads. They do not hand the loaded value
         // to unknown code, or inspect that value's [[Prototype]].
-        let keyed = self.slot_key_reads(slot);
-        if !keyed {
-            self.out.chain_read = true;
-        }
+        let keys: BTreeSet<_> = slot
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                RealmSlotStep::Field(key) => Some(key.to_string()),
+                _ => None,
+            })
+            .collect();
+        let kind = if keys.is_empty() {
+            ScopeKind::Chain
+        } else {
+            ScopeKind::Keys { keys, own: false }
+        };
+        // Nested slots have no root-value proof of the loaded operand.
+        let proved = slot.steps.is_empty()
+            || (slot.steps.len() == 1 && matches!(slot.steps[0], RealmSlotStep::Field(_)));
+        self.observe(
+            self.call_offset,
+            if proved {
+                Self::scope_slot(slot)
+            } else {
+                Operand::Unproved
+            },
+            kind,
+            |scan| {
+                if !scan.slot_key_reads(slot) {
+                    scan.out.chain_read = true;
+                }
+            },
+        );
     }
 
     fn slot_key_reads(&mut self, slot: &RealmSlot) -> bool {
@@ -171,8 +219,19 @@ impl Scan<'_> {
 
     fn escape_slot(&mut self, slot: &RealmSlot, callee: &ast::Expr, args: &[ast::ExprOrSpread]) {
         if self.slot_nonprimitive(slot, callee, args) {
-            self.out.chain_read = true;
-            self.out.any_receiver_key = true;
+            self.observe(
+                self.call_offset,
+                if slot.steps.is_empty() {
+                    Self::scope_slot(slot)
+                } else {
+                    Operand::Unproved
+                },
+                ScopeKind::Escape { callback: None },
+                |scan| {
+                    scan.out.chain_read = true;
+                    scan.out.any_receiver_key = true;
+                },
+            );
         }
     }
 
@@ -182,8 +241,15 @@ impl Scan<'_> {
                 .iter()
                 .any(|a| a.spread.is_some() || !primitive(&a.expr))
         {
-            self.out.chain_read = true;
-            self.out.any_receiver_key = true;
+            self.observe(
+                self.call_offset,
+                Operand::Callee,
+                ScopeKind::UnknownCall,
+                |scan| {
+                    scan.out.chain_read = true;
+                    scan.out.any_receiver_key = true;
+                },
+            );
         }
     }
 
@@ -207,13 +273,32 @@ impl Scan<'_> {
         });
         let row = name.as_deref().and_then(|n| self.entries.last(n));
         if row.is_none() {
-            self.primitive_prototypes();
+            self.observe(
+                self.call_offset,
+                Operand::Callee,
+                ScopeKind::UnknownCall,
+                |scan| scan.primitive_prototypes(),
+            );
         }
         if let Some(body) = row.and_then(|r| r.operation().or_else(|| r.body())) {
             let symbol = body.rsplit("::").next().unwrap();
             if self.entries.operation(symbol).is_some() {
                 self.out.exec(symbol);
             }
+        }
+        if let Some(name) = name.as_deref().filter(|name| {
+            name.ends_with(".getPrototypeOf")
+                || name.ends_with(".setPrototypeOf")
+                || name.ends_with(".isPrototypeOf")
+        }) {
+            self.observe(
+                self.call_offset,
+                Operand::Arg(0),
+                ScopeKind::Prototype(name.into()),
+                |scan| {
+                    scan.out.prototype_global = true;
+                },
+            );
         }
         let effects = row.map(|r| r.entry().effects).unwrap_or(&[]);
         if effects.is_empty() && !row.is_some_and(|r| r.argument_mode("converted")) {
@@ -228,10 +313,26 @@ impl Scan<'_> {
                 }
                 RealmEffect::Coerce { slot, protocol } => {
                     if self.slot_nonprimitive(slot, callee, args) {
-                        self.slot_key_reads(slot);
-                        self.out
-                            .receiver_keys
-                            .extend(protocol.receiver_keys().iter().map(|k| k.to_string()));
+                        let keys = protocol
+                            .receiver_keys()
+                            .iter()
+                            .map(|k| k.to_string())
+                            .collect();
+                        self.observe(
+                            self.call_offset,
+                            if slot.steps.is_empty() {
+                                Self::scope_slot(slot)
+                            } else {
+                                Operand::Unproved
+                            },
+                            ScopeKind::Keys { keys, own: false },
+                            |scan| {
+                                scan.slot_key_reads(slot);
+                                scan.out
+                                    .receiver_keys
+                                    .extend(protocol.receiver_keys().iter().map(|k| k.to_string()));
+                            },
+                        );
                     }
                 }
                 RealmEffect::Escapes(slot) | RealmEffect::AsyncResource(slot) => {
@@ -242,10 +343,27 @@ impl Scan<'_> {
                     this,
                     args: operands,
                 } => {
-                    self.read_slot(slot, callee, args);
-                    for operand in std::iter::once(this).chain(operands.iter()) {
-                        self.escape_operand(operand, callee, args);
-                    }
+                    self.observe(
+                        self.call_offset,
+                        if slot.steps.is_empty() {
+                            Self::scope_slot(slot)
+                        } else {
+                            Operand::Unproved
+                        },
+                        ScopeKind::Escape {
+                            callback: Some(if slot.steps.is_empty() {
+                                Self::scope_slot(slot)
+                            } else {
+                                Operand::Unproved
+                            }),
+                        },
+                        |scan| {
+                            scan.read_slot(slot, callee, args);
+                            for operand in std::iter::once(this).chain(operands.iter()) {
+                                scan.escape_operand(operand, callee, args);
+                            }
+                        },
+                    );
                 }
                 RealmEffect::Open => self.unknown_code_inputs(callee, args),
                 _ => {}

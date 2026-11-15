@@ -200,7 +200,7 @@ pub(crate) fn call(
                     &class.name,
                     crate::lower_call::FieldInitMode::AncestorsOnly,
                 )?;
-                super::this_super_call::lower_checked(ctx, &Expr::SuperCall(args.to_vec()))
+                super::this_super_call::lower_checked(ctx, &Expr::SuperCall(args.to_vec(), 0))
             },
             |ctx| super::super_constructor::call_live(ctx, class, args),
         )

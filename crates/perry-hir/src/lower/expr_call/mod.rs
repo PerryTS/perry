@@ -501,9 +501,9 @@ fn lower_call_inner(
             // ONE positional arg (zod's ZodNumber stored the whole
             // `arguments` object into `this._def`).
             if let Some(spread_args) = spread_args {
-                return Ok(Expr::SuperCallSpread(spread_args));
+                return Ok(Expr::SuperCallSpread(spread_args, call.span.lo.0));
             }
-            Ok(Expr::SuperCall(args))
+            Ok(Expr::SuperCall(args, call.span.lo.0))
         }
         ast::Callee::Expr(expr) => {
             // Check for super.method() call

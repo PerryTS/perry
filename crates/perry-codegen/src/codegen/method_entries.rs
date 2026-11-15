@@ -253,8 +253,8 @@ pub(super) fn source_needs_home(classes: &[(u32, &perry_hir::Class)], cid: u32, 
                 | Expr::SuperMethodCallSpread { .. }
                 | Expr::SuperPropertyGet { .. }
                 | Expr::SuperPropertySet { .. }
-                | Expr::SuperCall(_)
-                | Expr::SuperCallSpread(_)
+                | Expr::SuperCall(_, _)
+                | Expr::SuperCallSpread(_, _)
                 | Expr::Closure { .. }
                 | Expr::New { .. }
         ) {

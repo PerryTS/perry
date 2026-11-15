@@ -1,5 +1,58 @@
 use super::*;
+use perry_hir::Expr;
 impl<'a> Gen<'a> {
+    /// Operands only ever read as primitives by the runtime: objects get the
+    /// protocol touch (ToPrimitive / toString …), functions escape (the
+    /// runtime may call them back).
+    pub(crate) fn prim_op(
+        &mut self,
+        fx: &Fx,
+        operands: &[&Expr],
+        result: u16,
+        why: &str,
+        proto: Protocol,
+    ) -> NodeId {
+        let r = self.m.reason(why);
+        for o in operands {
+            self.prim_operand(fx, o, r, proto);
+        }
+        let out = self.tmp("primop");
+        self.m.add_prim(out, result);
+        out
+    }
+
+    pub(crate) fn prim_operand(
+        &mut self,
+        fx: &Fx,
+        operand: &Expr,
+        reason: u32,
+        proto: Protocol,
+    ) -> NodeId {
+        let value = self.expr(fx, operand);
+        self.m.cons(value, Cons::Implicit { reason, proto });
+        value
+    }
+
+    /// A primitive operation whose result may be a runtime container of
+    /// primitives (path.parse, os.cpus, process.memoryUsage …).
+    pub(crate) fn prim_box_op(
+        &mut self,
+        fx: &Fx,
+        operands: &[&Expr],
+        why: &str,
+        proto: Protocol,
+    ) -> NodeId {
+        let out = self.prim_op(fx, operands, prim::ALL, why, proto);
+        let tm = self.new_bobj_template(fx.module, "primbox");
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.m.field_any(t);
+        self.m.add_prim(fa, prim::ALL);
+        // Nested containers (os.cpus() elements ...) are the site's own.
+        self.m.add_tok(fa, t);
+        self.m.add_tok(out, t);
+        out
+    }
+
     /// A node holding exactly the primitive kinds `p`. A union of kinds is
     /// its own node: the shared all-primitives node would add `STR` and
     /// `SYMBOL`, and a string index reads every named member.

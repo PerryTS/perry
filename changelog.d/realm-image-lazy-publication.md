@@ -11,3 +11,12 @@ use seeds held family entries while their rows remain pending; first family
 observation publishes its rows and per-agent namespace/prototype words.
 Preserve runtime birth for realms without images and native-owned graphs,
 and report missing checked value roots even before Global materialization.
+
+Scope realm observations with unguarded whole-program operand facts, preserving
+conservative reach for incomplete solves and unproved builtin writes. Keep
+source identities through specialized prototype reads and stop keyed lookups at
+program-owned properties before selecting realm members.
+
+Keep implicit runtime-error summaries conservative, retain runtime-read
+constructor prototype slots without a STRUCTURE floor, and declare class-value
+and collection initialization calls at their existing EXEC owners.

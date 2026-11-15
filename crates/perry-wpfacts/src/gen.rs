@@ -28,8 +28,18 @@ mod walk;
 pub(crate) mod zero_sign;
 pub(crate) use walk::variant_name;
 
-/// A read site the precision report can match against the dynamic census:
-/// `recv.key` with a source byte offset.
+/// Source operands of a specialized intrinsic operation. Its HIR node
+/// carries the source offset and fixes the original argument positions.
+#[derive(Clone, Debug)]
+pub(crate) struct SourceCall {
+    pub module: u32,
+    pub offset: u32,
+    pub args: Vec<NodeId>,
+    pub result: NodeId,
+    pub realm_identity: &'static str,
+}
+
+/// A read site the precision report matches against the dynamic census.
 #[derive(Clone, Debug)]
 pub struct ReadSite {
     pub module: u32,
@@ -296,6 +306,7 @@ pub struct Gen<'a> {
     /// identity (the callee expression's address), whether it spreads, and
     /// for a direct call its callee node (`signatures::typed_calls`).
     pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,
+    pub(crate) source_calls: Vec<SourceCall>,
     /// One-unit String literal nodes by code (`Gen::str_literal`).
     pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
@@ -686,6 +697,7 @@ impl<'a> Gen<'a> {
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
             call_sites_at: Vec::new(),
+            source_calls: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
@@ -2364,6 +2376,6 @@ pub(crate) fn forwards_super(f: &Function) -> bool {
 /// `super(...a)` as a statement, `a` being local `rest`.
 pub(crate) fn is_forward_of(s: &Stmt, rest: perry_hir::types::LocalId) -> bool {
     use perry_hir::{CallArg, Expr};
-    matches!(s, Stmt::Expr(Expr::SuperCallSpread(args))
+    matches!(s, Stmt::Expr(Expr::SuperCallSpread(args, _))
         if matches!(args.as_slice(), [CallArg::Spread(Expr::LocalGet(id))] if *id == rest))
 }

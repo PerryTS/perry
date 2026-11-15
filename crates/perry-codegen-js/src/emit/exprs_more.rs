@@ -1449,7 +1449,7 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push(')');
             }
-            Expr::ObjectGetPrototypeOf(obj) => {
+            Expr::ObjectGetPrototypeOf(obj, _) => {
                 self.output.push_str("Object.getPrototypeOf(");
                 self.emit_expr(obj);
                 self.output.push(')');
@@ -1665,7 +1665,7 @@ impl JsEmitter {
                 self.emit_expr(descriptor);
                 self.output.push(')');
             }
-            Expr::ReflectGetPrototypeOf(target) => {
+            Expr::ReflectGetPrototypeOf(target, _) => {
                 self.output.push_str("Reflect.getPrototypeOf(");
                 self.emit_expr(target);
                 self.output.push(')');

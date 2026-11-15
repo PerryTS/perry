@@ -392,8 +392,7 @@ pub(super) fn try_module_static_methods(
                                 let reviver = iter.next().unwrap();
                                 return Ok(Ok(Expr::JsonParseWithReviver(
                                     Box::new(text),
-                                    Box::new(reviver),
-                                )));
+                                    Box::new(reviver), call.span.lo.0)));
                             } else {
                                 // 0 or 1 args. `JSON.parse()` with no argument is
                                 // `JSON.parse(undefined)` → ToString(undefined) =

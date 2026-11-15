@@ -584,7 +584,10 @@ mod tests {
             },
             Stmt::Expr(Expr::LocalSet(
                 1,
-                Box::new(Expr::ObjectGetPrototypeOf(Box::new(Expr::Object(vec![])))),
+                Box::new(Expr::ObjectGetPrototypeOf(
+                    Box::new(Expr::Object(vec![])),
+                    0,
+                )),
             )),
         ];
 

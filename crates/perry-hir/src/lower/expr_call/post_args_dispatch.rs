@@ -84,7 +84,11 @@ pub(super) fn try_object_static_alias_call(
                             let value = args.first().cloned().unwrap_or(Expr::Undefined);
                             return Ok(Expr::ArrayIsArray(Box::new(value)));
                         }
-                        return Ok(build_object_static_method_call(&method, args));
+                        return Ok(build_object_static_method_call(
+                            &method,
+                            args,
+                            call.span.lo.0,
+                        ));
                     }
                 }
             }

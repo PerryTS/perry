@@ -1,7 +1,7 @@
 //! Derived facts F1–F6 read off the solved graph (design section 2), and
 //! the per-site verdicts the precision report uses.
 
-mod element;
+pub(crate) mod element;
 pub(crate) use element::element_facts;
 use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};

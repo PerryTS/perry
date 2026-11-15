@@ -1069,6 +1069,7 @@ pub(crate) fn class_value(class_id: u32) -> f64 {
 /// first use and never collects.
 #[no_mangle]
 pub extern "C" fn js_class_value(class_id: i32) -> f64 {
+    crate::realm_decl! { operation js_class_value, calls = [function_prototype_ptr_materialized] }
     class_value(class_id as u32)
 }
 

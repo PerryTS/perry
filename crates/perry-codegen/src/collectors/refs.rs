@@ -598,11 +598,11 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(replacer, out);
             walk(indent, out);
         }
-        Expr::JsonParseReviver { text, reviver } => {
+        Expr::JsonParseReviver { text, reviver, .. } => {
             walk(text, out);
             walk(reviver, out);
         }
-        Expr::JsonParseWithReviver(a, b) => {
+        Expr::JsonParseWithReviver(a, b, _) => {
             walk(a, out);
             walk(b, out);
         }
@@ -702,7 +702,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {

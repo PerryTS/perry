@@ -172,7 +172,7 @@ pub(super) fn try_object_statics(
                 "getPrototypeOf" => {
                     return Ok(Ok(Expr::ObjectGetPrototypeOf(Box::new(
                         args.into_iter().next().unwrap_or(Expr::Undefined),
-                    ))));
+                    ), call.span.lo.0)));
                 }
                 "setPrototypeOf" => {
                     // `Object.setPrototypeOf(obj, proto)` is the foundation

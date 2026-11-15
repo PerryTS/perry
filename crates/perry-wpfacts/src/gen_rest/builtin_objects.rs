@@ -78,7 +78,7 @@ impl<'a> Gen<'a> {
                     Some((class_name, args, get, set)) => {
                         let a = self.evaluate_all(fx, args);
                         let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
-                        (self.new_named(fx, class_name, a, vec![]), own)
+                        (self.new_named(fx, class_name, a, vec![], 0), own)
                     }
                     None => (self.expr(fx, d), [None, None]),
                 };
@@ -211,11 +211,25 @@ impl<'a> Gen<'a> {
                 );
                 self.prim_node(prim::BOOL)
             }
-            Expr::ObjectGetPrototypeOf(o) | Expr::ReflectGetPrototypeOf(o) => {
+            Expr::ObjectGetPrototypeOf(o, byte_offset)
+            | Expr::ReflectGetPrototypeOf(o, byte_offset) => {
                 let on = self.expr(fx, o);
                 let out = self.tmp("protoof");
                 self.m.cons(on, Cons::ProtoOf { dst: out });
                 self.m.add_prim(out, prim::NULL);
+                if *byte_offset != 0 {
+                    self.source_calls.push(crate::gen::SourceCall {
+                        module: mi,
+                        offset: *byte_offset,
+                        args: vec![on],
+                        result: out,
+                        realm_identity: if matches!(e, Expr::ObjectGetPrototypeOf(..)) {
+                            "Object.getPrototypeOf"
+                        } else {
+                            "Reflect.getPrototypeOf"
+                        },
+                    });
+                }
                 out
             }
             Expr::ObjectSetPrototypeOf(o, p)
@@ -237,22 +251,29 @@ impl<'a> Gen<'a> {
                 on
             }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
-                let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
-                self.json_value(mi)
-            }
-            Expr::JsonParseReviver { text, reviver }
-            | Expr::JsonParseWithReviver(text, reviver) => {
-                let _ = self.prim_op(
+                let _ = self.prim_kids(
                     fx,
-                    &[text],
+                    e,
                     prim::STR,
-                    "JSON.parse text",
+                    "ToString JSON.parse text",
                     Protocol::ToPrimitive,
                 );
+                self.json_value(mi)
+            }
+            Expr::JsonParseReviver {
+                text,
+                reviver,
+                byte_offset,
+            }
+            | Expr::JsonParseWithReviver(text, reviver, byte_offset) => {
+                let reason = self.m.reason("ToString JSON.parse text");
+                let text_node = self.prim_operand(fx, text, reason, Protocol::ToPrimitive);
+                let converted = self.tmp("primop");
+                self.m.add_prim(converted, prim::STR);
                 let rv = self.expr(fx, reviver);
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::any());
+                let vals = self.own_values(v);
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
                 // The reviver's results replace values in the parsed tree.
@@ -262,6 +283,15 @@ impl<'a> Gen<'a> {
                 let out = self.tmp("json-out");
                 self.m.edge(v, out);
                 self.m.edge(ret, out);
+                if *byte_offset != 0 {
+                    self.source_calls.push(crate::gen::SourceCall {
+                        module: mi,
+                        offset: *byte_offset,
+                        args: vec![text_node, rv],
+                        result: out,
+                        realm_identity: "JSON.parse",
+                    });
+                }
                 out
             }
             Expr::JsonStringify(..)

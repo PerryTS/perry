@@ -22,7 +22,11 @@ use crate::ir::*;
 /// from the dispatch below will be tagged as aliases and then fall through
 /// to the original generic call path that throws `TypeError: value is not
 /// a function`, regressing the very pattern this fix is supposed to fix.
-pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> Expr {
+pub(super) fn build_object_static_method_call(
+    method: &str,
+    args: Vec<Expr>,
+    byte_offset: u32,
+) -> Expr {
     let mut iter = args.into_iter();
     match method {
         "defineProperty" => {
@@ -41,9 +45,10 @@ pub(super) fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> 
             let proto = iter.next().unwrap_or(Expr::Undefined);
             Expr::ObjectSetPrototypeOf(Box::new(obj), Box::new(proto))
         }
-        "getPrototypeOf" => {
-            Expr::ObjectGetPrototypeOf(Box::new(iter.next().unwrap_or(Expr::Undefined)))
-        }
+        "getPrototypeOf" => Expr::ObjectGetPrototypeOf(
+            Box::new(iter.next().unwrap_or(Expr::Undefined)),
+            byte_offset,
+        ),
         "getOwnPropertyDescriptor" => {
             let obj = iter.next().unwrap_or(Expr::Undefined);
             let key = iter.next().unwrap_or(Expr::Undefined);

@@ -901,9 +901,10 @@ pub fn synthesize_class_captures(
                     is_rest: true,
                     arguments_object: None,
                 }];
-                let body = vec![Stmt::Expr(Expr::SuperCallSpread(vec![CallArg::Spread(
-                    Expr::LocalGet(pid),
-                )]))];
+                let body = vec![Stmt::Expr(Expr::SuperCallSpread(
+                    vec![CallArg::Spread(Expr::LocalGet(pid))],
+                    0,
+                ))];
                 (params, body)
             } else {
                 (Vec::new(), Vec::new())
@@ -1146,7 +1147,7 @@ fn early_capture_stash_slot(body: &mut Vec<Stmt>) -> Option<usize> {
 }
 
 fn is_super_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_))
+    matches!(expr, Expr::SuperCall(_, _) | Expr::SuperCallSpread(_, _))
 }
 
 /// True when `expr` is or contains a `super(…)` call outside nested closures

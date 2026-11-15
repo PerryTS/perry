@@ -600,6 +600,7 @@ impl<'a> Gen<'a> {
         name: &str,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
+        byte_offset: u32,
     ) -> NodeId {
         let mi = fx.module;
         let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
@@ -626,9 +627,10 @@ impl<'a> Gen<'a> {
             Some(c) => {
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
                 self.m.cons(c, Cons::New { call });
+                self.record_construct_site(fx, byte_offset, c, call);
                 ret
             }
-            None => self.new_builtin(fx, name, args, spread),
+            None => self.new_builtin(fx, name, args, spread, byte_offset),
         }
     }
 
@@ -657,10 +659,11 @@ impl<'a> Gen<'a> {
     /// `new Name(...)` of a name that is not a program class: a builtin.
     pub(crate) fn new_builtin(
         &mut self,
-        _fx: &Fx,
+        fx: &Fx,
         name: &str,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
+        byte_offset: u32,
     ) -> NodeId {
         // `new Array(k)` of an integer literal: the length its birth has,
         // when the runtime backs it densely (`capacity >= k`, every slot a
@@ -682,6 +685,23 @@ impl<'a> Gen<'a> {
             _ => None,
         };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+        if byte_offset != 0 {
+            if let Some(row) = crate::builtins::members::realm_entry(name)
+                .filter(|r| r.kind == perry_hir::realm_manifest::RealmKind::Constructor)
+            {
+                self.source_calls.push(crate::gen::SourceCall {
+                    module: fx.module,
+                    offset: byte_offset,
+                    args: if self.m.calls[call as usize].spread.is_empty() {
+                        self.m.calls[call as usize].args.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    result: ret,
+                    realm_identity: row.name,
+                });
+            }
+        }
         if name == "Array" {
             let site = self.m.calls[call as usize].site;
             if let Some(k) = birth_len {
@@ -828,11 +848,41 @@ impl<'a> Gen<'a> {
         self.m.cons(base, Cons::SuperFrom { recv, key, act });
     }
 
-    pub(crate) fn super_ctor(&mut self, fx: &Fx, args: Vec<NodeId>, spread: Vec<NodeId>) -> NodeId {
+    pub(crate) fn record_construct_site(
+        &mut self,
+        fx: &Fx,
+        offset: u32,
+        callee: NodeId,
+        call: CallId,
+    ) {
+        if offset != 0 {
+            let source = &self.m.calls[call as usize];
+            self.call_sites_at.push(crate::signatures::CallSiteRec {
+                module: fx.module,
+                offset,
+                end: offset,
+                args: source.args.clone(),
+                spread: !source.spread.is_empty(),
+                callee: Some(callee),
+                call,
+            });
+        }
+    }
+
+    pub(crate) fn super_ctor(
+        &mut self,
+        fx: &Fx,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+        byte_offset: u32,
+    ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
         match fx.class {
             Some(tm) => {
                 self.m.cons(fx.this, Cons::SuperCtor { class: tm, call });
+                let class = self.m.tok(TokKind::ClassObj(tm));
+                let parent = self.m.proto_node(class);
+                self.record_construct_site(fx, byte_offset, parent, call);
             }
             None => {
                 let c = self.m.calls[call as usize].clone();
@@ -1306,8 +1356,8 @@ pub(crate) fn stmt_reads_this(stmt: &Stmt) -> bool {
 fn expr_reads_this(e: &Expr) -> bool {
     match e {
         Expr::This
-        | Expr::SuperCall(_)
-        | Expr::SuperCallSpread(_)
+        | Expr::SuperCall(_, _)
+        | Expr::SuperCallSpread(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertyGet { .. }

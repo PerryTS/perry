@@ -1641,7 +1641,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::SetNewFromArray(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_set_from_iterable", &[(DOUBLE, &arr_box)]);
+            let handle = blk.call(
+                I64,
+                perry_hir::realm_reach::lowered_operation(expr)
+                    .expect("collection initializer operation"),
+                &[(DOUBLE, &arr_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &handle))
         }
 

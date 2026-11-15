@@ -740,7 +740,7 @@ pub fn construction_expr_can_affect_method_lookup(
             getter_names,
             setter_names,
         ),
-        Expr::SuperCall(args) => args.iter().any(|arg| {
+        Expr::SuperCall(args, _) => args.iter().any(|arg| {
             construction_expr_can_affect_method_lookup(
                 arg,
                 method_name,

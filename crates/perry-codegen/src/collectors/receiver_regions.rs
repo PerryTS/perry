@@ -1504,8 +1504,8 @@ fn expr_region_ender_with_trusted_operation(
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }
-        | Expr::SuperCall(_)
-        | Expr::SuperCallSpread(_)
+        | Expr::SuperCall(_, _)
+        | Expr::SuperCallSpread(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::ObjectSuperMethodCall { .. }

@@ -186,8 +186,8 @@ fn observes_this(e: &perry_hir::Expr) -> bool {
     if matches!(
         e,
         Expr::This
-            | Expr::SuperCall(_)
-            | Expr::SuperCallSpread(_)
+            | Expr::SuperCall(_, _)
+            | Expr::SuperCallSpread(_, _)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
             | Expr::SuperPropertyGet { .. }

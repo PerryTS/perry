@@ -502,8 +502,8 @@ fn names_receiver(e: &Expr) -> bool {
     matches!(
         e,
         Expr::This
-            | Expr::SuperCall(_)
-            | Expr::SuperCallSpread(_)
+            | Expr::SuperCall(_, _)
+            | Expr::SuperCallSpread(_, _)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
             | Expr::SuperPropertyGet { .. }
@@ -908,11 +908,11 @@ fn own_keys(
             body = &body[1..];
         }
         match body.first() {
-            Some(Stmt::Expr(Expr::SuperCall(args))) => {
+            Some(Stmt::Expr(Expr::SuperCall(args, _))) => {
                 super_inert = open && args.iter().all(|a| inert(a, &params));
                 body = &body[1..];
             }
-            Some(Stmt::Expr(Expr::SuperCallSpread(_))) => {
+            Some(Stmt::Expr(Expr::SuperCallSpread(_, _))) => {
                 super_inert = false;
                 body = &body[1..];
             }

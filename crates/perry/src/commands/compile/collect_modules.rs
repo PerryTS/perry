@@ -813,7 +813,11 @@ fn collect_module_one(
         .as_ref()
         .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
     ctx.realm_reach
-        .merge(&perry_hir::realm_reach::scan(dynamic_ast, &ctx.realm_index));
+        .merge(&perry_hir::realm_reach::scan_for_source(
+            dynamic_ast,
+            &ctx.realm_index,
+            &canonical.to_string_lossy(),
+        ));
     let patched_before = ctx.patched_builtins.len();
     let guarded_before = ctx
         .patched_builtins

@@ -6616,7 +6616,7 @@ pub fn run_with_parse_cache(
         realm_reach.exec(birth);
     }
     for module in ctx.native_modules.values() {
-        perry_hir::realm_reach::scan_lowered(module, &ctx.realm_index, &mut realm_reach);
+        perry_hir::realm_reach::scan_lowered_for_scope(module, &ctx.realm_index, &mut realm_reach);
     }
     realm_reach.program_signals(&ctx.patched_builtins);
     // fninfer (decision 140): per-function inferred signatures over the
@@ -6801,7 +6801,35 @@ pub fn run_with_parse_cache(
             names.len()
         );
     }
+    let operand_index = program_facts
+        .as_ref()
+        .map(|facts| facts.realm_operand_index())
+        .unwrap_or_default();
+    let scope_census = std::env::var("PERRY_REALM_REACH")
+        .is_ok_and(|v| v == "1")
+        .then(|| realm_reach.clone());
+    realm_reach.resolve_observations(&operand_index, &ctx.realm_index);
     realm_reach.close(&ctx.realm_index);
+    if let Some(mut conservative) = scope_census {
+        conservative.close(&ctx.realm_index);
+        anyhow::ensure!(
+            realm_reach.names.is_subset(&conservative.names),
+            "scoped realm reach exceeds conservative reach"
+        );
+        eprintln!(
+            "[realm-scope-json] {}",
+            serde_json::json!({
+                "solve_complete": program_facts.as_ref().is_some_and(|f| f.realm_solve_complete),
+                "scope_complete": operand_index.complete,
+            "aborted": program_facts.as_ref().map(|f| f.stats.aborted),
+            "widened": program_facts.as_ref().map(|f| f.stats.widened),
+                "builtin_writes": program_facts.as_ref().map(|f| &f.realm_builtin_writes),
+                "subset": true,
+                "conservative_names": conservative.names.len(),
+                "scoped_names": realm_reach.names.len()
+            })
+        );
+    }
     // The actual lowering's Exec facts close R before it supplies any realm
     // cell row. The same final Arc reaches every module and the seed unit.
     let realm_target = target

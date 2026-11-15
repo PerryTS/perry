@@ -467,7 +467,10 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
     let mut child = user_class("Child", 8, 2);
     child.extends = Some(7);
     child.extends_name = Some("Base".into());
-    child.constructor = Some(constructor(vec![Stmt::Expr(Expr::SuperCall(Vec::new()))]));
+    child.constructor = Some(constructor(vec![Stmt::Expr(Expr::SuperCall(
+        Vec::new(),
+        0,
+    ))]));
     let parents = HashMap::from([("Base".into(), &base)]);
     let shape = class_final("p", &child, &parents, 0, 88).unwrap();
     assert_eq!(shape.proto, BirthProto::Class(88));

@@ -228,7 +228,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
         // count is dynamic, so the parent ctor can't be inlined; build
         // the args array and invoke the closest registered ancestor ctor
         // on the SAME `this` through the CLASS_CONSTRUCTORS registry.
-        Expr::SuperCallSpread(call_args) => {
+        Expr::SuperCallSpread(call_args, _) => {
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 for a in call_args {
                     let (perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e)) = a;
@@ -585,7 +585,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
         // `current_class.extends.and_then(class_id_to_name)`. For Phase
         // C.2 we use `extends_name` which is always populated when
         // there's a parent.
-        Expr::SuperCall(super_args) => {
+        Expr::SuperCall(super_args, _) => {
             // Soft fallback for super() outside a class context: lower
             // args and return undefined.
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {

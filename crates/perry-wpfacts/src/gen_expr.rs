@@ -70,9 +70,10 @@ impl<'a> Gen<'a> {
     ) -> Option<NodeId> {
         let e = crate::builtins::declared_member(member)?;
         let args = args.iter().map(|a| self.expr(fx, a)).collect();
-        let t = self
-            .m
-            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name, holder: None }));
+        let t = self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity: e.name,
+            holder: None,
+        }));
         let callee = self.tok_node(t);
         let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
         self.m.cons(callee, Cons::Call { call });
@@ -93,48 +94,10 @@ impl<'a> Gen<'a> {
                 .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
                 .map(|e| e.name)
         })?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
-    }
-
-    /// Operands only ever read as primitives by the runtime: objects get the
-    /// protocol touch (ToPrimitive / toString …), functions escape (the
-    /// runtime may call them back).
-    pub(crate) fn prim_op(
-        &mut self,
-        fx: &Fx,
-        operands: &[&Expr],
-        result: u16,
-        why: &str,
-        proto: Protocol,
-    ) -> NodeId {
-        let r = self.m.reason(why);
-        for o in operands {
-            let v = self.expr(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r, proto });
-        }
-        let out = self.tmp("primop");
-        self.m.add_prim(out, result);
-        out
-    }
-
-    /// A primitive operation whose result may be a runtime container of
-    /// primitives (path.parse, os.cpus, process.memoryUsage …).
-    pub(crate) fn prim_box_op(
-        &mut self,
-        fx: &Fx,
-        operands: &[&Expr],
-        why: &str,
-        proto: Protocol,
-    ) -> NodeId {
-        let out = self.prim_op(fx, operands, prim::ALL, why, proto);
-        let tm = self.new_bobj_template(fx.module, "primbox");
-        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let fa = self.m.field_any(t);
-        self.m.add_prim(fa, prim::ALL);
-        // Nested containers (os.cpus() elements ...) are the site's own.
-        self.m.add_tok(fa, t);
-        self.m.add_tok(out, t);
-        out
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        })))
     }
 
     /// Fail closed: every operand escapes, the result is ⊤.
@@ -1696,6 +1659,7 @@ impl<'a> Gen<'a> {
                 class_name,
                 args,
                 cap_args_appended,
+                byte_offset,
                 ..
             } => {
                 // A chunked literal birth: its chunk calls receive the object
@@ -1723,7 +1687,7 @@ impl<'a> Gen<'a> {
                 } else {
                     None
                 };
-                let born = self.new_named(fx, class_name, a, vec![]);
+                let born = self.new_named(fx, class_name, a, vec![], *byte_offset);
                 if let Some(x) = x {
                     self.m.edge(born, x);
                 }
@@ -1760,18 +1724,30 @@ impl<'a> Gen<'a> {
                 );
                 self.prim_node(prim::UNDEF)
             }
-            Expr::NewDynamic { callee, args, .. } => {
+            Expr::NewDynamic {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } => {
                 let c = self.expr(fx, callee);
                 let a = self.evaluate_all(fx, args);
                 let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
                 self.m.cons(c, Cons::New { call });
+                self.record_construct_site(fx, *byte_offset, c, call);
                 ret
             }
-            Expr::NewDynamicSpread { callee, args, .. } => {
+            Expr::NewDynamicSpread {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } => {
                 let c = self.expr(fx, callee);
                 let (a, s) = self.call_args(fx, args);
                 let (call, ret) = self.new_call(ThisArg::Undef, a, s);
                 self.m.cons(c, Cons::New { call });
+                self.record_construct_site(fx, *byte_offset, c, call);
                 ret
             }
             Expr::NewTarget => self.m.top_val("new.target"),
@@ -2166,13 +2142,13 @@ impl<'a> Gen<'a> {
             }
             Expr::This => fx.this,
             Expr::ModuleTopThis => fx.this,
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, byte_offset) => {
                 let a = self.evaluate_all(fx, args);
-                self.super_ctor(fx, a, vec![])
+                self.super_ctor(fx, a, vec![], *byte_offset)
             }
-            Expr::SuperCallSpread(args) => {
+            Expr::SuperCallSpread(args, byte_offset) => {
                 let (a, s) = self.call_args(fx, args);
-                self.super_ctor(fx, a, s)
+                self.super_ctor(fx, a, s, *byte_offset)
             }
             Expr::SuperMethodCall { method, args } => {
                 let a = self.evaluate_all(fx, args);

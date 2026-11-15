@@ -3145,6 +3145,7 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// (Maps materialize to their `[k, v]` pair arrays) inside `classify_init`.
 #[no_mangle]
 pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
+    crate::realm_decl! { operation js_map_from_iterable, calls = [map_proto_set_thunk], births = [Map], reads = [("Map.prototype", "set", "Map.prototype.set")] }
     map_init_iterable(js_map_alloc(4), value)
 }
 

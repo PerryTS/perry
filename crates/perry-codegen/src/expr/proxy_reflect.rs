@@ -1273,7 +1273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, proto);
             lower_boxed_operand_call(ctx, "js_reflect_set_prototype_of", &[target, proto])
         }
-        Expr::ReflectGetPrototypeOf(target) => {
+        Expr::ReflectGetPrototypeOf(target, _) => {
             // #2757: return the actual [[Prototype]] (shared with
             // Object.getPrototypeOf), not the target object itself. The
             // `=== Class.prototype` comparison is still folded to a constant

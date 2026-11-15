@@ -7,7 +7,7 @@ use super::*;
 pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
     fn check_expr(expr: &Expr) -> bool {
         match expr {
-            Expr::SuperCall(_) | Expr::SuperMethodCall { .. } => true,
+            Expr::SuperCall(_, _) | Expr::SuperMethodCall { .. } => true,
             Expr::Binary { left, right, .. }
             | Expr::Logical { left, right, .. }
             | Expr::Compare { left, right, .. } => check_expr(left) || check_expr(right),

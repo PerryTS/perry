@@ -20,7 +20,7 @@ use crate::block::LlBlock;
 pub(crate) fn emit_class_value(blk: &mut LlBlock, class_id: u32) -> String {
     blk.call(
         DOUBLE,
-        "js_class_value",
+        perry_hir::realm_reach::class_value_operation(),
         &[(I32, &(class_id as i32).to_string())],
     )
 }

@@ -1665,7 +1665,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
-        Expr::JsonParseReviver { text, reviver } => {
+        Expr::JsonParseReviver { text, reviver, .. } => {
             rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).
@@ -1679,7 +1679,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Ok(blk.bitcast_i64_to_double(&result_i64))
             })
         }
-        Expr::JsonParseWithReviver(text, reviver) => {
+        Expr::JsonParseWithReviver(text, reviver, _) => {
             rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).

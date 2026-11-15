@@ -89,6 +89,7 @@ llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
 # test/bench target is being built, so `cargo build`/`--release`/`--profile
 # dist` still compile the library with `testing` off.
 [dev-dependencies]
+perry-wpfacts.workspace = true
 perry-codegen = { path = ".", features = ["testing"] }
 perry-diagnostics.workspace = true
 perry-parser.workspace = true

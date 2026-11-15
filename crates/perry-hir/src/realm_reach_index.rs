@@ -117,9 +117,18 @@ impl<'a> Row<'a> {
             .filter_map(|v| v.as_str())
     }
     pub fn writes(self) -> impl Iterator<Item = (&'a str, &'a str, &'a str)> {
+        self.slot_accesses("writes")
+    }
+    pub fn reads(self) -> impl Iterator<Item = (&'a str, &'a str, &'a str)> {
+        self.slot_accesses("reads")
+    }
+    pub fn accesses(self) -> impl Iterator<Item = (&'a str, &'a str, &'a str)> {
+        self.writes().chain(self.reads())
+    }
+    fn slot_accesses(self, field: &str) -> impl Iterator<Item = (&'a str, &'a str, &'a str)> {
         self.0
             .facts
-            .get("writes")
+            .get(field)
             .and_then(|v| v.as_array())
             .into_iter()
             .flatten()
