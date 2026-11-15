@@ -154,3 +154,50 @@ fn r9birth4_k6_defined_non_writable() {
     ));
     assert!(known(&pf, "k", false), "k6 store onto a non-writable key proven");
 }
+
+// Rule K for literals (R9BIRTH4 item 2): `A`'s constructor stores an
+// object literal whose getters read `this` through an alias into
+// `this.stats`, then stores `b`. `MID` runs between the two.
+fn k_src(stats: &str, mid: &str) -> String {
+    format!(
+        "class K {{ constructor(v: any) {{ this.a = v; const scope = this; {stats} {mid} this.b = 2; }}
+  sum() {{ return this.a + this.b; }} }}
+function reg(x: any) {{ return x.total; }}
+const k = new K(Number(process.argv[2] ?? \"1\"));
+console.log(k.sum(), (k as any).stats.x.total);
+"
+    )
+}
+
+const K_STATS: &str = "this.stats = { x: { get total() { return scope.a; }, get inUse() { return 1; } }, y: 0 };";
+
+/// Every store of `key` is a slot store (T0) / none is.
+fn slot_stores(pf: &crate::ProgramFacts, key: &str, want: bool) -> bool {
+    let s = stores(pf, key);
+    !s.is_empty() && s.iter().all(|(v, _)| v.starts_with("T0") == want)
+}
+
+// KL1: the literal of accessors over `this` is no leak by itself.
+#[test]
+fn r9birth4_kl1_accessor_literal_store() {
+    let pf = facts(&k_src(K_STATS, ""));
+    assert!(slot_stores(&pf, "stats", true), "KL1 this.stats not a slot store");
+    assert!(slot_stores(&pf, "b", true), "KL1 this.b after the literal not a slot store");
+}
+
+// KEEP kl2: the literal is handed to other code before the store.
+#[test]
+fn r9birth4_kl2_literal_passed_out_first() {
+    let pf = facts(&k_src(
+        "const s = { get total() { return scope.a; } }; reg(s); this.stats = { x: s };",
+        "",
+    ));
+    assert!(slot_stores(&pf, "b", false), "kl2 this.b proven after the literal ran");
+}
+
+// KEEP kl3: the constructor reads `this.stats` (its getter sees `this`).
+#[test]
+fn r9birth4_kl3_stats_read_in_ctor() {
+    let pf = facts(&k_src(K_STATS, "console.log(this.stats.x.total);"));
+    assert!(slot_stores(&pf, "b", false), "kl3 this.b proven after this.stats was read");
+}

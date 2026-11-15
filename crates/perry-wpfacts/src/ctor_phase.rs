@@ -508,6 +508,33 @@ impl W<'_> {
         st.open && st.supered && self.present.contains(key)
     }
 
+    /// Rule K: a closure a holder value (`closure_holder`) creates that
+    /// captures a pending alias is noted as before (rule L, hoisting).
+    fn note_holder_captures(&mut self, v: &Expr) {
+        match v {
+            Expr::Closure {
+                captures,
+                mutable_captures,
+                ..
+            } => {
+                for c in captures.iter().chain(mutable_captures) {
+                    if self.alias_pending.contains(c) {
+                        self.alias_early.insert(*c);
+                    }
+                }
+            }
+            _ => {
+                let parts: Vec<&Expr> = match literal_parts(self.shapes, v) {
+                    Some(ps) => ps.into_iter().map(|(_, x)| x).collect(),
+                    None => literal_builder_parts(v).unwrap_or_default(),
+                };
+                for x in parts {
+                    self.note_holder_captures(x);
+                }
+            }
+        }
+    }
+
     fn leak(&mut self, st: &mut St) {
         if st.open {
             st.open = false;
@@ -870,20 +897,9 @@ impl W<'_> {
                 ..
             } if st.open
                 && matches!(object.as_ref(), Expr::This)
-                && matches!(value.as_ref(), Expr::Closure { .. }) =>
+                && closure_holder(self.shapes, value) =>
             {
-                if let Expr::Closure {
-                    captures,
-                    mutable_captures,
-                    ..
-                } = value.as_ref()
-                {
-                    for c in captures.iter().chain(mutable_captures) {
-                        if self.alias_pending.contains(c) {
-                            self.alias_early.insert(*c);
-                        }
-                    }
-                }
+                self.note_holder_captures(value);
                 self.store(st, e, property);
                 self.ph.closure_keys.insert(property.clone());
             }
@@ -907,20 +923,9 @@ impl W<'_> {
                 && matches!(target.as_ref(), Expr::This)
                 && matches!(receiver.as_ref(), Expr::This)
                 && matches!(key.as_ref(), Expr::String(_))
-                && matches!(value.as_ref(), Expr::Closure { .. }) =>
+                && closure_holder(self.shapes, value) =>
             {
-                if let Expr::Closure {
-                    captures,
-                    mutable_captures,
-                    ..
-                } = value.as_ref()
-                {
-                    for c in captures.iter().chain(mutable_captures) {
-                        if self.alias_pending.contains(c) {
-                            self.alias_early.insert(*c);
-                        }
-                    }
-                }
+                self.note_holder_captures(value);
                 if let Expr::String(k) = key.as_ref() {
                     self.store(st, e, k);
                     self.ph.closure_keys.insert(k.clone());
@@ -1217,4 +1222,108 @@ pub(crate) fn body_mentions_this(body: &[Stmt]) -> bool {
     }
     body.iter()
         .any(|s| perry_hir::walker::stmt_any_expr(s, &mut |e| ex(e)))
+}
+
+/// R9BIRTH4 rule K for literals: `e` is a fresh closure, or an object
+/// literal whose every value is a fresh closure, a constant or such a
+/// literal again, under static string keys, with getters / setters / methods
+/// (the source-ordered builder HIR lowers an accessor literal to:
+/// `literal_builder_parts`). Evaluating it runs no program code: a
+/// MethodDefinition / accessor only creates a function (ECMA-262 15.4.4,
+/// 10.2.3 OrdinaryFunctionCreate, 10.2.8 DefineMethodProperty), a literal
+/// creates an ordinary object (13.2.5.4) and defines data / accessor
+/// properties on it (CreateDataPropertyOrThrow, DefinePropertyOrThrow on a
+/// fresh extensible object), and a constant evaluates to itself. No
+/// computed key (ToPropertyKey may call code), no spread (its getters run),
+/// no `__proto__` (it sets the prototype). The object is reachable only
+/// through the store's target: what its closures hold (`this`) is seen only
+/// once that key is read or `this` reaches other code (rule K).
+pub(crate) fn closure_holder(shapes: &BTreeMap<String, Vec<String>>, e: &Expr) -> bool {
+    let value = |v: &Expr| inert_constant(v) || closure_holder(shapes, v);
+    match e {
+        Expr::Closure { .. } => true,
+        _ => match literal_parts(shapes, e) {
+            Some(ps) => {
+                !ps.is_empty()
+                    && ps.iter().all(|(k, v)| *k != "__proto__" && value(v))
+                    && ps.iter().any(|(_, v)| !inert_constant(v))
+            }
+            None => literal_builder_parts(e).is_some_and(|ps| {
+                ps.iter().all(|v| value(v)) && ps.iter().any(|v| !inert_constant(v))
+            }),
+        },
+    }
+}
+
+fn inert_constant(v: &Expr) -> bool {
+    matches!(
+        v,
+        Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined
+    )
+}
+
+/// The values of the source-ordered literal builder HIR emits for an
+/// object literal with accessors or methods (`lower/expr_object.rs`:
+/// `(function (o) { ..; return o; })({})`): each statement a value `let`,
+/// a `js_object_literal_define(o, "k", value)` or a
+/// `js_object_define_accessor(o, "k", getter, setter)` under a string key,
+/// ending in `return o`. `None`: any other statement (a computed key, a
+/// spread, a prototype set).
+fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
+    let Expr::Call { callee, args, .. } = e else {
+        return None;
+    };
+    let Expr::Closure { params, body, .. } = callee.as_ref() else {
+        return None;
+    };
+    if params.len() != 1 || !matches!(args.as_slice(), [Expr::Object(ps)] if ps.is_empty()) {
+        return None;
+    }
+    let o = params[0].id;
+    let is_o = |x: &Expr| matches!(x, Expr::LocalGet(id) if *id == o);
+    let (last, init) = body.split_last()?;
+    if !matches!(last, Stmt::Return(Some(x)) if is_o(x)) {
+        return None;
+    }
+    let mut values = Vec::new();
+    let mut lets: Vec<perry_hir::types::LocalId> = Vec::new();
+    for st in init {
+        match st {
+            Stmt::Let {
+                id,
+                name,
+                init: Some(v),
+                ..
+            } if name.starts_with("__perry_obj_iife_value_") => {
+                lets.push(*id);
+                values.push(v);
+            }
+            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+                let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+                    return None;
+                };
+                match (name.as_str(), args.as_slice()) {
+                    ("js_object_literal_define", [t, Expr::String(k), Expr::LocalGet(v)])
+                        if is_o(t) && k != "__proto__" && lets.contains(v) => {}
+                    ("js_object_define_accessor", [t, Expr::String(_), g, s]) if is_o(t) => {
+                        for f in [g, s] {
+                            match f {
+                                Expr::Undefined => {}
+                                Expr::Closure { .. } => values.push(f),
+                                _ => return None,
+                            }
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(values)
 }
