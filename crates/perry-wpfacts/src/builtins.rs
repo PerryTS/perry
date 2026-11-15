@@ -3478,12 +3478,14 @@ fn ns_method_inner(
 /// member found on the namespace's chain (`Function.prototype.call`) is no
 /// own static.
 /// The this value of `call` is no constructor: the receiver token the call
-/// runs on is an object without [[Call]] (`Model::no_call_tok`), or the call
-/// has no receiver (`undefined`).
+/// runs on (given to the call, or the call's own `ThisArg::Tok`, as a
+/// model's call has it) is an object without [[Call]]
+/// (`Model::no_call_tok`), or the call has no receiver (`undefined`).
 fn this_no_constructor(m: &Model, call: CallId) -> bool {
-    match m.cur_this {
-        Some(t) => m.no_call_tok(t),
-        None => matches!(m.calls[call as usize].this, ThisArg::Undef),
+    match (m.cur_this, &m.calls[call as usize].this) {
+        (Some(t), _) | (None, &ThisArg::Tok(t)) => m.no_call_tok(t),
+        (None, ThisArg::Undef) => true,
+        (None, ThisArg::Node(_)) => false,
     }
 }
 
