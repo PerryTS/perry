@@ -553,9 +553,7 @@ pub(crate) unsafe fn resume_fixed_step(
         })
     };
     if get(3) == crate::value::TAG_TRUE {
-        let msg = b"Generator is already executing";
-        let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
+        throw_generator_executing();
     }
     let next_only =
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| (*(*p).info).params == 1);
@@ -617,6 +615,24 @@ pub(crate) unsafe fn resume_fixed_step(
     }
 }
 );
+
+/// 27.5.3.3 GeneratorValidate step 3: resuming a generator whose body is
+/// running throws a TypeError.
+#[cold]
+pub(crate) fn throw_generator_executing() -> ! {
+    let msg = b"Generator is already executing";
+    let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
+}
+
+/// A for-of step the compiler emits over a proven sync generator found the
+/// record executing (its body is running and reached the same generator's
+/// step): the TypeError of [`resume_fixed_step`].
+#[no_mangle]
+#[cold]
+pub extern "C-unwind" fn js_generator_resume_executing() -> f64 {
+    throw_generator_executing()
+}
 
 /// A previously marked prototype already owns its stable serial. Read those
 /// existing metadata facts before asking the general allocating mark path.
