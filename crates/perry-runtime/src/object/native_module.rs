@@ -65,7 +65,7 @@ pub(crate) use callable_exports::minted_native_callable_export;
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
     bound_native_callable_module_and_method, bound_native_callable_value_arity,
-    bound_native_parent, buffer_constructor_value, birth_buffer_family, BUFFER_CONSTRUCTOR_INFO,
+    bound_native_parent, buffer_constructor_value, buffer_constructor_statics, birth_buffer_own_parts, BUFFER_CONSTRUCTOR_INFO,
     buffer_intrinsic_prototype_value, buffer_original_prototype_value,
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,

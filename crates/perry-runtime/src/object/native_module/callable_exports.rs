@@ -3,7 +3,7 @@ use super::*;
 mod buffer_constructor;
 mod buffer_species;
 pub(crate) use buffer_constructor::{
-    buffer_constructor_value, birth_buffer_family, BUFFER_CONSTRUCTOR_INFO, buffer_intrinsic_prototype_value,
+    buffer_constructor_value, buffer_constructor_statics, birth_buffer_own_parts, BUFFER_CONSTRUCTOR_INFO, buffer_intrinsic_prototype_value,
     buffer_original_prototype_value, cached_buffer_intrinsic_prototype_value,
     install_buffer_prototype_members, is_buffer_constructor_value,
 };

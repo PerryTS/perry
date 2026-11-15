@@ -802,6 +802,18 @@ pub(crate) fn install_builtin_constructor_statics(
         // `js_u8_from_base64` / `js_u8_from_hex` runtime helpers the compile-time
         // path uses, so the produced value is identical. `fromBase64.length` is
         // 1 (the optional opts is the 2nd, undefined-padded, ABI slot).
+        "Buffer" => {
+            crate::object::native_module::buffer_constructor_statics(|key, value| {
+                s.data(key, value, super::super::PropertyAttrs::new(true, true, true))
+            });
+            if let Some(prototype) = prototype.take() {
+                s.data(
+                    "prototype",
+                    prototype,
+                    super::super::PropertyAttrs::new(true, false, false),
+                );
+            }
+        }
         "Uint8Array" => {
             s.method(
                 "fromBase64",

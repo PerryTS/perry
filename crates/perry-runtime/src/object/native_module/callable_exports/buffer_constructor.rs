@@ -21,133 +21,40 @@ pub(crate) fn buffer_constructor_value() -> f64 {
     }
 }
 
-/// Buffer's birth on its realm constructor `closure` (from
-/// `birth_lazy_family`, under its no-move scope).
-pub(crate) fn birth_buffer_family(closure: *mut crate::closure::ClosureHeader) {
-    BUFFER_CONSTRUCTOR_VALUE.with(|slot| {
-        // #6924: the statics minted below are BOUND_METHOD closures that
-        // dispatch by name through the "buffer.Buffer" namespace, and that
-        // dispatch resolves via the per-module registry
-        // (`nm_dispatch_lookup`). The registry's soundness rule — a bound
-        // export exists only after its module's `js_nm_install_*` ran — is
-        // upheld by codegen for IMPORTED modules, but `Buffer` is a global:
-        // this mint runs with no `buffer` import anywhere, so nothing armed
-        // the bucket and every inherited/captured static (`MyBuf.from`,
-        // `const f = B.from`) silently returned `undefined`. Arm it at the
-        // mint, mirroring `install_native_module_vtable()` above.
-        crate::object::native_module_registry::js_nm_install_buffer();
+/// Buffer's declared statics (`from` .. `copyBytesFrom`, then `poolSize`),
+/// in declaration order, defined by its birth
+/// (`install_builtin_constructor_statics`). #6924: the bound statics dispatch
+/// by name through the "buffer.Buffer" namespace (`nm_dispatch_lookup`), and
+/// `Buffer` is a global no `buffer` import arms: its birth arms the bucket.
+pub(crate) fn buffer_constructor_statics(mut define: impl FnMut(&'static str, f64)) {
+    crate::object::native_module_registry::js_nm_install_buffer();
+    for method in BUFFER_STATIC_METHODS {
+        define(method, bound_native_callable_export_value("buffer.Buffer", method));
+    }
+    define("poolSize", buffer_pool_size());
+}
 
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(closure);
-        closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
-            set_bound_native_closure_name(ptr, "Buffer")
-        });
-
-        for method in BUFFER_STATIC_METHODS {
-            let method_value =
-                scope.root_nanbox_f64(bound_native_callable_export_value("buffer.Buffer", method));
-            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-                crate::closure::closure_set_dynamic_prop(
-                    closure as usize,
-                    method,
-                    method_value.get_nanbox_f64(),
-                )
-            });
-        }
-
-        closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-            crate::closure::closure_set_dynamic_prop(
-                closure as usize,
-                "poolSize",
-                buffer_pool_size(),
-            )
-        });
-
-        let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { Buffer.prototype, extends = Uint8Array.prototype, members = { constructor; toString, attrs = writable | enumerable | configurable; inspect, attrs = writable | enumerable | configurable; slice, attrs = writable | enumerable | configurable; subarray, attrs = writable | enumerable | configurable; copy, attrs = writable | enumerable | configurable; write, attrs = writable | enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; fill, attrs = writable | enumerable | configurable; equals, attrs = writable | enumerable | configurable; compare, attrs = writable | enumerable | configurable; indexOf, attrs = writable | enumerable | configurable; lastIndexOf, attrs = writable | enumerable | configurable; includes, attrs = writable | enumerable | configurable; swap16, attrs = writable | enumerable | configurable; swap32, attrs = writable | enumerable | configurable; swap64, attrs = writable | enumerable | configurable; toLocaleString, attrs = writable | enumerable | configurable; readUInt8, attrs = writable | enumerable | configurable; readUint8, attrs = writable | enumerable | configurable; readInt8, attrs = writable | enumerable | configurable; readUInt16BE, attrs = writable | enumerable | configurable; readUint16BE, attrs = writable | enumerable | configurable; readUInt16LE, attrs = writable | enumerable | configurable; readUint16LE, attrs = writable | enumerable | configurable; readInt16BE, attrs = writable | enumerable | configurable; readInt16LE, attrs = writable | enumerable | configurable; readUInt32BE, attrs = writable | enumerable | configurable; readUint32BE, attrs = writable | enumerable | configurable; readUInt32LE, attrs = writable | enumerable | configurable; readUint32LE, attrs = writable | enumerable | configurable; readInt32BE, attrs = writable | enumerable | configurable; readInt32LE, attrs = writable | enumerable | configurable; readFloatBE, attrs = writable | enumerable | configurable; readFloatLE, attrs = writable | enumerable | configurable; readDoubleBE, attrs = writable | enumerable | configurable; readDoubleLE, attrs = writable | enumerable | configurable; readBigInt64BE, attrs = writable | enumerable | configurable; readBigInt64LE, attrs = writable | enumerable | configurable; readBigUInt64BE, attrs = writable | enumerable | configurable; readBigUint64BE, attrs = writable | enumerable | configurable; readBigUInt64LE, attrs = writable | enumerable | configurable; readBigUint64LE, attrs = writable | enumerable | configurable; readUIntBE, attrs = writable | enumerable | configurable; readUintBE, attrs = writable | enumerable | configurable; readUIntLE, attrs = writable | enumerable | configurable; readUintLE, attrs = writable | enumerable | configurable; readIntBE, attrs = writable | enumerable | configurable; readIntLE, attrs = writable | enumerable | configurable; writeUInt8, attrs = writable | enumerable | configurable; writeUint8, attrs = writable | enumerable | configurable; writeInt8, attrs = writable | enumerable | configurable; writeUInt16BE, attrs = writable | enumerable | configurable; writeUint16BE, attrs = writable | enumerable | configurable; writeUInt16LE, attrs = writable | enumerable | configurable; writeUint16LE, attrs = writable | enumerable | configurable; writeInt16BE, attrs = writable | enumerable | configurable; writeInt16LE, attrs = writable | enumerable | configurable; writeUInt32BE, attrs = writable | enumerable | configurable; writeUint32BE, attrs = writable | enumerable | configurable; writeUInt32LE, attrs = writable | enumerable | configurable; writeUint32LE, attrs = writable | enumerable | configurable; writeInt32BE, attrs = writable | enumerable | configurable; writeInt32LE, attrs = writable | enumerable | configurable; writeFloatBE, attrs = writable | enumerable | configurable; writeFloatLE, attrs = writable | enumerable | configurable; writeDoubleBE, attrs = writable | enumerable | configurable; writeDoubleLE, attrs = writable | enumerable | configurable; writeBigInt64BE, attrs = writable | enumerable | configurable; writeBigInt64LE, attrs = writable | enumerable | configurable; writeBigUInt64BE, attrs = writable | enumerable | configurable; writeBigUint64BE, attrs = writable | enumerable | configurable; writeBigUInt64LE, attrs = writable | enumerable | configurable; writeBigUint64LE, attrs = writable | enumerable | configurable; writeUIntBE, attrs = writable | enumerable | configurable; writeUintBE, attrs = writable | enumerable | configurable; writeUIntLE, attrs = writable | enumerable | configurable; writeUintLE, attrs = writable | enumerable | configurable; writeIntBE, attrs = writable | enumerable | configurable; writeIntLE, attrs = writable | enumerable | configurable; asciiSlice, attrs = writable | enumerable | configurable; asciiWrite, attrs = writable | enumerable | configurable; base64Slice, attrs = writable | enumerable | configurable; base64Write, attrs = writable | enumerable | configurable; base64urlSlice, attrs = writable | enumerable | configurable; base64urlWrite, attrs = writable | enumerable | configurable; hexSlice, attrs = writable | enumerable | configurable; hexWrite, attrs = writable | enumerable | configurable; latin1Slice, attrs = writable | enumerable | configurable; latin1Write, attrs = writable | enumerable | configurable; ucs2Slice, attrs = writable | enumerable | configurable; ucs2Write, attrs = writable | enumerable | configurable; utf8Slice, attrs = writable | enumerable | configurable; utf8Write, attrs = writable | enumerable | configurable; parent = accessor(get = "Buffer.prototype.parent.<get>"), attrs = enumerable; offset = accessor(get = "Buffer.prototype.offset.<get>"), attrs = enumerable; }; } };
-        if !proto.is_null() {
-            let proto = scope.root_raw_mut_ptr(proto);
-            let constructor = "constructor";
-            let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
-                constructor.as_ptr(),
-                constructor.len() as u32,
-            ));
-            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
-                constructor_key.with_mut_ptr(|constructor_key| {
-                    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-                        js_object_set_field_by_name(
-                            proto,
-                            constructor_key,
-                            crate::value::js_nanbox_pointer(closure as i64),
-                        )
-                    })
-                })
-            });
-            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
-                crate::object::set_builtin_property_attrs(
-                    proto as usize,
-                    constructor.to_string(),
-                    crate::object::PropertyAttrs::new(true, false, true),
-                )
-            });
-
-            // The member table is the typed-array group's: a program that never
-            // reaches a Buffer installs none of it and links none of its bodies.
-            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
-                crate::typedarray_hook_slots::buffer_prototype_members(proto)
-            });
-            let proto_value = proto.with_mut_ptr(|proto: *mut ObjectHeader| {
-                crate::value::js_nanbox_pointer(proto as i64)
-            });
-            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-                crate::closure::js_closure_set_capture_f64(closure, 0, proto_value);
-            });
-            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-                crate::closure::closure_set_dynamic_prop(closure as usize, "prototype", proto_value)
-            });
-            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-                crate::object::set_builtin_property_attrs(
-                    closure as usize,
-                    "prototype".to_string(),
-                    crate::object::PropertyAttrs::new(true, false, false),
-                )
-            });
-        }
-
-        let value = closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-            crate::value::js_nanbox_pointer(closure as i64)
-        });
-        slot.set(value.to_bits());
-        // #11193: `Buffer[Symbol.species]` (FastBuffer). After the slot is
-        // set, so a re-entrant read of `Buffer` during the install sees it.
-        buffer_species::install_buffer_species(value);
-        // `class Buffer extends Uint8Array`: Buffer's birth links both edges
-        // to Uint8Array's own family cells, which births Uint8Array (#9173).
-        let uint8 = crate::object::BuiltinConstructorIdentity::Uint8Array;
-        let uint8_proto = crate::array::intrinsic_prototype_addr(uint8);
-        let uint8_ctor = crate::array::intrinsic_constructor_addr(uint8);
-        let ctor = crate::value::JSValue::from_bits(slot.get());
-        let proto = cached_buffer_intrinsic_prototype_value()
-            .map(|proto| crate::value::JSValue::from_bits(proto.to_bits()))
-            .filter(|proto| proto.is_pointer())
-            .map_or(0, |proto| proto.as_pointer::<u8>() as usize);
-        if proto != 0 && uint8_proto != 0 {
-            crate::object::prototype_chain::object_set_static_prototype(
-                proto,
-                crate::value::js_nanbox_pointer(uint8_proto as i64).to_bits(),
-            );
-        }
-        if uint8_ctor != 0 {
-            crate::closure::closure_set_static_prototype(
-                ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
-                crate::value::js_nanbox_pointer(uint8_ctor as i64).to_bits(),
-            );
-        }
-        crate::array::note_realm_intrinsic(
-            crate::object::BuiltinConstructorIdentity::Buffer,
-            proto,
-            ctor.as_pointer::<u8>() as usize,
-        );
-    })
+/// Buffer's own part of its birth (`birth_family`, after the generic
+/// prototype install): its `Buffer.prototype` members, the traced capture of
+/// that prototype (instances answer it) and `Buffer[Symbol.species]`
+/// (FastBuffer, which shares the prototype).
+pub(crate) fn birth_buffer_own_parts(
+    closure: *mut crate::closure::ClosureHeader,
+    proto: *mut ObjectHeader,
+) {
+    set_bound_native_closure_name(closure, "Buffer");
+    // The member table is the typed-array group's: a program that never
+    // reaches a Buffer installs none of it and links none of its bodies.
+    crate::typedarray_hook_slots::buffer_prototype_members(proto);
+    crate::closure::js_closure_set_capture_f64(
+        closure,
+        0,
+        crate::value::js_nanbox_pointer(proto as i64),
+    );
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    BUFFER_CONSTRUCTOR_VALUE.with(|slot| slot.set(value.to_bits()));
+    // After the slot is set, so a re-entrant read of `Buffer` sees it.
+    buffer_species::install_buffer_species(value);
 }
 
 pub(crate) fn is_buffer_constructor_value(value: f64) -> bool {
