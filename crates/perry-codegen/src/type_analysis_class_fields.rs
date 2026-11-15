@@ -135,17 +135,30 @@ pub(crate) fn class_field_slot(
     if accessor_in_chain(ctx, class_name, property) {
         return Err("an accessor of the name is on the chain");
     }
-    // Case 2c: a static family whose coloured layout moves a key off its
-    // constructor-order position (a hole before it) has no compile-time slot
-    // codegen may assume: an instance is at the family layout or, when it
-    // could not adopt it, at the constructor-order one.
-    if ctx
-        .class_ids
-        .get(class_name)
-        .is_some_and(|cid| ctx.program_layouts.slots_moved(*cid))
-    {
-        return Err("the family layout moved a constructor key off its constructor-order slot");
-    }
+    // Case 2c: an instance of a static family is at the family layout or,
+    // when it could not adopt it, at the constructor-order one. A slot is
+    // codegen's only when the key sits there on both: a constructor key the
+    // family keeps at its constructor-order slot, even when the colouring
+    // moved other keys of the family. Any other key of a family whose layout
+    // moved a key has no compile-time slot.
+    let cid = ctx.class_ids.get(class_name).copied();
+    let on_both = |idx: u32| -> Result<u32, &'static str> {
+        let Some(cid) = cid else { return Ok(idx) };
+        let Some(fam) = ctx.program_layouts.families.get(&cid) else {
+            return Ok(idx);
+        };
+        let own = &fam.keys[..fam.own_count as usize];
+        match own.iter().find(|(k, _)| k.name() == Some(property)) {
+            Some((_, slot)) if *slot == idx => Ok(idx),
+            Some(_) => {
+                Err("the family layout moved this constructor key off its constructor-order slot")
+            }
+            None if ctx.program_layouts.slots_moved(cid) => {
+                Err("the family layout moved a constructor key off its constructor-order slot")
+            }
+            None => Ok(idx),
+        }
+    };
     // Issue #26 / #321 (via #5654): prefer the authoritative, source-prefix-
     // disambiguated ancestor chain — the SAME data the packed-keys global and
     // constructor field-init are built from — so the returned index matches
@@ -177,7 +190,7 @@ pub(crate) fn class_field_slot(
                     ) {
                         return Err("a private entry precedes the field");
                     }
-                    return Ok(prefix_counts[i] + own_idx);
+                    return on_both(prefix_counts[i] + own_idx);
                 }
                 own_idx += 1;
             }
@@ -265,6 +278,7 @@ pub(crate) fn class_field_slot(
     let mut seen_class_names = std::collections::HashSet::new();
     walk(ctx, class_name, property, 0, &mut seen_class_names, 0)
         .ok_or("no class init chain; the name walk finds no slot")
+        .and_then(on_both)
 }
 
 pub(crate) fn class_field_declared_type(
