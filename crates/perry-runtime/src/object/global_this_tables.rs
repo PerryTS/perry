@@ -101,7 +101,7 @@ macro_rules! builtin_constructors {
                 sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
-                lazy: builtin_constructors!(@callable $($lazy)?),
+                lazy: true,
                 external: builtin_constructors!(@callable $($external)?),
                 statics: &[$($($static,)*)?],
             },)*

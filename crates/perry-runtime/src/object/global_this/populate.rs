@@ -281,7 +281,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // Its declared statics are own keys its base Function shape does
             // not list: FunctionDictionary, so no read site proves one absent
             // (the read reaches the bag and births the family).
-            if !declaration.statics.is_empty() {
+            {
                 unsafe { crate::closure::shape::closure_become_dictionary(closure_ptr.cast()) };
             }
             crate::value::js_nanbox_pointer(closure_ptr as i64)
