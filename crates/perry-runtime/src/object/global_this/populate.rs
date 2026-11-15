@@ -849,6 +849,9 @@ fn birth_family(
         closure_ptr,
         (!proto_obj.is_null()).then(|| crate::value::js_nanbox_pointer(proto_obj as i64)),
     );
+    // The constructor is described from its bag now that its family is
+    // born (an unborn one is FunctionDictionary, `unborn_constructor`).
+    unsafe { crate::closure::shape::closure_describe_born_constructor(closure_ptr as usize) };
     // #11193: `C[Symbol.species]` getter returning `this`.
     if matches!(
         name,

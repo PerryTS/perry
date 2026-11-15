@@ -316,6 +316,26 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
     }
 }
 
+/// A builtin constructor leaves FunctionDictionary when its family is born:
+/// an unborn constructor is a dictionary so that no read site proves one of
+/// its declared statics absent; once its statics are installed, the birth
+/// describes it from its bag, as every other function is described. One cold
+/// call per family birth.
+///
+/// # Safety
+/// `ptr` is the live constructor closure of the family being born.
+pub(crate) unsafe fn closure_describe_born_constructor(ptr: usize) {
+    let closure = ptr as *mut ClosureHeader;
+    if is_class_info((*closure).info) {
+        return;
+    }
+    if (*closure).shape_id == function_dictionary_shape() {
+        // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+        (*closure).shape_id = birth_shape_for_body((*closure).info);
+    }
+    refresh_closure_shape_as(ptr, None);
+}
+
 /// The [[Prototype]] identity of the base shape `closure` is born on: its
 /// body kind's intrinsic (`%Function.prototype%`, ...), by reserved serial.
 ///
