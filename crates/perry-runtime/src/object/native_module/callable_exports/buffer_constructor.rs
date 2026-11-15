@@ -112,8 +112,15 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         // `class Buffer extends Uint8Array`: the birth links both edges
         // (#9173), from Uint8Array's own family cells.
         let uint8 = crate::object::BuiltinConstructorIdentity::Uint8Array;
-        let uint8_proto = crate::array::intrinsic_prototype_addr(uint8);
-        let uint8_ctor = crate::array::intrinsic_constructor_addr(uint8);
+        // Buffer.prototype -> Uint8Array.prototype is linked here only when
+        // Uint8Array is born; else the first prototype walk that reaches
+        // Buffer.prototype births it (`buffer_intrinsic_prototype_parent`).
+        // The constructor edge needs Uint8Array's constructor, not its birth.
+        let uint8_proto = crate::array::intrinsic_prototype_addr_if_bound(uint8);
+        let uint8_ctor = match crate::array::intrinsic_constructor_addr_if_bound(uint8) {
+            0 => crate::array::intrinsic_constructor_addr(uint8),
+            ctor => ctor,
+        };
         let ctor = crate::value::JSValue::from_bits(slot.get());
         if let Some(proto) = cached_buffer_intrinsic_prototype_value() {
             let proto = crate::value::JSValue::from_bits(proto.to_bits());
