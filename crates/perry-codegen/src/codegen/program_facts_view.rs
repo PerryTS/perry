@@ -616,6 +616,14 @@ pub struct ElisionFacts {
     /// intrinsic. A host-object call (`console.log(...)`) binds to the
     /// intrinsic only here; every other one reads the property and calls it.
     pub native_member_calls: std::collections::BTreeSet<u32>,
+    /// The source offsets (the member's, as the solver records the site) of
+    /// this module's named stores whose verdict is `Verdict::AccessorSet`,
+    /// each with the program class id whose prototype holds the one setter
+    /// the store calls (10.1.9.2 OrdinarySet step 3).
+    pub accessor_sets: std::collections::BTreeMap<(u32, String), u32>,
+    /// The same for named reads (and a compound's GetValue) whose verdict is
+    /// `Verdict::AccessorGet`: the class holding the one getter (10.1.8.1).
+    pub accessor_gets: std::collections::BTreeMap<(u32, String), u32>,
 }
 
 impl ElisionFacts {
@@ -647,6 +655,8 @@ impl ElisionFacts {
             && self.local_classes.is_empty()
             && self.class_statics.is_empty()
             && self.native_member_calls.is_empty()
+            && self.accessor_sets.is_empty()
+            && self.accessor_gets.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

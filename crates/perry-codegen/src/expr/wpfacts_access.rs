@@ -1521,3 +1521,73 @@ impl FieldProof {
 #[cfg(test)]
 #[path = "wpfacts_access_tests.rs"]
 mod tests;
+
+/// ACCBUILD2 P3: the accessor function a named site at `offset` calls, when
+/// the facts prove it (`ElisionFacts::accessor_sets` / `accessor_gets`): the
+/// receiver's chain ends at one accessor property of the holder class's
+/// prototype with exactly one setter (`set`) or getter, so [[Set]] / [[Get]]
+/// call it with the receiver as `this` (10.1.9.2 step 3, 10.1.8.1). The call
+/// is direct: no guard, no fallback beside it. `None`: the site keeps its
+/// ordinary lowering.
+pub(crate) fn proven_accessor_fn(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+    set: bool,
+) -> Option<String> {
+    if ctx.wpfacts_off || offset == 0 || property.starts_with('#') || ctx.is_static_class_this(object) {
+        return None;
+    }
+    let map = if set {
+        &ctx.wpfacts.accessor_sets
+    } else {
+        &ctx.wpfacts.accessor_gets
+    };
+    let cid = *map.get(&(offset, property.to_string()))?;
+    let prefix = if set { "__set_" } else { "__get_" };
+    let member = format!("{prefix}{property}");
+    // The holder's names in this module: the local class of `cid`, or the
+    // imported class stub(s) the source module's id is registered under
+    // (`class_ids`; an alias and its canonical name). Every name must give
+    // the same accessor symbol.
+    let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
+    names.extend(
+        ctx.class_ids
+            .iter()
+            .filter(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut found: Option<String> = None;
+    for class in names {
+        if super::property_get::class_has_evaluated_accessor(ctx, &class)
+            || ctx
+                .classes
+                .get(&class)
+                .is_some_and(|c| c.static_accessor_names.iter().any(|n| n == property))
+        {
+            return None;
+        }
+        let f = ctx.methods.get(&(class, member.clone()))?;
+        match &found {
+            Some(g) if g != f => return None,
+            _ => found = Some(f.clone()),
+        }
+    }
+    found
+}
+
+/// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's
+/// direct call with the receiver as `this`; its result is the read's value.
+pub(crate) fn try_lower_proven_getter(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+) -> Result<Option<String>> {
+    let Some(fn_name) = proven_accessor_fn(ctx, object, property, offset, false) else {
+        return Ok(None);
+    };
+    let recv = lower_expr(ctx, object)?;
+    Ok(Some(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv)])))
+}

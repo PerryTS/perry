@@ -310,6 +310,10 @@ pub struct SiteFacts {
     /// The HIR identity `(module, function id)` of each body in `targets`,
     /// sorted (`field_read_calls`).
     pub(crate) target_fns: Vec<(u32, u32)>,
+    /// `AccessorGet` / `AccessorSet`: the program class id whose prototype
+    /// holds the one accessor function in `targets` (the class template its
+    /// `this` belongs to). Codegen calls that class's accessor directly.
+    pub holder_class: Option<u32>,
     /// Per-unit run: the receiver is a parameter whose TS object type
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
@@ -1543,6 +1547,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 })
                 .collect::<Vec<_>>()
         });
+        let holder_class = match (&verdict, targets.len()) {
+            (Verdict::AccessorGet | Verdict::AccessorSet, 1) => targets.keys().next().and_then(|&f| {
+                let tm = *m.this_class.get(&m.funcs[f as usize].this)?;
+                match &m.tmpls[tm as usize].kind {
+                    crate::model::TmplKind::Class { class_id, .. } => Some(*class_id),
+                    _ => None,
+                }
+            }),
+            _ => None,
+        };
         let mut target_fns: Vec<(u32, u32)> = targets
             .keys()
             .map(|&f| (m.funcs[f as usize].module, m.funcs[f as usize].func_id))
@@ -1581,6 +1595,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             fixed_shape,
             targets: t,
             target_fns,
+            holder_class,
             guard_keys,
         });
     }

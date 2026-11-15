@@ -539,6 +539,35 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 })
                 .map(|s| s.byte_offset)
                 .collect();
+            // ACCBUILD2 P3: the named sites proven to call one accessor.
+            // Every record at an offset must agree, or the offset is left out.
+            let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
+            for s in pf.sites.iter().filter(|s| s.module as usize == module && !s.is_call) {
+                let set = s.access.is_store();
+                let holder = match (&s.verdict, set) {
+                    (perry_wpfacts::Verdict::AccessorSet, true)
+                    | (perry_wpfacts::Verdict::AccessorGet, false) => s.holder_class,
+                    _ => None,
+                };
+                let map = if set {
+                    &mut out.accessor_sets
+                } else {
+                    &mut out.accessor_gets
+                };
+                let at = (s.byte_offset, s.key.clone());
+                match holder {
+                    Some(cid) if !refused.contains(&(set, at.0, at.1.clone())) => {
+                        if *map.entry(at.clone()).or_insert(cid) != cid {
+                            map.remove(&at);
+                            refused.insert((set, at.0, at.1));
+                        }
+                    }
+                    _ => {
+                        map.remove(&at);
+                        refused.insert((set, at.0, at.1));
+                    }
+                }
+            }
         }
     }
     let Some(mb) = pf.bindings_for(path) else {
