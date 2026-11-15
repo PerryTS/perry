@@ -1150,8 +1150,10 @@ where
             CaptureMode::All if groups && !pass => (span.start(), Some(span)),
             CaptureMode::All if groups => {
                 match program_captures(resources, span.start(), budget, memory, captures)? {
+                    // An automaton answer holds no evaluator state across a
+                    // safepoint: the pre-search stride poll and the result's
+                    // own allocation are its participation points.
                     Captured::Match(found) if found == span => {
-                        poll_with(hooks, poll)?;
                         return Ok((Some(found), None));
                     }
                     _ => {
@@ -1163,8 +1165,7 @@ where
             CaptureMode::Full => return Ok((Some(span), None)),
             CaptureMode::All => {
                 // Group zero is every capture there is: the slots the
-                // evaluator would fill, after the same capture poll.
-                poll_with(hooks, poll)?;
+                // evaluator would fill.
                 take_captures(mode, 1, memory, captures, |output| {
                     output[0] = Some(span);
                     Ok(())
@@ -1174,10 +1175,7 @@ where
         },
         Bounds::Declined => (start, None),
         Bounds::OneStart => match program_captures(resources, start, budget, memory, captures)? {
-            Captured::Match(found) => {
-                poll_with(hooks, poll)?;
-                return Ok((Some(found), None));
-            }
+            Captured::Match(found) => return Ok((Some(found), None)),
             Captured::NoMatch => return Ok((None, None)),
             Captured::Declined => (start, None),
         },
