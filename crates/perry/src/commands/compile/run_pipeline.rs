@@ -8313,7 +8313,9 @@ pub fn run_with_parse_cache(
     // SNAP census compiles: the TLS anchors around the program objects (begin
     // first, end after every other compiled object, before the pads and the
     // runtime archive), so the program's TLS slots get pages of their own.
-    if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+    if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
+        || perry_codegen::stubs::snap_image_run()
+    {
         for end in [false, true] {
             let bytes =
                 perry_codegen::stubs::generate_snap_tls_anchor_object(end, target.as_deref())?;

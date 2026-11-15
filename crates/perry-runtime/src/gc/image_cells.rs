@@ -415,3 +415,8 @@ pub(super) unsafe fn visit_leaf_service_roots(mut visit: impl FnMut(u64)) {
         visit_cell_slots(header, &mut |slot| visit(slot.read()));
     }
 }
+
+/// The traced slots of `header` as (slot address, word), for the image run.
+pub(crate) unsafe fn visit_cell_slots_raw(header: *mut GcHeader, visit: &mut dyn FnMut(usize, u64)) {
+    unsafe { visit_cell_slots(header, &mut |slot| visit(slot.slot as usize, slot.read())) }
+}

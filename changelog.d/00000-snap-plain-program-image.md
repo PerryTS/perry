@@ -1,0 +1,1 @@
+Add an opt-in compile knob that builds an image-run binary for a plain program: after the static dependency inits it writes the heap cells and changed root words to a file and exits. Programs compiled without the knob are unchanged.
