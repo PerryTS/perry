@@ -477,6 +477,9 @@ impl Model {
         if let Some(s) = self.plus_const(l, r) {
             return (s, false);
         }
+        if let Some(s) = self.plus_const_num(l, r).or_else(|| self.plus_const_num_rev(l, r)) {
+            return (s, false);
+        }
         let m3 = self.plus_strs_m3(l, r);
         if m3.0 != STRS_TOP {
             return m3;
@@ -961,6 +964,66 @@ impl Model {
         let s = format!("{}{}", self.atoms[a as usize], self.atoms[b as usize]);
         let c = self.str_const_atom(&s)?;
         Some(self.str_set(&[c]))
+    }
+
+    /// The one integer Number `n` holds (nothing else), within ±2^53.
+    fn one_int_point(&self, n: NodeId) -> Option<i64> {
+        let x = &self.nodes[n as usize];
+        let iv = x.range;
+        (x.prim == prim::NUM
+            && x.pts.is_empty()
+            && !x.frac
+            && iv.lo == iv.hi
+            && iv.lo >= -(1i64 << 53)
+            && iv.lo <= 1i64 << 53)
+            .then_some(iv.lo)
+    }
+
+    /// The String constants of `n` (no marks) when every other value is a
+    /// primitive that is not a BigInt or a Symbol (no object).
+    fn str_consts_prims(&self, n: NodeId) -> Option<Vec<Atom>> {
+        let x = &self.nodes[n as usize];
+        if !x.pts.is_empty() || x.prim & prim::STR == 0 || x.strs < STRS_SET0 || x.prim & (prim::BIGINT | prim::SYMBOL) != 0
+        {
+            return None;
+        }
+        let v = self.str_atoms(x.strs).to_vec();
+        (!v.iter().any(|&a| self.atom_is_mark(a))).then_some(v)
+    }
+
+    /// Rule M5b, ECMA-262 13.15.3 ApplyStringOrNumericBinaryOperator
+    /// (step 1.c/1.d): a left operand of String constants (beside primitives
+    /// that are not Strings, BigInts or Symbols) and a right operand that is
+    /// only the integer Number `k` give, as Strings, each constant followed
+    /// by Number::toString(k) (6.1.6.1.20: decimal digits, `-` when
+    /// negative, "0" for -0); the other primitives with `k` give Numbers.
+    /// Finite: one String per constant.
+    fn plus_const_num(&mut self, l: NodeId, r: NodeId) -> Option<StrSet> {
+        let k = self.one_int_point(r)?;
+        let left = self.str_consts_prims(l)?;
+        let mut out = Vec::new();
+        for a in left {
+            let t = format!("{}{k}", self.atoms[a as usize]);
+            out.push(self.str_const_atom(&t)?);
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(self.str_set(&out))
+    }
+
+    /// Rule M5b with the operands swapped: Number::toString(k) followed by
+    /// each constant.
+    fn plus_const_num_rev(&mut self, l: NodeId, r: NodeId) -> Option<StrSet> {
+        let k = self.one_int_point(l)?;
+        let right = self.str_consts_prims(r)?;
+        let mut out = Vec::new();
+        for a in right {
+            let t = format!("{k}{}", self.atoms[a as usize]);
+            out.push(self.str_const_atom(&t)?);
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(self.str_set(&out))
     }
 
     /// Rule M6, ECMA-262 22.1.3.19 `String.prototype.replace(searchValue,
