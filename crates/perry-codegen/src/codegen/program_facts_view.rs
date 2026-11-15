@@ -619,11 +619,14 @@ pub struct ElisionFacts {
     /// The source offsets (the member's, as the solver records the site) of
     /// this module's named stores whose verdict is `Verdict::AccessorSet`,
     /// each with the program class id whose prototype holds the one setter
-    /// the store calls (10.1.9.2 OrdinarySet step 3).
-    pub accessor_sets: std::collections::BTreeMap<(u32, String), u32>,
+    /// the store calls (10.1.9.2 OrdinarySet step 3) and that setter's
+    /// symbol, named from the holder's own module and class (the module that
+    /// defines the class emits it; any other module declares it), not from
+    /// this module's class table.
+    pub accessor_sets: std::collections::BTreeMap<(u32, String), (u32, String)>,
     /// The same for named reads (and a compound's GetValue) whose verdict is
     /// `Verdict::AccessorGet`: the class holding the one getter (10.1.8.1).
-    pub accessor_gets: std::collections::BTreeMap<(u32, String), u32>,
+    pub accessor_gets: std::collections::BTreeMap<(u32, String), (u32, String)>,
 }
 
 impl ElisionFacts {

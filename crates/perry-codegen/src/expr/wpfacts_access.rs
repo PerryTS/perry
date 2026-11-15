@@ -1530,7 +1530,7 @@ mod tests;
 /// is direct: no guard, no fallback beside it. `None`: the site keeps its
 /// ordinary lowering.
 pub(crate) fn proven_accessor_fn(
-    ctx: &FnCtx<'_>,
+    ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     offset: u32,
@@ -1544,13 +1544,14 @@ pub(crate) fn proven_accessor_fn(
     } else {
         &ctx.wpfacts.accessor_gets
     };
-    let cid = *map.get(&(offset, property.to_string()))?;
+    let (cid, symbol) = map.get(&(offset, property.to_string()))?.clone();
     let prefix = if set { "__set_" } else { "__get_" };
     let member = format!("{prefix}{property}");
-    // The holder's names in this module: the local class of `cid`, or the
-    // imported class stub(s) the source module's id is registered under
-    // (`class_ids`; an alias and its canonical name). Every name must give
-    // the same accessor symbol.
+    // The symbol is the holder module's own (`program_facts.rs`
+    // `accessor_symbol_in`). The holder's names in this module, if any (the
+    // local class of `cid`, or the imported class stub(s) the source module's
+    // id is registered under: `class_ids`, an alias and its canonical name),
+    // must all give that same symbol; a disagreement keeps the site generic.
     let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
     names.extend(
         ctx.class_ids
@@ -1569,12 +1570,21 @@ pub(crate) fn proven_accessor_fn(
             return None;
         }
         let f = ctx.methods.get(&(class, member.clone()))?;
-        match &found {
-            Some(g) if g != f => return None,
-            _ => found = Some(f.clone()),
+        if *f != symbol {
+            return None;
         }
+        found = Some(f.clone());
     }
-    found
+    if found.is_none() {
+        // No name for the holder here (it is reached through a re-export or
+        // a value, never named): declare the holder module's accessor with
+        // the signature its module defines it with (`method_registry.rs`
+        // imported getters / setters: `double (double this)` and
+        // `double (double this, double value)`).
+        let params = if set { vec![DOUBLE, DOUBLE] } else { vec![DOUBLE] };
+        ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
+    }
+    Some(symbol)
 }
 
 /// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's

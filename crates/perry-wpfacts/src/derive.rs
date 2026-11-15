@@ -309,7 +309,7 @@ pub struct SiteFacts {
     pub targets: Vec<String>,
     /// The HIR identity `(module, function id)` of each body in `targets`,
     /// sorted (`field_read_calls`).
-    pub(crate) target_fns: Vec<(u32, u32)>,
+    pub target_fns: Vec<(u32, u32)>,
     /// `AccessorGet` / `AccessorSet`: the program class id whose prototype
     /// holds the one accessor function in `targets` (the class template its
     /// `this` belongs to). Codegen calls that class's accessor directly.

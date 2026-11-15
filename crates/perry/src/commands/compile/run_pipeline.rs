@@ -6674,6 +6674,14 @@ pub fn run_with_parse_cache(
     );
     program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
+    // ACCBUILD3: a proven accessor site calls the holder's accessor by the
+    // symbol its own module emits, named from the holder's module and class.
+    let accessor_symbol = |holder: &str, class_id: u32, func: u32, key: &str, set: bool| {
+        let hir = ctx.native_modules.get(&PathBuf::from(holder))?;
+        let prefix =
+            compute_module_prefix(holder, &ctx.project_root, &ctx.module_prefix_overrides);
+        super::program_facts::accessor_symbol_in(hir, &prefix, class_id, func, key, set)
+    };
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
         .install(|| {
@@ -6691,7 +6699,7 @@ pub fn run_with_parse_cache(
                         &mut opts,
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
-                    opts.program_facts = super::program_facts::view_for(&program_facts, path);
+                    opts.program_facts = super::program_facts::view_for(&program_facts, path, &accessor_symbol);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6912,7 +6920,7 @@ pub fn run_with_parse_cache(
                     hir_module,
                     &mut opts,
                 );
-                opts.program_facts = super::program_facts::view_for(&program_facts, path);
+                opts.program_facts = super::program_facts::view_for(&program_facts, path, &accessor_symbol);
                 opts.program_facts.dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =

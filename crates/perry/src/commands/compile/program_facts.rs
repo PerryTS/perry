@@ -390,10 +390,45 @@ pub(crate) fn run(
     Some(Arc::new(pf))
 }
 
+/// ACCBUILD3: the symbol of the accessor function `func` (a getter when
+/// `!set`) for `key` of class `class_id` defined in `module`, exactly as that
+/// module's codegen names it (`method_registry.rs`: `scoped_method_name(
+/// module prefix, class name, "__set_" + setter fn name)`). `None` unless the
+/// module holds one class with that id and name whose own `key` accessor is
+/// the function `func` and the class has no evaluated or static accessor of
+/// that name.
+pub(crate) fn accessor_symbol_in(
+    hir: &perry_hir::Module,
+    prefix: &str,
+    class_id: u32,
+    func: u32,
+    key: &str,
+    set: bool,
+) -> Option<String> {
+    let mut classes = hir.classes.iter().filter(|c| c.id == class_id);
+    let c = classes.next()?;
+    if classes.next().is_some()
+        || hir.classes.iter().filter(|o| o.name == c.name).count() != 1
+        || c.has_evaluated_accessor()
+        || c.static_accessor_names.iter().any(|n| n == key)
+    {
+        return None;
+    }
+    let list = if set { &c.setters } else { &c.getters };
+    let mut own = list.iter().filter(|(k, _)| k == key);
+    let (_, f) = own.next()?;
+    if own.next().is_some() || f.id != func {
+        return None;
+    }
+    let member = format!("{}{}", if set { "__set_" } else { "__get_" }, f.name);
+    Some(perry_codegen::symbol_names::method(prefix, &c.name, &member))
+}
+
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
+    accessor_symbol: &dyn Fn(&str, u32, u32, &str, bool) -> Option<String>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -404,7 +439,7 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let elision = elision_for(pf, &key);
+    let elision = elision_for(pf, &key, accessor_symbol);
     // The bodies this module's code is removed for: its object depends on
     // them, so they join the digest (only with removal on and some inactive).
     let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
@@ -483,7 +518,11 @@ fn elide_enabled() -> bool {
 /// CHECKED (`checked`): the site compares the receiver's class id against
 /// the prefix-stable classes and takes its complete generic operation
 /// otherwise. An over-budget solve gives no entry at all.
-fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
+fn elision_for(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: &str,
+    accessor_symbol: &dyn Fn(&str, u32, u32, &str, bool) -> Option<String>,
+) -> perry_codegen::ElisionFacts {
     use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
     let mut out = ElisionFacts {
@@ -543,10 +582,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             // Every record at an offset must agree, or the offset is left out.
             let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
             for s in pf.sites.iter().filter(|s| s.module as usize == module && !s.is_call) {
-                let set = s.access.is_store();
-                let holder = match (&s.verdict, set) {
-                    (perry_wpfacts::Verdict::AccessorSet, true)
-                    | (perry_wpfacts::Verdict::AccessorGet, false) => s.holder_class,
+                // PutValue's record is the store; a compound's GetValue
+                // (`UpdateGet`, at the store's offset) reads the getter.
+                let set = matches!(s.access, perry_wpfacts::derive::Access::Set { .. });
+                // The one accessor body (`target_fns`) names the holder's
+                // module; its symbol comes from that module's class.
+                let holder = match (&s.verdict, set, s.holder_class, s.target_fns.as_slice()) {
+                    (perry_wpfacts::Verdict::AccessorSet, true, Some(cid), &[(m, f)])
+                    | (perry_wpfacts::Verdict::AccessorGet, false, Some(cid), &[(m, f)]) => pf
+                        .module_paths
+                        .get(m as usize)
+                        .and_then(|p| accessor_symbol(p, cid, f, &s.key, set))
+                        .map(|sym| (cid, sym)),
                     _ => None,
                 };
                 let map = if set {
@@ -556,8 +603,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 };
                 let at = (s.byte_offset, s.key.clone());
                 match holder {
-                    Some(cid) if !refused.contains(&(set, at.0, at.1.clone())) => {
-                        if *map.entry(at.clone()).or_insert(cid) != cid {
+                    Some(h) if !refused.contains(&(set, at.0, at.1.clone())) => {
+                        if *map.entry(at.clone()).or_insert_with(|| h.clone()) != h {
                             map.remove(&at);
                             refused.insert((set, at.0, at.1));
                         }
