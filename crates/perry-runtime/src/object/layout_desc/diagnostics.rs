@@ -174,6 +174,7 @@ thread_local! {
 pub(super) static INSTALLS_BY_CAUSE: [std::sync::atomic::AtomicU64; 8] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 8];
 
+#[inline]
 pub(crate) fn family_diag_on() -> bool {
     per_test_global! {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -187,10 +188,21 @@ pub(crate) fn note_install_cause(cause: u8) {
 }
 
 /// `overflow::ensure` is installing a table on `obj`: count it by cause when
-/// `obj` is a family object.
+/// `obj` is a family object. Inline at every install path: with the
+/// diagnostic off it is one flag test (the cause word is read only when it is
+/// on, so it need not be cleared otherwise).
+#[inline(always)]
 pub(crate) unsafe fn diag_note_install(obj: *const ObjectHeader) {
+    if family_diag_on() {
+        diag_count_install(obj);
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn diag_count_install(obj: *const ObjectHeader) {
     let cause = INSTALL_CAUSE.with(|c| c.replace(0));
-    if family_diag_on() && family_desc_of(obj).is_some() {
+    if family_desc_of(obj).is_some() {
         INSTALLS_BY_CAUSE[cause as usize & 7].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
