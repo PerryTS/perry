@@ -112,8 +112,12 @@ fn lazy_declarations_are_bornable_late() {
         // named serial): such a word reads 0 until the birth, and its readers
         // are audited per family before one may be lazy (P1-AUDIT).
         // Audited (P1-AUDIT): every reader of Array.prototype's identity word
-        // reads its family cell or is `_if_bound`.
-        const IDENTITY_WORD_AUDITED: &[&str] = &["Array"];
+        // reads its family cell or is `_if_bound`. WeakMap / WeakSet / WeakRef: their
+        // CLASS word is read as a [[Prototype]] only through an instance's
+        // layout, and the one instance birth (`js_weakmap_new` /
+        // `js_weakset_new` / `js_weakref_new`) observes the family cell first; every other
+        // reader compares the word (the `_if_bound` form).
+        const IDENTITY_WORD_AUDITED: &[&str] = &["Array", "WeakMap", "WeakSet", "WeakRef"];
         assert!(
             IDENTITY_WORD_AUDITED.contains(&declaration.name)
                 || declaration.prototype_class.is_none()

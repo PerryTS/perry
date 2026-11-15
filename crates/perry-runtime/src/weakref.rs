@@ -445,6 +445,9 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     if !is_valid_weak_target(target) {
         weakref_type_error("WeakRef: invalid target");
     }
+    // The instance is restamped onto the WeakRef CLASS identity word as its
+    // [[Prototype]]: this birth observes the family first (its cell).
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::WeakRef);
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
@@ -1415,6 +1418,10 @@ pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
+    // The instance is born on the layout whose [[Prototype]] is the WeakMap
+    // identity word: this birth observes the family first (its cell, the
+    // one birth point), so no instance names a word that is still 0.
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::WeakMap);
     crate::object::object_alloc_branded(CLASS_ID_WEAKMAP)
 }
 
@@ -1531,6 +1538,10 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
+    // The instance is born on the layout whose [[Prototype]] is the WeakSet
+    // identity word: this birth observes the family first (its cell, the
+    // one birth point), so no instance names a word that is still 0.
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::WeakSet);
     crate::object::object_alloc_branded(CLASS_ID_WEAKSET)
 }
 
