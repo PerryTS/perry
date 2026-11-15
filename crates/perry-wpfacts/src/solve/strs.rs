@@ -375,6 +375,43 @@ impl Model {
         })
     }
 
+    /// `PERRY_WPF_IMPLSRC=1` (rule CONSOLE-PCT): one stderr line naming
+    /// what in first argument `n` may hold a `%`.
+    pub(crate) fn console_pct_why(&self, n: NodeId) {
+        let node = &self.nodes[n as usize];
+        let toks: Vec<String> = node
+            .pts
+            .to_sorted()
+            .into_iter()
+            .filter(|&t| t == TOP || self.bare_marker(t))
+            .map(|t| if t == TOP { "TOP".to_string() } else { self.tok_name(t) })
+            .collect();
+        let strs: Vec<String> = if node.strs < STRS_SET0 {
+            vec![format!("set#{}", node.strs)]
+        } else {
+            self.str_atoms(node.strs)
+                .iter()
+                .map(|&a| {
+                    if !self.atom_is_mark(a) {
+                        format!("{:?}", self.atoms[a as usize].as_str())
+                    } else {
+                        let raw = &self.atoms[a as usize];
+                        format!("mark{:?}", &raw[..raw.len().min(160)])
+                    }
+                })
+                .collect()
+        };
+        eprintln!(
+            "perry: wpfacts console-pct: node={n} fn={:?} label={:?} prim={:#x} toks={toks:?} strs={strs:?}",
+            self.node_fn
+                .get(n as usize)
+                .and_then(|&f| self.funcs.get(f as usize))
+                .map(|fi| fi.name.as_str()),
+            self.labels[n as usize],
+            node.prim
+        );
+    }
+
     pub(crate) fn strs_any(&self, s: StrSet) -> bool {
         s == STRS_TOP || self.str_atoms(s).iter().any(|&a| self.atom_is_mark(a))
     }

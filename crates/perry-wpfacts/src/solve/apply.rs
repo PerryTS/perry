@@ -2337,6 +2337,11 @@ impl Model {
                     .iter()
                     .any(|c| matches!(c, Cons::Implicit { proto: Protocol::Inspect, .. }));
                 if !fired && self.may_hold_percent(n) {
+                    // `PERRY_WPF_IMPLSRC=1`: the first argument that lets
+                    // the specifiers consume (its tokens and String entries).
+                    if crate::solve::implsrc_on() {
+                        self.console_pct_why(n);
+                    }
                     self.cons(agg, Cons::Implicit { reason, proto: Protocol::Inspect });
                 }
             }

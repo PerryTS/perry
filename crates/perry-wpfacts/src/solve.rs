@@ -2382,7 +2382,7 @@ pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
 }
 
 /// `PERRY_WPF_IMPLSRC=1` (`Model::implicit`).
-fn implsrc_on() -> bool {
+pub(crate) fn implsrc_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_WPF_IMPLSRC").is_some())
 }
