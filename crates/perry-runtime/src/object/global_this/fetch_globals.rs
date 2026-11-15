@@ -353,6 +353,16 @@ pub extern "C" fn js_get_global_this() -> f64 {
     if mine != 0 {
         return f64::from_bits(mine);
     }
+    global_this_first_touch()
+}
+
+/// [`js_get_global_this`] on a thread whose realm is not complete: its first
+/// touch (the complete realm in one pass, every row in its declared place),
+/// or a two-phase realm's core to complete. Out of line, so the entry itself
+/// is the one load and compare with a leaf's frame: a large program calls it
+/// 10^4 times while it starts. Listed in the default hot-text order.
+#[inline(never)]
+fn global_this_first_touch() -> f64 {
     if THREAD_GLOBAL_THIS.with(|c| c.core.get()) != 0 {
         #[cfg(test)]
         if TEST_TWO_PHASE.with(|c| c.get()) {
@@ -360,8 +370,6 @@ pub extern "C" fn js_get_global_this() -> f64 {
         }
         return perry_realm_complete();
     }
-    // First access on this thread: the complete realm in one pass, every row
-    // in its declared place.
     realm_setup(RealmPhases::Both, false)
 }
 
