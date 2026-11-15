@@ -116,6 +116,13 @@ pub enum Cons {
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
+    /// A store under an index of each Array in the node whose key node
+    /// `key` holds Numbers only: it leaves a hole only at an index past the
+    /// end (10.4.2.1 [[DefineOwnProperty]] of an index below the length
+    /// writes that element, the length stays). A program Array of this unit
+    /// with a length interval watches the key and the length
+    /// (`Model::index_hole_in`); any other Array may get one at once.
+    IndexHoleIn { key: NodeId },
     /// A store under an index of each Array in the node, at a site whose
     /// key gen proved at most the Array's length there
     /// (`Model::inbounds_sites`): it leaves no hole in an Array whose length
@@ -930,6 +937,7 @@ impl Cons {
             Cons::OwnValues { .. } => "ownvalues",
             Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
+            Cons::IndexHoleIn { .. } => "indexholein",
             Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",

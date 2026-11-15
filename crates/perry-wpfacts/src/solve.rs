@@ -1936,6 +1936,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
+            Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
             Cons::IndexKept => format!("indexkept {n}"),
             Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),
             Cons::LenPermuted { t } => format!("lenpermuted {n} {t}"),

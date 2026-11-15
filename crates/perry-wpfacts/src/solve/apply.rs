@@ -65,6 +65,11 @@ impl Model {
                     self.mark_hole(t);
                 }
             }
+            Cons::IndexHoleIn { key } => {
+                for &t in toks {
+                    self.index_hole_in(t, key);
+                }
+            }
             Cons::IndexKept => {
                 for &t in toks {
                     self.index_kept(t);
@@ -2079,9 +2084,13 @@ impl Model {
                         && node.prim == prim::NUM
                         && node.pts.is_empty()
                         && index_strs.is_empty();
-                    let (kind, c) = match kept {
-                        true => (3, Cons::IndexKept),
-                        false => (4, Cons::IndexHole),
+                    // A key of Numbers only: its interval against the
+                    // length decides the hole (`index_hole_in`).
+                    let num = node.prim == prim::NUM && node.pts.is_empty() && index_strs.is_empty();
+                    let (kind, c) = match (kept, num) {
+                        (true, _) => (3, Cons::IndexKept),
+                        (false, true) => (5, Cons::IndexHoleIn { key: n }),
+                        (false, false) => (4, Cons::IndexHole),
                     };
                     if self.index_store_done.insert((n, o, src, site, kind)) {
                         self.cons(o, c);

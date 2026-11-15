@@ -177,6 +177,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::IndexHole
+        | Cons::IndexHoleIn { .. }
         | Cons::IndexKept
         | Cons::AddsKeys
         | Cons::Call { .. }

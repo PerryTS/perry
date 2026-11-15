@@ -679,7 +679,7 @@ fn plan(
                     // on the run's copy of the object from the run's own key
                     // (`Cons::StoreIndexed` in `solve/apply.rs`).
                     Ok(true)
-                        if matches!(c, Cons::IndexHole | Cons::IndexKept)
+                        if matches!(c, Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept)
                             && indexed_into.get(&h).is_some_and(|v| {
                                 v.iter().any(|&(x, j)| {
                                     let sc = &m.nodes[x as usize].cons[j as usize];

@@ -35,6 +35,7 @@ pub fn map_cons(
         OwnValues { dst } => OwnValues { dst: n(dst) },
         OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
         IndexHole => IndexHole,
+        IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
         LenIndex { lo, hi } => LenIndex { lo, hi },

@@ -41,6 +41,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
+            Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
