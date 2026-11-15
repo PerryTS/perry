@@ -141,6 +141,26 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
+    } else if let Some(key_algo) = ml_dsa_key_algo_from_name(&algo_upper) {
+        if mat.algo != key_algo {
+            return reject_with_dom_exception("InvalidAccessError", "Key algorithm mismatch");
+        }
+        if mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let context = object_field_bytes(algo_bits.to_bits(), b"context").unwrap_or_default();
+        match ml_dsa_sign(key_algo, &key_bytes, &data_bytes, &context) {
+            Some(signature) => signature,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED448" {
         if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -402,6 +422,26 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         use ed25519_dalek::Verifier as _;
         verifying_key.verify(&data_bytes, &signature).is_ok()
+    } else if let Some(key_algo) = ml_dsa_key_algo_from_name(&algo_upper) {
+        if mat.algo != key_algo {
+            return reject_with_dom_exception("InvalidAccessError", "Key algorithm mismatch");
+        }
+        if mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let context = object_field_bytes(algo_bits.to_bits(), b"context").unwrap_or_default();
+        match ml_dsa_verify(key_algo, &key_bytes, &data_bytes, &context, &provided_sig) {
+            Some(ok) => ok,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED448" {
         if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(

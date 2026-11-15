@@ -148,6 +148,9 @@ pub(super) enum KeyAlgo {
     MlKem512,
     MlKem768,
     MlKem1024,
+    MlDsa44,
+    MlDsa65,
+    MlDsa87,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -346,6 +349,9 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::MlKem512 => 30,
         KeyAlgo::MlKem768 => 31,
         KeyAlgo::MlKem1024 => 32,
+        KeyAlgo::MlDsa44 => 33,
+        KeyAlgo::MlDsa65 => 34,
+        KeyAlgo::MlDsa87 => 35,
     }
 }
 
@@ -467,6 +473,9 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 30 => KeyAlgo::MlKem512,
                 31 => KeyAlgo::MlKem768,
                 32 => KeyAlgo::MlKem1024,
+                33 => KeyAlgo::MlDsa44,
+                34 => KeyAlgo::MlDsa65,
+                35 => KeyAlgo::MlDsa87,
                 _ => return None,
             };
             let hash = match hash {
@@ -695,7 +704,10 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::Ed25519
             | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
-            | KeyAlgo::RsaPss,
+            | KeyAlgo::RsaPss
+            | KeyAlgo::MlDsa44
+            | KeyAlgo::MlDsa65
+            | KeyAlgo::MlDsa87,
             KeyKind::Private,
         ) => USAGE_SIGN,
         (
@@ -705,7 +717,10 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::Ed25519
             | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
-            | KeyAlgo::RsaPss,
+            | KeyAlgo::RsaPss
+            | KeyAlgo::MlDsa44
+            | KeyAlgo::MlDsa65
+            | KeyAlgo::MlDsa87,
             KeyKind::Public,
         ) => USAGE_VERIFY,
         (

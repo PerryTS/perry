@@ -15,12 +15,13 @@ mod jwk;
 mod kdf;
 mod key_object;
 mod keys;
+pub(crate) mod pq;
 mod supports;
 mod util;
 mod wrap;
 
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{aes::*, hmac::*, jwk::*, key_object::*, util::*};
+use self::{aes::*, hmac::*, jwk::*, key_object::*, pq::*, util::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{
