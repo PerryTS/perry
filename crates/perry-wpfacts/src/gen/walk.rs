@@ -40,9 +40,10 @@ impl<'a> Gen<'a> {
         self.m.eval_deps = (0..modules.len()).map(|mi| self.eval_deps_of(mi)).collect();
         // Constructor phase analysis first (needs every class).
         for mi in 0..modules.len() {
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
-                let ph = crate::ctor_phase::analyze(c);
+                let ph = crate::ctor_phase::analyze_in(c, &shapes);
                 self.ctor_phase.insert(tm, ph);
             }
         }

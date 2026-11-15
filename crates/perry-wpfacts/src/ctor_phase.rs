@@ -17,7 +17,7 @@
 
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Class, Expr, Stmt};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
 pub struct CtorPhase {
@@ -46,7 +46,10 @@ struct St {
     assigned: BTreeSet<String>,
 }
 
-struct W {
+struct W<'a> {
+    /// The data keys of the module's plain `__AnonShape_*` literal classes
+    /// (`plain_shapes`).
+    shapes: &'a BTreeMap<String, Vec<String>>,
     ph: CtorPhase,
     /// The class's own plain methods: reading one runs no code.
     methods: BTreeSet<String>,
@@ -56,6 +59,32 @@ struct W {
 }
 
 pub fn analyze(c: &Class) -> CtorPhase {
+    analyze_in(c, &BTreeMap::new())
+}
+
+/// The field keys of each plain-literal class of `classes`: an object
+/// literal lowers to `new __AnonShape_*(values...)` with its keys as the
+/// class's fields, in order. Only one of named public fields, no method,
+/// accessor or parent.
+pub fn plain_shapes(classes: &[Class]) -> BTreeMap<String, Vec<String>> {
+    classes
+        .iter()
+        .filter(|c| {
+            c.name.starts_with("__AnonShape_")
+                && c.methods.is_empty()
+                && c.getters.is_empty()
+                && c.setters.is_empty()
+                && c.extends.is_none()
+                && c.extends_name.is_none()
+                && c.extends_expr.is_none()
+                && c.native_extends.is_none()
+                && c.fields.iter().all(|f| !f.is_private && f.key_expr.is_none())
+        })
+        .map(|c| (c.name.clone(), c.fields.iter().map(|f| f.name.clone()).collect()))
+        .collect()
+}
+
+pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhase {
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
         .iter()
@@ -75,7 +104,7 @@ pub fn analyze(c: &Class) -> CtorPhase {
         Some(ctor) => (&ctor.params, &ctor.body),
         None => (&[], &[]),
     };
-    let mut ph = analyze_body(&fields, methods.clone(), params, body);
+    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -83,27 +112,29 @@ pub fn analyze(c: &Class) -> CtorPhase {
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(&valued, methods, params, body).definite;
+    ph.stored = analyze_body(shapes, &valued, methods, params, body).definite;
     ph
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
 pub fn analyze_fn(f: &perry_hir::Function) -> CtorPhase {
-    analyze_body(&[], BTreeSet::new(), &f.params, &f.body)
+    analyze_body(&BTreeMap::new(), &[], BTreeSet::new(), &f.params, &f.body)
 }
 
 /// Same for a closure body used as a constructor.
 pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase {
-    analyze_body(&[], BTreeSet::new(), params, body)
+    analyze_body(&BTreeMap::new(), &[], BTreeSet::new(), params, body)
 }
 
 fn analyze_body(
+    shapes: &BTreeMap<String, Vec<String>>,
     fields: &[(&Option<Expr>, Option<&str>)],
     methods: BTreeSet<String>,
     params: &[perry_hir::Param],
     body: &[Stmt],
 ) -> CtorPhase {
     let mut w = W {
+        shapes,
         ph: CtorPhase::default(),
         methods,
         late: BTreeSet::new(),
@@ -154,7 +185,36 @@ fn analyze_body(
     w.ph
 }
 
-impl W {
+impl W<'_> {
+
+    /// The (key, value) parts of object literal `e` (an `Expr::Object` or a
+    /// plain `__AnonShape_*` construction), or `None`: a spread, a computed
+    /// key, a method or accessor is no such literal.
+    fn literal_parts<'e>(&'e self, e: &'e Expr) -> Option<Vec<(&'e str, &'e Expr)>> {
+        match e {
+            Expr::Object(ps) => Some(ps.iter().map(|(k, v)| (k.as_str(), v)).collect()),
+            Expr::New {
+                class_name, args, ..
+            } => {
+                let keys = self.shapes.get(class_name)?;
+                (keys.len() == args.len())
+                    .then(|| keys.iter().map(|k| k.as_str()).zip(args.iter()).collect())
+            }
+            _ => None,
+        }
+    }
+
+    /// An object literal of only the data-descriptor fields `value`,
+    /// `writable`, `enumerable`, `configurable` (ECMA-262 6.2.6.5): no
+    /// spread, no computed key, no `__proto__` (it would set the literal's
+    /// prototype), no `get` / `set` of its own.
+    fn data_descriptor(&self, d: &Expr) -> bool {
+        self.literal_parts(d).is_some_and(|ps| {
+            ps.iter().all(|(k, _)| {
+                matches!(*k, "value" | "writable" | "enumerable" | "configurable")
+            })
+        })
+    }
     fn leak(&mut self, st: &mut St) {
         if st.open {
             st.open = false;
@@ -370,6 +430,31 @@ impl W {
                     }
                 }
                 self.store(st, e, property);
+            }
+            // ECMA-262 20.1.2.4 Object.defineProperty / 20.1.2.3
+            // Object.defineProperties on `this` with plain data-descriptor
+            // literals: `this` as the target is no leak. ToPropertyDescriptor
+            // (6.2.6.5) reads the descriptor's fields with HasProperty / Get on
+            // the literal (an accessor an Object.prototype field may hold
+            // runs with the literal as receiver, never with `this`), and
+            // OrdinaryDefineOwnProperty (10.1.6.1) on the ordinary `this` runs
+            // no code. The key and the values are walked as any expression: a
+            // value that holds or passes `this` leaks it. The defined key is
+            // not assigned: it may be an accessor (an inherited `get` / `set`).
+            Expr::ObjectDefineProperty(t, k, d)
+                if matches!(t.as_ref(), Expr::This)
+                    && matches!(k.as_ref(), Expr::String(_))
+                    && self.data_descriptor(d) =>
+            {
+                self.expr(st, d);
+            }
+            Expr::ObjectDefineProperties(t, ds)
+                if matches!(t.as_ref(), Expr::This)
+                    && self.literal_parts(ds).is_some_and(|ps| {
+                        ps.iter().all(|(k, d)| *k != "__proto__" && self.data_descriptor(d))
+                    }) =>
+            {
+                self.expr(st, ds);
             }
             Expr::SuperCall(args) => {
                 for a in args {
