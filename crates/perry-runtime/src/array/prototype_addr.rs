@@ -246,7 +246,7 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None)
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, Some(identity))
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -273,21 +273,22 @@ fn realm_intrinsic_addr(
     family: Option<crate::object::BuiltinConstructorIdentity>,
 ) -> usize {
     let mut addr = cell.get();
+    let birth = |addr: usize| match family {
+        Some(identity) if addr == 0 && identity.declaration().lazy => {
+            crate::object::birth_lazy_family(identity);
+            cell.get()
+        }
+        _ => addr,
+    };
+    // A family is born by itself; only what no birth makes (a non-family
+    // intrinsic, `Object`, `Buffer`) observes %Global%.
+    addr = birth(addr);
     if addr == 0 && !crate::object::global_this_is_materialized() {
         crate::object::js_get_global_this();
-        addr = cell.get();
+        addr = birth(cell.get());
     }
     if addr == 0 {
-        match family {
-            Some(identity) if identity.declaration().lazy => {
-                crate::object::birth_lazy_family(identity);
-                addr = cell.get();
-                if addr == 0 {
-                    return 0;
-                }
-            }
-            _ => return 0,
-        }
+        return 0;
     }
     heal_prototype_addr(cell, addr)
 }
@@ -537,7 +538,12 @@ pub(crate) fn prime_prototype_addr_cache() {
     // Capture all seven intrinsic identities before user code can replace a
     // global binding, including before its first primitive property read.
     for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
-        if prototype_addrs()[slot].get() == usize::MAX {
+        // An unborn family's row stays lazy: its bootstrap reads the realm
+        // intrinsic (never `globalThis`), so its first use births it.
+        if prototype_addrs()[slot].get() == usize::MAX
+            && (slot == OBJECT_PROTO_CACHE
+                || intrinsic_prototype_addr_if_bound(PROTOTYPE_ADDR_BUILTINS[slot]) != 0)
+        {
             bootstrap_prototype_addr(slot);
         }
     }

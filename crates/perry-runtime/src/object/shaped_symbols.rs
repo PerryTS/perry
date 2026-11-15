@@ -8,7 +8,17 @@ pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
     let bag = if crate::value::addr_class::is_proxy_cell(addr) {
         crate::proxy_hooks::property_bag(addr)
     } else if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
-        descriptor_state::descriptor_holder(addr)
+        let bag = descriptor_state::descriptor_holder(addr);
+        // An unborn lazy builtin constructor gets its own symbol keys
+        // (`@@species`) from its family's birth: a symbol query births it.
+        if bag.is_null()
+            && crate::closure::is_closure_ptr(addr)
+            && crate::object::birth_unborn_family_of(addr)
+        {
+            descriptor_state::descriptor_holder(addr)
+        } else {
+            bag
+        }
     } else {
         super::handle_expando::handle_property_bag(addr as i64)
     };

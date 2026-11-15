@@ -469,13 +469,46 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
+        let thread_realm = super::global_this::is_thread_realm_global(global);
         for (family, name) in BuiltinProto::ALL {
-            let proto = intrinsic_prototype_addr(family, global, name);
+            // The thread realm seals what is born; an unborn family seals
+            // its prototype in its own birth (`seal_born_family`).
+            let proto = if thread_realm && !matches!(family, BuiltinProto::Object) {
+                crate::object::BuiltinConstructorIdentity::for_name(name)
+                    .map_or(0, crate::array::intrinsic_prototype_addr_if_bound)
+            } else {
+                intrinsic_prototype_addr(family, global, name)
+            };
+            seal_family_prototype(family, proto);
+        }
+        super::builtin_namespace::seal_namespaces(global);
+    });
+}
+
+/// Seal the thread realm's prototype of the family `name` at the end of its
+/// birth, as `seal_realm` seals the families born before it.
+///
+/// # Safety
+/// Called inside the family's birth (collection suppressed).
+pub(crate) unsafe fn seal_born_family(
+    name: &str,
+    identity: crate::object::BuiltinConstructorIdentity,
+) {
+    if let Some((family, _)) = BuiltinProto::ALL.into_iter().find(|(_, n)| *n == name) {
+        seal_family_prototype(family, crate::array::intrinsic_prototype_addr_if_bound(identity));
+    }
+}
+
+/// Seal one family's intrinsic prototype `proto` (0: none).
+#[optimize(size)]
+unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize) {
+    {
+        {
             if proto == 0 {
-                continue;
+                return;
             }
             let Some(header) = crate::value::addr_class::try_read_gc_header(proto) else {
-                continue;
+                return;
             };
             match header.obj_type {
                 crate::gc_object_type_pat!() => {
@@ -510,8 +543,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 _ => {}
             }
         }
-        super::builtin_namespace::seal_namespaces(global);
-    });
+    }
 }
 
 /// The realm's intrinsic prototype of `family`: the memoized intrinsic cells

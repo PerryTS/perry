@@ -72,7 +72,8 @@ pub(crate) fn function_prototype_ptr_materialized() -> usize {
     if proto != 0 {
         return proto as usize;
     }
-    let _ = crate::object::js_get_global_this();
+    // %Function% is born by itself; %Global% is not observed.
+    let _ = crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Function);
     FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire) as usize
 }
 
