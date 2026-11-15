@@ -402,6 +402,14 @@
       "reason": "Tag-identity truthiness is taken only for a parameter in spec_bool_params, whose sole entry is the public wrapper's inline TAG_TRUE|TAG_FALSE guard; the proof API also rejects any binding written anywhere in the body, so the slot still holds the guarded boolean."
     },
     {
+      "path": "crates/perry-codegen/src/proto_constants.rs",
+      "function": "iterator_member_site",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared Named type only picks the candidate class for the fused Symbol.iterator member call. emit_iterator_call checks at run time that the receiver is an object pointer whose family layout word is that class's and that every prototype on the chain is on its recorded shape, branching to the generic iterator path otherwise, so a stale or wrong local type selects the slow path, never a wrong member."
+    },
+    {
       "path": "crates/perry-codegen/src/rooting/temp_root.rs",
       "function": "local_is_inert_primitive",
       "access": "stable_local_type_proof",
