@@ -293,14 +293,9 @@ fn coerce_search_param_arg(value: f64) -> String {
 /// Create a URLSearchParams object from entries
 pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
     // The layout's prototype family names `%URLSearchParams.prototype%`, which
-    // the realm builds with `globalThis`: build it before the first instance
+    // its own family birth builds: observe it before the first instance
     // (#12697), or the instance's [[Prototype]] word would still be empty.
-    if crate::object::shapes::identity_prototype_word(
-        crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
-    ) == 0
-    {
-        crate::object::js_get_global_this();
-    }
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::URLSearchParams);
     let obj = unsafe {
         crate::object::layout_desc::perry_alloc_layout(
             crate::object::runtime_layouts::URL_SEARCH_PARAMS::desc(),
