@@ -578,6 +578,35 @@ fn elision_for(
                 })
                 .map(|s| s.byte_offset)
                 .collect();
+            // ONCHANGE2: the named method calls proven to run one class
+            // method body: (holder class id, the body's function id). Every
+            // record at an offset must agree, or the offset is left out. A
+            // receiver that may be a primitive (`undefined` / `null` among
+            // them: the read throws first, 13.3.6.2) or ⊤ keeps its site.
+            let mut refused_calls: std::collections::BTreeSet<(u32, String)> = Default::default();
+            for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
+                let one = match (&s.verdict, s.holder_class, s.target_fns.as_slice()) {
+                    (perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set, Some(cid), [(_, fid)])
+                        if s.receiver_prims == 0 && !s.top =>
+                    {
+                        Some((cid, *fid))
+                    }
+                    _ => None,
+                };
+                let at = (s.byte_offset, s.key.clone());
+                match one {
+                    Some(v) if !refused_calls.contains(&at) => {
+                        if *out.method_calls.entry(at.clone()).or_insert(v) != v {
+                            out.method_calls.remove(&at);
+                            refused_calls.insert(at);
+                        }
+                    }
+                    _ => {
+                        out.method_calls.remove(&at);
+                        refused_calls.insert(at);
+                    }
+                }
+            }
             // ACCBUILD2 P3: the named sites proven to call one accessor.
             // Every record at an offset must agree, or the offset is left out.
             let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();

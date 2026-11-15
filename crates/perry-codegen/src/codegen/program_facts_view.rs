@@ -627,6 +627,12 @@ pub struct ElisionFacts {
     /// The same for named reads (and a compound's GetValue) whose verdict is
     /// `Verdict::AccessorGet`: the class holding the one getter (10.1.8.1).
     pub accessor_gets: std::collections::BTreeMap<(u32, String), (u32, String)>,
+    /// ONCHANGE2: this module's named method calls whose verdict is
+    /// `Verdict::T0Mono` / `T0Set` with one callee body and a holder class: every receiver is an object
+    /// (never a primitive, never ⊤) and the key's value at every receiver is
+    /// one class method body. Value: (holder class id, the body's HIR
+    /// function id). Codegen calls the body with the receiver as `this`.
+    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32)>,
 }
 
 impl ElisionFacts {
@@ -660,6 +666,7 @@ impl ElisionFacts {
             && self.native_member_calls.is_empty()
             && self.accessor_sets.is_empty()
             && self.accessor_gets.is_empty()
+            && self.method_calls.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

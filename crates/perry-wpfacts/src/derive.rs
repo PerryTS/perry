@@ -313,6 +313,9 @@ pub struct SiteFacts {
     /// `AccessorGet` / `AccessorSet`: the program class id whose prototype
     /// holds the one accessor function in `targets` (the class template its
     /// `this` belongs to). Codegen calls that class's accessor directly.
+    /// A `T0Mono` / `T0Set` call whose callee set is one body: the class whose method it is (its
+    /// `this` template's class); codegen calls that body directly with the
+    /// receiver as `this` (ECMA-262 13.3.6.2, 7.3.14 Call).
     pub holder_class: Option<u32>,
     /// Per-unit run: the receiver is a parameter whose TS object type
     /// names these keys; its verdict is decided after the census
@@ -1553,8 +1556,13 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 })
                 .collect::<Vec<_>>()
         });
+        // ONCHANGE2: a call proven to run one body (T0Mono, or T0Set over
+        // several receivers whose callee set is that one body) names the
+        // class whose method that body is, so codegen calls it directly.
         let holder_class = match (&verdict, targets.len()) {
-            (Verdict::AccessorGet | Verdict::AccessorSet, 1) => targets.keys().next().and_then(|&f| {
+            (Verdict::AccessorGet | Verdict::AccessorSet, 1) | (Verdict::T0Mono | Verdict::T0Set, 1)
+                if s.is_call == matches!(verdict, Verdict::T0Mono | Verdict::T0Set) =>
+            targets.keys().next().and_then(|&f| {
                 let tm = *m.this_class.get(&m.funcs[f as usize].this)?;
                 match &m.tmpls[tm as usize].kind {
                     crate::model::TmplKind::Class { class_id, .. } => Some(*class_id),
