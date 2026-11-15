@@ -550,6 +550,32 @@ pub(crate) fn quiet_store(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> boo
     recv.is_some_and(|r| facts_store(&ctx.wpfacts, r, property).is_ok())
 }
 
+/// The slot of `property` on every instance of class `cid`, when the class
+/// is a static family born on its family layout (D-CG1: one layout per
+/// family class, fixed at compile time; `new_alloc::class_born_on_family`).
+/// `Ok(None)`: not a family. `Err`: a family that does not hold the key, or
+/// a constructor-argument variant of it that holds it at another slot.
+pub(crate) fn family_slot(
+    ctx: &FnCtx<'_>,
+    cid: u32,
+    property: &str,
+) -> Result<Option<u32>, &'static str> {
+    let Some(fam) = ctx.program_layouts.families.get(&cid) else {
+        return Ok(None);
+    };
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return Ok(None);
+    }
+    let at = |keys: &[(crate::layout_families::FamilyKey, u32)]| {
+        keys.iter().find(|(k, _)| *k == property).map(|(_, s)| *s)
+    };
+    let idx = at(&fam.keys).ok_or("the family layout does not hold the key")?;
+    if fam.variants.iter().any(|v| at(&v.keys) != Some(idx)) {
+        return Err("a family variant holds the key at another slot");
+    }
+    Ok(Some(idx))
+}
+
 /// The zero-guard proof for `object.property`, if the facts give one.
 pub(crate) fn prove(
     ctx: &FnCtx<'_>,
@@ -613,12 +639,13 @@ pub(crate) fn prove(
             // the family layout and keeps it for life, so the program-wide
             // layout is the authority (the class may be another module's).
             // Stores add the key on the checked route.
-            let fam_slot = ctx.program_layouts.families.get(&cid).and_then(|fam| {
-                fam.keys
-                    .iter()
-                    .find(|(k, _)| *k == property)
-                    .map(|(_, s)| *s)
-            });
+            let fam_slot = match family_slot(ctx, cid, property) {
+                Ok(s) => s,
+                Err(why) => {
+                    crate::fallback_diag::refuse(why);
+                    return None;
+                }
+            };
             let Some(idx) = fam_slot.filter(|_| access == Access::Get) else {
                 crate::fallback_diag::refuse(
                     "declared key: stores add it on the checked route; reads need the family",
@@ -634,6 +661,55 @@ pub(crate) fn prove(
             all_f64 = false;
             names.push(format!("class#{cid}"));
             continue;
+        }
+        // D-CG1: a family class has one layout, its family layout, on which
+        // every instance is born and which it keeps for life, so a read of a
+        // birth field loads the family's slot: the class may be another
+        // module's, the key a define key, or one the colouring moved, and a
+        // subclass family keeps every inherited key at its parent's slot
+        // (`layout_families::assign_slots`). Stores keep codegen's own slot
+        // rule below (a slot both layouts agree on).
+        if access == Access::Get {
+            match family_slot(ctx, cid, property) {
+                Err(why) => {
+                    crate::fallback_diag::refuse(why);
+                    return None;
+                }
+                Ok(Some(idx)) => {
+                    let name = class_name_of(ctx, cid);
+                    if let Some(name) = name.as_deref() {
+                        if super::property_get::class_has_evaluated_accessor(ctx, name)
+                            || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, name)
+                        {
+                            crate::fallback_diag::refuse(
+                                "computed/private class layout refuses fixed-offset field access",
+                            );
+                            return None;
+                        }
+                    }
+                    // Every family slot is a boxed word (the hole until a
+                    // store adds the key): no raw-f64 lane.
+                    maybe_absent |= f.reserved;
+                    slot.get_or_insert(idx);
+                    slots.push(idx);
+                    kind_mask |= f.kind_mask;
+                    if f.reserved {
+                        ta_stable = false;
+                        ta_kind = Some(None);
+                    } else {
+                        ta_stable &= f.ta_stable;
+                        ta_kind = match ta_kind {
+                            None => Some(f.ta_kind),
+                            Some(k) if k == f.ta_kind => Some(k),
+                            Some(_) => Some(None),
+                        };
+                    }
+                    all_f64 = false;
+                    names.push(name.unwrap_or_else(|| format!("class#{cid}")));
+                    continue;
+                }
+                Ok(None) => {}
+            }
         }
         let Some(name) = class_name_of(ctx, cid) else {
             crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
