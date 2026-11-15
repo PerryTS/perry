@@ -2122,6 +2122,8 @@ impl Model {
             Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
             Cons::ObjTagProbe { t, key } => format!("objtagprobe {n} {t} {key}"),
             Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
+            Cons::StrIndex { dst, .. } => format!("strindex {n} {dst}"),
+            Cons::StrSubstring { dst, .. } => format!("strsubstring {n} {dst}"),
             Cons::ClassReplace { dst, .. } => format!("classreplace {n} {dst}"),
             Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),
             Cons::ViewedBuffer { view, fresh, share } => {

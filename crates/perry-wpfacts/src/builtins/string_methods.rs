@@ -346,6 +346,41 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             ret_prim(m, call, prim::BOOL);
             return true;
         }
+        // Rules KEY2a / KEY2b (22.1.3.9 / 22.1.3.12 with no position,
+        // 22.1.3.25): on a receiver node the solve folds the constants
+        // (`Cons::StrIndex`, `Cons::StrSubstring`); any Number / String
+        // when they are not constants.
+        "indexOf" | "lastIndexOf" | "substring"
+            if matches!(c.this, ThisArg::Node(_))
+                && c.spread.is_empty()
+                && (name == "substring" || c.args.len() == 1) =>
+        {
+            coerce_operands(m, call, "string method operand");
+            m.zs_absorbing = true;
+            let ThisArg::Node(recv) = c.this else { unreachable!() };
+            let a0 = c.args.first().copied().unwrap_or(NO_NODE);
+            let a1 = c.args.get(1).copied().unwrap_or(NO_NODE);
+            let k = match name {
+                "substring" => Cons::StrSubstring {
+                    dst: c.ret,
+                    recv,
+                    start: a0,
+                    end: a1,
+                },
+                _ => Cons::StrIndex {
+                    dst: c.ret,
+                    recv,
+                    search: a0,
+                    last: name == "lastIndexOf",
+                },
+            };
+            for x in [recv, a0, a1] {
+                if x != NO_NODE {
+                    m.cons(x, k);
+                }
+            }
+            return true;
+        }
         // Every operand is ToString'd or ToIntegerOrInfinity'd.
         "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
         | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf"

@@ -454,6 +454,23 @@ pub fn map_cons(
             search: n(search),
             repl: n(repl),
         },
+        StrIndex {
+            dst,
+            recv,
+            search,
+            last,
+        } => StrIndex {
+            dst: n(dst),
+            recv: n(recv),
+            search: n(search),
+            last,
+        },
+        StrSubstring { dst, recv, start, end } => StrSubstring {
+            dst: n(dst),
+            recv: n(recv),
+            start: if start == NO_NODE { NO_NODE } else { n(start) },
+            end: if end == NO_NODE { NO_NODE } else { n(end) },
+        },
         ClassReplace { dst, tok, repl } => ClassReplace { dst: n(dst), tok, repl: n(repl) },
         RegExpPattern { tok } => RegExpPattern { tok },
         ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
@@ -631,6 +648,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Captures { .. }
             | ObjTagProbe { .. }
             | StrReplace { .. }
+            | StrIndex { .. }
+            | StrSubstring { .. }
             | ClassReplace { .. }
             | RegExpPattern { .. }
             | ViewedBuffer { .. }
@@ -666,6 +685,8 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | ArrayLenArg { dst }
         | CaseMap { dst, .. }
         | StrReplace { dst, .. }
+        | StrIndex { dst, .. }
+        | StrSubstring { dst, .. }
         | ClassReplace { dst, .. }
         | IterNext { dst }
         | FromArrayLike { dst }

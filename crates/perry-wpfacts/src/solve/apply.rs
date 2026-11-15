@@ -2411,6 +2411,20 @@ impl Model {
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
+            // Rules KEY2a / KEY2b: indexOf / lastIndexOf and substring of
+            // constants.
+            Cons::StrIndex {
+                dst,
+                recv,
+                search,
+                last,
+            } => self.str_index(dst, recv, search, last),
+            Cons::StrSubstring {
+                dst,
+                recv,
+                start,
+                end,
+            } => self.str_substring(dst, recv, start, end),
             // Rule M9: RegExp.prototype[@@replace] of a global one-class
             // pattern.
             Cons::ClassReplace { dst, tok, repl } => {

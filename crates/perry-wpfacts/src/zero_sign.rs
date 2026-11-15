@@ -216,6 +216,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Captures { .. }
         | Cons::ObjTagProbe { .. }
         | Cons::StrReplace { .. }
+        | Cons::StrIndex { .. }
+        | Cons::StrSubstring { .. }
         | Cons::ClassReplace { .. }
         | Cons::RegExpPattern { .. }
         | Cons::ViewedBuffer { .. }

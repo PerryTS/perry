@@ -748,6 +748,27 @@ pub enum Cons {
     /// exclusion entry when `tok` is a global one-class pattern
     /// (`Model::class_replace_strs`).
     ClassReplace { dst: NodeId, tok: Tok, repl: NodeId },
+    /// Rule KEY2a: the node is the receiver or search string of
+    /// `String.prototype.indexOf` / `lastIndexOf` (22.1.3.9 / 22.1.3.12)
+    /// called with no position: `dst` holds the Numbers StringIndexOf (the
+    /// last match for `last`) gives on the constants, as an interval
+    /// (`Model::str_index`); any Number otherwise.
+    StrIndex {
+        dst: NodeId,
+        recv: NodeId,
+        search: NodeId,
+        last: bool,
+    },
+    /// Rule KEY2b: the node is the receiver, start or end (`NO_NODE`:
+    /// absent) of `String.prototype.substring` (22.1.3.25): `dst` holds the
+    /// substring of every constant over every clamped integer operand pair
+    /// (`Model::str_substring`); any String otherwise.
+    StrSubstring {
+        dst: NodeId,
+        recv: NodeId,
+        start: NodeId,
+        end: NodeId,
+    },
     /// Rule M7: the node is the pattern operand of the `new RegExp(P)` that
     /// made `tok` (`Model::regexp_pattern`).
     RegExpPattern { tok: Tok },
@@ -859,6 +880,8 @@ impl Cons {
                 | Cons::ConsoleFormat { .. }
                 | Cons::Captures { .. }
                 | Cons::StrReplace { .. }
+                | Cons::StrIndex { .. }
+                | Cons::StrSubstring { .. }
                 | Cons::ClassReplace { .. }
                 | Cons::RegExpPattern { .. }
                 | Cons::RequireSpec { .. }
@@ -880,6 +903,8 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::StrIndex { .. }
+                | Cons::StrSubstring { .. }
                 | Cons::LenPermuted { .. }
                 | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
@@ -1009,6 +1034,8 @@ impl Cons {
             Cons::Captures { .. } => "captures",
             Cons::ObjTagProbe { .. } => "objtagprobe",
             Cons::StrReplace { .. } => "strreplace",
+            Cons::StrIndex { .. } => "strindex",
+            Cons::StrSubstring { .. } => "strsubstring",
             Cons::ClassReplace { .. } => "classreplace",
             Cons::RegExpPattern { .. } => "regexppattern",
             Cons::ViewedBuffer { .. } => "viewedbuffer",

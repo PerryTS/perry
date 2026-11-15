@@ -1031,6 +1031,157 @@ impl Model {
         })
     }
 
+    /// The constants of a String-only node, the primitives `but` aside
+    /// (values the operation throws on): `None` while it holds no value,
+    /// `Some(None)` when it may hold anything else (an object, another
+    /// kind, a prefix / infix / suffix / exclusion entry, a constant that is
+    /// not ASCII: code units are bytes only for ASCII).
+    fn ascii_consts_but(&self, n: NodeId, but: u16) -> Option<Option<Vec<String>>> {
+        let x = &self.nodes[n as usize];
+        if x.prim == 0 && x.pts.is_empty() {
+            return None;
+        }
+        if x.prim & !but != prim::STR || !x.pts.is_empty() || x.strs < STRS_SET0 {
+            return Some(None);
+        }
+        let mut out = Vec::new();
+        for &a in self.str_atoms(x.strs) {
+            let s = &self.atoms[a as usize];
+            if self.atom_is_mark(a) || !s.is_ascii() {
+                return Some(None);
+            }
+            out.push(s.clone());
+        }
+        Some(Some(out))
+    }
+
+    /// A Number-or-undefined operand of a String method (`NO_NODE`:
+    /// absent, which is `undefined`): its interval and whether it may be
+    /// `undefined`. `None` while it holds no value (or a Number whose
+    /// interval has not arrived), `Some(None)` when it may hold another
+    /// kind or a Number the interval does not bound (⊤: NaN, an infinity,
+    /// a fraction; `model::range`).
+    fn int_operand(&self, n: NodeId) -> Option<Option<(crate::model::Iv, bool)>> {
+        use crate::model::Iv;
+        if n == NO_NODE {
+            return Some(Some((Iv::EMPTY, true)));
+        }
+        let x = &self.nodes[n as usize];
+        if x.prim == 0 && x.pts.is_empty() {
+            return None;
+        }
+        if !x.pts.is_empty() || x.prim & !(prim::NUM | prim::UNDEF) != 0 {
+            return Some(None);
+        }
+        let num = x.prim & prim::NUM != 0;
+        let iv = if num { x.range } else { Iv::EMPTY };
+        if num && iv.is_top() {
+            return Some(None);
+        }
+        let undef = x.prim & prim::UNDEF != 0;
+        if iv.is_empty() && !undef {
+            return None;
+        }
+        Some(Some((iv, undef)))
+    }
+
+    /// Rule KEY2a, ECMA-262 22.1.3.9 `String.prototype.indexOf(searchString)`
+    /// / 22.1.3.12 `lastIndexOf(searchString)` with no position (0 / +∞):
+    /// StringIndexOf (the last match) of each search constant in each
+    /// receiver constant, -1 for none; the result is their interval (a
+    /// finite superset of the set: `model::range` keeps no Number sets).
+    /// Step 1 RequireObjectCoercible: an `undefined` or `null` receiver
+    /// throws and gives no result. Any Number when an operand is not
+    /// constants only.
+    pub(crate) fn str_index(&mut self, dst: NodeId, recv: NodeId, search: NodeId, last: bool) {
+        use crate::model::Iv;
+        let nullish = prim::UNDEF | prim::NULL;
+        let (Some(r), Some(s)) = (self.ascii_consts_but(recv, nullish), self.ascii_consts_but(search, 0)) else {
+            return;
+        };
+        let iv = match (r, s) {
+            (Some(r), Some(s)) => {
+                let mut iv = Iv::EMPTY;
+                for a in &r {
+                    for b in &s {
+                        let k = if last { a.rfind(b.as_str()) } else { a.find(b.as_str()) };
+                        let k = k.map_or(-1, |k| k as i64);
+                        iv = iv.join(Iv::int(k, k));
+                    }
+                }
+                iv
+            }
+            _ => Iv::TOP,
+        };
+        let rg = crate::model::Rg {
+            num: iv,
+            chr: crate::model::range::CHAR_ANY,
+            frac: iv.is_top(),
+        };
+        let saved = self.cur_range.replace(rg);
+        self.add_s(dst, &[], prim::NUM, STRS_NONE);
+        self.cur_range = saved;
+    }
+
+    /// Rule KEY2b, ECMA-262 22.1.3.25 `String.prototype.substring(start,
+    /// end)`: ToIntegerOrInfinity of each operand (`undefined` start is 0,
+    /// `undefined` end is the length), clamped to `[0, len]`, the smaller
+    /// one first; the result for every receiver constant and every pair of
+    /// clamped operands (each operand's interval enumerated after the
+    /// clamp, so at most len + 1 values: finite with no bound of its own).
+    /// RequireObjectCoercible: a nullish receiver gives no result. Any
+    /// String when an operand is not constants / a bounded integer.
+    pub(crate) fn str_substring(&mut self, dst: NodeId, recv: NodeId, start: NodeId, end: NodeId) {
+        let nullish = prim::UNDEF | prim::NULL;
+        let Some(r) = self.ascii_consts_but(recv, nullish) else {
+            return;
+        };
+        let (Some(a), Some(b)) = (self.int_operand(start), self.int_operand(end)) else {
+            return;
+        };
+        let cands = |(iv, undef): (crate::model::Iv, bool), dflt: i64, len: i64| {
+            let mut v = Vec::new();
+            if undef {
+                v.push(dflt);
+            }
+            if !iv.is_empty() {
+                v.extend(iv.lo.clamp(0, len)..=iv.hi.clamp(0, len));
+            }
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let set = match (r, a, b) {
+            (Some(r), Some(a), Some(b)) => {
+                let mut out = Vec::new();
+                let mut top = false;
+                for s in &r {
+                    let len = s.len() as i64;
+                    for &x in &cands(a, 0, len) {
+                        for &y in &cands(b, len, len) {
+                            let (f, t) = (x.min(y) as usize, x.max(y) as usize);
+                            match self.str_const_atom(&s[f..t]) {
+                                Some(c) => out.push(c),
+                                None => top = true,
+                            }
+                        }
+                    }
+                }
+                if top {
+                    STRS_TOP
+                } else if out.is_empty() {
+                    return;
+                } else {
+                    out.sort_unstable();
+                    out.dedup();
+                    self.str_set(&out)
+                }
+            }
+            _ => STRS_TOP,
+        };
+        self.add_s(dst, &[], prim::STR, set);
+    }
+
     fn plus_strs_m3(&mut self, l: NodeId, r: NodeId) -> (StrSet, bool) {
         let (ln, rn) = (&self.nodes[l as usize], &self.nodes[r as usize]);
         let (lp, lt, ls) = (ln.prim, !ln.pts.is_empty(), ln.strs);

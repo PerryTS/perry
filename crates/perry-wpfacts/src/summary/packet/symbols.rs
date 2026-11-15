@@ -500,6 +500,15 @@ impl Model {
                 search,
                 repl,
             } => format!("StrReplace dst={dst:?} recv={recv:?} search={search:?} repl={repl:?}"),
+            Cons::StrIndex {
+                dst,
+                recv,
+                search,
+                last,
+            } => format!("StrIndex dst={dst:?} recv={recv:?} search={search:?} last={last}"),
+            Cons::StrSubstring { dst, recv, start, end } => {
+                format!("StrSubstring dst={dst:?} recv={recv:?} start={start:?} end={end:?}")
+            }
             Cons::ClassReplace { dst, tok, repl } => format!(
                 "ClassReplace dst={dst:?} tok={:?} repl={repl:?}",
                 self.packet_token(tok, packet)
