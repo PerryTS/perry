@@ -402,6 +402,50 @@ pub(super) unsafe fn key_leaf(dir: *const u8, key_bits: u64) -> Option<(u64, u64
     None
 }
 
+/// The keyed store's first test (DESIGN_R §3): the key's recorded atom
+/// ([`key_leaf`]). `None` is no hit: the keyed store leaves for its
+/// complete resolution ([`probe_store_keyed_complete`]) before the leaf
+/// body, so no key is resolved twice. No call.
+///
+/// # Safety
+/// Any value bits; `dir` is this agent's shape directory or the empty one.
+#[inline(always)]
+pub(crate) unsafe fn keyed_leaf(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
+    key_leaf(dir, key_bits)
+}
+
+/// The keyed store's add for an overflowed receiver whose overflow does
+/// not hold `key` ([`super::OwnSet::OverflowMiss`]: the leaf checked the
+/// receiver and probed its table). The overflow owns every current own key,
+/// so `key` is absent when the layout does not name it either (a deleted
+/// layout key is re-added as a reference to its slot, by the complete
+/// store), and the add is [`append_admitted`]'s question.
+///
+/// # Safety
+/// `obj` is the leaf's overflowed receiver, `r` its record.
+pub(crate) unsafe fn keyed_overflow_append(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    own_position(r as *mut ShapeRecord, key, hash) == Err(true)
+        && append_admitted(super::super::ordinary_dir_addr(), obj, r, key, hash)
+}
+
+/// [`append_admitted`] for the keyed store's [`super::OwnSet::Absent`].
+///
+/// # Safety
+/// As for [`append_admitted`].
+pub(crate) unsafe fn keyed_add_admitted(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    append_admitted(super::super::ordinary_dir_addr(), obj, r, key, hash)
+}
+
 /// [`computed_key`] in full, for every key [`key_leaf`] does not answer.
 #[inline(never)]
 pub(super) unsafe fn computed_key_complete(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
@@ -689,6 +733,39 @@ pub(crate) unsafe fn probe_store_keyed(obj_bits: u64, key_bits: u64, value: f64)
     let Some((key, hash)) = computed_key_in(dir, key_bits) else {
         return KeyedStore::Unresolved;
     };
+    probe_store_atom(dir, obj_bits, key, hash, value)
+}
+
+/// [`probe_store_keyed`] for a key [`key_leaf`] resolved no atom for: the
+/// complete resolution only (the leaf is not run twice).
+///
+/// # Safety
+/// Any value bits.
+#[inline(always)]
+pub(crate) unsafe fn probe_store_keyed_complete(
+    obj_bits: u64,
+    key_bits: u64,
+    value: f64,
+) -> KeyedStore {
+    let dir = super::super::ordinary_dir_addr();
+    let Some((key, hash)) = computed_key_complete(dir, key_bits) else {
+        return KeyedStore::Unresolved;
+    };
+    probe_store_atom(dir, obj_bits, key, hash, value)
+}
+
+/// [`probe_store_keyed`] for a resolved key (`key`, its atom, and `hash`).
+///
+/// # Safety
+/// Any value bits; `dir` is the agent's shape directory.
+#[inline(always)]
+pub(crate) unsafe fn probe_store_atom(
+    dir: *const u8,
+    obj_bits: u64,
+    key: u64,
+    hash: u64,
+    value: f64,
+) -> KeyedStore {
     match super::set_plan(dir, obj_bits, key, hash, value) {
         super::SetPlan::Stored(stored) if stored != 0 => KeyedStore::Stored,
         super::SetPlan::Add(obj, r, _) => {

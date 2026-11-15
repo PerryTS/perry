@@ -427,16 +427,168 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// §3.3; perry-codegen `expr/proxy_reflect.rs`): a stable-tombstone re-add,
 /// a key the receiver's layout names (its slot) or any other computed key
 /// (appended to the receiver's overflow, no transition), else the complete
-/// strict-aware `[[Set]]`. Nothing is remembered.
+/// strict-aware `[[Set]]`. Nothing is remembered. `dir` is the agent's
+/// shape directory (agent pointer `AGENT_PTR_SHAPE_DIR`), passed in the way
+/// `perry_probe_get_keyed` takes it, so the hit path names no thread-local.
+///
+/// # Safety
+/// `dir` is this agent's shape directory or `PERRY_EMPTY_SHAPE_DIR`.
 #[no_mangle]
-pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+pub unsafe extern "C" fn js_put_value_set_dynamic(
+    dir: *const u8,
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
+    use crate::object::layout_probe::OwnSet;
+    // The frame-free keyed probe (DESIGN_R §3): the key's atom first; a key
+    // the leaf resolves no atom for leaves at once for the complete keyed
+    // store. Then the static store's own-slot leaf with the atom; every
+    // other case is one tail call that continues from the atom.
+    let Some((atom, hash)) =
+        (unsafe { crate::object::layout_probe::keyed_leaf(dir, key.to_bits()) })
+    else {
+        return set_dynamic_unresolved(target, key, value, strict);
+    };
+    match unsafe { crate::object::layout_probe::own_set(dir, target.to_bits(), atom, hash, value) }
+    {
+        OwnSet::Stored => value,
+        OwnSet::Slot(obj, address, slot) => set_dynamic_slot_any(obj, address, slot, value),
+        OwnSet::Table(t, address) => set_dynamic_table_barrier(t, address, value),
+        OwnSet::Hole(..) => set_dynamic_rest_atom(target, atom, hash, value, strict),
+        OwnSet::Absent(r) => set_dynamic_absent(target, value, atom, hash, r, strict),
+        OwnSet::OverflowMiss(r) => set_dynamic_overflow_miss(target, value, atom, hash, r, strict),
+        OwnSet::Rest => set_dynamic_rest_atom(target, atom, hash, value, strict),
+    }
+}
+
+/// [`js_put_value_set_dynamic`]'s barriered own-slot store
+/// ([`crate::object::layout_probe::OwnSet::Slot`]).
+#[inline(never)]
+fn set_dynamic_slot_any(
+    obj: *mut crate::ObjectHeader,
+    address: *mut u64,
+    slot: u32,
+    value: f64,
+) -> f64 {
+    unsafe {
+        crate::object::layout_probe::own_slot_store_any(
+            obj,
+            address,
+            slot,
+            crate::object::layout_probe::store_bits(value),
+        )
+    };
+    // Opaque: a returned argument lets IPO take the call out of tail position.
+    core::hint::black_box(value)
+}
+
+/// [`js_put_value_set_dynamic`]'s barrier for an overflow value word the
+/// leaf wrote ([`crate::object::layout_probe::OwnSet::Table`]).
+#[inline(never)]
+fn set_dynamic_table_barrier(
+    t: *mut crate::object::overflow::Table,
+    address: *mut u64,
+    value: f64,
+) -> f64 {
+    crate::gc::runtime_write_barrier_slot(
+        t as usize,
+        address as usize,
+        crate::object::layout_probe::store_bits(value),
+    );
+    // Opaque: a returned argument lets IPO take the call out of tail position.
+    core::hint::black_box(value)
+}
+
+/// [`js_put_value_set_dynamic`] for a key its receiver's own list proves
+/// absent ([`crate::object::layout_probe::OwnSet::Absent`]): the overflow
+/// append when the receiver admits it, else the complete store of the atom.
+#[inline(never)]
+fn set_dynamic_absent(
+    target: f64,
+    value: f64,
+    atom: u64,
+    hash: u64,
+    r: *const crate::object::layout_probe::ShapeRecord,
+    strict: i32,
+) -> f64 {
+    unsafe {
+        if !crate::object::layout_probe::own_list_complete(r) {
+            return set_dynamic_rest_atom(target, atom, hash, value, strict);
+        }
+        let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
+        if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
+            if let Some(stored) = keyed_append(obj, atom, value) {
+                return stored;
+            }
+        }
+    }
+    set_dynamic_complete(target, f64::from_bits(atom), value, strict)
+}
+
+/// [`js_put_value_set_dynamic`] for an overflowed receiver whose overflow
+/// does not hold the atom ([`crate::object::layout_probe::OwnSet::OverflowMiss`]):
+/// the leaf checked the receiver and probed its table, so the append asks
+/// only the layout and the receiver's admission; else the complete store.
+#[inline(never)]
+fn set_dynamic_overflow_miss(
+    target: f64,
+    value: f64,
+    atom: u64,
+    hash: u64,
+    r: *const crate::object::layout_probe::ShapeRecord,
+    strict: i32,
+) -> f64 {
+    unsafe {
+        let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
+        if crate::object::layout_probe::keyed_overflow_append(obj, r, atom, hash) {
+            if let Some(stored) = keyed_append(obj, atom, value) {
+                return stored;
+            }
+        }
+    }
+    set_dynamic_complete(target, f64::from_bits(atom), value, strict)
+}
+
+/// [`js_put_value_set_dynamic`] for a key the leaf resolved no atom for:
+/// the complete resolution, then the keyed store.
+#[inline(never)]
+fn set_dynamic_unresolved(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    let store = unsafe {
+        crate::object::layout_probe::probe_store_keyed_complete(
+            target.to_bits(),
+            key.to_bits(),
+            value,
+        )
+    };
+    set_dynamic_after(store, target, key, value, strict)
+}
+
+/// [`js_put_value_set_dynamic`] for every case the leaf hands back with the
+/// key's atom resolved: the keyed store from the atom.
+#[inline(never)]
+fn set_dynamic_rest_atom(target: f64, atom: u64, hash: u64, value: f64, strict: i32) -> f64 {
+    let dir = crate::object::shapes::ordinary_dir_addr();
+    let store = unsafe {
+        crate::object::layout_probe::probe_store_atom(dir, target.to_bits(), atom, hash, value)
+    };
+    set_dynamic_after(store, target, f64::from_bits(atom), value, strict)
+}
+
+/// The keyed store after its probe (`store`): the store a static
+/// `target.key = value` site makes when the receiver owns the key, the
+/// append when its own list proves the key absent, else the complete store.
+#[inline(always)]
+fn set_dynamic_after(
+    store: crate::object::layout_probe::KeyedStore,
+    target: f64,
+    key: f64,
+    value: f64,
+    strict: i32,
+) -> f64 {
     use crate::object::layout_probe::KeyedStore;
-    // The keyed store probe: one key resolution (the key's atom), then the
-    // store a static `target.key = value` site makes when the receiver owns
-    // the key, or the append when its own list proves the key absent.
-    let (target, key, value) = match unsafe {
-        crate::object::layout_probe::probe_store_keyed(target.to_bits(), key.to_bits(), value)
-    } {
+    let (target, key, value) = match store {
         KeyedStore::Stored => return value,
         KeyedStore::Append(obj, atom) => match unsafe { keyed_append(obj, atom, value) } {
             Some(stored) => return stored,
@@ -462,6 +614,13 @@ pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, st
             }
         }
     };
+    set_dynamic_complete(target, key, value, strict)
+}
+
+/// The keyed store after its probe: an own overwrite, a family store, the
+/// migrate-on-miss, a tombstone re-add, the dynamic add, else `[[Set]]`.
+#[inline(never)]
+fn set_dynamic_complete(target: f64, key: f64, value: f64, strict: i32) -> f64 {
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
         Err(key) => key,
@@ -626,12 +785,15 @@ mod tests {
             let before = unsafe { crate::object::shapes::object_shape_stamp(obj) };
             assert!(!unsafe { crate::object::overflow::has_overflow(obj) });
             assert_eq!(
-                js_put_value_set_dynamic(
-                    crate::value::js_nanbox_pointer(obj as i64),
-                    key_handle.get_nanbox_f64(),
-                    value,
-                    1,
-                ),
+                unsafe {
+                    js_put_value_set_dynamic(
+                        crate::object::shapes::ordinary_dir_addr(),
+                        crate::value::js_nanbox_pointer(obj as i64),
+                        key_handle.get_nanbox_f64(),
+                        value,
+                        1,
+                    )
+                },
                 value
             );
             let obj = handle.get_raw_mut_ptr::<crate::ObjectHeader>();
@@ -658,12 +820,15 @@ mod tests {
 
         let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
         assert_eq!(
-            js_put_value_set_dynamic(
-                crate::value::js_nanbox_pointer(user_class as i64),
-                key_handle.get_nanbox_f64(),
-                47.0,
-                1,
-            ),
+            unsafe {
+                js_put_value_set_dynamic(
+                    crate::object::shapes::ordinary_dir_addr(),
+                    crate::value::js_nanbox_pointer(user_class as i64),
+                    key_handle.get_nanbox_f64(),
+                    47.0,
+                    1,
+                )
+            },
             47.0
         );
         assert_eq!(
