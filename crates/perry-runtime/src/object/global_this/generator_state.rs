@@ -592,27 +592,46 @@ pub(crate) unsafe fn resume_fixed_step(
     // including after barrier work. Abrupt arguments cross no slot barrier;
     // their remaining setup is the non-collecting exception-stack capture.
     // The argument is never read here after the body can collect.
-    let result = crate::exception::catch_generator_resume(&state, op, arg);
+    // 27.5.3.3 GeneratorResume: an abrupt completion of the body completes
+    // the generator. The body's own completion catch marks it done and not
+    // executing before it rethrows, so the throw passes through this frame
+    // with nothing left to do here; the catching frame's handler truncates
+    // the runtime handle stack, this scope included (as for any runtime
+    // frame that calls into JS).
+    let value = state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+        let arg = if op == 0.0 {
+            f64::from_bits(*p.add(1).cast::<u64>().add(2))
+        } else {
+            arg
+        };
+        if (*(*p).info).params == 1 {
+            return crate::closure::body_call::js_body_call_unwind!(
+                (*(*p).info).code,
+                p,
+                crate::closure::plain_call_receiver(),
+                arg
+            );
+        }
+        crate::closure::body_call::js_body_call_unwind!(
+            (*(*p).info).code,
+            p,
+            crate::closure::plain_call_receiver(),
+            op,
+            arg
+        )
+    });
     set(3, crate::value::TAG_FALSE);
-    match result {
-        Ok(value) => {
-            // The record can keep this value in a slot its body appends to
-            // in place. Handing it out aliases it, exactly as storing it into
-            // an IteratorResult member did: demote a uniquely owned string.
-            if value.to_bits() & crate::value::TAG_MASK == crate::value::STRING_TAG {
-                crate::string::js_string_addref(
-                    (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::StringHeader,
-                );
-            }
-            let kind = f64::from_bits(get(STEP_SLOT)) as u32;
-            debug_assert!(matches!(kind, STEP_YIELD | STEP_DONE | STEP_INNER_RESULT));
-            FixedStep { value, kind }
-        }
-        Err(value) => {
-            set(1, crate::value::TAG_TRUE);
-            crate::exception::rethrow_caught(value)
-        }
+    // The record can keep this value in a slot its body appends to in place.
+    // Handing it out aliases it, exactly as storing it into an IteratorResult
+    // member did: demote a uniquely owned string.
+    if value.to_bits() & crate::value::TAG_MASK == crate::value::STRING_TAG {
+        crate::string::js_string_addref(
+            (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::StringHeader,
+        );
     }
+    let kind = f64::from_bits(get(STEP_SLOT)) as u32;
+    debug_assert!(matches!(kind, STEP_YIELD | STEP_DONE | STEP_INNER_RESULT));
+    FixedStep { value, kind }
 }
 );
 
