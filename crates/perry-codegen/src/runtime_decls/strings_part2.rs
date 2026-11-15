@@ -633,6 +633,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_crypto_generate_key_pair_sync_ed25519", I64, &[DOUBLE]);
     module.declare_function("js_crypto_generate_key_pair_sync_x25519", I64, &[DOUBLE]);
     module.declare_function(
+        "js_crypto_generate_key_pair_sync_named",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_crypto_generate_key_pair_async",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],

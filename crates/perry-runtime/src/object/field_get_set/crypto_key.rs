@@ -101,6 +101,9 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         30 => "ML-KEM-512",
         31 => "ML-KEM-768",
         32 => "ML-KEM-1024",
+        33 => "ML-DSA-44",
+        34 => "ML-DSA-65",
+        35 => "ML-DSA-87",
         _ => "",
     }
 }

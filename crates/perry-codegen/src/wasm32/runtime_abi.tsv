@@ -1099,6 +1099,7 @@ js_crypto_generate_key_pair_async	f64	i64,f64,f64
 js_crypto_generate_key_pair_sync	f64	i64,i64
 js_crypto_generate_key_pair_sync_ec_p256	ptr	f64
 js_crypto_generate_key_pair_sync_ed25519	ptr	f64
+js_crypto_generate_key_pair_sync_named	ptr	i64,f64
 js_crypto_generate_key_pair_sync_rsa	ptr	f64
 js_crypto_generate_key_pair_sync_x25519	ptr	f64
 js_crypto_generate_key_sync	ptr	i64,f64
