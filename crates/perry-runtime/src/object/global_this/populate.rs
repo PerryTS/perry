@@ -237,6 +237,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // The thread realm binds the constructor its [[Intrinsics]] already
         // holds (a family born before %Global%); a `vm` realm births its own.
         let thread_realm = super::is_thread_realm_global(singleton());
+        // A root family (Function) is born at setup by its own birth; the
+        // thread realm binds the constructor that birth made.
+        if thread_realm && !declaration.lazy {
+            crate::array::intrinsic_prototype_addr(declaration.identity);
+        }
         let bound = if thread_realm {
             crate::array::intrinsic_constructor_addr_if_bound(declaration.identity)
         } else {
@@ -1140,8 +1145,22 @@ fn is_own_builder_family(name: &str) -> bool {
 }
 
 pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
+    debug_assert!(identity.declaration().lazy);
+    birth_own_family(identity);
+}
+
+/// `%Function%`'s setup birth. Function is a root family like Object: every
+/// closure's [[Prototype]] is %Function.prototype%, so the first closure the
+/// realm setup allocates observes it; "born at setup" is its true state, and
+/// it is not declared `lazy`. This is the one writer of its cells.
+pub(crate) fn ensure_function_intrinsics() {
+    birth_own_family(crate::object::BuiltinConstructorIdentity::Function);
+}
+
+/// A family's birth: the constructor (made here when it is born before
+/// %Global%), then `birth_family` on it.
+fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
     let declaration = identity.declaration();
-    debug_assert!(declaration.lazy);
     if crate::array::intrinsic_prototype_addr_if_bound(identity) != 0 {
         return;
     }

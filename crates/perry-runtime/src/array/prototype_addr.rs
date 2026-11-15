@@ -283,6 +283,11 @@ fn realm_intrinsic_addr(
             crate::object::birth_lazy_family(identity);
             cell.get()
         }
+        // The root family Function is born by its own setup birth.
+        Some(crate::object::BuiltinConstructorIdentity::Function) if addr == 0 => {
+            crate::object::ensure_function_intrinsics();
+            cell.get()
+        }
         _ => addr,
     };
     // A family is born by itself; only what no birth makes (a non-family

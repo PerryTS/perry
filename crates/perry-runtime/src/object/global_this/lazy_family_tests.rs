@@ -38,6 +38,12 @@ fn realm_population_does_not_birth_lazy_families() {
     assert!(!born_by_its_observation(object.declaration()));
     assert_ne!(crate::array::intrinsic_constructor_addr_if_bound(object), 0, "Object: setup binds the constructor");
     assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(object), 0, "Object is born at realm setup");
+    // Function is the second root family: born at realm setup, exactly (321-reply).
+    let function = crate::object::BuiltinConstructorIdentity::Function;
+    assert!(!function.declaration().lazy, "Function is not declared lazy");
+    assert!(!born_by_its_observation(function.declaration()));
+    assert_ne!(crate::array::intrinsic_constructor_addr_if_bound(function), 0, "Function: setup binds the constructor");
+    assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(function), 0, "Function is born at realm setup");
     assert!(!lazy.is_empty(), "Navigator is declared lazy");
     for declaration in &lazy {
         let ctor = crate::array::intrinsic_constructor_addr_if_bound(declaration.identity);
