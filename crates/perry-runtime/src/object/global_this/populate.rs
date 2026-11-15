@@ -1136,7 +1136,7 @@ pub(crate) fn born_by_its_observation(declaration: &BuiltinConstructorDeclaratio
 }
 
 fn is_own_builder_family(name: &str) -> bool {
-    matches!(name, "Object" | "Buffer")
+    matches!(name, "Buffer")
 }
 
 pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {

@@ -5,7 +5,7 @@ use super::*;
 fn lazy_declarations() -> Vec<&'static BuiltinConstructorDeclaration> {
     GLOBAL_THIS_BUILTIN_CONSTRUCTORS
         .iter()
-        .filter(|declaration| declaration.lazy)
+        .filter(|declaration| born_by_its_observation(declaration))
         .collect()
 }
 
@@ -32,6 +32,12 @@ fn realm_population_does_not_birth_lazy_families() {
     let _lock = crate::gc::global_side_table_test_lock();
     js_get_global_this();
     let lazy = lazy_declarations();
+    // Object is the root family: born at realm setup, exactly (320-reply).
+    let object = crate::object::BuiltinConstructorIdentity::Object;
+    assert!(!object.declaration().lazy, "Object is not declared lazy");
+    assert!(!born_by_its_observation(object.declaration()));
+    assert_ne!(crate::array::intrinsic_constructor_addr_if_bound(object), 0, "Object: setup binds the constructor");
+    assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(object), 0, "Object is born at realm setup");
     assert!(!lazy.is_empty(), "Navigator is declared lazy");
     for declaration in &lazy {
         let ctor = crate::array::intrinsic_constructor_addr_if_bound(declaration.identity);

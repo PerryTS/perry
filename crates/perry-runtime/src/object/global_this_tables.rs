@@ -101,12 +101,16 @@ macro_rules! builtin_constructors {
                 sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
-                lazy: true,
+                lazy: builtin_constructors!(@lazy $($lazy)?),
                 external: builtin_constructors!(@callable $($external)?),
                 statics: &[$($($static,)*)?],
             },)*
         ];
     };
+    // Every family is born on its first observation, except the root
+    // family Object (every prototype chain observes it): born at setup.
+    (@lazy $lazy:expr) => { $lazy };
+    (@lazy) => { true };
     (@callable $callable:expr) => { $callable };
     (@callable) => { false };
     (@optional $class:expr) => { Some($class) };
@@ -123,7 +127,7 @@ macro_rules! builtin_constructors {
 // legacy `0.0` no-value placeholder.
 builtin_constructors! {
     Array => ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE; statics ["isArray", "from", "of"],
-    Object => crate::fn_info!(#[realm(Object, kind = constructor, provider = builtin_constructor, members = { keys; values; entries; freeze; create; seal; isSealed; isFrozen; isExtensible; preventExtensions; is; setPrototypeOf; getOwnPropertySymbols; getOwnPropertyDescriptors; defineProperties; groupBy; getPrototypeOf; getOwnPropertyNames; getOwnPropertyDescriptor; defineProperty; fromEntries; assign; hasOwn; })] export crate::object::global_this::builtin_thunks::global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050); statics ["keys", "values", "entries", "freeze", "create", "seal", "isSealed", "isFrozen", "isExtensible", "preventExtensions", "is", "setPrototypeOf", "getOwnPropertySymbols", "getOwnPropertyDescriptors", "defineProperties", "groupBy", "getPrototypeOf", "getOwnPropertyNames", "getOwnPropertyDescriptor", "defineProperty", "fromEntries", "assign", "hasOwn"],
+    Object => crate::fn_info!(#[realm(Object, kind = constructor, provider = builtin_constructor, members = { keys; values; entries; freeze; create; seal; isSealed; isFrozen; isExtensible; preventExtensions; is; setPrototypeOf; getOwnPropertySymbols; getOwnPropertyDescriptors; defineProperties; groupBy; getPrototypeOf; getOwnPropertyNames; getOwnPropertyDescriptor; defineProperty; fromEntries; assign; hasOwn; })] export crate::object::global_this::builtin_thunks::global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050); lazy false; statics ["keys", "values", "entries", "freeze", "create", "seal", "isSealed", "isFrozen", "isExtensible", "preventExtensions", "is", "setPrototypeOf", "getOwnPropertySymbols", "getOwnPropertyDescriptors", "defineProperties", "groupBy", "getPrototypeOf", "getOwnPropertyNames", "getOwnPropertyDescriptor", "defineProperty", "fromEntries", "assign", "hasOwn"],
     String => crate::fn_info!(#[realm(String, kind = constructor, provider = builtin_constructor, members = { fromCharCode; fromCodePoint; raw; }, births = ["%StringIteratorPrototype%", Array, RegExp])] export crate::object::global_this::builtin_thunks::global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1); statics ["fromCharCode", "fromCodePoint", "raw"],
     Number => crate::fn_info!(#[realm(Number, kind = constructor, provider = builtin_constructor, members = { isNaN; isFinite; isInteger; isSafeInteger; parseFloat = ref(parseFloat); parseInt = ref(parseInt); NaN = NaN; POSITIVE_INFINITY = Infinity; NEGATIVE_INFINITY = -Infinity; MAX_VALUE = 1.7976931348623157e+308; MIN_VALUE = 5e-324; EPSILON = 2.220446049250313e-16; MAX_SAFE_INTEGER = 9007199254740991.0; MIN_SAFE_INTEGER = -9007199254740991.0; })] export crate::object::global_this::builtin_thunks::global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0); statics ["isNaN", "isFinite", "isInteger", "isSafeInteger", "parseFloat", "parseInt", "NaN", "POSITIVE_INFINITY", "NEGATIVE_INFINITY", "MAX_VALUE", "MIN_VALUE", "EPSILON", "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER"],
     Boolean => crate::fn_info!(#[realm(Boolean, kind = constructor, provider = builtin_constructor)] export crate::object::global_this::builtin_thunks::global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
