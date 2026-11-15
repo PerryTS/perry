@@ -1116,6 +1116,18 @@ fn unborn_constructor(
     crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
 
+/// A family whose birth is `birth_lazy_family` (its first observation):
+/// `lazy`, and not one of the two made by their own builders (`Object`,
+/// `Buffer`). Its prototype and its constructor namespace are sealed by that
+/// birth (`seal_born_family`), never by `seal_realm`.
+pub(crate) fn born_by_its_observation(declaration: &BuiltinConstructorDeclaration) -> bool {
+    declaration.lazy && !is_own_builder_family(declaration.name)
+}
+
+fn is_own_builder_family(name: &str) -> bool {
+    matches!(name, "Object" | "Buffer")
+}
+
 pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
     let declaration = identity.declaration();
     debug_assert!(declaration.lazy);
@@ -1131,7 +1143,7 @@ pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdent
         // Born before %Global%: the thread realm's constructor is made here,
         // as setup makes it. `Object` and `Buffer` are made by their own
         // builders, never by `alloc_builtin_constructor`.
-        if matches!(declaration.name, "Object" | "Buffer") {
+        if is_own_builder_family(declaration.name) {
             return;
         }
         let _no_move = crate::gc::GcSuppressScope::new();

@@ -7,6 +7,12 @@ fn ns(name: &str) -> usize {
 /// This thread's realm global, populated and sealed.
 fn global() -> *mut ObjectHeader {
     let g = crate::object::js_get_global_this();
+    // A lazy family's namespace is sealed by its own birth: observe each one.
+    for name in crate::codegen_abi::BUILTIN_NAMESPACES {
+        if let Some(identity) = crate::object::BuiltinConstructorIdentity::for_name(name) {
+            crate::array::intrinsic_prototype_addr(identity);
+        }
+    }
     (g.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader
 }
 

@@ -158,7 +158,9 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
             // (`seal_born_family`): a bag made here would be that birth.
             let name: &str = name;
             if crate::object::BuiltinConstructorIdentity::for_name(name)
-                .is_some_and(|identity| identity.declaration().lazy)
+                .is_some_and(|identity| {
+                    crate::object::global_this::born_by_its_observation(identity.declaration())
+                })
             {
                 continue;
             }
