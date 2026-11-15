@@ -97,6 +97,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_FIELD_READ_CALLS",
     "PERRY_FACTS_FILTER_DEMAND",
     "PERRY_FACTS_FN_BASES",
+    "PERRY_FACTS_GENERATOR_SOURCES",
     "PERRY_FACTS_GUARD_PRESENCE",
     "PERRY_FACTS_GUARD_RANGES",
     "PERRY_FACTS_HELD_LENGTHS",
@@ -380,6 +381,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_ENUM_IMAGE_CENSUS", "Prints enum-image census diagnostics only; no lowering decision depends on this report."),
     ("PERRY_LIFE_CENSUS", "Compiler-only lifetime census file; forces the uncached path (as PERRY_NO_CACHE=1) and does not change emitted code."),
     ("PERRY_FALLBACK_DIAG", "Opt-in sidecar labels; all caches are bypassed while enabled. Off leaves emitted code and cache identity unchanged."),
+    ("PERRY_SNAP_IMAGE_LIST_PAST_STOPS", "Test-only: writes the names of image words past a stop to a side file; the image, its stop and the emitted binary are unchanged."),
     ("PERRY_LOWERING_JOBS", "Changes callable scheduling only; deterministic merging preserves emitted objects."),
     (
         "PERRY_5951_TRACE",
