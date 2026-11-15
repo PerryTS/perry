@@ -247,6 +247,7 @@ pub(crate) fn install_default_value() {
     DEFAULT_VALUE.set(cluster_default_value);
 }
 
+#[inline(never)]
 pub(crate) fn cluster_default_value_installed() -> f64 {
     DEFAULT_VALUE
         .get()

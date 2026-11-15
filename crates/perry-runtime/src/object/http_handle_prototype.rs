@@ -97,7 +97,8 @@ pub(crate) fn install_field() {
 
 /// Resolve a live HTTP handle before generic registry dispatch. Native own
 /// state survives prototype replacement; synthetic inherited members do not.
-#[inline]
+/// Not inlined: its callers keep main's code, a call to this function.
+#[inline(never)]
 pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option<JSValue> {
     FIELD.peek()?(handle_id, key)
 }
