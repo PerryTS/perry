@@ -156,7 +156,9 @@ pub(crate) fn is_builtin_stream_method(value: f64, name: &str) -> bool {
         .into_iter()
         .chain(super::readwrite::emitter_methods())
         .chain(super::readwrite::writable_methods())
-        .any(|(key, intrinsic)| key == name && std::ptr::eq(intrinsic, info))
+        // The identity first: a pointer compare rejects nearly every row
+        // before a string compare runs.
+        .any(|(key, intrinsic)| std::ptr::eq(intrinsic, info) && key == name)
 }
 
 /// `value` when it is a callable that is not one of node's prototype hooks.
