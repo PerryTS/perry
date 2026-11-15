@@ -445,3 +445,27 @@ fn linker_ordered_records_have_a_sentinel_and_reject_broken_order() {
     fixture.section[2 * WORDS] = 1;
     assert_ne!(unsafe { (fixture.bounds.sentinel as *const i32).read() }, 0);
 }
+/// A native and a builtin accessor born by the realm carry their name as
+/// static data: after populate neither owner holds state, and the name reads.
+#[test]
+fn realm_natives_and_accessors_carry_static_names_without_owner_state() {
+    let key = |name: &[u8]| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let closure_of = |bits: u64| crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *const crate::closure::ClosureHeader;
+    let global = crate::object::js_get_global_this();
+    let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
+    let native = crate::object::js_object_get_field_by_name(global_ptr, key(b"parseInt"));
+    let native = crate::closure::closure_info(closure_of(native.bits())).expect("parseInt info");
+    assert!(Record::for_info(native).is_some(), "parseInt must be an owned record");
+    assert!(!test_owner_has_state(native), "parseInt owner has state after populate");
+    assert_eq!(crate::builtins::fn_metadata::registered_name_string(native).as_deref(), Some("parseInt"));
+    assert!(!test_owner_has_state(native), "reading the name must not create state");
+    let regexp = crate::object::js_object_get_field_by_name(global_ptr, key(b"RegExp"));
+    let proto = crate::closure::closure_get_dynamic_prop(closure_of(regexp.bits()) as usize, "prototype");
+    let proto = crate::value::js_nanbox_get_pointer(proto) as usize;
+    let accessor = crate::object::get_accessor_descriptor(proto, "global").expect("RegExp.prototype.global accessor");
+    let getter = crate::closure::closure_info(closure_of(accessor.get)).expect("getter info");
+    assert!(Record::for_info(getter).is_some(), "getter must be an owned record");
+    assert!(!test_owner_has_state(getter), "getter owner has state after populate");
+    assert_eq!(crate::builtins::fn_metadata::registered_name_string(getter).as_deref(), Some("get global"));
+    assert!(!test_owner_has_state(getter), "reading the name must not create state");
+}
