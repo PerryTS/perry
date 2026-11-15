@@ -725,6 +725,56 @@ pub(crate) unsafe fn get_found_from_record(
     read_found_with_live(t, obj, slot, || record.live_inline_slot_count())
 }
 
+/// The probe's (GC-leaf) read of entry `slot`: as [`get_from`], except that
+/// a fixed inline slot holding the null POINTER word (never legitimate) answers
+/// `None`, so the caller's hole sends the read to the complete path, which keeps
+/// its diagnostic. No formatting, allocation or collection is reachable.
+#[inline(always)]
+pub(crate) unsafe fn get_from_probe(t: *const Table, obj: *const ObjectHeader, slot: u32) -> Option<u64> {
+    if slot >= (*t).length || *key_at(t, slot) == TAG_HOLE {
+        return None;
+    }
+    read_found_probe(t, obj, slot, || super::object_live_slot_count(obj))
+}
+
+/// [`get_found_from_record`] for the probe, with [`get_from_probe`]'s null rule.
+///
+/// # Safety
+/// As [`get_found_from_record`].
+#[inline(always)]
+pub(crate) unsafe fn get_found_from_record_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u64> {
+    debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
+    read_found_probe(t, obj, slot, || record.live_inline_slot_count())
+}
+
+#[inline(always)]
+unsafe fn read_found_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    inline_bound: impl FnOnce() -> u32,
+) -> Option<u64> {
+    if *attrs_at(t, slot) & SLOT_REF != 0 {
+        let fixed = *value_at(t, slot) as u32;
+        let live = inline_bound();
+        if fixed < live {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            let w = *fields.add(fixed as usize);
+            if w == crate::value::POINTER_TAG {
+                return None;
+            }
+            return Some(crate::layout_slot::slot_word_value(obj, fixed, w));
+        }
+        return super::spill::spill_get_present(obj as usize, fixed as usize);
+    }
+    Some(*value_at(t, slot))
+}
+
 /// The single entry-value operation. General callers validate the entry above
 /// and resolve a bound only for a fixed reference; a proved lookup supplies its
 /// current record's same bound. No state is learned by either caller.

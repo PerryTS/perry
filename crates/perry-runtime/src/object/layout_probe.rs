@@ -254,7 +254,7 @@ unsafe fn overflow_accessor_answer(
     obj: *const ObjectHeader,
     entry: u32,
 ) -> f64 {
-    crate::object::overflow::get_from(table, obj, entry).map_or_else(hole, |pair| pair_answer(pair))
+    crate::object::overflow::get_from_probe(table, obj, entry).map_or_else(hole, |pair| pair_answer(pair))
 }
 
 /// [`pair_answer`] for the public accessor at key position `pos` of `obj`
@@ -898,7 +898,7 @@ unsafe fn owned_accessor_answer<const ABSENT: bool>(
     key_bits: u64,
 ) -> f64 {
     let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+    let value = crate::object::overflow::get_found_from_record_probe(table, obj, entry, record)
         .map_or_else(hole, |pair| pair_answer(pair));
     if ABSENT {
         verify::answer(obj as usize, key_bits, value)
@@ -980,7 +980,7 @@ unsafe fn owned_found<const ABSENT: bool>(
         return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
     }
     let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+    let value = crate::object::overflow::get_found_from_record_probe(table, obj, entry, record)
         .map(f64::from_bits)
         .unwrap_or_else(hole);
     if ABSENT {
@@ -1708,7 +1708,7 @@ unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Op
         return Some(overflow_accessor_answer(t, obj, i));
     }
     Some(
-        crate::object::overflow::get_from(t, obj, i)
+        crate::object::overflow::get_from_probe(t, obj, i)
             .map(f64::from_bits)
             .unwrap_or_else(hole),
     )
@@ -1872,7 +1872,7 @@ unsafe fn overflow_accessor(obj: *const ObjectHeader, key_bits: u64, hash: u64) 
     {
         return OverflowKey::Data;
     }
-    OverflowKey::Accessor(crate::object::overflow::get_from(t, obj, i).unwrap_or(0))
+    OverflowKey::Accessor(crate::object::overflow::get_from_probe(t, obj, i).unwrap_or(0))
 }
 
 /// The accessor slot word at key position `pos` of `obj` (record `r`): one
