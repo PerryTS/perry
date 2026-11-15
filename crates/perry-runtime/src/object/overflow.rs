@@ -523,6 +523,25 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
     next
 }
 
+/// The append of a plain writable data entry `key` (a property atom the
+/// table does not hold) with `value` into table `t`, which has room
+/// (`length < capacity`). No allocation, no collection: the caller proved the
+/// receiver admits the add (`layout_probe::table_append`).
+#[inline(always)]
+pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, value: u64) {
+    let slot = (*t).length;
+    // GC_STORE_AUDIT(BARRIERED): new entry's key atom; the resolved-slot barrier below covers it.
+    *key_at(t, slot) = key;
+    // GC_STORE_AUDIT(BARRIERED): new entry's value word; the resolved-slot barrier below covers it.
+    *value_at(t, slot) = value;
+    // GC_STORE_AUDIT(POINTER_FREE): attributes word, scalar.
+    *attrs_at(t, slot) = 0;
+    (*t).length = slot + 1;
+    place(t, slot);
+    crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
+    crate::gc::runtime_write_barrier_resolved_slot(t as usize, value_at(t, slot) as usize, value);
+}
+
 pub(crate) unsafe fn insert(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
