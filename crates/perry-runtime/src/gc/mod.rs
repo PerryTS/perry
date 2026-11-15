@@ -1926,3 +1926,6 @@ pub(crate) fn life_collect_full() {
 
 #[cfg(perry_gc_instruments)]
 pub(crate) use layout_slot_visit::visit_traced_slots;
+
+#[cfg(perry_gc_instruments)]
+pub(crate) use roots::census_visit_roots;
