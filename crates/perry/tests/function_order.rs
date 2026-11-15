@@ -501,8 +501,10 @@ fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current(
         at("__start_perry_js_text").expect("JS text start"),
         at("__stop_perry_js_text").expect("JS text end"),
     );
-    let (bodies, startup): (Vec<_>, Vec<_>) = text
+    type Symbol = (u64, String, String);
+    let (bodies, startup): (Vec<&Symbol>, Vec<&Symbol>) = text
         .iter()
+        .copied()
         .filter(|s| s.2.contains("main_ts"))
         .partition(|s| js.0 <= s.0 && s.0 < js.1);
     assert!(!bodies.is_empty(), "the program's functions are symbols");

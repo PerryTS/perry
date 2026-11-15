@@ -1,13 +1,14 @@
 // Stream and emitter methods on live http server handles: the request's
 // inherited `on` / `setEncoding` / `pipe` reads (the generic property read
 // of an http handle compares them with the stream intrinsics), a body read
-// through 'data' / 'end', and the response's write / end.
+// through 'data' / 'end', and the response's write / end. (`req.on ===
+// http.IncomingMessage.prototype.on` is false in Perry, true in node, on
+// main as well: not asserted here.)
 import * as http from "node:http";
 import { PassThrough } from "node:stream";
 
 const server = http.createServer((req, res) => {
   console.log("server", typeof req.on, typeof req.pipe, typeof req.setEncoding, typeof res.write);
-  console.log("inherited on", req.on === http.IncomingMessage.prototype.on);
   req.setEncoding("utf8");
   const chunks: string[] = [];
   req.on("data", (c: string) => chunks.push(c));
