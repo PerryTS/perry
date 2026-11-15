@@ -256,7 +256,8 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
         unresolved: Vec::new(),
     };
     for w in words {
-        let tls = w.region == format::WORD_TLS;
+        let tls = w.region & format::WORD_TLS != 0;
+        let collect = w.region & format::WORD_COLLECT != 0;
         let (kind, a) = if tls {
             ("tls", w.off)
         } else {
@@ -268,6 +269,18 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
             continue;
         };
         let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, sym_path(&s.name), a - s.addr);
+        if collect {
+            // Written only by the capture's collect: a scalar under the gc
+            // module is policy state B1's own collects derive again.
+            if is_collect_pristine(&s.name, &w.val) {
+                c.dropped += 1;
+                *c.dropped_by.entry(sym_path(&s.name)).or_default() += 1;
+            } else {
+                c.unresolved
+                    .push(format!("{at}: the capture's collect wrote it, and it is not a scalar under the gc module"));
+            }
+            continue;
+        }
         match judge(&s.name, &w.val) {
             Judge::Pristine => {
                 c.dropped += 1;
@@ -709,6 +722,12 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     }
     let bytes = std::fs::read(&file).map_err(|e| format!("no image file: {e}"))?;
     let img = format_read::decode(&bytes)?;
+    if let Some(t) = img.stops.iter().find(|t| t.kind == format::STOP_CLASS_TABLES) {
+        return Err(format!(
+            "the class tables grew by {} row(s) between the baseline and the cut, and the image has no form that restores them",
+            t.value
+        ));
+    }
     if let Some(t) = img.stops.first() {
         return Err(format!(
             "{} cell(s) have no image form; first: cell {} type {} kind {} off {}",
@@ -929,6 +948,23 @@ mod tests {
     }
 
     #[test]
+    fn a_collect_only_word_is_pristine_only_as_a_scalar_under_the_gc_module() {
+        let t = parse_syms("Symbol table '.symtab' contains 2 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime2gc6policy5CACHE\n    11: 0000000000600008     8 OBJECT  LOCAL  DEFAULT   24 SOME_CACHE\n");
+        let c = format::WORD_COLLECT;
+        let ws = [
+            word(format::WORD_DATA | c, 0, Val::Scalar(1)),
+            word(format::WORD_DATA | c, 0, Val::Opaque(0x7f00_0000_1000)),
+            word(format::WORD_DATA | c, 8, Val::Scalar(2)),
+            word(format::WORD_DATA, 0, Val::Scalar(3)),
+        ];
+        let r = classify(&ws, &t, 0x600000);
+        assert_eq!(r.dropped, 1, "only the scalar under the gc module");
+        assert_eq!(r.unresolved.len(), 2, "{:?}", r.unresolved);
+        assert!(r.unresolved.iter().all(|u| u.contains("collect wrote it")));
+        assert_eq!(r.kept.len(), 1, "a program-changed word is judged as before");
+    }
+
+    #[test]
     fn cells_become_link_time_constants() {
         let tag = Val::Cell { hi: 0x7FFD, bare: false, index: 1 };
         let img = Image {
@@ -1014,4 +1050,10 @@ mod tests {
         assert!(check_b0_layout(&[], 0x80_0000).is_err());
         assert!(placeholder_ll().contains(SECTION));
     }
+}
+
+/// A word only the capture's collect changed is state of the collector itself
+/// when it is a scalar under `perry_runtime::gc`.
+fn is_collect_pristine(name: &str, v: &Val) -> bool {
+    matches!(v, Val::Scalar(_)) && under(&sym_path(name), "perry_runtime::gc")
 }

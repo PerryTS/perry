@@ -34,7 +34,13 @@ unsafe extern "C" {
 pub(crate) struct Baseline {
     data: (usize, Vec<u8>),
     tls: (usize, Vec<u8>),
-    program_tls: [usize; 4],
+    /// The same ranges as taken first at the cut, before the capture ran any
+    /// code of its own (filled in place: the copy allocates nothing). Empty =
+    /// no cut copy: every change counts as the program's.
+    pre_data: Vec<u8>,
+    pre_tls: Vec<u8>,
+    /// `class_image::snap_image_table_size` at the baseline.
+    classes: usize,
 }
 
 static BASELINE: AtomicPtr<Baseline> = AtomicPtr::new(std::ptr::null_mut());
@@ -73,10 +79,10 @@ fn executable_tls_size() -> usize {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[no_mangle]
 pub extern "C" fn js_snap_image_begin(
-    tls_data_lo: usize,
-    tls_data_hi: usize,
-    tls_bss_lo: usize,
-    tls_bss_hi: usize,
+    _tls_data_lo: usize,
+    _tls_data_hi: usize,
+    _tls_bss_lo: usize,
+    _tls_bss_hi: usize,
 ) {
     let mut fs = 0usize;
     // SAFETY: ARCH_GET_FS stores the thread pointer.
@@ -84,10 +90,14 @@ pub extern "C" fn js_snap_image_begin(
     let tls_lo = fs.saturating_sub(executable_tls_size());
     let lo = std::ptr::addr_of!(__data_start) as usize;
     let hi = std::ptr::addr_of!(_end) as usize;
+    let pre_data = vec![0u8; hi - lo];
+    let pre_tls = vec![0u8; fs - tls_lo];
     let b = Box::new(Baseline {
         data: copy(lo, hi),
         tls: copy(tls_lo, fs),
-        program_tls: [tls_data_lo, tls_data_hi, tls_bss_lo, tls_bss_hi],
+        pre_data,
+        pre_tls,
+        classes: crate::object::class_image::snap_image_table_size(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
@@ -96,20 +106,32 @@ pub extern "C" fn js_snap_image_begin(
 #[no_mangle]
 pub extern "C" fn js_snap_image_cut() {
     let p = BASELINE.load(Relaxed);
-    let Some(out) = std::env::var_os("PERRY_SNAP_IMAGE_OUT") else {
-        return;
-    };
     if p.is_null() {
         return;
     }
+    // SAFETY: leaked in `begin`, never freed; one cut per process.
+    let b = unsafe { &mut *p };
+    // First, before the capture runs any code of its own (no environment
+    // lookup, no maps read): the words as the program left them.
+    take_pre(b);
+    let Some(out) = std::env::var_os("PERRY_SNAP_IMAGE_OUT") else {
+        return;
+    };
     BASELINE.store(std::ptr::null_mut(), Relaxed);
-    // SAFETY: leaked in `begin`, never freed.
-    let b = unsafe { &*p };
+    let b = &*b;
     let pre = read_maps();
     crate::gc::js_gc_collect();
     let img = build(Some(b), pre);
     let ok = std::fs::write(&out, format::encode(&img)).is_ok();
     std::process::exit(if ok { 0 } else { 70 });
+}
+
+/// Copy the data range and the TLS block into the buffers `begin` made.
+fn take_pre(b: &mut Baseline) {
+    for (lo, buf) in [(b.data.0, &mut b.pre_data), (b.tls.0, &mut b.pre_tls)] {
+        // SAFETY: the range `begin` copied; the buffer has the same length.
+        unsafe { std::ptr::copy_nonoverlapping(lo as *const u8, buf.as_mut_ptr(), buf.len()) };
+    }
 }
 
 /// A GC type with no image form: a native payload (inventory `form`).
@@ -348,26 +370,45 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>) -> Image 
     }
     if let Some(b) = base {
         let own = std::ptr::addr_of!(BASELINE) as usize;
-        let p = b.program_tls;
-        let in_program = |a: usize| (a >= p[0] && a < p[1]) || (a >= p[2] && a < p[3]);
-        for (region, (lo, old)) in [(format::WORD_DATA, &b.data), (format::WORD_TLS, &b.tls)] {
+        let le = |s: &[u8]| u64::from_le_bytes(s.try_into().unwrap_or([0; 8]));
+        let regions = [
+            (format::WORD_DATA, &b.data, &b.pre_data),
+            (format::WORD_TLS, &b.tls, &b.pre_tls),
+        ];
+        for (region, (lo, old), pre) in regions {
             for (i, o) in old.chunks_exact(8).enumerate() {
                 let a = lo + i * 8;
-                if a >= own && a < own + 8 || (region == format::WORD_TLS && !in_program(a)) {
+                if a >= own && a < own + 8 {
                     continue;
                 }
                 // SAFETY: the range the baseline copied.
                 let now = unsafe { std::ptr::read_volatile(a as *const u64) };
-                if now == u64::from_le_bytes(o.try_into().unwrap_or([0; 8])) {
+                let was = le(o);
+                if now == was {
                     continue;
                 }
+                // Equal to the baseline in the copy taken first: only the
+                // capture's collect wrote it.
+                let collect = pre.get(i * 8..i * 8 + 8).is_some_and(|p| le(p) == was);
                 let val = w.val(now).unwrap_or(Val::Opaque(now));
                 img.words.push(Word {
-                    region,
+                    region: region | if collect { format::WORD_COLLECT } else { 0 },
                     off: (a - lo) as u64,
                     val,
                 });
             }
+        }
+    }
+    if let Some(b) = base {
+        let now = crate::object::class_image::snap_image_table_size();
+        if now != b.classes {
+            img.stops.push(Stop {
+                cell: 0,
+                obj_type: 0,
+                kind: format::STOP_CLASS_TABLES,
+                off: 0,
+                value: now.wrapping_sub(b.classes) as u64,
+            });
         }
     }
     img.pending = format::PENDING;

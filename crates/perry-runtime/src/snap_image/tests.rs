@@ -169,7 +169,9 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let base = Baseline {
         data: copy(lo, hi),
         tls: (0, Vec::new()),
-        program_tls: [0; 4],
+        pre_data: Vec::new(),
+        pre_tls: Vec::new(),
+        classes: crate::object::class_image::snap_image_table_size(),
     };
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
@@ -237,4 +239,88 @@ fn a_word_outside_every_mapping_is_a_scalar_and_a_tagged_symbol_word_is_sym() {
     // Inside a mapping but neither a cell nor the symbol space: opaque.
     let m = 0x7000_0000_2000u64;
     assert_eq!(w.val(crate::value::STRING_TAG | m), Ok(Val::Opaque(crate::value::STRING_TAG | m)));
+}
+
+#[thread_local]
+static PROBE_TLS: std::cell::Cell<u64> = std::cell::Cell::new(0x77);
+
+fn probe_baseline(pre_is_baseline: bool) -> (Baseline, usize) {
+    let lo = std::ptr::addr_of!(__data_start) as usize;
+    let hi = std::ptr::addr_of!(_end) as usize;
+    let mut fs = 0usize;
+    // SAFETY: ARCH_GET_FS stores the thread pointer.
+    unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1003, &mut fs as *mut usize) };
+    let tls_lo = fs - executable_tls_size();
+    let data = copy(lo, hi);
+    let tls = copy(tls_lo, fs);
+    let (pre_data, pre_tls) = if pre_is_baseline {
+        (data.1.clone(), tls.1.clone())
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let b = Baseline {
+        data,
+        tls,
+        pre_data,
+        pre_tls,
+        classes: crate::object::class_image::snap_image_table_size(),
+    };
+    (b, tls_lo)
+}
+
+#[test]
+fn a_runtime_thread_local_word_written_after_the_baseline_is_a_root_word() {
+    let (base, tls_lo) = probe_baseline(false);
+    PROBE_TLS.set(0x78);
+    let img = build(Some(&base), Vec::new());
+    let want = (std::ptr::addr_of!(PROBE_TLS) as usize - tls_lo) as u64;
+    PROBE_TLS.set(0x77);
+    let w = img
+        .words
+        .iter()
+        .find(|w| w.region == WORD_TLS && w.off == want)
+        .expect("the thread-local word is captured");
+    assert_eq!(w.val, Val::Scalar(0x78));
+}
+
+#[test]
+fn a_word_equal_to_the_baseline_in_the_first_copy_is_collect_only() {
+    let probe = std::ptr::addr_of_mut!(PROBE);
+    let lo = std::ptr::addr_of!(__data_start) as usize;
+    let (base, _) = probe_baseline(true);
+    // SAFETY: a test-owned static, written by the tests that use it.
+    unsafe { probe.write_volatile(0x9999) };
+    let img = build(Some(&base), Vec::new());
+    let want = (probe as usize - lo) as u64;
+    let w = img
+        .words
+        .iter()
+        .find(|w| w.off == want && w.region & WORD_TLS == 0)
+        .expect("probe word captured");
+    assert_eq!(w.region, WORD_DATA | WORD_COLLECT);
+    // The first copy already differs (the program wrote it before the cut).
+    let (mut base2, _) = probe_baseline(true);
+    let i = (want / 8) as usize;
+    base2.pre_data[i * 8..i * 8 + 8].copy_from_slice(&0x5555u64.to_le_bytes());
+    // SAFETY: as above.
+    unsafe { probe.write_volatile(0x6666) };
+    let img2 = build(Some(&base2), Vec::new());
+    let w2 = img2
+        .words
+        .iter()
+        .find(|w| w.off == want && w.region & WORD_TLS == 0);
+    assert!(w2.is_some_and(|w| w.region == WORD_DATA), "{w2:?}");
+    // SAFETY: as above.
+    unsafe { probe.write_volatile(0x1234_5678) };
+}
+
+#[test]
+fn growth_of_the_class_tables_stops_the_image() {
+    let (mut base, _) = probe_baseline(false);
+    let none = build(Some(&base), Vec::new());
+    assert!(none.stops.iter().all(|s| s.kind != STOP_CLASS_TABLES));
+    base.classes = base.classes.wrapping_sub(3);
+    let grew = build(Some(&base), Vec::new());
+    let s = grew.stops.iter().find(|s| s.kind == STOP_CLASS_TABLES);
+    assert_eq!(s.map(|s| s.value), Some(3));
 }

@@ -18,6 +18,8 @@ pub const PENDING: u32 = 0b111;
 pub const STOP_NO_FORM: u8 = 0;
 pub const STOP_SLOT_OUTSIDE: u8 = 1;
 pub const STOP_NOT_CELL_START: u8 = 2;
+/// The class tables grew between the baseline and the cut (`value` = rows).
+pub const STOP_CLASS_TABLES: u8 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stop {
@@ -41,6 +43,9 @@ pub const REGION_TLS: u8 = 4;
 
 pub const WORD_DATA: u8 = 0;
 pub const WORD_TLS: u8 = 1;
+/// Or-ed into the region: written only by the capture's own collect (the
+/// word equals the baseline in the copy taken first at the cut).
+pub const WORD_COLLECT: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Val {

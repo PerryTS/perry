@@ -134,7 +134,7 @@ pub fn dump(img: &Image) -> String {
     for ((r, k), n) in &w {
         s += &format!(
             "words region={} kind={k} n={n}\n",
-            if *r == WORD_DATA { "data" } else { "tls" }
+            if *r & WORD_TLS == 0 { "data" } else { "tls" }
         );
     }
     s += &format!("words={}\n", img.words.len());
