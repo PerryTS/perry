@@ -52,6 +52,16 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     };
     let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
+    // A perf_hooks export that is a realm family is that family's
+    // constructor (`require("perf_hooks").Performance === Performance`),
+    // read through the family's one birth point.
+    if module_name == "perf_hooks" {
+        if let Some(identity) = crate::object::BuiltinConstructorIdentity::for_name(property_name) {
+            return crate::value::js_nanbox_pointer(
+                crate::array::intrinsic_constructor_addr(identity) as i64,
+            );
+        }
+    }
     // Codegen can request a callable directly, bypassing namespace lookup.
     #[cfg(windows)]
     if module_name == "process"
@@ -219,19 +229,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     // module's handler is registered by its `js_nm_install_<module>()`, and
     // this path is only reachable through that module's namespace — so a
     // binary links exactly the attach machinery of the modules it imports.
-    if export_module_name == "perf_hooks" {
-        // These constructors are also installed as globals during realm
-        // bootstrap, before an explicit perf_hooks import necessarily arms the
-        // optional module hook. Their prototypes are intrinsic constructor
-        // state, so install them at this common callable-creation seam.
-        unsafe {
-            crate::perf_hook_slots::attach_perf_hooks_constructor(
-                property_name,
-                value.get_nanbox_f64(),
-                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
-            );
-        }
-    } else if export_module_name == "bun" && property_name == "plugin" {
+    if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
         crate::bun_hook_slots::decorate_bun_plugin(value.get_nanbox_f64());

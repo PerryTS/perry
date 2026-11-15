@@ -7,7 +7,7 @@ const NOOP_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
 const TYPED_ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
     crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0));
 const CONSTRUCT_ONLY_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(#[realm(realm_decl! { DataView, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer], spec = {length = 1}, emit = metadata(realm_function_metadata); ArrayBuffer, kind = constructor, provider = builtin_constructor, members = { isView; [Symbol.species] = accessor(get = "ArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); SharedArrayBuffer, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "SharedArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); Iterator, kind = constructor, provider = builtin_constructor; })] export crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk, 0);
+    crate::fn_info!(#[realm(realm_decl! { DataView, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer], spec = {length = 1}, emit = metadata(realm_function_metadata); ArrayBuffer, kind = constructor, provider = builtin_constructor, members = { isView; [Symbol.species] = accessor(get = "ArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); SharedArrayBuffer, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "SharedArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); Iterator, kind = constructor, provider = builtin_constructor, members = { from; concat; }; })] export crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk, 0);
 const WEBCRYPTO_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
     crate::fn_info!(#[realm(realm_decl! { Crypto, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, CryptoKey, DOMException, Promise, SubtleCrypto, Uint8Array]; CryptoKey, kind = constructor, provider = builtin_constructor; SubtleCrypto, kind = constructor, provider = builtin_constructor, members = { supports, attrs = writable | enumerable | configurable; }, births = [ArrayBuffer, CryptoKey, DOMException, Promise, Uint8Array]; })] export crate::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk, 0);
 
@@ -196,9 +196,11 @@ builtin_constructors! {
     URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063); statics ["canParse", "parse"],
     URLSearchParams => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
     URLPattern => crate::fn_info!(#[realm(URLPattern, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::ctor_thunks::global_this_url_pattern_call_thunk, 2; with_declared(2)); lazy true,
+    // A parent family is declared before its `extends` children: a
+    // child's birth observes (births) its parent.
+    EventTarget => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT_TARGET),
     AbortController => NOOP_CONSTRUCTOR_INFO,
     AbortSignal => NOOP_CONSTRUCTOR_INFO; statics ["abort", "timeout", "any"],
-    EventTarget => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT_TARGET),
     Crypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Crypto; lazy true,
     CryptoKey => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::CryptoKey; lazy true,
     SubtleCrypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::SubtleCrypto; statics ["supports"],
@@ -226,8 +228,18 @@ builtin_constructors! {
     AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
     SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true,
     // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
-    Iterator => CONSTRUCT_ONLY_INFO,
+    Iterator => CONSTRUCT_ONLY_INFO; statics ["from", "concat"],
     Buffer => crate::object::native_module::BUFFER_CONSTRUCTOR_INFO; statics ["from", "alloc", "allocUnsafe", "allocUnsafeSlow", "concat", "of", "isBuffer", "isEncoding", "byteLength", "compare", "copyBytesFrom", "poolSize"],
+    // perf_hooks families (node: globals identical to the module exports),
+    // born on first observation; their members are perf_hooks' own
+    // (`perf_hook_slots::attach_perf_hooks_constructor`, in the birth).
+    Performance => NOOP_CONSTRUCTOR_INFO; lazy true,
+    PerformanceEntry => NOOP_CONSTRUCTOR_INFO; lazy true,
+    PerformanceMark => crate::fn_info!(crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(realm_native_perf_hooks_PerformanceMark_metadata!(length))); lazy true,
+    PerformanceMeasure => NOOP_CONSTRUCTOR_INFO; lazy true,
+    PerformanceObserver => crate::fn_info!(crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(realm_native_perf_hooks_PerformanceObserver_metadata!(length))); lazy true; statics ["supportedEntryTypes"],
+    PerformanceObserverEntryList => NOOP_CONSTRUCTOR_INFO; lazy true,
+    PerformanceResourceTiming => NOOP_CONSTRUCTOR_INFO; lazy true,
 }
 
 /// Is `name` one of the built-in CONSTRUCTORS installed on `globalThis`?

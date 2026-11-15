@@ -445,3 +445,104 @@ fn lazy_interface_children_link_to_their_parent_in_their_birth() {
         );
     }
 }
+
+/// node: `performance` is an accessor (get + set, enumerable, configurable);
+/// the 7 perf_hooks constructors are data properties (writable,
+/// non-enumerable, configurable), identical to the module exports. Setup
+/// runs nothing of perf_hooks: EventTarget stays unborn until a perf family
+/// is observed, and `Performance` extends EventTarget by the `extends` rule.
+#[test]
+fn perf_hooks_families_are_born_by_their_first_read() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::perf_hook_slots::install();
+    let global_value = js_get_global_this();
+    let global = crate::value::js_nanbox_get_pointer(global_value) as usize;
+    let event_target = crate::object::BuiltinConstructorIdentity::EventTarget;
+    assert_eq!(
+        crate::array::intrinsic_prototype_addr_if_bound(event_target),
+        0,
+        "EventTarget is unborn after setup"
+    );
+    let accessor = crate::object::get_accessor_descriptor(global, "performance")
+        .expect("performance is an accessor");
+    assert_ne!(accessor.get, 0, "performance has a getter");
+    assert_ne!(accessor.set, 0, "performance has a setter");
+    let attrs = crate::object::get_property_attrs(global, "performance").expect("performance attrs");
+    assert!(attrs.enumerable() && attrs.configurable(), "performance: e and c");
+    assert_eq!(
+        crate::array::intrinsic_prototype_addr_if_bound(event_target),
+        0,
+        "the performance descriptor births nothing"
+    );
+    // Reading `performance` creates perf_hooks' singleton, whose
+    // [[Prototype]] is Performance.prototype: the creation site births the
+    // Performance family (and EventTarget, by `extends`).
+    let performance_key = crate::string::js_string_from_bytes(b"performance".as_ptr(), 11);
+    let performance_value =
+        js_object_get_field_by_name_f64(global as *const ObjectHeader, performance_key);
+    assert_ne!(
+        crate::array::intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::Performance),
+        0,
+        "reading performance births Performance"
+    );
+    for name in [
+        "Performance",
+        "PerformanceEntry",
+        "PerformanceMark",
+        "PerformanceMeasure",
+        "PerformanceObserver",
+        "PerformanceObserverEntryList",
+        "PerformanceResourceTiming",
+    ] {
+        let identity = crate::object::BuiltinConstructorIdentity::for_name(name)
+            .unwrap_or_else(|| panic!("{name} is a realm family"));
+        assert!(identity.declaration().lazy, "{name} is declared lazy");
+        assert!(
+            crate::object::get_accessor_descriptor(global, name).is_none(),
+            "{name} is a data property"
+        );
+        let attrs = crate::object::get_property_attrs(global, name)
+            .unwrap_or_else(|| panic!("{name} attrs"));
+        assert!(
+            attrs.writable() && !attrs.enumerable() && attrs.configurable(),
+            "{name}: w, not e, c"
+        );
+        let value = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        let ctor = crate::array::intrinsic_constructor_addr(identity);
+        assert_eq!(
+            value.to_bits(),
+            crate::value::js_nanbox_pointer(ctor as i64).to_bits(),
+            "{name}: the realm constructor"
+        );
+        let prototype = builtin_prototype_value(name);
+        assert_eq!(
+            prototype.to_bits(),
+            crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr_if_bound(identity) as i64)
+                .to_bits(),
+            "{name}: born by the first ask for its prototype"
+        );
+        let export = crate::object::bound_native_callable_export_value("perf_hooks", name);
+        assert_eq!(export.to_bits(), value.to_bits(), "require(\"perf_hooks\").{name} === {name}");
+    }
+    let event_target_proto = crate::array::intrinsic_prototype_addr_if_bound(event_target);
+    assert_ne!(event_target_proto, 0, "Performance births its parent");
+    let performance =
+        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Performance);
+    let parent = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(performance as i64));
+    assert_eq!(
+        parent.to_bits(),
+        crate::value::js_nanbox_pointer(event_target_proto as i64).to_bits(),
+        "Performance.prototype extends EventTarget.prototype"
+    );
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(performance_value).to_bits(),
+        crate::value::js_nanbox_pointer(performance as i64).to_bits(),
+        "performance's [[Prototype]] is Performance.prototype"
+    );
+    let mark = crate::array::intrinsic_constructor_addr(
+        crate::object::BuiltinConstructorIdentity::PerformanceMark,
+    );
+    let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let length = js_object_get_field_by_name_f64(mark as *const ObjectHeader, length_key);
+    assert_eq!(length.to_bits(), 1.0f64.to_bits(), "PerformanceMark.length === 1");
+}

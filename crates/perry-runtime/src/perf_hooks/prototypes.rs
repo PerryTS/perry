@@ -230,10 +230,14 @@ unsafe fn perf_field_getter(name: &str) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// The family's intrinsic prototype (read through its birth).
 fn perf_constructor_prototype(class_name: &str) -> f64 {
-    let ctor = crate::object::bound_native_callable_export_value("perf_hooks", class_name);
-    let ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-    crate::closure::closure_get_dynamic_prop(ptr, "prototype")
+    match crate::object::BuiltinConstructorIdentity::for_name(class_name) {
+        Some(identity) => {
+            crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr(identity) as i64)
+        }
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
 }
 
 /// Link runtime-created perf objects through their built-in class hierarchy.
@@ -257,16 +261,20 @@ pub(super) fn link_perf_prototype(value: f64, class_name: &str) -> f64 {
     value.get_nanbox_f64()
 }
 
+/// The members of a perf_hooks family, installed by its birth
+/// (`birth_family`) on the family's own prototype and constructor.
 pub(crate) unsafe fn attach_perf_hooks_constructor(
     class_name: &str,
     constructor_value: f64,
     closure_addr: usize,
+    proto_obj: *mut crate::object::ObjectHeader,
 ) {
     if !PERF_CONSTRUCTOR_NAMES.contains(&class_name) {
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    let proto = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { Performance.prototype, extends = EventTarget.prototype, members = { constructor; clearMarks, attrs = writable | enumerable | configurable; clearMeasures, attrs = writable | enumerable | configurable; clearResourceTimings, attrs = writable | enumerable | configurable; getEntries, attrs = writable | enumerable | configurable; getEntriesByName, attrs = writable | enumerable | configurable; getEntriesByType, attrs = writable | enumerable | configurable; mark, attrs = writable | enumerable | configurable; measure, attrs = writable | enumerable | configurable; now, attrs = writable | enumerable | configurable; setResourceTimingBufferSize, attrs = writable | enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; eventLoopUtilization = ref(performance.eventLoopUtilization); markResourceTiming; timerify = ref(performance.timerify); timeOrigin = accessor(get = "Performance.prototype.timeOrigin.<get>"), attrs = enumerable | configurable; [Symbol.toStringTag] = "Performance"; }; PerformanceEntry.prototype, members = { constructor; name = accessor(get = "PerformanceEntry.prototype.name.<get>"), attrs = enumerable | configurable; entryType = accessor(get = "PerformanceEntry.prototype.entryType.<get>"), attrs = enumerable | configurable; startTime = accessor(get = "PerformanceEntry.prototype.startTime.<get>"), attrs = enumerable | configurable; duration = accessor(get = "PerformanceEntry.prototype.duration.<get>"), attrs = enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; }; PerformanceMark.prototype, extends = PerformanceEntry.prototype, members = { constructor; detail = accessor(get = "PerformanceMark.prototype.detail.<get>"), attrs = enumerable | configurable; toJSON; [Symbol.toStringTag] = "PerformanceMark"; }; PerformanceMeasure.prototype, extends = PerformanceEntry.prototype, members = { constructor; detail = accessor(get = "PerformanceMeasure.prototype.detail.<get>"), attrs = enumerable | configurable; toJSON; [Symbol.toStringTag] = "PerformanceMeasure"; }; PerformanceObserver.prototype, members = { constructor; observe, attrs = writable | enumerable | configurable; disconnect, attrs = writable | enumerable | configurable; takeRecords, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "PerformanceObserver"; }; PerformanceObserverEntryList.prototype, members = { constructor; getEntries, attrs = writable | enumerable | configurable; getEntriesByType, attrs = writable | enumerable | configurable; getEntriesByName, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "PerformanceObserverEntryList"; }; PerformanceResourceTiming.prototype, extends = PerformanceEntry.prototype, members = { constructor; initiatorType = accessor(get = "PerformanceResourceTiming.prototype.initiatorType.<get>"), attrs = enumerable | configurable; workerStart = accessor(get = "PerformanceResourceTiming.prototype.workerStart.<get>"), attrs = enumerable | configurable; redirectStart = accessor(get = "PerformanceResourceTiming.prototype.redirectStart.<get>"), attrs = enumerable | configurable; redirectEnd = accessor(get = "PerformanceResourceTiming.prototype.redirectEnd.<get>"), attrs = enumerable | configurable; fetchStart = accessor(get = "PerformanceResourceTiming.prototype.fetchStart.<get>"), attrs = enumerable | configurable; domainLookupStart = accessor(get = "PerformanceResourceTiming.prototype.domainLookupStart.<get>"), attrs = enumerable | configurable; domainLookupEnd = accessor(get = "PerformanceResourceTiming.prototype.domainLookupEnd.<get>"), attrs = enumerable | configurable; connectStart = accessor(get = "PerformanceResourceTiming.prototype.connectStart.<get>"), attrs = enumerable | configurable; connectEnd = accessor(get = "PerformanceResourceTiming.prototype.connectEnd.<get>"), attrs = enumerable | configurable; secureConnectionStart = accessor(get = "PerformanceResourceTiming.prototype.secureConnectionStart.<get>"), attrs = enumerable | configurable; nextHopProtocol = accessor(get = "PerformanceResourceTiming.prototype.nextHopProtocol.<get>"), attrs = enumerable | configurable; requestStart = accessor(get = "PerformanceResourceTiming.prototype.requestStart.<get>"), attrs = enumerable | configurable; responseStart = accessor(get = "PerformanceResourceTiming.prototype.responseStart.<get>"), attrs = enumerable | configurable; responseEnd = accessor(get = "PerformanceResourceTiming.prototype.responseEnd.<get>"), attrs = enumerable | configurable; encodedBodySize = accessor(get = "PerformanceResourceTiming.prototype.encodedBodySize.<get>"), attrs = enumerable | configurable; decodedBodySize = accessor(get = "PerformanceResourceTiming.prototype.decodedBodySize.<get>"), attrs = enumerable | configurable; transferSize = accessor(get = "PerformanceResourceTiming.prototype.transferSize.<get>"), attrs = enumerable | configurable; deliveryType = accessor(get = "PerformanceResourceTiming.prototype.deliveryType.<get>"), attrs = enumerable | configurable; responseStatus = accessor(get = "PerformanceResourceTiming.prototype.responseStatus.<get>"), attrs = enumerable | configurable; toJSON, attrs = writable | enumerable | configurable; [Symbol.toStringTag] = "PerformanceResourceTiming"; }; } };
+    // Declared with the lazy family births (`populate::birth_family`).
+    let proto = proto_obj;
     if proto.is_null() {
         return;
     }
@@ -501,13 +509,6 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
         _ => {}
     }
 
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
-    crate::object::set_builtin_property_attrs(
-        closure_addr,
-        "prototype".to_string(),
-        crate::object::PropertyAttrs::new(false, false, false),
-    );
 
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(

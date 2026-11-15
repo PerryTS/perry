@@ -66,6 +66,20 @@ pub(super) unsafe fn construct(
                 }),
             );
         }
+        // perf_hooks families: perf_hooks constructs (or throws "Illegal
+        // constructor" for the abstract ones).
+        BuiltinConstructorIdentity::Performance
+        | BuiltinConstructorIdentity::PerformanceEntry
+        | BuiltinConstructorIdentity::PerformanceMark
+        | BuiltinConstructorIdentity::PerformanceMeasure
+        | BuiltinConstructorIdentity::PerformanceObserver
+        | BuiltinConstructorIdentity::PerformanceObserverEntryList
+        | BuiltinConstructorIdentity::PerformanceResourceTiming => {
+            return Some(
+                crate::perf_hook_slots::construct_perf_hooks_class(name.name(), args_ptr, args_len)
+                    .unwrap_or_else(|| crate::error::js_throw_illegal_constructor_type_error()),
+            );
+        }
         BuiltinConstructorIdentity::Navigator
         | BuiltinConstructorIdentity::AbortSignal
         | BuiltinConstructorIdentity::ReadableStreamDefaultController

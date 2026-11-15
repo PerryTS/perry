@@ -343,6 +343,37 @@ pub(crate) extern "C" fn global_this_crypto_getter_thunk(
     super::super::native_module::webcrypto_namespace()
 }
 
+/// `globalThis.performance` getter: perf_hooks' singleton.
+pub(crate) extern "C" fn global_this_performance_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    crate::perf_hook_slots::performance_namespace()
+}
+
+/// `globalThis.performance` setter: node's replaceable attribute, the
+/// assignment replaces the accessor with an ordinary data property.
+pub(crate) extern "C" fn global_this_performance_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let global = crate::value::JSValue::from_bits(crate::object::js_get_global_this().to_bits())
+        .as_pointer::<ObjectHeader>()
+        .cast_mut();
+    let key = crate::string::js_string_from_bytes(b"performance".as_ptr(), 11);
+    crate::object::clear_accessor_descriptor(global as usize, "performance");
+    crate::object::define_builtin_data_property(
+        global,
+        key,
+        value,
+        "performance".into(),
+        crate::object::PropertyAttrs::new(true, true, true),
+    );
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 fn require_webcrypto_this(this: crate::closure::JsThis) -> f64 {
     let this_value = f64::from_bits(this.bits());
     let jv = crate::value::JSValue::from_bits(this_value.to_bits());

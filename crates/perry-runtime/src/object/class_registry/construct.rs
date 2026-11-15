@@ -212,13 +212,6 @@ unsafe fn construct_function_impl(
         {
             return value;
         }
-        if module == "perf_hooks" {
-            if let Some(result) =
-                crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)
-            {
-                return result;
-            }
-        }
         if module == "perf_histogram"
             && matches!(method.as_str(), "RecordableHistogram" | "ELDHistogram")
         {
@@ -940,6 +933,13 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | BuiltinConstructorIdentity::ReadableStreamBYOBRequest
                 | BuiltinConstructorIdentity::MessagePort
                 | BuiltinConstructorIdentity::Storage
+                | BuiltinConstructorIdentity::Performance
+                | BuiltinConstructorIdentity::PerformanceEntry
+                | BuiltinConstructorIdentity::PerformanceMark
+                | BuiltinConstructorIdentity::PerformanceMeasure
+                | BuiltinConstructorIdentity::PerformanceObserver
+                | BuiltinConstructorIdentity::PerformanceObserverEntryList
+                | BuiltinConstructorIdentity::PerformanceResourceTiming
         ) {
             if let Some(result) = builtin::construct(identity, func_value, args) {
                 return result;

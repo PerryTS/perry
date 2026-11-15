@@ -39,15 +39,17 @@ pub(crate) fn js_perf_create_histogram(options: f64) -> f64 {
         ),
     }
 }
-static ATTACH_PERF_HOOKS_CONSTRUCTOR: Hook<unsafe fn(&str, f64, usize) -> ()> = Hook::empty();
+static ATTACH_PERF_HOOKS_CONSTRUCTOR: Hook<unsafe fn(&str, f64, usize, *mut ObjectHeader) -> ()> =
+    Hook::empty();
 pub(crate) unsafe fn attach_perf_hooks_constructor(
     class_name: &str,
     constructor_value: f64,
     closure_addr: usize,
+    proto_obj: *mut ObjectHeader,
 ) -> () {
     ATTACH_PERF_HOOKS_CONSTRUCTOR.get().map_or_else(
         || (),
-        |run| unsafe { run(class_name, constructor_value, closure_addr) },
+        |run| unsafe { run(class_name, constructor_value, closure_addr, proto_obj) },
     )
 }
 static CONSTRUCT_PERF_HOOKS_CLASS: Hook<unsafe fn(&str, *const f64, usize) -> Option<f64>> =

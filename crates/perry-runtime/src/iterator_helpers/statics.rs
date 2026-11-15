@@ -230,7 +230,7 @@ unsafe extern "C" fn concat_thunk(
     new_helper(OP_CONCAT, undefined(), list)
 }
 
-extern "C" fn iterator_from_thunk(
+pub(crate) extern "C" fn iterator_from_thunk(
     _closure: *const ClosureHeader,
     _this: JsThis,
     value: f64,
@@ -242,12 +242,12 @@ extern "C" fn iterator_from_thunk(
 pub(crate) fn install_iterator_statics(s: &mut crate::object::global_this::ConstructorStatics) {
     s.method(
         "from",
-        crate::fn_info!(iterator_from_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Iterator.from)] export crate::iterator_helpers::statics::iterator_from_thunk, 1; with_declared(1)),
         1,
     );
     s.method(
         "concat",
-        crate::fn_info!(native_args concat_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Iterator.concat)] export native_args crate::iterator_helpers::statics::concat_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
 }
