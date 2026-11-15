@@ -609,30 +609,24 @@ impl Model {
                     self.store_into(t, pk, s, ps);
                 }
             }
-            if !named_copy && !self.unit_mode && self.is_builtin_proto(t) {
-                self.given_prototype(t, src);
-            }
-            // A `JSON.parse` object: the setter gives it `src`'s objects or
-            // null as its prototype (B.2.2.1.2; another primitive does
-            // nothing), which its lookups then read (10.1.8.1). Every such
-            // store gives its value (any of them may run last);
-            // `json_relink` only marks the token as relinked.
-            if let (false, &TokKind::Obj(tm, _)) = (named_copy, &self.toks[t as usize]) {
-                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
-                    && !self.is_marker(t)
-                {
+            // The setter (B.2.2.1.2) runs O.[[SetPrototypeOf]](V) on every
+            // ordinary object: a builtin prototype, a `JSON.parse` object, a
+            // class object, a class instance or prototype, a literal. Each
+            // store gives `src`'s objects (or null) as `t`'s prototype, which
+            // every lookup on `t`'s chain then walks (10.1.8.1), the call
+            // lookup included: the same as `Object.setPrototypeOf`. A
+            // parameter marker's store reaches its arguments by replay.
+            let json = matches!(&self.toks[t as usize], &TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. }));
+            if !named_copy
+                && t != TOP
+                && !self.is_marker(t)
+                && !(self.unit_mode && self.is_builtin_proto(t))
+            {
+                if json {
                     self.json_relink.insert(t);
-                    self.given_prototype(t, src);
                 }
-            }
-            if let (false, &TokKind::ClassObj(tm)) = (named_copy, &self.toks[t as usize]) {
-                let objs = self.proto_objects(src);
-                self.cons(objs, Cons::ParentGiven { of: t });
-                let parent = self.proto_node(t);
-                self.edge(objs, parent);
-                let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                let reason = self.reason("E6 possible computed superclass write");
-                self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
+                self.given_prototype(t, src);
             }
         }
         if t == TOP {
