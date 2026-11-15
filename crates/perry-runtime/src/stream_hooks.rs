@@ -77,10 +77,24 @@ pub(crate) fn event_emitter_constructor_value(export: &str) -> f64 {
         .expect("EventEmitter in a program compiled without the events runtime family")(export)
 }
 
+/// The slots hold these wrappers, not the node_stream functions themselves:
+/// each function keeps the direct callers it had before the slots existed (a
+/// stored address would change the inliner's view of it and of its
+/// callers), and the wrapper is the one new direct caller.
+#[inline(never)]
+fn event_emitter_constructor_for_slot(export: &str) -> f64 {
+    crate::node_stream::event_emitter_constructor_value(export)
+}
+
+#[inline(never)]
+pub(crate) fn builtin_stream_method_for_slot(value: f64, name: &str) -> bool {
+    crate::node_stream::is_builtin_stream_method(value, name)
+}
+
 /// Emitter construction owns only emitter initialization. Stream probes are
 /// installed by stream births, whose layouts make those probes meaningful.
 pub(crate) fn install_emitter() {
-    EVENT_EMITTER_CONSTRUCTOR_VALUE.set(crate::node_stream::event_emitter_constructor_value);
+    EVENT_EMITTER_CONSTRUCTOR_VALUE.set(event_emitter_constructor_for_slot);
     // Emitter subclasses also retain shape words in the existing birth sites.
     NOTE_BIRTH_CARRIERS.set(crate::node_stream::note_birth_carriers);
     JS_EVENT_EMITTER_SUBCLASS_INIT.set(crate::node_stream::js_event_emitter_subclass_init);
