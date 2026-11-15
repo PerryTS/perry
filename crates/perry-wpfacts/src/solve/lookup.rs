@@ -193,6 +193,28 @@ impl Model {
         if t == TOP || self.is_proto_key(Key::Named(a)) || self.is_private_atom(a) {
             return false;
         }
+        // R9BIRTH4: a class constructor owns `prototype` from its creation,
+        // non-writable and non-configurable (ECMA-262 15.7.14
+        // ClassDefinitionEvaluation: MakeConstructor(F, false, proto)), so no
+        // store, delete or definition removes or replaces it: `C.prototype`
+        // reads Cs own prototype object, never a parent classs.
+        if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            return self.atoms[a as usize] == "prototype"
+                && matches!(
+                    self.tmpls[tm as usize].kind,
+                    crate::model::TmplKind::Class {
+                        literal_shape: false,
+                        ..
+                    }
+                )
+                // The class's own field holds that object (`Gen` class
+                // values); a layout without one keeps the chain walk.
+                && self.tok_index.get(&TokKind::Proto(tm)).is_some_and(|&p| {
+                    self.fields
+                        .get(&(t, a))
+                        .is_some_and(|&f| self.nodes[f as usize].pts.contains_tok(p))
+                });
+        }
         let mut cs: Vec<TmplId> = self.tmpl_of(t).into_iter().collect();
         if let Some(ps) = self.virt_protos.get(&t) {
             cs.extend(ps.iter().copied());
@@ -871,7 +893,10 @@ impl Model {
                 Key::Named(a) => self.proto_first_read(t, a, dst),
                 Key::Any(_) => false,
             };
-        if !present && !private && !realm && !first {
+        // R9BIRTH4: a class constructor's own `prototype` (`surely_own_data`)
+        // is present for life: the read is the field's value alone.
+        let ctor_proto = stop && matches!(self.toks[t as usize], TokKind::ClassObj(_));
+        if !present && !private && !realm && !first && !ctor_proto {
             self.add_prim(dst, prim::UNDEF);
         }
         // What a closed marker's own load gives (its classes' chain through

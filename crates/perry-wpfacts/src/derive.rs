@@ -262,6 +262,15 @@ pub enum Verdict {
     /// an own data property (10.1.9.2 step 2.c-e). Unproven in round one
     /// (owner D1): no direct lowering exists.
     AddsKey,
+    /// R9BIRTH4 (owner 2026-11-15): a named store whose receiver set is ONE
+    /// program object, a class's prototype object or its class constructor
+    /// (`known_object_store`), where OrdinarySet (ECMA-262 10.1.9.2) adds
+    /// or overwrites an own data property of that object: no accessor of the
+    /// key on it or its chain, no builtin member of the key on the chain,
+    /// never frozen, sealed, non-extensible, given a defined key, relinked or
+    /// held by unknown code. Counted proven in its own column ("known-object
+    /// stores"); the emitted store stays the generic one.
+    KnownObjectStore,
     No(String),
 }
 
@@ -2365,6 +2374,17 @@ fn judge_store(
     let mut acc: Vec<Tok> = Vec::new();
     let (mut throws, mut adds) = (0usize, 0usize);
     let private = m.is_private_atom(s.key);
+    // R9BIRTH4: one known object (a class's prototype or constructor) as
+    // the whole receiver set.
+    if let ([t], 0) = (toks, prim) {
+        if matches!(m.toks[*t as usize], TokKind::Proto(_) | TokKind::ClassObj(_)) {
+            let verdict = match known_object_store(m, *t, key, s.key) {
+                Ok(()) => Verdict::KnownObjectStore,
+                Err(w) => Verdict::No(format!("store: {w}")),
+            };
+            return (vec![m.tok_name(*t)], false, verdict, true, FxHashMap::default());
+        }
+    }
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -2452,6 +2472,95 @@ fn judge_store(
         None => Verdict::AddsKey,
     };
     (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// R9BIRTH4: may a named store of `key` (atom `a`) onto `t`, a class's
+/// prototype object or class constructor, be decided exactly as "adds or
+/// overwrites an own data property of `t`" (ECMA-262 10.1.9.2
+/// OrdinarySetWithOwnDescriptor)? `t` is one object: its class is
+/// evaluated once (`per_evaluation` classes mint one per evaluation).
+/// Own: no accessor of the key (a class getter / setter, static or not);
+/// an own data property of it is writable (methods and fields are created
+/// writable, 10.2.8 / 7.3.6; only a definition makes one non-writable,
+/// which marks the object HARD). A class constructor's own `prototype`,
+/// `length` and `name` are non-writable (15.7.14, 10.2.9-10): they are
+/// %Function.prototype% members by name, refused below. Chain: every
+/// prototype a program class's prototype / constructor, with no accessor
+/// of the key, not HARD, not escaped, not relinked, ending at
+/// %Object.prototype% (a constructor: at %Function.prototype%, which
+/// `ObjectProto` stands for too); the key is no member of the builtin
+/// prototype the chain ends at (`__proto__`, Function's `caller` /
+/// `arguments` accessors included), and no program write or definition
+/// reaches a builtin prototype under it (`builtin_protos_unwritten`).
+/// Extensible: `t` is never frozen, sealed or made non-extensible (E8),
+/// defined on (E5, or an accessor key of a prototype), deleted from (E7),
+/// relinked (E6) or a Proxy target (E9): any of those is HARD. Not
+/// escaped: no unknown code holds it.
+fn known_object_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), String> {
+    let is_ctor = match m.toks[t as usize] {
+        TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
+            if m.tmpls[tm as usize].per_evaluation {
+                return Err("a class evaluated more than once".into());
+            }
+            matches!(m.toks[t as usize], TokKind::ClassObj(_))
+        }
+        _ => return Err("receiver is not a program class instance".into()),
+    };
+    if m.is_private_atom(a) {
+        return Err("a private name".into());
+    }
+    let lacks = if is_ctor {
+        crate::builtins::function_chain_lacks(key)
+    } else {
+        crate::builtins::object_proto_lacks(key)
+    };
+    if !lacks {
+        return Err("the key is a builtin prototype member".into());
+    }
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    let mut ends = false;
+    while let Some(h) = todo.pop() {
+        if !seen.insert(h) {
+            continue;
+        }
+        if h != t && !matches!(m.toks[h as usize], TokKind::Proto(_) | TokKind::ClassObj(_)) {
+            return Err("a prototype from unmodeled code".into());
+        }
+        if m.is_marker(h) || m.is_escaped(h) {
+            return Err("a known object unknown code may hold".into());
+        }
+        if m.hard.contains_key(&h) || m.super_relink.contains(&h) {
+            return Err("a known object with a hard operation".into());
+        }
+        // A definition onto a prototype under a key it holds no method of
+        // is an accessor key there (`Cons::DefineKey`), as a getter is.
+        if m.accessors.contains_key(&(h, a)) || m.accessor_keys.get(&h).is_some_and(|k| k.contains(&a)) {
+            return Err("an accessor of the key on the known object or its chain".into());
+        }
+        let Some(&pn) = m.proto_node.get(&h) else {
+            return Err("an unknown prototype chain".into());
+        };
+        let nd = &m.nodes[pn as usize];
+        if nd.prim != 0 || nd.pts.is_empty() {
+            return Err("a chain that may end at null".into());
+        }
+        for p in nd.pts.to_sorted() {
+            if p == TOP {
+                return Err("a prototype from unmodeled code".into());
+            }
+            if m.toks[p as usize] == TokKind::ObjectProto {
+                ends = true;
+            } else {
+                todo.push(p);
+            }
+        }
+    }
+    if !ends {
+        return Err("a chain that may not end at a builtin prototype".into());
+    }
+    builtin_protos_unwritten(m, None, a)?;
+    Ok(())
 }
 
 /// BIV (CHB §2): the receivers of a NativeMember site, or why there are

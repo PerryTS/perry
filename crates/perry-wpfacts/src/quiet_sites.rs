@@ -195,6 +195,7 @@ pub(crate) fn collect(
             Verdict::E0 => Some("verdict:guarded"),
             Verdict::AccessorGet | Verdict::AccessorSet => Some("verdict:accessor"),
             Verdict::AddsKey => Some("verdict:adds-key"),
+            Verdict::KnownObjectStore => Some("verdict:known-object"),
             Verdict::No(_) => Some("verdict:none"),
         };
         join(

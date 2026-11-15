@@ -339,6 +339,13 @@ pub(crate) fn run(
                     )
             })
             .count();
+        // R9BIRTH4 (owner 11-15): the known-object stores apart.
+        let st_known = pf
+            .sites
+            .iter()
+            .filter(|s| matches!(s.verdict, perry_wpfacts::Verdict::KnownObjectStore))
+            .count();
+        eprintln!("perry: wpfacts: {st_known} known-object stores");
         eprintln!(
             "perry: wpfacts: {} modules, {} templates ({} fact units), {} nodes, {} constraints; \
              {} of {} read/call sites proven, {} of {} stores proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",
@@ -1370,6 +1377,7 @@ fn verification_sites(
                 perry_wpfacts::Verdict::AccessorGet
                 | perry_wpfacts::Verdict::AccessorSet
                 | perry_wpfacts::Verdict::AddsKey
+                | perry_wpfacts::Verdict::KnownObjectStore
                 | perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {

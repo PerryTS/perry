@@ -345,6 +345,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::AccessorGet => format!("accessor-get:{}", st.targets.join(",")),
             Verdict::AccessorSet => format!("accessor-set:{}", st.targets.join(",")),
             Verdict::AddsKey => "adds-key".to_string(),
+            Verdict::KnownObjectStore => "known-object-store".to_string(),
             Verdict::IntrinsicCall => "intrinsic-call".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };

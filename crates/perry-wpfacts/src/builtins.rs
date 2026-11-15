@@ -999,6 +999,12 @@ pub(crate) fn object_chain_locked(m: &Model, a: Atom) -> bool {
     members::locked_read(Family::Object, None, &m.atoms[a as usize])
 }
 
+/// R9BIRTH4: neither %Function.prototype% nor %Object.prototype% (a class
+/// constructor's chain end) describes `name`.
+pub(crate) fn function_chain_lacks(name: &str) -> bool {
+    members::member(members::Family::Function, name).is_none()
+}
+
 pub(crate) fn object_proto_lacks(name: &str) -> bool {
     members::member(members::Family::Object, name).is_none()
 }
