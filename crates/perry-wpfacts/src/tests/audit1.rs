@@ -169,6 +169,20 @@ fn audit1_u7_from_entries_named_read() {
     assert!(!has(&r, "Throws"), "X.a is {{q:1}} in JS: {r:?}");
 }
 
+/// U7 / I8: the values of the entries are the values of the result (Map and entries() sources too).
+#[test]
+fn audit1_u7_from_entries_sources() {
+    let a = v("const m = new Map<any, any>([[\"a\", { q: 1 }]]);\nconst X: any = Object.fromEntries(m);\nX.a.zz;\n", "zz", false);
+    let b = v("const o = { a: { q: 1 } };\nconst X: any = Object.fromEntries(Object.entries(o));\nX.a.zz;\n", "zz", false);
+    assert!(!has(&a, "Throws") && !has(&b, "Throws"), "X.a is {{q:1}} in JS: {a:?} {b:?}");
+}
+/// U7 KEEP (I8): a key is no value of the result: the entry key `o` stays unescaped, `o.m()` keeps its callee.
+#[test]
+fn audit1_u7_keep_key_is_no_value() {
+    let r = v("const o = { m() { return 1; } };\nconst X: any = Object.fromEntries([[o, 1]]);\nconst y = X.b;\no.m();\n", "m", true);
+    assert!(last_is(&r, "T0Mono"), "o.m() calls its own method only: {r:?}");
+}
+
 // ---- IMPRECISE: red = a wide answer where the exact one is narrow.
 
 /// I1: iterating a Set yields its values only (24.2.5.2): `e` is the literal.

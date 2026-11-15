@@ -129,11 +129,15 @@ pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
     }
 }
 
-/// `fromEntries`: each entry `it`'s `"0"` and `"1"` (`inner`, a [[Get]]
-/// under a number key) are the values of the object `t`.
+/// `fromEntries` (20.1.2.7, 24.1.1.2 AddEntriesFromIterable): each entry
+/// `it` is read as Get(entry, "0") (the key, ToPropertyKey) and Get(entry,
+/// "1") (`inner`, the value); CreateDataPropertyOrThrow (7.3.5) makes the
+/// value an own enumerable property of the object `t` under that key. The
+/// values are what `t` holds under its keys (its any-key field, the box
+/// model of `t`); a key is no value of `t`.
 pub(crate) fn from_entries(m: &mut Model, it: NodeId, inner: NodeId, t: Tok) {
-    let num = Key::Named(m.atom(crate::model::NUM_KEY));
-    m.cons(it, Cons::Load { key: num, dst: inner });
+    let one = Key::Named(m.atom("1"));
+    m.cons(it, Cons::Load { key: one, dst: inner });
     let fa = m.field_any(t);
     m.edge(inner, fa);
 }
