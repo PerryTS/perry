@@ -590,6 +590,44 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
             out.push(m.atoms[a as usize].clone());
         }
     }
+    // Rule 3 (`gen::proto_first`, RAYBOX3): a key that a static block opening
+    // the class body stores on the prototype (`C.prototype.K = lit`). The
+    // static elements run in ClassDefinitionEvaluation (15.7.14) before the
+    // outer binding is initialized; the inner one is reachable only from code
+    // of the class body, and none of it runs before the store (the scan
+    // admits only earlier such stores and literal static fields). So the key
+    // is an own data property of the prototype before any instance or any
+    // other code can reach the prototype. It stays one while every writer of
+    // the key on the prototype is such a store (`proto_writers`), no builtin
+    // prototype is reshaped under the key, and the prototype checks above
+    // hold (no escape, no HARD operation such as delete or defineProperty, no
+    // computed-key store, no accessor): the solver's `proto_first_holds` at
+    // its own link.
+    if !m.reshaped_any {
+        let mut firsts: Vec<Atom> = m
+            .proto_first_keys
+            .iter()
+            .filter(|&&(c, _)| c == tm)
+            .map(|&(_, a)| a)
+            .collect();
+        firsts.sort_unstable();
+        for a in firsts {
+            if m.reshaped_keys.contains(&a)
+                || m.is_private_atom(a)
+                || tpl.accessor_keys.contains(&a)
+                || accessors.is_some_and(|ks| ks.contains(&a))
+            {
+                continue;
+            }
+            let only_first = m.proto_writers.get(&(tm, a)).is_none_or(|w| {
+                w.ctor.is_empty()
+                    && w.post.iter().all(|&s| m.stores[s as usize].proto_first == Some(tm))
+            });
+            if only_first && m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
+                out.push(m.atoms[a as usize].clone());
+            }
+        }
+    }
     out.sort();
     out.dedup();
     out

@@ -966,7 +966,14 @@ impl Model {
                         w.post.push(site);
                     }
                     // A store effect's key exists in the defining unit's layout.
-                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
+                    // A rule 3 store (`gen::proto_first`) makes its key on the
+                    // prototype while the class is evaluated, before any
+                    // instance or any other code can reach the prototype
+                    // (15.7.14): the chain every instance has holds it from
+                    // the first instance on, so it adds no key to a layout.
+                    let first = matches!(self.toks[t as usize], TokKind::Proto(_))
+                        && self.stores[site as usize].proto_first == Some(tm);
+                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect && !first {
                         *self.adds_keys.entry(tm).or_default() += 1;
                         *self.adds_named.entry((tm, a)).or_default() += 1;
                     }

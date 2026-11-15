@@ -147,3 +147,92 @@ fn g2f_not_form_true_side() {
     let (p, o, pf) = boxv(&s);
     assert!(!o && p & !(prim::NUM | prim::UNDEF) == 0, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
 }
+
+/// RAYBOX3, the derive side of rule 3 (`constant_proto_members`): a read
+/// of a key a static block stores on the prototype before any instance
+/// exists is a constant prototype member (Rule B3 for an instance, the
+/// prototype receiver for `C.prototype.K`). The verdicts of the read sites
+/// of `key` (stores left out).
+fn read_verdicts(pf: &ProgramFacts, key: &str) -> Vec<crate::Verdict> {
+    let v: Vec<crate::Verdict> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.access.is_store())
+        .map(|s| s.verdict.clone())
+        .collect();
+    assert!(!v.is_empty(), "no read site .{key}\n{}", pf.dump_text());
+    v
+}
+
+fn proven(s: &str) {
+    let pf = facts(s);
+    let v = read_verdicts(&pf, "K");
+    assert!(
+        v.iter().all(|v| !matches!(v, crate::Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+fn not_proven(s: &str) {
+    let pf = facts(s);
+    let v = read_verdicts(&pf, "K");
+    assert!(
+        v.iter().any(|v| matches!(v, crate::Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn d3_instance_read_is_proven() {
+    proven(&src("", "", "c.K"));
+}
+
+#[test]
+fn d3_prototype_read_is_proven() {
+    proven(&src("", "", "(C.prototype as any).K"));
+}
+
+#[test]
+fn d3_keep_second_writer() {
+    not_proven(&src("", "function f() { (C.prototype as any).K = 0; } if (process.argv[2]) f();", "c.K"));
+}
+
+#[test]
+fn d3_keep_delete() {
+    not_proven(&src("", "if (process.argv[2]) delete (C.prototype as any).K;", "c.K"));
+}
+
+#[test]
+fn d3_keep_instance_own() {
+    not_proven(&src("", "", "(process.argv[2] ? (c.K = 5, c) : c).K"));
+}
+
+#[test]
+fn d3_keep_accessor() {
+    not_proven(&src(
+        "",
+        "if (process.argv[2]) Object.defineProperty(C.prototype, \"K\", { get() { return 7; } });",
+        "c.K",
+    ));
+}
+
+#[test]
+fn d3_keep_set_prototype_of() {
+    not_proven(&src("", "", "(process.argv[2] ? Object.setPrototypeOf(c, { K: 2 }) : c).K"));
+}
+
+/// A subclass's static block stores its own `K`: the site's value set is
+/// the union of both constants. (Not proven yet: the solve lets the store
+/// `D.prototype.K = 2` reach `C.prototype` too, a foreign writer of C's
+/// `K`; RAYBOX3 open item.)
+#[test]
+fn d3_subclass_static_block_both_constants() {
+    let s = src(
+        "",
+        "class D extends C { static { (D.prototype as any).K = 2; } constructor() { super(); } }",
+        "(process.argv[2] ? new D() : c as any).K",
+    );
+    has(&s, prim::NUM | prim::TRUE);
+}
