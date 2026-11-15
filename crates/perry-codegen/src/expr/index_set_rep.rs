@@ -82,11 +82,23 @@ pub(crate) fn fact(ctx: &FnCtx<'_>, object: &Expr, e: &Expr) -> Option<RepRead> 
     let Expr::IndexSet { element_offset, .. } = e else {
         return None;
     };
-    // `in_floor`: the facts bound the store's key to `[0, floor)` at every
-    // copy (`element_keys` of the store's own offset); otherwise the store
-    // bounds its key itself.
     let read = rep_read(ctx, object, *element_offset)?;
-    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed).then_some(read)
+    // `in_floor`: the facts bound the store's key to `[0, floor)` at every
+    // copy. The bound is the key signs' (`ElisionFacts::key_signs`, wpfacts
+    // `element_keys::collect_signs`): the hull of the key node's integer
+    // interval over every copy of every site at this offset, stores
+    // included. `element_keys` hulls only the reads there, which may be
+    // other expressions (`a[i][0] = v`: the read `a[i]` starts at the
+    // same offset), so it never bounds a store's key.
+    let in_floor = ctx
+        .wpfacts
+        .key_signs
+        .get(element_offset)
+        .is_some_and(|&(lo, hi)| lo >= 0 && hi < i64::from(read.rep.floor));
+    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed).then_some(RepRead {
+        in_floor,
+        ..read
+    })
 }
 
 /// `PERRY_STORE_ARM_DIAG=1`: one stderr line per rep-keyed store.
