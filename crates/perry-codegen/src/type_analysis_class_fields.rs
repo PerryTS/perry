@@ -73,6 +73,16 @@ pub(crate) fn class_field_global_index(
     class_name: &str,
     property: &str,
 ) -> Option<u32> {
+    class_field_slot(ctx, class_name, property).ok()
+}
+
+/// [`class_field_global_index`] with the reason it has no slot (the
+/// `PERRY_FALLBACK_DIAG` refusal detail; compile time only).
+pub(crate) fn class_field_slot(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> Result<u32, &'static str> {
     // Walk parent chain to find the field. Parent fields come first in
     // the slot layout, so we sum parent counts as we descend.
     //
@@ -123,7 +133,7 @@ pub(crate) fn class_field_global_index(
     // for normal JS semantics. Do not emit direct packed-field access even if
     // HIR inferred a same-named field on a subclass assignment.
     if accessor_in_chain(ctx, class_name, property) {
-        return None;
+        return Err("an accessor of the name is on the chain");
     }
     // Case 2c: a static family whose coloured layout moves a key off its
     // constructor-order position (a hole before it) has no compile-time slot
@@ -134,7 +144,7 @@ pub(crate) fn class_field_global_index(
         .get(class_name)
         .is_some_and(|cid| ctx.program_layouts.slots_moved(*cid))
     {
-        return None;
+        return Err("the family layout moved a constructor key off its constructor-order slot");
     }
     // Issue #26 / #321 (via #5654): prefer the authoritative, source-prefix-
     // disambiguated ancestor chain — the SAME data the packed-keys global and
@@ -165,9 +175,9 @@ pub(crate) fn class_field_global_index(
                         chain[..=i].iter().map(|(_, fields)| fields.as_slice()),
                         f,
                     ) {
-                        return None;
+                        return Err("a private entry precedes the field");
                     }
-                    return Some(prefix_counts[i] + own_idx);
+                    return Ok(prefix_counts[i] + own_idx);
                 }
                 own_idx += 1;
             }
@@ -175,7 +185,7 @@ pub(crate) fn class_field_global_index(
         // The chain is authoritative for this class's layout: absent means the
         // property is not an inline slot. Do NOT fall through to the name-keyed
         // walk — it could "find" the field on a wrong same-named stub.
-        return None;
+        return Err("the key is not in the class init chain");
     }
     fn walk(
         ctx: &FnCtx<'_>,
@@ -254,6 +264,7 @@ pub(crate) fn class_field_global_index(
     }
     let mut seen_class_names = std::collections::HashSet::new();
     walk(ctx, class_name, property, 0, &mut seen_class_names, 0)
+        .ok_or("no class init chain; the name walk finds no slot")
 }
 
 pub(crate) fn class_field_declared_type(

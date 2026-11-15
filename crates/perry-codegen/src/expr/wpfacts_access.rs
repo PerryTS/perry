@@ -635,16 +635,30 @@ pub(crate) fn prove(
             names.push(format!("class#{cid}"));
             continue;
         }
-        let name = class_name_of(ctx, cid).or_else(|| {
+        let Some(name) = class_name_of(ctx, cid) else {
             crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
-            None
-        })?;
+            if crate::fallback_diag::enabled() {
+                let family = ctx.program_layouts.families.contains_key(&cid);
+                crate::fallback_diag::refuse(&format!(
+                    "receiver class is absent from codegen class metadata: class#{cid}{}",
+                    if family { " (has a family layout)" } else { "" }
+                ));
+            }
+            return None;
+        };
         // Codegen's own layout must agree with the facts' birth slot.
-        let idx =
-            crate::type_analysis::class_field_global_index(ctx, &name, property).or_else(|| {
+        let idx = match crate::type_analysis::class_field_slot(ctx, &name, property) {
+            Ok(idx) => idx,
+            Err(why) => {
                 crate::fallback_diag::refuse("class field has no codegen slot");
-                None
-            })?;
+                if crate::fallback_diag::enabled() {
+                    crate::fallback_diag::refuse(&format!(
+                        "class field has no codegen slot: {why}; class {name}"
+                    ));
+                }
+                return None;
+            }
+        };
         if idx != f.slot {
             crate::fallback_diag::refuse("facts slot disagrees with codegen layout");
             return None;
