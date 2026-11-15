@@ -181,6 +181,7 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    crate::cluster::install_default_value();
     crate::feature_hooks::install_json_engine();
     js_nm_install_events();
     nm_register_const(

@@ -1025,3 +1025,8 @@ mod symbol_identity_is_header {
         }
     }
 }
+
+/// The address range of the persistent-symbol space; empty until it is mapped.
+pub(crate) fn snap_image_space() -> (usize, usize) {
+    space::image_range()
+}

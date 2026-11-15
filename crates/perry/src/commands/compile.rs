@@ -241,3 +241,5 @@ mod windows_link_tests;
 // `lock_integration_tests` module all moved to `compile/lock_scan.rs`.
 
 // (lock_integration_tests body removed — coverage lives in compile/lock_scan.rs)
+
+mod snap_image_emit;

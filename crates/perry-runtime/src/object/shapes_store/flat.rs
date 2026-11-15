@@ -187,7 +187,20 @@ fn reserve_with(
 
 impl Region {
     pub(super) fn new() -> Self {
-        let capacity = if cfg!(target_pointer_width = "64") {
+        // iOS-family apps get a small address space (about 8 GB on an iPhone without the
+        // extended-virtual-addressing entitlement). The full 1 << 26 rows is 8 GB per agent: two
+        // agents (the main thread and a worker) took most of it, and malloc then failed. 1 << 22
+        // rows (512 MB per agent) is still far more shapes than an app makes.
+        let capacity = if cfg!(any(
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos"
+        )) {
+            (1usize << 22)
+                .min(LAYOUT_ROW_LIMIT as usize)
+                .max(MIN_CAPACITY)
+        } else if cfg!(target_pointer_width = "64") {
             LAYOUT_ROW_LIMIT as usize
         } else {
             1 << 16

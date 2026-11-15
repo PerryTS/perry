@@ -1946,6 +1946,7 @@ mod declared_global_write;
 mod delegate_step;
 mod field_read_calls;
 mod gen_proto_lock;
+mod gen_next;
 mod gen_proto_members;
 mod generator_results;
 mod generator_resume_arguments;
