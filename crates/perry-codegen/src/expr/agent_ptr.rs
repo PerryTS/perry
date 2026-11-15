@@ -203,12 +203,29 @@ pub(crate) fn emit_intrinsic_proto_object(ctx: &mut FnCtx<'_>, family: usize) ->
     emit_intrinsic_proto(ctx, family)
 }
 
+/// The layout word of this agent's intrinsic prototype of builtin family
+/// `family` (the word whose shadow bit is `Pristine(family)`): the one read
+/// that is good for every family in every phase of the realm, the pristine
+/// stand-in's word included.
+pub(crate) fn emit_intrinsic_shadow_word(ctx: &mut FnCtx<'_>, family: usize) -> String {
+    let proto = emit_intrinsic_proto(ctx, family);
+    let at = ctx
+        .block()
+        .gep(crate::types::I8, &proto, &[(crate::types::I64, "4")]);
+    ctx.block().load(crate::types::I32, &at)
+}
+
 /// This agent's intrinsic prototype of builtin family `family` (object model
 /// step 3: the object whose layout word's shadow bit is `Pristine(family)`).
 /// The slot is never null (`PERRY_PRISTINE_PROTO` until the realm is sealed),
 /// so the inline forms are one load; Apple's TSD path answers the stand-in
 /// when unavailable; every other target calls the leaf accessor.
-pub(crate) fn emit_intrinsic_proto(ctx: &mut FnCtx<'_>, family: usize) -> String {
+///
+/// Private: the two doors out of this module are
+/// [`emit_intrinsic_shadow_word`] (the layout word, any family) and
+/// [`emit_intrinsic_proto_object`] (the object, phase-A families only), so
+/// the compiler enforces DESIGN startup-realm rule 7.
+fn emit_intrinsic_proto(ctx: &mut FnCtx<'_>, family: usize) -> String {
     let slot = crate::runtime_abi::AGENT_PTR_INTRINSIC_PROTO + family;
     debug_assert!(slot < AGENT_PTR_SLOTS);
     let slot_off = (slot * 8).to_string();
@@ -367,62 +384,58 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
 mod tests {
     use super::*;
     /// DESIGN startup-realm, rule 7: before phase B a phase-B family's agent
-    /// slot may be read for its layout word only. The slot loader has three
-    /// users: the two shadow-word readers of `builtin_proto.rs` (any family)
-    /// and `emit_intrinsic_proto_object` here, which refuses a phase-B
-    /// family. No other file may call the raw loader.
+    /// slot may be read for its layout word only. The raw slot loader is
+    /// private to this module (the compiler enforces that); its two doors
+    /// are the shadow-word reader (any family) and
+    /// `emit_intrinsic_proto_object`, which refuses a phase-B family.
     #[test]
     fn a_phase_b_intrinsic_slot_is_never_used_as_the_object() {
-        use perry_abi::{BuiltinProto, BUILTIN_NAMESPACES, BUILTIN_PROTO_FAMILIES};
-        for (family, name) in BuiltinProto::ALL {
-            assert_eq!(
-                intrinsic_slot_is_the_object(family as usize),
-                !perry_abi::realm_rest_global(name),
-                "{name}"
-            );
-        }
-        for (i, name) in BUILTIN_NAMESPACES.iter().enumerate() {
-            assert_eq!(
-                intrinsic_slot_is_the_object(BUILTIN_PROTO_FAMILIES + i),
-                !perry_abi::realm_rest_global(name),
-                "{name}"
-            );
-        }
-        // The families the generic dispatcher dereferences are phase A.
+        use perry_abi::{BuiltinProto, BUILTIN_PROTO_FAMILIES};
+        // The families the generic dispatcher dereferences are phase A: this
+        // fails the day one of them moves to phase B.
         assert!(intrinsic_slot_is_the_object(BuiltinProto::Map as usize));
         assert!(intrinsic_slot_is_the_object(BuiltinProto::Set as usize));
-        // Every phase-B family and namespace with a slot is refused.
+        assert!(intrinsic_slot_is_the_object(BuiltinProto::Array as usize));
+        // Phase-B families and namespaces with a slot, by name (stage 2's
+        // set; a later stage only adds to it): refused.
+        assert!(!intrinsic_slot_is_the_object(
+            BuiltinProto::WeakMap as usize
+        ));
+        assert!(!intrinsic_slot_is_the_object(
+            BuiltinProto::WeakSet as usize
+        ));
+        for namespace in ["Intl", "Atomics"] {
+            let family = perry_abi::builtin_namespace_family(namespace).expect(namespace);
+            assert!(family >= BUILTIN_PROTO_FAMILIES);
+            assert!(!intrinsic_slot_is_the_object(family), "{namespace}");
+        }
+        // No slot, no object.
+        assert!(!intrinsic_slot_is_the_object(usize::MAX / 2));
+        // Every phase-B name that has a slot is one of the refused: the
+        // predicate follows the phase lists, whatever they hold.
+        let mut refused = 0;
         for name in perry_abi::REALM_REST_GLOBALS {
             if let Some((family, _)) = BuiltinProto::ALL.iter().find(|(_, n)| n == name) {
                 assert!(!intrinsic_slot_is_the_object(*family as usize), "{name}");
+                refused += 1;
             }
             if let Some(family) = perry_abi::builtin_namespace_family(name) {
                 assert!(!intrinsic_slot_is_the_object(family), "{name}");
+                refused += 1;
             }
         }
-        // Source audit: the raw loader's call sites.
-        let shadow_readers = include_str!("../builtin_proto.rs");
-        assert_eq!(shadow_readers.matches("emit_intrinsic_proto(").count(), 2);
-        for site in shadow_readers.split("emit_intrinsic_proto(").skip(1) {
-            let after = &site[..site.len().min(400)];
-            assert!(
-                after.contains("&[(I64, \"4\")]"),
-                "a builtin_proto.rs reader goes beyond the layout word: {after}"
-            );
-        }
-        for (file, source) in [
-            (
-                "generic_dispatch.rs",
-                include_str!("property_get/generic_dispatch.rs"),
-            ),
-            ("property_get.rs", include_str!("property_get.rs")),
-        ] {
-            assert_eq!(
-                source.matches("emit_intrinsic_proto(").count(),
-                0,
-                "{file} calls the raw slot loader: use emit_intrinsic_proto_object"
-            );
-        }
+        assert!(refused >= 4, "the phase-B list lost its slotted families");
+        // The raw loader stays private, with exactly its two callers here.
+        let source = include_str!("agent_ptr.rs");
+        let raw = ["fn emit_intrinsic", "_proto("].concat();
+        assert!(source.contains(&format!("\n{raw}")), "the raw loader is not private");
+        let calls = ["= emit_intrinsic", "_proto(ctx, family)"].concat();
+        let tail = ["    emit_intrinsic", "_proto(ctx, family)\n}"].concat();
+        assert_eq!(
+            source.matches(&calls).count() + source.matches(&tail).count(),
+            2,
+            "the raw loader has a caller besides the shadow-word reader and the object door"
+        );
     }
 
     /// Local-exec only where the program is an ELF executable: Linux

@@ -223,11 +223,11 @@ pub(super) fn compile_module_entry(
         }
 
         // Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): the entry module
-        // defines the runtime's two link-time hooks (weak in the runtime),
+        // defines the runtime's three link-time hooks (weak in the runtime),
         // so the runtime's own readers of a phase-A intrinsic call the core
         // entry and the full entry can complete a core-only realm, with no
         // mode test on any call; a program compiled without the switch
-        // defines neither and does not link the two-phase path.
+        // defines none of them and does not link the two-phase path.
         if crate::expr::property_get::globalget::realm_two_phase() {
             for (hook, target) in [
                 ("perry_realm_core_entry", "js_get_global_core"),
