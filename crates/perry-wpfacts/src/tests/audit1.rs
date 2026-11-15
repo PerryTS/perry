@@ -285,3 +285,28 @@ fn audit1_u5_keep_user_data_descriptor() {
     let w = v("const o = { a: { m() { return 1; } } };\nconst X: any = g() ? o.a : undefined;\nX.m();\n", "m", true);
     assert!(r == w && !has(&r, "Throws"), "X is o.a or undefined: {r:?} {w:?}");
 }
+/// U8 gaps: `Object.assign(B, src)` does Set(B, key, v) for each own enumerable key of `src`
+/// (20.1.2.1); a key that may be `"__proto__"` runs the setter (B.2.2.1.2) and relinks class B:
+/// `new D()` then constructs through the new parent, so `b.x` is not the field of A alone.
+fn u8_gap(maker: &str) -> (Vec<String>, Vec<String>) {
+    let src = format!("class A {{ x: any = {{ zz: 1 }}; }}\nclass C {{}}\nclass B extends A {{}}\nclass D extends B {{}}\nconst go = () => {{ const b: any = new D(); b.x.zz; }};\nconst k: any = String(g());\n{maker}\ngo();\n");
+    (v(&src, "x", false), v(&src, "zz", false))
+}
+/// (a) `JSON.parse` makes own keys by CreateDataProperty (25.5.1), any string of the text.
+#[test]
+fn audit1_u8_json() {
+    let (x, z) = u8_gap("Object.assign(B, JSON.parse(k));");
+    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to a JSON object: {x:?} {z:?}");
+}
+/// (b) `Object.fromEntries` (20.1.2.7) CreateDataPropertyOrThrow under the entry key.
+#[test]
+fn audit1_u8_from_entries() {
+    let (x, z) = u8_gap("Object.assign(B, Object.fromEntries([[k, C]]));");
+    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to C: {x:?} {z:?}");
+}
+/// (c) `Object.defineProperty(s, k, { value })` (20.1.2.4) defines an own key `k`.
+#[test]
+fn audit1_u8_define_property() {
+    let (x, z) = u8_gap("const s: any = {};\nObject.defineProperty(s, k, { value: C, enumerable: true });\nObject.assign(B, s);");
+    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to C: {x:?} {z:?}");
+}

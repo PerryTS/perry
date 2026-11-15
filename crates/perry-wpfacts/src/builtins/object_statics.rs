@@ -140,6 +140,14 @@ pub(crate) fn from_entries(m: &mut Model, it: NodeId, inner: NodeId, t: Tok) {
     m.cons(it, Cons::Load { key: one, dst: inner });
     let fa = m.field_any(t);
     m.edge(inner, fa);
+    // U8: the entry key Get(entry, "0") is an own key of `t` (it may be
+    // "__proto__"): an `Object.assign` of `t` Sets it (`Cons::OwnComputedKey`).
+    let zero = Key::Named(m.atom("0"));
+    let k = m.node_l("fromEntries key");
+    m.cons(it, Cons::Load { key: zero, dst: k });
+    let o = m.node_l("fromEntries object");
+    m.add_tok(o, t);
+    m.cons(o, Cons::OwnComputedKey { key: k, val: inner });
 }
 
 /// `groupBy`: the key `k` the callback returned (ToPropertyKey) and the
