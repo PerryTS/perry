@@ -185,8 +185,22 @@ fn accsite1_k1_keep_json_receiver() {
     assert!(st.len() == 1 && !proven(&st[0].2), "K1 store must be a site, unproven: {st:?}");
 }
 
-// K2 KEEP: store to a getter-only accessor: Throws (strict).
+// K2 KEEP: store to a getter-only accessor (10.1.9.2 step 7: [[Set]] returns
+// false; 6.2.5.6 PutValue throws a TypeError only in strict code). A `.ts`
+// file without import/export is a script (node agrees): its top level is
+// sloppy, the store does nothing and nothing throws; a class body is strict
+// code (11.2.2), and so is every part of a module.
 const K2: &str = "class E { get y() { return 1; } }
+const e = new E();
+try { e.y = Number(process.argv[2] ?? \"2\"); } catch (x) { console.log(\"t\"); }
+console.log(e.y);";
+const K2B: &str = "class E { get y() { return 1; } }
+class H { run(e: E) { try { e.y = Number(process.argv[2] ?? \"2\"); } catch (x) { console.log(\"t\"); } } }
+const e = new E();
+new H().run(e);
+console.log(e.y);";
+const K2C: &str = "export {};
+class E { get y() { return 1; } }
 const e = new E();
 try { e.y = Number(process.argv[2] ?? \"2\"); } catch (x) { console.log(\"t\"); }
 console.log(e.y);";
@@ -195,7 +209,16 @@ fn accsite1_k2_keep_getter_only_throws() {
     let pf = facts(K2);
     show("K2", K2, &pf, &["y"]);
     let st = at(&pf, K2, "y", "e.y = ");
-    assert!(st.len() == 1 && matches!(st[0].2, crate::Verdict::Throws), "K2 store: {st:?}");
+    assert!(
+        st.len() == 1 && !proven(&st[0].2) && !matches!(st[0].2, crate::Verdict::Throws),
+        "K2 sloppy script store: no Throws: {st:?}"
+    );
+    for (tag, src) in [("K2b", K2B), ("K2c", K2C)] {
+        let pf = facts(src);
+        show(tag, src, &pf, &["y"]);
+        let st = at(&pf, src, "y", "e.y = ");
+        assert!(st.len() == 1 && matches!(st[0].2, crate::Verdict::Throws), "{tag} strict store: {st:?}");
+    }
 }
 
 // K3 KEEP: the setter may be replaced at run time: not "exactly setter E.y".

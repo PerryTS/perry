@@ -110,7 +110,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let cache_reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| wrapped(s) && s.key.starts_with(&root))
+        .filter(|s| wrapped(s) && s.key.starts_with(&root) && !s.access.is_store())
         .collect();
     // a.js requires b and c, c.js requires b: three static edges, each
     // reading the live entry and, after a reload, the new one.
@@ -436,7 +436,7 @@ fn cache_reads(dir: &tempfile::TempDir, pf: &ProgramFacts) -> Vec<(String, bool)
     let support = support_index(pf);
     pf.sites
         .iter()
-        .filter(|s| s.module != support && s.key.starts_with(&root))
+        .filter(|s| s.module != support && s.key.starts_with(&root) && !s.access.is_store())
         .map(|s| {
             let name = s.key.rsplit('/').next().unwrap_or_default().to_string();
             (name, proven(&s.verdict))
