@@ -99,6 +99,24 @@ impl Model {
         {
             return None;
         }
+        // The keys below are the object's own and its template's methods:
+        // the chain beyond them is `%Object.prototype%`, whose members are
+        // not enumerable. A chain that may hold another object (the literal
+        // `{ __proto__: p }`, B.3.1; a relink) also visits that object's
+        // enumerable keys (14.7.5.9 EnumerateObjectProperties, 14.7.5.10):
+        // the general walk runs.
+        let born_chain = self.proto_node.get(&t).is_none_or(|&pn| {
+            let nd = &self.nodes[pn as usize];
+            nd.prim == 0
+                && nd.pts.to_sorted().iter().all(|&p| match self.toks[p as usize] {
+                    TokKind::ObjectProto => true,
+                    TokKind::Proto(pm) => pm == tm,
+                    _ => false,
+                })
+        });
+        if !born_chain {
+            return None;
+        }
         let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
         if self.accessor_keys.get(&t).is_some_and(|ks| ks.iter().any(|&a| star(a))) {
             return None;
