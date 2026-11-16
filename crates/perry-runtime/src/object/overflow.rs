@@ -128,7 +128,7 @@ unsafe fn index(t: *const Table) -> *mut u32 {
 /// The keys column: a dense key list of `length` entries.
 #[inline(always)]
 pub(crate) unsafe fn keys_ptr(t: *const Table) -> *mut u64 {
-    values(t).add(2 * (*t).capacity as usize + (*t).index_capacity as usize / 2)
+    values(t).add(3 * (*t).capacity as usize)
 }
 
 /// Entry `i`'s key (`TAG_HOLE` for a tombstone).
@@ -147,11 +147,11 @@ pub(crate) unsafe fn tombstone(t: *mut Table, i: u32) {
 }
 
 unsafe fn allocate(capacity: u32) -> *mut Table {
-    let index_capacity = if capacity < 8 {
-        0
-    } else {
-        (capacity * 2).next_power_of_two()
-    };
+    // Every table is indexed, its index twice its capacity (capacity is a
+    // power of two, at least 4): a lookup derives the mask and the keys
+    // column from `capacity` alone.
+    debug_assert!(capacity.is_power_of_two() && capacity >= 4);
+    let index_capacity = capacity * 2;
     // Keys last: `array_elements_ptr` of the table is the keys column.
     let size =
         std::mem::size_of::<Table>() + 3 * capacity as usize * 8 + index_capacity as usize * 4;
@@ -165,9 +165,18 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         index_capacity,
         summary: 0,
     });
+    if index_capacity == SMALLEST_INDEX / 2 {
+        // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-4 table, EMPTY=u32::MAX, in one fixed-size store.
+        index(t)
+            .cast::<[u32; SMALLEST_INDEX as usize / 2]>()
+            .write_unaligned([EMPTY; SMALLEST_INDEX as usize / 2]);
+        return t;
+    }
     if index_capacity == SMALLEST_INDEX {
         // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-8 table, EMPTY=u32::MAX, in one fixed-size store (no memset call).
-        index(t).cast::<[u32; SMALLEST_INDEX as usize]>().write_unaligned([EMPTY; SMALLEST_INDEX as usize]);
+        index(t)
+            .cast::<[u32; SMALLEST_INDEX as usize]>()
+            .write_unaligned([EMPTY; SMALLEST_INDEX as usize]);
         return t;
     }
     for i in 0..index_capacity as usize {
@@ -177,7 +186,7 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
     t
 }
 
-/// The index of the smallest indexed table (capacity 8: `(2 * 8).next_power_of_two()`).
+/// The index of a capacity-8 table (`2 * 8`); a capacity-4 table has half.
 const SMALLEST_INDEX: u32 = 16;
 
 /// A key atom is canonicalized before entry lookup, including long keys.
@@ -192,9 +201,6 @@ unsafe fn key_hash(key: u64) -> u64 {
 }
 
 unsafe fn place(t: *mut Table, slot: u32) {
-    if (*t).index_capacity == 0 {
-        return;
-    }
     let key = *key_at(t, slot);
     if key == TAG_HOLE || super::key_attrs::entry_is_private(*attrs_at(t, slot) as u8) {
         return;
@@ -206,10 +212,7 @@ unsafe fn place(t: *mut Table, slot: u32) {
 /// `hash`, the key's [`key_hash`] (the hash every lookup of it probes with).
 #[inline(always)]
 unsafe fn place_hashed(t: *mut Table, slot: u32, key: u64, hash: u64) {
-    if (*t).index_capacity == 0 {
-        return;
-    }
-    let mask = (*t).index_capacity as usize - 1;
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = hash as usize & mask;
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
@@ -247,7 +250,7 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         }
         return None;
     }
-    let mask = (*t).index_capacity as usize - 1;
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = hash as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -270,21 +273,10 @@ pub(crate) unsafe fn find_hashed_with(
     key: u64,
     hash: impl FnOnce() -> u64,
 ) -> Option<u32> {
-    // A table too small to carry an index is scanned, newest entry first.
-    // Every other table answers from its index, which every insert places
-    // (`place`: the newest entry of a key, never a private name).
-    if (*t).index_capacity == 0 {
-        let keys = keys_ptr(t);
-        let mut i = (*t).length;
-        while i > 0 {
-            i -= 1;
-            if *keys.add(i as usize) == key {
-                return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
-            }
-        }
-        return None;
-    }
-    let mask = (*t).index_capacity as usize - 1;
+    // Every table answers from its index (`allocate`: twice the capacity),
+    // which every insert places (`place`: the newest entry of a key, never a
+    // private name).
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = hash() as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -359,7 +351,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
             *key_at(t, i) == key && !super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
         });
     }
-    let mask = (*t).index_capacity as usize - 1;
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = key_hash(key) as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -538,7 +530,7 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
         }
         (*t).length = out;
         (*t).deleted = 0;
-        for i in 0..(*t).index_capacity as usize {
+        for i in 0..2 * (*t).capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): Compaction clears scalar u32 hash-index column to EMPTY; the separate managed key/value columns receive their own visit_slots barrier.
             index(t).add(i).write(EMPTY);
         }
@@ -730,7 +722,11 @@ pub(crate) unsafe fn get_found_from_record(
 /// `None`, so the caller's hole sends the read to the complete path, which keeps
 /// its diagnostic. No formatting, allocation or collection is reachable.
 #[inline(always)]
-pub(crate) unsafe fn get_from_probe(t: *const Table, obj: *const ObjectHeader, slot: u32) -> Option<u64> {
+pub(crate) unsafe fn get_from_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+) -> Option<u64> {
     if slot >= (*t).length || *key_at(t, slot) == TAG_HOLE {
         return None;
     }
@@ -1399,4 +1395,71 @@ static KEEP_PERRY_OVERFLOW_DELETE: unsafe extern "C" fn(
 pub(crate) unsafe fn establish_order(obj: *mut ObjectHeader) -> bool {
     ensure(obj);
     true
+}
+
+#[cfg(test)]
+mod every_table_indexed_tests {
+    use super::*;
+
+    fn hash_of(i: u32) -> u64 {
+        (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+
+    /// Every table, the capacity-4 one included, is born with an index of
+    /// twice its capacity, and a probe front's lookup answers from it: the
+    /// hash is asked for (only the index path asks) and every key, and an
+    /// absent one, is answered.
+    #[test]
+    fn every_table_is_born_indexed_and_answers_from_its_index() {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(|| unsafe {
+                crate::gc::initialize_runtime_fixture();
+                let _no_move = crate::gc::GcSuppressScope::new();
+                for capacity in [4u32, 8, 16, 64] {
+                    let t = allocate(capacity);
+                    assert_eq!(
+                        (*t).index_capacity,
+                        2 * capacity,
+                        "capacity {capacity}: no full index"
+                    );
+                    for b in 0..2 * capacity as usize {
+                        assert_eq!(
+                            *index(t).add(b),
+                            EMPTY,
+                            "capacity {capacity}: bucket {b} not empty"
+                        );
+                    }
+                    for i in 0..capacity {
+                        append_plain(
+                            t,
+                            (i as f64 + 0.5).to_bits(),
+                            hash_of(i),
+                            crate::value::TAG_UNDEFINED,
+                        );
+                    }
+                    for i in 0..=capacity {
+                        let asked = std::cell::Cell::new(false);
+                        let key = (i as f64 + 0.5).to_bits();
+                        let found = find_hashed_with(t, key, || {
+                            asked.set(true);
+                            hash_of(i)
+                        });
+                        assert_eq!(
+                            found,
+                            (i < capacity).then_some(i),
+                            "capacity {capacity}: key {i}"
+                        );
+                        assert!(
+                            asked.get(),
+                            "capacity {capacity}: key {i} took the linear path"
+                        );
+                        assert_eq!(find_hashed(t, key, hash_of(i)), (i < capacity).then_some(i));
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }
