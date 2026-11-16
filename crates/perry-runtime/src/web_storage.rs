@@ -24,6 +24,9 @@ enum StorageKind {
 thread_local! {
     static LOCAL_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
     static SESSION_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+crate::perry_thread_local! {
     /// Set while this module writes its own mirror of a stored key onto the
     /// storage object (`sync_named_property`): that write is the ordinary
     /// one, not the program's named-property [[Set]].
