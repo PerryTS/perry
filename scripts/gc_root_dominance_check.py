@@ -1939,6 +1939,19 @@ POLL_CAPABLE_RUNTIME = {
     # corpus is that one, which the same PR fixes in
     # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
+    # Fifth wave, one hop each, the audit's own premise:
+    #   js_object_assign_fresh -> js_object_assign_one  (object/assign.rs: the
+    #       spread / Object.assign birth copies through the listed per-source
+    #       copy, which runs the source's getters)
+    #   js_array_flat_depth    -> js_number_coerce  (array/flat_clone.rs:
+    #       ToIntegerOrInfinity(depth) runs a user valueOf, and
+    #       ArraySpeciesCreate may run a user constructor)
+    #   js_array_flat          -> js_array_flat_depth  (a pure delegate)
+    #   js_array_to_spliced    -> js_number_coerce  (array/immutable.rs:
+    #       ToIntegerOrInfinity(start / skipCount) runs a user valueOf)
+    "js_object_assign_fresh",
+    "js_array_flat", "js_array_flat_depth",
+    "js_array_to_spliced",
 }
 
 
