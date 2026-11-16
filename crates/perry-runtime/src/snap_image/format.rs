@@ -256,7 +256,9 @@ pub const PENDING_SHAPES: u32 = 0b001;
 pub const PENDING_ATOMS: u32 = 0b010;
 pub const PENDING_TOKENS: u32 = 0b100;
 
-/// The shape counters moved between the baseline and the cut (`value` = rows).
+/// The shape records changed between the baseline and the cut: `value` = the records
+/// minted per id band (static, ordinary, dictionary, exotic; 16 bits each), `off` = the
+/// records present at the baseline whose state changed, `cell` = those no longer present.
 pub const STOP_SHAPES_MINTED: u8 = 5;
 /// More than the primary's class-template token was claimed (`value` = next token).
 pub const STOP_TOKENS: u8 = 6;
@@ -302,3 +304,5 @@ pub fn registry_blob(recs: &[RegRec]) -> Vec<u8> {
     }
     o
 }
+/// The shape id or generation counters moved (`value` = ids drawn | generations << 32).
+pub const STOP_SHAPE_COUNTERS: u8 = 10;

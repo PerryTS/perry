@@ -45,8 +45,8 @@ pub(crate) struct Baseline {
     claims_from: u32,
     /// Names claimed since, read first at the cut (the capture claims its own).
     claims: Vec<(Vec<u8>, u32)>,
-    /// Shape counters and the next class-template token at the baseline.
-    shapes: u64,
+    /// Shape records and counters, and the next class-template token, at the baseline.
+    shapes: crate::object::shapes::SnapShapeState,
     token: u64,
 }
 
@@ -110,7 +110,7 @@ pub extern "C" fn js_snap_image_begin(
         classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: crate::tls_hot::js_tls_hot_claimed_slots(),
         claims: Vec::new(),
-        shapes: crate::object::shapes::snap_image_shape_counts(),
+        shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
@@ -465,8 +465,10 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
     match base {
         Some(b) => {
             let (pending, stops) = completeness(
-                b.shapes,
-                crate::object::shapes::snap_image_shape_counts(),
+                crate::object::shapes::snap_image_shape_delta(
+                    &b.shapes,
+                    &crate::object::shapes::snap_image_shape_state(),
+                ),
                 b.token,
                 crate::object::field_get_set::snap_image_next_token(),
             );
@@ -566,19 +568,33 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
 /// Which forms the image still lacks, and why it stops: a shape minted between the
 /// baseline and the cut (the shape slab has no form), more than the primary's
 /// class-template token. The atom table has no run-time counter: its bit stays set.
-fn completeness(shapes0: u64, shapes1: u64, tok0: u64, tok1: u64) -> (u32, Vec<Stop>) {
+fn completeness(shapes: crate::object::shapes::SnapShapeDelta, tok0: u64, tok1: u64) -> (u32, Vec<Stop>) {
     let mut pending = format::PENDING_ATOMS;
     let mut stops = Vec::new();
-    let mut stop = |kind: u8, value: u64| {
-        stops.push(Stop { cell: 0, obj_type: 0, kind, off: 0, value });
+    let mut stop = |kind: u8, cell: u32, off: u32, value: u64| {
+        stops.push(Stop { cell, obj_type: 0, kind, off, value });
     };
-    if shapes0 != shapes1 {
+    if shapes.any() {
         pending |= format::PENDING_SHAPES;
-        stop(format::STOP_SHAPES_MINTED, shapes1.wrapping_sub(shapes0));
+    }
+    if shapes.minted_total() != 0 || shapes.changed != 0 || shapes.retired != 0 {
+        // One stop: the records minted per id band (16 bits each, saturating), the
+        // pre-existing records that changed (`off`) and those that are gone (`cell`).
+        let sat = |n: u32| u64::from(n.min(0xffff));
+        let m = shapes.minted;
+        stop(
+            format::STOP_SHAPES_MINTED,
+            shapes.retired,
+            shapes.changed,
+            sat(m[0]) | sat(m[1]) << 16 | sat(m[2]) << 32 | sat(m[3]) << 48,
+        );
+    }
+    if shapes.drawn != 0 || shapes.generations != 0 {
+        stop(format::STOP_SHAPE_COUNTERS, 0, 0, u64::from(shapes.drawn) | u64::from(shapes.generations) << 32);
     }
     if tok1 > 2.max(tok0) {
         pending |= format::PENDING_TOKENS;
-        stop(format::STOP_TOKENS, tok1);
+        stop(format::STOP_TOKENS, 0, 0, tok1);
     }
     (pending, stops)
 }

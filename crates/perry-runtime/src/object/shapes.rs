@@ -7471,11 +7471,211 @@ pub(crate) fn recompute_record_handle_carriers() {
 #[path = "shapes_snap22.rs"]
 pub(crate) mod snap22;
 
-/// Shape ids and semantic generations handed out so far (image run: equal at begin and cut = no shape was minted).
-pub(crate) fn snap_image_shape_counts() -> u64 {
+/// Image run: the shape state at one point, for the exact begin-to-cut accounting
+/// (`snap_image_shape_delta`): every present record's identity and state bytes in id
+/// order, and the id and generation counters.
+pub(crate) struct SnapShapeState {
+    records: Vec<(u32, Vec<u8>)>,
+    next: [u32; 4],
+    exotic: [u32; 4],
+    semantic: u64,
+}
+
+/// What changed in the shape state between two [`SnapShapeState`]s. A record is minted
+/// when its id is absent at begin, changed when it exists at both and its state bytes
+/// differ, retired when it is absent at the cut.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SnapShapeDelta {
+    /// Minted records by id band: static (compile-time ids), ordinary, dictionary, exotic.
+    pub minted: [u32; 4],
+    pub changed: u32,
+    pub retired: u32,
+    /// Ids drawn from the ordinary and the exotic counters (a counter that moved to
+    /// another kind granule counts from the granule start), and semantic generations.
+    pub drawn: u32,
+    pub generations: u32,
+}
+
+impl SnapShapeDelta {
+    pub(crate) fn minted_total(&self) -> u32 {
+        self.minted.iter().sum()
+    }
+    /// Any shape state changed: the image has no form for it.
+    pub(crate) fn any(&self) -> bool {
+        self.minted_total() != 0
+            || self.changed != 0
+            || self.retired != 0
+            || self.drawn != 0
+            || self.generations != 0
+    }
+}
+
+fn snap_image_id_band(id: u32) -> usize {
+    if id < STATIC_SHAPE_ID_END {
+        0
+    } else if id < SITE_SHAPE_ID_END {
+        1
+    } else if id < EXOTIC_SHAPE_ID_BASE {
+        2
+    } else {
+        3
+    }
+}
+
+pub(crate) fn snap_image_shape_state() -> SnapShapeState {
     use std::sync::atomic::Ordering::Relaxed;
-    SHAPE_ID_NEXT
-        .iter()
-        .map(|c| u64::from(c.load(Relaxed)))
-        .fold(SHAPE_SEMANTIC_NEXT.load(Relaxed), u64::wrapping_add)
+    let slab = crate::state::state().shapes.slab();
+    let mut records = Vec::with_capacity(slab.len());
+    slab.for_each(|id, p| {
+        // SAFETY: a present record of this agent's slab.
+        records.push((id.0, unsafe { &*p }.snap_image_state()));
+    });
+    records.sort_by_key(|r| r.0);
+    SnapShapeState {
+        records,
+        next: std::array::from_fn(|i| SHAPE_ID_NEXT[i].load(Relaxed)),
+        exotic: std::array::from_fn(|i| EXOTIC_SHAPE_ID_NEXT[i].load(Relaxed)),
+        semantic: SHAPE_SEMANTIC_NEXT.load(Relaxed),
+    }
+}
+
+pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
+    let mut d = SnapShapeDelta::default();
+    let (mut i, mut j) = (0, 0);
+    while i < a.records.len() || j < b.records.len() {
+        let ka = a.records.get(i).map(|r| r.0);
+        let kb = b.records.get(j).map(|r| r.0);
+        match (ka, kb) {
+            (Some(x), Some(y)) if x == y => {
+                d.changed += u32::from(a.records[i].1 != b.records[j].1);
+                i += 1;
+                j += 1;
+            }
+            (Some(x), Some(y)) if x < y => {
+                d.retired += 1;
+                i += 1;
+            }
+            (Some(_), None) => {
+                d.retired += 1;
+                i += 1;
+            }
+            (_, Some(y)) => {
+                d.minted[snap_image_id_band(y)] += 1;
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    let steps = |old: u32, new: u32| {
+        if old >> SHAPE_ID_KIND_SHIFT == new >> SHAPE_ID_KIND_SHIFT {
+            new.wrapping_sub(old)
+        } else {
+            new - (new >> SHAPE_ID_KIND_SHIFT << SHAPE_ID_KIND_SHIFT)
+        }
+    };
+    for k in 0..4 {
+        d.drawn += steps(a.next[k], b.next[k]) + steps(a.exotic[k], b.exotic[k]);
+    }
+    d.generations = b.semantic.wrapping_sub(a.semantic) as u32;
+    d
+}
+
+#[cfg(test)]
+mod snap_image_delta_tests {
+    use super::*;
+
+    fn st(recs: &[(u32, u8)]) -> SnapShapeState {
+        SnapShapeState {
+            records: recs.iter().map(|&(i, b)| (i, vec![b])).collect(),
+            next: [0; 4],
+            exotic: [0; 4],
+            semantic: 0,
+        }
+    }
+    const S: u32 = SHAPE_ID_BASE + 5;
+    const O: u32 = STATIC_SHAPE_ID_END + 7;
+    const D: u32 = SITE_SHAPE_ID_END + 3;
+    const X: u32 = EXOTIC_SHAPE_ID_BASE + 9;
+
+    #[test]
+    fn snap_image_delta_counts_records_per_band() {
+        let a = st(&[(S, 0)]);
+        let b = st(&[(S, 0), (S + 1, 0), (O, 0), (O + 1, 0), (O + 2, 0), (D, 0), (X, 0)]);
+        let d = snap_image_shape_delta(&a, &b);
+        assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
+        assert_eq!(d.minted_total(), 6);
+        assert!(d.any());
+        assert!(!snap_image_shape_delta(&b, &b).any());
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_changed_pre_existing_record() {
+        let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
+        assert_eq!((d.minted_total(), d.changed, d.retired), (0, 1, 0));
+        assert!(d.any());
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_retired_record() {
+        let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
+        assert_eq!((d.minted_total(), d.changed, d.retired), (0, 0, 1));
+        assert!(d.any());
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_static_id_birth_that_moves_no_counter() {
+        let d = snap_image_shape_delta(&st(&[]), &st(&[(S, 0)]));
+        assert_eq!((d.minted, d.drawn, d.generations), ([1, 0, 0, 0], 0, 0));
+        assert!(d.any());
+    }
+
+    #[test]
+    fn snap_image_delta_counts_exotic_band_records_and_counter() {
+        let mut b = st(&[(X, 0)]);
+        b.exotic[1] = 2;
+        let d = snap_image_shape_delta(&st(&[]), &b);
+        assert_eq!((d.minted, d.drawn), ([0, 0, 0, 1], 2));
+        let mut c = st(&[]);
+        c.exotic[3] = 4;
+        assert_eq!(snap_image_shape_delta(&st(&[]), &c).drawn, 4);
+    }
+
+    #[test]
+    fn snap_image_delta_counts_an_id_space_jump_as_steps_not_the_granule() {
+        let a = st(&[]);
+        let mut a = a;
+        a.next[2] = STATIC_SHAPE_ID_END;
+        let mut b = st(&[]);
+        b.next[2] = SHAPE_ID_BASE + (2 << SHAPE_ID_KIND_SHIFT) + 1;
+        b.semantic = 3;
+        let d = snap_image_shape_delta(&a, &b);
+        assert_eq!((d.drawn, d.generations), (1, 3));
+    }
+
+    fn fresh_key(tag: &str) -> *const crate::StringHeader {
+        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let s = format!("{tag}{}", N.fetch_add(1, Relaxed));
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    }
+
+    #[test]
+    fn snap_image_delta_live_mint_is_a_few_records_not_an_id_jump() {
+        let o = crate::object::js_object_alloc(0, 0);
+        let before = snap_image_shape_state();
+        crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
+        let d = snap_image_shape_delta(&before, &snap_image_shape_state());
+        assert!(d.any() && d.minted_total() >= 1 && d.minted_total() < 8, "{d:?}");
+        assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
+    }
+
+    #[test]
+    fn snap_image_delta_live_freeze_changes_the_existing_record() {
+        let o = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(o, fresh_key("snapimgfrz"), 1.0);
+        let before = snap_image_shape_state();
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
+        let d = snap_image_shape_delta(&before, &snap_image_shape_state());
+        assert!(d.changed >= 1, "{d:?}");
+    }
 }
