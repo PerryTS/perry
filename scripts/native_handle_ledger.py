@@ -80,6 +80,10 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/image_cells.rs", "IMAGE_REMEMBERED"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
+    # LIFE I3d's mark-parent record (PERRY_LIFE_REGIONS_WHY, instrumented
+    # runtime only: the module is #[cfg(perry_gc_instruments)]): header address
+    # -> the parent that marked it during the one armed full, cleared on arm.
+    ("crates/perry-runtime/src/gc/life_why.rs", "MAP"),
     # Compiled code/literal/site metadata, not heap object identity.
     # `builtins/fn_metadata.rs` used to hold `REGISTRY` and `OVERRIDES` here; #13442
     # replaced both modules' tables with stable function-metadata identity, so the
