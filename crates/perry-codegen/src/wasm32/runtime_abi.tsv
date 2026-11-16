@@ -799,6 +799,7 @@ js_bun_zstd_decompress	f64	f64
 js_bun_zstd_decompress_sync	f64	f64
 js_byte_length_queuing_strategy_new	f64	f64
 js_call_function	f64	i64,i64,i64,i64,i64
+js_call_late_own_value	f64	f64,i64,i64,ptr,usize
 js_callback_timer_has_pending	i32s	
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
