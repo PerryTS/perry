@@ -2368,6 +2368,16 @@ const __memDispatch = {
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(msg)` in a class extending a built-in Error: the instance is a plain
+  // `{__class__}` object, so it takes the message the Error constructor would
+  // give it, non-enumerable as on a real Error. Returns the instance.
+  error_super_init: (obj, msg) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    Object.defineProperty(obj, 'message', {
+      value: msg === undefined ? '' : String(msg), writable: true, configurable: true, enumerable: false,
+    });
+    return obj;
+  },
 
   global_receiver: () => __hostGlobal,
   global_property: (name) => __hostGlobal[name],

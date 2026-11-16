@@ -1106,3 +1106,49 @@ console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
         "k 1\nk 2\ndecl 3 4\nonce 5 1\ncaught true caught true no throw 6"
     );
 }
+
+// `.message` is an ordinary property read: only an Error's message comes from the
+// Error itself.
+#[test]
+fn message_reads_the_property_of_any_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = JSON.parse('{"message":"hi","phone":"p"}');
+const lit: any = { message: "lit" };
+class G { get message(): string { return "getter"; } }
+class F { message: string; constructor() { this.message = "field"; } }
+const none: any = {};
+console.log(o.message + " " + o.phone + " " + lit.message + " " + new G().message + " " + new F().message + " " + none.message);
+try { throw { message: "thrown" }; } catch (e: any) { console.log(e.message); }
+const err = new Error("boom");
+const empty = new Error();
+console.log(err.message + " [" + empty.message + "]");
+try { JSON.parse("{bad"); } catch (e: any) { console.log(e.message.length > 0); }
+"#
+        ),
+        "hi p lit getter field undefined\nthrown\nboom []\ntrue"
+    );
+}
+
+#[test]
+fn an_error_subclass_takes_its_message_from_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class MyErr extends Error { constructor(m?: string) { super(m); this.name = "MyErr"; } }
+class Coded extends Error { code: number; constructor(m: string, c: number) { super(m); this.code = c; } }
+class Bare extends Error {}
+class Deep extends Bare { constructor() { super("deep"); } }
+class Ranged extends RangeError { constructor(m: string) { super(m); } }
+class Fielded extends Error { code = 5; }
+const c = new Coded("coded", 7);
+console.log(new MyErr("sub").message + " [" + new MyErr().message + "] " + c.message + " " + c.code);
+console.log(new Bare("bare").message + " " + new Deep().message + " " + new Ranged("ranged").message + " [" + new Fielded().message + "]");
+try { throw new MyErr("caught"); } catch (e: any) { console.log(e.message + " " + (e instanceof Error)); }
+console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k")).length);
+"#
+        ),
+        "sub [] coded 7\nbare deep ranged []\ncaught true\n{\"name\":\"MyErr\"} 0"
+    );
+}

@@ -210,6 +210,7 @@ impl WasmModuleEmitter {
             "date_to_json",
             "error_new",
             "error_message",
+            "error_super_init",
             "global_property",
             "global_receiver",
             "propagate_exception",
