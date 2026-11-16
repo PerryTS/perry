@@ -62,8 +62,18 @@ pub const JS_FN_SECTION_PREFIX: &str = "perry_js_text.fn.";
 /// The ELF link rule that gathers the JS text input sections into the
 /// `perry_js_text` output section: a C-identifier name, so the linker defines
 /// `__start_`/`__stop_perry_js_text` around every JS frame.
+///
+/// Behind it, the runtime's tail text ([`RUNTIME_TAIL_SECTION`]): functions
+/// only a realm that starts with phase A alone runs. Placed here they move
+/// nothing a program maps that never runs them; left to the linker's orphan
+/// placement they would sit in front of the JS text (GNU ld). An output
+/// section with no input (the program links none of them) is not emitted.
 pub const JS_TEXT_LINK_RULE: &str =
-    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n} INSERT AFTER .text;\n";
+    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n .perry_tail : ALIGN(16) {\n  *(.perry_tail)\n }\n} INSERT AFTER .text;\n";
+
+/// The input (and output) section of the runtime's tail text on Linux
+/// (`#[link_section]` in perry-runtime and perry-abi).
+pub const RUNTIME_TAIL_SECTION: &str = ".perry_tail";
 
 /// A parsed order list: function name -> rank (0 runs first).
 #[derive(Debug, Clone, PartialEq, Eq)]

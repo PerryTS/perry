@@ -132,6 +132,7 @@ static KEEP_JS_REALM_POPULATE_WHOLE: extern "C" fn(*mut ObjectHeader) = js_realm
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
 /// Linked only into a program compiled for a two-phase realm.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
 #[inline(never)]
 pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     super::super::own_override::as_builtin_definition(|| {
@@ -144,6 +145,7 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
 /// layout is static, so no key is added and none moves) and its family's
 /// declaration order (the same `birth_family`). Runs inside the caller's
 /// no-move window, and no program code runs inside it.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
 #[cold]
 #[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
@@ -904,6 +906,8 @@ impl FamilyBirthState {
     /// The state for a family born after its realm's phase A: `Error` as the
     /// realm bound it, and `%TypedArray%` if it exists (only a typed-array
     /// row reads it, and the pass that binds those builds it first).
+    #[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+    #[inline(never)]
     fn of_bound_realm() -> Self {
         let bits = |addr: usize| {
             (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits())
