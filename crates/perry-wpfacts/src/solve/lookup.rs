@@ -626,6 +626,21 @@ impl Model {
             {
                 return false;
             }
+            // R9READ1: a class-body method (a non-accessor `proto_members`
+            // key) is defined on the prototype in ClassDefinitionEvaluation
+            // (ECMA-262 15.7.14) before any instance exists, as a writable
+            // data property; only `delete` / `defineProperty` (HARD, above)
+            // remove or reshape it, and a store keeps it a data property
+            // whose values join the field (a stored `undefined`, named or
+            // computed, ends the rule above).
+            if tp.proto_members.contains(&a)
+                && !self
+                    .field_any
+                    .get(&p)
+                    .is_some_and(|&n| self.nodes[n as usize].prim & prim::UNDEF != 0)
+            {
+                return true;
+            }
             // The store statement runs when the class is evaluated, before
             // any instance exists; every other writer the solve finds
             // (later: `settle_proto_first`) ends the rule.

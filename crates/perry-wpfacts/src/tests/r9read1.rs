@@ -1,0 +1,109 @@
+// R9READ1 (2026-11-16): the remaining r9 read/call sites.
+use super::*;
+use perry_hir::Module;
+
+fn hirs(src: &str) -> Vec<(String, Module)> {
+    let path = "a.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "a", &path).expect("lowers");
+    vec![(path, hir)]
+}
+
+fn facts(src: &str) -> crate::ProgramFacts {
+    let h = hirs(src);
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let cfg = FactsConfig {
+        unit_io: true,
+        ..Default::default()
+    };
+    crate::compute(&list, &cfg)
+}
+
+fn verdicts(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && !s.access.is_store())
+        .map(|s| format!("{:?}", s.verdict))
+        .collect();
+    for verdict in &v {
+        eprintln!("RR1 .{key} verdict={verdict}");
+    }
+    v
+}
+
+fn proven(src: &str, key: &str) {
+    let pf = facts(src);
+    let v = verdicts(&pf, key);
+    assert!(
+        !v.is_empty() && v.iter().all(|x| !x.starts_with("No(")),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+fn not_proven(src: &str, key: &str) {
+    let pf = facts(src);
+    let v = verdicts(&pf, key);
+    assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
+}
+
+// b: a method value copied through a local into a field, then called.
+const B: &str = "class P {
+  _a() { return 1; }
+  constructor(t: string) {
+    let g = this._a;
+    this.f = g;
+  }
+  run() { return this.f(); }
+}
+const p = new P(process.argv[2] ?? String(Math.random()));
+console.log(p.run());
+";
+
+#[test]
+fn r9read1_b1_method_through_local_is_proven() {
+    proven(B, "f");
+}
+
+#[test]
+fn r9read1_b2_method_value_direct() {
+    proven(&B.replace("let g = this._a;\n    this.f = g;", "this.f = this._a;"), "f");
+}
+
+#[test]
+fn r9read1_b3_method_through_const() {
+    proven(&B.replace("let g", "const g"), "f");
+}
+
+#[test]
+fn r9read1_b4_keep_function_local() {
+    proven(&B.replace("let g = this._a;", "let g = function () { return 2; };"), "f");
+}
+
+// KEEP: what can take the method away or store `undefined` over it.
+#[test]
+fn r9read1_bk1_delete() {
+    not_proven(&B.replace("const p =", "if (process.argv[2]) delete (P.prototype as any)._a;\nconst p ="), "f");
+}
+
+#[test]
+fn r9read1_bk2_stored_undefined() {
+    not_proven(&B.replace("const p =", "if (process.argv[2]) (P.prototype as any)._a = undefined;\nconst p ="), "f");
+}
+
+#[test]
+fn r9read1_bk3_computed_undefined() {
+    not_proven(&B.replace("const p =", "(P.prototype as any)[process.argv[2] ?? \"x\"] = undefined;\nconst p ="), "f");
+}
+
+#[test]
+fn r9read1_bk4_instance_undefined() {
+    not_proven(&B.replace("let g = this._a;", "if (t.length > 3) (this as any)._a = undefined;\n    let g = this._a;"), "f");
+}
+
+#[test]
+fn r9read1_bk5_define_property() {
+    not_proven(&B.replace("const p =", "if (process.argv[2]) Object.defineProperty(P.prototype, \"_a\", { get() { return 7; } });\nconst p ="), "f");
+}
