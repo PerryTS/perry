@@ -964,6 +964,19 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             match name.as_deref() {
                 Some("mainModule") => {}
                 _ if array_key => {}
+                // A key the realm declares holding one primitive type
+                // (`execPath = runtime(process.execPath, string)`): the
+                // runtime's value has that type; a write of the
+                // key (a program store, `Object.defineProperty`, unknown code),
+                // now or later in the solve, makes the read opaque.
+                Some(n) if !m.unit_mode && m.native_property(t, n).and_then(|p| p.prim).is_some() => {
+                    let p = m.native_property(t, n).and_then(|p| p.prim).expect("guarded");
+                    let Key::Named(a) = key else { unreachable!() };
+                    if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                        return opaque_member(m, dst);
+                    }
+                    m.add_prim(dst, p);
+                }
                 // A key the realm declares as a native function reads it.
                 Some(n)
                     if !m.unit_mode && namespace_native(m, t, BuiltinNs::Process, n).is_some() =>

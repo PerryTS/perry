@@ -380,6 +380,19 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
     Ok(facts)
 }
 
+/// The one primitive type a runtime value is declared to have
+/// (`runtime(process.execPath, string)`): the provider returns only values of
+/// that type (ECMA-262 6.1: String, Number, Boolean).
+pub(super) fn runtime_type(ts: &[Token<'_>]) -> Option<&'static str> {
+    let n = ts.len();
+    if n < 7 || ts[0].text != "runtime" || ts[n - 3].text != "," {
+        return None;
+    }
+    ["string", "number", "boolean"]
+        .into_iter()
+        .find(|&k| ts[n - 2].text == k)
+}
+
 pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
     if ts
         .first()
@@ -388,7 +401,13 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
         if ts.len() < 4 || ts[1].text != "(" || ts.last().unwrap().text != ")" {
             return Err("runtime value requires its provider path".into());
         }
-        let binding = path(&ts[2..ts.len() - 1])?;
+        let inner = &ts[2..ts.len() - 1];
+        let inner = if runtime_type(ts).is_some() {
+            &inner[..inner.len() - 2]
+        } else {
+            inner
+        };
+        let binding = path(inner)?;
         if !binding.starts_with("process.") && !binding.starts_with("navigator.") {
             return Err("unknown runtime value provider".into());
         }
