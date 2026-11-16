@@ -68,6 +68,11 @@ def main() -> int:
         route_job = category.get('route_job', 'route')
         if category.get('route_job') and route_job not in jobs:
             errors.append(f'{parent}/{category_id}: missing category router {route_job}')
+        # A router that starts on an ineligible workflow_run spends a runner to
+        # select nothing, so eligibility is decided by the job-level `if`.
+        if 'workflow_run' in triggers and route_job in jobs:
+            if 'workflow_run' not in str(jobs[route_job].get('if') or ''):
+                errors.append(f'{parent}/{category_id}: {route_job} must decide workflow_run eligibility in its job-level if')
         concurrency = workflow.get('concurrency') or {}
         parent_group = str(concurrency.get('group') or '')
         if category_id not in {'ci', 'release-packages', 'release-hono-server'}:
