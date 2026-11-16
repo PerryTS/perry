@@ -312,7 +312,7 @@ pub fn performance_namespace() -> f64 {
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { performance, kind = namespace, extends = Performance.prototype, members = { }; } };
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { performance, kind = namespace, extends = Performance.prototype, members = { }, births = ["performance.<get>", "performance.<set>"]; } };
     let ns = link_perf_prototype(crate::value::js_nanbox_pointer(obj as i64), "Performance");
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
