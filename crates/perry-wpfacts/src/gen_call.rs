@@ -316,6 +316,24 @@ impl<'a> Gen<'a> {
                 let key = self.m.atom(name);
                 self.mcall(recv, Key::Named(key), args, spread)
             }
+            // ASSUMED (owner 2026-11-16, "Assume it for now", interim): a
+            // native-library extern whose manifest signature is all
+            // primitives reaches no program object. Its arguments are
+            // checked, not converted (`js_native_abi_check_*`: a TypeError,
+            // which every catch already sees as the runtime error; `bool`
+            // is ToBoolean): no program code runs, nothing escapes, the
+            // realm is not held. The result is the descriptor's kind.
+            Expr::ExternFuncRef { name, .. } if self.native_extern(fx.module, name).is_some() => {
+                let r = self.native_extern(fx.module, name).unwrap_or(crate::NativeResult::Undefined);
+                self.m.native_extern_fired.push((fx.module, byte_offset));
+                let _ = (args, spread, byte_end);
+                self.prim_node(match r {
+                    crate::NativeResult::Number => prim::NUM,
+                    crate::NativeResult::String => prim::STR,
+                    crate::NativeResult::Boolean => prim::BOOL,
+                    crate::NativeResult::Undefined => prim::UNDEF,
+                })
+            }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -370,6 +388,14 @@ impl<'a> Gen<'a> {
                 ret
             }
         }
+    }
+
+    /// The result kind of a call of `name` when it is a native-library
+    /// extern under the native-extern assumption (`FactsConfig::native_externs`):
+    /// a declared extern, not an import or module binding of that name.
+    fn native_extern(&self, mi: u32, name: &str) -> Option<crate::NativeResult> {
+        let r = *self.m.native_externs.get(name)?;
+        (!self.is_import(mi, name) && !self.mods[mi as usize].scope.contains_key(name)).then_some(r)
     }
 
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
