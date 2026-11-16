@@ -2467,12 +2467,21 @@ pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool, reviver: 
         m.json_root(j, ja);
         return (j, ja);
     }
-    let fa = m.field_any(j);
     let vals = if reviver { prim::ALL } else { prim::JSON };
-    for f in [fa, m.field_any(ja)] {
+    // Without a reviver the result `j` / `ja` is no value inside its own
+    // tree (`Model::json_inner`): every nested object or array is `io` /
+    // `ia`. A reviver runs with every object of the tree as its `this` and
+    // its results replace values anywhere (25.5.1.1
+    // InternalizeJSONProperty): one token for the whole tree.
+    let (io, ia) = match reviver {
+        true => (j, ja),
+        false => m.json_inner(j, ja),
+    };
+    for o in [j, ja, io, ia] {
+        let f = m.field_any(o);
         m.add_prim(f, vals);
-        m.add_tok(f, j);
-        m.add_tok(f, ja);
+        m.add_tok(f, io);
+        m.add_tok(f, ia);
     }
     (j, ja)
 }
