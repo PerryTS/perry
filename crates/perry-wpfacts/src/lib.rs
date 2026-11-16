@@ -25,6 +25,7 @@ pub mod canonical_numbers;
 mod const_arrays;
 mod const_numbers;
 mod ctor_phase;
+mod decl_units;
 pub mod delta;
 mod demand;
 pub mod derive;
@@ -34,7 +35,6 @@ mod element_floors;
 mod element_keys;
 pub mod family_reach;
 pub mod field_read_calls;
-mod decl_units;
 mod fill_births;
 mod gen;
 mod gen_call;
@@ -43,17 +43,17 @@ mod gen_const;
 mod gen_expr;
 mod gen_protocol;
 mod gen_rest;
+mod gen_sources;
 mod held_lengths;
 mod ledger;
 pub mod list_caps;
 mod literal_strings;
 mod method_sites;
 pub mod model;
-mod gen_sources;
 mod named_lengths;
 pub mod native_effects;
-pub mod pts;
 mod provenance;
+pub mod pts;
 mod push_fills;
 mod quiet_sites;
 mod reach;
@@ -446,7 +446,9 @@ pub fn compute_with(
 
 #[path = "lib/program_facts.rs"]
 mod program_facts;
-use program_facts::{big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows, solve_counters};
+use program_facts::{
+    big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows, solve_counters,
+};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -678,7 +680,11 @@ fn generate<'a>(
             gm.m.funcs
                 .get(f as usize)
                 .map(|fi| {
-                    let p = gm.modules.get(fi.module as usize).map(|(p, _)| p.to_string()).unwrap_or_default();
+                    let p = gm
+                        .modules
+                        .get(fi.module as usize)
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default();
                     format!("{}@{}", fi.name, p)
                 })
                 .unwrap_or_else(|| "-".into())
@@ -811,13 +817,18 @@ fn activation_pass<'a>(
         );
     }
     if cfg.profile {
-        eprintln!("perry: wpfacts activation pass profile: {}", g.m.size_line());
+        eprintln!(
+            "perry: wpfacts activation pass profile: {}",
+            g.m.size_line()
+        );
         g.m.prof_mark(crate::model::NO_NODE, "activation end");
         g.m.prof_report();
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
         for (k, (es, ec, pops)) in v.iter().take(25) {
-            eprintln!("perry: wpfacts activation pass labelwork {k} succ={es} cons={ec} pops={pops}");
+            eprintln!(
+                "perry: wpfacts activation pass labelwork {k} succ={es} cons={ec} pops={pops}"
+            );
         }
     }
     if g.m.aborted {
@@ -832,7 +843,6 @@ fn activation_pass<'a>(
     a.seen = seen;
     Some((a, std::mem::take(&mut g.dynimport_seen)))
 }
-
 
 fn compute_act<'a>(
     modules: &'a [(String, &'a Module)],
@@ -1239,12 +1249,18 @@ fn compute_act<'a>(
     } else {
         g.m.array_iteration_writes()
     };
-    let native_extern_sites: Vec<(String, u32)> = g
-        .m
-        .native_extern_fired
-        .iter()
-        .map(|&(mi, off)| (sorted.get(mi as usize).map_or(String::new(), |s| s.0.to_owned()), off))
-        .collect();
+    let native_extern_sites: Vec<(String, u32)> =
+        g.m.native_extern_fired
+            .iter()
+            .map(|&(mi, off)| {
+                (
+                    sorted
+                        .get(mi as usize)
+                        .map_or(String::new(), |s| s.0.to_owned()),
+                    off,
+                )
+            })
+            .collect();
     let fnproto_bind_written = if stats.aborted {
         Some("solve aborted".to_string())
     } else {

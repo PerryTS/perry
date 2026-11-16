@@ -143,7 +143,11 @@ pub(super) fn field_truthy_filters(m: &model::Model) -> (u64, u64) {
             if let model::Cons::FieldTruthy { dst, .. } = *c {
                 rules += 1;
                 let out = &m.nodes[dst as usize].pts;
-                if n.pts.to_sorted().into_iter().any(|t| t != model::TOP && !m.is_marker(t) && !out.contains_tok(t)) {
+                if n.pts
+                    .to_sorted()
+                    .into_iter()
+                    .any(|t| t != model::TOP && !m.is_marker(t) && !out.contains_tok(t))
+                {
                     removing += 1;
                 }
             }
@@ -164,7 +168,9 @@ pub(super) fn field_truthy_rows(m: &model::Model) -> Vec<String> {
         if m.labels[i] != "field-truthy-token" {
             continue;
         }
-        let Some(t) = n.pts.to_sorted().into_iter().next() else { continue };
+        let Some(t) = n.pts.to_sorted().into_iter().next() else {
+            continue;
+        };
         for c in &n.cons {
             if let model::Cons::Load { dst: read, .. } = *c {
                 for rc in &m.nodes[read as usize].cons {
@@ -180,17 +186,33 @@ pub(super) fn field_truthy_rows(m: &model::Model) -> Vec<String> {
     let mut out = Vec::new();
     for (i, n) in m.nodes.iter().enumerate() {
         for c in &n.cons {
-            let model::Cons::FieldTruthy { key, dst, .. } = *c else { continue };
+            let model::Cons::FieldTruthy { key, dst, .. } = *c else {
+                continue;
+            };
             let toks = n.pts.to_sorted();
             let dpts = &m.nodes[dst as usize].pts;
             let top = toks.iter().any(|&t| t == model::TOP);
             let markers = toks.iter().filter(|&&t| m.is_marker(t)).count();
-            let objs: Vec<_> = toks.iter().copied().filter(|&t| t != model::TOP && !m.is_marker(t)).collect();
-            let pass: Vec<_> = objs.iter().copied().filter(|&t| dpts.contains_tok(t)).collect();
+            let objs: Vec<_> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != model::TOP && !m.is_marker(t))
+                .collect();
+            let pass: Vec<_> = objs
+                .iter()
+                .copied()
+                .filter(|&t| dpts.contains_tok(t))
+                .collect();
             let f = m.node_fn[i];
-            let fname = if f == model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
-            let by: HashMap<model::Tok, model::NodeId> =
-                reads.get(&dst).map(|v| v.iter().copied().collect()).unwrap_or_default();
+            let fname = if f == model::NO_FN {
+                "-".to_string()
+            } else {
+                m.funcs[f as usize].name.clone()
+            };
+            let by: HashMap<model::Tok, model::NodeId> = reads
+                .get(&dst)
+                .map(|v| v.iter().copied().collect())
+                .unwrap_or_default();
             let mut samples = Vec::new();
             for &t in pass.iter().take(6) {
                 let what = match by.get(&t) {
@@ -198,8 +220,15 @@ pub(super) fn field_truthy_rows(m: &model::Model) -> Vec<String> {
                         let rn = &m.nodes[r as usize];
                         let rt = rn.pts.to_sorted();
                         let rtop = rt.iter().any(|&x| x == model::TOP);
-                        let first: Vec<String> = rt.iter().take(2).map(|&x| m.tok_name(x)).collect();
-                        format!("prim={:#x},toks={},top={},{}", rn.prim, rt.len(), rtop as u8, first.join("|"))
+                        let first: Vec<String> =
+                            rt.iter().take(2).map(|&x| m.tok_name(x)).collect();
+                        format!(
+                            "prim={:#x},toks={},top={},{}",
+                            rn.prim,
+                            rt.len(),
+                            rtop as u8,
+                            first.join("|")
+                        )
                     }
                     None => "noread".to_string(),
                 };
@@ -337,7 +366,11 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
     }
     let mut ks: Vec<_> = kinds.into_iter().collect();
     ks.sort();
-    v.push(format!("# insts total={} kinds={:?}", m.sum.insts.len(), ks));
+    v.push(format!(
+        "# insts total={} kinds={:?}",
+        m.sum.insts.len(),
+        ks
+    ));
     // Per instance: its key kind; per birth run (kind 5): the run whose
     // `new` call made its token (`# births-by-maker`).
     let mut kind_of = vec![u8::MAX; m.sum.insts.len()];
@@ -368,7 +401,11 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             }
             if fr & model::FN_RUN != 0 {
                 let f = fr & !model::FN_RUN;
-                let f = if (f as usize) < m.funcs.len() { f } else { model::NO_FN };
+                let f = if (f as usize) < m.funcs.len() {
+                    f
+                } else {
+                    model::NO_FN
+                };
                 *makers.entry((u8::MAX - 2, f)).or_default() += 1;
                 continue;
             }
@@ -380,7 +417,13 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             *makers.entry((kind_of[mi], m.sum.insts[mi].f)).or_default() += 1;
         }
     }
-    let nm = |f: model::FnIdx| if f == model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+    let nm = |f: model::FnIdx| {
+        if f == model::NO_FN {
+            "-".to_string()
+        } else {
+            m.funcs[f as usize].name.clone()
+        }
+    };
     let mut mk: Vec<_> = makers.into_iter().collect();
     mk.sort_by(|a, b| b.1.cmp(&a.1));
     for ((k, f), n) in mk.into_iter().take(15) {
@@ -421,14 +464,27 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
     }
     for &t in &k5t {
         if let Some(model::TokKind::Obj(tm, c)) = m.toks.get(t as usize) {
-            let site = if *c == model::NO_CTX { "tmpl".to_string() } else if let Some(&tc) = m.sum.tmpl_of.get(c) { format!("inst-copy-of-call{tc}") } else { format!("call{c}") };
+            let site = if *c == model::NO_CTX {
+                "tmpl".to_string()
+            } else if let Some(&tc) = m.sum.tmpl_of.get(c) {
+                format!("inst-copy-of-call{tc}")
+            } else {
+                format!("call{c}")
+            };
             let _ = site;
-            *k5tm.entry(format!("{}", m.tmpls[*tm as usize].display)).or_default() += 1;
+            *k5tm
+                .entry(format!("{}", m.tmpls[*tm as usize].display))
+                .or_default() += 1;
         } else {
             *k5tm.entry("non-obj".into()).or_default() += 1;
         }
     }
-    v.push(format!("# birth-runs keys={} distinct-t={} distinct-ft={}", m.sum.inst_key.keys().filter(|k| k.0 == 5).count(), k5t.len(), k5f.len()));
+    v.push(format!(
+        "# birth-runs keys={} distinct-t={} distinct-ft={}",
+        m.sum.inst_key.keys().filter(|k| k.0 == 5).count(),
+        k5t.len(),
+        k5f.len()
+    ));
     let mut tm: Vec<_> = k5tm.into_iter().collect();
     tm.sort_by(|a, b| b.1.cmp(&a.1));
     for (n, c) in tm.into_iter().take(12) {
@@ -462,7 +518,13 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             if c >= BORN - nmade {
                 return "maker".into();
             }
-            let o = m.sum.tmpl_of.get(&c).or_else(|| m.sum.origin.get(&c)).copied().unwrap_or(c);
+            let o = m
+                .sum
+                .tmpl_of
+                .get(&c)
+                .or_else(|| m.sum.origin.get(&c))
+                .copied()
+                .unwrap_or(c);
             if let Some(&f) = fn_of_call.get(&o) {
                 return nm(f);
             }
@@ -487,14 +549,27 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
         let mut makers: HashMap<(String, String), (u64, HashSet<u32>)> = HashMap::new();
         let mut roots: HashMap<(String, String), (u64, HashSet<model::Tok>)> = HashMap::new();
         for (t, tk) in m.toks.iter().enumerate() {
-            let model::TokKind::Obj(_, c) = *tk else { continue };
+            let model::TokKind::Obj(_, c) = *tk else {
+                continue;
+            };
             let (mkey, mid) = match entry(c) {
                 Some((site, Maker::Obj(o, bm))) => (
-                    format!("site-fn={} maker={}{}", call_fn(site), tdisp(o), if bm { "/method" } else { "/ctor" }),
+                    format!(
+                        "site-fn={} maker={}{}",
+                        call_fn(site),
+                        tdisp(o),
+                        if bm { "/method" } else { "/ctor" }
+                    ),
                     o,
                 ),
-                Some((site, Maker::Site(sr))) => (format!("site-fn={} site-run={}", call_fn(site), call_fn(sr)), sr),
-                Some((site, Maker::Val)) => (format!("site-fn={} maker=value-run", call_fn(site)), u32::MAX),
+                Some((site, Maker::Site(sr))) => (
+                    format!("site-fn={} site-run={}", call_fn(site), call_fn(sr)),
+                    sr,
+                ),
+                Some((site, Maker::Val)) => (
+                    format!("site-fn={} maker=value-run", call_fn(site)),
+                    u32::MAX,
+                ),
                 None => (format!("site-fn={} maker=-", call_fn(c)), u32::MAX),
             };
             let e = makers.entry((mkey, String::new())).or_default();
@@ -502,7 +577,9 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             e.1.insert(mid);
             let mut x = t as model::Tok;
             for _ in 0..10000 {
-                let model::TokKind::Obj(_, cx) = m.toks[x as usize] else { break };
+                let model::TokKind::Obj(_, cx) = m.toks[x as usize] else {
+                    break;
+                };
                 match entry(cx) {
                     Some((_, Maker::Obj(o, _))) => x = o,
                     _ => break,
@@ -510,7 +587,9 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             }
             let rc = match m.toks[x as usize] {
                 model::TokKind::Obj(_, cx) => match entry(cx) {
-                    Some((site, Maker::Site(sr))) => format!("{} site-run={}", call_fn(site), call_fn(sr)),
+                    Some((site, Maker::Site(sr))) => {
+                        format!("{} site-run={}", call_fn(site), call_fn(sr))
+                    }
                     _ => call_fn(cx),
                 },
                 _ => "?".into(),
@@ -527,7 +606,10 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
         let mut rt: Vec<_> = roots.into_iter().collect();
         rt.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
         for ((tm, rc), (n, rs)) in rt.into_iter().take(30) {
-            v.push(format!("# roots objects={n} roots={} tmpl={tm} at={rc}", rs.len()));
+            v.push(format!(
+                "# roots objects={n} roots={} tmpl={tm} at={rc}",
+                rs.len()
+            ));
         }
         let mut fk: HashMap<model::FnIdx, [u64; 9]> = HashMap::new();
         for (k, &i) in &m.sum.inst_key {
@@ -538,15 +620,29 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
             }
         }
         let mut fv: Vec<_> = fk.into_iter().collect();
-        fv.sort_by(|a, b| b.1.iter().take(8).sum::<u64>().cmp(&a.1.iter().take(8).sum::<u64>()));
+        fv.sort_by(|a, b| {
+            b.1.iter()
+                .take(8)
+                .sum::<u64>()
+                .cmp(&a.1.iter().take(8).sum::<u64>())
+        });
         for (f, a) in fv.into_iter().take(30) {
-            v.push(format!("# insts-by-fn-kind n={} k={:?} by-val={} fn={}", a.iter().take(8).sum::<u64>(), &a[..8], a[8], nm(f)));
+            v.push(format!(
+                "# insts-by-fn-kind n={} k={:?} by-val={} fn={}",
+                a.iter().take(8).sum::<u64>(),
+                &a[..8],
+                a[8],
+                nm(f)
+            ));
         }
     }
     let mut r: Vec<_> = by.into_iter().collect();
     r.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
     for (f, (n, nv)) in r.into_iter().take(8) {
-        v.push(format!("# insts-by-fn n={n} by-val={nv} fn={}", m.funcs[f as usize].name));
+        v.push(format!(
+            "# insts-by-fn n={n} by-val={nv} fn={}",
+            m.funcs[f as usize].name
+        ));
     }
     v
 }

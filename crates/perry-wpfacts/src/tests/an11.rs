@@ -17,7 +17,9 @@ use crate::model::{TmplKind, TokKind};
 
 fn solved(src: &str) -> crate::gen::Gen<'static> {
     let src: &'static str = Box::leak(src.to_string().into_boxed_str());
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 5_000_000;
@@ -73,7 +75,9 @@ fn reaches_push(src: &str) -> bool {
         .map(|t| m.tok_name(t))
         .collect();
     eprintln!("an11 builtin fns: {names:?}");
-    names.iter().any(|s| s.contains("push") || s.contains("Array.prototype[*]"))
+    names
+        .iter()
+        .any(|s| s.contains("push") || s.contains("Array.prototype[*]"))
 }
 
 const HEAD: &str = r#"const text: string = process.argv[2] ?? "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":1},\"extensions\":{\"X\":{\"b\":2}}}";

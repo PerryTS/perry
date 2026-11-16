@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -87,7 +91,10 @@ fn r9store4_k1_subclass_setter() {
     let pf = facts(&format!(
         "{P}class D extends P {{ set skel(x: any) {{ (globalThis as any).g = x; }} }}\nfunction f(v: string) {{ const p = v.length > 1 ? new P(1) : new D(2); p.bind(v); return [p.a]; }}\n{TAIL}"
     ));
-    assert!(known(&pf, "skel"), "K1 skel: setter + own-data arms not the per-kind store verdict");
+    assert!(
+        known(&pf, "skel"),
+        "K1 skel: setter + own-data arms not the per-kind store verdict"
+    );
 }
 
 // K2 (KEEP): defineProperty puts a setter for the key on the prototype.
@@ -96,7 +103,10 @@ fn r9store4_k2_define_proto_setter() {
     let pf = facts(&format!(
         "{P}Object.defineProperty(P.prototype, \"skel\", {{ set(x: any) {{ (globalThis as any).g = x; }} }});\nfunction f(v: string) {{ const p = new P(1); p.bind(v); return [p.a]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "skel"), "K2 skel a known-object store although the prototype has a setter");
+    assert!(
+        refused(&pf, "skel"),
+        "K2 skel a known-object store although the prototype has a setter"
+    );
 }
 
 // K3 (KEEP): one instance, chosen by argv, gets a non-writable own key.
@@ -105,7 +115,10 @@ fn r9store4_k3_define_instance_readonly() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const ps = [new P(1), new P(2)]; Object.defineProperty(ps[v.length % 2], \"skel\", {{ value: 1, writable: false }}); ps[0].bind(v); return [ps[0].skel]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "skel"), "K3 skel proven although an instance has it non-writable");
+    assert!(
+        refused(&pf, "skel"),
+        "K3 skel proven although an instance has it non-writable"
+    );
 }
 
 // K4 (KEEP): one instance is frozen.
@@ -114,7 +127,10 @@ fn r9store4_k4_freeze() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); const q = new P(2); Object.freeze(v.length > 1 ? p : q); p.bind(v); q.bind(v); return [p.a]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "skel"), "K4 skel proven although an instance may be frozen");
+    assert!(
+        refused(&pf, "skel"),
+        "K4 skel proven although an instance may be frozen"
+    );
 }
 
 // K5 (KEEP): a class extending Array (exotic instance).
@@ -132,7 +148,10 @@ fn r9store4_k6_computed_proto_store() {
     let pf = facts(&format!(
         "{P}(P.prototype as any)[process.argv[2] ?? \"y\"] = 1;\nfunction f(v: string) {{ const p = new P(1); p.bind(v); return [p.a]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "skel"), "K6 skel proven although the prototype may hold the key");
+    assert!(
+        refused(&pf, "skel"),
+        "K6 skel proven although the prototype may hold the key"
+    );
 }
 
 // K7 (KEEP): a number beside the instance (not this rule).
@@ -151,7 +170,10 @@ fn r9store4_t1_only_nullish_throws() {
         "{P}function g(o: any, i: number) {{ o.idx = i; }}\nfunction f(v: string) {{ const p = new P(1); try {{ g(v.length > 99 ? undefined : undefined, 4); }} catch (e) {{}} return [p.a]; }}\n{TAIL}"
     ));
     let s = stores(&pf, "idx");
-    assert!(!s.is_empty() && s.iter().all(|v| v == "Throws"), "T1 idx not Throws");
+    assert!(
+        !s.is_empty() && s.iter().all(|v| v == "Throws"),
+        "T1 idx not Throws"
+    );
 }
 
 // T2 (KEEP): a string beside `undefined` (no TypeError on every run).
@@ -161,5 +183,8 @@ fn r9store4_t2_string_beside_nullish() {
         "{P}function g(o: any, i: number) {{ o.idx = i; }}\nfunction f(v: string) {{ try {{ g(v.length > 9 ? undefined : v, 4); }} catch (e) {{}} return [v]; }}\n{TAIL}"
     ));
     let s = stores(&pf, "idx");
-    assert!(s.iter().all(|v| v != "Throws"), "T2 idx Throws with a string receiver");
+    assert!(
+        s.iter().all(|v| v != "Throws"),
+        "T2 idx Throws with a string receiver"
+    );
 }

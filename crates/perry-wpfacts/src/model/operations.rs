@@ -2005,6 +2005,10 @@ impl Model {
 /// the activation path of each matching function when it first activates.
 pub(crate) fn why_act() -> Option<&'static String> {
     static W: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    W.get_or_init(|| std::env::var("PERRY_FACTS_WHY_ACT").ok().filter(|v| !v.is_empty()))
-        .as_ref()
+    W.get_or_init(|| {
+        std::env::var("PERRY_FACTS_WHY_ACT")
+            .ok()
+            .filter(|v| !v.is_empty())
+    })
+    .as_ref()
 }

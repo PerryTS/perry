@@ -41,14 +41,21 @@ fn holds_obj(pf: &ProgramFacts, class: &str) -> bool {
 /// (push.spot, hasOwnProperty.spot, element.spot) may hold the object.
 fn run(s: &str) -> (bool, bool, bool) {
     let pf = facts(s);
-    (holds_obj(&pf, "BoxP"), holds_obj(&pf, "BoxH"), holds_obj(&pf, "BoxE"))
+    (
+        holds_obj(&pf, "BoxP"),
+        holds_obj(&pf, "BoxH"),
+        holds_obj(&pf, "BoxE"),
+    )
 }
 
 #[test]
 fn switch_case_skips_builtin_functions() {
     let (p, h, e) = run(&src(F, ""));
     assert!(e, "the element object must get `spot`");
-    assert!(!p && !h, "no built-in function gets `spot`: push {p} hasOwnProperty {h}");
+    assert!(
+        !p && !h,
+        "no built-in function gets `spot`: push {p} hasOwnProperty {h}"
+    );
 }
 
 #[test]
@@ -69,9 +76,10 @@ fn unknown_key_store_is_conservative() {
 
 #[test]
 fn reassigned_in_clause_no_filter() {
-    let f = F
-        .replace("const d = defs[k];", "let d = defs[k];")
-        .replace("case 'spot': d.spot", "case 'spot': d = ([] as any).push; d.spot");
+    let f = F.replace("const d = defs[k];", "let d = defs[k];").replace(
+        "case 'spot': d.spot",
+        "case 'spot': d = ([] as any).push; d.spot",
+    );
     let (p, _, _) = run(&src(&f, ""));
     assert!(p, "the written value is not filtered");
 }
@@ -96,11 +104,10 @@ fn grouped_cases_union() {
 
 #[test]
 fn fallthrough_from_a_body_no_filter() {
-    let f = F.replace(
-        "const d = defs[k];",
-        "let d = defs[k];",
-    )
-    .replace("case 'spot':", "case 'b': d = ([] as any).push; case 'spot':");
+    let f = F.replace("const d = defs[k];", "let d = defs[k];").replace(
+        "case 'spot':",
+        "case 'b': d = ([] as any).push; case 'spot':",
+    );
     let (p, _, _) = run(&src(&f, ""));
     assert!(p, "the fallthrough brings the written push");
 }
@@ -123,7 +130,9 @@ fn if_strict_equal_else_branch_no_filter() {
 
 #[test]
 fn number_literal_case() {
-    let f = F.replace("switch (d.type)", "switch (d.n)").replace("case 'spot':", "case 3:");
+    let f = F
+        .replace("switch (d.type)", "switch (d.n)")
+        .replace("case 'spot':", "case 3:");
     let (p, h, _) = run(&src(&f, "defs[0].n = 3;"));
     assert!(!p && !h, "push {p} hasOwnProperty {h}");
 }
@@ -134,5 +143,8 @@ fn getter_on_the_chain_is_conservative() {
         F,
         "Object.defineProperty(Function.prototype, 'type', { get() { return 'spot'; } });",
     ));
-    assert!(p && h, "a getter may yield 'spot': push {p} hasOwnProperty {h}");
+    assert!(
+        p && h,
+        "a getter may yield 'spot': push {p} hasOwnProperty {h}"
+    );
 }

@@ -28,11 +28,22 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// (offset, is_call, is_store, verdict) of every site of `key` in a.ts.
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Verdict)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .filter(|s| s.module == mi && s.key == key)
-        .map(|s| (s.byte_offset, s.is_call, s.access.is_store(), s.verdict.clone()))
+        .map(|s| {
+            (
+                s.byte_offset,
+                s.is_call,
+                s.access.is_store(),
+                s.verdict.clone(),
+            )
+        })
         .collect()
 }
 
@@ -40,13 +51,19 @@ fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Ve
 /// store (rule A: the store adds or sets an own data property, exact for
 /// any layout) is no layout claim, so these KEEP tests do not count it.
 fn proven(v: &crate::Verdict) -> bool {
-    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore)
+    !matches!(
+        v,
+        crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore
+    )
 }
 
 fn show(tag: &str, pf: &crate::ProgramFacts, keys: &[&str]) {
     for k in keys {
         for s in sites(pf, k) {
-            eprintln!("RB2 {tag} .{k} @{} call={} store={} verdict={:?}", s.0, s.1, s.2, s.3);
+            eprintln!(
+                "RB2 {tag} .{k} @{} call={} store={} verdict={:?}",
+                s.0, s.1, s.2, s.3
+            );
         }
     }
 }
@@ -93,7 +110,10 @@ fn r9birth2_d1_definite_slot_beside_absent() {
     let pf = facts(&src);
     show("D1", &pf, &["isM"]);
     let r = pick_reads(&pf, &src, "isM");
-    assert!(!r.is_empty() && r.iter().all(proven), "D1 o.isM not proven: {r:?}");
+    assert!(
+        !r.is_empty() && r.iter().all(proven),
+        "D1 o.isM not proven: {r:?}"
+    );
 }
 
 // D2: the key at different slots of two classes (and absent on a third).
@@ -108,7 +128,10 @@ all_k.push(new K());
     let pf = facts(&src);
     show("D2", &pf, &["isM"]);
     let r = pick_reads(&pf, &src, "isM");
-    assert!(!r.is_empty() && r.iter().all(proven), "D2 o.isM not proven: {r:?}");
+    assert!(
+        !r.is_empty() && r.iter().all(proven),
+        "D2 o.isM not proven: {r:?}"
+    );
 }
 
 // D3 KEEP: M stores `isM` on one path only (a slot that may hold the hole)
@@ -124,7 +147,10 @@ fn r9birth2_d3_hole_slot_beside_prototype_member() {
     let pf = facts(&src);
     show("D3", &pf, &["isM"]);
     let r = pick_reads(&pf, &src, "isM");
-    assert!(!r.is_empty() && !r.iter().any(proven), "D3 o.isM proven, but [[Get]] may find M.prototype.isM: {r:?}");
+    assert!(
+        !r.is_empty() && !r.iter().any(proven),
+        "D3 o.isM proven, but [[Get]] may find M.prototype.isM: {r:?}"
+    );
 }
 
 /// Every store site of `key` (in a.ts) is proven / every one is not.
@@ -170,7 +196,10 @@ fn r9birth2_l1_this_alias_binding() {
 fn r9birth2_l2_alias_passed_out() {
     let pf = facts(&l_src("    reg(scope);\n"));
     show("L2", &pf, &["onLoad"]);
-    assert!(stores(&pf, "onLoad", false), "L2 store .onLoad proven after reg(scope)");
+    assert!(
+        stores(&pf, "onLoad", false),
+        "L2 store .onLoad proven after reg(scope)"
+    );
 }
 
 // L3 KEEP: a closure on the alias runs before the store.
@@ -178,14 +207,22 @@ fn r9birth2_l2_alias_passed_out() {
 fn r9birth2_l3_alias_closure_runs_first() {
     let pf = facts(&l_src("    const f = () => scope.onLoad;\n    reg(f());\n"));
     show("L3", &pf, &["onLoad"]);
-    assert!(stores(&pf, "onLoad", false), "L3 store .onLoad proven after a closure on scope ran");
+    assert!(
+        stores(&pf, "onLoad", false),
+        "L3 store .onLoad proven after a closure on scope ran"
+    );
 }
 
 // L4 KEEP: a nested function declaration on the alias, called before the
 // store (its declaration is hoisted: the call finds it bound).
 #[test]
 fn r9birth2_l4_alias_function_declaration_called_first() {
-    let pf = facts(&l_src("    reg(g());\n    function g() { return scope.onLoad; }\n"));
+    let pf = facts(&l_src(
+        "    reg(g());\n    function g() { return scope.onLoad; }\n",
+    ));
     show("L4", &pf, &["onLoad"]);
-    assert!(stores(&pf, "onLoad", false), "L4 store .onLoad proven after g() read scope");
+    assert!(
+        stores(&pf, "onLoad", false),
+        "L4 store .onLoad proven after g() read scope"
+    );
 }

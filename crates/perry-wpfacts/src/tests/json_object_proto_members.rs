@@ -42,7 +42,12 @@ fn src(tail: &str) -> String {
 #[test]
 fn a_json_tostring_value_uses_no_argument() {
     let pf = whole(&src("const f: any = j.toString; console.log(f(cb));"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// `valueOf` (20.1.3.7) and `toLocaleString` (20.1.3.5, `Invoke(O,
@@ -53,7 +58,12 @@ fn json_valueof_and_tolocalestring_values_use_no_argument() {
         "const f: any = j.valueOf; const g: any = j.toLocaleString; \
          try { console.log(f(cb), g(cb, cb)); } catch (e) { console.log(\"t\"); }",
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// skinbench: a `for...in` key of a json object read back and called with
@@ -63,7 +73,12 @@ fn a_json_for_in_member_value_uses_no_argument() {
     let pf = whole(&src(
         "for (const k in j) { const f: any = j[k]; try { console.log(f(cb)); } catch (e) { console.log(\"t\"); } }",
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a key the program wrote onto `Object.prototype` through an
@@ -73,7 +88,11 @@ fn a_chain_key_written_through_an_unknown_store_reads_the_store() {
     let pf = whole(&src(
         "(Object.prototype as any)[process.argv[4]] = unknown; const f: any = j[process.argv[5]]; f(cb);",
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the member value handed to `new Function` code with the
@@ -81,7 +100,11 @@ fn a_chain_key_written_through_an_unknown_store_reads_the_store() {
 #[test]
 fn a_json_member_value_given_to_unknown_code_with_the_argument_escapes() {
     let pf = whole(&src("new Function(process.argv[4])()(j.toString, cb);"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A json object's member under an unknown key, called with an argument:
@@ -91,5 +114,10 @@ fn a_json_member_under_an_unknown_key_uses_no_argument() {
     let pf = whole(&src(
         "const f: any = j[process.argv[4]]; try { console.log(f(cb)); } catch (e) { console.log(\"t\"); }",
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }

@@ -78,7 +78,10 @@ fn an_escape_inside_an_entry_run_names_the_escape_that_made_the_run() {
             for l in &lines {
                 *kinds.entry(field(l, "record").to_string()).or_insert(0) += 1;
             }
-            let toks: Vec<&&String> = lines.iter().filter(|l| l.contains("\"record\":\"token\"")).collect();
+            let toks: Vec<&&String> = lines
+                .iter()
+                .filter(|l| l.contains("\"record\":\"token\""))
+                .collect();
             panic!("B never escaped:\n{dump}\n{kinds:?}\n{toks:#?}")
         });
     // Follow the cause chain to its end.
@@ -86,7 +89,10 @@ fn an_escape_inside_an_entry_run_names_the_escape_that_made_the_run() {
     let mut at: &String = b;
     for _ in 0..32 {
         let c = field(at, "cause");
-        let Some(t) = c.strip_prefix("{\"token\":").map(|s| s.trim_end_matches('}')) else {
+        let Some(t) = c
+            .strip_prefix("{\"token\":")
+            .map(|s| s.trim_end_matches('}'))
+        else {
             break;
         };
         chain.push(tok_name(t));
@@ -162,16 +168,25 @@ fn a_top_seeded_into_a_field_of_an_escaped_prototype_names_the_prototype() {
     // first hop, not a later ⊤ that `r` holds.
     let victims: Vec<&&String> = firsts
         .iter()
-        .filter(|l| tok_name(field(l, "token")).starts_with("obj:") && tok_name(field(l, "token")).contains("VICTIM"))
+        .filter(|l| {
+            tok_name(field(l, "token")).starts_with("obj:")
+                && tok_name(field(l, "token")).contains("VICTIM")
+        })
         .collect();
-    assert!(!victims.is_empty(), "the VICTIM instance never escaped:\n{dump}");
+    assert!(
+        !victims.is_empty(),
+        "the VICTIM instance never escaped:\n{dump}"
+    );
     for v in victims {
         let via = tok_name(field(v, "via"));
         assert!(
             via.contains("HOLDER") && via.starts_with("proto:"),
             "a VICTIM instance's escape names {via:?}, not HOLDER.prototype's: {v}\n{dump}"
         );
-        assert!(first(field(v, "via")).is_some(), "no escape-first for the cause\n{dump}");
+        assert!(
+            first(field(v, "via")).is_some(),
+            "no escape-first for the cause\n{dump}"
+        );
     }
     // Every call an escape names has a call record.
     assert!(

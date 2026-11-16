@@ -64,7 +64,10 @@ impl Model {
         // A builtin reads its arguments by position: with a spread, it
         // reads the positional view of the argument list (`with_native`
         // gives the same view to the models it runs).
-        let call = if matches!(self.toks[t as usize], TokKind::BuiltinFn(_) | TokKind::Builtin(_)) {
+        let call = if matches!(
+            self.toks[t as usize],
+            TokKind::BuiltinFn(_) | TokKind::Builtin(_)
+        ) {
             self.builtin_args_view(call)
         } else {
             call
@@ -281,10 +284,22 @@ impl Model {
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
         if !self.realm_held && self.prov.is_some() {
-            self.why_hold(if t == TOP { "callee-top" } else { "callee-builtin" }, call, Some(t));
+            self.why_hold(
+                if t == TOP {
+                    "callee-top"
+                } else {
+                    "callee-builtin"
+                },
+                call,
+                Some(t),
+            );
         }
         if crate::unksrc::on() {
-            let kind = if t == TOP { "callee-top" } else { "callee-builtin" };
+            let kind = if t == TOP {
+                "callee-top"
+            } else {
+                "callee-builtin"
+            };
             let why = format!("{:?}", self.toks[t as usize]);
             let f = crate::unksrc::call_fn(self, call);
             crate::unksrc::note(kind, &why, call, f);
@@ -296,7 +311,13 @@ impl Model {
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             if self.keysnap.is_some() {
-                self.keysnap_at(true, "unknown callee (unknown_callee_args)", Some(call), r, Some(t));
+                self.keysnap_at(
+                    true,
+                    "unknown callee (unknown_callee_args)",
+                    Some(call),
+                    r,
+                    Some(t),
+                );
             }
             self.hold_realm(r);
         }
@@ -923,7 +944,11 @@ impl Model {
                     self.top_calls += 1;
                 }
                 if !self.realm_held && self.prov.is_some() {
-                    self.why_hold(if t == TOP { "new-top" } else { "new-builtin" }, call, Some(t));
+                    self.why_hold(
+                        if t == TOP { "new-top" } else { "new-builtin" },
+                        call,
+                        Some(t),
+                    );
                 }
                 if crate::unksrc::on() {
                     let kind = if t == TOP { "new-top" } else { "new-builtin" };
@@ -937,7 +962,13 @@ impl Model {
                 if !self.realm_held {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
                     if self.keysnap.is_some() {
-                        self.keysnap_at(true, "new of an unknown constructor (construct)", Some(call), r, Some(t));
+                        self.keysnap_at(
+                            true,
+                            "new of an unknown constructor (construct)",
+                            Some(call),
+                            r,
+                            Some(t),
+                        );
                     }
                     self.hold_realm(r);
                 }
@@ -1140,9 +1171,9 @@ impl Model {
                 self.cons(receiver, Cons::SuperCtor { class: tm, call });
                 self.add_tok(receiver, inst);
             }
-            (None, None, Some(_)) => {
-                self.with_native(call, |m, call| builtins::native_parent_ctor(m, tm, call, inst))
-            }
+            (None, None, Some(_)) => self.with_native(call, |m, call| {
+                builtins::native_parent_ctor(m, tm, call, inst)
+            }),
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
                 let receiver = self.node_l("implicit-super-this");
@@ -1453,4 +1484,3 @@ impl Model {
         self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 }
-

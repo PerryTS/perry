@@ -52,7 +52,7 @@ crates/perry-stdlib/src/streams.rs	2454
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2877
 # Shape registry table and publication invariants require a coordinated split.
-crates/perry-runtime/src/object/shapes.rs	4950
+crates/perry-runtime/src/object/shapes.rs	4911
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.

@@ -23,7 +23,12 @@ fn check(body: &str, yes: bool) {
     );
     let pf = facts(&src);
     let v = &site(&pf, "marker").verdict;
-    assert_eq!(!matches!(v, Verdict::No(_)), yes, "{body}: {v:?}\n{}", pf.dump_text());
+    assert_eq!(
+        !matches!(v, Verdict::No(_)),
+        yes,
+        "{body}: {v:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// `this` no typed array: a program object, a function, a builtin function.
@@ -60,7 +65,12 @@ fn to_primitive_on_a_typed_array_prototype_throws() {
             console.log(o.m(r));
         "#
         ));
-        assert_eq!(tmpl(&pf, "R").escape.as_deref().unwrap_or(""), "", "{give}\n{}", pf.dump_text());
+        assert_eq!(
+            tmpl(&pf, "R").escape.as_deref().unwrap_or(""),
+            "",
+            "{give}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -76,5 +86,8 @@ fn a_typed_array_receiver_keeps_the_method() {
 /// function escapes.
 #[test]
 fn an_unknown_receiver_keeps_the_unknown_call() {
-    check("try { j.call((globalThis as any).hostGet(), o); } catch (e) {}", false);
+    check(
+        "try { j.call((globalThis as any).hostGet(), o); } catch (e) {}",
+        false,
+    );
 }

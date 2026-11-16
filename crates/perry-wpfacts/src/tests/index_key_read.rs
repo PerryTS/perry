@@ -40,17 +40,53 @@ macro_rules! case {
 
 // A Number key reads no method of the class prototype.
 case!(program_index_reads_no_method, false, "take(h[i]);");
-case!(native_from_reads_no_method, false, "take(Array.from(h)[0]);");
-case!(native_apply_reads_no_method, false, "take.apply(undefined, h);");
-case!(native_reflect_apply_reads_no_method, false, "Reflect.apply(take, undefined, h);");
-case!(control_apply_index_field, true, "h[0] = svc; take.apply(undefined, h);");
-case!(typed_array_source_reads_no_method, false, "take(new Float32Array(h));");
+case!(
+    native_from_reads_no_method,
+    false,
+    "take(Array.from(h)[0]);"
+);
+case!(
+    native_apply_reads_no_method,
+    false,
+    "take.apply(undefined, h);"
+);
+case!(
+    native_reflect_apply_reads_no_method,
+    false,
+    "Reflect.apply(take, undefined, h);"
+);
+case!(
+    control_apply_index_field,
+    true,
+    "h[0] = svc; take.apply(undefined, h);"
+);
+case!(
+    typed_array_source_reads_no_method,
+    false,
+    "take(new Float32Array(h));"
+);
 
 // Controls: the method itself escapes; a String key of unknown content
 // still reads every member; a number-named own field is read.
 case!(control_method_escapes, true, "take(h.m);");
-case!(control_unknown_string_reads_method, true, "const s: any = (globalThis as any).hostKey(); take(h[s]);");
+case!(
+    control_unknown_string_reads_method,
+    true,
+    "const s: any = (globalThis as any).hostKey(); take(h[s]);"
+);
 case!(control_native_unknown_string_reads_method, true, "const s: any = (globalThis as any).hostKey(); Array.prototype.forEach.call([h], (v: any) => take(v[s]));");
-case!(control_index_field_read, true, "h[0] = svc; Array.prototype.forEach.call(h, (v: any) => take(v));");
-case!(control_index_field_from, true, "h[0] = svc; take(Array.from(h)[0]);");
-case!(control_program_index_field_read, true, "h[0] = svc; take(h[i]);");
+case!(
+    control_index_field_read,
+    true,
+    "h[0] = svc; Array.prototype.forEach.call(h, (v: any) => take(v));"
+);
+case!(
+    control_index_field_from,
+    true,
+    "h[0] = svc; take(Array.from(h)[0]);"
+);
+case!(
+    control_program_index_field_read,
+    true,
+    "h[0] = svc; take(h[i]);"
+);

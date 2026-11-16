@@ -24,7 +24,11 @@ fn one(src: &str) -> ProgramFacts {
 
 fn m_calls(src: &str) -> Vec<String> {
     let pf = one(src);
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m" && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("SKINROOT24 {src:?}: {v:?}");
@@ -41,7 +45,10 @@ fn exact(use_d: &str) {
         "{OBJ}const d: any = Object.getOwnPropertyDescriptor(src, \"k\");\n{use_d};\nconsole.log(o);\nconst r = o.m();\n"
     );
     let v = m_calls(&src);
-    assert!(mono(&v), "a data descriptor holds program values only: {use_d}: {v:?}");
+    assert!(
+        mono(&v),
+        "a data descriptor holds program values only: {use_d}: {v:?}"
+    );
 }
 
 /// RED: the descriptor's ToPrimitive reads Object.prototype.toString.
@@ -87,7 +94,10 @@ fn k2_unknown_object_descriptor_stays_unknown() {
         "declare function mk(): any;\nconst w = mk();\n{OBJ}const d: any = Object.getOwnPropertyDescriptor(w, \"k\");\nconst g = d.get.call(o);\nconst r = o.m();\n"
     );
     let v = m_calls(&src);
-    assert!(!mono(&v), "an unknown object's accessors are unknown: {v:?}");
+    assert!(
+        !mono(&v),
+        "an unknown object's accessors are unknown: {v:?}"
+    );
 }
 
 /// SKINDESC1 k3: a program getter taken out by a descriptor and called on
@@ -122,5 +132,8 @@ fn v1_descriptor_value_is_stored_value() {
     );
     let v = m_calls(&src);
     // Proven (o.m, or undefined: the key is read as any key, OPEN), never unknown.
-    assert!(v.iter().all(|x| x.starts_with("T0Mono") || x == "T0Set"), "d.value = o: {v:?}");
+    assert!(
+        v.iter().all(|x| x.starts_with("T0Mono") || x == "T0Set"),
+        "d.value = o: {v:?}"
+    );
 }

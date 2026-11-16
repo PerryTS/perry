@@ -81,7 +81,10 @@ fn red_mm9_spread_of_a_primitive_wrapper_copies_only_its_stores() {
 fn mm9_a_wrapper_store_is_copied() {
     let body = "const w: any = Object(5); w.a = new Svc(); const o: any = { ...w }; console.log(o.a.run());";
     let (got, top, proven) = mm9_reads(&mm9_src(body), "run");
-    assert!(!top && proven && got.iter().any(|g| g.contains("Svc")), "{got:?} top={top}");
+    assert!(
+        !top && proven && got.iter().any(|g| g.contains("Svc")),
+        "{got:?} top={top}"
+    );
 }
 
 /// Control (ii): a wrapper given to unknown code first may hold anything.

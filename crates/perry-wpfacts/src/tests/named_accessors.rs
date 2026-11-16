@@ -6,7 +6,6 @@
 
 use super::*;
 
-
 /// Every live read of `key` is proven (a getter no read runs has none).
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let dead =
@@ -22,12 +21,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
             .iter()
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
-
-
-
-
-
-
 
 #[test]
 fn a_computed_key_in_the_map_answers_any_key() {
@@ -128,8 +121,6 @@ fn a_constant_key_binding_is_a_named_install() {
     assert!(proven(&w, "kind"), "{}", w.dump_text());
 }
 
-
-
 #[test]
 fn a_class_accessor_under_a_computed_key_answers_any_key() {
     let src = r#"
@@ -203,4 +194,3 @@ fn a_value_defined_on_a_prototype_is_no_instance_slot() {
         w.dump_text()
     );
 }
-

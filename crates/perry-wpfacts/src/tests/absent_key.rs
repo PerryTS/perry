@@ -96,7 +96,12 @@ fn an_object_prototype_add_is_refused_so_the_read_stays_proven() {
     let pf = facts(&format!(
         "{SEARCH} console.log(search({{ level: 2 }})); try {{ (Object.prototype as any).maxDepth = 7; }} catch {{}} console.log(search());"
     ));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
 }
 
 /// A store into ⊤ reaches only what reached unknown code, and an add to
@@ -108,7 +113,12 @@ fn a_store_into_top_with_no_path_to_the_receiver_is_proven() {
     let pf = facts(&format!(
         "{SEARCH} console.log(search({{ level: 2 }})); import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.maxDepth = 3;"
     ));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
 }
 
 /// An intrinsic member of `Object.prototype` is no absent key.

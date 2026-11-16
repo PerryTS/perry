@@ -710,7 +710,12 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
 /// per call site, CreateArrayFromList(« key, value ») (ECMA-262 23.1.5.1,
 /// 24.1.5.1, 24.2.5.1): index 0 holds `keys`, index 1 `values`, each its own
 /// slot (`Model::index_slot`); `keys` = None: the index, a Number.
-pub(super) fn entry_pairs(m: &mut Model, call: CallId, keys: Option<NodeId>, values: NodeId) -> NodeId {
+pub(super) fn entry_pairs(
+    m: &mut Model,
+    call: CallId,
+    keys: Option<NodeId>,
+    values: NodeId,
+) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
     let k = m.index_slot(pair, 0);
     match keys {
@@ -1061,18 +1066,27 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
     match name {
         "toString" => {
             let ja = m.atom("join");
-            let jc = recv_call(m, call, t, ja, ThisArg::Tok(t), 0, recv, move |m, tg, jc| {
-                let f = m.node_l("array-like-join");
-                m.cons(
-                    tg,
-                    Cons::Load {
-                        key: Key::Named(ja),
-                        dst: f,
-                    },
-                );
-                m.tostring_join_calls.insert(jc);
-                m.cons(f, Cons::Call { call: jc });
-            });
+            let jc = recv_call(
+                m,
+                call,
+                t,
+                ja,
+                ThisArg::Tok(t),
+                0,
+                recv,
+                move |m, tg, jc| {
+                    let f = m.node_l("array-like-join");
+                    m.cons(
+                        tg,
+                        Cons::Load {
+                            key: Key::Named(ja),
+                            dst: f,
+                        },
+                    );
+                    m.tostring_join_calls.insert(jc);
+                    m.cons(f, Cons::Call { call: jc });
+                },
+            );
             let r = m.calls[jc as usize].ret;
             let ret = m.calls[call as usize].ret;
             m.edge(r, ret);
@@ -1109,7 +1123,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if m.is_rest_arr(t) && !crate::const_arrays::method_reads_only(name) {
         let site = m.calls[call as usize].site;
         let own = name == Some("shift")
-            && m.rest_owner_of(t).is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
+            && m.rest_owner_of(t)
+                .is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
         if !own || *m.rest_front_site.entry(t).or_insert(site) != site {
             m.rest_front_widen(t);
         }
@@ -1426,24 +1441,33 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let nested = recv_call(m, call, t, a, ThisArg::Node(elems), 2, elems, move |m, tg, nested| {
-                m.cons(
-                    tg,
-                    Cons::MCall {
-                        key: Key::Named(a),
-                        call: nested,
-                    },
-                );
-                let r = m.calls[nested as usize].ret;
-                let why = m.reason("array join (locale element ToString)");
-                m.cons(
-                    r,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-            });
+            let nested = recv_call(
+                m,
+                call,
+                t,
+                a,
+                ThisArg::Node(elems),
+                2,
+                elems,
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    );
+                    let r = m.calls[nested as usize].ret;
+                    let why = m.reason("array join (locale element ToString)");
+                    m.cons(
+                        r,
+                        Cons::Implicit {
+                            reason: why,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                },
+            );
             let params = m.calls[nested as usize].args.clone();
             for (&x, p) in c.args.iter().zip(params) {
                 m.edge(x, p);
@@ -1753,10 +1777,15 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     site: nested,
                     region: m.thrown,
                 },
-                move |m, tg, nested| m.cons(tg, Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                }),
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    )
+                },
             );
             ret_prim(m, call, prim::NULL);
         }
@@ -1862,9 +1891,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         (
             "BoxedNumber" | "BoxedString" | "BoxedBoolean" | "BoxedSymbol" | "BoxedBigInt",
             Some(n),
-        ) => {
-            wrapper_method(m, t, &what, n, call)
-        }
+        ) => wrapper_method(m, t, &what, n, call),
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }

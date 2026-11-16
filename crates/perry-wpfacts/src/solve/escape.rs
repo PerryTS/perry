@@ -49,7 +49,10 @@ impl Model {
         // A value reaches unknown code: unknown code exists and holds the
         // realm (`hold_realm`).
         if crate::unksrc::on() {
-            let why = format!("{} [tok {t} {:?}]", self.reasons[reason as usize], self.toks[t as usize]);
+            let why = format!(
+                "{} [tok {t} {:?}]",
+                self.reasons[reason as usize], self.toks[t as usize]
+            );
             crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
             if !self.realm_held {
                 crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
@@ -1151,7 +1154,13 @@ impl Model {
         // the model keeps every rejection reason in `thrown` (a reject
         // function's parameter, an async body's throw): those leave.
         if let TokKind::Obj(tm, _) = self.toks[t as usize] {
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "Promise", .. }) {
+            if matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::BObj {
+                    what: "Promise",
+                    ..
+                }
+            ) {
                 let thrown = self.thrown;
                 self.sink_node(thrown, reason);
             }

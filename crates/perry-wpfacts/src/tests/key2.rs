@@ -208,9 +208,15 @@ fn key2_f3_three_object_part_is_split() {
 // K1 KEEP: an unknown subject stays any String: both members read.
 #[test]
 fn key2_k1_unknown_subject_stays_unknown() {
-    for e in ["String( process.argv[ 2 ] ).substring( 0, 2 )", "'abc'.substring( 0, Number( process.argv[ 2 ] ) )"] {
+    for e in [
+        "String( process.argv[ 2 ] ).substring( 0, 2 )",
+        "'abc'.substring( 0, Number( process.argv[ 2 ] ) )",
+    ] {
         let r = is_const("ab", e);
-        assert!(r.contains(&"A".to_string()) && r.contains(&"B".to_string()), "K1 {e}: {r:?}");
+        assert!(
+            r.contains(&"A".to_string()) && r.contains(&"B".to_string()),
+            "K1 {e}: {r:?}"
+        );
     }
 }
 

@@ -241,14 +241,23 @@ fn a_word_outside_every_mapping_is_a_scalar_and_a_tagged_symbol_word_is_sym() {
     let w = probe_where();
     // A flag-byte word (0x01010100) is a number, not an address.
     assert_eq!(w.val(0x0101_0100), Ok(Val::Scalar(0x0101_0100)));
-    assert_eq!(w.val(crate::value::POINTER_TAG | 0x1234), Ok(Val::Scalar(crate::value::POINTER_TAG | 0x1234)));
+    assert_eq!(
+        w.val(crate::value::POINTER_TAG | 0x1234),
+        Ok(Val::Scalar(crate::value::POINTER_TAG | 0x1234))
+    );
     // An untagged and a tagged address inside the symbol space.
     let a = 0x7000_0000_9000u64;
     assert_eq!(w.val(a), Ok(Val::Sym(a)));
-    assert_eq!(w.val(crate::value::POINTER_TAG | a), Ok(Val::Sym(crate::value::POINTER_TAG | a)));
+    assert_eq!(
+        w.val(crate::value::POINTER_TAG | a),
+        Ok(Val::Sym(crate::value::POINTER_TAG | a))
+    );
     // Inside a mapping but neither a cell nor the symbol space: opaque.
     let m = 0x7000_0000_2000u64;
-    assert_eq!(w.val(crate::value::STRING_TAG | m), Ok(Val::Opaque(crate::value::STRING_TAG | m)));
+    assert_eq!(
+        w.val(crate::value::STRING_TAG | m),
+        Ok(Val::Opaque(crate::value::STRING_TAG | m))
+    );
 }
 
 // The probes read the Linux x86-64 thread pointer and static TLS block.
@@ -325,7 +334,10 @@ fn a_word_the_capture_writes_after_the_first_copy_is_not_a_root_word() {
     unsafe { probe.write_volatile(0x7777) };
     let img2 = build(Some(&base2), Vec::new(), false);
     assert!(
-        !img2.words.iter().any(|w| w.off == want && w.region & WORD_TLS == 0),
+        !img2
+            .words
+            .iter()
+            .any(|w| w.off == want && w.region & WORD_TLS == 0),
         "a write after the first copy is invisible"
     );
     unsafe { probe.write_volatile(0x1234_5678) };
@@ -342,16 +354,24 @@ fn the_mark_keeps_what_the_roots_reach_and_nothing_else() {
     arr = crate::array::js_array_push_f64(arr, crate::value::js_nanbox_string(held as i64));
     let header = |p: usize| p - crate::gc::GC_HEADER_SIZE;
     let all = cell_headers();
-    let live = mark_live(all.clone(), |v| v(crate::value::js_nanbox_pointer(arr as i64).to_bits()));
+    let live = mark_live(all.clone(), |v| {
+        v(crate::value::js_nanbox_pointer(arr as i64).to_bits())
+    });
     assert!(live.contains(&header(arr as usize)), "the root's own cell");
-    assert!(live.contains(&header(held as usize)), "reached through a traced slot");
+    assert!(
+        live.contains(&header(held as usize)),
+        "reached through a traced slot"
+    );
     assert!(!live.contains(&header(dead as usize)), "garbage stays out");
     assert!(live.len() < all.len());
 }
 
 #[test]
 fn every_root_source_of_the_full_trace_reaches_the_mark() {
-    let s = crate::string::js_string_from_bytes(b"global root probe, a heap string cell for the mark".as_ptr(), 50);
+    let s = crate::string::js_string_from_bytes(
+        b"global root probe, a heap string cell for the mark".as_ptr(),
+        50,
+    );
     // SAFETY: a test-owned static word registered as a global root.
     unsafe {
         let slot = std::ptr::addr_of_mut!(LIVE_ROOT);
@@ -374,9 +394,17 @@ fn growth_of_the_class_tables_stops_the_image() {
     assert!(none.stops.iter().all(|s| s.kind != STOP_CLASS_TABLES));
     base.classes[4] = base.classes[4].wrapping_sub(3);
     let grew = build(Some(&base), Vec::new(), false);
-    let s: Vec<_> = grew.stops.iter().filter(|s| s.kind == STOP_CLASS_TABLES).collect();
+    let s: Vec<_> = grew
+        .stops
+        .iter()
+        .filter(|s| s.kind == STOP_CLASS_TABLES)
+        .collect();
     assert_eq!(s.len(), 1, "one stop per growing table");
-    assert_eq!((s[0].cell, s[0].value), (4, 3), "the stop names the table and its rows");
+    assert_eq!(
+        (s[0].cell, s[0].value),
+        (4, 3),
+        "the stop names the table and its rows"
+    );
 }
 
 #[test]
@@ -451,13 +479,17 @@ fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
     assert!(!maps.is_empty() && !stores.is_empty());
     let has = |c: &Cell, k: u8| c.slots.iter().any(|s| s.1 == Val::Derived(k));
     assert!(maps.iter().all(|c| has(c, DERIVED_MAP_ENTRIES)));
-    assert!(stores.iter().all(|c| has(c, DERIVED_STORE_ENTRIES) && has(c, DERIVED_STORE_INDEX)));
+    assert!(stores
+        .iter()
+        .all(|c| has(c, DERIVED_STORE_ENTRIES) && has(c, DERIVED_STORE_INDEX)));
     // The derived words are zero in the bytes: nothing of this process's heap remains.
     assert!(maps.iter().all(|c| c.bytes[16..24] == [0; 8]));
     let bad = |i: &Image| {
         i.stops
             .iter()
-            .filter(|s| s.obj_type == crate::gc::GC_TYPE_MAP || s.obj_type == crate::gc::GC_TYPE_MAP_STORE)
+            .filter(|s| {
+                s.obj_type == crate::gc::GC_TYPE_MAP || s.obj_type == crate::gc::GC_TYPE_MAP_STORE
+            })
             .map(|s| s.kind)
             .collect::<Vec<_>>()
     };
@@ -496,11 +528,18 @@ fn completeness_names_each_missing_form() {
     let none = SnapShapeDelta::default();
     let (p, s) = completeness(none, 1, 2);
     assert_eq!((p, s.len()), (PENDING_ATOMS, 0));
-    let minted = SnapShapeDelta { minted: [1, 2, 0, 3], changed: 4, retired: 5, ..none };
+    let minted = SnapShapeDelta {
+        minted: [1, 2, 0, 3],
+        changed: 4,
+        retired: 5,
+        ..none
+    };
     let (p, s) = completeness(minted, 1, 2);
     assert_eq!(p, PENDING_ATOMS | PENDING_SHAPES);
     assert_eq!(
-        s.iter().map(|s| (s.kind, s.cell, s.off, s.value)).collect::<Vec<_>>(),
+        s.iter()
+            .map(|s| (s.kind, s.cell, s.off, s.value))
+            .collect::<Vec<_>>(),
         vec![(STOP_SHAPES_MINTED, 5, 4, 1 | 2 << 16 | 3 << 48)]
     );
     // A changed pre-existing record alone, a retired one alone and a counter alone each stop.
@@ -512,17 +551,46 @@ fn completeness_names_each_missing_form() {
         assert_eq!((p & PENDING_SHAPES, s.len()), (PENDING_SHAPES, 1), "{d:?}");
     }
     // A minted record alone sets the shape form pending; its stop is the mint record's.
-    for d in [SnapShapeDelta { minted: [1, 0, 0, 0], ..none }, SnapShapeDelta { minted: [0, 0, 0, 1], ..none }] {
+    for d in [
+        SnapShapeDelta {
+            minted: [1, 0, 0, 0],
+            ..none
+        },
+        SnapShapeDelta {
+            minted: [0, 0, 0, 1],
+            ..none
+        },
+    ] {
         let (p, s) = completeness(d, 1, 2);
         assert_eq!((p & PENDING_SHAPES, s.len()), (PENDING_SHAPES, 0), "{d:?}");
     }
-    let (p, s) = completeness(SnapShapeDelta { drawn: 7, generations: 2, ..none }, 1, 2);
+    let (p, s) = completeness(
+        SnapShapeDelta {
+            drawn: 7,
+            generations: 2,
+            ..none
+        },
+        1,
+        2,
+    );
     assert_eq!(p, PENDING_ATOMS | PENDING_SHAPES);
-    assert_eq!(s.iter().map(|s| (s.kind, s.value)).collect::<Vec<_>>(), vec![(STOP_SHAPE_COUNTERS, 7 | 2 << 32)]);
+    assert_eq!(
+        s.iter().map(|s| (s.kind, s.value)).collect::<Vec<_>>(),
+        vec![(STOP_SHAPE_COUNTERS, 7 | 2 << 32)]
+    );
     let (p, s) = completeness(none, 1, 3);
     assert_eq!(p, PENDING_ATOMS | PENDING_TOKENS);
-    assert_eq!(s.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![STOP_TOKENS]);
-    assert_eq!((completeness(none, 3, 3).1.len(), completeness(none, 3, 4).1.len()), (0, 1));
+    assert_eq!(
+        s.iter().map(|s| s.kind).collect::<Vec<_>>(),
+        vec![STOP_TOKENS]
+    );
+    assert_eq!(
+        (
+            completeness(none, 3, 3).1.len(),
+            completeness(none, 3, 4).1.len()
+        ),
+        (0, 1)
+    );
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -533,11 +601,19 @@ extern "C" fn registry_probe_init() {}
 fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
     let key = b"\0module-init:img-probe";
     unsafe {
-        crate::module_require::js_register_path_init(key.as_ptr(), key.len() as i64, registry_probe_init as usize as i64);
+        crate::module_require::js_register_path_init(
+            key.as_ptr(),
+            key.len() as i64,
+            registry_probe_init as usize as i64,
+        );
     }
     let (b, _) = probe_baseline();
     let img = build(Some(&b), Vec::new(), false);
-    let r = img.registry.iter().find(|r| r.key == key).expect("the entry is in the record");
+    let r = img
+        .registry
+        .iter()
+        .find(|r| r.key == key)
+        .expect("the entry is in the record");
     let exe = std::ptr::addr_of!(__executable_start) as usize;
     assert_eq!(r.init_off, (registry_probe_init as usize - exe) as u64);
     assert_eq!((r.status, r.exports.clone()), (0, None));
@@ -556,7 +632,11 @@ fn the_file_carries_derived_words_and_the_registry() {
         key: b"k".to_vec(),
         init_off: 9,
         status: 2,
-        exports: Some(Val::Cell { hi: 0x7FFD, bare: false, index: 0 }),
+        exports: Some(Val::Cell {
+            hi: 0x7FFD,
+            bare: false,
+            index: 0,
+        }),
         factory: None,
     }];
     assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
@@ -567,7 +647,10 @@ fn the_tls_window_is_the_executables_block_without_the_gap_above_it() {
     let (lo, len) = super::tls_window(0x10_0000, 0x2ed70, 0x40);
     assert_eq!(lo, 0x10_0000 - 0x2ed80);
     assert_eq!(len, 0x2ed70, "the padding up to fs holds libc blocks");
-    assert_eq!(super::tls_window(0x10_0000, 0x100, 8), (0x10_0000 - 0x100, 0x100));
+    assert_eq!(
+        super::tls_window(0x10_0000, 0x100, 8),
+        (0x10_0000 - 0x100, 0x100)
+    );
 }
 
 fn full_mint_rec(n: u32) -> MintRec {
@@ -608,12 +691,26 @@ fn mint_record_round_trips_every_field() {
 fn mint_stop_reports_the_size_of_a_verified_record_and_names_a_failing_one() {
     let before = crate::object::shapes::snap_image_shape_state();
     let o = crate::object::js_object_alloc(0, 0);
-    crate::object::js_object_set_field_by_name(o, crate::string::js_string_from_bytes(b"snapimgmintstop".as_ptr(), 15u32), 1.0);
-    let delta = crate::object::shapes::snap_image_shape_delta(&before, &crate::object::shapes::snap_image_shape_state());
+    crate::object::js_object_set_field_by_name(
+        o,
+        crate::string::js_string_from_bytes(b"snapimgmintstop".as_ptr(), 15u32),
+        1.0,
+    );
+    let delta = crate::object::shapes::snap_image_shape_delta(
+        &before,
+        &crate::object::shapes::snap_image_shape_state(),
+    );
     let recs = crate::object::shapes::snap_image_mint_collect(&before);
     assert!(!recs.is_empty());
     let s = mint_stop(&delta, &recs).expect("a stop");
-    assert_eq!((s.kind, s.value & 0xffff_ffff, s.value >> 32), (STOP_MINT_RECORD, recs.len() as u64, mint_blob(&recs).len() as u64));
+    assert_eq!(
+        (s.kind, s.value & 0xffff_ffff, s.value >> 32),
+        (
+            STOP_MINT_RECORD,
+            recs.len() as u64,
+            mint_blob(&recs).len() as u64
+        )
+    );
     assert_eq!(s.cell & 0xffff, delta.minted[0]);
     assert_eq!(s.off & 0xffff, delta.minted[1]);
     assert_eq!(mint_stop(&Default::default(), &[]).map(|s| s.kind), None);
@@ -621,5 +718,8 @@ fn mint_stop_reports_the_size_of_a_verified_record_and_names_a_failing_one() {
     let mut bad = recs.clone();
     bad[0].generation += 1;
     let s = mint_stop(&delta, &bad).expect("a stop");
-    assert_eq!((s.kind, s.cell, u64::from(bad[0].id)), (STOP_MINT_MISMATCH, 0, s.value));
+    assert_eq!(
+        (s.kind, s.cell, u64::from(bad[0].id)),
+        (STOP_MINT_MISMATCH, 0, s.value)
+    );
 }

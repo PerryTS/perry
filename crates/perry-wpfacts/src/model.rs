@@ -2580,7 +2580,17 @@ pub struct Model {
     /// they run under that root (`Model::chain_call`).
     /// The value: (the call, its own target node, which every run's
     /// callee node flows into and the callee constraint sits on).
-    pub chain_calls: FxHashMap<(CallId, &'static std::panic::Location<'static>, u32, u32, u32, bool), (CallId, NodeId)>,
+    pub chain_calls: FxHashMap<
+        (
+            CallId,
+            &'static std::panic::Location<'static>,
+            u32,
+            u32,
+            u32,
+            bool,
+        ),
+        (CallId, NodeId),
+    >,
     /// A call -> the root-level native-made call it descends from (the call
     /// a native made while it ran for a call that is not itself under such
     /// a root): the chain root of `chain_calls`' keys.
@@ -3407,8 +3417,8 @@ pub const SUPER_BIT: Tok = 1 << 31;
 mod key_shape;
 #[path = "model/operations.rs"]
 mod operations;
-pub(crate) use operations::why_act;
 pub use key_shape::KeyShape;
+pub(crate) use operations::why_act;
 
 /// A property key as one whitespace-free token for the dump and the
 /// relations (`scripts/wpfacts_recompute.py` `unesc` is the inverse):

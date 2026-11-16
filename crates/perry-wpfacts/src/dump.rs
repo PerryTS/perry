@@ -318,12 +318,14 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     // MATHB1: the intrinsic-callee verdicts (`I <module>@<start> .<key> …`).
     for st in &pf.sites {
         match &st.intrinsic_callee {
-            Some(crate::derive::IntrinsicCallee::Exact(n)) => {
-                out.push_str(&format!("I {}@{} .{} exact {n}\n", st.module, st.byte_offset, st.key))
-            }
-            Some(crate::derive::IntrinsicCallee::No(why)) => {
-                out.push_str(&format!("I {}@{} .{} no {why}\n", st.module, st.byte_offset, st.key))
-            }
+            Some(crate::derive::IntrinsicCallee::Exact(n)) => out.push_str(&format!(
+                "I {}@{} .{} exact {n}\n",
+                st.module, st.byte_offset, st.key
+            )),
+            Some(crate::derive::IntrinsicCallee::No(why)) => out.push_str(&format!(
+                "I {}@{} .{} no {why}\n",
+                st.module, st.byte_offset, st.key
+            )),
             None => {}
         }
     }

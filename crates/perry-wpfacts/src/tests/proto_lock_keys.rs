@@ -74,12 +74,18 @@ fn computed_key_meets_the_exempt_constructor() {
         &program(TABLE, "top[String(Math.random())] = 1;", key),
         "/*A*/",
     );
-    assert!(p, "a stored number is not callable: nothing receives n\n{dump}");
+    assert!(
+        p,
+        "a stored number is not callable: nothing receives n\n{dump}"
+    );
     let (p, dump) = v_proven(
         &program(TABLE, "top[String(Math.random())] = top;", key),
         "/*A*/",
     );
-    assert!(!p, "a computed ⊤ store of ⊤ may write `constructor`\n{dump}");
+    assert!(
+        !p,
+        "a computed ⊤ store of ⊤ may write `constructor`\n{dump}"
+    );
     let (p, dump) = v_proven(&program(TABLE, "top[0] = 1;", key), "/*A*/");
     assert!(p, "a number-key ⊤ store writes no `constructor`\n{dump}");
 }

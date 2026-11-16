@@ -51,11 +51,6 @@ fn lacthis() -> String {
     )
 }
 
-
-
-
-
-
 #[test]
 fn whole_program_mode_is_unchanged_by_the_contract() {
     // Whole program: the program's own `swap` is seen as the getter's
@@ -68,16 +63,13 @@ fn whole_program_mode_is_unchanged_by_the_contract() {
 }
 
 #[test]
-fn a_getter_result_rewriting_the_method_through_a_known_function_stays_unproven() {
-}
+fn a_getter_result_rewriting_the_method_through_a_known_function_stays_unproven() {}
 
 #[test]
-fn a_getter_result_rewriting_the_method_through_an_unknown_function_stays_unproven() {
-}
+fn a_getter_result_rewriting_the_method_through_an_unknown_function_stays_unproven() {}
 
 #[test]
-fn a_getter_result_swapping_the_method_for_a_sibling_stays_unproven() {
-}
+fn a_getter_result_swapping_the_method_for_a_sibling_stays_unproven() {}
 
 #[test]
 fn a_getter_that_returns_a_fresh_arrow_is_proven_as_whole() {

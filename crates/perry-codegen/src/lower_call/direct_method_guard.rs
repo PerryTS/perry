@@ -151,7 +151,7 @@ pub(crate) fn family_method_word(
 /// key spells `property` (a data method's own slot, `RawFamily::late_blocked`;
 /// owner decision 2026-11-16): then the second value is that slot, and the
 /// word proves "no own `property`" only together with the slot holding the
-/// hole ([`emit_late_slot_holds_hole`]). Under the exact family word the
+/// hole ([`emit_late_slot_word`]). Under the exact family word the
 /// object has no overflow (its install sets the shadow bit), so the slot is
 /// the only place an own `property` can be. A constructor key spelling
 /// `property` gives `None`.
@@ -180,15 +180,6 @@ pub(crate) fn family_method_word_holed(
     Some((family_layout_id(ctx, class_id)?, hole))
 }
 
-/// `i1`: the family slot `slot` of the object `recv_box` (whose exact family
-/// word the caller has compared) holds the hole: the one compare the owner
-/// decision 2026-11-16 accepts at an unproven, already guarded site of a key
-/// that has a late slot.
-pub(crate) fn emit_late_slot_holds_hole(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
-    let value = emit_late_slot_word(ctx, recv_box, slot);
-    ctx.block().icmp_eq(I64, &value, crate::nanbox::TAG_HOLE_I64)
-}
-
 /// `i64`: the word in family slot `slot` of the object `recv_box` (whose
 /// exact family word the caller has compared): the hole, or the own data
 /// value of the late key (ONCHG1: the own-value arm calls it).
@@ -200,7 +191,11 @@ pub(crate) fn emit_late_slot_word(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32
     let bits = blk.bitcast_double_to_i64(recv_box);
     let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let obj = blk.inttoptr(I64, &handle);
-    let ptr = blk.gep(I8, &obj, &[(I64, &(header + 8 * i64::from(slot)).to_string())]);
+    let ptr = blk.gep(
+        I8,
+        &obj,
+        &[(I64, &(header + 8 * i64::from(slot)).to_string())],
+    );
     blk.load(I64, &ptr)
 }
 

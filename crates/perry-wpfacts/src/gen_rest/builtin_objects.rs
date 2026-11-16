@@ -174,7 +174,15 @@ impl<'a> Gen<'a> {
                 let descs = self.tmp("own-descriptors");
                 let reads = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-                crate::builtins::object_statics::define_all(&mut self.m, on, pn, descs, reads, site, r);
+                crate::builtins::object_statics::define_all(
+                    &mut self.m,
+                    on,
+                    pn,
+                    descs,
+                    reads,
+                    site,
+                    r,
+                );
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -864,9 +872,10 @@ impl<'a> Gen<'a> {
                         self.m.regexp_class_of.insert(tm, mk);
                     }
                 }
-                if let (&TokKind::Obj(tm, _), Some(tail)) =
-                    (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
-                {
+                if let (&TokKind::Obj(tm, _), Some(tail)) = (
+                    &self.m.toks[t as usize],
+                    crate::builtins::regex_tail::analyse(pattern, flags),
+                ) {
                     let i = self.m.regexp_tails.len() as u32;
                     self.m.regexp_tails.push(tail);
                     self.m.regexp_tail_of.insert(tm, i);
@@ -1016,7 +1025,11 @@ impl<'a> Gen<'a> {
     /// define handles that as before).
     fn birth_define_owner(&self, fx: &Fx, e: &Expr, o: &Expr) -> Option<TmplId> {
         let tm = self.phase_owner(fx, e, o)?;
-        let ks = self.ctor_phase.get(&tm)?.birth_defines.get(&(e as *const Expr as usize))?;
+        let ks = self
+            .ctor_phase
+            .get(&tm)?
+            .birth_defines
+            .get(&(e as *const Expr as usize))?;
         let mut cur = Some(tm);
         let mut own = true;
         while let Some(c) = cur {

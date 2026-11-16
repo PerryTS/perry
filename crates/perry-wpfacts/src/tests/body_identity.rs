@@ -1,8 +1,3 @@
-
-
-
-
-
 #[test]
 fn a_copied_class_parent_temp_does_not_rename_its_callers_binding() {
     let ast = perry_parser::parse_typescript(

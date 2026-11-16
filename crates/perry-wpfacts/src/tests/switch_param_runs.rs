@@ -36,7 +36,11 @@ fn per_read(pf: &ProgramFacts) -> Vec<Vec<String>> {
         .iter()
         .filter(|s| s.key == "p" && !s.is_call)
         .map(|s| {
-            let mut r: Vec<String> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+            let mut r: Vec<String> = s
+                .receivers
+                .iter()
+                .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+                .collect();
             r.sort();
             r.dedup();
             r
@@ -52,7 +56,10 @@ fn split(v: &[Vec<String>]) -> bool {
 
 #[test]
 fn switch_parameter_runs_per_string_constant() {
-    assert_eq!(per_read(&facts(&src(GET, LITS))), vec![vec!["A"], vec!["B"], vec!["C"]]);
+    assert_eq!(
+        per_read(&facts(&src(GET, LITS))),
+        vec![vec!["A"], vec!["B"], vec!["C"]]
+    );
 }
 
 #[test]
@@ -63,8 +70,15 @@ fn unknown_string_keeps_every_case() {
 
 #[test]
 fn two_constants_keep_both_cases() {
-    let v = per_read(&facts(&src(GET, ["process.argv[2] ? 'a' : 'b'", "'b'", "'c'"])));
-    assert!(v.iter().any(|r| r.contains(&"A".to_string()) && r.contains(&"B".to_string())), "{v:?}");
+    let v = per_read(&facts(&src(
+        GET,
+        ["process.argv[2] ? 'a' : 'b'", "'b'", "'c'"],
+    )));
+    assert!(
+        v.iter()
+            .any(|r| r.contains(&"A".to_string()) && r.contains(&"B".to_string())),
+        "{v:?}"
+    );
 }
 
 #[test]
@@ -89,13 +103,26 @@ fn no_match_runs_default_only() {
 
 #[test]
 fn switch_under_if_runs_per_string_constant() {
-    let g = GET.replace("let r: any; switch (t) {", "let r: any; if (!r) { switch (t) {").replace("r = new D(); }", "r = new D(); } }");
-    assert_eq!(per_read(&facts(&src(&g, LITS))), vec![vec!["A"], vec!["B"], vec!["C"]]);
+    let g = GET
+        .replace(
+            "let r: any; switch (t) {",
+            "let r: any; if (!r) { switch (t) {",
+        )
+        .replace("r = new D(); }", "r = new D(); } }");
+    assert_eq!(
+        per_read(&facts(&src(&g, LITS))),
+        vec![vec!["A"], vec!["B"], vec!["C"]]
+    );
 }
 
 #[test]
 fn switch_in_loop_keeps_every_case() {
-    let g = GET.replace("let r: any; switch (t) {", "let r: any; for (let i = 0; i < 1; i++) { switch (t) {").replace("r = new D(); }", "r = new D(); } }");
+    let g = GET
+        .replace(
+            "let r: any; switch (t) {",
+            "let r: any; for (let i = 0; i < 1; i++) { switch (t) {",
+        )
+        .replace("r = new D(); }", "r = new D(); } }");
     assert!(!split(&per_read(&facts(&src(&g, LITS)))));
 }
 
@@ -103,7 +130,10 @@ fn switch_in_loop_keeps_every_case() {
 // constants runs each constant's clauses and no other (=== selects).
 #[test]
 fn constant_set_runs_each_constant() {
-    let v = per_read(&facts(&src(GET, ["process.argv[2] ? 'a' : 'b'", "'b'", "'c'"])));
+    let v = per_read(&facts(&src(
+        GET,
+        ["process.argv[2] ? 'a' : 'b'", "'b'", "'c'"],
+    )));
     assert_eq!(v, vec![vec!["A", "B"], vec!["B"], vec!["C"]]);
 }
 
@@ -131,7 +161,11 @@ fn passed(arg_b: &str) -> String {
 #[test]
 fn passed_constants_run_their_clauses_only() {
     let v = per_read(&facts(&passed("'b'")));
-    assert!(v.iter().all(|r| r == &vec!["A".to_string(), "B".to_string()]), "{v:?}");
+    assert!(
+        v.iter()
+            .all(|r| r == &vec!["A".to_string(), "B".to_string()]),
+        "{v:?}"
+    );
 }
 
 #[test]
@@ -143,5 +177,9 @@ fn passed_unknown_string_keeps_every_case() {
 #[test]
 fn passed_unknown_code_value_keeps_every_case() {
     let v = per_read(&facts(&passed("new Function(process.argv[2])()")));
-    assert!(v.iter().any(|r| r.contains(&"C".to_string()) && r.contains(&"D".to_string())), "{v:?}");
+    assert!(
+        v.iter()
+            .any(|r| r.contains(&"C".to_string()) && r.contains(&"D".to_string())),
+        "{v:?}"
+    );
 }

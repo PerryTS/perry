@@ -20,7 +20,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn verdicts(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -55,18 +59,30 @@ fn not_proven(src: &str, key: &str) {
 // (7.3.2 GetV, 7.1.18 ToObject of `undefined`).
 fn undefined_arm_kept(src: &str, key: &str) {
     let pf = facts(src);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let sites: Vec<_> = pf
         .sites
         .iter()
         .filter(|s| s.module == mi && s.key == key && !s.access.is_store())
         .collect();
-    let kept = sites.iter().any(|s| match format!("{:?}", s.verdict).as_str() {
-        v if v.starts_with("No(") => true,
-        "PerKind" => s.receivers.iter().any(|r| r == "primitive:undefined (TypeError)"),
-        _ => false,
-    });
-    let v: Vec<_> = sites.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    let kept = sites
+        .iter()
+        .any(|s| match format!("{:?}", s.verdict).as_str() {
+            v if v.starts_with("No(") => true,
+            "PerKind" => s
+                .receivers
+                .iter()
+                .any(|r| r == "primitive:undefined (TypeError)"),
+            _ => false,
+        });
+    let v: Vec<_> = sites
+        .iter()
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
     assert!(kept, "{v:?}");
 }
 
@@ -106,7 +122,10 @@ fn r9read2_i2_subclass_without_constructor() {
 // KEEP: an accessor under the key runs with `this` before the store.
 #[test]
 fn r9read2_ik1_accessor_under_the_key() {
-    let src = I.replace("K.prototype.TB = Float32Array;", &format!("Object.defineProperty(K.prototype, \"TB\", {GET});"));
+    let src = I.replace(
+        "K.prototype.TB = Float32Array;",
+        &format!("Object.defineProperty(K.prototype, \"TB\", {GET});"),
+    );
     undefined_arm_kept(&src, "length");
 }
 

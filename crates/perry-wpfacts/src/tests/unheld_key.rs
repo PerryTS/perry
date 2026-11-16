@@ -7,7 +7,6 @@
 
 use super::*;
 
-
 /// Every `.status` call site of module `m.ts`, proven with one target.
 fn status_calls_proven(pf: &ProgramFacts) -> bool {
     let s: Vec<_> = pf

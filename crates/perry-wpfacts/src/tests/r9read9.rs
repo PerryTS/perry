@@ -33,7 +33,10 @@ fn row(pf: &crate::ProgramFacts, class: &str, key: &str) -> (usize, bool) {
         .iter()
         .find(|f| f.key == key)
         .unwrap_or_else(|| panic!("no field {key}\n{}", pf.dump_text()));
-    eprintln!("RR9 {class}.{key} writers_post={} readonly={}", f.writers_post, f.readonly);
+    eprintln!(
+        "RR9 {class}.{key} writers_post={} readonly={}",
+        f.writers_post, f.readonly
+    );
     (f.writers_post, f.readonly)
 }
 
@@ -53,7 +56,9 @@ fn src(store: &str) -> String {
 /// canonical numeric string, never `name` (10.1.9.2 OrdinarySet writes P).
 #[test]
 fn r9read9_n1_number_key_store_skips_named_key() {
-    let pf = facts(&src("function put(d: any, i: number) { d[i] = 7; }\nfor (let i = 0; i < n; ++i) put(o, i);"));
+    let pf = facts(&src(
+        "function put(d: any, i: number) { d[i] = 7; }\nfor (let i = 0; i < n; ++i) put(o, i);",
+    ));
     assert_eq!(row(&pf, "V", "name"), (0, true));
 }
 
@@ -82,7 +87,9 @@ fn r9read9_n4_number_or_string_key_kept() {
 /// rule does not apply: the key node is no Number).
 #[test]
 fn r9read9_n5_symbol_key_unchanged() {
-    let pf = facts(&src("const s = Symbol(\"q\");\no[n > 1 ? s : \"name\"] = 7;"));
+    let pf = facts(&src(
+        "const s = Symbol(\"q\");\no[n > 1 ? s : \"name\"] = 7;",
+    ));
     assert!(row(&pf, "V", "name").0 > 0);
 }
 
@@ -120,7 +127,9 @@ fn any_post(m: &Model, pick: impl Fn(&Model, TmplId) -> bool, key: &str) -> Vec<
 /// writes no `name`.
 #[test]
 fn r9read9_n1m_number_key_writer_not_named() {
-    let m = model(&src("function put(d: any, i: number) { d[i] = 7; }\nfor (let i = 0; i < n; ++i) put(o, i);"));
+    let m = model(&src(
+        "function put(d: any, i: number) { d[i] = 7; }\nfor (let i = 0; i < n; ++i) put(o, i);",
+    ));
     let v = any_post(&m, |m, tm| !m.tmpl_may_be_array(tm), "name");
     assert!(!v.is_empty() && v.iter().all(|&x| !x), "{v:?}");
 }
@@ -155,7 +164,11 @@ console.log(o.name);"
 }
 
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -180,13 +193,18 @@ const x: any = n > 2 ? [1, 2] : n > 1 ? Number : n > 0 ? Math.max : Number.parse
 fn r9read9_m1_builtin_function_map_absent() {
     let pf = facts(&format!("{FNS}console.log(typeof x.map);"));
     let v = reads(&pf, "map");
-    assert!(!v.is_empty() && v.iter().all(|x| !x.starts_with("No(")), "{v:?}");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| !x.starts_with("No(")),
+        "{v:?}"
+    );
 }
 
 /// KEEP m2: the program stores `map` on the builtin method value.
 #[test]
 fn r9read9_m2_store_on_function_kept() {
-    let pf = facts(&format!("{FNS}(Math.max as any).map = 1;\nconsole.log(typeof x.map);"));
+    let pf = facts(&format!(
+        "{FNS}(Math.max as any).map = 1;\nconsole.log(typeof x.map);"
+    ));
     let v = reads(&pf, "map");
     assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
 }
@@ -194,7 +212,9 @@ fn r9read9_m2_store_on_function_kept() {
 /// KEEP m3: the program writes `map` onto Function.prototype.
 #[test]
 fn r9read9_m3_function_prototype_write_kept() {
-    let pf = facts(&format!("{FNS}(Function.prototype as any).map = 1;\nconsole.log(typeof x.map);"));
+    let pf = facts(&format!(
+        "{FNS}(Function.prototype as any).map = 1;\nconsole.log(typeof x.map);"
+    ));
     let v = reads(&pf, "map");
     assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
 }
@@ -204,9 +224,14 @@ fn r9read9_m3_function_prototype_write_kept() {
 /// OwnDataOrAbsent).
 #[test]
 fn r9read9_m4_own_length_not_absent() {
-    let pf = facts("const n = Number(process.argv[2] ?? \"3\");
+    let pf = facts(
+        "const n = Number(process.argv[2] ?? \"3\");
 const x: any = n > 1 ? Math.max : Math.min;
-console.log(x.length);");
+console.log(x.length);",
+    );
     let v = reads(&pf, "length");
-    assert!(!v.is_empty() && v.iter().all(|x| !x.starts_with("OwnDataOrAbsent")), "{v:?}");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| !x.starts_with("OwnDataOrAbsent")),
+        "{v:?}"
+    );
 }

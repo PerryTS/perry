@@ -37,8 +37,10 @@ fn proven(v: &Verdict) -> bool {
     !matches!(v, Verdict::No(_))
 }
 
-const LISTED: &[(&str, NativeResult)] =
-    &[("nx_add1", NativeResult::Number), ("nx_log", NativeResult::Undefined)];
+const LISTED: &[(&str, NativeResult)] = &[
+    ("nx_add1", NativeResult::Number),
+    ("nx_log", NativeResult::Undefined),
+];
 
 /// An f64 -> f64 and a string -> void extern in a loop next to an object
 /// that a builtin call (`console.log`) sees afterwards.
@@ -62,11 +64,20 @@ console.log(z);
 fn w3e_red_all_primitive_externs_reach_no_object() {
     let pf = facts_of(LOOP, LISTED);
     let v = verdict(&pf, LOOP, "v", "const z");
-    assert!(proven(&v), "p.v after the extern loop: {v:?}\n{}", pf.dump_text());
+    assert!(
+        proven(&v),
+        "p.v after the extern loop: {v:?}\n{}",
+        pf.dump_text()
+    );
     let w = verdict(&pf, LOOP, "w", "const z");
     assert!(proven(&w), "p.w after the extern loop: {w:?}");
     // The tag: both extern call sites rest on the assumption.
-    assert_eq!(pf.native_extern_sites.len(), 2, "{:?}", pf.native_extern_sites);
+    assert_eq!(
+        pf.native_extern_sites.len(),
+        2,
+        "{:?}",
+        pf.native_extern_sites
+    );
 }
 
 #[test]
@@ -134,5 +145,9 @@ const z = p.v;
 console.log(z, keep.length);
 "#;
     let pf = facts_of(src, LISTED);
-    assert!(pf.native_extern_sites.is_empty(), "{:?}", pf.native_extern_sites);
+    assert!(
+        pf.native_extern_sites.is_empty(),
+        "{:?}",
+        pf.native_extern_sites
+    );
 }

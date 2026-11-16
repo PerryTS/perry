@@ -47,7 +47,10 @@ fn r9sites7_n1_number_key_on_string_reads_no_member() {
     let pf = facts(&program("i", ""));
     let r = recv(&pf, "zz");
     eprintln!("R9SITES7 N1 zz recv={r:?}");
-    assert!(builtin_fns(&r).is_empty(), "N1 member read under a Number key: {r:?}");
+    assert!(
+        builtin_fns(&r).is_empty(),
+        "N1 member read under a Number key: {r:?}"
+    );
 }
 
 // N2 KEEP: the key is unknown (`process.argv[2]`): it may spell `at`.
@@ -56,7 +59,10 @@ fn r9sites7_n2_keep_string_key() {
     let pf = facts(&program("process.argv[ 2 ]", ""));
     let r = recv(&pf, "zz");
     eprintln!("R9SITES7 N2 zz recv={r:?}");
-    assert!(r.iter().any(|x| x == "String.prototype.at"), "N2 lost a member: {r:?}");
+    assert!(
+        r.iter().any(|x| x == "String.prototype.at"),
+        "N2 lost a member: {r:?}"
+    );
 }
 
 // N3 KEEP: a Number key the program wrote on String.prototype reads it.
@@ -66,14 +72,23 @@ fn r9sites7_n3_keep_written_number_key() {
     let pf = facts(&program("i", pre));
     let r = recv(&pf, "zz");
     eprintln!("R9SITES7 N3 zz recv={r:?}");
-    assert!(r.iter().any(|x| x.contains("hook")), "N3 lost the written member: {r:?}");
+    assert!(
+        r.iter().any(|x| x.contains("hook")),
+        "N3 lost the written member: {r:?}"
+    );
 }
 
 // N4 KEEP: a key that is a Number or a String reads the members.
 #[test]
 fn r9sites7_n4_keep_mixed_key() {
-    let pf = facts(&program("( process.argv.length > 9 ? i : process.argv[ 2 ] )", ""));
+    let pf = facts(&program(
+        "( process.argv.length > 9 ? i : process.argv[ 2 ] )",
+        "",
+    ));
     let r = recv(&pf, "zz");
     eprintln!("R9SITES7 N4 zz recv={r:?}");
-    assert!(r.iter().any(|x| x == "String.prototype.at"), "N4 lost a member: {r:?}");
+    assert!(
+        r.iter().any(|x| x == "String.prototype.at"),
+        "N4 lost a member: {r:?}"
+    );
 }

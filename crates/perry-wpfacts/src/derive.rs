@@ -588,7 +588,10 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
         // R9BIRTH7: a settled top-level `X.k = v` defines the own data
         // property before any code can read `X` (`gen::settled`), as a
         // class-body static field does.
-        let settled = m.settled_static.get(&(tm, a)).is_some_and(|w| window_own(m, w));
+        let settled = m
+            .settled_static
+            .get(&(tm, a))
+            .is_some_and(|w| window_own(m, w));
         if m.static_fields.contains(&(tm, a)) || !stored || settled {
             out.push(m.atoms[a as usize].clone());
         }
@@ -616,7 +619,13 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
     let tpl = &m.tmpls[tm as usize];
     if tpl.per_evaluation
         || tpl.has_computed_members
-        || !matches!(tpl.kind, TmplKind::Class { literal_shape: false, .. })
+        || !matches!(
+            tpl.kind,
+            TmplKind::Class {
+                literal_shape: false,
+                ..
+            }
+        )
     {
         return Vec::new();
     }
@@ -672,7 +681,9 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
             {
                 continue;
             }
-            if only_proto_first_writers(m, tm, a) && m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
+            if only_proto_first_writers(m, tm, a)
+                && m.fields.get(&(proto, a)).is_some_and(|&n| holds(n))
+            {
                 out.push(m.atoms[a as usize].clone());
             }
         }
@@ -686,7 +697,10 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
 /// store opening the class body (`gen::proto_first`).
 fn only_proto_first_writers(m: &Model, tm: TmplId, a: Atom) -> bool {
     m.proto_writers.get(&(tm, a)).is_none_or(|w| {
-        w.ctor.is_empty() && w.post.iter().all(|&s| m.stores[s as usize].proto_first == Some(tm))
+        w.ctor.is_empty()
+            && w.post
+                .iter()
+                .all(|&s| m.stores[s as usize].proto_first == Some(tm))
     })
 }
 
@@ -734,15 +748,22 @@ fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
                     let Some(p) = proto(xq) else {
                         return Some("rule S: no prototype token".into());
                     };
-                    let value = pts_len(m.fields.get(&(p, a))) != 0 || pts_len(m.field_any.get(&p)) != 0;
+                    let value =
+                        pts_len(m.fields.get(&(p, a))) != 0 || pts_len(m.field_any.get(&p)) != 0;
                     if xq == d {
                         if value || m.accessors.get(&(p, a)).is_none_or(|(_, s)| s.len() != 1) {
-                            return Some(format!("rule S: prototype member {} not the setter alone", m.atoms[a as usize]));
+                            return Some(format!(
+                                "rule S: prototype member {} not the setter alone",
+                                m.atoms[a as usize]
+                            ));
                         }
                         break;
                     }
                     if value || m.accessors.contains_key(&(p, a)) {
-                        return Some(format!("rule S: a prototype below holds {}", m.atoms[a as usize]));
+                        return Some(format!(
+                            "rule S: a prototype below holds {}",
+                            m.atoms[a as usize]
+                        ));
                     }
                     x = m.tmpls[xq as usize].parent;
                 }
@@ -756,7 +777,9 @@ fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
                     if let Some(&pn) = m.proto_node.get(t) {
                         let ps = m.nodes[pn as usize].pts.to_sorted();
                         if own.is_none() || ps.iter().any(|&p| Some(p) != own) {
-                            return Some("rule M: an instance's prototype is not its class's".into());
+                            return Some(
+                                "rule M: an instance's prototype is not its class's".into(),
+                            );
                         }
                     }
                 }
@@ -768,7 +791,10 @@ fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
                             || m.accessors.contains_key(&(p, a))
                             || pts_len(m.field_any.get(&p)) != 0
                         {
-                            return Some(format!("rule M: a prototype below holds {}", m.atoms[a as usize]));
+                            return Some(format!(
+                                "rule M: a prototype below holds {}",
+                                m.atoms[a as usize]
+                            ));
                         }
                     }
                 }
@@ -779,7 +805,10 @@ fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
                     || m.accessors.contains_key(&(p, a))
                     || pts_len(m.field_any.get(&p)) != 0
                 {
-                    return Some(format!("rule M: prototype member {} not the method alone", m.atoms[a as usize]));
+                    return Some(format!(
+                        "rule M: prototype member {} not the method alone",
+                        m.atoms[a as usize]
+                    ));
                 }
             }
         }
@@ -1274,7 +1303,11 @@ fn template_facts(
         // key's shape, ECMA-262 13.15.2 / 10.1.9.2: OrdinarySet creates or
         // changes only property P); a key of unknown content (shape 0) may
         // be any key.
-        let any_post = any.post.iter().filter(|&&(w, k)| m.any_store_may_name(tm, w, k, a)).count();
+        let any_post = any
+            .post
+            .iter()
+            .filter(|&&(w, k)| m.any_store_may_name(tm, w, k, a))
+            .count();
         let readonly = escape.is_none()
             && hard.is_none()
             && w.post.is_empty()
@@ -1649,7 +1682,14 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         .collect();
     let all: Vec<&crate::gen::ReadSite> = g.read_sites.iter().chain(g.store_sites.iter()).collect();
     for (i, s) in all.iter().enumerate() {
-        let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call, s.access);
+        let k = (
+            s.module,
+            s.byte_offset,
+            s.key,
+            s.is_call,
+            s.value_call,
+            s.access,
+        );
         match first.get(&k) {
             Some(&gi) => {
                 groups[gi].1.push(s.recv);
@@ -1698,10 +1738,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             || (prim != 0
                 && matches!(
                     verdict,
-                    Verdict::T0Mono
-                        | Verdict::T0Set
-                        | Verdict::KnownObjectStore
-                        | Verdict::PerKind
+                    Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore | Verdict::PerKind
                 )))
             && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
@@ -1809,15 +1846,18 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         // several receivers whose callee set is that one body) names the
         // class whose method that body is, so codegen calls it directly.
         let holder_class = match (&verdict, targets.len()) {
-            (Verdict::AccessorGet | Verdict::AccessorSet, 1) | (Verdict::T0Mono | Verdict::T0Set, 1)
+            (Verdict::AccessorGet | Verdict::AccessorSet, 1)
+            | (Verdict::T0Mono | Verdict::T0Set, 1)
                 if s.is_call == matches!(verdict, Verdict::T0Mono | Verdict::T0Set) =>
-            targets.keys().next().and_then(|&f| {
-                let tm = *m.this_class.get(&m.funcs[f as usize].this)?;
-                match &m.tmpls[tm as usize].kind {
-                    crate::model::TmplKind::Class { class_id, .. } => Some(*class_id),
-                    _ => None,
-                }
-            }),
+            {
+                targets.keys().next().and_then(|&f| {
+                    let tm = *m.this_class.get(&m.funcs[f as usize].this)?;
+                    match &m.tmpls[tm as usize].kind {
+                        crate::model::TmplKind::Class { class_id, .. } => Some(*class_id),
+                        _ => None,
+                    }
+                })
+            }
             _ => None,
         };
         let mut target_fns: Vec<(u32, u32)> = targets
@@ -1958,7 +1998,11 @@ fn indexed_length(
     let (prim, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     if prim != 0 && prim != crate::model::prim::STR {
         if why_indexed() {
-            eprintln!("WHY_INDEXED length @{} prims {}", s.byte_offset, crate::model::prim::name(prim));
+            eprintln!(
+                "WHY_INDEXED length @{} prims {}",
+                s.byte_offset,
+                crate::model::prim::name(prim)
+            );
         }
         return None;
     }
@@ -1970,9 +2014,20 @@ fn indexed_length(
                 TokKind::Obj(tm, _) => {
                     let tpl = &m.tmpls[tm as usize];
                     let sp = tpl.species.map(|c| {
-                        m.nodes[c as usize].pts.to_sorted().into_iter().map(|v| m.tok_name(v)).collect::<Vec<_>>()
+                        m.nodes[c as usize]
+                            .pts
+                            .to_sorted()
+                            .into_iter()
+                            .map(|v| m.tok_name(v))
+                            .collect::<Vec<_>>()
                     });
-                    (format!("{:?}", tpl.kind).chars().take(60).collect::<String>(), sp)
+                    (
+                        format!("{:?}", tpl.kind)
+                            .chars()
+                            .take(60)
+                            .collect::<String>(),
+                        sp,
+                    )
                 }
                 _ => ("not an object".to_string(), None),
             };
@@ -2001,7 +2056,10 @@ fn indexed_length(
                     ..
                 }
             );
-            if !is_typed || m.is_marker(t) || !native_own_free(m, NativeFamily::TypedArray, t, s.key) {
+            if !is_typed
+                || m.is_marker(t)
+                || !native_own_free(m, NativeFamily::TypedArray, t, s.key)
+            {
                 if !is_typed {
                     refused(t);
                 }
@@ -2150,10 +2208,23 @@ fn judge(
         if !m.unit_mode {
             if let Some(name) = intrinsic_callee(m, toks, prim) {
                 if !m.realm_held {
-                    return (vec![name], false, Verdict::IntrinsicCall, true, FxHashMap::default());
+                    return (
+                        vec![name],
+                        false,
+                        Verdict::IntrinsicCall,
+                        true,
+                        FxHashMap::default(),
+                    );
                 }
-                let why = "intrinsic callee: unknown code holds the realm and may replace the member";
-                return (Vec::new(), false, Verdict::No(why.into()), true, FxHashMap::default());
+                let why =
+                    "intrinsic callee: unknown code holds the realm and may replace the member";
+                return (
+                    Vec::new(),
+                    false,
+                    Verdict::No(why.into()),
+                    true,
+                    FxHashMap::default(),
+                );
             }
         }
         return match callee_set(m, runtime, toks, prim, top_recv) {
@@ -2223,7 +2294,13 @@ fn judge(
                 if nn & crate::model::prim::NULL != 0 {
                     receivers.push("primitive:null (TypeError)".into());
                 }
-                (receivers, false, Verdict::PerKind, true, FxHashMap::default())
+                (
+                    receivers,
+                    false,
+                    Verdict::PerKind,
+                    true,
+                    FxHashMap::default(),
+                )
             }
             Ok(receivers) => (
                 receivers,
@@ -2242,7 +2319,13 @@ fn judge(
         };
     }
     if let Some(receivers) = ns_export(m, s, toks, prim) {
-        return (receivers, false, Verdict::NsExport, true, FxHashMap::default());
+        return (
+            receivers,
+            false,
+            Verdict::NsExport,
+            true,
+            FxHashMap::default(),
+        );
     }
     let mut receivers = Vec::new();
     let mut top = false;
@@ -2323,7 +2406,8 @@ fn judge(
                         if m.json_relink.contains(&t)
                             && json_relink_closed(m, t, key, s.key) == Ok(true)
                         {
-                            receivers.push("json: [[Prototype]] chain ends at null (undefined)".into());
+                            receivers
+                                .push("json: [[Prototype]] chain ends at null (undefined)".into());
                         }
                         continue;
                     }
@@ -2384,9 +2468,7 @@ fn judge(
                         // appear (the `absent_key` walk: own field node, computed stores,
                         // accessors, the chain): GetValue gives `undefined`, Call
                         // throws (7.3.14): the receiver's TypeError arm.
-                        Err(_) if instance_absent(m, tf, t, key, s.key) => {
-                            throw_arms += 1
-                        }
+                        Err(_) if instance_absent(m, tf, t, key, s.key) => throw_arms += 1,
                         // R9READ11: a key the instance gains by a store that
                         // may not run (a conditional store in a method, a
                         // copy after birth) and that its chain lacks
@@ -2444,7 +2526,9 @@ fn judge(
                     Some(f) if !f.data_field => match accessor_one(m, t, s.key, false) {
                         // An own data property shadows the getter (10.1.8.1).
                         Ok(AccOne::Fn(_)) if may_own_data_key(m, *tm, s.key) => {
-                            verdict.get_or_insert(Verdict::No("read: an instance may own the key".into()));
+                            verdict.get_or_insert(Verdict::No(
+                                "read: an instance may own the key".into(),
+                            ));
                         }
                         Ok(AccOne::Fn(x)) => acc.push(x),
                         _ => {
@@ -2479,12 +2563,14 @@ fn judge(
                                     // store added (`present_from_start`): the
                                     // field holds every value stored there.
                                     TokKind::Proto(tm) => {
-                                        by_id
-                                            .get(tm)
-                                            .is_some_and(|pf| pf.proto_consts.iter().any(|k| k == key))
-                                            || (m.settled_proto.contains_key(&(*tm, s.key))
-                                                && present_from_start(m, h, s.key)
-                                                && !m.accessor_keys.get(&h).is_some_and(|ks| ks.contains(&s.key)))
+                                        by_id.get(tm).is_some_and(|pf| {
+                                            pf.proto_consts.iter().any(|k| k == key)
+                                        }) || (m.settled_proto.contains_key(&(*tm, s.key))
+                                            && present_from_start(m, h, s.key)
+                                            && !m
+                                                .accessor_keys
+                                                .get(&h)
+                                                .is_some_and(|ks| ks.contains(&s.key)))
                                     }
                                     _ => false,
                                 })
@@ -2514,8 +2600,17 @@ fn judge(
                                 absent_key(m, t, key, s.key),
                                 own_data_or_absent(m, tf, t, key, s.key)
                             );
-                            for w in m.writers.get(&(*tm, s.key)).iter().flat_map(|w| w.post.iter()) {
-                                eprintln!("WHY_ARM_W @{} named post {}", s.byte_offset, m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str()));
+                            for w in m
+                                .writers
+                                .get(&(*tm, s.key))
+                                .iter()
+                                .flat_map(|w| w.post.iter())
+                            {
+                                eprintln!(
+                                    "WHY_ARM_W @{} named post {}",
+                                    s.byte_offset,
+                                    m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str())
+                                );
                             }
                             for (w, k) in m.any_writers.get(tm).iter().flat_map(|w| w.post.iter()) {
                                 if m.any_store_may_name(*tm, *w, *k, s.key) {
@@ -2616,8 +2711,12 @@ fn judge(
                         false,
                     )
                     && native_own_free(m, crate::builtins::NativeFamily::Array, t, s.key)
-                    && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), s.key)
-                        .is_ok() =>
+                    && builtin_protos_unwritten(
+                        m,
+                        Some(crate::builtins::NativeFamily::Array),
+                        s.key,
+                    )
+                    .is_ok() =>
             {
                 receivers.push(m.tok_name(t));
                 native_arms += 1;
@@ -2703,7 +2802,9 @@ fn judge(
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     if born_own && chain_read {
-        verdict.get_or_insert(Verdict::No("mixed: born-with own slot and chain receivers".into()));
+        verdict.get_or_insert(Verdict::No(
+            "mixed: born-with own slot and chain receivers".into(),
+        ));
     }
     let mut targets = FxHashMap::default();
     let verdict = match verdict {
@@ -2978,12 +3079,21 @@ fn judge_store(
     // R9BIRTH4: one known object (a class's prototype or constructor) as
     // the whole receiver set.
     if let ([t], 0) = (toks, prim) {
-        if matches!(m.toks[*t as usize], TokKind::Proto(_) | TokKind::ClassObj(_)) {
+        if matches!(
+            m.toks[*t as usize],
+            TokKind::Proto(_) | TokKind::ClassObj(_)
+        ) {
             let verdict = match known_object_store(m, *t, key, s.key) {
                 Ok(()) => Verdict::KnownObjectStore,
                 Err(w) => Verdict::No(format!("store: {w}")),
             };
-            return (vec![m.tok_name(*t)], false, verdict, true, FxHashMap::default());
+            return (
+                vec![m.tok_name(*t)],
+                false,
+                verdict,
+                true,
+                FxHashMap::default(),
+            );
         }
     }
     for &t in toks {
@@ -3014,7 +3124,9 @@ fn judge_store(
                     Some(f)
                         if f.data_field
                             && (m.birth_attrs.contains_key(&(*tm, s.key))
-                                || m.defined_keys.get(tm).is_some_and(|ks| ks.contains(&s.key))) =>
+                                || m.defined_keys
+                                    .get(tm)
+                                    .is_some_and(|ks| ks.contains(&s.key))) =>
                     {
                         why.get_or_insert("store: a defined key (its attributes decide)".into());
                     }
@@ -3028,8 +3140,7 @@ fn judge_store(
                         // descriptor or a later data definition (rule D2,
                         // `defined_keys`) makes an own property that 10.1.9.2
                         // step 1 finds first. `accessor_one`'s precondition.
-                        Ok(AccOne::Fn(_)) if may_own_data_key(m, *tm, s.key) =>
-                        {
+                        Ok(AccOne::Fn(_)) if may_own_data_key(m, *tm, s.key) => {
                             why.get_or_insert("store: an instance may own the key".into());
                         }
                         Ok(AccOne::Fn(x)) => acc.push(x),
@@ -3037,7 +3148,9 @@ fn judge_store(
                         Ok(AccOne::GetterOnly) => {
                             why.get_or_insert("store: getter-only accessor in sloppy code".into());
                         }
-                        Ok(AccOne::Absent) if row.is_none() && absent_key(m, t, key, s.key) => adds += 1,
+                        Ok(AccOne::Absent) if row.is_none() && absent_key(m, t, key, s.key) => {
+                            adds += 1
+                        }
                         Ok(AccOne::Absent) if instance_sets(m, t, key, s.key) => sets += 1,
                         Ok(AccOne::Absent) => {
                             why.get_or_insert("store: key not a definite birth field".into());
@@ -3053,7 +3166,13 @@ fn judge_store(
             }
             // R9STORE6 item 3: `arr.length = n` onto an Array.
             _ if key == "length"
-                && matches!(s.access, Access::Set { uint_value: true, .. })
+                && matches!(
+                    s.access,
+                    Access::Set {
+                        uint_value: true,
+                        ..
+                    }
+                )
                 && array_length_sets(m, t, s.key) =>
             {
                 receivers.push(m.tok_name(t));
@@ -3101,10 +3220,16 @@ fn judge_store(
         why.get_or_insert("store: primitive receiver".into());
     }
     let mut targets = FxHashMap::default();
-    let kinds = [!slots.is_empty(), !acc.is_empty(), throws > 0, adds > 0, sets > 0]
-        .iter()
-        .filter(|&&b| b)
-        .count();
+    let kinds = [
+        !slots.is_empty(),
+        !acc.is_empty(),
+        throws > 0,
+        adds > 0,
+        sets > 0,
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
     let one_setter = {
         let mut a = acc.clone();
         a.sort_unstable();
@@ -3347,9 +3472,9 @@ fn proto_data_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             }
         }
     }
-    held
-        && (!ends
-            || (crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()))
+    held && (!ends
+        || (crate::builtins::object_proto_lacks(key)
+            && builtin_protos_unwritten(m, None, a).is_ok()))
 }
 
 /// R9STORE1: may a named store of `key` (atom `a`) onto `t`, one object
@@ -3389,7 +3514,8 @@ fn literal_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), String> {
     if m.hard.contains_key(&t) || m.super_relink.contains(&t) {
         return Err("a known object with a hard operation".into());
     }
-    if m.accessors.contains_key(&(t, a)) || m.accessor_keys.get(&t).is_some_and(|k| k.contains(&a)) {
+    if m.accessors.contains_key(&(t, a)) || m.accessor_keys.get(&t).is_some_and(|k| k.contains(&a))
+    {
         return Err("an accessor of the key on the known object".into());
     }
     if m.field_any.get(&t).is_some_and(|&n| {
@@ -3504,7 +3630,9 @@ fn known_object_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), Strin
         }
         // A definition onto a prototype under a key it holds no method of
         // is an accessor key there (`Cons::DefineKey`), as a getter is.
-        if m.accessors.contains_key(&(h, a)) || m.accessor_keys.get(&h).is_some_and(|k| k.contains(&a)) {
+        if m.accessors.contains_key(&(h, a))
+            || m.accessor_keys.get(&h).is_some_and(|k| k.contains(&a))
+        {
             return Err("an accessor of the key on the known object or its chain".into());
         }
         let Some(&pn) = m.proto_node.get(&h) else {
@@ -3685,7 +3813,9 @@ fn host_member(
     // Interpreted code (DEC 150) names every global and may write the key;
     // no namespace object is a lock holder, so nothing refuses the write.
     if realm_ns && m.interp_runs {
-        return Some(Err("namespace member: interpreted code may write the key".into()));
+        return Some(Err(
+            "namespace member: interpreted code may write the key".into()
+        ));
     }
     // Unknown code holds the realm (9.3, `realm_held`): a host object's
     // members are writable, and the solve does not replay unknown code's
@@ -3894,8 +4024,10 @@ fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     let TokKind::Obj(tm, _) = m.toks[t as usize] else {
         return false;
     };
-    matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
-        && !m.is_marker(t)
+    matches!(
+        m.tmpls[tm as usize].kind,
+        TmplKind::BObj { what: "json", .. }
+    ) && !m.is_marker(t)
         && own_data_or_absent_tok(m, t, key, a)
 }
 
@@ -3966,7 +4098,13 @@ fn not_unit_why(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> String {
 /// callable under the key). A BigInt or a Symbol is not covered (no
 /// family here). The receivers, and whether an absent outcome is among
 /// them.
-fn beside_prims(m: &Model, key: &str, a: Atom, prim: u16, call: bool) -> Option<(Vec<String>, bool)> {
+fn beside_prims(
+    m: &Model,
+    key: &str,
+    a: Atom,
+    prim: u16,
+    call: bool,
+) -> Option<(Vec<String>, bool)> {
     use crate::builtins::NativeFamily as F;
     use crate::model::prim::{BOOL, NULL, NUM, STR, UNDEF};
     if prim & !(STR | NUM | BOOL | NULL | UNDEF) != 0 {
@@ -3988,7 +4126,11 @@ fn beside_prims(m: &Model, key: &str, a: Atom, prim: u16, call: bool) -> Option<
             if !family_absent(m, fam, key, a) {
                 return None;
             }
-            r.push(if call { format!("{name} (TypeError)") } else { name.to_string() });
+            r.push(if call {
+                format!("{name} (TypeError)")
+            } else {
+                name.to_string()
+            });
         }
     }
     let absent = !call && prim & (STR | NUM | BOOL) != 0;
@@ -4033,8 +4175,7 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     if let Some(k) = m.accessor_keys.get(&t).filter(|k| !k.is_empty()) {
         return Err(format!("accessor keys on the token ({})", k.len()));
     }
-    if m
-        .tmpl_of(t)
+    if m.tmpl_of(t)
         .and_then(|tm| m.defined_keys.get(&tm))
         .is_some_and(|ks| ks.contains(&a))
     {
@@ -4096,7 +4237,11 @@ fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, Str
                     }
                     todo.push(p);
                 } else if !m.proto_node.get(&p).is_none_or(|&pn| {
-                    m.nodes[pn as usize].pts.to_sorted().iter().all(|&q| Some(q) == op)
+                    m.nodes[pn as usize]
+                        .pts
+                        .to_sorted()
+                        .iter()
+                        .all(|&q| Some(q) == op)
                         && m.nodes[pn as usize].prim == 0
                 }) {
                     return Err("relink: a chain object's prototype is not Object.prototype".into());
@@ -4106,7 +4251,10 @@ fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, Str
             if array_absent(m, p, key, a) || json_chain_array(m, p, key, a) {
                 continue;
             }
-            return Err(format!("relink: prototype {} may hold the key", m.tok_name(p)));
+            return Err(format!(
+                "relink: prototype {} may hold the key",
+                m.tok_name(p)
+            ));
         }
     }
     if !(crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok())
@@ -4153,8 +4301,10 @@ fn json_own_or_absent_obj(m: &Model, t: Tok) -> bool {
     let TokKind::Obj(tm, _) = m.toks[t as usize] else {
         return false;
     };
-    matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
-        && !m.is_marker(t)
+    matches!(
+        m.tmpls[tm as usize].kind,
+        TmplKind::BObj { what: "json", .. }
+    ) && !m.is_marker(t)
         && !m.is_escaped(t)
         && !m.hard.contains_key(&t)
         && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
@@ -4215,7 +4365,10 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// primitive on GetV's ToObject wrapper (7.3.2), gives `undefined`.
 fn family_absent(m: &Model, fam: crate::builtins::NativeFamily, key: &str, a: Atom) -> bool {
     (key != "length"
-        || matches!(fam, crate::builtins::NativeFamily::Num | crate::builtins::NativeFamily::Bool))
+        || matches!(
+            fam,
+            crate::builtins::NativeFamily::Num | crate::builtins::NativeFamily::Bool
+        ))
         && key != "__proto__"
         && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
         && !matches!(key, "Infinity" | "NaN")
@@ -4285,7 +4438,11 @@ fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
     if it.next().is_some() {
         return None;
     }
-    matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
+    matches!(
+        m.toks[t as usize],
+        TokKind::BuiltinFn(Native::Member { .. })
+    )
+    .then(|| m.tok_name(t))
 }
 
 /// MATHB1 rule R1: is the callee of call site `s` exactly the realm's
@@ -4329,7 +4486,11 @@ pub(crate) fn namespace_callee(
     dropped: bool,
 ) -> Option<IntrinsicCallee> {
     use crate::model::BuiltinNs;
-    let named: Vec<Tok> = toks.iter().copied().filter(|&t| !m.closed_marker(t)).collect();
+    let named: Vec<Tok> = toks
+        .iter()
+        .copied()
+        .filter(|&t| !m.closed_marker(t))
+        .collect();
     // The namespace and member the site names.
     let (ns, member): (BuiltinNs, String) = if s.value_call {
         let mut ids = named.iter().filter_map(|&t| match m.toks[t as usize] {
@@ -4363,7 +4524,10 @@ pub(crate) fn namespace_callee(
         if prim != 0 {
             held.push(format!("primitives {prim:#x}"));
         }
-        return no(&format!("the set holds more than the one namespace member: {}", held.join(", ")));
+        return no(&format!(
+            "the set holds more than the one namespace member: {}",
+            held.join(", ")
+        ));
     }
     if dropped {
         return no("a source left a value out");
@@ -4380,7 +4544,8 @@ pub(crate) fn namespace_callee(
     }
     let a = m.atom_index.get(&member).copied();
     let written = |t: Tok| {
-        m.native_writes.contains_key(&(t, None)) || a.is_some_and(|a| m.native_writes.contains_key(&(t, Some(a))))
+        m.native_writes.contains_key(&(t, None))
+            || a.is_some_and(|a| m.native_writes.contains_key(&(t, Some(a))))
     };
     if written(TOP) {
         return no("a write on an unknown receiver may reach the member");
@@ -4614,19 +4779,35 @@ fn lookup_holders(
     // Diagnostic (off: one env read): `PERRY_FACTS_WHY_LOOKUP=<key>` prints
     // the lookup clause inputs for that key.
     static WHY_LOOKUP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    if WHY_LOOKUP.get_or_init(|| std::env::var("PERRY_FACTS_WHY_LOOKUP").ok()).as_deref() == Some(key) {
+    if WHY_LOOKUP
+        .get_or_init(|| std::env::var("PERRY_FACTS_WHY_LOOKUP").ok())
+        .as_deref()
+        == Some(key)
+    {
         let row = tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a)));
         let h = m.fields.get(&(t, a)).copied();
         eprintln!(
             "WHY_LOOKUP {} .{key} t={t} row={:?} birth={} field={:?} prim={:#x} pts={}",
             tf.display,
-            row.map(|f| (f.definite, f.data_field, f.slot, f.writers_ctor, f.writers_post)),
+            row.map(|f| (
+                f.definite,
+                f.data_field,
+                f.slot,
+                f.writers_ctor,
+                f.writers_post
+            )),
             tf.birth_keys.iter().any(|k| k == key),
             h,
             h.map_or(0, |n| m.nodes[n as usize].prim),
             h.map_or(0, |n| m.nodes[n as usize].pts.len()),
         );
-        eprintln!("WHY_LOOKUP settled={:?}", m.settled_proto.iter().filter(|((_, x), _)| *x == a).collect::<Vec<_>>());
+        eprintln!(
+            "WHY_LOOKUP settled={:?}",
+            m.settled_proto
+                .iter()
+                .filter(|((_, x), _)| *x == a)
+                .collect::<Vec<_>>()
+        );
     }
     // A key the layout never writes (a read names it) is the chain's.
     match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
@@ -4663,7 +4844,10 @@ fn lookup_holders(
         // `Object.setPrototypeOf(x, null)`, `Object.create(null)`: 10.1.2.1)
         // may end the chain at `h`, which lacks the key: the read may be
         // `undefined` (10.1.8.1) and the call may throw (13.3.6).
-        if m.proto_node.get(&h).is_some_and(|&pn| m.nodes[pn as usize].prim != 0) {
+        if m.proto_node
+            .get(&h)
+            .is_some_and(|&pn| m.nodes[pn as usize].prim != 0)
+        {
             return Err("the chain may end at a null prototype".into());
         }
         let protos: Vec<Tok> = m
@@ -4717,11 +4901,18 @@ fn window_own(m: &Model, w: &SettledWin) -> bool {
                 !m.hard.contains_key(&p)
                     && !m.is_escaped(p)
                     && !m.super_relink.contains(&p)
-                    && !m.accessor_keys.get(&p).is_some_and(|ks| w.keys.iter().any(|k| ks.contains(k)))
+                    && !m
+                        .accessor_keys
+                        .get(&p)
+                        .is_some_and(|ks| w.keys.iter().any(|k| ks.contains(k)))
             })
         })
         && (w.keys.is_empty()
-            || op.is_some_and(|op| w.keys.iter().all(|&k| !crate::builtins::native_nonplain_written(m, op, k))))
+            || op.is_some_and(|op| {
+                w.keys
+                    .iter()
+                    .all(|&k| !crate::builtins::native_nonplain_written(m, op, k))
+            }))
 }
 
 /// The globals a settled window read (`gen::settled`) are the realm's own
@@ -4732,14 +4923,17 @@ fn window_globals_own(m: &Model, gs: &[Atom]) -> bool {
         || (!m.global_in_top
             && !m.global_written_own
             && gs.iter().all(|g| {
-                m.global_fields.iter().filter(|(k, _)| k == g).all(|&(_, n)| {
-                    let nd = &m.nodes[n as usize];
-                    nd.pts.to_sorted().into_iter().all(|t| {
-                        t != TOP
-                            && m.tmpl_of(t).is_none()
-                            && !matches!(m.toks[t as usize], TokKind::Func(..))
+                m.global_fields
+                    .iter()
+                    .filter(|(k, _)| k == g)
+                    .all(|&(_, n)| {
+                        let nd = &m.nodes[n as usize];
+                        nd.pts.to_sorted().into_iter().all(|t| {
+                            t != TOP
+                                && m.tmpl_of(t).is_none()
+                                && !matches!(m.toks[t as usize], TokKind::Func(..))
+                        })
                     })
-                })
             }))
 }
 
@@ -4783,8 +4977,13 @@ fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
         }
         TokKind::Obj(tm, _) => {
             let tpl = &m.tmpls[tm as usize];
-            matches!(tpl.kind, TmplKind::Class { literal_shape: true, .. } | TmplKind::Lit { .. })
-                && tpl.birth_keys.contains(&a)
+            matches!(
+                tpl.kind,
+                TmplKind::Class {
+                    literal_shape: true,
+                    ..
+                } | TmplKind::Lit { .. }
+            ) && tpl.birth_keys.contains(&a)
         }
         _ => false,
     }

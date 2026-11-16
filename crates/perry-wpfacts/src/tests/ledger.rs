@@ -13,7 +13,6 @@ fn whole(src: &str) -> ProgramFacts {
     facts_with(src, diag())
 }
 
-
 /// The cause names of every site record of `kind` with `key`, in every
 /// analysis unit.
 fn causes(pf: &ProgramFacts, kind: &str, key: &str) -> Vec<String> {
@@ -423,7 +422,6 @@ fn buffer_aliasing() {
     );
 }
 
-
 /// One record per HIR site: the census of a program with every site kind
 /// accounts for each, and no recorded site is outside the HIR.
 #[test]
@@ -473,7 +471,6 @@ fn every_hir_site_has_one_record() {
         );
     }
 }
-
 
 /// The closed list of reasons a published value contract is unknown
 /// (`ValueContract::unknown_because` / `unknown_for`, dump field `why`).
@@ -554,4 +551,3 @@ fn every_unknown_reason_is_named() {
         assert!(given.contains(*w), "reason {w} is given nowhere");
     }
 }
-

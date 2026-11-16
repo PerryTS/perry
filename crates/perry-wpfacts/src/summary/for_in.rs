@@ -43,7 +43,10 @@ impl Model {
     fn for_in_key_runs(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> Option<bool> {
         let mut made = false;
         for &k in keys {
-            made |= !self.sum.inst_key.contains_key(&(6, k, ft, crate::summary::NO_VAL));
+            made |= !self
+                .sum
+                .inst_key
+                .contains_key(&(6, k, ft, crate::summary::NO_VAL));
             let inst = self.instance((6, k, ft));
             match self.sum.insts[inst as usize].params.first().copied() {
                 // The run reads no key.
@@ -108,7 +111,11 @@ impl Model {
     #[track_caller]
     pub(crate) fn for_in_every_key(&mut self, call: CallId, ft: Tok) {
         if for_in_diag() {
-            eprintln!("perry: wpfacts forindiag every-key body={} at={}", self.funcs[self.tok_fn(ft) as usize].name, std::panic::Location::caller());
+            eprintln!(
+                "perry: wpfacts forindiag every-key body={} at={}",
+                self.funcs[self.tok_fn(ft) as usize].name,
+                std::panic::Location::caller()
+            );
         }
         if self.for_in_any.insert((call, ft)) {
             // The loop as it is: its key is any String key of the value
@@ -166,17 +173,25 @@ impl Model {
         let born_chain = self.proto_node.get(&t).is_none_or(|&pn| {
             let nd = &self.nodes[pn as usize];
             nd.prim == 0
-                && nd.pts.to_sorted().iter().all(|&p| match self.toks[p as usize] {
-                    TokKind::ObjectProto => true,
-                    TokKind::Proto(pm) => pm == tm,
-                    _ => false,
-                })
+                && nd
+                    .pts
+                    .to_sorted()
+                    .iter()
+                    .all(|&p| match self.toks[p as usize] {
+                        TokKind::ObjectProto => true,
+                        TokKind::Proto(pm) => pm == tm,
+                        _ => false,
+                    })
         });
         if !born_chain {
             return None;
         }
         let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
-        if self.accessor_keys.get(&t).is_some_and(|ks| ks.iter().any(|&a| star(a))) {
+        if self
+            .accessor_keys
+            .get(&t)
+            .is_some_and(|ks| ks.iter().any(|&a| star(a)))
+        {
             return None;
         }
         let mut keys: Vec<Atom> = Vec::new();
@@ -289,7 +304,11 @@ impl Model {
                     "lit={} computed={}",
                     matches!(
                         tpl.kind,
-                        TmplKind::Lit { .. } | TmplKind::Class { literal_shape: true, .. }
+                        TmplKind::Lit { .. }
+                            | TmplKind::Class {
+                                literal_shape: true,
+                                ..
+                            }
                     ),
                     tpl.has_computed_members
                 )

@@ -7,20 +7,12 @@
 
 use super::*;
 
-
 fn proven(pf: &ProgramFacts, key: &str) -> usize {
     pf.sites
         .iter()
         .filter(|s| s.key == key && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
         .count()
 }
-
-
-
-
-
-
-
 
 /// Two modules (`lib` imported by `main`), per unit and whole program.
 fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
@@ -41,10 +33,7 @@ fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
     let cfg = FactsConfig::default();
-    (
-        crate::compute(&list, &cfg),
-        crate::compute(&list, &cfg),
-    )
+    (crate::compute(&list, &cfg), crate::compute(&list, &cfg))
 }
 
 /// The reader's `new` of another unit's constructor: per unit proves `x`
@@ -65,8 +54,6 @@ const MAIN_F: &str = r#"
     const b: any = new (F as any)();
     console.log(b.x);
 "#;
-
-
 
 #[test]
 fn another_units_function_constructor_with_a_primitive_return_is_the_instance() {
@@ -91,7 +78,6 @@ fn another_units_function_constructor_returning_this_stays_sound() {
     assert!(proven(&pu, "x") <= proven(&pw, "x"), "{}", pu.dump_text());
 }
 
-
 #[test]
 fn another_units_class_whose_constructor_returns_an_object_is_not_an_instance() {
     check_two(
@@ -106,8 +92,6 @@ fn another_units_class_whose_constructor_returns_an_object_is_not_an_instance() 
         false,
     );
 }
-
-
 
 #[test]
 fn a_class_expression_with_a_returning_constructor_of_another_unit_is_not_an_instance() {

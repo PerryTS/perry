@@ -304,13 +304,21 @@ pub fn map_cons(
             setter,
             probe: n(probe),
         },
-        OwnDescAcc { setter, dst } => OwnDescAcc { setter, dst: n(dst) },
+        OwnDescAcc { setter, dst } => OwnDescAcc {
+            setter,
+            dst: n(dst),
+        },
         ForInMeet { other, src, gate } => ForInMeet {
             other: if other == NO_NODE { NO_NODE } else { n(other) },
             src: n(src),
             gate: n(gate),
         },
-        IdxKey { obj, prim, dst, shape } => IdxKey {
+        IdxKey {
+            obj,
+            prim,
+            dst,
+            shape,
+        } => IdxKey {
             obj,
             prim,
             dst: n(dst),
@@ -442,7 +450,10 @@ pub fn map_cons(
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
-        ConsoleFormat { reason, agg } => ConsoleFormat { reason, agg: n(agg) },
+        ConsoleFormat { reason, agg } => ConsoleFormat {
+            reason,
+            agg: n(agg),
+        },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },
         ObjTagProbe { t, key } => ObjTagProbe { t, key },
@@ -468,13 +479,22 @@ pub fn map_cons(
             search: n(search),
             last,
         },
-        StrSubstring { dst, recv, start, end } => StrSubstring {
+        StrSubstring {
+            dst,
+            recv,
+            start,
+            end,
+        } => StrSubstring {
             dst: n(dst),
             recv: n(recv),
             start: if start == NO_NODE { NO_NODE } else { n(start) },
             end: if end == NO_NODE { NO_NODE } else { n(end) },
         },
-        ClassReplace { dst, tok, repl } => ClassReplace { dst: n(dst), tok, repl: n(repl) },
+        ClassReplace { dst, tok, repl } => ClassReplace {
+            dst: n(dst),
+            tok,
+            repl: n(repl),
+        },
         RegExpPattern { tok } => RegExpPattern { tok },
         ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
         BoundCall { reason, bound } => BoundCall { reason, bound },

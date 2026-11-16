@@ -57,7 +57,10 @@ fn names_only(v: &[String], want: &[&str]) {
         assert!(v.iter().any(|x| x == w), "{w} {v:?}");
     }
     for x in v {
-        assert!(want.contains(&x.as_str()) || PROGRAM_PROTO.contains(&x.as_str()), "{x} {v:?}");
+        assert!(
+            want.contains(&x.as_str()) || PROGRAM_PROTO.contains(&x.as_str()),
+            "{x} {v:?}"
+        );
     }
 }
 
@@ -104,13 +107,21 @@ fn unknown_input_is_any_key() {
 // (v) A backreference or an alternation in the tail: no rule.
 #[test]
 fn backreference_tail_is_any_key() {
-    let v = reads(r"/^(?:([^.]*)\.)?([^.]+)\1?$/", "String(n) + \".position\"", 2);
+    let v = reads(
+        r"/^(?:([^.]*)\.)?([^.]+)\1?$/",
+        "String(n) + \".position\"",
+        2,
+    );
     assert!(v.len() > 1, "{v:?}");
 }
 
 #[test]
 fn alternation_tail_is_any_key() {
-    let v = reads(r"/^(?:([^.]*)\.)?([^.]+)(?:x|y)?$/", "String(n) + \".position\"", 2);
+    let v = reads(
+        r"/^(?:([^.]*)\.)?([^.]+)(?:x|y)?$/",
+        "String(n) + \".position\"",
+        2,
+    );
     assert!(v.len() > 1, "{v:?}");
 }
 

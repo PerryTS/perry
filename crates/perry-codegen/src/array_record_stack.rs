@@ -277,9 +277,7 @@ fn generator_step(ctx: &mut FnCtx<'_>, r: &Record) -> (String, String) {
     let (done, value) = generator_resume(ctx, r.source, &home, &r.fields[5]);
     let g = ctx.block().load_volatile(DOUBLE, &home);
     let bits = ctx.block().bitcast_double_to_i64(&done);
-    let finished = ctx
-        .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let finished = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
     let payload = ctx
         .block()
         .select(crate::types::I1, &finished, DOUBLE, &undefined, &g);
@@ -326,7 +324,9 @@ pub(crate) fn generator_resume(
     let (busy_label, check_label) = (ctx.block_label(busy_idx), ctx.block_label(check_idx));
     ctx.block().cond_br(&running, &busy_label, &check_label);
     ctx.current_block = busy_idx;
-    let _ = ctx.block().call(DOUBLE, "js_generator_resume_executing", &[]);
+    let _ = ctx
+        .block()
+        .call(DOUBLE, "js_generator_resume_executing", &[]);
     ctx.block().unreachable();
 
     ctx.current_block = check_idx;
@@ -416,10 +416,14 @@ pub(crate) fn generator_resume(
     // A string the record may append to in place is aliased by the loop
     // variable: demote a uniquely owned one, as the runtime boundary does.
     let bits = ctx.block().bitcast_double_to_i64(&result);
-    let tag = ctx
+    let tag = ctx.block().and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let is_str = ctx
         .block()
-        .and(I64, &bits, &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK));
-    let is_str = ctx.block().icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_I64);
+        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_I64);
     let str_idx = ctx.new_block("gen.str");
     let kind_idx = ctx.new_block("gen.kind");
     let (str_label, kind_label) = (ctx.block_label(str_idx), ctx.block_label(kind_idx));
@@ -455,12 +459,16 @@ pub(crate) fn generator_resume(
     );
     let inner_value = ctx.block().load_volatile(DOUBLE, out);
     let inner_is_done = ctx.block().icmp_ne(I32, &inner_done, "0");
-    let inner_done_d = ctx
-        .block()
-        .select(crate::types::I1, &inner_is_done, DOUBLE, &true_d, &false_d);
-    let inner_v = ctx
-        .block()
-        .select(crate::types::I1, &inner_is_done, DOUBLE, &undefined, &inner_value);
+    let inner_done_d =
+        ctx.block()
+            .select(crate::types::I1, &inner_is_done, DOUBLE, &true_d, &false_d);
+    let inner_v = ctx.block().select(
+        crate::types::I1,
+        &inner_is_done,
+        DOUBLE,
+        &undefined,
+        &inner_value,
+    );
     let inner_pred = ctx.block().label.clone();
     ctx.block().br(&join_label);
 

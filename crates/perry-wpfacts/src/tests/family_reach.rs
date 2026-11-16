@@ -70,7 +70,6 @@ fn the_dump_has_one_line_per_family() {
     assert!(lines.contains(&"# family_reach typedarray never reason=none"));
 }
 
-
 #[test]
 fn l1_an_unknown_value_makes_every_family_live() {
     // A member of `process` the realm does not declare: an unknown value.

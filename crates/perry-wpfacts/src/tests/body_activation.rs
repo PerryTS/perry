@@ -75,7 +75,6 @@ fn mk(pf: &ProgramFacts) -> Vec<&SiteFacts> {
         .collect()
 }
 
-
 /// The per-unit <= whole site residual: what a view of `u` proves that no
 /// view of `w` proves. A site `w`'s activation proved can never run is
 /// exempt (any fact about it is vacuously true there); a site of an active
@@ -100,7 +99,6 @@ pub(super) fn stronger_sites(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> 
     }
     out
 }
-
 
 #[test]
 fn an_uncalled_body_does_not_escape_what_it_names() {
@@ -150,5 +148,3 @@ fn sabotage_each_activation_path_proves_its_arm_wrongly() {
         );
     }
 }
-
-

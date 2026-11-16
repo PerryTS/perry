@@ -47,7 +47,8 @@ fn only_a(body: &str) -> Vec<String> {
 
 #[test]
 fn literal_prefix_keys_are_apart() {
-    let v = only_a("reg['c:' + n] = new A(); reg['d:' + n] = new B(); const x: any = reg['c:' + n];");
+    let v =
+        only_a("reg['c:' + n] = new A(); reg['d:' + n] = new B(); const x: any = reg['c:' + n];");
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
@@ -111,7 +112,9 @@ fn control_compatible_prefixes_merge() {
 #[test]
 fn prefix_read_names_a_member_only_under_its_prefix() {
     // `'c:' + n` never spells an Object.prototype member: only A.
-    let v = only_a("const k1 = 'c:' + n; reg[k1] = new A(); const k3 = 'c:' + n; const x: any = reg[k3];");
+    let v = only_a(
+        "const k1 = 'c:' + n; reg[k1] = new A(); const k3 = 'c:' + n; const x: any = reg[k3];",
+    );
     assert_eq!(v, vec!["A"], "{v:?}");
     // `'to' + s` may be `toString`: the read holds Object.prototype members.
     let v = only_a(

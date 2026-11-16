@@ -5912,7 +5912,7 @@ mod hold_tests {
             // The physical extent holds the six words past the length too.
             let physical = (8..b.size as usize)
                 .step_by(8)
-                .filter(|off| unsafe { ((addr + off) as *const u64).read() } & !0xFFFF == TAG)
+                .filter(|off| ((addr + off) as *const u64).read() & !0xFFFF == TAG)
                 .count();
             assert_eq!(physical, 32);
             (*a).length = 32;

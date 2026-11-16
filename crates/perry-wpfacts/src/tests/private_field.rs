@@ -6,7 +6,6 @@
 //! or never NativeMember, and the entries a `get` returns did not flow.
 use super::*;
 
-
 fn verdicts(pf: &ProgramFacts, key: &str, call: bool) -> Vec<Verdict> {
     let mut s: Vec<_> = pf
         .sites

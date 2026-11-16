@@ -5,7 +5,6 @@
 
 use super::*;
 
-
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     assert!(!s.is_empty(), "no site .{key}");

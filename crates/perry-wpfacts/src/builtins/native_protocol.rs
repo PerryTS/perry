@@ -402,7 +402,15 @@ pub enum WriteValue {
 /// installed by a definition through ⊤ (ECMA-262 10.1.6.3): an accessor
 /// query that may reach it returns `f`, not an unknown value.
 pub fn note_native_accessor(m: &mut Model, t: Tok, key: Option<Key>, f: Tok, setter: bool) {
-    note_write(m, t, key, "accessor", false, Some((f, setter)), WriteValue::Opaque)
+    note_write(
+        m,
+        t,
+        key,
+        "accessor",
+        false,
+        Some((f, setter)),
+        WriteValue::Opaque,
+    )
 }
 
 /// [`note_native_write`] for a plain store ([[Set]], ECMA-262 10.1.9.2) or a
@@ -613,7 +621,9 @@ pub fn settle_native_given(m: &mut Model) -> bool {
             }
             m.census_settling(Some(src));
             match value {
-                WriteValue::Opaque => note_native_write(m, t, k.map(Key::Named), "E6 prototype given"),
+                WriteValue::Opaque => {
+                    note_native_write(m, t, k.map(Key::Named), "E6 prototype given")
+                }
                 _ => note_native_data_write(m, t, k.map(Key::Named), "E6 prototype given", value),
             }
             m.census_settling(None);
@@ -631,7 +641,13 @@ fn given_read(m: &mut Model, src: NodeId, a: Atom) -> NodeId {
         return n;
     }
     let n = m.node_l("given-prototype-read");
-    m.cons(src, crate::model::Cons::Load { key: Key::Named(a), dst: n });
+    m.cons(
+        src,
+        crate::model::Cons::Load {
+            key: Key::Named(a),
+            dst: n,
+        },
+    );
     m.given_reads.insert((src, a), n);
     n
 }
@@ -763,7 +779,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     // opaque members once an opaque write reaches their key.
     m.native_replays += 1;
     m.with_b(|m| {
-        let keys: Vec<_> = m.native_answer_nodes.iter().map(|(&k, &e)| (k, e)).collect();
+        let keys: Vec<_> = m
+            .native_answer_nodes
+            .iter()
+            .map(|(&k, &e)| (k, e))
+            .collect();
         let mut opaque: std::collections::HashSet<(Tok, Atom)> = Default::default();
         for ((np, a), e) in keys {
             match stored_values(m, np, a) {
@@ -1248,7 +1268,9 @@ pub(crate) const NATIVE_READ_GLOBALS: &[&str] = &[
 /// [[Set]] returns false, a strict store throws) and the getter-only
 /// `navigator` (no setter: the same).
 pub fn global_any_names(m: &Model, n: &str) -> bool {
-    !m.unit_mode && !matches!(n, "undefined" | "NaN" | "Infinity" | "navigator") && n != crate::STAR_KEY
+    !m.unit_mode
+        && !matches!(n, "undefined" | "NaN" | "Infinity" | "navigator")
+        && n != crate::STAR_KEY
 }
 
 /// G2: a read of a global binding (bare name, `globalThis.K`, a module
@@ -1456,10 +1478,11 @@ pub(super) fn native_method(
         // above), whose method runs with the receiver as `this`
         // (`Object.prototype.valueOf`, 20.1.3.7: ToObject(this value), no
         // program code). A well-known symbol key stays as before.
-        (n0, n) if typed_array_proto_name(n0)
-            && !n.starts_with("@@")
-            && !typed_array_proto_declares(m, n0, n)
-            && !native_written(m, np, a) =>
+        (n0, n)
+            if typed_array_proto_name(n0)
+                && !n.starts_with("@@")
+                && !typed_array_proto_declares(m, n0, n)
+                && !native_written(m, np, a) =>
         {
             m.native_missing
                 .push((np, a, NativeMiss::Call(origin, call)));

@@ -723,11 +723,7 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
         "calendarId",
     ];
     for g in GETTERS {
-        install_temporal_getter(
-            proto,
-            g,
-            zdt_getter_info(g),
-        );
+        install_temporal_getter(proto, g, zdt_getter_info(g));
     }
     // (name, spec_length)
     const METHODS: &[(&str, u32)] = &[
