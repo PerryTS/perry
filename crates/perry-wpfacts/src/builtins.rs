@@ -2744,6 +2744,51 @@ pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -
     own && !native_written(m, t, a)
 }
 
+/// R9READ9: named key `a` is absent on builtin function value `t` and its
+/// whole chain: a described language constructor or namespace
+/// (`members::ns_member`: neither its own statics nor its chain,
+/// `Function.prototype` / `Object.prototype`, list the key), or a builtin
+/// method value (its own `length` and `name`, 10.3.4 CreateBuiltinFunction;
+/// no `prototype`; its chain `Function.prototype` then `Object.prototype`,
+/// `members::member(Function, _)`). No accessor and no write the solve sees
+/// reached the key on `t` (its own field values; `native_written`: a
+/// named or computed store, a write through ⊤). The caller adds the chain's own writes
+/// (`builtin_protos_unwritten`, `object_proto_unwritten`). Unknown code
+/// holding the realm or interpreted code may add the key: refused.
+/// 10.1.8.1 OrdinaryGet: `undefined`. Whole-program solves only.
+pub(crate) fn builtin_value_absent(m: &Model, t: Tok, a: Atom) -> bool {
+    if m.unit_mode || m.realm_held || m.interp_runs || m.is_private_atom(a) {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    let absent = match &m.toks[t as usize] {
+        TokKind::Builtin(ns) => {
+            !members::is_host(*ns) && matches!(members::ns_member(*ns, name), Some(None))
+        }
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            name != "prototype" && members::member(Family::Function, name).is_none()
+        }
+        _ => false,
+    };
+    // The solve's own value of the key on `t`: a store onto the function
+    // object itself (a named store, a computed one, `__proto__`).
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    absent
+        && m.native_property(t, name).is_none()
+        && holds_nothing(m.fields.get(&(t, a)))
+        && holds_nothing(m.field_any.get(&t))
+        && !m.super_relink.contains(&t)
+        && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && !native_written(m, t, a)
+}
+
 /// A call of member `n` of host `h`: the runtime's own method (`native`)
 /// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
 /// that reads other members of its receiver), then an unknown method of the

@@ -153,3 +153,58 @@ console.log(o.name);"
     ));
     assert!(row(&pf, "W", "name").0 > 0);
 }
+
+fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && !s.access.is_store())
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
+    for verdict in &v {
+        eprintln!("RR9 .{key} verdict={verdict}");
+    }
+    v
+}
+
+const FNS: &str = "const n = Number(process.argv[2] ?? \"3\");
+const x: any = n > 2 ? [1, 2] : n > 1 ? Number : n > 0 ? Math.max : Number.parseFloat;
+";
+
+/// m1: `.map` of a builtin constructor (Number) or a builtin method value
+/// (Math.max, Array.prototype.map): absent on the function and its chain
+/// (Function.prototype, Object.prototype): `undefined`; the Array arm
+/// reads its own builtin member.
+#[test]
+fn r9read9_m1_builtin_function_map_absent() {
+    let pf = facts(&format!("{FNS}console.log(typeof x.map);"));
+    let v = reads(&pf, "map");
+    assert!(!v.is_empty() && v.iter().all(|x| !x.starts_with("No(")), "{v:?}");
+}
+
+/// KEEP m2: the program stores `map` on the builtin method value.
+#[test]
+fn r9read9_m2_store_on_function_kept() {
+    let pf = facts(&format!("{FNS}(Math.max as any).map = 1;\nconsole.log(typeof x.map);"));
+    let v = reads(&pf, "map");
+    assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
+}
+
+/// KEEP m3: the program writes `map` onto Function.prototype.
+#[test]
+fn r9read9_m3_function_prototype_write_kept() {
+    let pf = facts(&format!("{FNS}(Function.prototype as any).map = 1;\nconsole.log(typeof x.map);"));
+    let v = reads(&pf, "map");
+    assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
+}
+
+/// KEEP m4: `length` is an own property of a builtin function (not absent).
+#[test]
+fn r9read9_m4_own_length_not_absent() {
+    let pf = facts("const n = Number(process.argv[2] ?? \"3\");
+const x: any = n > 1 ? Math.max : Math.min;
+console.log(x.length);");
+    let v = reads(&pf, "length");
+    assert!(v.iter().all(|x| !x.contains("absent (undefined)")), "{v:?}");
+}

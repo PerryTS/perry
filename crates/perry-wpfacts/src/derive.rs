@@ -2460,6 +2460,19 @@ fn judge(
                     }
                 }
             }
+            // R9READ9: a read of a key a builtin function value and its
+            // chain lack (`builtins::builtin_value_absent`), with no write of
+            // the key onto `Object.prototype` (where the model's builtin
+            // prototypes collapse) or through ⊤: `undefined` (10.1.8.1).
+            TokKind::Builtin(_) | TokKind::BuiltinFn(_)
+                if !s.is_call
+                    && crate::builtins::builtin_value_absent(m, t, s.key)
+                    && object_proto_unwritten(m, s.key)
+                    && builtin_protos_unwritten(m, None, s.key).is_ok() =>
+            {
+                receivers.push(format!("{}: absent (undefined)", m.tok_name(t)));
+                own_or_absent += 1;
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;
