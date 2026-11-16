@@ -667,9 +667,14 @@ pub(crate) fn prove(
         // birth field loads the family's slot: the class may be another
         // module's, the key a define key, or one the colouring moved, and a
         // subclass family keeps every inherited key at its parent's slot
-        // (`layout_families::assign_slots`). Stores keep codegen's own slot
-        // rule below (a slot both layouts agree on).
-        if access == Access::Get {
+        // (`layout_families::assign_slots`). A store to a birth field the
+        // facts prove present (not reserved: no hole to fill, so the store
+        // adds no key) writes the same family slot: the key is an own data
+        // property there (OrdinarySet, ECMA-262 10.1.9.2 steps 2-3: an own
+        // writable data property is set in place, no chain walk), unless a
+        // completed shape holds a constant function at that slot (the
+        // constant-function lane needs the checked store).
+        if access == Access::Get || !f.reserved {
             match family_slot(ctx, cid, property) {
                 Err(why) => {
                     crate::fallback_diag::refuse(why);
@@ -686,6 +691,12 @@ pub(crate) fn prove(
                             );
                             return None;
                         }
+                    }
+                    if access != Access::Get
+                        && crate::codegen::key_may_be_constfn_at(property, idx)
+                    {
+                        crate::fallback_diag::refuse("constant-function lane requires checked store");
+                        return None;
                     }
                     // Every family slot is a boxed word (the hole until a
                     // store adds the key): no raw-f64 lane.

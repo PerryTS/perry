@@ -344,7 +344,7 @@ pub use static_shape_ids::{
     TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    compatible_final_layout_words, compatible_final_layouts, slot_may_be_constfn,
+    compatible_final_layout_words, compatible_final_layouts, key_may_be_constfn_at, slot_may_be_constfn,
     static_layout_word_for_keys_global, static_region_slots,
 };
 mod class_declarations;
