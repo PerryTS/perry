@@ -373,6 +373,7 @@ pub(crate) fn collect_literal_finals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     stmts(body, m, p, r, w, out);
                     if let Some(c) = catch {

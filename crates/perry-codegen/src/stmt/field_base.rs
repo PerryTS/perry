@@ -331,6 +331,7 @@ pub(super) fn reads_in_stmt(ctx: &FnCtx<'_>, s: &Stmt, out: &mut Vec<Read>) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body
                 .iter()
@@ -539,6 +540,7 @@ fn jumps(stmts: &[Stmt], plain: bool) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             jumps(body, plain)
                 || catch.as_ref().is_some_and(|c| jumps(&c.body, plain))

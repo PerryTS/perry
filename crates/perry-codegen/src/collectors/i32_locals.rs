@@ -383,6 +383,7 @@ fn walk_writes_for_unsigned_i32(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_writes_for_unsigned_i32(body, saw_any, disqualified);
                 if let Some(c) = catch {
@@ -612,6 +613,7 @@ pub fn walk_writes_for_strict(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_writes_for_strict(
                     body,
@@ -930,6 +932,7 @@ pub fn collect_integer_let_ids(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_integer_let_ids(
                     body,
@@ -1153,6 +1156,7 @@ pub fn collect_localset_ids_in_stmts_filtered(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_localset_ids_in_stmts_filtered(
                     body,

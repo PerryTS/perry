@@ -153,6 +153,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt(s, out);

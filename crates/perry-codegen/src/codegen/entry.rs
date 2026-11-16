@@ -828,15 +828,6 @@ pub(super) fn compile_module_entry(
             if !entry_in_init {
                 blk.store(I8, "1", &format!("@__perry_init_done_{module_prefix}"));
             }
-            // Image run: the baseline is taken after the runtime prelude, right before
-            // the first literal-prepare call, so the prelude is never program state.
-            if snap_image {
-                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
-                blk.call_void(
-                    "js_snap_image_begin",
-                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
-                );
-            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -844,6 +835,18 @@ pub(super) fn compile_module_entry(
                 let prepare_addr =
                     format!("ptrtoint (ptr @__perry_prepare_literals_{} to i64)", prefix);
                 blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
+            }
+            // Image run: the baseline is taken after the runtime prelude and the
+            // eager literal pools (strings, function info, ordinary-object shape
+            // registrations), right before the first module body, so none of
+            // them is program state. Deferred pools prepare in their own wrapper
+            // and stay after the baseline.
+            if snap_image {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_image_begin",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
             }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {

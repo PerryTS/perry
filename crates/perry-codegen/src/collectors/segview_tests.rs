@@ -86,6 +86,7 @@ fn for_stmt(destructure: Vec<Stmt>, body: Vec<Stmt>) -> Stmt {
             body: vec![Stmt::Throw(Expr::LocalGet(12))],
         }),
         finally: None,
+        forof_completion: None,
     });
     Stmt::For {
         init: Some(Box::new(let_(RESULT, "__result_7", for_of_next()))),

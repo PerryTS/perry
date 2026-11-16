@@ -475,6 +475,7 @@ fn stmts_return_value(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_return_value(body)
                 || catch.as_ref().is_some_and(|c| stmts_return_value(&c.body))
@@ -860,6 +861,7 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             body,
             catch,
             finally,
+            ..
         } => {
             walk_stmts(body, depth, scan);
             if let Some(c) = catch {
@@ -1169,6 +1171,7 @@ fn judge_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 judge_stmt(st, env, number_arrays, integer_locals, ready, out);
@@ -1563,6 +1566,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body, param_id, uses);
                 if let Some(catch) = catch {
@@ -1609,6 +1613,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 contains_loop(body)
                     || catch

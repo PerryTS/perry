@@ -275,6 +275,7 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 any_stmt(body, f)
                     || catch.as_ref().is_some_and(|c| any_stmt(&c.body, f))

@@ -87,6 +87,7 @@ impl SH for Stmt {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 tag(h, 13);
                 body.hash(h);

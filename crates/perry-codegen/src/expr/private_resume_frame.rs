@@ -204,6 +204,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
                         body: vec![],
                     }),
                     finally: None,
+                    forof_completion: None,
                 },
             )?;
             Ok(Some(group.reread(ctx, incoming)?))

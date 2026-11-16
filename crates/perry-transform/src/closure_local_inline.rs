@@ -730,6 +730,7 @@ pub(crate) fn nested_stmt_lists(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {
@@ -762,6 +763,7 @@ fn nested_stmt_lists_ref(s: &Stmt) -> Vec<&Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {

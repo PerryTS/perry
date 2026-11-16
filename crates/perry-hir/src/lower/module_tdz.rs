@@ -476,6 +476,7 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
             body,
             catch,
             finally,
+            ..
         } => {
             rw_stmts(body, rw);
             if let Some(catch) = catch {

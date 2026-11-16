@@ -29,6 +29,14 @@
 //! generator body hoists its locals with `undefined`): GetIterator throws
 //! a TypeError on those when the loop starts (7.4.3 GetMethod), before any
 //! step, so no step sees them; the record's start keeps the runtime path.
+//! Beside them the local may hold the iterator object a `GetIterator` site
+//! stands for (`Model::get_iterator_src`, the `[iterator#n]` template: what
+//! its source's `@@iterator` returns when that is not the source). When
+//! every value of that source (and of its summary-instance copies) is such a
+//! generator, `undefined` or `null`, `@@iterator` is
+//! `%IteratorPrototype%[@@iterator]` (27.1.4.1), which returns the generator
+//! itself, or GetIterator throws: the object is never born, and what the
+//! site returns is the source's value, which reaches the local as itself.
 //! With interpreted code in the program nothing is claimed.
 
 use crate::bindings::ModuleBindings;
@@ -114,6 +122,35 @@ fn intrinsic_generator(
         })
 }
 
+/// `t` is a `GetIterator` site's iterator object whose source holds only
+/// intrinsic generators (or `undefined`/`null`): it is never born (the
+/// module comment).
+fn unborn_iterator(
+    m: &Model,
+    t: Tok,
+    copies: &FxHashMap<NodeId, Vec<NodeId>>,
+    generator: &dyn Fn(Tok) -> bool,
+) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let Some(&src) = m.get_iterator_src.get(&tm) else {
+        return false;
+    };
+    std::iter::once(src)
+        .chain(copies.get(&src).into_iter().flatten().copied())
+        .all(|n| {
+            m.nodes.get(n as usize).is_some_and(|node| {
+                node.prim & !(UNDEF | NULL) == 0
+                    && node
+                        .pts
+                        .to_sorted()
+                        .into_iter()
+                        .all(|s| s != TOP && generator(s))
+            })
+        })
+}
+
 pub(crate) fn collect(
     g: &Gen<'_>,
     bindings: &mut [ModuleBindings],
@@ -175,10 +212,11 @@ pub(crate) fn collect(
                 }
                 continue;
             }
+            let generator = |t: Tok| intrinsic_generator(m, t, &keys, op, &owned);
             let ok = sabotage
-                || toks
-                    .iter()
-                    .all(|&t| t != TOP && intrinsic_generator(m, t, &keys, op, &owned));
+                || toks.iter().all(|&t| {
+                    t != TOP && (generator(t) || unborn_iterator(m, t, &copies, &generator))
+                });
             b.generator_source = ok;
             if let Some(p) = probe.as_deref_mut() {
                 p.push(format!(

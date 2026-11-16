@@ -64,6 +64,7 @@ fn synthetic_counter_inits(stmts: &[Stmt]) -> Vec<Expr> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out);
                     if let Some(c) = catch {

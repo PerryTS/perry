@@ -1175,6 +1175,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             body,
             catch,
             finally,
+            forof_completion,
         } => Stmt::Try {
             body: substitute_stmts(body, substitutions),
             catch: catch.as_ref().map(|c| CatchClause {
@@ -1182,6 +1183,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
                 body: substitute_stmts(&c.body, substitutions),
             }),
             finally: finally.as_ref().map(|f| substitute_stmts(f, substitutions)),
+            forof_completion: *forof_completion,
         },
         Stmt::Switch {
             discriminant,

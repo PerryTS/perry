@@ -32,6 +32,7 @@ pub(super) fn for_each_child_list<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a [Stmt])
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -253,6 +254,7 @@ pub(super) fn declarations_to_assignments(stmts: &mut Vec<Stmt>, ids: &HashMap<u
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         declarations_to_assignments(body, ids);
                         if let Some(c) = catch {

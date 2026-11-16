@@ -193,6 +193,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt(s, out, env);
@@ -284,6 +285,7 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 widen_lets_stmt(s, sets);

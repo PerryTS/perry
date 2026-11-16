@@ -220,6 +220,7 @@ fn collect_direct_call_closures_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_direct_call_closures_in_stmts(body, out);
                 if let Some(catch) = catch {
@@ -330,6 +331,7 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
             body,
             catch,
             finally,
+            ..
         } => {
             count += body.iter().map(count_stmt_nodes).sum::<usize>();
             count += catch
@@ -482,6 +484,7 @@ fn scan_capture_use_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_capture_use_stmt(s, in_loop, uses);

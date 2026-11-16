@@ -53,6 +53,7 @@ pub(crate) fn plain_async_step_release_ids(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out);
                     if let Some(catch) = catch {

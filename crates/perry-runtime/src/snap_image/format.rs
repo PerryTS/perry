@@ -18,7 +18,32 @@ pub const PENDING: u32 = 0b111;
 pub const STOP_NO_FORM: u8 = 0;
 pub const STOP_SLOT_OUTSIDE: u8 = 1;
 pub const STOP_NOT_CELL_START: u8 = 2;
-/// The class tables grew between the baseline and the cut (`value` = rows).
+/// Names of the class tables, in the order `snap_image_table_sizes` reports them.
+pub const CLASS_TABLE_NAMES: [&str; 20] = [
+    "declarations",
+    "parent_dense",
+    "static_methods",
+    "static_accessors",
+    "string_member_orders",
+    "method_bind_lengths",
+    "static_method_bind_lengths",
+    "registered_class_ids",
+    "parents",
+    "fetch_parent_kind",
+    "generic_origin",
+    "extends_error",
+    "has_instance",
+    "to_string_tag",
+    "constructors",
+    "constructor_flags",
+    "extends_data_view",
+    "extends_typed_array",
+    "names",
+    "lengths",
+];
+pub const CLASS_TABLE_COUNT: usize = CLASS_TABLE_NAMES.len();
+/// A class table grew between the baseline and the cut (`cell` = table index in
+/// `CLASS_TABLE_NAMES`, `value` = rows added); one stop per growing table.
 pub const STOP_CLASS_TABLES: u8 = 3;
 /// A slot-claim key longer than 4 KiB or not UTF-8 (`cell` = claim index).
 pub const STOP_CLAIM_KEY: u8 = 4;
@@ -66,6 +91,8 @@ pub enum Val {
     /// An address inside the persistent-symbol space (a symbol cell): no
     /// form of its own yet, so a word of this kind stops the image.
     Sym(u64),
+    /// A word the cell does not hold: restore derives it (kind `DERIVED_*`); zero in the bytes.
+    Derived(u8),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,6 +126,8 @@ pub struct Image {
     /// until the cut, in claim order (index = `claims_from` + position).
     pub claims_from: u32,
     pub claims: Vec<Vec<u8>>,
+    /// The module-path registry entries the module inits added, for replay.
+    pub registry: Vec<RegRec>,
 }
 
 fn put_val(o: &mut Vec<u8>, v: &Val) {
@@ -132,6 +161,10 @@ fn put_val(o: &mut Vec<u8>, v: &Val) {
         Val::Sym(x) => {
             o.push(4);
             o.extend(x.to_le_bytes());
+        }
+        Val::Derived(k) => {
+            o.push(5);
+            o.push(*k);
         }
     }
 }
@@ -168,6 +201,7 @@ pub fn encode(img: &Image) -> Vec<u8> {
     }
     o.extend(img.pending.to_le_bytes());
     o.extend(img.claims_from.to_le_bytes());
+    o.extend(registry_blob(&img.registry));
     o.extend(claims_blob(&img.claims));
 
     o
@@ -208,4 +242,63 @@ pub fn claims_replay_matches(from: u32, claims: &[Vec<u8>], now: &[(Vec<u8>, u32
             .zip(now)
             .enumerate()
             .all(|(i, (k, (nk, ni)))| k == nk && *ni == from + i as u32)
+}
+
+/// The `entries` word of a Map header: the store's inline entry payload.
+pub const DERIVED_MAP_ENTRIES: u8 = 1;
+/// The `entries` word of a Map store: its own inline entry payload.
+pub const DERIVED_STORE_ENTRIES: u8 = 2;
+/// A word of a Map store's native key indexes: rebuilt from the entries.
+pub const DERIVED_STORE_INDEX: u8 = 3;
+
+/// Bits of `Image::pending` (see `PENDING`).
+pub const PENDING_SHAPES: u32 = 0b001;
+pub const PENDING_ATOMS: u32 = 0b010;
+pub const PENDING_TOKENS: u32 = 0b100;
+
+/// The shape counters moved between the baseline and the cut (`value` = rows).
+pub const STOP_SHAPES_MINTED: u8 = 5;
+/// More than the primary's class-template token was claimed (`value` = next token).
+pub const STOP_TOKENS: u8 = 6;
+/// An untraced word of a cell holds an address that is not the binary's (`off`, `value`).
+pub const STOP_RAW_HEAP_WORD: u8 = 7;
+/// A Map keyed by something other than strings and numbers (`obj_type` = the cell).
+pub const STOP_MAP_KEYS: u8 = 8;
+/// A module-path registry entry that is not Registered or Initialized, or has no form.
+pub const STOP_REGISTRY: u8 = 9;
+
+/// One module-path registry entry the module inits added.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegRec {
+    pub key: Vec<u8>,
+    /// Offset of the init function from the start of the executable image.
+    pub init_off: u64,
+    /// 0 registered, 2 initialized.
+    pub status: u8,
+    pub exports: Option<Val>,
+    pub factory: Option<Val>,
+}
+
+fn put_opt(o: &mut Vec<u8>, v: &Option<Val>) {
+    match v {
+        None => o.push(0),
+        Some(v) => {
+            o.push(1);
+            put_val(o, v);
+        }
+    }
+}
+
+/// The replay record as section bytes: count, then per entry key, init offset, status, exports, factory.
+pub fn registry_blob(recs: &[RegRec]) -> Vec<u8> {
+    let mut o = (recs.len() as u32).to_le_bytes().to_vec();
+    for r in recs {
+        o.extend((r.key.len() as u32).to_le_bytes());
+        o.extend(&r.key);
+        o.extend(r.init_off.to_le_bytes());
+        o.push(r.status);
+        put_opt(&mut o, &r.exports);
+        put_opt(&mut o, &r.factory);
+    }
+    o
 }

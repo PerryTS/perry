@@ -523,6 +523,7 @@ impl HirTypeEnv {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_stmts_declarations(body);
                 if let Some(catch) = catch {
