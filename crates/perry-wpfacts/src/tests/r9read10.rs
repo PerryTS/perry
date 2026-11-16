@@ -95,3 +95,57 @@ fn r9read10_c6_store_on_builtin_fn_kept() {
     let v = sites(&pf, "toArray");
     assert!(v.iter().any(|x| x.starts_with("No(\"receiver is a builtin")), "{v:?}");
 }
+
+const LEN: &str = "class W { length: number; constructor() { this.length = 2; } }
+const n = Number(process.argv[2] ?? \"3\");
+const x: any = n > 2 ? new W() : n > 1 ? Number : Math.max;
+";
+
+/// l1 (RED before): `length` of a builtin constructor and a builtin method
+/// value is their own data property, a Number (20.2.4.1); the class arm
+/// reads its own slot.
+#[test]
+fn r9read10_l1_builtin_fn_own_length() {
+    let pf = facts(&format!("{LEN}console.log(x.length);"));
+    assert!(proven(&sites(&pf, "length")));
+}
+
+/// l1b (RED before): builtin function arms only.
+#[test]
+fn r9read10_l1b_builtin_fn_only_length() {
+    let pf = facts("const n = Number(process.argv[2] ?? \"3\");
+const x: any = n > 1 ? Number : Math.max;
+console.log(x.length);");
+    assert!(proven(&sites(&pf, "length")));
+}
+
+/// KEEP l2: `delete` of the configurable own `length`.
+#[test]
+fn r9read10_l2_delete_length_kept() {
+    let pf = facts(&format!("{LEN}delete (Math.max as any).length;\nconsole.log(x.length);"));
+    assert!(!proven(&sites(&pf, "length")));
+}
+
+/// KEEP l3: `Object.defineProperty` replaces it by an accessor.
+#[test]
+fn r9read10_l3_define_getter_kept() {
+    let pf = facts(&format!(
+        "{LEN}Object.defineProperty(Math.max, \"length\", {{ get() {{ return 9; }} }});\nconsole.log(x.length);"
+    ));
+    assert!(!proven(&sites(&pf, "length")));
+}
+
+/// KEEP l4: an unknown-key delete reaching the function.
+#[test]
+fn r9read10_l4_unknown_key_delete_kept() {
+    let pf = facts(&format!("{LEN}delete x[process.argv[3] ?? \"q\"];\nconsole.log(x.length);"));
+    assert!(!proven(&sites(&pf, "length")));
+}
+
+/// KEEP l5: a store of `length` on the function (non-writable: it changes
+/// nothing, but the model refuses any store that reaches the key).
+#[test]
+fn r9read10_l5_store_length_kept() {
+    let pf = facts(&format!("{LEN}(Number as any).length = 5;\nconsole.log(x.length);"));
+    assert!(!proven(&sites(&pf, "length")));
+}
