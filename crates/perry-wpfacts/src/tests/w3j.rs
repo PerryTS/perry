@@ -104,3 +104,34 @@ fn w3j_a_k3_replaced_array_iterator_runs() {
     let (v, dump) = verdict(&src, "v", "\"IT\"");
     assert_ne!(v, Verdict::Dead, "iterator body runs\n{dump}");
 }
+
+// B (S6b): `process.cwd` read as a value and called (`?.()`, an alias):
+// the bound method of the process object runs its declared body
+// (js_process_cwd: a string, nothing else), as the direct call does
+// (ECMA-262 13.3.9 OptionalChain: only a nullish test of the callee value;
+// 13.3.6.2 EvaluateCall: `this` is ignored by the bound method).
+const CWD: &str = "class M { v = 1; }\nconst m = new M();\n";
+
+// B-R1 (RED on base): the optional call and the alias call do not reach
+// unknown code.
+#[test]
+fn w3j_b_r1_cwd_value_call_is_declared() {
+    for call in ["const s = process.cwd?.() ?? \"\";", "const f = process.cwd; const s = f();"] {
+        let src = format!("{CWD}{call}\nconsole.log(s.length, m.v);\n");
+        let (tops, held) = top_origins(&src);
+        assert!(!held, "{call}: realm not held; unknown values {tops:?}");
+        assert!(!tops.iter().any(|t| t.contains("Process")), "{call}: {tops:?}");
+    }
+}
+
+// B-K1 (KEEP): a program function stored as `process.cwd` (by argv) is
+// what the optional call runs: its body is reached.
+#[test]
+fn w3j_b_k1_program_cwd_runs() {
+    let src = format!(
+        "{CWD}if (process.argv[2] === \"x\") (process as any).cwd = () => {{ console.log(\"PC\", m.v); return \"p\"; }};\n\
+         const s = process.cwd?.() ?? \"\";\nconsole.log(s.length);\n"
+    );
+    let (v, dump) = verdict(&src, "v", "\"PC\"");
+    assert_ne!(v, Verdict::Dead, "program cwd body runs\n{dump}");
+}
