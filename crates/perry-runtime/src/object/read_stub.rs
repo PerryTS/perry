@@ -72,8 +72,16 @@ fn bucket_of(token: u64, key_bits: u64) -> usize {
     // Multiplicative mixing taking the TOP bits of the product. An SSO key's
     // LOW bits are its first byte, so a low-bit index collapses a whole key
     // family onto a few buckets — measured on the write side before #8977.
-    let h = (token ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    ((h >> 40) as usize) & (READ_STUB_BUCKETS - 1)
+    // The token is mixed BEFORE it meets the key: layout words of one program
+    // are consecutive rows and short keys differ in their first byte's low
+    // bits, so a bare `token ^ key_bits` maps (row r, key k) and (row r ^ d,
+    // key k ^ d) to one bucket. Three such pairs thrash a two-way bucket, and
+    // which pairs meet moved with every program's row numbering.
+    // The index is the product's TOP bits, a single shift with no mask, so
+    // the token's own multiply costs nothing over the old `token ^ key` hash.
+    let h = (token.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ key_bits)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> (64 - READ_STUB_BUCKETS.trailing_zeros())) as usize
 }
 
 /// An entry word with this bit set is a CONFIRMED ABSENCE, not a slot: an
@@ -333,3 +341,27 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
 #[cfg(test)]
 #[path = "read_stub_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bucket_mix_tests {
+    use super::bucket_of;
+
+    /// Consecutive layout rows with one-byte keys that differ in the same low
+    /// bits must not share buckets by construction (`token ^ key` did: every
+    /// pair below collided).
+    #[test]
+    fn row_and_key_low_bits_do_not_cancel() {
+        let mut pairs = 0;
+        let mut same = 0;
+        for row in 0x8000_0080u64..0x8000_00A0 {
+            for k in 0x61u64..0x67 {
+                for d in 1u64..8 {
+                    pairs += 1;
+                    same += usize::from(bucket_of(row, k) == bucket_of(row ^ d, k ^ d));
+                }
+            }
+        }
+        assert_eq!(pairs, 1344);
+        assert!(same <= 8, "{same} of {pairs} cancelling pairs share a bucket");
+    }
+}
