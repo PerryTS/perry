@@ -1777,6 +1777,10 @@ const __memDispatch = {
     ? v[Symbol.iterator]() : v,
   rt_iterableToArray: (v) => __iterableToArray(v),
   rt_arrayIterationPatched: () => __arrayIterationPatched(),
+  rt_requireObjectCoercible: (v) => {
+    if (v == null) throw new TypeError('Cannot convert undefined or null to object');
+    return v;
+  },
   generator_new: (record, paramCount) => {
     const gen = Object.create(__GeneratorPrototype);
     __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
