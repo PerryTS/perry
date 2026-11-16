@@ -50,6 +50,12 @@ pub const ANY_MEMBER: &str = "*";
 pub struct PatchedBuiltins {
     entries: BTreeSet<(String, String)>,
     pub dynamic_code_reach: crate::dynamic_code::DynamicCodeReach,
+    /// MATHB1: lower every direct namespace call as the pair
+    /// `NamespacePatched(ns) ? <generic> : <intrinsic>`, so the whole-program
+    /// facts see its member read (wpfacts `IntrinsicCallee`). Off in the
+    /// compiler (`PERRY_NS_PAIRS=1` turns it on for a facts run); the
+    /// facts-on lowering of phase B2 picks one arm from the verdict.
+    pub namespace_pairs: bool,
 }
 impl PatchedBuiltins {
     pub fn new() -> Self {
@@ -61,7 +67,9 @@ impl PatchedBuiltins {
     /// sites under such reach test it — `Pristine(family)` in perry-codegen
     /// `builtin_proto`, and [`namespace_call_guarded`])?
     pub fn is_inert(&self) -> bool {
-        self.entries.is_empty() && !self.dynamic_code_reach.disables_builtin_constants()
+        self.entries.is_empty()
+            && !self.dynamic_code_reach.disables_builtin_constants()
+            && !self.namespace_pairs
     }
 }
 impl std::ops::Deref for PatchedBuiltins {
@@ -607,6 +615,7 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
 pub fn namespace_call_guarded() -> bool {
     with_set(|s| {
         s.dynamic_code_reach.disables_builtin_constants()
+            || s.namespace_pairs
             || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
     })
     .unwrap_or(false)
