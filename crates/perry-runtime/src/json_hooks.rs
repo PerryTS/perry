@@ -65,7 +65,12 @@ pub(crate) unsafe fn parse(text: *const StringHeader) -> JSValue {
         .map_or_else(JSValue::undefined, |parse| parse(text))
 }
 pub(crate) fn scan_parser_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if let Some(scan) = SCAN_PARSE.get() {
+    let scan = SCAN_PARSE.peek();
+    // Scanner fixtures control their root registry. Hook::get's test fallback
+    // would install unrelated scanners in the middle of that collection.
+    #[cfg(test)]
+    let scan = scan.or(Some(crate::json::scan_parser_roots_mut));
+    if let Some(scan) = scan {
         scan(visitor);
     }
 }
