@@ -2014,6 +2014,7 @@ js_link_path_module_parent	void	f64
 js_literal_shape_initialize	void	f64,ptr,ptr,i32u
 js_load_module	i64	i64,i64
 js_loop_interrupt	void	
+js_loop_settle_once	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64
 js_main_thread_notified	i32s	
@@ -2908,6 +2909,7 @@ js_parcel_watcher_unsubscribe	ptr	ptr,i64,f64
 js_parcel_watcher_write_snapshot	ptr	ptr,ptr,f64
 js_parse_float	f64	ptr
 js_parse_int	f64	ptr,f64
+js_parse_int_value	f64	f64,f64
 js_path_arg_header	i64	f64
 js_path_basename	ptr	ptr
 js_path_basename_ext	ptr	ptr,ptr
