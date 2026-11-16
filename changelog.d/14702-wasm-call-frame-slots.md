@@ -1,4 +1,3 @@
-On the web target `console.log(n, arr.join(","))` and other calls that take an
-`arr.join()`, `toReversed()`, `toSorted()`, `with()`, `toSpliced()`, `copyWithin()`, `keys()`,
-`values()` or `entries()` argument keep their other arguments, instead of
-printing the array in place of an earlier one.
+Regression tests pin that a wasm `join` inside a call argument and the array
+bridge calls (`toReversed`, `toSorted`, `toSpliced`, `with`, `copyWithin`,
+`entries`, `keys`, `values`) open their own argument frame (fix in #14742).
