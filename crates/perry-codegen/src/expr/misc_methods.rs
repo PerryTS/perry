@@ -1210,13 +1210,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Math.hypot(x) = |x|
                 return Ok(ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &v)]));
             }
-            let mut acc = lower_math_operand(ctx, &values[0])?;
-            for v in &values[1..] {
-                let rhs = lower_math_operand(ctx, v)?;
-                let blk = ctx.block();
-                acc = blk.call(DOUBLE, "js_math_hypot", &[(DOUBLE, &acc), (DOUBLE, &rhs)]);
-            }
-            Ok(acc)
+            let exprs: Vec<&Expr> = values.iter().collect();
+            super::dispatch::with_math_operands(ctx, &exprs, |ctx, vals| {
+                let mut acc = vals[0].clone();
+                for rhs in &vals[1..] {
+                    let blk = ctx.block();
+                    acc = blk.call(DOUBLE, "js_math_hypot", &[(DOUBLE, &acc), (DOUBLE, rhs)]);
+                }
+                Ok(acc)
+            })
         }
 
         // -------- RegExpExecGroups — reads thread-local from the last exec() call --------
