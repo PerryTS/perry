@@ -1427,7 +1427,17 @@ impl Model {
             self.add_prim(e, prim::NUM | prim::BIGINT);
         }
         let seed = seed && !b1e;
-        if self.hard.contains_key(&t) {
+        if let Some(&(was, _)) = self.hard.get(&t) {
+            // R9BIRTH8: a B1 mark (bytes only, rule B1E) is the one kind a
+            // typed array's named keys survive (`derive::native_own_free`):
+            // a later mark of any other kind replaces it, so the entry
+            // names a kind that may reach a named key whenever one did.
+            if was == Hard::B1Exposed && kind != Hard::B1Exposed {
+                self.hard.insert(t, (kind, reason));
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, seed);
+                }
+            }
             // HARD so far only through named data definitions: this mark is
             // the first that may write any field (rule D1).
             if seed && self.hard_unseeded.remove(&t) {

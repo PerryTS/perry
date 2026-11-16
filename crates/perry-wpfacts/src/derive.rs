@@ -1832,11 +1832,11 @@ fn indexed_length(
                 if is_typed && why_indexed() {
                     let a = s.key;
                     eprintln!(
-                        "WHY_INDEXED {} marker={} escaped={:?} hard={} writers={} relink={} acc={}",
+                        "WHY_INDEXED {} marker={} escaped={:?} hard={:?} writers={} relink={} acc={}",
                         m.tok_name(t),
                         m.is_marker(t),
                         m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone()),
-                        m.hard.contains_key(&t),
+                        m.hard.get(&t).map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize])),
                         m.writers.get(&(tm, a)).is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty()),
                         m.super_relink.contains(&t),
                         m.accessor_keys.get(&t).is_some_and(|k| !k.is_empty()),
@@ -3476,12 +3476,35 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };
-            m.writers
-                .get(&(tm, a))
-                .is_none_or(|w| w.ctor.is_empty() && w.post.is_empty())
+            // R9BIRTH8: a store never creates an own key that the chain
+            // holds as an accessor without a setter: [[Set]] of a typed
+            // array under a non-numeric key is OrdinarySet (10.4.5.5), which
+            // reaches the accessor and returns false (10.1.9.2 step 7: a
+            // TypeError in strict code). `%TypedArray%.prototype`'s `buffer`,
+            // `byteLength`, `byteOffset` and `length` are such (23.2.3.2,
+            // 23.2.3.3, 23.2.3.4, 23.2.3.21) while no builtin prototype is
+            // written (`builtin_protos_unwritten`, checked by the caller).
+            let getter_only = matches!(fam, NativeFamily::TypedArray)
+                && matches!(
+                    &*m.atoms[a as usize],
+                    "buffer" | "byteLength" | "byteOffset" | "length"
+                );
+            (getter_only
+                || m.writers
+                    .get(&(tm, a))
+                    .is_none_or(|w| w.ctor.is_empty() && w.post.is_empty()))
                 && !m.super_relink.contains(&t)
                 && !m.is_escaped(t)
-                && !m.hard.contains_key(&t)
+                && m.hard.get(&t).is_none_or(|&(k, _)| {
+                    // R9BIRTH8: B1 (a `.buffer` read, a view over a shared
+                    // buffer) lets other holders write the view's bytes
+                    // only: an integer-indexed exotic object's buffer
+                    // backs its canonical numeric keys (10.4.5.2-5,
+                    // 10.4.5.15/16), never an ordinary key, so no own
+                    // named key appears (`mark_hard_as`: a later mark of
+                    // another kind replaces B1).
+                    k == crate::model::Hard::B1Exposed && matches!(fam, NativeFamily::TypedArray)
+                })
                 && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
         }
     }
