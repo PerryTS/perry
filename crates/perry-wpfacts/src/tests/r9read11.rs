@@ -181,10 +181,30 @@ fn r9read11_c2_chain_has_key_kept() {
     assert!(!proven(&sites(&pf, "ci")), "ci");
 }
 
-/// KEEP c3: a computed-key store may write `ci` with another value.
+/// c3: a computed-key store may write `ci` with another value, a known
+/// function. The key is an unknown string: it may name `ci` (OrdinarySet,
+/// 10.1.9.2: an own data property on the ordinary instance), but it is
+/// never `__proto__` (OPTIMISTIC, owner 2026-11-16), so the instance's
+/// [[Prototype]] stays its class prototype. [[Get]] of `ci` then finds
+/// the own data property, whose values are every store of `ci` on the
+/// token (A, B, and the stored function), or nothing: the callee set
+/// {T::A, T::B, the stored function} is closed, beside the TypeError
+/// arm. (Before the owner rule the unknown key might be `__proto__`, so
+/// the instance was relinked and the site refused.) c3b guards that the
+/// stored value is in the set.
 #[test]
-fn r9read11_c3_computed_store_kept() {
+fn r9read11_c3_computed_store_known_fn() {
     let pf = facts(&format!("{TRACK}ts[0][process.argv[3] ?? \"z\"] = function () {{ return 4; }};\n{CI}"));
+    assert!(proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c3b: the computed-key store's value is unknown (a global read under
+/// an unknown key): the callee set holds it, so it is not closed.
+#[test]
+fn r9read11_c3b_computed_store_unknown_value_kept() {
+    let pf = facts(&format!(
+        "{TRACK}ts[0][process.argv[3] ?? \"z\"] = (globalThis as any)[process.argv[4]];\n{CI}"
+    ));
     assert!(!proven(&sites(&pf, "ci")), "ci");
 }
 
