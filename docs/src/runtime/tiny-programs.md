@@ -66,8 +66,8 @@ filled by the JSON engine installer. The common root scanner visits stringify
 caches directly and parser caches through an engine-installed slot; generic TLS
 cache initialization remains independent of this selection.
 
-Direct parsing, `JSON.rawJSON`, and computed native JSON methods retain the
-engine. Native-module imports, UI/plugin programs, workers, and data imports
+Direct parsing, runtime JSON-file `require`, `JSON.rawJSON`, and computed
+native JSON methods retain the engine. Native-module imports, UI/plugin programs, workers, and data imports
 also retain it conservatively: their return adapters and callbacks can parse
 JSON without a JavaScript parse call. A JSON namespace used as a value, an escaped global
 object, supported dynamic code, or native-addon access retains the full JSON
