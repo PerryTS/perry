@@ -8,6 +8,49 @@ fn run_web_source(source: &str) -> String {
 /// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, STUB_DOM, after_boot)
+}
+
+/// The runtime injects a `<style>` at load, so `document` must exist even for
+/// programs that never build a widget.
+const STUB_DOM: &str = r#"
+const stub = {appendChild() {}, style: {}};
+globalThis.document = {createElement: () => ({...stub}), getElementById: () => null, head: stub, body: stub};
+"#;
+
+/// Enough of the DOM for a perry/ui widget to be built, inspected and sent an
+/// event: an element tree with text, attributes as properties, listeners that
+/// `dispatch(type)` fires, and descendant tag selectors for `querySelector`.
+const WIDGET_DOM: &str = r#"
+class FakeElement {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
+  get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
+  set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { this.text = ""; this.children = []; }
+  setAttribute(name, value) { this[name] = String(value); }
+  descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
+  querySelector(selector) {
+    let found = this;
+    for (const tag of selector.toUpperCase().split(" ")) {
+      found = found.descendants().find(e => e.tagName === tag);
+      if (!found) return null;
+    }
+    return found;
+  }
+}
+globalThis.document = {createElement: tag => new FakeElement(tag), getElementById: () => null, head: new FakeElement("head"), body: new FakeElement("body")};
+"#;
+
+/// `run_web_source_then` against `WIDGET_DOM`; `after_boot` finds the widgets in
+/// the runtime's `uiHandles`.
+fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, WIDGET_DOM, after_boot)
+}
+
+fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     // The HIR transforms `perry --target web` runs before wasm emission.
@@ -32,8 +75,7 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let script = format!(
         r#"
 globalThis.window = globalThis;
-const stub = {{appendChild() {{}}, style: {{}}}};
-globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () => null, head: stub, body: stub}};
+{dom}
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
@@ -631,6 +673,26 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 #[test]
+fn table_update_row_count_renders_the_new_rows() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Table, Text, tableSetColumnHeader, tableUpdateRowCount } from "perry/ui";
+const table = Table(3, 1, (row: number, col: number) => Text("r" + row));
+tableSetColumnHeader(table, 0, "Name");
+tableUpdateRowCount(table, 4);
+"#,
+            r#"
+const table = [...uiHandles.values()].find(e => e.tagName === "TABLE");
+const rows = table.querySelector("tbody").children;
+console.log(table.querySelector("thead tr").textContent + " " + rows.length + " " + rows[rows.length - 1].textContent);
+"#
+        ),
+        "Name 4 r3"
+    );
+}
+
+#[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(
         run_web_source(
@@ -655,6 +717,26 @@ console.log(bump(5) + " " + total);
 "#
         ),
         "1 3 3\nab-\n7 2"
+    );
+}
+
+// `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
+// is a symbol, as `ImageSymbol(name)` is.
+#[test]
+fn image_keeps_alt_text_in_both_forms() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+import { Image } from "perry/ui";
+Image("x.png", "photo");
+Image({ url: "y.png", alt: "avatar" });
+Image({ systemName: "gear" });
+"#,
+            r#"
+for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.textContent);
+"#
+        ),
+        "x.png photo\ny.png avatar\n\u{2b1c} gear"
     );
 }
 
@@ -684,6 +766,23 @@ console.log(d.next("hi").value);
 }
 
 #[test]
+fn section_renders_its_children_after_the_legend() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Section, Text } from "perry/ui";
+Section("Contact", [Text("phone"), Text("email")]);
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+console.log(fieldset.children.map(c => c.tagName + ":" + c.textContent).join(" "));
+"#
+        ),
+        "LEGEND:Contact SPAN:phone SPAN:email"
+    );
+}
+
+#[test]
 fn for_of_and_destructuring_drive_the_iterator_protocol() {
     assert_eq!(
         run_web_source(
@@ -708,6 +807,27 @@ console.log(p + q);
 "#
         ),
         "closed\n12\na=1\nb=2\n[h][é]\n7\n8,9\n9"
+    );
+}
+
+// perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
+#[test]
+fn picker_on_change_is_called_with_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Picker, pickerAddItem } from "perry/ui";
+const picker = Picker((index: number) => { console.log("picker " + index); });
+pickerAddItem(picker, "first");
+pickerAddItem(picker, "second");
+"#,
+            r#"
+const select = [...uiHandles.values()].find(e => e.tagName === "SELECT");
+select.selectedIndex = 1;
+select.dispatch("change");
+"#
+        ),
+        "picker 1"
     );
 }
 

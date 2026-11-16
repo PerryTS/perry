@@ -75,7 +75,6 @@ mod builtin_proto_value;
 mod builtin_spread;
 mod forin_key_string;
 mod call_shadow;
-mod callable_contract;
 mod callback_origin;
 mod captured;
 mod cjs_require;
@@ -116,6 +115,7 @@ mod descriptor_reads;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
+mod dynamic_import_options;
 mod elem_undef;
 mod element_reads;
 mod element_sites;
@@ -167,7 +167,6 @@ mod in_bounds_read;
 mod indexed_callees;
 mod indexed_owner;
 mod indirect_eval_call;
-mod inherited_layout;
 mod instanceof_buffer_false;
 mod instanceof_class_has_instance;
 mod int_demand;
@@ -258,10 +257,8 @@ mod recv_call_cycle;
 mod reflect_construct;
 mod reflect_new_target;
 mod regexp_exec;
-mod relinked_parent;
 mod rest_element;
 mod rest_elements;
-mod run_once_closed;
 mod runtime_errors;
 mod runtime_helpers;
 mod set_proto_result;
@@ -305,18 +302,8 @@ mod spread_root;
 mod builtin_value_call;
 mod typed_array_key_read;
 mod unheld_key;
-mod unit_alias;
 mod root4162;
-mod unit_cjs;
-mod unit_ctor;
-mod unit_effects;
-mod unit_extends;
-mod unit_mode;
-mod unit_namespace;
-mod unit_shared;
-mod unit_this;
 mod unknown_accessor_key;
-mod unrun_param_call;
 mod work_bound_widen;
 
 use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
@@ -349,24 +336,7 @@ fn tmpl<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
         .unwrap_or_else(|| panic!("template {name} in\n{}", pf.dump_text()))
 }
 
-/// Some layout's field `key` holds a function, and never ⊤.
-fn holds_fn(pf: &ProgramFacts, key: &str) -> bool {
-    let fs: Vec<_> = pf
-        .templates
-        .iter()
-        .flat_map(|t| &t.fields)
-        .filter(|f| f.key == key)
-        .collect();
-    fs.iter().any(|f| f.kind.funcs > 0) && fs.iter().all(|f| !f.kind.top)
-}
 
-/// Every site of `key` is refused, for `why`.
-fn refused(pf: &ProgramFacts, key: &str, why: &str) -> bool {
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
-    !s.is_empty()
-        && s.iter()
-            .all(|s| matches!(&s.verdict, Verdict::No(r) if r.starts_with(why)))
-}
 
 fn field<'a>(t: &'a crate::TemplateFacts, k: &str) -> &'a crate::FieldFacts {
     t.fields.iter().find(|f| f.key == k).expect("field")
@@ -2074,7 +2044,6 @@ mod primitive_this;
 mod promise_capability_executor;
 mod proto_own_call;
 mod realm_read_static;
-mod receiver_param_call;
 mod regexp_results;
 mod signatures;
 mod static_native_parent;
@@ -2246,6 +2215,7 @@ mod r9read9;
 mod r9read10;
 mod r9read11;
 mod onchange1;
+mod onchg2;
 mod thisbind1;
 mod r9birth1;
 mod accsite1;

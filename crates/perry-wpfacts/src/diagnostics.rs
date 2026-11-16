@@ -1601,23 +1601,6 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     out
 }
 
-/// Existing contract summary, observed only after fact derivation.
-pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
-    format!(
-        "{{\"unknown\":{},\"why\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
-        c.unknown,
-        why_json(c),
-        c.prim,
-        strings(c.fns.iter().map(|f| f.name.clone())),
-        strings(
-            c.arrays
-                .iter()
-                .chain(&c.made_arrays)
-                .chain(&c.arrayboxes)
-                .cloned()
-        )
-    )
-}
 
 /// The reason an unknown value contract is unknown and the unit that
 /// published it, as JSON (`null` when it is known or has no recorded reason).

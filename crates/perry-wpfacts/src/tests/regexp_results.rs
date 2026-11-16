@@ -8,18 +8,6 @@
 //! the captures are then what that code returns, unknown.
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
 
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
@@ -199,31 +187,6 @@ fn written_exec_split_capture_call_is_unknown() {
     unproven(src, "return x()", "()");
 }
 
-/// Two modules: what `tests` sees of the program, per unit or whole.
-fn facts_of_modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
 
 /// CHB13/CHB14: a RegExp object holds `lastIndex` as an own non-configurable
 /// data property (22.2.3.1 RegExpAlloc), and `new RegExp(p, f)` reads only
@@ -261,4 +224,43 @@ fn stored_last_index_is_read_back() {
     let src = "class K { k = 1; }\nconst r: any = /a/g;\nr.lastIndex = new K();\nconsole.log(r.lastIndex.k);\n";
     let v = verdict_at(&facts_of(src, false), src, "console.log(r.lastIndex", "k");
     assert!(proven(&v), "whole r.lastIndex.k: {v:?}");
+}
+
+fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
+}
+
+/// Two modules: what `tests` sees of the program, per unit or whole.
+fn facts_of_modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

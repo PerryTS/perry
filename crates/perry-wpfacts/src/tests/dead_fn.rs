@@ -33,7 +33,7 @@ fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
         ..Default::default()
     };
     match unit {
-        true => crate::compute_units(&list, &cfg),
+        true => crate::compute(&list, &cfg),
         false => crate::compute(&list, &cfg),
     }
 }

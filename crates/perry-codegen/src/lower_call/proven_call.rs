@@ -50,12 +50,12 @@ const ARMS_CAP: usize = 4;
 
 /// Whether the target's ABI lets a call pass more arguments than a body
 /// declares (wasm's `call_indirect` checks the signature).
-fn native_abi(ctx: &FnCtx<'_>) -> bool {
+pub(crate) fn native_abi(ctx: &FnCtx<'_>) -> bool {
     !ctx.target_triple.contains("wasm")
 }
 
 /// The symbol of one body of this module.
-fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
+pub(crate) fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
     if b.closure {
         Some(crate::fn_info::closure_body_symbol(
             &ctx.strings.module_prefix(),
@@ -328,7 +328,7 @@ pub(crate) fn try_lower_proven_static_call(
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the
 /// function object `callee_box`, receiver `this_bits`, over lowered
 /// arguments `args` (`hir_args` their HIR).
-fn emit_proven_call(
+pub(crate) fn emit_proven_call(
     ctx: &mut FnCtx<'_>,
     bodies: &[FactsBody],
     symbols: &[String],

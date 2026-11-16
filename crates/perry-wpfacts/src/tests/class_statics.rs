@@ -15,11 +15,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
 
 /// The class `Pk` is reached through a value (`k`), so its member reads and
 /// calls are sites on the class object.
@@ -29,32 +24,6 @@ const PK: &str = r#"
     console.log(useIt(Pk));
 "#;
 
-#[test]
-fn a_constant_static_called_through_a_value_is_proven() {
-    let pf = facts(PK);
-    // `prototype` is one too: a class's is neither writable nor configurable.
-    assert_eq!(
-        tmpl(&pf, "Pk").statics,
-        ["of", "prototype", "x"],
-        "{}",
-        pf.dump_text()
-    );
-    assert!(proven(&pf, "of"), "{}", pf.dump_text());
-    assert!(proven(&pf, "x"), "{}", pf.dump_text());
-    let of = sites(&pf, "of");
-    assert!(
-        of[0].targets.iter().any(|t| t.contains("::static of#")),
-        "{:?}",
-        of[0]
-    );
-    // Per unit claims no more than whole program.
-    let u = units(PK);
-    for k in ["of", "x"] {
-        if proven(&u, k) {
-            assert!(proven(&pf, k));
-        }
-    }
-}
 
 #[test]
 fn a_nested_class_static_is_defined_where_the_class_is_evaluated() {

@@ -201,7 +201,7 @@ impl<'a> Gen<'a> {
             }
             let token = fi.token;
             let n = fi.params.len();
-            let name = crate::contracts::fn_contract_name(self, f).0;
+            let name = crate::fn_contract_name(self, f).0;
             let broken = unit_in.broken(&format!("fn:{name}"));
             let runs = unit_in.ctor_runs.get(&name);
             if broken {

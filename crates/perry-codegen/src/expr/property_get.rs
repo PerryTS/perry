@@ -418,6 +418,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `undefined`, and require node-identical output. They run the
             // inline arm now instead of the generic tower.
             && (matches!(object.as_ref(), Expr::LocalGet(id) if ctx.array_record_length_local == Some(*id))
+                || crate::expr::index_get::proven_array::receiver_is_proven_array(ctx, object)
                 || is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
@@ -459,6 +460,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     super::held_len::length_read(ctx, *arr_id, &cached)?;
                     return Ok(cached);
                 }
+            }
+            // A receiver the facts give `Arr`: the header length, an integer.
+            if let Some(length) = crate::expr::index_get::proven_array::lower_length(ctx, object)? {
+                return Ok(length);
             }
             if is_array_expr(ctx, object) {
                 let recv_box = lower_expr(ctx, object)?;

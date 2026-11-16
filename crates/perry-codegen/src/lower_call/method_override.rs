@@ -1921,7 +1921,49 @@ pub(super) fn emit_guarded_direct_method_call(
     }
 
     // ONCHG1: the own late-slot value's arm (see the hole block above).
-    if let Some((own_idx, _, word)) = &late_own {
+    // ONCHG2: where the facts prove the call's callee set is closed compiled
+    // closures / declarations (`late_call_bodies`), the own value is one of
+    // them (13.3.6.2: the callee is the member read's value): its body is
+    // called with the value as its function object (10.2.1 [[Call]]: the
+    // closure's environment) and the receiver as `this`; one body takes no
+    // test, several one info compare per body but the last.
+    let late_bodies = late_own
+        .as_ref()
+        .filter(|_| !ctx.wpfacts_off && super::proven_call::native_abi(ctx))
+        .and_then(|_| {
+            let at = (
+                crate::codegen::signature_entry::method_site_offset(),
+                property.to_string(),
+            );
+            (at.0 != 0).then_some(())?;
+            ctx.wpfacts.late_call_bodies.get(&at).cloned()
+        })
+        .and_then(|bodies| {
+            let symbols = bodies
+                .iter()
+                .map(|b| super::proven_call::body_symbol(ctx, b))
+                .collect::<Option<Vec<_>>>()?;
+            Some((bodies, symbols))
+        });
+    if let (Some((own_idx, _, word)), Some((bodies, symbols))) = (&late_own, &late_bodies) {
+        crate::facts_consumed::used();
+        ctx.current_block = *own_idx;
+        let callee_box = ctx.block().bitcast_i64_to_double(word);
+        let this_bits = ctx.block().bitcast_double_to_i64(recv_box);
+        let value = super::proven_call::emit_proven_call(
+            ctx,
+            bodies,
+            symbols,
+            &callee_box,
+            &this_bits,
+            fallback_user_args,
+            source_args,
+        );
+        let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        layout_misses.push((value, truthy, end));
+    } else if let Some((own_idx, _, word)) = &late_own {
         ctx.current_block = *own_idx;
         let (args_ptr, args_len) = fallback_args_buffer(ctx, fallback_user_args);
         let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
