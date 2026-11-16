@@ -7484,7 +7484,8 @@ pub(crate) struct SnapShapeState {
 /// What changed in the shape state between two [`SnapShapeState`]s. A record is minted
 /// when its id is absent at begin, changed when it exists at both and its state bytes
 /// differ, retired when it is absent at the cut.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 pub(crate) struct SnapShapeDelta {
     /// Minted records by id band: static (compile-time ids), ordinary, dictionary, exotic.
     pub minted: [u32; 4],
