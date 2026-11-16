@@ -56,6 +56,10 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 // themselves are the realm declaration's rows (the runtime's
                 // `lazy_declared_statics_are_the_realm_sources` checks them).
                 "statics" => continue,
+                // The family whose prototype (and constructor) its birth links
+                // as the [[Prototype]] (`class C extends P`): a birth fact, as
+                // `lazy`; the realm declaration states the same edge.
+                "extends" | "extends_prototype" => continue,
                 other => return Err(format!("unknown constructor family field {other}")),
             };
             let value = if field == "prototype_callable" {

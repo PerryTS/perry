@@ -182,20 +182,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     }
     // The thread realm births no family here (each is born by its own
     // observation); a vm realm births each one in the loop below.
-    let typed_array_intrinsic_ctor = if super::is_thread_realm_global(singleton()) {
-        std::ptr::null_mut()
-    } else {
-        ensure_typed_array_intrinsic().0
-    };
-    // Constructors: ClosureHeader-backed so typeof is "function".
-    // #4533: native error subclasses must link to `Error` / `Error.prototype`.
-    // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
-    // so these are populated before the subclass iterations consume them.
-    let mut birth = FamilyBirthState {
-        error_ctor_bits: None,
-        error_proto_bits: None,
-        typed_array_intrinsic_ctor,
-    };
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
         // A `vm` realm shares the thread's Buffer (named residual: the vm
@@ -268,7 +254,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         } else if thread_realm {
             unborn_constructor(declaration.identity, closure_ptr)
         } else {
-            birth_family(declaration, closure_ptr, &singleton, &mut birth)
+            birth_family(declaration, closure_ptr, &singleton)
         };
         if name == "Storage" {
             // Node: `localStorage` / `sessionStorage` are accessors whose
@@ -634,13 +620,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
 /// Install `%TypedArray%.prototype.toString` as the same closure object as
 /// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
 /// The realm state one family's birth reads from the families born before it.
-pub(super) struct FamilyBirthState {
-    pub(super) error_ctor_bits: Option<u64>,
-    pub(super) error_proto_bits: Option<u64>,
-    pub(super) typed_array_intrinsic_ctor: *mut crate::closure::ClosureHeader,
-}
-
-/// A per-kind typed-array family (its constructor links to %TypedArray%).
 fn is_typed_array_kind(name: &str) -> bool {
     matches!(
         name,
@@ -660,65 +639,47 @@ fn is_typed_array_kind(name: &str) -> bool {
 }
 
 /// (child, parent, the constructor also inherits) for the interface families.
-const INTERFACE_PARENTS: [(&str, &str, bool); 7] = [
-    ("Buffer", "Uint8Array", true),
-    ("AbortSignal", "EventTarget", true),
-    ("Performance", "EventTarget", true),
-    ("BroadcastChannel", "EventTarget", true),
-    ("CustomEvent", "Event", true),
-    ("MessageEvent", "Event", true),
-    ("DOMException", "Error", false),
-];
-
-/// A lazy interface child's links to its (eager) parent, made in its birth:
-/// the same two links the population makes for an eager child.
-fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
-    let Some(&(_, parent, constructor_inherits)) =
-        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
-    else {
-        return;
-    };
-    let Some(parent) = crate::object::BuiltinConstructorIdentity::for_name(parent) else {
-        return;
-    };
-    // The `extends` rule: the child's birth observes its parent. Reading the
-    // parent's constructor births the parent family (its first observation),
-    // so the constructor edge exists whichever family was observed first.
-    let parent_ctor = if constructor_inherits {
-        crate::array::intrinsic_constructor_addr(parent)
-    } else {
-        0
-    };
-    let parent_proto = crate::array::intrinsic_prototype_addr(parent);
-    if parent_ctor != 0 {
-        crate::closure::closure_set_static_prototype(
-            closure_ptr as usize,
-            crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
-        );
+/// `class C extends P` for a family `C` (its declaration's `extends`):
+/// `C.prototype` inherits from `P.prototype` and, unless `C` is an interface
+/// whose constructor does not inherit, `C` from `P`. Asking for `P`'s cells
+/// births `P`.
+fn link_extends_parent(
+    declaration: &BuiltinConstructorDeclaration,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    proto_obj: *mut ObjectHeader,
+) {
+    if let Some(parent) = declaration.constructor_extends {
+        let parent_ctor = crate::array::intrinsic_constructor_addr(parent);
+        if parent_ctor != 0 {
+            crate::closure::closure_set_static_prototype(
+                closure_ptr as usize,
+                crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
+            );
+        }
     }
-    if parent_proto != 0 && !proto_obj.is_null() {
-        super::super::prototype_chain::object_set_static_prototype(
-            proto_obj as usize,
-            crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
-        );
+    if let Some(parent) = declaration.extends {
+        let parent_proto = crate::array::intrinsic_prototype_addr(parent);
+        if parent_proto != 0 && !proto_obj.is_null() {
+            super::super::prototype_chain::object_set_static_prototype(
+                proto_obj as usize,
+                crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
+            );
+        }
     }
 }
 
-/// One builtin family's birth after its constructor exists: the prototype,
-/// the constructor's own properties, the prototype's members and hooks, and
-/// the realm's [[Intrinsics]] entry. Returns the constructor value.
-// Once per family, compacted like the population that calls it. One instance
-// for both callers (the population and `birth_lazy_family`): the realm global
-// comes as `&dyn Fn`, so the body is not monomorphized per caller.
 #[optimize(size)]
 fn birth_family(
     declaration: &BuiltinConstructorDeclaration,
     closure_ptr: *mut crate::closure::ClosureHeader,
     singleton: &dyn Fn() -> *mut ObjectHeader,
-    state: &mut FamilyBirthState,
 ) -> f64 {
     let name = declaration.name;
-    let typed_array_intrinsic_ctor = state.typed_array_intrinsic_ctor;
+    let typed_array_intrinsic_ctor = if is_typed_array_kind(name) {
+        ensure_typed_array_intrinsic().0
+    } else {
+        std::ptr::null_mut()
+    };
     // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
     // on the constructor closure so rebound usage like
     // `const O = Object; O.keys(x)` dispatches through the real helpers.
@@ -802,11 +763,6 @@ fn birth_family(
     // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
     if name == "Error" {
         ERROR_CONSTRUCTOR_PTR.with(|cell| cell.set(closure_ptr as usize));
-        state.error_ctor_bits = Some(ctor_value.to_bits());
-    } else if is_native_error_subclass_constructor(name) {
-        if let Some(proto_bits) = state.error_ctor_bits {
-            crate::closure::closure_set_static_prototype(closure_ptr as usize, proto_bits);
-        }
     }
     if name == "Iterator" {
         crate::object::iterator_ctor::bind_constructor(proto_obj, ctor_value);
@@ -920,26 +876,13 @@ fn birth_family(
         // here and linked into each subclass prototype's chain. Without this
         // `Object.getPrototypeOf(TypeError.prototype) !== Error.prototype`
         // (test262 NativeErrors/*/prototype/proto.js).
-        if name == "Error" {
-            state.error_proto_bits =
-                Some(crate::value::js_nanbox_pointer(proto_obj as i64).to_bits());
-        } else if is_native_error_subclass_constructor(name) {
-            if let Some(proto_bits) = state.error_proto_bits {
-                super::super::prototype_chain::object_set_static_prototype(
-                    proto_obj as usize,
-                    proto_bits,
-                );
-            }
-        }
         if super::super::native_module::is_worker_messaging_constructor(name) {
             crate::messaging_hook_slots::populate_messaging_prototype(name, proto_obj, ctor_value);
             if name == "BroadcastChannel" {
                 crate::event_target_hook_slots::install_web_event_proto_methods(name, proto_obj);
             }
         }
-        if declaration.lazy {
-            link_interface_parent(name, closure_ptr, proto_obj);
-        }
+        link_extends_parent(declaration, closure_ptr, proto_obj);
         if name == "Storage" {
             crate::web_storage::install_storage_prototype(proto_obj, ctor_value);
         }
@@ -1117,10 +1060,6 @@ fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
     if crate::array::intrinsic_prototype_addr_if_bound(identity) != 0 {
         return;
     }
-    // A native error's prototype chain starts at %Error.prototype%: born first.
-    if is_native_error_subclass_constructor(declaration.name) {
-        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Error);
-    }
     let mut ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
     if ctor == 0 {
         // Born before %Global%: the thread realm's constructor is made here,
@@ -1148,24 +1087,11 @@ fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
     let _no_move = crate::gc::GcSuppressScope::new();
     // %Global% is observed only by the installs that need it.
     let global = || (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    let bits =
-        |addr: usize| (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits());
-    let error = crate::object::BuiltinConstructorIdentity::Error;
-    let mut state = FamilyBirthState {
-        error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
-        error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
-        typed_array_intrinsic_ctor: if is_typed_array_kind(declaration.name) {
-            ensure_typed_array_intrinsic().0
-        } else {
-            std::ptr::null_mut()
-        },
-    };
     super::super::own_override::as_builtin_definition(|| {
         birth_family(
             declaration,
             ctor as *mut crate::closure::ClosureHeader,
             &global,
-            &mut state,
         );
         unsafe { crate::object::builtin_proto::seal_born_family(declaration.name, identity) };
     });
