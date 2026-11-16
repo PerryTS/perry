@@ -1,4 +1,7 @@
 // f(...inst) where inst's class declares *[Symbol.iterator](): the spread calls the member and drains the generator exactly as node does.
+// DEC 250: %GeneratorPrototype%.next is locked in a compiled program, so the patch is refused and the drain calls the builtin next.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 const log = [];
 function f(...a) { return a.join(","); }
 function g(a, b, c, d) { return [a, b, c, d].join(","); }
@@ -57,9 +60,9 @@ console.log("own", f(...own), f(...v).split(",").length);
 class Gp { *[Symbol.iterator]() { yield 1; yield 2; } }
 const GenProto = Object.getPrototypeOf(Object.getPrototypeOf((new Gp())[Symbol.iterator]()));
 const realNext = GenProto.next;
-GenProto.next = function (...a) { const r = realNext.apply(this, a); if (!r.done) r.value *= 10; return r; };
+locked(() => { GenProto.next = function (...a) { const r = realNext.apply(this, a); if (!r.done) r.value *= 10; return r; }; });
 console.log("patched-next", f(...new Gp()));
-GenProto.next = realNext;
+locked(() => { GenProto.next = realNext; });
 console.log("restored-next", f(...new Gp()));
 
 // The member replaced on the prototype after the class (r2's case): generic path, still correct.

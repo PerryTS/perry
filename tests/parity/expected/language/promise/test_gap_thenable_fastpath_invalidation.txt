@@ -3,8 +3,6 @@ DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only
 DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
 DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
 DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
-DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
-DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
 DEC 250: Cyclic __proto__ value
 DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
 DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program

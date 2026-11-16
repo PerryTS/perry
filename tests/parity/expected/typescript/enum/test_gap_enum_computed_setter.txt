@@ -1,1 +1,2 @@
-1.5 Captured 1.5
+DEC 250: Cannot add member Object.prototype.Captured: built-in objects are read-only in a compiled program
+0 Captured Captured,1.5

@@ -11,8 +11,11 @@
 //
 // Module code is strict, so a strict getter keeps the raw primitive `this`
 // rather than a boxed wrapper — which is exactly the value being asserted.
+// DEC 250: the primitive prototypes' toString and toLocaleString are locked in a compiled program, so the accessors are refused and toLocaleString runs the builtins.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 
-Object.defineProperty(Boolean.prototype, "toString", {
+locked(() => { Object.defineProperty(Boolean.prototype, "toString", {
   configurable: true,
   get: function (this: any) {
     const seen = typeof this;
@@ -21,12 +24,12 @@ Object.defineProperty(Boolean.prototype, "toString", {
       return seen + ":" + String(value);
     };
   },
-});
+}); });
 
 console.log("true:", (true as any).toLocaleString());
 console.log("false:", (false as any).toLocaleString());
 
-Object.defineProperty(String.prototype, "toString", {
+locked(() => { Object.defineProperty(String.prototype, "toString", {
   configurable: true,
   get: function (this: any) {
     const seen = typeof this;
@@ -34,12 +37,12 @@ Object.defineProperty(String.prototype, "toString", {
       return seen;
     };
   },
-});
+}); });
 
 console.log("string:", ("abc" as any).toLocaleString());
 
 // A getter installed on `Symbol.prototype` sees the symbol itself.
-Object.defineProperty(Symbol.prototype, "toString", {
+locked(() => { Object.defineProperty(Symbol.prototype, "toString", {
   configurable: true,
   get: function (this: any) {
     const seen = typeof this;
@@ -47,7 +50,7 @@ Object.defineProperty(Symbol.prototype, "toString", {
       return seen;
     };
   },
-});
+}); });
 
 console.log("symbol:", (Symbol("s") as any).toLocaleString());
 
@@ -68,22 +71,22 @@ console.log("object:", obj.toLocaleString());
 
 // The ordinary DATA-property path must keep working — the accessor lookup is
 // an addition to it, not a replacement.
-Object.defineProperty(Boolean.prototype, "toString", {
+locked(() => { Object.defineProperty(Boolean.prototype, "toString", {
   configurable: true,
   value: function (this: any) {
     return "data:" + typeof this;
   },
   writable: true,
-});
+}); });
 
 console.log("data:", (true as any).toLocaleString());
 
 // A present NON-CALLABLE must throw (`Invoke` -> `Call`), not collapse into the
 // "native behavior still applies" fallback.
-Object.defineProperty(String.prototype, "toString", {
+locked(() => { Object.defineProperty(String.prototype, "toString", {
   configurable: true,
   value: 42,
-});
+}); });
 try {
   ("abc" as any).toLocaleString();
   console.log("data noncallable: missed");
@@ -92,12 +95,12 @@ try {
 }
 
 // The same distinction matters when an accessor resolves the value.
-Object.defineProperty(Boolean.prototype, "toString", {
+locked(() => { Object.defineProperty(Boolean.prototype, "toString", {
   configurable: true,
   get: function () {
     return null;
   },
-});
+}); });
 try {
   (true as any).toLocaleString();
   console.log("accessor noncallable: missed");
@@ -107,10 +110,10 @@ try {
 
 // TypedArray.prototype.toLocaleString performs the same Invoke operation for
 // each numeric element, through the shared prototype resolver.
-Object.defineProperty(Number.prototype, "toLocaleString", {
+locked(() => { Object.defineProperty(Number.prototype, "toLocaleString", {
   configurable: true,
   value: 42,
-});
+}); });
 try {
   new Int32Array([1]).toLocaleString();
   console.log("typed array noncallable: missed");

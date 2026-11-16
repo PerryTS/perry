@@ -1,0 +1,3 @@
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+1 [ 1, 2 ] 2 [ 1, 2 ] 3 Promise { 1 } true [object Object]

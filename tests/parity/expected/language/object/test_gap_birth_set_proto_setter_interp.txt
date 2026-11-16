@@ -1,0 +1,4 @@
+DEC 250: Cannot add member Object.prototype.v: built-in objects are read-only in a compiled program
+interp-class 7 v
+interp-literal 3 v
+interp-fnobj 4 v
