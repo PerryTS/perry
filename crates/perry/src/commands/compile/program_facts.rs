@@ -1057,6 +1057,39 @@ fn elision_for(
             out.local_classes.insert(*id, cid);
         }
     }
+    // ONCHG2: the named method calls proven to call one of a closed set of
+    // compiled closures / declarations of this module (`T0Mono` / `T0Set`
+    // whose `target_bodies` is the set): the value the member read gives is
+    // one of them (13.3.6.2), so the call runs that body with the function
+    // object as its environment and the receiver as `this` (10.2.1). The
+    // bodies of every record at an offset are joined (each record bounds its
+    // own evaluations); a record proving less leaves the offset out. A
+    // receiver that may be a primitive, `undefined`, `null` or top keeps the
+    // site (no nullish arm here). Interpreted code may write any member
+    // (decision 150): as the method calls, only without the guard word.
+    if let Some(module) = pf.module_paths.iter().position(|p| p == path).filter(|_| !interp) {
+        let mut refused: std::collections::BTreeSet<(u32, String)> = Default::default();
+        for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
+            let at = (s.byte_offset, s.key.clone());
+            let fs = match s.verdict {
+                perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set
+                    if s.receiver_prims == 0 && !s.top =>
+                {
+                    bodies(&s.target_bodies)
+                }
+                _ => Vec::new(),
+            };
+            if fs.is_empty() || refused.contains(&at) {
+                out.late_call_bodies.remove(&at);
+                refused.insert(at);
+                continue;
+            }
+            let e = out.late_call_bodies.entry(at).or_default();
+            e.extend(fs);
+            e.sort();
+            e.dedup();
+        }
+    }
     // FVA 3.4: every class's constant statics (a static call names its class
     // by id, which may be another module's).
     if !interp {

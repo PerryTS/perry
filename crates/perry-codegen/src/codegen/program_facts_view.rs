@@ -663,6 +663,12 @@ pub struct ElisionFacts {
     /// `null` (never another primitive): the call tests it first, and the
     /// nullish edge is the complete member read, which throws.
     pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool)>,
+    /// ONCHG2: this module's named method calls `o.k(args)` whose callee set
+    /// is proven to be these compiled closures / declarations of this module
+    /// (wpfacts `SiteFacts::target_bodies` of `T0Mono` / `T0Set`), every
+    /// receiver an object. Codegen calls the loaded value's body directly
+    /// (`proven_call::emit_proven_call`) where it has loaded the value.
+    pub late_call_bodies: std::collections::BTreeMap<(u32, String), Vec<FactsBody>>,
 }
 
 impl ElisionFacts {
@@ -698,6 +704,7 @@ impl ElisionFacts {
             && self.accessor_sets.is_empty()
             && self.accessor_gets.is_empty()
             && self.method_calls.is_empty()
+            && self.late_call_bodies.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

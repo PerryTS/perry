@@ -131,6 +131,30 @@ pub(crate) fn bodies_of(m: &Model, n: NodeId) -> Vec<BodyRef> {
     out
 }
 
+/// ONCHG2: functions `fs` as bodies, when every one is a compiled closure or
+/// function declaration with a HIR id (no method, no function only another
+/// unit or the runtime has). Empty otherwise.
+pub(crate) fn bodies_of_fns(m: &Model, fs: impl Iterator<Item = crate::model::FnIdx>) -> Vec<BodyRef> {
+    let mut out: Vec<BodyRef> = Vec::new();
+    for f in fs {
+        let fi = &m.funcs[f as usize];
+        let closure = m.closures.contains(&f);
+        if fi.func_id == u32::MAX || !(closure || m.decls.contains(&f)) {
+            return Vec::new();
+        }
+        out.push(BodyRef {
+            module: fi.module,
+            func_id: fi.func_id,
+            params: fi.params.len() as u32,
+            plain: fi.rest.is_none() && !fi.has_arguments,
+            closure,
+        });
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// A stand-in describes another declaration unit's code, but still names
 /// the original emitted body. Consume that identity only in the defining
 /// source module: the native consumer cannot call a foreign module's HIR id.
