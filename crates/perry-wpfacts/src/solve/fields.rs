@@ -276,6 +276,13 @@ impl Model {
             }
         }
         if slot {
+            // Unknown code holding `t` runs the built-in operations that
+            // read the slot (`Promise.prototype.then` hands on
+            // [[PromiseResult]], 27.2.5.4 PerformPromiseThen): what it holds
+            // leaves with `t` (`escape_inner`), a slot made later too.
+            if let Some(&r) = self.escaped.get(&t) {
+                self.cons(n, Cons::TopSink { reason: r });
+            }
             return n;
         }
         let all = self.all_fields(t);
