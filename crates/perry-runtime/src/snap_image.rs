@@ -483,8 +483,9 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
 
 /// The address ranges of `/proc/self/maps` now.
 fn read_maps() -> Vec<(usize, usize)> {
-    use std::os::unix::ffi::OsStrExt;
-    let text = std::fs::read(std::ffi::OsStr::from_bytes(b"/proc/self/maps")).unwrap_or_default();
+    // A plain path, not OsStr::from_bytes: that is Unix-only and broke the Windows build.
+    // Where the file does not exist (macOS, Windows) the result is empty, as before.
+    let text = std::fs::read("/proc/self/maps").unwrap_or_default();
     parse_maps(&text)
 }
 
