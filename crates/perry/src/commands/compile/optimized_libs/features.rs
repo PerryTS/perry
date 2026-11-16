@@ -468,14 +468,21 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/turnloop".to_string());
     }
-    // A formatter-only program can reach stringify, without creating a global
-    // namespace or constructing parser/tape values. The full JSON installer
-    // also fills formatting slots when the JSON API itself is reachable.
-    let json_namespace = ctx.uses_global_json || (ctx.uses_json_format && addon_world);
-    if ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+    // Native return adapters, worker messages and data imports can parse JSON
+    // without a JsonParse HIR node. Without a producer proof across those
+    // boundaries, retain parsing even when the JS only serializes the result.
+    let json_engine = ctx.uses_json_engine
+        || !ctx.native_module_imports.is_empty()
+        || ctx.needs_ui
+        || ctx.needs_plugins
+        || ctx.uses_worker_threads
+        || ctx.uses_dynamic_import_options
+        || ctx.uses_get_builtin_module;
+    let json_namespace = ctx.uses_global_json || addon_world;
+    if json_engine && !json_namespace && !needs_dyn_eval {
         cross_features.push("perry-runtime/json-engine".to_string());
     }
-    if ctx.uses_json_format && !ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+    if ctx.uses_json_format && !json_engine && !json_namespace && !needs_dyn_eval {
         cross_features.push("perry-runtime/json-format".to_string());
     }
     // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
