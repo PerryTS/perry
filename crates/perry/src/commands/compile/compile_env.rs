@@ -381,6 +381,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_FACTS_WHY_ARRIVE", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_WHY_AT", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_WHY_LOOKUP", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
+    ("PERRY_FACTS_WHY_INDEXED", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_WPF_ANYFALL", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_WPF_ENUMDIAG", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_WPF_FILTER_CHECK", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
