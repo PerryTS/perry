@@ -1345,6 +1345,11 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     described_member(ns_statics(ns), name)
 }
 
+/// Does the realm declare `name` on namespace `ns` (MATHB1)?
+pub(crate) fn ns_declares(ns: BuiltinNs, name: &str) -> bool {
+    matches!(ns_member(ns, name), Some(Some(_)))
+}
+
 /// Is `name` an own static function of namespace `ns` (listed on the
 /// namespace itself, not found on its chain)?
 pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
