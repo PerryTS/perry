@@ -231,6 +231,8 @@ fn judge(name: &str, v: &Val) -> Judge {
         } else {
             Judge::Stop("more than one thread claimed a class-template token before the cut")
         }
+    } else if name.starts_with("perry_concat_site_") {
+        concat_site_word(v)
     } else if name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|q| is(q)) {
         Judge::Pristine
     } else {
@@ -249,12 +251,41 @@ struct Classified {
 /// word no symbol covers, one a static's rule stops, or one that holds a heap,
 /// stack or symbol-space address outside a pristine static, is unresolved.
 fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
+    classify_with(words, st, data_start, false)
+}
+
+/// Whether a path names a static the module-path replay record covers.
+fn covered_by_record(path: &str) -> bool {
+    path.split("::")
+        .any(|s| s == "MODULE_PATH_REGISTRY" || s == "PATH_MODULE_INIT_ADDRS")
+}
+
+/// One static as the judge sees it: every changed word of one symbol.
+struct Unit {
+    path: String,
+    size: u64,
+    kind: &'static str,
+    first: u64,
+    pristine: Vec<Word>,
+    bad: Vec<String>,
+    kept: Vec<Word>,
+}
+
+/// `classify`; with `record` the statics the replay record covers are dropped.
+/// The unit of judgement is the static (one symbol), never the word: a static
+/// with a stopped or unresolved word stops as a whole, a static with a
+/// pristine word is pristine as a whole, and the scalar words of a runtime
+/// container static (lengths, bump pointers, table sizes, slot indices) are
+/// never kept by value on their own.
+fn classify_with(words: &[Word], st: &Symtab, data_start: u64, record: bool) -> Classified {
     let mut c = Classified {
         kept: Vec::new(),
         dropped: 0,
         dropped_by: Default::default(),
         unresolved: Vec::new(),
     };
+    let mut units: Vec<Unit> = Vec::new();
+    let mut index: std::collections::BTreeMap<(bool, u64), usize> = Default::default();
     for w in words {
         let tls = w.region & format::WORD_TLS != 0;
         let (kind, a) = if tls {
@@ -263,26 +294,75 @@ fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
             ("data", data_start.wrapping_add(w.off))
         };
         let Some(s) = sym_at(if tls { &st.tls } else { &st.mem }, a) else {
-            c.unresolved
-                .push(format!("{kind}+{:#x}: no symbol names it", w.off));
+            c.unresolved.push(if tls {
+                format!("{kind}+{:#x}: unnamed TLS word (outside every named TLS symbol)", w.off)
+            } else {
+                format!("{kind}+{:#x}: no symbol names it", w.off)
+            });
             continue;
         };
-        let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, sym_path(&s.name), a - s.addr);
-        match judge(&s.name, &w.val) {
-            Judge::Pristine => {
-                c.dropped += 1;
-                *c.dropped_by.entry(sym_path(&s.name)).or_default() += 1;
-            }
-            Judge::Stop(why) => c.unresolved.push(format!("{at}: {why}")),
+        let path = sym_path(&s.name);
+        let at = format!("{kind}+{:#x} ({}+{:#x})", w.off, path, a - s.addr);
+        let j = if record && covered_by_record(&path) {
+            Judge::Pristine
+        } else {
+            judge(&s.name, &w.val)
+        };
+        let at_unit = *index.entry((tls, s.addr)).or_insert_with(|| {
+            units.push(Unit {
+                path: path.clone(),
+                size: s.size,
+                kind,
+                first: w.off,
+                pristine: Vec::new(),
+                bad: Vec::new(),
+                kept: Vec::new(),
+            });
+            units.len() - 1
+        });
+        let Some(u) = units.get_mut(at_unit) else {
+            continue;
+        };
+        match j {
+            Judge::Pristine => u.pristine.push(w.clone()),
+            Judge::Stop(why) => u.bad.push(format!("{at}: {why}")),
             Judge::Keep => match w.val {
-                Val::Opaque(x) => c.unresolved.push(format!(
+                Val::Opaque(x) => u.bad.push(format!(
                     "{at}: holds {x:#x}, a heap or stack address, and no pristine form covers it"
                 )),
-                Val::Sym(x) => c.unresolved.push(format!(
+                Val::Sym(x) => u.bad.push(format!(
                     "{at}: holds {x:#x}, a symbol-space address, and the symbol space has no image form"
                 )),
-                _ => c.kept.push(w.clone()),
+                _ => u.kept.push(w.clone()),
             },
+        }
+    }
+    for u in units {
+        if !u.bad.is_empty() {
+            c.unresolved.extend(u.bad);
+            if !u.kept.is_empty() {
+                c.unresolved.push(format!(
+                    "{}+{:#x} ({}): {} scalar word(s) are not kept by value; the static stops as one unit",
+                    u.kind,
+                    u.first,
+                    u.path,
+                    u.kept.len()
+                ));
+            }
+        } else if !u.pristine.is_empty() {
+            let n = u.pristine.len() + u.kept.len();
+            c.dropped += n;
+            *c.dropped_by.entry(u.path).or_default() += n;
+        } else if runtime_container(&u.path, u.size) {
+            c.unresolved.push(format!(
+                "{}+{:#x} ({}): {} scalar word(s) of a runtime container static; no declaration says they may be kept by value",
+                u.kind,
+                u.first,
+                u.path,
+                u.kept.len()
+            ));
+        } else {
+            c.kept.extend(u.kept);
         }
     }
     c
@@ -334,6 +414,7 @@ fn val_ll(v: &Val, ncells: usize) -> Result<(u64, String), String> {
         Val::Sym(x) => {
             return Err(format!("a value holds {x:#x}, a symbol-space address"));
         }
+        Val::Derived(k) => (5 | (u64::from(*k) << 8), "0".to_string()),
     })
 }
 
@@ -416,10 +497,15 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
             w.region, addr as i64
         ));
     }
+    for r in &img.registry {
+        for v in [&r.exports, &r.factory].into_iter().flatten() {
+            val_ll(v, nc).map_err(|m| format!("registry entry: {m}"))?;
+        }
+    }
     let ptr = |n: &str| format!("i64 ptrtoint (ptr @{n} to i64)");
     let mut ll = String::from("; Perry image run: the captured heap as link-time data\n\n");
     ll += &format!(
-        "@perry_snap_image = global <{{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }}> <{{ i64 {}, i64 {nc}, i64 {}, i64 {}, i64 {}, {}, {}, {}, {}, i64 {} }}>, section \"{SECTION}\", align 8\n",
+        "@perry_snap_image = global <{{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }}> <{{ i64 {}, i64 {nc}, i64 {}, i64 {}, i64 {}, {}, {}, {}, {}, i64 {}, {} }}>, section \"{SECTION}\", align 8\n",
         SECTION_MAGIC as i64,
         slot_rows.len(),
         word_rows.len(),
@@ -429,6 +515,11 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
         ptr("perry_snap_words"),
         ptr("perry_snap_claims"),
         img.claims_from,
+        ptr("perry_snap_registry"),
+    );
+    ll += &format!(
+        "@perry_snap_registry = global {}, section \"{SECTION}\", align 8\n",
+        bytes_ll(&format::registry_blob(&img.registry))
     );
     ll += &format!(
         "@perry_snap_claims = global {}, section \"{SECTION}\", align 8\n",
@@ -437,7 +528,7 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
     ll += &table("perry_snap_cells", nc, 2, &cell_rows);
     ll += &table("perry_snap_slots", slot_rows.len(), 3, &slot_rows);
     ll += &table("perry_snap_words", word_rows.len(), 4, &word_rows);
-    for n in ["perry_snap_cells", "perry_snap_slots", "perry_snap_words", "perry_snap_claims"] {
+    for n in ["perry_snap_cells", "perry_snap_slots", "perry_snap_words", "perry_snap_claims", "perry_snap_registry"] {
         used.push(format!("@{n}"));
     }
     ll += &cells;
@@ -483,11 +574,15 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
     let (nc, ns, nw, pending) = (rd(8)?, rd(16)?, rd(24)?, rd(32)?);
     let (tc, ts, tw) = (at(rd(40)?)?, at(rd(48)?)?, at(rd(56)?)?);
     let (cp, cf) = (at(rd(64)?)? as usize, rd(72)?);
+    let rp = at(rd(80)?)? as usize;
     let mut img = Image {
         pending: pending as u32,
         claims_from: cf as u32,
         claims: format::parse_claims_blob(sec.get(cp..).ok_or("the claim record is outside the section")?)
             .ok_or("the claim record is malformed")?,
+        registry: format_read::parse_registry_blob(sec.get(rp..).ok_or("the registry record is outside the section")?)
+            .ok_or("the registry record is malformed")?
+            .0,
         ..Image::default()
     };
     let mut user: std::collections::HashMap<u64, u32> = Default::default();
@@ -533,6 +628,7 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
                     off: a.wrapping_sub(base),
                 }
             }
+            5 => Val::Derived((info >> 8) as u8),
             k => return Err(format!("bad value kind {k}")),
         })
     };
@@ -734,28 +830,18 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         // Test only: name the words past a stop; the stop itself stays.
         if let Ok((syms, _, _)) = probe(b0) {
             if let Some(ds) = find_sym(&syms, "__data_start") {
-                let c = classify(&img.words, &syms, ds);
+                let c = classify_with(&img.words, &syms, ds, !img.registry.is_empty());
                 if !c.unresolved.is_empty() {
                     let _ = std::fs::write(unresolved_path(b0), c.unresolved.join("\n"));
                 }
             }
         }
     }
-    if let Some(t) = img.stops.iter().find(|t| t.kind == format::STOP_CLASS_TABLES) {
-        return Err(format!(
-            "the class tables grew by {} row(s) between the baseline and the cut, and the image has no form that restores them",
-            t.value
-        ));
+    if let Some(m) = class_table_message(&img.stops) {
+        return Err(m);
     }
-    if let Some(t) = img.stops.first() {
-        return Err(format!(
-            "{} cell(s) have no image form; first: cell {} type {} kind {} off {}",
-            img.stops.len(),
-            t.cell,
-            t.obj_type,
-            t.kind,
-            t.off
-        ));
+    if !img.stops.is_empty() {
+        return Err(stop_summary(&img.stops));
     }
     let (syms, secs, phdrs) = probe(b0)?;
     let need = |n: &str| find_sym(&syms, n).ok_or_else(|| format!("B0 has no symbol {n} (symbols stripped?)"));
@@ -767,7 +853,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
     if est > IMAGE_WINDOW {
         return Err(format!("the image needs about {est:#x} bytes, the window holds {IMAGE_WINDOW:#x}"));
     }
-    let c = classify(&img.words, &syms, data_start);
+    let c = classify_with(&img.words, &syms, data_start, !img.registry.is_empty());
     if !c.unresolved.is_empty() {
         let full = unresolved_path(b0);
         let _ = std::fs::write(&full, c.unresolved.join("\n"));
@@ -792,6 +878,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         pending: img.pending,
         claims_from: img.claims_from,
         claims: img.claims,
+        registry: img.registry,
     };
     Ok(Prepared {
         object,
@@ -867,6 +954,32 @@ pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
         p.b0_dump,
         format_read::dump(&got)
     ))
+}
+
+/// A runtime static (a Rust path) of more than one word: a container whose
+/// scalar words only mean something with its pointers.
+fn runtime_container(path: &str, size: u64) -> bool {
+    path.contains("::") && size > 8
+}
+
+/// A per-site concat table is a cache: slot k is 0 or the string the miss arm
+/// builds, so a changed word must be a string value (short string or string
+/// cell) and is then pristine; anything else stops.
+const STRING_TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+const SHORT_STRING_BITS: u64 = 0x7FF9_0000_0000_0000;
+const STRING_BITS: u64 = 0x7FFF_0000_0000_0000;
+
+fn concat_site_word(v: &Val) -> Judge {
+    let string = match v {
+        Val::Scalar(x) => x & STRING_TAG_MASK == SHORT_STRING_BITS,
+        Val::Cell { hi, bare, .. } => !*bare && u64::from(*hi) << 48 == STRING_BITS,
+        _ => false,
+    };
+    if string {
+        Judge::Pristine
+    } else {
+        Judge::Stop("a concat-site slot holds a value that is not a string")
+    }
 }
 
 #[cfg(test)]
@@ -1012,37 +1125,57 @@ mod tests {
     #[test]
     fn the_section_decodes_to_its_image() {
         let v = 0x1000_0000u64;
-        let mut s = vec![0u8; 200];
+        let mut s = vec![0u8; 300];
         let mut put = |o: usize, x: u64| s[o..o + 8].copy_from_slice(&x.to_le_bytes());
-        for (o, x) in [(0, SECTION_MAGIC), (8, 1), (16, 1), (24, 1), (32, 7), (40, v + 80), (48, v + 96), (56, v + 120)] {
+        for (o, x) in [(0, SECTION_MAGIC), (8, 1), (16, 2), (24, 1), (32, 7), (40, v + 88), (48, v + 104), (56, v + 152), (64, v + 208), (72, 3), (80, v + 224)] {
             put(o, x);
         }
-        put(64, v + 176);
-        put(72, 3);
-        put(80, v + 152);
-        put(88, 2 | 0x15 << 8 | 24 << 32);
-        put(96, 0);
-        put(104, 8);
-        put(112, 1);
-        for (o, x) in [(120, 0), (128, 0x600010), (136, 0), (144, 5)] {
+        put(88, v + 184);
+        put(96, 2 | 0x15 << 8 | 24 << 32);
+        for (o, x) in [(104, 0), (112, 8), (120, 1), (128, 0), (136, 16), (144, 5 | 3 << 8)] {
             put(o, x);
         }
-        put(160, (0x7FFDu64 << 48) | (v + 152 + 8));
+        for (o, x) in [(152, 0), (160, 0x600010), (168, 0), (176, 5)] {
+            put(o, x);
+        }
+        put(192, (0x7FFDu64 << 48) | (v + 184 + 8));
         let blob = format::claims_blob(&[b"ab".to_vec(), b"c".to_vec()]);
-        s[176..176 + blob.len()].copy_from_slice(&blob);
+        s[208..208 + blob.len()].copy_from_slice(&blob);
+        let rec = format::RegRec { key: b"k".to_vec(), init_off: 9, status: 2, exports: Some(Val::Cell { hi: 0x7FFD, bare: false, index: 0 }), factory: None };
+        let rb = format::registry_blob(std::slice::from_ref(&rec));
+        s[224..224 + rb.len()].copy_from_slice(&rb);
         let b = Bases { strings: 0, layouts: 0, atoms: 0, exe: 0x400000, data_start: 0x600000 };
         let got = decode_section(&s, v, &b).expect("decode");
-        let mut bytes = vec![0u8; 24];
-        bytes[0] = 0;
         let want = Image {
-            cells: vec![Cell { obj_type: 2, flags: 0x15, reserved: 0, size: 24, bytes, slots: vec![(8, Val::Cell { hi: 0x7FFD, bare: false, index: 0 })] }],
+            cells: vec![Cell { obj_type: 2, flags: 0x15, reserved: 0, size: 24, bytes: vec![0u8; 24], slots: vec![(8, Val::Cell { hi: 0x7FFD, bare: false, index: 0 }), (16, Val::Derived(3))] }],
             words: vec![word(format::WORD_DATA, 0x10, Val::Scalar(5))],
             stops: vec![],
             pending: 7,
             claims_from: 3,
             claims: vec![b"ab".to_vec(), b"c".to_vec()],
+            registry: vec![rec],
         };
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn registry_statics_are_dropped_only_when_a_record_covers_them() {
+        let t = parse_syms("Symbol table '.symtab' contains 1 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000     8 OBJECT  LOCAL  DEFAULT   24 MODULE_PATH_REGISTRY\n");
+        let ws = [word(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000))];
+        assert_eq!(classify(&ws, &t, 0x600000).unresolved.len(), 1);
+        let r = classify_with(&ws, &t, 0x600000, true);
+        assert_eq!((r.dropped, r.unresolved.len()), (1, 0));
+    }
+
+    #[test]
+    fn a_derived_slot_is_a_zero_word_in_the_ir() {
+        let img = Image {
+            cells: vec![Cell { obj_type: 8, flags: 0, reserved: 0, size: 16, bytes: vec![0u8; 16], slots: vec![(8, Val::Derived(1))] }],
+            ..Image::default()
+        };
+        let ll = image_ll(&img, &[], 0x600000).expect("ir");
+        assert!(ll.contains("[3 x i64] [i64 0, i64 8, i64 261]"), "{ll}");
+        assert!(ll.contains("@perry_snap_registry"));
     }
 
     #[test]
@@ -1084,4 +1217,121 @@ mod tests {
         assert!(check_b0_layout(&[], 0x80_0000).is_err());
         assert!(placeholder_ll().contains(SECTION));
     }
+}
+
+/// The reasons an image stops, one named line per (reason, cell type).
+fn stop_summary(stops: &[format::Stop]) -> String {
+    let mut by: std::collections::BTreeMap<(u8, u8), (usize, u64, u32)> = Default::default();
+    for t in stops {
+        let e = by.entry((t.kind, t.obj_type)).or_insert((0, t.value, t.off));
+        e.0 += 1;
+    }
+    let ty = |t: u8| match t {
+        5 => "promise",
+        8 => "Map",
+        20 => "regular expression",
+        21 => "regular expression program",
+        35 => "Map store",
+        41 => "regex cache",
+        _ => "cell",
+    };
+    let mut parts = Vec::new();
+    for ((kind, t), (n, value, off)) in by {
+        parts.push(match kind {
+            format::STOP_NO_FORM => format!("{n} {} cell(s) (type {t}) have no image form", ty(t)),
+            format::STOP_SLOT_OUTSIDE => format!("{n} slot(s) outside their cell (type {t})"),
+            format::STOP_NOT_CELL_START => format!("{n} slot(s) of type {t} name an address that is not a cell start"),
+            format::STOP_CLAIM_KEY => format!("{n} hot-slot claim key(s) too long or not UTF-8"),
+            format::STOP_SHAPES_MINTED => format!("{value} shape(s) were minted between the baseline and the cut and the image has no shape slab"),
+            format::STOP_TOKENS => format!("more than the primary's class-template token was claimed (next token {value})"),
+            format::STOP_RAW_HEAP_WORD => format!("{n} {} cell(s) (type {t}) hold a raw address outside the binary in an untraced word (first at offset {off}, value {value:#x})", ty(t)),
+            format::STOP_MAP_KEYS => format!("{n} Map store(s) are keyed by something other than strings and numbers"),
+            format::STOP_REGISTRY => format!("{n} module-path registry entr(ies) have no replay form"),
+            k => format!("{n} stop(s) of kind {k}"),
+        });
+    }
+    parts.join("; ")
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn the_class_table_stop_names_each_growing_table() {
+        let st = |cell: u32, value: u64| format::Stop { cell, obj_type: 0, kind: format::STOP_CLASS_TABLES, off: 0, value };
+        assert!(class_table_message(&[]).is_none());
+        let m = class_table_message(&[st(0, 5), st(18, 7)]).unwrap();
+        assert!(m.contains("12 row(s)") && m.contains("declarations +5") && m.contains("names +7"), "{m}");
+    }
+
+    const SY: &str = "Symbol table '.symtab' contains 5 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000    48 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5ATOMS\n    11: 0000000000600030     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern4SLOT\n    12: 0000000000600040   256 OBJECT  LOCAL  DEFAULT   24 perry_concat_site_dep__1\n    13: 0000000000600200    16 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5STATE\n    14: 0000000000000040     8 TLS     LOCAL  DEFAULT   20 perry_tls_y\n";
+
+    fn w(region: u8, off: u64, val: Val) -> Word {
+        Word { region, off, val }
+    }
+
+    #[test]
+    fn a_scalar_word_of_a_stopped_static_is_not_kept() {
+        let t = parse_syms(SY);
+        let ws = [
+            w(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000)),
+            w(format::WORD_DATA, 0x18, Val::Scalar(0x2be)),
+            w(format::WORD_DATA, 0x30, Val::Scalar(0x3e)),
+        ];
+        let c = classify(&ws, &t, 0x600000);
+        assert_eq!(c.kept.len(), 1, "only the single-word static stays: {:?}", c.unresolved);
+        assert!(c.unresolved.iter().any(|u| u.contains("ATOMS") && u.contains("stops as one unit")));
+    }
+
+    #[test]
+    fn the_scalar_words_of_a_runtime_container_are_not_kept() {
+        let t = parse_syms(SY);
+        let ws = [w(format::WORD_DATA, 0x208, Val::Scalar(5)), w(format::WORD_DATA, 0x30, Val::Scalar(7))];
+        let c = classify(&ws, &t, 0x600000);
+        assert_eq!(c.kept.len(), 1, "{:?}", c.unresolved);
+        assert!(c.unresolved.len() == 1 && c.unresolved[0].contains("STATE"));
+    }
+
+    #[test]
+    fn a_concat_site_slot_is_pristine_only_while_it_holds_a_string() {
+        let t = parse_syms(SY);
+        let s = Val::Scalar(0x7FF9_0000_0000_6e30);
+        let ok = classify(&[w(format::WORD_DATA, 0x40, s.clone()), w(format::WORD_DATA, 0x48, s)], &t, 0x600000);
+        assert!(ok.unresolved.is_empty() && ok.dropped == 2, "{:?}", ok.unresolved);
+        let bad = classify(&[w(format::WORD_DATA, 0x40, Val::Scalar(0x2a))], &t, 0x600000);
+        assert!(bad.unresolved.iter().any(|u| u.contains("not a string")), "{:?}", bad.unresolved);
+    }
+
+    #[test]
+    fn a_tls_word_outside_every_named_symbol_is_unnamed() {
+        let t = parse_syms(SY);
+        let c = classify(&[w(format::WORD_TLS, 0x2ef88, Val::Scalar(2))], &t, 0x600000);
+        assert!(c.unresolved.iter().any(|u| u.contains("unnamed TLS word")), "{:?}", c.unresolved);
+    }
+
+    #[test]
+    fn a_record_covers_only_the_registry_statics() {
+        let t = parse_syms(SY);
+        let ws = [w(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000))];
+        let r = classify_with(&ws, &t, 0x600000, true);
+        assert_eq!((r.dropped, r.unresolved.len()), (0, 1), "{:?}", r.unresolved);
+    }
+}
+
+/// The class-table stop text: the total rows and which table grew by how many.
+fn class_table_message(stops: &[format::Stop]) -> Option<String> {
+    let rows: Vec<_> = stops.iter().filter(|t| t.kind == format::STOP_CLASS_TABLES).collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let total: u64 = rows.iter().map(|t| t.value).sum();
+    let per: Vec<String> = rows
+        .iter()
+        .map(|t| format!("{} +{}", format::CLASS_TABLE_NAMES.get(t.cell as usize).copied().unwrap_or("?"), t.value))
+        .collect();
+    Some(format!(
+        "the class tables grew by {total} row(s) between the baseline and the cut ({}), and the image has no form that restores them",
+        per.join(", ")
+    ))
 }

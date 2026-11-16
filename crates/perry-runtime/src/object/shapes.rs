@@ -7470,3 +7470,12 @@ pub(crate) fn recompute_record_handle_carriers() {
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 #[path = "shapes_snap22.rs"]
 pub(crate) mod snap22;
+
+/// Shape ids and semantic generations handed out so far (image run: equal at begin and cut = no shape was minted).
+pub(crate) fn snap_image_shape_counts() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    SHAPE_ID_NEXT
+        .iter()
+        .map(|c| u64::from(c.load(Relaxed)))
+        .fold(SHAPE_SEMANTIC_NEXT.load(Relaxed), u64::wrapping_add)
+}
