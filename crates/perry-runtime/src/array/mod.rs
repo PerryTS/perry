@@ -354,6 +354,7 @@ pub use self::search::{
 pub use self::sort::{
     js_array_sort_default, js_array_sort_with_comparator, js_validate_array_comparator,
 };
+pub(crate) use self::splice_slice::{array_slice_value_to_index, index_operand_across};
 #[cfg(test)]
 pub(crate) use self::splice_slice::test_collect_after_splice_roots_once;
 pub use self::splice_slice::{
