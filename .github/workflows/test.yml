@@ -3497,6 +3497,8 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     runs-on: ubuntu-latest
+    # A hang bound well above a cold build of the instrumented graph.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -3527,8 +3529,8 @@ jobs:
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry-instr"
-          # The instrumented graph builds in target-instr; target/ holds the
-          # gc-effects analyzer that writes the sidecars.
+          # The instrumented graph builds in target-instr; sidecars.sh builds
+          # the gc-effects analyzer in target/ when the cache lacks it.
           workspaces: |
             . -> target
             . -> target-instr
