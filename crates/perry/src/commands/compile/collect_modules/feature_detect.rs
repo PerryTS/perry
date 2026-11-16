@@ -1938,6 +1938,7 @@ class C {
                         module,
                         &Default::default(),
                         &Default::default(),
+                        &Default::default(),
                     )
                 } else {
                     perry_hir::namespace_pairs::take_intrinsic_arms(module);

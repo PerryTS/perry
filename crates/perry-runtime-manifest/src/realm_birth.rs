@@ -141,6 +141,9 @@ pub(super) fn members_with_defaults(
                 default_attrs = 4;
             } else {
                 property.insert("value".into(), facts::constant(value)?);
+                if let Some(kind) = facts::runtime_type(value) {
+                    property.insert("type".into(), string(kind));
+                }
                 default_attrs = if symbol && label == "@@toStringTag" {
                     4
                 } else {

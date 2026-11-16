@@ -1955,6 +1955,9 @@ pub fn run_with_parse_cache(
             .collect(),
         &ctx.cache_dir,
         activation,
+        super::program_facts::native_externs(
+            ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
+        ),
     );
     // The optional-feature scan read each pair as its intrinsic arm
     // (`feature_detect::detect_program_optional_feature_usage`); a module
@@ -1965,7 +1968,10 @@ pub fn run_with_parse_cache(
         for (path, module) in ctx.native_modules.iter_mut() {
             let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
             let inactive = super::program_facts::namespace_pair_inactive(&program_facts, path);
-            if perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive) > 0 {
+            let aliases = super::program_facts::alias_intrinsic_calls(&program_facts, path);
+            if perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive, &aliases)
+                > 0
+            {
                 generic_kept.push(path.clone());
             }
         }

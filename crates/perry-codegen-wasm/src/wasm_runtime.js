@@ -1642,6 +1642,53 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// An object or a function: a class value (see __classRef) is a host function, and
+// its static side (`(K as any).key = 1`) is its own properties.
+function __holdsProperties(v) {
+  return v !== null && (typeof v === 'object' || typeof v === 'function');
+}
+
+// A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
+// so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
+// the compiled constructor. `ctorIdx` is the constructor's
+// table slot, or -1 when the class has none. Its arguments stay Perry values: a
+// closure passed to it must reach the compiled constructor as a closure, so
+// __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
+const __classRefs = new Map();
+const __perryClassCtors = new WeakSet();
+function __classRef(className, ctorIdx) {
+  let ctor = __classRefs.get(className);
+  if (!ctor) {
+    ctor = function (...args) {
+      if (new.target === undefined) {
+        throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
+      }
+      const self = __classInstance(className);
+      if (ctorIdx < 0) return self;
+      const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+      // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
+      return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+    };
+    Object.defineProperty(ctor, 'name', { value: className });
+    // Instances are `{__class__}` objects, not linked to ctor.prototype: host
+    // `instanceof` walks the class table as class_instanceof does.
+    Object.defineProperty(ctor, Symbol.hasInstance, {
+      value: (obj) => {
+        if (!obj || typeof obj !== 'object') return false;
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          if (c === className) return true;
+        }
+        return false;
+      },
+    });
+    __perryClassCtors.add(ctor);
+    __classRefs.set(className, ctor);
+  }
+  return ctor;
+}
+
 // A lowered sync generator drives its resume record, a wasm closure taking
 // `(op, arg)` (op 0 next, 1 return, 2 throw), or `(arg)` when it has no catch,
 // finally or `yield*`. The record's first five captures are the cells it shares
@@ -1869,21 +1916,44 @@ const __memDispatch = {
     if (!obj || typeof obj !== 'object') return undefined;
     return obj[String(key)];
   },
+  // A literal's property is defined, so a setter on its prototype does not run.
+  object_literal_define: (obj, key, value) => {
+    if (obj && typeof obj === 'object') {
+      Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+    return obj;
+  },
+  // Only an object or null becomes the prototype; any other value is ignored.
+  object_literal_set_prototype: (obj, proto) => {
+    if (obj && typeof obj === 'object' && (proto === null || typeof proto === 'object' || typeof proto === 'function')) {
+      Object.setPrototypeOf(obj, proto);
+    }
+    return obj;
+  },
+  object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
+  // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
+  // at call time. A home that is not an object is unbound, and reads undefined.
+  object_super_get: (home, receiver, key) => {
+    if (!home || typeof home !== 'object') return undefined;
+    const proto = Object.getPrototypeOf(home);
+    if (proto === null) throw new TypeError(`Cannot read properties of null (reading '${String(key)}')`);
+    return Reflect.get(proto, key, receiver);
+  },
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
-    if (!obj || typeof obj !== 'object') return undefined;
+    if (!__holdsProperties(obj)) return undefined;
     return obj[key];
   },
   object_set_dynamic: (obj, key, value) => {
-    if (obj && typeof obj === 'object') obj[key] = value;
+    if (__holdsProperties(obj)) obj[key] = value;
   },
-  object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
-  object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
-  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj) : [],
-  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).map(k => obj[k]) : [],
-  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj) : [],
+  object_delete: (obj, key) => { if (__holdsProperties(obj)) delete obj[String(key)]; },
+  object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
+  object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
+  object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
+  object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   object_has_property: (obj, key) => {
-    if (!obj || typeof obj !== 'object') return 0;
+    if (!__holdsProperties(obj)) return 0;
     return (key in obj) ? 1 : 0;
   },
   object_assign: (target, source) => {
@@ -2126,6 +2196,7 @@ const __memDispatch = {
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
+  class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -2198,7 +2269,7 @@ const __memDispatch = {
   },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
-    if (!obj || typeof obj !== 'object') return undefined;
+    if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
     if (obj.__class__) {
@@ -2225,7 +2296,7 @@ const __memDispatch = {
     return obj[fname];
   },
   class_set_field: (obj, name, value) => {
-    if (!obj || typeof obj !== 'object') return;
+    if (!__holdsProperties(obj)) return;
     const fname = String(name);
     // Check for compiled setter method — WASM uses i64 (BigInt)
     if (obj.__class__) {
@@ -3101,8 +3172,10 @@ function perry_ui_toggle_create(label, callback) {
   if (label) { const sp = document.createElement("span"); sp.textContent = label; wrap.appendChild(sp); }
   wrap._perryCallback = callback;
   wrap._inp = inp;
+  // `Toggle(label, onChange: (value: boolean) => void)`: the callback receives the
+  // boolean itself, so `value === true` holds there.
   inp.addEventListener("change", () => {
-    if (wrap._perryCallback !== undefined) callWasmClosure(wrap._perryCallback, inp.checked ? 1.0 : 0.0);
+    if (wrap._perryCallback !== undefined) callWasmClosure(wrap._perryCallback, inp.checked);
   });
   return uiAlloc(wrap);
 }
@@ -5238,7 +5311,7 @@ function __callHostFunction(fn, args, receiver = undefined) {
 // handling as __callHostFunction.
 function __constructHostFunction(fn, args) {
   try {
-    return Reflect.construct(fn, args.map(__hostCallback));
+    return Reflect.construct(fn, __perryClassCtors.has(fn) ? args : args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
