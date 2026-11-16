@@ -360,6 +360,7 @@ fn scalarize_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scalarize_stmts(
                     body,
@@ -586,6 +587,7 @@ fn collect_return_record_assignments(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_return_record_assignments(body, record_id, assigned_shapes);
                 if let Some(catch) = catch {
@@ -662,6 +664,7 @@ fn merge_body_ends_with_record_assignment(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
                     || catch.as_ref().is_some_and(|catch| {
@@ -724,6 +727,7 @@ fn merge_nested_breaks_follow_assignment(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
                     || catch.as_ref().is_some_and(|catch| {
@@ -904,6 +908,7 @@ fn return_record_stmts_are_safe(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !return_record_stmts_are_safe(
                     body,
@@ -1094,6 +1099,7 @@ fn rewrite_return_record_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_return_record_stmts(
                     body,
@@ -1362,6 +1368,7 @@ fn collect_aliases(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_aliases(body, array_id, len, aliases);
                 if let Some(catch) = catch {
@@ -1543,6 +1550,7 @@ fn stmts_are_safe(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_are_safe(body, array_id, aliases, fields)
                     && catch
@@ -1685,6 +1693,7 @@ fn rewrite_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_stmts(body, array_id, aliases, fields);
                 if let Some(catch) = catch {

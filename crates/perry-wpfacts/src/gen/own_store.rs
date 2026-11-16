@@ -101,6 +101,7 @@ fn each_list<'s>(list: &'s [Stmt], f: &mut dyn FnMut(&'s [Stmt])) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 each_list(body, f);
                 if let Some(c) = catch {

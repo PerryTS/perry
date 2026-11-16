@@ -615,6 +615,7 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for_each_stmt(body, f);
                 if let Some(catch) = catch {

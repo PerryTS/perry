@@ -174,6 +174,7 @@ impl JsEmitter {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.writeln("try {");
                 self.indent += 1;

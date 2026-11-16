@@ -579,6 +579,7 @@ fn additive_flow_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             // The try body may partially execute; the catch entry state is
             // unknown. Meet everything.
@@ -1006,6 +1007,7 @@ fn collect_facts<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_facts(body, types, guarded_number_array_params, in_loop, facts);
                 if let Some(c) = catch {
@@ -1142,6 +1144,7 @@ fn collect_loop_reseeded_locals<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_loop_reseeded_locals(body, types, guarded_number_array_params, false, out);
                 if let Some(c) = catch {
@@ -1304,6 +1307,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_refs_stmt(s, out);
@@ -1461,6 +1465,7 @@ fn observe_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 observe_stmts(body, cands, types, additive, exact_i32, disq, false);
                 if let Some(c) = catch {

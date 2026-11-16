@@ -35,6 +35,7 @@ fn lift_bindings(body: &mut [Stmt], declarations: &mut Vec<Stmt>) {
             body,
             catch,
             finally,
+            ..
         } = stmt
         {
             lift_bindings(body, declarations);

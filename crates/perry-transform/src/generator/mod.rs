@@ -349,6 +349,7 @@ fn transform_generator_closures_in_stmts(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(f) = finally {
                             push_stmt_slice(&mut stack, f);

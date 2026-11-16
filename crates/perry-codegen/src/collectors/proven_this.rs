@@ -358,6 +358,7 @@ fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_contain_loop(body)
                 || catch
@@ -430,6 +431,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_array_field_reads_in_stmts(body, aliases);
                 if let Some(catch) = catch {

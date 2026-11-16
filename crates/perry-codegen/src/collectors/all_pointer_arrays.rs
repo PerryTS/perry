@@ -221,6 +221,7 @@ fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, f);
                 if let Some(c) = catch {

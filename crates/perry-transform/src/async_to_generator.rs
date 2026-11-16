@@ -340,6 +340,7 @@ fn rewrite_async_closures_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
             if let Some(c) = catch {
@@ -690,6 +691,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
             body,
             catch,
             finally,
+            ..
         } => {
             hoist_awaits_in_stmts(body, next_id);
             if let Some(c) = catch {
@@ -1242,6 +1244,7 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, had_await);
             if let Some(c) = catch {
@@ -1352,6 +1355,7 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
             body,
             catch,
             finally,
+            ..
         } => {
             strip_in_stmts(body, non_promise);
             if let Some(c) = catch {
@@ -1612,6 +1616,7 @@ fn scan_stmt_for_async_closures(
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_async_closures(body, found);
             if let Some(c) = catch {
@@ -1715,6 +1720,7 @@ fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body_contains_await(body)
                 || catch.as_ref().is_some_and(|c| body_contains_await(&c.body))

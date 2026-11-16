@@ -363,6 +363,7 @@ fn forward_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Cx) {
             body,
             catch,
             finally,
+            ..
         } => {
             forward_list(body, avail, cx);
             if let Some(catch) = catch {
@@ -447,6 +448,7 @@ fn each_expr<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
             body,
             catch,
             finally,
+            ..
         } => body
             .iter()
             .chain(catch.iter().flat_map(|c| &c.body))
@@ -512,6 +514,7 @@ fn each_expr_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
             body,
             catch,
             finally,
+            ..
         } => body
             .iter_mut()
             .chain(catch.iter_mut().flat_map(|c| &mut c.body))

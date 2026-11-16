@@ -28,6 +28,7 @@ pub(crate) fn wrap_generator_resume_body(
                 ],
             }),
             finally: None,
+            forof_completion: None,
         },
     ]
 }
@@ -61,6 +62,7 @@ pub(crate) fn wrap_async_gen_step_body(
                 ],
             }),
             finally: None,
+            forof_completion: None,
         },
     ]
 }
@@ -87,6 +89,7 @@ pub(crate) fn wrap_fixed_state_completion(
             ],
         }),
         finally: None,
+        forof_completion: None,
     }]
 }
 
@@ -151,6 +154,7 @@ pub(crate) fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, exec
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 prepend_executing_clear_before_returns(body, executing_id);
                 if let Some(catch) = catch {

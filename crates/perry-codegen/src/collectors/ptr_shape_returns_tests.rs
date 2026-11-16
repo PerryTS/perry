@@ -1526,6 +1526,7 @@ fn a_catch_bound_callee_id_is_not_resolved() {
                 body: Vec::new(),
             }),
             finally: None,
+            forof_completion: None,
         }],
         "a catch binding on the same id",
     );

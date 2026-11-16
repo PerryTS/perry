@@ -209,6 +209,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
                 body: original,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
+                forof_completion: None,
             },
         ];
         captures.push(brand_id);
@@ -242,6 +243,7 @@ pub(super) fn restore_in_continuations(
                         body: resume,
                         catch: None,
                         finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
+                        forof_completion: None,
                     },
                 ];
             }

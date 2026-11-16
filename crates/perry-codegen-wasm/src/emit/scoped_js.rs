@@ -64,6 +64,7 @@ pub(super) fn scoped_js_names(stmts: &[Stmt]) -> BTreeSet<String> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     visit(body, names);
                     if let Some(catch) = catch {

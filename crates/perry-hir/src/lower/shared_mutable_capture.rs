@@ -532,6 +532,7 @@ impl<'a> CensusWalker<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body, scope, loop_depth, false);
                 if let Some(c) = catch {
@@ -669,6 +670,7 @@ fn demote_redeclarations_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             stmts(body, seen);
             if let Some(c) = catch {
@@ -800,6 +802,7 @@ fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<LocalId>) {
             body,
             catch,
             finally,
+            ..
         } => {
             recur(body);
             if let Some(cc) = catch {
@@ -1288,6 +1291,7 @@ fn for_each_child_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(&mut *f);
             if let Some(c) = catch {
@@ -1492,6 +1496,7 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, shared, index_uses);
             if let Some(c) = catch {

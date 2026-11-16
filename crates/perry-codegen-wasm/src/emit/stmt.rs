@@ -435,6 +435,7 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 let target = finally.as_ref().map(|_| {
                     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
@@ -606,6 +607,7 @@ pub(super) fn has_return(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(has_return)
                 || catch

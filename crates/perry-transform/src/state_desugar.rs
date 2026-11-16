@@ -465,6 +465,7 @@ fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fres
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, bindings, fresh);
             if let Some(c) = catch {

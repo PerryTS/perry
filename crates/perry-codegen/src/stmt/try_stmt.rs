@@ -474,6 +474,7 @@ mod tests {
                 })],
             }),
             finally: None,
+            forof_completion: None,
         });
         let opts = crate::CompileOptions {
             emit_ir_only: true,
@@ -516,6 +517,7 @@ mod tests {
                 body: vec![],
             }),
             finally: None,
+            forof_completion: None,
         });
         module
             .init
@@ -588,6 +590,7 @@ mod tests {
                 body: vec![],
             }),
             finally: None,
+            forof_completion: None,
         });
         for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
             let opts = crate::CompileOptions {

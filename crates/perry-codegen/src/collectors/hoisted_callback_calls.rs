@@ -87,6 +87,7 @@ fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             walk_stmts(body, visit);
             if let Some(catch) = catch {
@@ -159,6 +160,7 @@ fn collect_immutable_alias_edges(stmts: &[Stmt], edges: &mut Vec<(u32, u32)>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_immutable_alias_edges(body, edges);
                 if let Some(catch) = catch {
@@ -358,6 +360,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     scan_stmt(s, loop_depth, out);
