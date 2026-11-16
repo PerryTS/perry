@@ -124,9 +124,21 @@ mod tests {
 
     #[test]
     fn the_record_does_not_cross_modules() {
-        note_closed_call(caller(&mut m), "a", 1);
+        let mut other = module_with(&[]);
+        note_closed_call(caller(&mut other), "a", 1);
         let mut m = module_with(&[("a", true)]);
         apply(&mut m);
         assert!(!inlined(&m, "a"));
+    }
+
+    #[test]
+    fn the_record_crosses_the_worker_boundary_with_its_caller() {
+        // A body lowered on a callable worker travels as an OwnedFunction;
+        // its closed sites must arrive with it.
+        let mut f = LlFunction::new("worker_caller", DOUBLE, vec![]);
+        note_closed_call(&mut f, "a", 1);
+        note_closed_call(&mut f, "a", 1);
+        let f = f.into_owned().into_builder();
+        assert_eq!(f.closed_callees, vec!["a".to_string()]);
     }
 }
