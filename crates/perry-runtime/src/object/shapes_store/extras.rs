@@ -84,9 +84,7 @@ impl ShapeRecord {
             .created_birth_shape
             .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
-}
 
-impl ShapeRecord {
     /// Image run: this record's shape state as bytes, for a begin-to-cut diff. The words
     /// the collector and the lazy probes own (carrier epochs, the facts-indexed bit, the
     /// keys word, the key probe and colour masks) and the address of a boxed extension

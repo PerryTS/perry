@@ -574,10 +574,10 @@ fn completeness(shapes: crate::object::shapes::SnapShapeDelta, tok0: u64, tok1: 
     let mut stop = |kind: u8, cell: u32, off: u32, value: u64| {
         stops.push(Stop { cell, obj_type: 0, kind, off, value });
     };
-    if shapes.any() {
+    if crate::object::shapes::snap_image_delta_any(&shapes) {
         pending |= format::PENDING_SHAPES;
     }
-    if shapes.minted_total() != 0 || shapes.changed != 0 || shapes.retired != 0 {
+    if crate::object::shapes::snap_image_delta_minted_total(&shapes) != 0 || shapes.changed != 0 || shapes.retired != 0 {
         // One stop: the records minted per id band (16 bits each, saturating), the
         // pre-existing records that changed (`off`) and those that are gone (`cell`).
         let sat = |n: u32| u64::from(n.min(0xffff));

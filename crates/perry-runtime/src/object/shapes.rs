@@ -7484,8 +7484,7 @@ pub(crate) struct SnapShapeState {
 /// What changed in the shape state between two [`SnapShapeState`]s. A record is minted
 /// when its id is absent at begin, changed when it exists at both and its state bytes
 /// differ, retired when it is absent at the cut.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Clone, Copy, Default, PartialEq, Eq, Debug))]
 pub(crate) struct SnapShapeDelta {
     /// Minted records by id band: static (compile-time ids), ordinary, dictionary, exotic.
     pub minted: [u32; 4],
@@ -7497,18 +7496,17 @@ pub(crate) struct SnapShapeDelta {
     pub generations: u32,
 }
 
-impl SnapShapeDelta {
-    pub(crate) fn minted_total(&self) -> u32 {
-        self.minted.iter().sum()
-    }
-    /// Any shape state changed: the image has no form for it.
-    pub(crate) fn any(&self) -> bool {
-        self.minted_total() != 0
-            || self.changed != 0
-            || self.retired != 0
-            || self.drawn != 0
-            || self.generations != 0
-    }
+pub(crate) fn snap_image_delta_minted_total(d: &SnapShapeDelta) -> u32 {
+    d.minted.iter().sum()
+}
+
+/// Any shape state changed: the image has no form for it.
+pub(crate) fn snap_image_delta_any(d: &SnapShapeDelta) -> bool {
+    snap_image_delta_minted_total(d) != 0
+        || d.changed != 0
+        || d.retired != 0
+        || d.drawn != 0
+        || d.generations != 0
 }
 
 fn snap_image_id_band(id: u32) -> usize {
@@ -7540,8 +7538,21 @@ pub(crate) fn snap_image_shape_state() -> SnapShapeState {
     }
 }
 
+/// Ids drawn between two readings of one counter (a counter that moved to another kind
+/// granule counts from the granule start). Not inlined: the eight calls stay scalar, since
+/// a vectorised form leaves 16-byte constants in the constant section of every binary that
+/// links the runtime.
+#[inline(never)]
+fn snap_image_id_steps(old: u32, new: u32) -> u32 {
+    if old >> SHAPE_ID_KIND_SHIFT == new >> SHAPE_ID_KIND_SHIFT {
+        new.wrapping_sub(old)
+    } else {
+        new - (new >> SHAPE_ID_KIND_SHIFT << SHAPE_ID_KIND_SHIFT)
+    }
+}
+
 pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
-    let mut d = SnapShapeDelta::default();
+    let mut d = SnapShapeDelta { minted: [0; 4], changed: 0, retired: 0, drawn: 0, generations: 0 };
     let (mut i, mut j) = (0, 0);
     while i < a.records.len() || j < b.records.len() {
         let ka = a.records.get(i).map(|r| r.0);
@@ -7567,16 +7578,14 @@ pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> 
             (None, None) => break,
         }
     }
-    let steps = |old: u32, new: u32| {
-        if old >> SHAPE_ID_KIND_SHIFT == new >> SHAPE_ID_KIND_SHIFT {
-            new.wrapping_sub(old)
-        } else {
-            new - (new >> SHAPE_ID_KIND_SHIFT << SHAPE_ID_KIND_SHIFT)
-        }
-    };
-    for k in 0..4 {
-        d.drawn += steps(a.next[k], b.next[k]) + steps(a.exotic[k], b.exotic[k]);
-    }
+    d.drawn = snap_image_id_steps(a.next[0], b.next[0])
+        + snap_image_id_steps(a.next[1], b.next[1])
+        + snap_image_id_steps(a.next[2], b.next[2])
+        + snap_image_id_steps(a.next[3], b.next[3])
+        + snap_image_id_steps(a.exotic[0], b.exotic[0])
+        + snap_image_id_steps(a.exotic[1], b.exotic[1])
+        + snap_image_id_steps(a.exotic[2], b.exotic[2])
+        + snap_image_id_steps(a.exotic[3], b.exotic[3]);
     d.generations = b.semantic.wrapping_sub(a.semantic) as u32;
     d
 }
@@ -7604,30 +7613,30 @@ mod snap_image_delta_tests {
         let b = st(&[(S, 0), (S + 1, 0), (O, 0), (O + 1, 0), (O + 2, 0), (D, 0), (X, 0)]);
         let d = snap_image_shape_delta(&a, &b);
         assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
-        assert_eq!(d.minted_total(), 6);
-        assert!(d.any());
-        assert!(!snap_image_shape_delta(&b, &b).any());
+        assert_eq!(snap_image_delta_minted_total(&d), 6);
+        assert!(snap_image_delta_any(&d));
+        assert!(!snap_image_delta_any(&snap_image_shape_delta(&b, &b)));
     }
 
     #[test]
     fn snap_image_delta_sees_a_changed_pre_existing_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
-        assert_eq!((d.minted_total(), d.changed, d.retired), (0, 1, 0));
-        assert!(d.any());
+        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 1, 0));
+        assert!(snap_image_delta_any(&d));
     }
 
     #[test]
     fn snap_image_delta_sees_a_retired_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
-        assert_eq!((d.minted_total(), d.changed, d.retired), (0, 0, 1));
-        assert!(d.any());
+        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 0, 1));
+        assert!(snap_image_delta_any(&d));
     }
 
     #[test]
     fn snap_image_delta_sees_a_static_id_birth_that_moves_no_counter() {
         let d = snap_image_shape_delta(&st(&[]), &st(&[(S, 0)]));
         assert_eq!((d.minted, d.drawn, d.generations), ([1, 0, 0, 0], 0, 0));
-        assert!(d.any());
+        assert!(snap_image_delta_any(&d));
     }
 
     #[test]
@@ -7666,7 +7675,7 @@ mod snap_image_delta_tests {
         let before = snap_image_shape_state();
         crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
-        assert!(d.any() && d.minted_total() >= 1 && d.minted_total() < 8, "{d:?}");
+        assert!(snap_image_delta_any(&d) && snap_image_delta_minted_total(&d) >= 1 && snap_image_delta_minted_total(&d) < 8, "{d:?}");
         assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
     }
 
