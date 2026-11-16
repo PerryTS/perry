@@ -214,3 +214,54 @@ console.log(p(Number(process.argv[2])));
     );
     assert!(e9(&tops), "{tops:?}");
 }
+
+// PROXY4 R2 (RED on 115fc8fab3: the `=== null` test of a field that holds
+// the Proxy is a `Guard` the hook did not model, so the Proxy degraded to
+// "E9 Proxy target"). A lazily made Proxy in a field, as a DOM `style`.
+const LAZY: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { item: (i: number): string => "i" + i };
+  const store: Record<string, string> = {};
+  return new Proxy(api, {
+    get(t: any, key: any) { if (typeof key !== "string") return t[key]; if (key in api) return api[key]; return store[key] ?? ""; },
+    set(_t: any, key: any, v: any) { if (typeof key !== "string") return false; store[key] = String(v); return true; },
+  });
+}
+class El {
+  _s: any = null;
+  get style(): any { if (this._s === null) this._s = mk(); return this._s; }
+}
+const e = new El();
+e.style.color = "red" + N;
+console.log(e.style.color, e.style.item(1), e.style === e.style);
+"#;
+
+#[test]
+fn px4_r2_null_test_of_a_proxy_field() {
+    let (tops, held) = solve(LAZY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+    let v = verdicts(LAZY, "color");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s.contains("Proxy")),
+        "color sites see the Proxy, no escape: {v:?}"
+    );
+}
+
+// The other value tests: typeof, `??`, `&&`, `!`, `!== null`.
+#[test]
+fn px4_k10_value_tests_run_no_trap() {
+    let src = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { n: 1 };
+  return new Proxy(api, { get(t: any, key: any) { return key === "n" ? N : t[key]; } });
+}
+const p: any = mk();
+const q: any = (N === "x" ? null : p) ?? p;
+const r: any = q && q;
+console.log(typeof r, !r, r !== null, r === undefined, r.n);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}

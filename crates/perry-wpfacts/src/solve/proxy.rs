@@ -14,9 +14,12 @@
 //! The trap's result is the operation's result; the invariant checks
 //! (10.5.8 step 9, 10.5.7 step 9) may throw a fresh TypeError instead, which
 //! runs no program code and carries no program value (the arm of every
-//! native TypeError). Every other operation on the token, and an escape of
-//! it, takes the path the solver had before (`degrade`): the target is hard
-//! E9 and goes to ⊤, the handler escapes, and the operation sees ⊤.
+//! native TypeError). PROXY4: a test of the value itself (strict equality,
+//! ToBoolean, `??`, typeof, ToObject) runs no internal method: the token is
+//! an object there like any other. Every other operation on the token, and
+//! an escape of it, takes the path the solver had before (`degrade`): the
+//! target is hard E9 and goes to ⊤, the handler escapes, and the operation
+//! sees ⊤. The hold's reason names that first operation.
 
 use super::*;
 
@@ -76,7 +79,9 @@ impl Model {
 
     /// Today's path for Proxy `p` (before PROXY2): target hard E9 and ⊤,
     /// handler escapes. Once per Proxy.
-    pub(crate) fn proxy_degrade(&mut self, p: u32) {
+    /// `cause` names the first operation that sent it here (the hold's
+    /// reason reads "E9 Proxy target (<cause>)").
+    pub(crate) fn proxy_degrade(&mut self, p: u32, cause: &str) {
         if self.proxies[p as usize].degraded {
             return;
         }
@@ -84,7 +89,7 @@ impl Model {
         let ProxyRec {
             target, handler, ..
         } = self.proxies[p as usize];
-        let r = self.reason("E9 Proxy target");
+        let r = self.reason(&format!("E9 Proxy target ({cause})"));
         self.cons(
             target,
             Cons::Hard {
@@ -223,8 +228,26 @@ impl Model {
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
             Cons::Identity { .. } | Cons::Raise { .. } => {}
+            // A test of the value itself: `=== null`, `=== lit`, `!== null`
+            // (IsStrictlyEqual 7.2.16, no internal method), ToBoolean (7.1.2:
+            // an object is truthy), the `??` and `&&` operands, typeof
+            // (13.5.3: "object" or "function", never a primitive type) and
+            // ToObject of an object (7.1.18). None runs a trap: the Proxy is
+            // an object token there like any other, and the ordinary rule
+            // decides.
+            Cons::Guard { .. }
+            | Cons::Defined { .. }
+            | Cons::NotNullish { .. }
+            | Cons::NotUndefined { .. }
+            | Cons::NotNull { .. }
+            | Cons::TypeIs { .. }
+            | Cons::Falsy { .. }
+            | Cons::Objects { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
             _ => {
-                self.proxy_degrade(p);
+                self.proxy_degrade(p, c.kind_name());
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
             }
         }
