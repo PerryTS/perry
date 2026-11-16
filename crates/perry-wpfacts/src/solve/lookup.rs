@@ -688,13 +688,37 @@ impl Model {
         !self.wl.is_empty()
     }
 
+    /// R9READ2 rule I: `a` is present on `tm`'s objects from birth on: the
+    /// construction phase stores it before `this` is observed once its
+    /// reads of keys not yet own run no code, i.e. no accessor may be
+    /// defined under any of them (`needs_accessor_walk`: the test every
+    /// lookup takes for whether it can run a getter). A later accessor
+    /// under one of them flushes the reads (`add_accessor_atom`).
+    pub(crate) fn inert_sure(&self, tm: TmplId, a: Atom) -> bool {
+        let t = &self.tmpls[tm as usize];
+        t.inert_definite.contains(&a)
+            && t.inert_reads.iter().all(|&k| !self.needs_accessor_walk(Key::Named(k)))
+    }
+
+    /// Rule I: the birth value `v` of reservation `a` of class `tm` holds
+    /// `undefined` unless `inert_sure`; filed for a later accessor key.
+    pub(crate) fn inert_undef(&mut self, tm: TmplId, a: Atom, v: NodeId) {
+        if self.inert_sure(tm, a) {
+            self.inert_births.push((tm, a, v));
+        } else {
+            self.add_prim(v, prim::UNDEF);
+        }
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
         let mut kept = Vec::new();
         for (a, dst) in reads {
             let sure = !self.keys_unsure.contains(&tm)
-                && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
+                && (self.tmpls[tm as usize].definite.contains(&a)
+                    || self.spread_sure(tm, a)
+                    || self.inert_sure(tm, a));
             if sure {
                 kept.push((a, dst));
             } else {
@@ -875,7 +899,8 @@ impl Model {
                     let sure = self.tmpls[tm as usize].kind.is_fact_unit()
                         && !self.keys_unsure.contains(&tm)
                         && (self.tmpls[tm as usize].definite.contains(&a)
-                            || self.spread_sure(tm, a));
+                            || self.spread_sure(tm, a)
+                            || self.inert_sure(tm, a));
                     if sure && self.present_seen.insert((tm, a, dst)) {
                         self.present_reads.entry(tm).or_default().push((a, dst));
                     }
@@ -1069,6 +1094,28 @@ impl Model {
     pub(crate) fn add_accessor_atom(&mut self, a: Atom) {
         if !self.accessor_atoms.insert(a) {
             return;
+        }
+        // Rule I: a class whose construction read `a` (or any key: STAR)
+        // through the chain no longer knows its inert keys present.
+        let star = self.atoms[a as usize] == crate::STAR_KEY;
+        let hit: Vec<TmplId> = (0..self.tmpls.len() as TmplId)
+            .filter(|&tm| {
+                let r = &self.tmpls[tm as usize].inert_reads;
+                !r.is_empty() && (star || r.contains(&a))
+            })
+            .collect();
+        for &tm in &hit {
+            self.flush_present_reads(tm);
+        }
+        if !hit.is_empty() {
+            let births = std::mem::take(&mut self.inert_births);
+            for (tm, b, v) in births {
+                if self.inert_sure(tm, b) {
+                    self.inert_births.push((tm, b, v));
+                } else {
+                    self.add_prim(v, prim::UNDEF);
+                }
+            }
         }
         self.numeric_index_walks(a);
         self.deferred_walks(a);

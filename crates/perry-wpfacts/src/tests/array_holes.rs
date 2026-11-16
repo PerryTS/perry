@@ -25,6 +25,8 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
         definite: vec![],
         declared: Vec::new(),
         reserved: Vec::new(),
+        inert_definite: Vec::new(),
+        inert_reads: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,

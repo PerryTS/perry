@@ -533,6 +533,8 @@ impl<'a> Gen<'a> {
             static_methods: Vec::new(),
             declared: vec![],
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         self.stand_in_arrs.insert(display.to_string(), t);
@@ -945,6 +947,8 @@ impl<'a> Gen<'a> {
             definite,
             declared: Vec::new(),
             reserved,
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(ctor),
             native_parent: c.native_parent.clone(),

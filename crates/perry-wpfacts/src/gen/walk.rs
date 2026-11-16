@@ -400,6 +400,8 @@ impl<'a> Gen<'a> {
         let mut keys = Vec::new();
         let mut definite = Vec::new();
         let mut reserved = Vec::new();
+        let mut inert_definite = Vec::new();
+        let mut inert_reads = Vec::new();
         if let Some(p) = self.m.tmpls[tm as usize].parent {
             if let TmplKind::Class { module: pm, .. } = self.m.tmpls[p as usize].kind {
                 let pmod = self.modules[pm as usize].1;
@@ -408,6 +410,8 @@ impl<'a> Gen<'a> {
             keys = self.m.tmpls[p as usize].birth_keys.clone();
             definite = self.m.tmpls[p as usize].definite.clone();
             reserved = self.m.tmpls[p as usize].reserved.clone();
+            inert_definite = self.m.tmpls[p as usize].inert_definite.clone();
+            inert_reads = self.m.tmpls[p as usize].inert_reads.clone();
         }
         if let Some((_, np)) = self.m.tmpls[tm as usize].native_parent.clone() {
             // Keys the native parent constructor defines (summary, E21).
@@ -491,6 +495,18 @@ impl<'a> Gen<'a> {
                     let a = self.m.atom(k);
                     push_unique(&mut definite, a);
                 }
+                // Rule I: a native parent's prototypes hold builtin
+                // accessors no program definition names: no inert read.
+                if !self.native_on_chain(tm) {
+                    for k in &ph.inert_definite {
+                        let a = self.m.atom(k);
+                        push_unique(&mut inert_definite, a);
+                    }
+                    for k in &ph.inert_reads {
+                        let a = self.m.atom(k);
+                        push_unique(&mut inert_reads, a);
+                    }
+                }
             }
         }
         // A parent that is a value (§17.2) is not known before the solve
@@ -501,16 +517,36 @@ impl<'a> Gen<'a> {
         if self.parent_pending(tm) {
             definite.clear();
             reserved.clear();
+            inert_definite.clear();
         } else if self.value_parent_on_chain(tm) && self.parent_chain_leaks(tm) {
+            inert_definite.clear();
             let n = self.m.tmpls[tm as usize]
                 .parent
                 .map_or(0, |p| self.m.tmpls[p as usize].definite.len());
             definite.truncate(n);
         }
         reserved.retain(|a| !definite.contains(a));
+        inert_definite.retain(|a| !definite.contains(a));
+        if inert_definite.is_empty() {
+            inert_reads.clear();
+        }
+        self.m.tmpls[tm as usize].inert_definite = inert_definite;
+        self.m.tmpls[tm as usize].inert_reads = inert_reads;
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
         self.m.tmpls[tm as usize].reserved = reserved;
+    }
+
+    /// Some class on `tm`'s chain (itself too) extends a native constructor.
+    fn native_on_chain(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.m.tmpls[c as usize].native_parent.is_some() {
+                return true;
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
     }
 
     /// Some class on `tm`'s chain has a parent value not settled to one
@@ -1154,6 +1190,21 @@ impl<'a> Gen<'a> {
                     // An object literal's shape: its constructor stores
                     // every key from the literal's values first.
                     continue;
+                }
+                // R9READ2 rule I: a reservation the construction stores
+                // first once its chain reads run no code: its `undefined`
+                // only while that may fail (`Model::inert_undef`).
+                None if f.key_expr.is_none()
+                    && !f.is_private
+                    && matches!(f.origin, perry_hir::ClassFieldOrigin::ConstructorStore)
+                    && self.m.atom_index.get(f.name.as_str()).is_some_and(|&a| {
+                        self.m.tmpls[tm as usize].inert_definite.contains(&a)
+                    }) =>
+                {
+                    let a = self.m.atom(&f.name);
+                    let v = self.m.node_l("inert-birth");
+                    self.m.inert_undef(tm, a, v);
+                    v
                 }
                 None => self.prim_node(prim::UNDEF),
             };

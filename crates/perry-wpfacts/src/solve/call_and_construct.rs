@@ -1186,6 +1186,8 @@ impl Model {
             definite,
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(f),
             native_parent: None,

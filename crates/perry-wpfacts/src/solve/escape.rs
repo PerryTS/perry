@@ -656,6 +656,8 @@ impl Model {
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

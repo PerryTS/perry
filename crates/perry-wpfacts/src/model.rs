@@ -602,6 +602,11 @@ pub struct Template {
     /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
+    /// R9READ2 rule I (`CtorPhase::inert_definite`): keys present from
+    /// birth on while no key of `inert_reads` may name an accessor
+    /// (`Model::inert_sure`); this class's and its parent chain's.
+    pub inert_definite: Vec<Atom>,
+    pub inert_reads: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -2374,6 +2379,12 @@ pub struct Model {
     /// Keys some accessor may be defined under (known at generation): only
     /// lookups of these keys walk the chain per receiver.
     pub accessor_atoms: crate::pts::FxHashSet<Atom>,
+    /// R9READ2 rule I: the birth value nodes of reservations a class's
+    /// construction stores before `this` is observed once its chain reads
+    /// run no code (`Template::inert_definite`): (class, key, node). The
+    /// node gets the reservation's `undefined` when that stops holding
+    /// (`Model::inert_undef`, `add_accessor_atom`).
+    pub inert_births: Vec<(TmplId, Atom, NodeId)>,
     /// One of `accessor_atoms` is a numeric string: a read under a number
     /// key walks accessors (`Model::plain_key`, DECISIONS 217).
     pub numeric_accessor: bool,

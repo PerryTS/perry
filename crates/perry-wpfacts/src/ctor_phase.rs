@@ -90,6 +90,18 @@ pub struct CtorPhase {
     /// A subclass constructor could read the key without either (it is a
     /// present key there): the class leaks to subclasses (`Gen::parent_chain_leaks`).
     pub closure_keys: BTreeSet<String>,
+    /// R9READ2 rule I: the keys the construction phase stores on every exit
+    /// before `this` is observed when a read `this.K` of a key not yet own
+    /// (no own method) observes nothing: no accessor sits under `K` on the
+    /// chain, so OrdinaryGet (ECMA-262 10.1.8.1) runs no code with `this`
+    /// there. Keys beyond `definite` only, walked with rule M off. They hold
+    /// while no key of `inert_reads` is one some accessor may be defined
+    /// under (`Model::needs_accessor_walk`, the solve's own test of whether
+    /// a lookup can run a getter: `Model::inert_sure`). CLOSED-WORLD PREMISE
+    /// (owner 2026-11-14): every accessor definition is in the program.
+    pub inert_definite: Vec<String>,
+    /// The keys those chain reads name.
+    pub inert_reads: BTreeSet<String>,
 }
 
 impl CtorPhase {
@@ -169,6 +181,9 @@ struct W<'a> {
     /// The followed methods the walk is inside (a call to one of them again
     /// is a leak: no recursion is followed).
     visiting: Vec<String>,
+    /// Rule I's walk: a chain read of a key that is no own method is no
+    /// leak; its key is noted (`CtorPhase::inert_reads`).
+    inert: bool,
 }
 
 /// Rule M: the methods of `c` a `this.m()` in its constructor may be
@@ -304,6 +319,10 @@ pub fn analyze_in_present_m(
         m
     });
     let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees);
+    // Rule I: the same walk with chain reads inert (rule M off: a followed
+    // call keeps its own exactness argument, `settle_rule_m`).
+    let none = BTreeMap::new();
+    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -313,6 +332,12 @@ pub fn analyze_in_present_m(
         .collect();
     ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true, present, &callees).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
+    if !inert.inert_reads.is_empty() {
+        ph.inert_definite = inert.definite.into_iter().filter(|k| !ph.definite.contains(k)).collect();
+        if !ph.inert_definite.is_empty() {
+            ph.inert_reads = inert.inert_reads;
+        }
+    }
     ph
 }
 
@@ -354,7 +379,24 @@ fn analyze_body<'a>(
     present: &'a BTreeSet<String>,
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
 ) -> CtorPhase {
+    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_body_i<'a>(
+    shapes: &'a BTreeMap<String, Vec<String>>,
+    fields: &[(&Option<Expr>, Option<&str>)],
+    methods: BTreeSet<String>,
+    params: &[perry_hir::Param],
+    body: &[Stmt],
+    order: Option<BTreeMap<String, usize>>,
+    class_ctor: bool,
+    present: &'a BTreeSet<String>,
+    callees: &'a BTreeMap<String, &'a perry_hir::Function>,
+    inert: bool,
+) -> CtorPhase {
     let mut w = W {
+        inert,
         callees,
         visiting: Vec::new(),
         present,
@@ -881,9 +923,14 @@ impl W<'_> {
                 if !st.assigned.contains(property) && !self.is_present(st, property) {
                     self.read_before.insert(property.clone());
                     // Not own yet: the read walks the prototype chain, where
-                    // an accessor runs with `this`.
+                    // an accessor runs with `this` (rule I's walk notes the
+                    // key; `__proto__` is Object.prototype's accessor, B.2.2.1).
                     if !self.methods.contains(property) {
-                        self.leak(st);
+                        if self.inert && st.open && property != "__proto__" {
+                            self.ph.inert_reads.insert(property.clone());
+                        } else {
+                            self.leak(st);
+                        }
                     }
                 }
             }
