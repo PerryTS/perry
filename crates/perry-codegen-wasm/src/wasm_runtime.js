@@ -1947,13 +1947,13 @@ const __memDispatch = {
   object_set_dynamic: (obj, key, value) => {
     if (__holdsProperties(obj)) obj[key] = value;
   },
-  object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
-  object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
-  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj) : [],
-  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).map(k => obj[k]) : [],
-  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj) : [],
+  object_delete: (obj, key) => { if (__holdsProperties(obj)) delete obj[String(key)]; },
+  object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
+  object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
+  object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
+  object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   object_has_property: (obj, key) => {
-    if (!obj || typeof obj !== 'object') return 0;
+    if (!__holdsProperties(obj)) return 0;
     return (key in obj) ? 1 : 0;
   },
   object_assign: (target, source) => {
