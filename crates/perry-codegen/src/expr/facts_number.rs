@@ -47,6 +47,36 @@ pub(crate) enum Operand {
     Number,
     /// A field read holding Number, Boolean, null or undefined only.
     Prim,
+    /// An element read the facts prove a Number or `undefined`
+    /// (`facts_canonical::Num::NumberOrUndefined`).
+    NumOrUndef,
+}
+
+/// The facts' answer for the element read `e` (`facts_canonical::of`): a
+/// plain double at every copy of the read, possibly `undefined` for a hole
+/// or an index past the end. The value is the facts' claim about whatever
+/// the read yields, so the read itself is lowered as before; only the
+/// conversion of its value is decided here.
+fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
+    use crate::expr::facts_canonical::{of, Num};
+    if !matches!(e, Expr::IndexGet { .. }) {
+        return None;
+    }
+    let k = match of(ctx, e)? {
+        Num::Number => Operand::Number,
+        Num::NumberOrUndefined => Operand::NumOrUndef,
+    };
+    crate::verify_facts::consumed(crate::verify_facts::Fact::CanonicalNumber, || {
+        serde_json::json!({ "arith": "element operand" })
+    });
+    crate::facts_consumed::used();
+    Some(k)
+}
+
+/// `e` is an element read the facts prove a Number or `undefined`: not a
+/// BigInt. No recursion: a fact lookup.
+pub(crate) fn element_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    element_operand(ctx, e).is_some()
 }
 
 /// The kind mask of the guard-free facts read `object.property`.
@@ -64,6 +94,9 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     // region verifier counts as one that may run JS.
     if crate::stmt::region_loop::is_f64_read(ctx, e) {
         return Some(Operand::Number);
+    }
+    if let Some(k) = element_operand(ctx, e) {
+        return Some(k);
     }
     if let Expr::PropertyGet {
         object, property, ..
@@ -90,6 +123,19 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     } = e
     {
         return add_is_number(ctx, left, right).then_some(Operand::Number);
+    }
+    // `-` `*` `/` over two operands: `try_lower_arith` lowers it to one
+    // IEEE operation on two Numbers (or, when both are already numeric, the
+    // plain path converts them), so its value is a canonical double.
+    if let Expr::Binary {
+        op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
+        left,
+        right,
+    } = e
+    {
+        if operand(ctx, left).is_some() && operand(ctx, right).is_some() {
+            return Some(Operand::Number);
+        }
     }
     crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e).then_some(Operand::Number)
 }
@@ -189,17 +235,31 @@ pub(crate) fn try_lower_arith(
     }))
 }
 
-fn arith_to_number(ctx: &mut FnCtx<'_>, e: &Expr, k: Operand, raw: &str) -> Result<String> {
-    if k == Operand::Number {
-        return Ok(raw.to_string());
-    }
-    if prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0) {
-        crate::expr::facts_canonical::witness(
-            ctx,
-            raw,
-            crate::expr::facts_canonical::Num::NumberOrUndefined,
-            "arith operand",
-        )?;
+/// `ToNumber` of the operand `e` classified `k` (`operand`), whose lowered
+/// value is `raw`. An element read proven a Number is witnessed in check
+/// mode and taken as is; a Number-or-undefined element or field converts
+/// with one test and no branch (the select of `try_lower_arith`'s doc: a
+/// Number has one encoding there, `undefined` is a tag word, which must
+/// become the canonical NaN, never propagate as a NaN payload).
+pub(crate) fn arith_to_number(
+    ctx: &mut FnCtx<'_>,
+    e: &Expr,
+    k: Operand,
+    raw: &str,
+) -> Result<String> {
+    use crate::expr::facts_canonical::{witness, Num};
+    let num_or_undef = match k {
+        Operand::Number => {
+            if matches!(e, Expr::IndexGet { .. }) && element_operand(ctx, e).is_some() {
+                witness(ctx, raw, Num::Number, "arith element operand")?;
+            }
+            return Ok(raw.to_string());
+        }
+        Operand::NumOrUndef => true,
+        Operand::Prim => prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0),
+    };
+    if num_or_undef {
+        witness(ctx, raw, Num::NumberOrUndefined, "arith operand")?;
         let is_num = crate::stmt::emit_js_value_is_number(ctx, raw);
         let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
         return Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
@@ -248,17 +308,9 @@ pub(crate) fn try_lower_add(
         return Ok(None);
     }
     let l_raw = lower_expr(ctx, left)?;
-    let l = if lk == Operand::Prim {
-        emit_prim_to_number(ctx, &l_raw)
-    } else {
-        l_raw
-    };
+    let l = arith_to_number(ctx, left, lk, &l_raw)?;
     let r_raw = lower_expr(ctx, right)?;
-    let r = if rk == Operand::Prim {
-        emit_prim_to_number(ctx, &r_raw)
-    } else {
-        r_raw
-    };
+    let r = arith_to_number(ctx, right, rk, &r_raw)?;
     Ok(Some(ctx.block().fadd(&l, &r)))
 }
 
