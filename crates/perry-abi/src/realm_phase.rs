@@ -48,7 +48,7 @@ realm_names! {
     /// subclass).
     REALM_REST_GLOBALS, REALM_REST_NAMES,
     // Only a phase of a two-phase realm asks (the runtime's `.perry_tail`).
-    #[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+    #[cfg_attr(target_os = "linux", link_section = ".perry_tail.realm_rest_global")]
     #[inline(never)]
     realm_rest_global:
         "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"

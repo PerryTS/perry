@@ -48,6 +48,10 @@ if grep -E "$two_phase" "$work/realm-off.nm"; then
   echo "realm two-phase link check: a program compiled with the switch off links the two-phase path (above)" >&2
   exit 1
 fi
+if command -v readelf > /dev/null 2>&1 && readelf -SW "$work/realm-off" 2> /dev/null | grep -q '\.perry_tail'; then
+  echo "realm two-phase link check: a program compiled with the switch off has a tail section (.perry_tail): something it links carries the section attribute" >&2
+  exit 1
+fi
 for arm in on default; do
   for symbol in js_get_global_core js_realm_complete js_realm_family_phase js_realm_populate_whole populate_realm_phase; do
     grep -q "$symbol" "$work/realm-$arm.nm" || {

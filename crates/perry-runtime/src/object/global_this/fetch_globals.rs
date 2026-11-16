@@ -124,15 +124,20 @@ pub extern "C" fn perry_realm_family_phase(_identity: u32) {}
 /// runtime's internal births of a phase-B family (a `WeakMap`'s inherited
 /// read, a typed array's prototype) complete the realm. Phase A's own asks
 /// get the realm as it is (`js_realm_complete`).
-// `.perry_tail` (Linux): the input section of what only a realm that STARTS
-// with phase A alone runs: the core entry's first touch, the phase-B driver
-// and its helpers. The ELF link gathers it into one output section behind
+// `.perry_tail.<name>` (Linux): the input sections, one per function, of what
+// only a realm that STARTS with phase A alone runs: the core entry's first
+// touch, the phase-B driver and its helpers. Nothing a program compiled with
+// the two-phase realm off links may carry one (the link check asserts that
+// such a program has no tail section). The ELF link gathers it into one output section behind
 // the program's own text (`perry_codegen::function_order::JS_TEXT_LINK_RULE`),
 // so the runtime text and the program text of a program whose realm is
 // populated in one pass lie where they lie without these functions. A
 // program compiled with the two-phase realm off references none of them and
 // the link drops the section. Other object formats keep them in the text.
-#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.js_realm_family_phase"
+)]
 #[no_mangle]
 pub extern "C" fn js_realm_family_phase(identity: u32) {
     if identity == REALM_TYPED_ARRAY_BUILT_LATE {
@@ -350,7 +355,7 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
 /// runs inside it and no collection moves anything (a no-move window, as for
 /// phase A), so no reference to a phase-B object exists before every one of
 /// them is born, linked and sealed.
-#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.complete_realm")]
 #[cold]
 #[inline(never)]
 fn complete_realm() {
@@ -376,7 +381,7 @@ fn complete_realm() {
 /// filling: it gets the realm as it is). Reached only through
 /// [`perry_realm_complete`], which a two-phase program defines as a jump
 /// here.
-#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.js_realm_complete")]
 #[no_mangle]
 pub extern "C" fn js_realm_complete() -> f64 {
     if !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()) {
@@ -482,7 +487,10 @@ fn realm_core_slow() -> f64 {
 /// alone. Out of line and in the tail section (`.perry_tail`), so the
 /// allocation and the population's driver are not in the text a program that
 /// starts one-pass maps.
-#[cfg_attr(target_os = "linux", link_section = ".perry_tail")]
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.realm_core_first_touch"
+)]
 #[inline(never)]
 fn realm_core_first_touch(poison: bool) -> f64 {
     realm_setup(RealmPhases::Core, poison)

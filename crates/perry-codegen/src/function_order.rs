@@ -69,10 +69,12 @@ pub const JS_FN_SECTION_PREFIX: &str = "perry_js_text.fn.";
 /// placement they would sit in front of the JS text (GNU ld). An output
 /// section with no input (the program links none of them) is not emitted.
 pub const JS_TEXT_LINK_RULE: &str =
-    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n .perry_tail : ALIGN(16) {\n  *(.perry_tail)\n }\n} INSERT AFTER .text;\n";
+    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n .perry_tail : ALIGN(16) {\n  *(.perry_tail .perry_tail.*)\n }\n} INSERT AFTER .text;\n";
 
-/// The input (and output) section of the runtime's tail text on Linux
-/// (`#[link_section]` in perry-runtime and perry-abi).
+/// The output section of the runtime's tail text on Linux, and the prefix of
+/// its input sections: one per function (`.perry_tail.<name>`,
+/// `#[link_section]` in perry-runtime and perry-abi), so the link keeps or
+/// drops each function by itself.
 pub const RUNTIME_TAIL_SECTION: &str = ".perry_tail";
 
 /// A parsed order list: function name -> rank (0 runs first).
