@@ -1622,3 +1622,32 @@ console.log(q.x, qhi());
         "o>base\nhello w!\np>o>base\n1 base"
     );
 }
+
+// The lookup reads the literal's [[Prototype]] when the call runs, and before the
+// arguments are evaluated; a null prototype or a non-callable property throws.
+#[test]
+fn an_object_literal_super_call_resolves_at_call_time() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a = { m() { return "a"; } };
+const b = { m() { return "b"; } };
+const o = { __proto__: a, m(x: string) { return super.m() + x; }, n() { return super.m(Object.setPrototypeOf(o, b)); } };
+const om = o.m;
+console.log(om("!"));
+Object.setPrototypeOf(o, b);
+console.log(om("!"));
+Object.setPrototypeOf(o, a);
+const on = o.n;
+console.log(on());
+const z = { __proto__: null, m() { return super.m(); } };
+const zm = z.m;
+try { zm(); console.log("null: no throw"); } catch (e) { console.log("null: " + e.name); }
+const c = { __proto__: { m: 1 }, m() { return super.m(); } };
+const cm = c.m;
+try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name); }
+"#
+        ),
+        "a!\nb!\na\nnull: TypeError\n1: TypeError"
+    );
+}

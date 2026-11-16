@@ -1924,13 +1924,21 @@ const __memDispatch = {
     }
     return obj;
   },
-  // `super[key](args)` with HomeObject `home`: look up from home's [[Prototype]], call with `receiver`.
-  object_super_call: (home, key, receiver, args) => {
-    const proto = home && typeof home === 'object' ? Object.getPrototypeOf(home) : null;
-    if (proto === null) return undefined;
-    const fn = Reflect.get(proto, key, receiver);
+  // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
+  // at call time. A home that is not an object is unbound, and reads undefined.
+  object_super_get: (home, receiver, key) => {
+    if (!home || typeof home !== 'object') return undefined;
+    const proto = Object.getPrototypeOf(home);
+    if (proto === null) throw new TypeError(`Cannot read properties of null (reading '${String(key)}')`);
+    return Reflect.get(proto, key, receiver);
+  },
+  // Calls what object_super_get read, after the arguments were evaluated.
+  object_super_call: (fn, receiver, key, args) => {
     if (typeof fn === 'function') return __callHostFunction(fn, args, receiver);
-    return __memDispatch.closure_call_spread(fn, args);
+    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') {
+      return __memDispatch.closure_call_spread(fn, args);
+    }
+    throw new TypeError(`(intermediate value)${key === undefined ? '' : '.' + String(key)} is not a function`);
   },
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);

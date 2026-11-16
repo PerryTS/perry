@@ -10,16 +10,34 @@ impl<'a> FuncEmitCtx<'a> {
         match expr {
             // `super[key](args)` in an object-literal method: `home` is the literal, and
             // the lookup starts at its [[Prototype]]. A class method's home is its class.
+            // The method is read before the arguments are evaluated, as in `o.m(args)`.
             Expr::ObjectSuperMethodCall {
                 home,
                 key,
                 receiver,
                 args,
             } if self.current_class.is_none() => {
+                // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
                 self.emit_frame_begin(func, 4);
+                self.emit_store_arg(func, 1, receiver);
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, home);
-                self.emit_store_arg(func, 1, key);
-                self.emit_store_arg(func, 2, receiver);
+                self.emit_store_arg(func, 1, receiver);
+                self.emit_store_arg(func, 2, key);
+                self.emit_memcall(func, "object_super_get", 3);
+                func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                self.emit_slot_addr(func, 0);
+                func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // The key names the callee in the TypeError; a computed one is not evaluated twice.
+                match key.as_ref() {
+                    Expr::String(_) => self.emit_store_arg(func, 2, key),
+                    _ => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
+                }
                 self.emit_store_arg(func, 3, &Expr::Array(args.clone(), None));
                 self.emit_memcall(func, "object_super_call", 4);
             }
