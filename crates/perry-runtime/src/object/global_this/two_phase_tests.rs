@@ -189,43 +189,6 @@ fn core_then_rest_equals_one_pass() {
     });
 }
 
-/// A two-phase program whose first touch is the FULL entry populates its
-/// realm in one pass through the phased copy of the rows
-/// (`js_realm_populate_whole`): the global's keys and their order, and which
-/// slots are bound, are those of the one-pass copy; the realm is complete and
-/// nothing holds the poison word.
-#[test]
-fn the_phased_copy_in_one_pass_equals_the_one_pass_copy() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let reference = one_pass();
-    std::thread::Builder::new()
-        .stack_size(16 << 20)
-        .spawn(move || {
-            let value = fetch_globals::whole_realm_for_test();
-            let global = global_ptr(value);
-            assert!(fetch_globals::realm_is_complete());
-            assert_eq!(own_names(value), reference.names);
-            for name in REALM_CORE_GLOBALS.iter().chain(REALM_REST_GLOBALS) {
-                let word = slot_word(global, name);
-                assert_ne!(word, REALM_UNBOUND_POISON, "{name}");
-                assert_eq!(
-                    word == UNDEFINED,
-                    reference.undefined.contains(name),
-                    "{name}"
-                );
-            }
-            // The core entry adopts the complete realm: the same object.
-            assert_eq!(js_get_global_core().to_bits(), value.to_bits());
-            for name in ["Map", "WeakMap", "Uint8Array", "Date", "Intl"] {
-                let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-                assert_eq!(ctor.to_bits(), slot_word(global, name), "{name}");
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap();
-}
-
 /// A runtime reader of a phase-A intrinsic leaves phase B alone; a reader of
 /// a phase-B intrinsic (`realm_intrinsic_addr`, the internal births' one
 /// materialize point) runs it, and gets the object the global then names.

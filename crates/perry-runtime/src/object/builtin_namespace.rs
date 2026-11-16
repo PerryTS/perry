@@ -203,6 +203,7 @@ unsafe fn seal_namespace(i: usize, bits: u64) {
 /// two-phase realm, whose namespaces the realm seal (phase A) did not see.
 /// No-op for a name that is no builtin namespace. The caller is the
 /// population (a builtin definition, in its no-move window).
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.seal_namespace_value")]
 #[cold]
 #[inline(never)]
 pub(crate) fn seal_namespace_value(name: &str, bits: u64) {

@@ -235,7 +235,7 @@ pub(super) fn compile_module_entry(
         }
 
         // Two-phase realm (the default; `PERRY_REALM_TWO_PHASE=0` is off):
-        // the entry module defines the runtime's four link-time hooks (weak
+        // the entry module defines the runtime's three link-time hooks (weak
         // in the runtime), so the runtime's own readers of a phase-A
         // intrinsic call the core entry and the full entry can complete a
         // core-only realm, with no mode test on any call; a program compiled
@@ -260,19 +260,6 @@ pub(super) fn compile_module_entry(
             let _ = f.create_block("entry");
             let blk = f.block_mut(0).unwrap();
             blk.call_void("js_realm_family_phase", &[(I32, "%identity")]);
-            blk.ret_void();
-            // The fourth hook: a complete realm in one pass (a first touch
-            // through the full entry, a `vm` context) runs the phased copy
-            // of the population, so the program does not link the one-pass
-            // copy beside it.
-            let f = llmod.define_function(
-                "perry_realm_populate_whole",
-                VOID,
-                vec![(PTR, "%global".to_string())],
-            );
-            let _ = f.create_block("entry");
-            let blk = f.block_mut(0).unwrap();
-            blk.call_void("js_realm_populate_whole", &[(PTR, "%global")]);
             blk.ret_void();
         }
 

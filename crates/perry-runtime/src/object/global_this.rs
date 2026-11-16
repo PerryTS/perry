@@ -166,7 +166,6 @@ pub(crate) use object_intrinsic::{
     ensure_object_intrinsics, ensure_object_prototype_shape, object_intrinsics_for_realm,
     object_prototype_intrinsic_bits,
 };
-pub use populate::{js_realm_populate_whole, perry_realm_populate_whole};
 pub(crate) use populate::{
     birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
     populate_global_this_builtins, populate_realm_core, populate_realm_rest, RealmPhases,

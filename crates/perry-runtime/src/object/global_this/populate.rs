@@ -75,60 +75,20 @@ mod two_phase_tests;
 ///
 /// The population has two phases (`perry_abi::realm_phase`): phase A, the
 /// core, then phase B, the rest. This runs both in ONE pass, every row in its
-/// declared place: the complete realm, for the thread's realm when its first
-/// touch is the full entry, and for a global that is not the thread's own (a
-/// `vm` context, an eval realm, the Rust tests).
-///
-/// Which copy of the rows runs is decided by the LINK
-/// ([`perry_realm_populate_whole`]): a program holds one of the two.
-#[inline(always)]
-pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
-    #[cfg(test)]
-    if super::fetch_globals::test_two_phase() {
-        return js_realm_populate_whole(singleton_at_entry);
-    }
-    perry_realm_populate_whole(singleton_at_entry)
-}
-
-/// The fourth link-time hook of the realm: the population of a complete
-/// realm in one pass. The default, linked when the program is not compiled
-/// for a two-phase realm: the one-pass copy of the rows
-/// (`populate_global_this_builtins_inner`), the code the population always
-/// was. A two-phase program defines it as a jump to
-/// [`js_realm_populate_whole`], which runs the same rows in the same order
-/// through the phased copy it links anyway, so it does not hold two copies of
-/// the population (8.5 KB of text).
+/// declared place: the complete realm, for the thread's realm when the
+/// program is not compiled for a two-phase realm, and for a global that is
+/// not the thread's own (a `vm` context, an eval realm, the Rust tests).
 // Out of line and listed in the default hot-text order
 // (`hot_text_order.txt`), so that its builtin-definition scope is inlined
 // here and nowhere else, whichever callers the realm has.
-#[no_mangle]
-#[linkage = "weak"]
 #[inline(never)]
-pub extern "C" fn perry_realm_populate_whole(singleton_at_entry: *mut ObjectHeader) {
+pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
     // Every install below is a builtin definition, which arms the own-override
     // guard only on a Map, Set or Date owner (#10697).
     super::super::own_override::as_builtin_definition(|| {
         populate_global_this_builtins_inner(singleton_at_entry)
     })
 }
-
-/// The one-pass population for a two-phase program
-/// ([`perry_realm_populate_whole`]): every row, in declaration order, through
-/// `populate_realm_phase` with both phases in one pass. The rows, their order
-/// and every install are those of the one-pass copy; a row's phase test is
-/// one compare that never looks at a name.
-#[no_mangle]
-pub extern "C" fn js_realm_populate_whole(singleton_at_entry: *mut ObjectHeader) {
-    super::super::own_override::as_builtin_definition(|| {
-        populate_realm_phase(singleton_at_entry, RealmPhases::Both)
-    })
-}
-
-/// Keepalive anchor: `js_realm_populate_whole` is referenced only from
-/// codegen-generated `.o` files (see `KEEP_JS_MODULE_TOP_THIS`).
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_REALM_POPULATE_WHOLE: extern "C" fn(*mut ObjectHeader) = js_realm_populate_whole;
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
 /// Linked only into a program compiled for a two-phase realm.
@@ -195,10 +155,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     populate_rows(singleton_at_entry, RealmPhases::Both)
 }
 
-/// The phased copy of the population: the same rows, each behind its phase
-/// test (`RealmPhases::binds`). One phase of a two-phase realm, or both in
-/// one pass (`js_realm_populate_whole`). Linked only into a program compiled
-/// for a two-phase realm, which does not link the one-pass copy.
+/// One phase of a two-phase realm: the same rows, each behind its phase test
+/// (`RealmPhases::binds`). A second copy of the population, linked only into
+/// a program compiled for a two-phase realm.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.populate_realm_phase")]
 #[optimize(size)]
 #[inline(never)]
 fn populate_realm_phase(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
