@@ -2267,6 +2267,16 @@ impl Model {
                         self.cons(o, Cons::Store { key, src, site });
                     }
                 } else if any && self.index_store_done.insert((n, o, src, site, kind)) {
+                    // Diagnostic (off: one flag read): why a store keeps the any key.
+                    if shape == 0 && crate::derive::why_indexed() {
+                        let f = self.stores.get(site as usize).and_then(|x| self.funcs.get(x.func as usize)).map_or("?", |f| f.name.as_str());
+                        let nd = &self.nodes[n as usize];
+                        eprintln!(
+                            "WHY_ANYKEY {f} site={site} key={n} prim={:#x} strs_top={} dropped={} toks={:?}",
+                            prim, strs == STRS_TOP, nd.dropped,
+                            toks.iter().take(4).map(|&t| self.tok_name(t)).collect::<Vec<_>>()
+                        );
+                    }
                     self.cons(
                         o,
                         Cons::Store {
