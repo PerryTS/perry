@@ -5342,7 +5342,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: '2'
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
       CARGO_INCREMENTAL: '0'
     steps:
     - name: Checkout repository (inline git)
@@ -5394,7 +5395,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      CARGO_BUILD_JOBS: '2'
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
       CARGO_INCREMENTAL: '0'
     steps:
     - name: Checkout repository (inline git)
@@ -5506,7 +5508,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      CARGO_BUILD_JOBS: '2'
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
       CARGO_INCREMENTAL: '0'
     steps:
     - name: Checkout repository (inline git)
