@@ -149,3 +149,48 @@ fn r9read10_l5_store_length_kept() {
     let pf = facts(&format!("{LEN}(Number as any).length = 5;\nconsole.log(x.length);"));
     assert!(!proven(&sites(&pf, "length")));
 }
+
+/// b1: `BYTES_PER_ELEMENT` of a typed-array constructor (23.2.6.1).
+#[test]
+fn r9read10_b1_bytes_per_element() {
+    let pf = facts("function convertArray(array: any, type: any) {
+  if (!array || array.constructor === type) return array;
+  if (typeof type.BYTES_PER_ELEMENT === \"number\") return new type(array);
+  return Array.prototype.slice.call(array);
+}
+console.log(convertArray([1, 2], Float32Array).length);");
+    assert!(proven(&sites(&pf, "BYTES_PER_ELEMENT")));
+}
+
+/// b2 (RED before): the receiver may also be `undefined` (a call without
+/// the argument): that arm throws TypeError (7.1.18 ToObject), the typed
+/// array constructor arm reads its constant (23.2.6.1).
+#[test]
+fn r9read10_b2_bytes_per_element_or_undefined() {
+    let pf = facts("function convertArray(array: any, type?: any) {
+  if (!array || array.constructor === type) return array;
+  if (typeof type.BYTES_PER_ELEMENT === \"number\") return new type(array);
+  return Array.prototype.slice.call(array);
+}
+const n = Number(process.argv[2] ?? \"1\");
+try { console.log(n > 0 ? convertArray([1, 2], Float32Array).length : convertArray([1, 2]).length); } catch (e) { console.log(\"TypeError\"); }");
+    let v = sites(&pf, "BYTES_PER_ELEMENT");
+    assert!(proven(&v) && v.iter().all(|x| x.starts_with("PerKind")), "{v:?}");
+}
+
+/// b3: an unknown-key store on the typed array constructor cannot change
+/// `BYTES_PER_ELEMENT` ({ [[Writable]]: false, [[Configurable]]: false },
+/// 23.2.6.1: OrdinarySet and OrdinaryDefineOwnProperty both fail): still
+/// decided.
+#[test]
+fn r9read10_b3_unknown_store_cannot_change_constant() {
+    let pf = facts("function convertArray(array: any, type?: any) {
+  if (typeof type.BYTES_PER_ELEMENT === \"number\") return new type(array);
+  return array;
+}
+(Float32Array as any)[process.argv[3] ?? \"q\"] = 1;
+const n = Number(process.argv[2] ?? \"1\");
+try { console.log(n > 0 ? convertArray([1, 2], Float32Array).length : convertArray([1, 2]).length); } catch (e) { console.log(\"TypeError\"); }");
+    let v = sites(&pf, "BYTES_PER_ELEMENT");
+    assert!(proven(&v), "{v:?}");
+}
