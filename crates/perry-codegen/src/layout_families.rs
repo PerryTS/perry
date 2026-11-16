@@ -1236,14 +1236,22 @@ fn filled_records(modules: &[&HirModule]) -> BTreeSet<String> {
 
 /// A static family before its late keys: the class, its runtime parent, its
 /// constructor keys in store order, the names its prototype chain defines
-/// (methods and accessors: a store of one may run a setter or shadow it, so
-/// it never gets a late slot), and the chain's class ids, leaf first.
+/// (methods and accessors), and the chain's class ids, leaf first. A member
+/// name gets no late slot ([`RawFamily::late_blocked`]) unless it is only a
+/// writable data member of the chain (an ordinary method): a `[[Set]]` on a
+/// receiver whose chain holds a writable data property creates an own data
+/// property (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor steps 2-3), so
+/// its slot is exact; a store of an accessor's name runs the setter.
 #[derive(Debug, Clone)]
 pub(crate) struct RawFamily {
     pub class_id: u32,
     pub parent: u32,
     pub keys: Vec<FamilyKey>,
     pub members: BTreeSet<String>,
+    /// The member names that are an ordinary method on some class of the
+    /// chain and an accessor on none: a store of one creates an own data
+    /// property (owner decision 2026-11-16: one fixed late slot per class).
+    pub data_methods: BTreeSet<String>,
     pub chain: Vec<u32>,
     /// [`FamilyLayout::init_count`].
     pub init: usize,
@@ -1255,6 +1263,16 @@ pub(crate) struct RawFamily {
     /// reads, and per constant the variant's keys in key order.
     pub discriminant: u32,
     pub variants: Vec<(f64, Vec<FamilyKey>)>,
+}
+
+impl RawFamily {
+    /// Does the chain keep `k` out of the late slots? An accessor (a store
+    /// runs it), and a generator or async method (kept out with the
+    /// accessors); an ordinary method is a writable data property, so a
+    /// store of its name creates an own data property: it may hold a slot.
+    pub(crate) fn late_blocked(&self, k: &str) -> bool {
+        self.members.contains(k) && !self.data_methods.contains(k)
+    }
 }
 
 /// A root class's constructor keys stored straight from a parameter, as
@@ -1495,16 +1513,29 @@ fn program_families(
             );
         }
         let mut members = BTreeSet::new();
+        let mut accessors = BTreeSet::new();
+        let mut methods = BTreeSet::new();
         for x in &chain {
             members.extend(x.methods.iter().map(|m| m.name.clone()));
             members.extend(x.getters.iter().map(|(n, _)| n.clone()));
             members.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.getters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            for m in &x.methods {
+                if m.is_generator || m.is_async {
+                    accessors.insert(m.name.clone());
+                } else {
+                    methods.insert(m.name.clone());
+                }
+            }
         }
+        let data_methods = methods.difference(&accessors).cloned().collect();
         out.push(RawFamily {
             class_id: c.id,
             parent,
             keys,
             members,
+            data_methods,
             chain: chain.iter().map(|x| x.id).collect(),
             init,
             params: if chain.len() == 1 && !c.is_literal_shape() {
