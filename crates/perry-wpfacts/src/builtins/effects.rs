@@ -813,6 +813,10 @@ impl Run {
             // 25.1.6.7). Likewise a shared one (25.2.2.1).
             Cow::Borrowed("ArrayBuffer.prototype") => "ArrayBuffer",
             Cow::Borrowed("SharedArrayBuffer.prototype") => "SharedArrayBuffer",
+            // The URLSearchParams object a URL's `searchParams` getter returns
+            // is the one `new URLSearchParams()` makes (constructors.rs),
+            // with its modelled members (WHATWG URL 6.2).
+            Cow::Borrowed("URLSearchParams.prototype") => "URLSearchParams",
             Cow::Borrowed(p) => p,
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
