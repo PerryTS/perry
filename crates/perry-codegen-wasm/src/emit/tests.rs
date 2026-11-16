@@ -673,6 +673,26 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 #[test]
+fn table_update_row_count_renders_the_new_rows() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Table, Text, tableSetColumnHeader, tableUpdateRowCount } from "perry/ui";
+const table = Table(3, 1, (row: number, col: number) => Text("r" + row));
+tableSetColumnHeader(table, 0, "Name");
+tableUpdateRowCount(table, 4);
+"#,
+            r#"
+const table = [...uiHandles.values()].find(e => e.tagName === "TABLE");
+const rows = table.querySelector("tbody").children;
+console.log(table.querySelector("thead tr").textContent + " " + rows.length + " " + rows[rows.length - 1].textContent);
+"#
+        ),
+        "Name 4 r3"
+    );
+}
+
+#[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(
         run_web_source(
