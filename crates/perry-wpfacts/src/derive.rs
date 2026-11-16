@@ -322,6 +322,16 @@ impl Access {
     }
 }
 
+/// MATHB1: the verdict of a call of a builtin namespace member `N.m`
+/// ([`namespace_callee`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntrinsicCallee {
+    /// The callee is exactly the realm's original `N.m` (named `N.m`).
+    Exact(String),
+    /// Refused, with the reason.
+    No(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct SiteFacts {
     /// Observational solve identity. Never read by a proof or digest.
@@ -339,6 +349,11 @@ pub struct SiteFacts {
     pub receiver_prims: u16,
     pub top: bool,
     pub verdict: Verdict,
+    /// MATHB1: a call whose receiver (a member call) or callee (a value
+    /// call) names a builtin namespace member: is the callee exactly the
+    /// original builtin ([`namespace_callee`])? `None`: no namespace member.
+    /// Information only: no count and no consumer reads it yet.
+    pub intrinsic_callee: Option<IntrinsicCallee>,
     pub fixed_shape: bool,
     /// A call site: the bodies its callee set holds (every body, sorted;
     /// empty when the set holds anything that is not a body).
@@ -1757,6 +1772,14 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             receiver_values,
             receiver_prims,
         ) = verdict_of(s, recvs);
+        let intrinsic_callee = if s.is_call && !matches!(s.access, Access::Set { .. }) {
+            let all = element::with_copies(&copies, recvs);
+            let set = receiver_set(m, &all);
+            let dropped = all.iter().any(|&r| m.nodes[r as usize].dropped);
+            namespace_callee(m, s, &set.toks, set.prims, dropped)
+        } else {
+            None
+        };
         // Observational only (the facts dump): the verdict of each function
         // copy holding the site (an inlined body is a copy of its own), so a
         // dump compares a copy with the same copy of another run. Never read
@@ -1841,6 +1864,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             receiver_prims,
             top,
             verdict,
+            intrinsic_callee,
             fixed_shape,
             targets: t,
             target_fns,
@@ -4247,6 +4271,128 @@ fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
         return None;
     }
     matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
+}
+
+/// MATHB1 rule R1: is the callee of call site `s` exactly the realm's
+/// original builtin namespace member `N.m`?
+///
+/// The site names `N.m` when it is a member call `recv.m(…)` whose receiver
+/// set holds a builtin namespace token `N` (the direct form is the HIR pair
+/// `NamespacePatched(N) ? N.m(…) : <intrinsic>`, whose generic arm is this
+/// ordinary member call), or a value call whose callee set holds the
+/// builtin function value `N.m` (`const c = N.m; c(…)`). It is exact iff:
+/// - the set is that one token (no other token, no ⊤, no primitive) and no
+///   source left a value out (`dropped`);
+/// - `m` is a member the realm declares on `N` (`members::ns_member`);
+/// - no write may reach the member: no `native_writes` entry for (N, m),
+///   (N, every key), (⊤, m) or (⊤, every key): every [[Set]] (a store
+///   through any reference, a computed store whose key may be `m`, Reflect.set,
+///   Object.assign), [[DefineOwnProperty]] (defineProperty /
+///   defineProperties / Reflect.defineProperty, accessors), [[Delete]], a
+///   Proxy's target, and a value given to unknown code records one there
+///   (`note_native_write` / `note_native_data_write`); no program field of
+///   N holds a stored value under `m` or a computed key (`fields`,
+///   `field_any`);
+/// - the global binding `N` is not replaced: no `native_writes` entry on the
+///   global object (`globalThis` or the HIR's global sentinel) under the
+///   key `N` or every key (`globalThis.N = v`, a sloppy `N = v`,
+///   `globalThis[k] = v`);
+/// - the whole program is solved (no unit mode: units use the facts-off
+///   rule) and no unknown code holds the realm (`realm_held`).
+///   CLOSED-WORLD PREMISE (owner 2026-11-14): code the solve does not see
+///   (eval, `new Function`, an open native addon) is exactly what
+///   `realm_held` names; nothing else can write `N.m`.
+///
+/// Lexical shadowing (a local, parameter, import or class named `N`) is the
+/// HIR's: the pair and the global read are emitted only for an unshadowed
+/// `N` (`shadows_unqualified_global`).
+pub(crate) fn namespace_callee(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+    dropped: bool,
+) -> Option<IntrinsicCallee> {
+    use crate::model::BuiltinNs;
+    let named: Vec<Tok> = toks.iter().copied().filter(|&t| !m.closed_marker(t)).collect();
+    // The namespace and member the site names.
+    let (ns, member): (BuiltinNs, String) = if s.value_call {
+        let mut ids = named.iter().filter_map(|&t| match m.toks[t as usize] {
+            TokKind::BuiltinFn(Native::Member { identity, .. }) => {
+                let (n, k) = identity.rsplit_once('.')?;
+                Some((crate::builtins::ns_by_name(n)?, k.to_string()))
+            }
+            _ => None,
+        });
+        ids.next()?
+    } else {
+        let ns = named.iter().find_map(|&t| match m.toks[t as usize] {
+            TokKind::Builtin(ns) if !crate::builtins::global_object(m, t) => Some(ns),
+            _ => None,
+        })?;
+        (ns, m.atoms[s.key as usize].clone())
+    };
+    let name = format!("{ns:?}.{member}");
+    let no = |why: &str| Some(IntrinsicCallee::No(format!("{name}: {why}")));
+    let ns_tok = m.tok_index.get(&TokKind::Builtin(ns)).copied();
+    let one = named.len() == 1
+        && match m.toks[named[0] as usize] {
+            TokKind::BuiltinFn(_) => s.value_call,
+            _ => Some(named[0]) == ns_tok,
+        };
+    if !one || prim != 0 || toks.contains(&TOP) {
+        let mut held: Vec<String> = named.iter().map(|&t| m.tok_name(t)).collect();
+        if toks.contains(&TOP) {
+            held.push("⊤".into());
+        }
+        if prim != 0 {
+            held.push(format!("primitives {prim:#x}"));
+        }
+        return no(&format!("the set holds more than the one namespace member: {}", held.join(", ")));
+    }
+    if dropped {
+        return no("a source left a value out");
+    }
+    if m.unit_mode {
+        return no("units mode: the facts-off rule decides");
+    }
+    // CLOSED-WORLD PREMISE (owner 2026-11-14).
+    if m.realm_held {
+        return no("unknown code holds the realm and may replace the member");
+    }
+    if !crate::builtins::members::ns_declares(ns, &member) {
+        return no("not a member the realm declares on the namespace");
+    }
+    let a = m.atom_index.get(&member).copied();
+    let written = |t: Tok| {
+        m.native_writes.contains_key(&(t, None)) || a.is_some_and(|a| m.native_writes.contains_key(&(t, Some(a))))
+    };
+    if written(TOP) {
+        return no("a write on an unknown receiver may reach the member");
+    }
+    if let Some(t) = ns_tok {
+        if written(t) {
+            return no("a write on the namespace may reach the member");
+        }
+        let empty = |n: Option<&NodeId>| {
+            n.is_none_or(|&n| {
+                let nd = &m.nodes[n as usize];
+                !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+            })
+        };
+        if !empty(a.and_then(|a| m.fields.get(&(t, a)))) || !empty(m.field_any.get(&t)) {
+            return no("a store on the namespace may reach the member");
+        }
+    }
+    for (&(t, k), _) in m.native_writes.iter() {
+        if t == TOP || !crate::builtins::global_object(m, t) {
+            continue;
+        }
+        if k.is_none_or(|k| crate::builtins::ns_by_name(&m.atoms[k as usize]) == Some(ns)) {
+            return no("the global binding of the namespace may be replaced");
+        }
+    }
+    Some(IntrinsicCallee::Exact(name))
 }
 
 /// [`Verdict::NsExport`]: every receiver is a module namespace token of

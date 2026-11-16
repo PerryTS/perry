@@ -971,6 +971,15 @@ impl<'a> Gen<'a> {
                 );
                 out
             }
+            // MATHB1 R2: the namespace pair `NamespacePatched(N) ? <generic>
+            // : <intrinsic>` is ONE call: the generic arm's ordinary member
+            // call `N.m(…)`, which also runs the original member when nothing
+            // replaced it. The intrinsic arm is not a second call.
+            Expr::Conditional {
+                condition,
+                then_expr,
+                ..
+            } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => self.expr_zs(fx, then_expr),
             Expr::Conditional {
                 condition,
                 then_expr,
