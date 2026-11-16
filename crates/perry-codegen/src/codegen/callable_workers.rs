@@ -16,6 +16,12 @@ struct State {
     creates: crate::layout_desc::create_families::CallableState,
     globals: std::collections::HashSet<u32>,
     executable: bool,
+    // Read while a body is lowered; a worker that lacks either lowers that
+    // body differently from the serial loop (dead-body traps, constructor
+    // layout stores), and whether a module lowers in parallel depends on the
+    // budget at that moment.
+    bodies: crate::verify_facts::CallableState,
+    plans: crate::layout_desc::function_families::CallableState,
 }
 impl State {
     fn capture() -> Self {
@@ -30,6 +36,8 @@ impl State {
             creates: crate::layout_desc::create_families::callable_state(),
             globals: crate::stmt::region_loop::callable_const_globals(),
             executable: crate::expr::agent_ptr::output_is_executable(),
+            bodies: crate::verify_facts::callable_state(),
+            plans: crate::layout_desc::function_families::callable_state(),
         }
     }
     fn install(&self) {
@@ -43,6 +51,8 @@ impl State {
         self.creates.install();
         crate::stmt::region_loop::install_callable_const_globals(self.globals.clone());
         crate::expr::agent_ptr::set_output_is_executable(self.executable);
+        self.bodies.install();
+        self.plans.install();
         crate::ext_registry::begin_module_capture();
     }
 }
@@ -52,6 +62,7 @@ struct Effects {
     creates: std::collections::BTreeMap<String, crate::layout_desc::create_families::Site>,
     ffi: Vec<&'static str>,
     requests: std::collections::BTreeSet<u32>,
+    closed: std::collections::BTreeSet<String>,
 }
 impl Effects {
     fn take() -> Self {
@@ -61,6 +72,7 @@ impl Effects {
             creates: crate::layout_desc::create_families::take_callable_effects(),
             ffi: crate::ext_registry::take_module_capture(),
             requests: crate::layout_ordinals::take_callable_requests(),
+            closed: super::closed_targets::take_callable_notes(),
         }
     }
     fn merge(self) {
@@ -69,6 +81,7 @@ impl Effects {
         self.layouts.merge();
         crate::layout_desc::create_families::merge_callable_effects(self.creates);
         crate::ext_registry::merge_callable_capture(self.ffi);
+        super::closed_targets::merge_callable_notes(self.closed);
     }
 }
 

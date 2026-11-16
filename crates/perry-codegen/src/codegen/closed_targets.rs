@@ -29,6 +29,17 @@ pub(crate) fn begin_module() {
     CLOSED.with(|c| c.borrow_mut().clear());
 }
 
+/// A parallel lowering worker's notes (`codegen::callable_workers`), taken
+/// on the worker and merged into the module thread's record, so `apply` sees
+/// every closed site whichever thread lowered it.
+pub(crate) fn take_callable_notes() -> BTreeSet<String> {
+    CLOSED.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+pub(crate) fn merge_callable_notes(notes: BTreeSet<String>) {
+    CLOSED.with(|c| c.borrow_mut().extend(notes));
+}
+
 /// A facts-proven site, closed over `distinct` bodies, calls `target` directly.
 pub(crate) fn note_closed_call(target: &str, distinct: usize) {
     if distinct == 0 || distinct > MAX_CLOSED_SITE_TARGETS {
