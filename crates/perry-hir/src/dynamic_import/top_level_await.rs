@@ -50,6 +50,7 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_has_top_level_await)
                 || catch

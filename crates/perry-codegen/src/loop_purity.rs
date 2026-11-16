@@ -610,6 +610,7 @@ fn collect_body_declared_locals(body: &[Stmt], out: &mut HashSet<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_body_declared_locals(body, out);
                 if let Some(c) = catch {

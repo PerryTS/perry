@@ -495,6 +495,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 fix_stmts(body, table);
                 if let Some(catch) = catch.as_mut() {

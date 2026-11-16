@@ -290,7 +290,7 @@ fn generator_step(ctx: &mut FnCtx<'_>, r: &Record) -> (String, String) {
 
 /// Whether `source` holds only proven sync generators whose for-of step
 /// resumes the body directly ([`generator_resume`]).
-fn direct_generator(ctx: &FnCtx<'_>, source: u32) -> bool {
+pub(crate) fn direct_generator(ctx: &FnCtx<'_>, source: u32) -> bool {
     !ctx.wpfacts_off
         && !ctx.target_triple.contains("wasm")
         && ctx.wpfacts.generator_sources.contains(&source)
@@ -306,7 +306,7 @@ fn direct_generator(ctx: &FnCtx<'_>, source: u32) -> bool {
 /// slot the cold `yield*` inner-result step writes its value to. `home`
 /// still holds the generator on return. Returns (done as a NaN-boxed
 /// boolean, value).
-fn generator_resume(
+pub(crate) fn generator_resume(
     ctx: &mut FnCtx<'_>,
     source: u32,
     home: &str,

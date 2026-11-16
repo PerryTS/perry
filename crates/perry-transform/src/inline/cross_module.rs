@@ -83,6 +83,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(check_stmt)
                     && catch.as_ref().is_none_or(|c| c.body.iter().all(check_stmt))
@@ -475,6 +476,7 @@ fn recursive_stmt_count(stmts: &[Stmt]) -> usize {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().map(count).sum::<usize>()
                     + catch
@@ -550,6 +552,7 @@ fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, visit);
                 if let Some(catch) = catch {
@@ -1006,6 +1009,7 @@ fn walk_stmts_mut(stmts: &mut [Stmt], visit: &mut impl FnMut(&mut Expr)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts_mut(body, visit);
                 if let Some(catch) = catch {
@@ -1238,6 +1242,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(|s| check_stmt(s, extern_names))
                     && catch

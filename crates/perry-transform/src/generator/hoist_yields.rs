@@ -126,6 +126,7 @@ fn hoist_yields_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
             body,
             catch,
             finally,
+            ..
         } => {
             hoist_yields_in_stmts(body, next_id);
             if let Some(c) = catch {

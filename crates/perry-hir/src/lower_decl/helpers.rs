@@ -101,6 +101,7 @@ pub fn collect_let_decls_in_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_let_decls_in_stmt(s, out);

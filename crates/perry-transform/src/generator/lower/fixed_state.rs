@@ -64,6 +64,7 @@ fn collect_box_prealloc_ids(stmts: &[Stmt], out: &mut Vec<LocalId>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_box_prealloc_ids(body, out);
                 if let Some(c) = catch {
@@ -194,6 +195,7 @@ pub(super) fn record_step_kinds(stmts: &mut Vec<Stmt>, step_id: LocalId) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 record_step_kinds(body, step_id);
                 if let Some(catch) = catch {

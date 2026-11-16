@@ -1068,6 +1068,28 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         m.arr_len_permuted(t);
     }
     let c = m.positional(call, 3);
+    // ECMA-262 23.1.3: the index, count and depth operands these methods
+    // convert (ToIntegerOrInfinity 7.1.5 -> ToNumber -> ToPrimitive( hint
+    // number ) 7.1.1: an object operand's `@@toPrimitive`, `valueOf` or
+    // `toString` runs). A spread operand may land at any position.
+    let converted: &[usize] = match name {
+        Some("at" | "with" | "flat") => &[0],
+        Some("slice" | "splice" | "toSpliced") => &[0, 1],
+        Some("indexOf" | "lastIndexOf" | "includes") => &[1],
+        Some("fill") => &[1, 2],
+        Some("copyWithin") => &[0, 1, 2],
+        _ => &[],
+    };
+    for &i in converted {
+        if let Some(&a) = c.args.get(i) {
+            to_prim(m, a, "array index operand (ToIntegerOrInfinity)");
+        }
+    }
+    if !converted.is_empty() {
+        for &a in &c.spread {
+            to_prim(m, a, "array index operand (ToIntegerOrInfinity)");
+        }
+    }
     let elems = m.field_any(t);
     // Every method here reads or writes the receiver's indices through its
     // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the

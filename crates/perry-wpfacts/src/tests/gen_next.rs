@@ -322,3 +322,100 @@ fn gen_next_fact_u8_own_other_key() {
 fn gen_next_fact_p5_read_absent_key() {
     holds("const it: any = gen(); console.log(it.tag); for (const s of it) { console.log(g(s)); }");
 }
+
+/// `generator_source` of the payload local of every protocol for-of step
+/// (`iteratorStep(LocalGet(payload), ..)`, what codegen's native step site
+/// names), in program order: generator bodies first.
+fn step_payloads(src: &str) -> Vec<bool> {
+    let ast = perry_parser::parse_typescript(
+        &format!(
+            r#"
+            class Svc {{ size = 3; }}
+            class Alt {{ other = 1; size = 4; }}
+            class Called {{ value: any; constructor(v: any) {{ this.value = v; }} }}
+            function g(a: any) {{ return a.size; }}
+            function* gen() {{ yield new Svc(); }}
+            {src}
+            "#
+        ),
+        "t.ts",
+    )
+    .expect("parses");
+    let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").expect("lowers");
+    perry_transform::transform_generators(&mut hir);
+    let text = format!("{hir:?}");
+    let head = "\"iteratorStep\", args: [LocalGet(";
+    let ids: Vec<u32> = text
+        .match_indices(head)
+        .map(|(at, _)| {
+            let n: String = text[at + head.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            n.parse().expect("local id")
+        })
+        .collect();
+    assert!(!ids.is_empty(), "no protocol for-of step");
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    let pf = compute(&[("t.ts".to_string(), &hir)], &cfg);
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    ids.iter()
+        .map(|id| {
+            mb.locals
+                .iter()
+                .find(|(l, _)| l == id)
+                .is_some_and(|(_, b)| b.generator_source)
+        })
+        .collect()
+}
+
+/// P6. A for-of inside a generator body over a parameter that holds only
+/// generators: its payload is GetIterator(source), which returns the
+/// generator itself, so the `[iterator#n]` object is never born.
+#[test]
+fn gen_next_fact_p6_generator_body_forof_payload() {
+    let p = step_payloads(
+        "function* range(n: number) { for (let i = 0; i < n; i++) yield new Svc(); }
+         function* mapGen(it: any, f: (x: any) => any) { for (const v of it) yield f(v); }
+         let t = 0;
+         for (const s of mapGen(range(3), (x: any) => x)) { t += g(s); }
+         console.log(t);",
+    );
+    assert!(p.iter().all(|&b| b), "{p:?}");
+}
+
+/// U9. The same body fed a generator AND an array: GetIterator over the
+/// array makes the iterator object, and array mode puts the array itself
+/// in the payload. The step inside `wrap` keeps the runtime step.
+#[test]
+fn gen_next_fact_u9_generator_body_forof_mixed_source() {
+    let p = step_payloads(
+        "function* wrap(src: any) { for (const v of src) yield v; }
+         for (const s of wrap(gen())) { console.log(g(s)); }
+         for (const s of wrap([new Alt()])) { console.log(g(s)); }",
+    );
+    assert!(!p[0], "{p:?}");
+}
+
+/// U10. A Set source: its `@@iterator` returns a fresh Set iterator.
+#[test]
+fn gen_next_fact_u10_generator_body_forof_set_source() {
+    let p = step_payloads(
+        "function* wrap(src: any) { for (const v of src) yield v; }
+         for (const s of wrap(gen())) { console.log(g(s)); }
+         for (const s of wrap(new Set([new Alt()]))) { console.log(g(s)); }",
+    );
+    assert!(!p[0], "{p:?}");
+}
+
+/// U11. A generator with an own key: not the birth layout.
+#[test]
+fn gen_next_fact_u11_generator_body_forof_own_key() {
+    let p = step_payloads(
+        "function* wrap(src: any) { for (const v of src) yield v; }
+         const it: any = gen(); it.tag = 1;
+         for (const s of wrap(it)) { console.log(g(s)); }",
+    );
+    assert!(!p[0], "{p:?}");
+}

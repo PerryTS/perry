@@ -1171,6 +1171,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 body,
                 catch,
                 finally,
+                forof_completion: None,
             });
         }
         ast::Stmt::Throw(throw_stmt) => {

@@ -212,6 +212,7 @@ fn lower_array_assignment_from_expr(
             ],
         }),
         finally: None,
+        forof_completion: None,
     });
     result.push(close_stmt);
     result.extend(source.release(&[iter_id, next_id]));

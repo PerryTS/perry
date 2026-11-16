@@ -139,6 +139,7 @@ fn collect_lets<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_lets(body, lets, writes);
                 if let Some(c) = catch {

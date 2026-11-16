@@ -567,6 +567,7 @@ fn writes_in_stmt<'a>(s: &'a Stmt, id: u32, out: &mut Vec<Step<'a>>) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             writes_in_stmts(body, id, out)
                 && catch
@@ -614,6 +615,7 @@ fn jumps_to_latch(stmts: &[Stmt], plain: bool) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             jumps_to_latch(body, plain)
                 || catch

@@ -432,6 +432,7 @@ pub fn transform_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             transform_stmts(
                 body,

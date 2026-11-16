@@ -234,6 +234,7 @@ fn body_cost(stmts: &[Stmt]) -> usize {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body_cost(body)
                     + catch.as_ref().map_or(0, |c| body_cost(&c.body))

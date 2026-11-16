@@ -287,6 +287,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_use_this_as_value(body, fields)
                     || catch

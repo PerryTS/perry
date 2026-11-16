@@ -481,6 +481,7 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 let entry = state.clone();
                 if let Some(finally) = finally {

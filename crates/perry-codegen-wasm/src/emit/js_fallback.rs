@@ -136,6 +136,7 @@ impl WasmModuleEmitter {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 out.push_str(&format!("{pad}    try {{\n"));
                 for s in body {

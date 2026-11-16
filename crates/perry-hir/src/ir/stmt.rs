@@ -53,6 +53,12 @@ pub enum Stmt {
         body: Vec<Stmt>,
         catch: Option<CatchClause>,
         finally: Option<Vec<Stmt>>,
+        /// Set only on the try that lowers a synchronous `for...of` body: the
+        /// loop-completion local (0 normal, 1 outgoing break/return, 2 close
+        /// started) its `finally` reads. A generator `return()` completion that
+        /// leaves the loop from a yield sets it to 1 before running that
+        /// `finally` (ECMA-262 14.7.5.7 IteratorClose with a return completion).
+        forof_completion: Option<LocalId>,
     },
     /// Switch statement
     Switch {

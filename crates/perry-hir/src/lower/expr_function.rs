@@ -1493,6 +1493,7 @@ fn insert_class_capture_refresh_into_stmt(stmt: &mut Stmt, re_regs: &[Stmt]) {
             body,
             catch,
             finally,
+            ..
         } => {
             insert_class_capture_refresh_before_returns(body, re_regs);
             if let Some(c) = catch {
@@ -1733,6 +1734,7 @@ fn insert_class_capture_refresh_inside_expressions(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 insert_class_capture_refresh_inside_expressions(body, regs);
                 if let Some(catch) = catch {
@@ -1809,6 +1811,7 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 insert_class_capture_refresh_after_assignments(body, regs);
                 if let Some(c) = catch {

@@ -833,7 +833,36 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     );
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    // Built after the realm's `Array` (phase B of a two-phase realm, or a
+    // reader that asks for the intrinsic on its own between the phases): its
+    // `toString` is `Array.prototype.toString` from this moment, as the
+    // population makes it once both exist (ECMA-262 23.2.3.33). Built before
+    // `Array` (the population's own call, a program without a realm): the
+    // population aliases it.
+    //
+    // Only a two-phase realm can be in that state (a one-pass population
+    // builds the intrinsic before it binds `Array`), so the alias is reached
+    // through the realm's link-time hook: a program compiled without the
+    // switch calls the empty default and does not link `alias_to_string_late`.
+    if crate::array::intrinsic_prototype_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::Array,
+    ) != 0
+    {
+        fetch_globals::realm_typed_array_built_late();
+    }
     (ctor, proto)
+}
+
+/// [`ensure_typed_array_intrinsic`] built the intrinsic after the realm's
+/// `Array`: alias its `toString` now. Its own copy of the alias, out of line,
+/// so the population keeps the inlined one it always had. Called from
+/// `js_realm_family_phase` only (a two-phase program).
+#[cold]
+#[inline(never)]
+pub(super) fn alias_to_string_late() {
+    let global =
+        crate::value::js_nanbox_get_pointer(fetch_globals::realm_core()) as *mut ObjectHeader;
+    super::populate::alias_typed_array_proto_to_string(global);
 }
 
 /// Public accessor for the `%TypedArray%.prototype` object. Returns the cached

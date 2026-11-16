@@ -462,6 +462,7 @@ impl IteratorRecordPlan {
             body: mut user,
             catch,
             mut finally,
+            forof_completion,
         }) = body.pop()
         else {
             unreachable!("record loop requires its completion handler");
@@ -554,6 +555,7 @@ impl IteratorRecordPlan {
                 }],
                 catch,
                 finally,
+                forof_completion,
             },
         ]
     }
@@ -612,6 +614,7 @@ fn walk_stmt(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 walk_stmt(s, f);
@@ -992,6 +995,7 @@ mod tests {
                 ],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             }],
         );
         let Stmt::Try { body: outer, .. } = &lowered[3] else {

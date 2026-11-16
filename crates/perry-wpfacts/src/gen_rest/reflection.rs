@@ -3,10 +3,13 @@
 use super::*;
 
 impl<'a> Gen<'a> {
-    /// ToPropertyKey of a reflective key operand
-    /// (`Object.getOwnPropertyDescriptor`, `Reflect.getOwnPropertyDescriptor`,
-    /// `Reflect.deleteProperty`): an object key runs its `@@toPrimitive`,
-    /// `toString` or `valueOf` before the lookup.
+    /// ToPropertyKey (ECMA-262 7.1.19) of the key value `key`: the one place
+    /// an operation of the program's own syntax says it converts a key
+    /// (`o[k]` read, store, update, call, `delete o[k]`, `k in o`,
+    /// `super[k]`, computed class member and field names, the reflective
+    /// key operands). An object key runs its `@@toPrimitive`, else
+    /// OrdinaryToPrimitive( hint string ): `toString`, then `valueOf`
+    /// (7.1.1), with `this` = the key; `Protocol::ToPrimitive` names them.
     pub(crate) fn to_property_key(&mut self, key: NodeId) {
         let r = self.m.reason("ToPropertyKey");
         self.m.cons(

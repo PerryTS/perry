@@ -178,6 +178,7 @@ fn collect_counter_floors(stmts: &[Stmt], out: &mut HashMap<u32, i64>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_counter_floors(body, out);
                 if let Some(c) = catch {
@@ -266,6 +267,7 @@ fn collect_counter_ceilings(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_counter_ceilings(body, constants, floors, out);
                 if let Some(c) = catch {

@@ -76,6 +76,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
                 }],
                 catch: None,
                 finally: Some(vec![]),
+                forof_completion: None,
             }],
         ),
         (
@@ -92,6 +93,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
                     }],
                 }),
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -144,6 +146,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
                     body: vec![Stmt::Continue],
                     catch: None,
                     finally: Some(vec![]),
+                    forof_completion: None,
                 }],
             }])],
         ),

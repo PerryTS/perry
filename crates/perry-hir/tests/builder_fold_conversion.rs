@@ -62,6 +62,7 @@ fn all_stmt_lists(module: &perry_hir::Module) -> Vec<&[Stmt]> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     nested(body, out);
                     if let Some(catch) = catch {

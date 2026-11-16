@@ -347,6 +347,8 @@ pub extern "C" fn js_vm_create_script_branded(code: f64, options: f64) -> f64 {
     )
 }
 
+// One `matches!`: inlined at each caller (the population tests every row).
+#[inline(always)]
 pub(crate) fn is_worker_messaging_constructor(property: &str) -> bool {
     matches!(
         property,
@@ -354,6 +356,9 @@ pub(crate) fn is_worker_messaging_constructor(property: &str) -> bool {
     )
 }
 
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 pub(crate) fn publish_worker_messaging_constructor(
     global: *mut ObjectHeader,
     property: &str,
@@ -1060,16 +1065,13 @@ unsafe fn native_module_property_by_name_impl(
         return bound_native_callable_export_value("util", "debuglog");
     }
     if module_name == "url" && property_name == "URL" {
-        return js_get_global_this_builtin_value(b"URL".as_ptr(), "URL".len());
+        return crate::object::builtin_value_core("URL");
     }
     if module_name == "url" && property_name == "URLSearchParams" {
-        return js_get_global_this_builtin_value(
-            b"URLSearchParams".as_ptr(),
-            "URLSearchParams".len(),
-        );
+        return crate::object::builtin_value_core("URLSearchParams");
     }
     if module_name == "url" && property_name == "URLPattern" {
-        return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+        return crate::object::builtin_value_core("URLPattern");
     }
     // #6560/#9599 — Bun globals shim pack. The stdio properties are
     // BunFile-like handles built by `bun_compat`. In Bun platform mode the

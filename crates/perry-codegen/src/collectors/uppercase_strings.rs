@@ -73,6 +73,7 @@ fn find_candidates(stmts: &[Stmt], candidates: &mut HashSet<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 find_candidates(body, candidates);
                 if let Some(catch) = catch {
@@ -319,6 +320,7 @@ fn check_uses_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             check_uses_in_stmts(
                 body,

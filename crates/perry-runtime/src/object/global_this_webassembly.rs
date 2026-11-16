@@ -856,6 +856,9 @@ extern "C" fn webassembly_module_custom_sections_thunk(
 // Namespace assembly
 // ────────────────────────────────────────────────────────────────────────
 
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 pub(super) fn create_webassembly_namespace() -> f64 {
     let ns_obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { WebAssembly, kind = namespace, members = { Module; Instance; Memory; Table; Global; CompileError; LinkError; RuntimeError; Exception; Tag; JSTag, attrs = configurable; compile, attrs = writable | enumerable | configurable; validate, attrs = writable | enumerable | configurable; instantiate, attrs = writable | enumerable | configurable; compileStreaming, attrs = writable | enumerable | configurable; instantiateStreaming, attrs = writable | enumerable | configurable; promising, attrs = writable | enumerable | configurable; }, births = [ArrayBuffer, Promise, Uint8Array]; } };
     if ns_obj.is_null() {

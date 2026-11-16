@@ -379,6 +379,7 @@ fn scan_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts(body, decl, excl);
             if let Some(c) = catch {
@@ -457,6 +458,7 @@ fn own_consts(ss: &[Stmt], out: &mut Vec<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 own_consts(body, out);
                 if let Some(c) = catch {
@@ -566,6 +568,7 @@ pub(crate) fn jumps_leave(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             jumps_leave(body)
                 && catch.as_ref().is_none_or(|c| jumps_leave(&c.body))
@@ -611,6 +614,7 @@ pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             finally.as_deref().is_some_and(|f| !may_complete(f))
                 || (!may_complete(body) && catch.as_ref().is_none_or(|c| !may_complete(&c.body)))
@@ -638,6 +642,7 @@ fn breaks_out(ss: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 labeled(body)
                     || catch.as_ref().is_some_and(|c| labeled(&c.body))
@@ -658,6 +663,7 @@ fn breaks_out(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             breaks_out(body)
                 || catch.as_ref().is_some_and(|c| breaks_out(&c.body))

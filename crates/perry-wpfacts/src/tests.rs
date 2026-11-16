@@ -1937,6 +1937,7 @@ mod builtin_ctor_statics;
 mod collection_entries;
 mod concat_elements;
 mod console_protocol;
+mod keycall1;
 mod constructor_values;
 mod cycle_e20_own_field;
 mod cycle_locked_member;
