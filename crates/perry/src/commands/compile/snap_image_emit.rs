@@ -1257,6 +1257,9 @@ fn stop_summary(stops: &[format::Stop]) -> String {
                     value & 0xffff_ffff, cell & 0xffff, off & 0xffff, cell >> 16, off >> 16, value & 0xffff_ffff, value >> 32
                 )
             }
+            format::STOP_MINT_MISMATCH if off == format::MINT_BAD_LAZY_ROW => {
+                format!("mint record {cell} (shape id {value}) is on a static row that is neither a runtime layout nor a lazy image row naming its word")
+            }
             format::STOP_MINT_MISMATCH => format!(
                 "mint record {cell} (shape id {value}) does not rebuild to the live record: {}",
                 match off {

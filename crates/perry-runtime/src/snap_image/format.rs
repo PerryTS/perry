@@ -325,6 +325,8 @@ pub const MINT_BAD_IDENTITY: u32 = 2;
 pub const MINT_BAD_FIELDS: u32 = 3;
 /// A row or an id is out of mint order, or the word does not carry the recorded row.
 pub const MINT_BAD_ORDER: u32 = 4;
+/// A lazy image row whose descriptor does not name the recorded word.
+pub const MINT_BAD_LAZY_ROW: u32 = 5;
 
 /// One shape record minted between the baseline and the cut, as the facts a replay hands
 /// the runtime's mint: the identity facts, the record's attached state and the layout
@@ -350,6 +352,8 @@ pub struct MintRec {
     pub constfn: Vec<(u32, u64)>,
     /// Rollback parent, created birth shape, field define target, three integrity targets.
     pub handles: [u32; 6],
+    /// The image descriptor a lazy-row record names (index + 1), or 0.
+    pub family_desc: u32,
     /// The rep deprecation edges: to-nopointer, to-any, then the tail words.
     pub edges: Vec<u32>,
 }
@@ -383,6 +387,7 @@ pub fn mint_blob(recs: &[MintRec]) -> Vec<u8> {
         for h in r.handles {
             o.extend(h.to_le_bytes());
         }
+        o.extend(r.family_desc.to_le_bytes());
         o.extend((r.edges.len() as u32).to_le_bytes());
         for e in &r.edges {
             o.extend(e.to_le_bytes());
@@ -425,6 +430,7 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
         for h in &mut r.handles {
             *h = le32(take(4)?);
         }
+        r.family_desc = le32(take(4)?);
         for _ in 0..le32(take(4)?) {
             r.edges.push(le32(take(4)?));
         }
