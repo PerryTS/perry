@@ -423,4 +423,31 @@ impl Model {
             Key::Any(_) => self.key_may_name_str(key, &self.atoms[a as usize]),
         }
     }
+
+    /// Store `site`'s key value is a Number on every path: its key node is
+    /// whole (not dropped), holds no object and no ⊤, and no primitive kind
+    /// but Number. ECMA-262 7.1.19 ToPropertyKey of a Number is its ToString
+    /// (7.1.12.1, 6.1.6.1.20): a canonical numeric string (`numeric_key`).
+    pub(crate) fn number_key_store(&self, site: SiteId) -> bool {
+        self.stores[site as usize].key_value.is_some_and(|n| {
+            let n = &self.nodes[n as usize];
+            !n.dropped && n.pts.is_empty() && n.prim != 0 && n.prim & !prim::NUM == 0
+        })
+    }
+
+    /// May post-birth computed store `site` (key `key`) on template `tm`
+    /// write the property named `a`? A Number-keyed store
+    /// (`number_key_store`) writes only a canonical numeric name; on an
+    /// ordinary object nothing else (10.1.9.2 OrdinarySet: property P only),
+    /// on an Array also `length` (10.4.2.1 ArrayDefineOwnProperty).
+    pub(crate) fn any_store_may_name(&self, tm: TmplId, site: SiteId, key: Key, a: Atom) -> bool {
+        if !self.key_may_name(key, a) {
+            return false;
+        }
+        if !self.number_key_store(site) {
+            return true;
+        }
+        let name = self.atoms[a as usize].as_str();
+        crate::solve::numeric_key(name) || (name == "length" && self.tmpl_may_be_array(tm))
+    }
 }
