@@ -478,7 +478,8 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// lazy automaton's storage (`regex::perex_owner::ProgramCell::dfa`).
     RegexProgram,
     /// A realm's [[Intrinsics]] record: every born cell is a raw-address edge
-    /// (`array::for_each_realm_record_cell`).
+    /// (`array::realm_record_cells`, visited by the one out-of-line
+    /// `visit_realm_record_cells` arm).
     RealmRecord,
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,

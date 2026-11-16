@@ -15,6 +15,27 @@ fn pointer_slot(slot: *mut usize) -> GcMutableSlotDescriptor {
     GcMutableSlotDescriptor::Slot(GcMutableSlot::pointer(slot))
 }
 
+/// The `RealmRecord` arm of every collector (mark, relocation and dirty-slot
+/// rescan): the record's born cells, as the `vm` install's slot gives its cell
+/// words. One out-of-line body shared by every collector instantiation; the arm
+/// runs only for `vm` realm records.
+///
+/// # Safety
+/// `user_ptr` is a live `GC_TYPE_REALM_RECORD` payload.
+#[inline(never)]
+unsafe fn visit_realm_record_cells(
+    user_ptr: usize,
+    visit: &mut dyn FnMut(GcMutableSlotDescriptor),
+) {
+    let (cells, count) = crate::array::realm_record_cells(user_ptr);
+    for i in 0..count {
+        let slot = cells.add(i);
+        if crate::array::realm_record_cell_is_born(*slot) {
+            visit(pointer_slot(slot));
+        }
+    }
+}
+
 impl HeapChildSlotIterator {
     /// The payload mask WORD for a `Masked` selection whose mask is
     /// [`LayoutSlotMask::Inline`]: exactly the slot indices [`Self::next`]
@@ -616,15 +637,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
             }
         }
         GcRewriteDescriptorKind::RealmRecord => {
-            // Mark, relocation and dirty-slot rescan: the record's born cells
-            // (the `vm` install's slot gives its cell words).
-            let (cells, count) = crate::array::realm_record_cells(user_ptr as usize);
-            for i in 0..count {
-                let slot = cells.add(i);
-                if crate::array::realm_record_cell_is_born(*slot) {
-                    visit(pointer_slot(slot));
-                }
-            }
+            visit_realm_record_cells(user_ptr as usize, &mut visit);
         }
         GcRewriteDescriptorKind::Buffer => {
             #[cfg(test)]
