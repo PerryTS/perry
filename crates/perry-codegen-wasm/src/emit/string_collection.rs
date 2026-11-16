@@ -137,6 +137,8 @@ impl WasmModuleEmitter {
             "array_some",
             "array_every",
             "class_new",
+            "tagged_template",
+            "template_raw",
             "class_set_method",
             "class_call_method",
             "class_super_get",
@@ -577,6 +579,14 @@ impl WasmModuleEmitter {
             Expr::Array(elems, _) => {
                 for e in elems {
                     self.collect_strings_in_expr(e);
+                }
+            }
+            Expr::TaggedTemplateStrings { cooked, raw, .. } => {
+                for e in cooked {
+                    self.collect_strings_in_expr(e);
+                }
+                for s in raw {
+                    self.intern_string(s);
                 }
             }
             Expr::Object(fields) => {

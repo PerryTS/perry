@@ -1054,3 +1054,29 @@ console.log("push", o.list.push(7), o.list.push(8), o.list.join(","));
         "1,2\npair 1-2|3+4 a|b+c\npush 1 2 7,8"
     );
 }
+
+// A tagged template calls its tag with the call site's strings array, whose `raw`
+// holds the unescaped text and which is the same object on every evaluation, through
+// a static method, an instance method or a function.
+#[test]
+fn a_tagged_template_passes_its_strings_array_to_any_tag() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { static tag(s: string[], a: any, b: any) { return s.join("|") + "/" + a + "," + b; } }
+console.log(T.tag`a${1}b${2}c`);
+class K { m = "M"; tag(s: any, v: any) { return this.m + s[0] + v + s[1]; } }
+console.log(new K().tag`v=${3}!`);
+function raw(s: TemplateStringsArray) { return s.raw[0] + "|" + s.raw.length + "|" + s[0]; }
+console.log(raw`a\nb`);
+function anyRaw(s: any) { return s.raw[0] + "," + s.raw[1]; }
+console.log(anyRaw`x\ty${0}z`);
+function id(s: any) { return s; }
+function site() { return id`q`; }
+const a = site();
+console.log(a === site(), a === id`q`, Array.isArray(a), a.length);
+"#
+        ),
+        "a|b|c/1,2\nMv=3!\na\\nb|1|a\nb\nx\\ty,z\ntrue false true 1"
+    );
+}
