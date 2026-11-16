@@ -2250,7 +2250,20 @@ impl Model {
                 // the any-key store. GLOBK.
                 let ret_node = self.to_prim_ret_nodes.contains(&n);
                 let mut obj_key = false;
-                if !ret_node {
+                // Only a receiver that may be the global object gains from
+                // the ToPrimitive result key (G2's any-String field); every
+                // other receiver keeps the any-key store for an object key
+                // (no extra nodes).
+                let recv_global = {
+                    let gt = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    let ot = self.tok(TokKind::Builtin(BuiltinNs::Other));
+                    let p = &self.nodes[o as usize].pts;
+                    p.contains_tok(TOP) || p.contains_tok(gt) || p.contains_tok(ot)
+                };
+                if !ret_node && !recv_global {
+                    obj_key = !toks.is_empty();
+                }
+                if !ret_node && recv_global {
                     let r = self.reason("ToPropertyKey");
                     for &t in toks {
                         let ret = match t != TOP && !self.is_marker(t) {
