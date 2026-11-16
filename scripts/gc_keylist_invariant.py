@@ -21,7 +21,11 @@ def keylist_contract_problems(entry: dict, root: Path | None) -> list[str]:
         "object/canonical_keys.rs": [r"alloc_canonical_key_list\(", r"fn prune_dead_canonical_keys\("],
         "object/key_attrs.rs": [r"fn alloc_canonical_key_list\(", r"js_array_alloc_canonical_keys\("],
         "array/alloc.rs": [r"arena_alloc_gc_old_born_tenured\(bytes, 8, crate::gc::GC_TYPE_ARRAY\)",
-                           r"if canonical\s*\{\s*\(\*header\)\.gc_flags \|= crate::gc::GC_FLAG_SHAPE_SHARED;"],
+                           # The instruments-only census note (476d7d8a5a) may precede the store;
+                           # nothing else may, so the flag stays unconditional on a canonical birth.
+                           r"if canonical\s*\{\s*"
+                           r"(?:#\[cfg\(perry_gc_instruments\)\]\s*crate::arena::alloc_life::shape_shared\(header\);\s*)?"
+                           r"\(\*header\)\.gc_flags \|= crate::gc::GC_FLAG_SHAPE_SHARED;"],
         "gc/oldgen.rs": [r"flags & \(GC_FLAG_FORWARDED \| GC_FLAG_PINNED \| GC_FLAG_SHAPE_SHARED\) == 0"],
         "gc/dead_owner.rs": [r"prune: crate::object::canonical_keys::prune_dead_canonical_keys"],
     }
