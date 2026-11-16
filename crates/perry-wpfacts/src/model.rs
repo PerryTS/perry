@@ -778,6 +778,20 @@ pub struct FuncInfo {
     pub ret_param: Option<u32>,
 }
 
+/// GLOBK3: one `Object.defineProperty(o, key, d)` under a computed key
+/// (`Cons::DefineAnyKey`).
+#[derive(Clone, Copy, Debug)]
+pub struct DefineAny {
+    pub o: NodeId,
+    pub key: NodeId,
+    pub value: NodeId,
+    pub get: NodeId,
+    pub set: NodeId,
+    pub site: SiteId,
+    pub reason: u32,
+    pub accessor: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum ThisArg {
     Undef,
@@ -2842,6 +2856,20 @@ pub struct Model {
     pub global_any_off: bool,
     /// G2: the any-key stores taken, for that replay.
     pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// GLOBK3: the global object's field of what `defineProperty` under a
+    /// computed key defines there (`DefineAny`): it flows into the any-key
+    /// field and, as a define may replace the configurable accessor
+    /// `navigator` (which a store cannot), into the navigator reads.
+    pub global_def: Option<NodeId>,
+    /// GLOBK3: the navigator reads made before `global_def` exists.
+    pub global_def_navs: Vec<NodeId>,
+    /// GLOBK3: the computed-key defines taken onto the global object (by
+    /// key node), replayed onto the old path when G2 turns off.
+    pub global_defs: Vec<(DefineAny, Tok)>,
+    pub global_def_done: crate::pts::FxHashSet<NodeId>,
+    /// GLOBK3: the holder node of a computed-key define's old path (E5
+    /// HARD), by key node.
+    pub define_any_old: crate::pts::FxHashMap<NodeId, NodeId>,
     /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
     /// (`implicit`); a computed key's object value stores under what its
     /// ToPrimitive returns (`Cons::StoreIndexed` on that node).

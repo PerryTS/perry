@@ -649,6 +649,25 @@ pub enum Cons {
         reason: u32,
         accessor: bool,
     },
+    /// GLOBK3: `Object.defineProperty(o, k, d)` under a computed key `key`,
+    /// on the nodes `o`, `key` and `set` (any of them growing decides
+    /// again, `Model::define_computed_key`). The global object under a key
+    /// proven never a Symbol, with no setter, defines one string-named
+    /// global binding (ECMA-262 20.1.2.4, 10.1.6.3, 9.1.1.4): the
+    /// descriptor's `value` and what a call of its `get` with `this` = the
+    /// global object returns join the global's any-key field. Any other
+    /// receiver or key: E5 HARD, a store of `value` under any key and the
+    /// computed-key accessors, as before.
+    DefineAnyKey {
+        o: NodeId,
+        key: NodeId,
+        value: NodeId,
+        get: NodeId,
+        set: NodeId,
+        site: SiteId,
+        reason: u32,
+        accessor: bool,
+    },
     /// The node is the key of a store into `o` in a for-in body: a run's one
     /// key stores under that key; any other under the keys the loop's
     /// subject enumerates when `subj` is that subject's node (ENUM3,
@@ -1061,6 +1080,7 @@ impl Cons {
             Cons::ForInBody { .. } => "forinbody",
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
+            Cons::DefineAnyKey { .. } => "defineanykey",
             Cons::StoreKeyed { .. } => "storekeyed",
             Cons::EnumKeyStore { .. } => "enumkeystore",
             Cons::EnumKeyAny { .. } => "enumkeyany",

@@ -254,6 +254,19 @@ impl Model {
             }
             Cons::EnumKeyAny { o, src, .. } => format!("enumkeyany {n} {o} {src}"),
             Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
+            Cons::DefineAnyKey {
+                o,
+                key,
+                value,
+                get,
+                set,
+                site,
+                reason,
+                accessor,
+            } => format!(
+                "defineanykey {n} {o} {key} {value} {get} {set} {site} {reason} {}",
+                *accessor as u8
+            ),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }
