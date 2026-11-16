@@ -265,3 +265,66 @@ console.log(typeof r, !r, r !== null, r === undefined, r.n);
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
 }
+
+// PROXY5 R3: ToPrimitive of a Proxy (String, `+`, a template; 7.1.1) with
+// a get trap and without one: `@@toPrimitive`, `valueOf`, `toString` are
+// [[Get]]s of the Proxy, the callable one runs with `this` = the Proxy.
+const TO_PRIM: &str = r#"const N = String(process.argv[2]);
+function mk(g: boolean): any {
+  const t = { n: 1, toString(): string { return "T" + this.n; } };
+  const h: any = g ? { get(o: any, k: any) { return k === "n" ? N : o[k]; } } : {};
+  return new Proxy(t, h);
+}
+const a = mk(true), b = mk(false);
+console.log(String(a), "" + a, `${a}`, String(b), "" + b, `${b}`);
+"#;
+
+#[test]
+fn px5_r3_to_primitive_of_a_proxy() {
+    let (tops, held) = solve(TO_PRIM);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+    let v = verdicts(TO_PRIM, "n");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s.contains("Proxy")),
+        "`this.n` in toString sees the Proxy: {v:?}"
+    );
+}
+
+// K11: a get trap that returns a non-callable `toString`: OrdinaryToPrimitive
+// skips it, `valueOf` returns the Proxy (an object): TypeError (as node).
+#[test]
+fn px5_k11_non_callable_to_string() {
+    let src = r#"const N = String(process.argv[2]);
+const p: any = new Proxy({ n: N }, { get(o: any, k: any) { return k === "toString" ? 5 : o[k]; } });
+try { console.log(String(p)); } catch (e) { console.log(e instanceof TypeError, p.n); }
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// K12: a Proxy over a function: ToPrimitive reads Function.prototype's
+// `toString` through the forward and calls it with `this` = the Proxy.
+// That builtin is opaque to the solver: it receives the Proxy (an escape:
+// the old path), as it receives a plain function.
+#[test]
+fn px5_k12_proxy_of_a_function() {
+    let src = r#"const N = String(process.argv[2]);
+const f: any = new Proxy(function (): string { return N; }, {});
+console.log(String(f).startsWith("function"), typeof f);
+"#;
+    let (tops, held) = solve(src);
+    let plain = src.replace(
+        "new Proxy(function (): string { return N; }, {})",
+        "function (): string { return N; }",
+    );
+    let (ptops, pheld) = solve(&plain);
+    eprintln!("px5 k12 proxy held={held} plain held={pheld} plain={ptops:?}");
+    assert!(
+        tops.iter()
+            .filter(|t| t.contains("E9"))
+            .all(|t| t == "E9 Proxy target (escape)" || t == "E9 Proxy handler"),
+        "only the opaque builtin's escape: {tops:?}"
+    );
+}

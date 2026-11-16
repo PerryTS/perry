@@ -1826,6 +1826,13 @@ impl Model {
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`).
+        if proto == Protocol::ToPrimitive {
+            if let TokKind::Proxy(p) = self.toks[t as usize] {
+                self.proxy_to_primitive(p, reason);
+                return;
+            }
+        }
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
         self.rest_used(t);
         // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,

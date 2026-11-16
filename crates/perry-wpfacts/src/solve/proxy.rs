@@ -16,7 +16,10 @@
 //! runs no program code and carries no program value (the arm of every
 //! native TypeError). PROXY4: a test of the value itself (strict equality,
 //! ToBoolean, `??`, typeof, ToObject) runs no internal method: the token is
-//! an object there like any other. Every other operation on the token, and
+//! an object there like any other. PROXY5: ToPrimitive (and so
+//! ToPropertyKey) reads and calls `@@toPrimitive`, `valueOf` and `toString`
+//! through [[Get]] with `this` = the Proxy (`proxy_to_primitive`). Every
+//! other operation on the token, and
 //! an escape of it, takes the path the solver had before (`degrade`): the
 //! target is hard E9 and goes to ⊤, the handler escapes, and the operation
 //! sees ⊤. The hold's reason names that first operation.
@@ -182,6 +185,47 @@ impl Model {
         }
     }
 
+    /// ToPrimitive (7.1.1) of Proxy `p`, and through it ToString, ToNumber,
+    /// ToNumeric and ToPropertyKey (7.1.19: hint String). `@@toPrimitive`
+    /// (GetMethod 7.3.11), then OrdinaryToPrimitive's (7.1.1.1) `valueOf`
+    /// and `toString`, each a [[Get]] of the Proxy (`proxy_get`: the get
+    /// trap and the forward to the target). A callable result is called with
+    /// `this` = the Proxy and the hint; a non-callable one is not called (a
+    /// TypeError, or the next method) and runs nothing. What the calls
+    /// return goes back to the runtime (an object result: TypeError, 7.1.1
+    /// step 1.b.vi, 7.1.1.1 step 6), as for any object (`implicit`). A
+    /// superset of the one order each hint takes. Once per Proxy.
+    pub(crate) fn proxy_to_primitive(&mut self, p: u32, reason: u32) {
+        let t = self.tok(TokKind::Proxy(p));
+        if !self.implicit_done.insert((t, Protocol::ToPrimitive)) {
+            return;
+        }
+        let ret = self.node_l("implicit-ret");
+        self.to_prim_ret.insert(t, ret);
+        self.to_prim_ret_nodes.insert(ret);
+        self.nodes[ret as usize].sink = true;
+        let arg = self.node_l("implicit-arg");
+        self.add_prim(arg, prim::ALL);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Tok(t),
+            args: vec![arg; 4],
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.thrown,
+        });
+        self.protocol_calls.insert(call);
+        self.why_mint(call, Some(t), reason);
+        for k in Protocol::ToPrimitive.keys().unwrap_or(&[]) {
+            let a = self.atom(k);
+            let f = self.node_l("proxy-method");
+            self.proxy_get(p, Key::Named(a), NO_NODE, f);
+            self.cons(f, Cons::Call { call });
+        }
+    }
+
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
@@ -242,10 +286,24 @@ impl Model {
             | Cons::NotNull { .. }
             | Cons::TypeIs { .. }
             | Cons::Falsy { .. }
-            | Cons::Objects { .. } => {
+            | Cons::Objects { .. }
+            // The interval of an arithmetic or string operand (`range`):
+            // an object operand's is ⊤; its ToPrimitive is its own rule
+            // (`Cons::Implicit`, below).
+            | Cons::Range { .. }
+            // The type of a `+` or arithmetic result: an object operand
+            // gives any primitive its ToPrimitive may return, as for any
+            // object; ToPrimitive itself is `Cons::Implicit`.
+            | Cons::Plus { .. }
+            | Cons::Arith { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
+            // ToPrimitive (7.1.1), and ToPropertyKey's (7.1.19, hint String).
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            } => self.proxy_to_primitive(p, reason),
             _ => {
                 self.proxy_degrade(p, c.kind_name());
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
