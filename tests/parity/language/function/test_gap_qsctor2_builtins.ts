@@ -25,7 +25,7 @@ function check(name: string, args: any[]) {
     const holder = { C };
     const value: any = new holder.C(...args);
     // Coordinator: baseline default-prototype gaps are tracked separately.
-    if (name !== "URLSearchParams" && name !== "DisposableStack")
+    if (name !== "URLSearchParams")
         console.log(name, typeof value, Object.getPrototypeOf(value) === C.prototype);
     function Target() {}
     const reflected: any = Reflect.construct(C, args, Target);
