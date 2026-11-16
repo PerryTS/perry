@@ -437,6 +437,11 @@ fn realm_core_slow() -> f64 {
         return js_get_global_this();
     }
     if whole != 0 {
+        // A second copy of the realm's word, and a root of its own: the
+        // global is promoted (moved once) at the first minor collection, and
+        // every registered copy is rewritten then. An unregistered copy would
+        // name the old address
+        // (`test_gap_realm_two_phase_global_first_gc.ts`).
         THREAD_GLOBAL_THIS.with(|c| {
             c.core.set(whole);
             crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
