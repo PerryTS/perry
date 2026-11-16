@@ -342,6 +342,12 @@ pub struct SiteFacts {
     /// The HIR identity `(module, function id)` of each body in `targets`,
     /// sorted (`field_read_calls`).
     pub target_fns: Vec<(u32, u32)>,
+    /// ONCHG2: a `T0Mono` / `T0Set` call whose callee set is only compiled
+    /// closures and function declarations: each as a plain body codegen can
+    /// call through the loaded function object (`bindings::BodyRef`), sorted.
+    /// Empty when a body in `targets` is a method, a body without a HIR id
+    /// or the set is no set of bodies.
+    pub target_bodies: Vec<crate::bindings::BodyRef>,
     /// `AccessorGet` / `AccessorSet`: the program class id whose prototype
     /// holds the one accessor function in `targets` (the class template its
     /// `this` belongs to). Codegen calls that class's accessor directly.
@@ -1785,6 +1791,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             .collect();
         target_fns.sort_unstable();
         target_fns.dedup();
+        // ONCHG2: the callee set as bodies called through the function object
+        // (13.3.6.2 EvaluateCall: the value the member read gives is the
+        // callee; 10.2.1 [[Call]] of an ECMAScript function object runs its
+        // body with that object's environment): all or nothing.
+        let target_bodies = if matches!(verdict, Verdict::T0Mono | Verdict::T0Set) && s.is_call {
+            crate::bindings::bodies_of_fns(m, targets.keys().copied())
+        } else {
+            Vec::new()
+        };
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
@@ -1817,6 +1832,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             fixed_shape,
             targets: t,
             target_fns,
+            target_bodies,
             holder_class,
             guard_keys,
         });
