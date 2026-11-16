@@ -200,6 +200,13 @@ pub enum RealmEffect {
     /// (a ToObject wrapper, a temporary, its fresh result); it keeps nothing
     /// in an object the program already holds.
     StoresFresh,
+    /// `stores_bytes(slot)`: the body copies bytes into the backing store of
+    /// the byte views in the slot (a Buffer, a TypedArray, a DataView, an
+    /// ArrayBuffer) without a [[Set]]: no program value is kept, no setter
+    /// or coercion runs, and a value of any other kind is left as it is. An
+    /// element read of a typed array gives its element type whatever its
+    /// bytes are (ECMA-262 10.4.5.15 TypedArrayGetElement).
+    StoresBytes(RealmSlot),
     /// What the call returns; several `returns` are a union.
     Returns(RealmOperand),
     /// Compares the slot's values by identity (SameValue, SameValueZero,
@@ -421,6 +428,7 @@ pub fn validate_effects(
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
+            RealmEffect::StoresBytes(slot) => not_result(slot)?,
             // An input of the call: not its result, not a call's return.
             RealmEffect::Identity(slot) => not_result(slot)?,
             // The runtime hands over the object it made and returns.
@@ -547,6 +555,9 @@ pub mod emit {
                         format!("{p}RealmEffect::AsyncResource({})", slot(p, s))
                     }
                     RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
+                    RealmEffect::StoresBytes(s) => {
+                        format!("{p}RealmEffect::StoresBytes({})", slot(p, s))
+                    }
                     RealmEffect::Identity(s) => format!("{p}RealmEffect::Identity({})", slot(p, s)),
 
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),

@@ -206,9 +206,10 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             slot(callee) || operand(this) || args.iter().any(operand)
         }
         RealmEffect::Stores { src, dst } => slot(src) || slot(dst),
-        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) | RealmEffect::Identity(s) => {
-            slot(s)
-        }
+        RealmEffect::Escapes(s)
+        | RealmEffect::AsyncResource(s)
+        | RealmEffect::Identity(s)
+        | RealmEffect::StoresBytes(s) => slot(s),
         RealmEffect::Returns(o) => operand(o),
         RealmEffect::StoresFresh | RealmEffect::Open => false,
     })
@@ -408,6 +409,8 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
+            // Bytes into a byte view's backing store: no value flows.
+            RealmEffect::StoresBytes(s) => slot(s),
             // An observation of the slot's values: no flow to model.
             RealmEffect::Identity(_) => true,
             RealmEffect::Escapes(s) => slot(s),
@@ -1101,6 +1104,11 @@ fn run(
                 }
             }
             RealmEffect::StoresFresh => {}
+            // A byte copy into the slot's byte views: an element read of a
+            // typed array already carries its element type
+            // (`typed_array_elem_prim`, ECMA-262 10.4.5.15) and no [[Set]]
+            // runs, so nothing flows; the slot's values are not kept.
+            RealmEffect::StoresBytes(_) => {}
             // The body compares the slot's values by identity (DESIGN-p4l4
             // §2.2): recorded for the value-record derive only.
             RealmEffect::Identity(s) if m.value_records => {
