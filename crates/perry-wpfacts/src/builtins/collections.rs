@@ -1003,10 +1003,6 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
 /// elements the call already takes).
 pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
     if !m.is_arr(t) {
-        let own = m.num_fields(t);
-        let elems = m.field_any(t);
-        m.edge(own, elems);
-        m.plain_key(t, ChainAct::Load(elems));
         non_array_this(m, t, name, call);
     }
     array_method(m, t, Some(name), call);
@@ -1024,7 +1020,59 @@ pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// of an index (the program's `delete o[i]`: E7), `toString`'s Invoke of
 /// `join`, `concat`'s Get of `@@isConcatSpreadable`. HasProperty runs
 /// program code only as a Proxy's `has` trap, and a Proxy is ⊤.
+///
+/// Everything but `toString`'s `join` call reads `t` and `name` only, never
+/// the call: it is made once per (receiver, method) (`array_like_model`,
+/// `Model::array_like_this`) and serves every call site that applies the
+/// method to `t`. The same constraints on the same nodes once instead of
+/// once per site: the same facts.
 fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    let a = m.atom(name);
+    let recv = match m.array_like_this.get(&(t, a)) {
+        Some(&r) => r,
+        None => {
+            let r = array_like_model(m, t, name);
+            m.array_like_this.insert((t, a), r);
+            r
+        }
+    };
+    if name == "toString" {
+        let ja = m.atom("join");
+        let jc = recv_call(
+            m,
+            call,
+            t,
+            ja,
+            ThisArg::Tok(t),
+            0,
+            recv,
+            move |m, tg, jc| {
+                let f = m.node_l("array-like-join");
+                m.cons(
+                    tg,
+                    Cons::Load {
+                        key: Key::Named(ja),
+                        dst: f,
+                    },
+                );
+                m.tostring_join_calls.insert(jc);
+                m.cons(f, Cons::Call { call: jc });
+            },
+        );
+        let r = m.calls[jc as usize].ret;
+        let ret = m.calls[call as usize].ret;
+        m.edge(r, ret);
+    }
+}
+
+/// The call-free part of `non_array_this` for (`t`, `name`): the index
+/// reads (`num_fields` into the any-field, the plain-key chain read), the
+/// receiver node and what the method does to it. Returns the receiver node.
+fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
+    let own = m.num_fields(t);
+    let elems = m.field_any(t);
+    m.edge(own, elems);
+    m.plain_key(t, ChainAct::Load(elems));
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1063,41 +1111,12 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
             },
         );
     }
-    match name {
-        "toString" => {
-            let ja = m.atom("join");
-            let jc = recv_call(
-                m,
-                call,
-                t,
-                ja,
-                ThisArg::Tok(t),
-                0,
-                recv,
-                move |m, tg, jc| {
-                    let f = m.node_l("array-like-join");
-                    m.cons(
-                        tg,
-                        Cons::Load {
-                            key: Key::Named(ja),
-                            dst: f,
-                        },
-                    );
-                    m.tostring_join_calls.insert(jc);
-                    m.cons(f, Cons::Call { call: jc });
-                },
-            );
-            let r = m.calls[jc as usize].ret;
-            let ret = m.calls[call as usize].ret;
-            m.edge(r, ret);
-        }
-        "concat" => {
-            let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
-            let v = m.node_l("array-like-spreadable");
-            m.cons(recv, Cons::Load { key: k, dst: v });
-        }
-        _ => {}
+    if name == "concat" {
+        let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
+        let v = m.node_l("array-like-spreadable");
+        m.cons(recv, Cons::Load { key: k, dst: v });
     }
+    recv
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
