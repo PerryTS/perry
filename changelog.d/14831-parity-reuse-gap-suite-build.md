@@ -1,0 +1,1 @@
+CI: the full-tier `parity` shards link the `gap-suite-fast-build` artifact that `gap-suite-build` already produces in the same run, instead of each rebuilding the compiler, runtime archives, gc-effects sidecars and instrumented archives.
