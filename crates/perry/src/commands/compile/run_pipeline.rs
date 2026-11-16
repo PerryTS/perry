@@ -1950,13 +1950,23 @@ pub fn run_with_parse_cache(
         &ctx.cache_dir,
         activation,
     );
+    // The optional-feature scan read each pair as its intrinsic arm
+    // (`feature_detect::detect_program_optional_feature_usage`); a module
+    // whose pick keeps a generic call, or whose pairs stay for codegen, is
+    // scanned again so its generic calls select their features.
+    let mut generic_kept = Vec::new();
     if ctx.patched_builtins.namespace_pairs_by_verdict() {
         for (path, module) in ctx.native_modules.iter_mut() {
             let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
             let inactive = super::program_facts::namespace_pair_inactive(&program_facts, path);
-            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive);
+            if perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive) > 0 {
+                generic_kept.push(path.clone());
+            }
         }
+    } else if ctx.patched_builtins.namespace_pairs {
+        generic_kept.extend(ctx.native_modules.keys().cloned());
     }
+    collect_modules::feature_detect::detect_kept_generic_calls(&mut ctx, &generic_kept);
 
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference

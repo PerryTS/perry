@@ -29,6 +29,8 @@ struct Arms<'a> {
     proven: &'a BTreeSet<u32>,
     inactive: &'a BTreeSet<u32>,
     dead: bool,
+    /// Counts the pairs that keep their generic arm.
+    kept: &'a std::cell::Cell<usize>,
 }
 
 impl Arms<'_> {
@@ -66,6 +68,7 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
                 let arm = if proven.dead || (offset != 0 && proven.proven.contains(&offset)) {
                     std::mem::replace(else_expr.as_mut(), Expr::Undefined)
                 } else {
+                    proven.kept.set(proven.kept.get() + 1);
                     std::mem::replace(then_expr.as_mut(), Expr::Undefined)
                 };
                 *e = arm;
@@ -149,12 +152,31 @@ fn function(f: &mut crate::ir::Function, proven: Arms<'_>) {
 /// `inactive`: the function ids of the module's bodies the program never
 /// runs (empty when reach is incomplete); every pair in one takes the
 /// intrinsic.
+///
+/// Returns the number of pairs that keep the generic call: the only places
+/// where the picked module holds code a build without the pairs does not
+/// (MATHC4: the optional-feature scan runs again for such a module).
 pub fn pick_namespace_pair_arms(
     module: &mut Module,
     proven: &BTreeSet<u32>,
     inactive: &BTreeSet<u32>,
-) {
-    let proven = Arms { proven, inactive, dead: false };
+) -> usize {
+    let kept = std::cell::Cell::new(0);
+    module_arms(module, Arms { proven, inactive, dead: false, kept: &kept });
+    kept.get()
+}
+
+/// Replace every namespace pair of `module` by its intrinsic arm: the HIR the
+/// module has without the pairs. The optional-feature scan reads this view
+/// before the facts run (MATHC4), so a pair's generic arm selects no runtime
+/// feature unless the pick keeps it.
+pub fn take_intrinsic_arms(module: &mut Module) {
+    let none = BTreeSet::new();
+    let kept = std::cell::Cell::new(0);
+    module_arms(module, Arms { proven: &none, inactive: &none, dead: true, kept: &kept });
+}
+
+fn module_arms(module: &mut Module, proven: Arms<'_>) {
     stmts(&mut module.init, proven);
     for global in &mut module.globals {
         if let Some(e) = &mut global.init {
