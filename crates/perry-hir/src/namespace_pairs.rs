@@ -16,8 +16,19 @@
 //! for it, no execution observes its lowering, and the intrinsic is the HIR a
 //! build without the pair has there (the plain member call would only add
 //! generic-call code to a body that never runs).
+//!
+//! MATHC5: in the same walk, a call through a value `f(args…)` whose callee
+//! the facts prove to be exactly the original builtin `Math.<m>` (a native
+//! declared `this = ignored` at its definition: its algorithm never reads
+//! its `this` value) becomes `(f, <intrinsic of Math.<m>(args…)>)`. ECMA-262
+//! 13.3.6.1: the call evaluates the callee, then the arguments in order, then
+//! calls the value with `this` undefined; the sequence keeps the callee's
+//! evaluation first and the intrinsic is the HIR the direct call
+//! `Math.<m>(args…)` lowers to (ToNumber of each argument it reads, in
+//! order). A call whose arguments the intrinsic does not read exactly (a
+//! spread, fewer or more than its operands) keeps the generic call.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::{Expr, Module, Stmt};
 
@@ -31,6 +42,9 @@ struct Arms<'a> {
     dead: bool,
     /// Counts the pairs that keep their generic arm.
     kept: &'a std::cell::Cell<usize>,
+    /// MATHC5: the value calls proven to call `Math.<m>`: call byte offset
+    /// to the member `m`.
+    aliases: &'a BTreeMap<u32, String>,
 }
 
 impl Arms<'_> {
@@ -61,7 +75,26 @@ fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
     }
 }
 
+/// MATHC5: `callee(args…)` as `(callee, <intrinsic of Math.<member>(args…)>)`
+/// when the intrinsic reads exactly the call's arguments (one operand per
+/// argument), else `None` and the call is unchanged.
+fn alias_call(member: &str, callee: &Expr, args: &[Expr]) -> Option<Expr> {
+    let intrinsic = crate::lower::math_intrinsic(member, args.to_vec(), false).ok()?;
+    let mut operands = 0usize;
+    crate::walker::walk_expr_children(&intrinsic, &mut |_| operands += 1);
+    (operands == args.len()).then(|| Expr::Sequence(vec![callee.clone(), intrinsic]))
+}
+
 fn pick(e: &mut Expr, proven: Arms<'_>) {
+    if let Expr::Call { callee, args, byte_offset, .. } = e {
+        if *byte_offset != 0 {
+            if let Some(member) = proven.aliases.get(byte_offset) {
+                if let Some(rewritten) = alias_call(member, callee, args) {
+                    *e = rewritten;
+                }
+            }
+        }
+    }
     if let Expr::Conditional { condition, then_expr, else_expr } = e {
         if let Expr::NamespacePatched(ns) = condition.as_ref() {
             if let Some(offset) = pair_offset(ns, then_expr) {
@@ -156,13 +189,18 @@ fn function(f: &mut crate::ir::Function, proven: Arms<'_>) {
 /// Returns the number of pairs that keep the generic call: the only places
 /// where the picked module holds code a build without the pairs does not
 /// (MATHC4: the optional-feature scan runs again for such a module).
+///
+/// `aliases`: the value calls of the module the facts prove to call the
+/// original `Math.<m>` (call byte offset to `m`); each becomes the intrinsic
+/// (MATHC5, module comment).
 pub fn pick_namespace_pair_arms(
     module: &mut Module,
     proven: &BTreeSet<u32>,
     inactive: &BTreeSet<u32>,
+    aliases: &BTreeMap<u32, String>,
 ) -> usize {
     let kept = std::cell::Cell::new(0);
-    module_arms(module, Arms { proven, inactive, dead: false, kept: &kept });
+    module_arms(module, Arms { proven, inactive, dead: false, kept: &kept, aliases });
     kept.get()
 }
 
@@ -173,7 +211,11 @@ pub fn pick_namespace_pair_arms(
 pub fn take_intrinsic_arms(module: &mut Module) {
     let none = BTreeSet::new();
     let kept = std::cell::Cell::new(0);
-    module_arms(module, Arms { proven: &none, inactive: &none, dead: true, kept: &kept });
+    let aliases = BTreeMap::new();
+    module_arms(
+        module,
+        Arms { proven: &none, inactive: &none, dead: true, kept: &kept, aliases: &aliases },
+    );
 }
 
 fn module_arms(module: &mut Module, proven: Arms<'_>) {
@@ -310,7 +352,7 @@ mod tests {
     fn mathc3_pair_in_an_inactive_body_takes_the_intrinsic() {
         let mut m = module();
         let never = m.functions[1].id;
-        pick_namespace_pair_arms(&mut m, &BTreeSet::new(), &BTreeSet::from([never]));
+        pick_namespace_pair_arms(&mut m, &BTreeSet::new(), &BTreeSet::from([never]), &BTreeMap::new());
         // run: generic; never: closure intrinsic, return intrinsic.
         assert_eq!(arms(&m), ["generic", "intrinsic", "intrinsic"]);
     }
@@ -320,7 +362,44 @@ mod tests {
     #[test]
     fn mathc3_no_inactive_body_keeps_the_verdict_pick() {
         let mut m = module();
-        pick_namespace_pair_arms(&mut m, &BTreeSet::from([10]), &BTreeSet::new());
+        pick_namespace_pair_arms(&mut m, &BTreeSet::from([10]), &BTreeSet::new(), &BTreeMap::new());
         assert_eq!(arms(&m), ["intrinsic", "generic", "generic"]);
+    }
+
+    /// MATHC5: a proven value call `c(1)` (offset 40) becomes `(c, MathCos(1))`;
+    /// `c()` and `c(1, 2)` (offsets 41, 42), whose arguments the intrinsic
+    /// does not read exactly, and an unproven one (43) keep the call.
+    #[test]
+    fn mathc5_proven_alias_call_takes_the_intrinsic_when_it_reads_every_argument() {
+        let call = |offset: u32, args: Vec<Expr>| Expr::Call {
+            callee: Box::new(Expr::Undefined),
+            args,
+            type_args: Vec::new(),
+            byte_offset: offset,
+            byte_end: 0,
+        };
+        let mut m = module();
+        m.functions[0].body = vec![
+            Stmt::Expr(call(40, vec![Expr::Number(1.0)])),
+            Stmt::Expr(call(41, vec![])),
+            Stmt::Expr(call(42, vec![Expr::Number(1.0), Expr::Number(2.0)])),
+            Stmt::Expr(call(43, vec![Expr::Number(1.0)])),
+        ];
+        let aliases: BTreeMap<u32, String> = [40, 41, 42].map(|o| (o, "cos".to_string())).into();
+        pick_namespace_pair_arms(&mut m, &BTreeSet::new(), &BTreeSet::new(), &aliases);
+        let shapes: Vec<&str> = m.functions[0]
+            .body
+            .iter()
+            .map(|s| match s {
+                Stmt::Expr(Expr::Sequence(v))
+                    if matches!(v.as_slice(), [Expr::Undefined, Expr::MathCos(_)]) =>
+                {
+                    "intrinsic"
+                }
+                Stmt::Expr(Expr::Call { .. }) => "call",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(shapes, ["intrinsic", "call", "call", "call"]);
     }
 }

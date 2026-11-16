@@ -660,209 +660,14 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" && !ctx.shadows_unqualified_global("Math") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
-                    // Only `min` / `max` have arms written for a spread; every
-                    // other spread call declines (see `call_has_spread_arg`).
-                    if has_spread && !matches!(method_name, "min" | "max") {
-                        return Ok(Err(args));
-                    }
-                    match method_name {
-                        "floor" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathFloor(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "ceil" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCeil(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "round" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathRound(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "trunc" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTrunc(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sign" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSign(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "abs" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAbs(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sqrt" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSqrt(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log2" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog2(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log10" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog10(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "pow" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let base = args_iter.next().unwrap();
-                            let exp = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathPow(Box::new(base), Box::new(exp))));
-                        }
-                        "min" => {
-                            if has_spread {
-                                if args.len() == 1 {
-                                    return Ok(Ok(Expr::MathMinSpread(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                }
-                                // The compact HIR form records one spread
-                                // operand and no fixed prefix. Keep mixed
-                                // calls on the generic CallSpread path; folding
-                                // `Math.min(fixed, ...tail)` into MathMin would
-                                // coerce `tail` as one scalar argument.
-                                return Ok(Err(args));
-                            }
-                            return Ok(Ok(Expr::MathMin(args)));
-                        }
-                        "max" => {
-                            if has_spread {
-                                if args.len() == 1 {
-                                    return Ok(Ok(Expr::MathMaxSpread(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                }
-                                return Ok(Err(args));
-                            }
-                            return Ok(Ok(Expr::MathMax(args)));
-                        }
-                        "random" => {
-                            return Ok(Ok(Expr::MathRandom));
-                        }
-                        "imul" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let a = args_iter.next().unwrap();
-                            let b = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathImul(Box::new(a), Box::new(b))));
-                        }
-                        "sin" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSin(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "cos" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCos(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "tan" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTan(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "asin" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAsin(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "acos" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAcos(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atan" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAtan(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atan2" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let y = args_iter.next().unwrap();
-                            let x = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathAtan2(Box::new(y), Box::new(x))));
-                        }
-                        "cbrt" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCbrt(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "hypot" => {
-                            return Ok(Ok(Expr::MathHypot(args)));
-                        }
-                        "fround" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathFround(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "f16round" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathF16round(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "clz32" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathClz32(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "expm1" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathExpm1(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log1p" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog1p(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sinh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSinh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "cosh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCosh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "tanh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTanh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "asinh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAsinh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "acosh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAcosh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atanh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAtanh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "exp" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathExp(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        _ => {} // Fall through to generic handling
+                    match math_intrinsic(
+                        method_name,
+                        args,
+                        has_spread,
+                    ) {
+                        Ok(e) => return Ok(Ok(e)),
+                        Err(a) if has_spread => return Ok(Err(a)),
+                        Err(a) => args = a, // Fall through to generic handling
                     }
                 }
             }
@@ -1629,4 +1434,221 @@ pub(super) fn try_module_static_methods(
         }
     }
     Ok(Err(args))
+}
+
+/// The intrinsic HIR of the direct call `Math.<method_name>(args…)`, or the
+/// arguments back when the call keeps its generic form (no intrinsic for the
+/// member, too few arguments, a spread it has no arm for). The lowering of a
+/// direct `Math` call and the facts rewrite of a call through a value proven
+/// to be the original member (`namespace_pairs::alias_call`) both build it.
+pub(crate) fn math_intrinsic(
+    method_name: &str,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> std::result::Result<Expr, Vec<Expr>> {
+    // Only `min` / `max` have arms written for a spread; every
+    // other spread call declines (see `call_has_spread_arg`).
+    if has_spread && !matches!(method_name, "min" | "max") {
+        return Err(args);
+    }
+    match method_name {
+        "floor" if !args.is_empty() => {
+            return Ok(Expr::MathFloor(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "ceil" if !args.is_empty() => {
+            return Ok(Expr::MathCeil(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "round" if !args.is_empty() => {
+            return Ok(Expr::MathRound(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "trunc" if !args.is_empty() => {
+            return Ok(Expr::MathTrunc(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "sign" if !args.is_empty() => {
+            return Ok(Expr::MathSign(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "abs" if !args.is_empty() => {
+            return Ok(Expr::MathAbs(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "sqrt" if !args.is_empty() => {
+            return Ok(Expr::MathSqrt(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "log" if !args.is_empty() => {
+            return Ok(Expr::MathLog(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "log2" if !args.is_empty() => {
+            return Ok(Expr::MathLog2(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "log10" if !args.is_empty() => {
+            return Ok(Expr::MathLog10(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "pow" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let base = args_iter.next().unwrap();
+            let exp = args_iter.next().unwrap();
+            return Ok(Expr::MathPow(Box::new(base), Box::new(exp)));
+        }
+        "min" => {
+            if has_spread {
+                if args.len() == 1 {
+                    return Ok(Expr::MathMinSpread(Box::new(
+                        args.into_iter().next().unwrap(),
+                    )));
+                }
+                // The compact HIR form records one spread
+                // operand and no fixed prefix. Keep mixed
+                // calls on the generic CallSpread path; folding
+                // `Math.min(fixed, ...tail)` into MathMin would
+                // coerce `tail` as one scalar argument.
+                return Err(args);
+            }
+            return Ok(Expr::MathMin(args));
+        }
+        "max" => {
+            if has_spread {
+                if args.len() == 1 {
+                    return Ok(Expr::MathMaxSpread(Box::new(
+                        args.into_iter().next().unwrap(),
+                    )));
+                }
+                return Err(args);
+            }
+            return Ok(Expr::MathMax(args));
+        }
+        "random" => {
+            return Ok(Expr::MathRandom);
+        }
+        "imul" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let a = args_iter.next().unwrap();
+            let b = args_iter.next().unwrap();
+            return Ok(Expr::MathImul(Box::new(a), Box::new(b)));
+        }
+        "sin" if !args.is_empty() => {
+            return Ok(Expr::MathSin(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "cos" if !args.is_empty() => {
+            return Ok(Expr::MathCos(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "tan" if !args.is_empty() => {
+            return Ok(Expr::MathTan(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "asin" if !args.is_empty() => {
+            return Ok(Expr::MathAsin(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "acos" if !args.is_empty() => {
+            return Ok(Expr::MathAcos(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "atan" if !args.is_empty() => {
+            return Ok(Expr::MathAtan(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "atan2" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let y = args_iter.next().unwrap();
+            let x = args_iter.next().unwrap();
+            return Ok(Expr::MathAtan2(Box::new(y), Box::new(x)));
+        }
+        "cbrt" if !args.is_empty() => {
+            return Ok(Expr::MathCbrt(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "hypot" => {
+            return Ok(Expr::MathHypot(args));
+        }
+        "fround" if !args.is_empty() => {
+            return Ok(Expr::MathFround(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "f16round" if !args.is_empty() => {
+            return Ok(Expr::MathF16round(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "clz32" if !args.is_empty() => {
+            return Ok(Expr::MathClz32(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "expm1" if !args.is_empty() => {
+            return Ok(Expr::MathExpm1(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "log1p" if !args.is_empty() => {
+            return Ok(Expr::MathLog1p(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "sinh" if !args.is_empty() => {
+            return Ok(Expr::MathSinh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "cosh" if !args.is_empty() => {
+            return Ok(Expr::MathCosh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "tanh" if !args.is_empty() => {
+            return Ok(Expr::MathTanh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "asinh" if !args.is_empty() => {
+            return Ok(Expr::MathAsinh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "acosh" if !args.is_empty() => {
+            return Ok(Expr::MathAcosh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "atanh" if !args.is_empty() => {
+            return Ok(Expr::MathAtanh(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "exp" if !args.is_empty() => {
+            return Ok(Expr::MathExp(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        _ => {} // Fall through to generic handling
+    }
+    Err(args)
 }

@@ -1243,6 +1243,48 @@ pub(crate) fn namespace_pair_proven(
     }
 }
 
+/// MATHC5: the value calls of module `path` (call byte offset to member `m`)
+/// whose callee the solve proves to be exactly the original `Math.<m>`
+/// (`Verdict::IntrinsicCall`: the callee set is that one builtin function;
+/// `IntrinsicCallee::Exact`: no source left a value out, no unknown code
+/// holds the realm, no write reaches the member) and whose native the realm
+/// declares `this = ignored` (its algorithm never reads `this`). Each such
+/// call takes the intrinsic of `Math.<m>(args…)` (`namespace_pairs`). Empty
+/// under the same conditions as [`namespace_pair_proven`].
+pub(crate) fn alias_intrinsic_calls(
+    pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
+    path: &Path,
+) -> BTreeMap<u32, String> {
+    use perry_wpfacts::derive::IntrinsicCallee;
+    let Some(pf) = pf else {
+        return BTreeMap::new();
+    };
+    if !elide_enabled() || pf.stats.aborted || pf.interp_guard.is_some() {
+        return BTreeMap::new();
+    }
+    let key = path.display().to_string();
+    let Some(module) = pf.module_paths.iter().position(|p| *p == key) else {
+        return BTreeMap::new();
+    };
+    let mut out: BTreeMap<u32, Option<String>> = BTreeMap::new();
+    for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call && s.key == "()") {
+        let member = match (&s.verdict, &s.intrinsic_callee) {
+            (perry_wpfacts::Verdict::IntrinsicCall, Some(IntrinsicCallee::Exact(name)))
+                if perry_wpfacts::native_effects::this_ignored(name) =>
+            {
+                name.strip_prefix("Math.").map(str::to_owned)
+            }
+            _ => None,
+        };
+        // Every site at the offset must agree (a site per function copy).
+        let slot = out.entry(s.byte_offset).or_insert_with(|| member.clone());
+        if *slot != member {
+            *slot = None;
+        }
+    }
+    out.into_iter().filter_map(|(o, m)| Some((o, m?))).collect()
+}
+
 /// MATHC3: the function ids of module `path` whose bodies the program never
 /// runs (`BodyReach::inactive`: the solve completed, activation classified
 /// the body and no path reaches it; the predicate the dead-body removal
