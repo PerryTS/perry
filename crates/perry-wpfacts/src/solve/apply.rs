@@ -704,6 +704,7 @@ impl Model {
                     if may_empty {
                         let e = self.atom("");
                         let s = self.str_set(&[e]);
+                        let s = self.run_born(s);
                         self.add_s(dst, &[], prim::STR, s);
                     }
                 }
@@ -2479,6 +2480,7 @@ impl Model {
             }
             Cons::CaseMap { dst, upper } => {
                 let strs = self.case_map_strs(n, upper);
+                let strs = self.run_born(strs);
                 self.add_s(dst, &[], prim::STR, strs);
             }
             Cons::Plus {
@@ -2537,6 +2539,7 @@ impl Model {
                         self.realm_str_dsts.push(str);
                     }
                     if strs != STRS_NONE {
+                        let strs = self.run_born(strs);
                         self.add_s(str, &[], s, strs);
                     }
                 }
@@ -2585,6 +2588,7 @@ impl Model {
                 repl,
             } => {
                 if let Some(s) = self.replace_strs(recv, search, repl) {
+                    let s = self.run_born(s);
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
@@ -2609,6 +2613,7 @@ impl Model {
                     if s != STRS_TOP {
                         self.realm_str_dsts.push(dst);
                     }
+                    let s = self.run_born(s);
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
@@ -2618,6 +2623,7 @@ impl Model {
                 for (g, p, s) in self.capture_strs(n, pat) {
                     if p != 0 {
                         let slot = self.index_slot(rec, g);
+                        let s = self.run_born(s);
                         self.add_s(slot, &[], p, s);
                     }
                 }
