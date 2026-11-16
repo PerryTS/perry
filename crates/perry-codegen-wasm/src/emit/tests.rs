@@ -1528,3 +1528,22 @@ console.log(n, a.entries(), n);
         assert!(line.starts_with("7 ") && line.ends_with(" 7"), "{out}");
     }
 }
+
+// `Toggle(label, onChange: (value: boolean) => void)` hands the callback a boolean.
+#[test]
+fn toggle_on_change_receives_a_boolean() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Toggle } from "perry/ui";
+Toggle("Notify", (value: boolean) => { console.log("toggle " + (value === true) + " " + typeof value); });
+"#,
+            r#"
+const toggle = [...uiHandles.values()].find(e => e.tagName === "LABEL");
+toggle._inp.checked = true;
+toggle._inp.dispatch("change");
+"#
+        ),
+        "toggle true boolean"
+    );
+}
