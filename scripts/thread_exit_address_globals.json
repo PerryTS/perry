@@ -777,6 +777,14 @@
   {
    "file": "crates/perry-runtime/src/tui/input.rs",
    "names": [
+    "READER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Owns a Unix cancellation socket and a Rust JoinHandle. The worker owns an OS input descriptor and queues plain bytes; neither the reader nor its thread captures a JS value or an arena pointer. Shutdown wakes and joins the worker before dropping the reader."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/input.rs",
+   "names": [
     "INPUT_HANDLER"
    ],
    "verdict": "thread_exit_invalidated",
