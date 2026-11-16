@@ -2263,7 +2263,7 @@ const __memDispatch = {
       if (own(methods, '__set_' + name)) return undefined;
       if (own(methods, name)) return __classMethodValue(c, name);
     }
-    return Object.prototype[name];
+    return Reflect.get(Object.prototype, name, obj);
   },
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
   // method gets its arguments as Perry values; a non-callable throws, as in JS.
