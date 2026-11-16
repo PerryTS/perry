@@ -46,8 +46,9 @@ impl<'a> Gen<'a> {
         if let Some(d) = &mut self.m.diagnostic {
             d.source_calls.insert(id);
         }
+        let first_arg_fixed = !spread.is_empty() && self.fixed_spreads.as_ref() == Some(&spread);
         self.m.calls.push(CallSite {
-            first_arg_fixed: false,
+            first_arg_fixed,
             this,
             args,
             spread,
@@ -1808,7 +1809,11 @@ impl<'a> Gen<'a> {
                 // unless a spread leads the list.
                 let lead = matches!(args.first(), Some(CallArg::Spread(_)));
                 let (c0, spreads) = (self.m.calls.len(), s.clone());
+                // The call is fixed when it is made (`new_call`): a builtin
+                // model run for it then (the console formatter) reads it.
+                let prev = std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
                 let ret = self.call_with(fx, callee, a, s, (0, 0));
+                self.fixed_spreads = prev;
                 if !lead {
                     for c in &mut self.m.calls[c0..] {
                         if c.spread == spreads {

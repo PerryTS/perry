@@ -2819,6 +2819,22 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         return;
     }
     let fixed = c.first_arg_fixed || c.spread.is_empty();
+    // `PERRY_WPF_IMPLSRC=1`: a formatting call whose first argument may
+    // come from a spread (the call, its site and the function holding it).
+    if !fixed && crate::solve::implsrc_on() {
+        let f = m.call_place.get(&c.site).map(|&(f, _)| f);
+        let fname = f.and_then(|f| m.funcs.get(f as usize)).map(|fi| fi.name.clone());
+        eprintln!(
+            "perry: wpfacts console-unfixed: call={call} site={} name={name} args={} spread={} fn={fname:?} site_call=({}, args={}, spread={}, ret={})",
+            c.site,
+            c.args.len(),
+            c.spread.len(),
+            m.calls.get(c.site as usize).map_or(false, |s| s.first_arg_fixed),
+            m.calls.get(c.site as usize).map_or(0, |s| s.args.len()),
+            m.calls.get(c.site as usize).map_or(0, |s| s.spread.len()),
+            m.calls.get(c.site as usize).map_or(0, |s| s.ret),
+        );
+    }
     let mut firsts = Vec::new();
     let mut later = Vec::new();
     for (i, &a) in c.args.iter().enumerate() {

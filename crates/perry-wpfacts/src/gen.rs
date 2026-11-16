@@ -336,6 +336,11 @@ pub struct Gen<'a> {
     /// `(module, byte offset, byte end, result node)` of every call with a
     /// source offset, whatever its callee (`call_kinds`).
     pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
+    /// The spread nodes of the `CallSpread` being lowered whose first
+    /// argument no spread precedes (`CallSite::first_arg_fixed`): a call
+    /// made with exactly these is fixed when it is made, before a builtin
+    /// model (the console formatter, `builtin_args_view`) reads it.
+    pub(crate) fixed_spreads: Option<Vec<NodeId>>,
     /// The list births and the push sites of the bodies walked, the body
     /// the walk is in (a serial; its loop depth is `loop_depth`) and the
     /// number of bodies entered so far (`list_caps`).
@@ -781,6 +786,7 @@ impl<'a> Gen<'a> {
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
             call_kinds_at: Vec::new(),
+            fixed_spreads: None,
             list_births: Vec::new(),
             list_pushes: Vec::new(),
             list_body: 0,
