@@ -4984,9 +4984,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perex"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f05a46b0e476a34f6cb722ecf5c2613b0bacb22d0a0a6e69a3162274d1b165ff"
+checksum = "1ac2349e1d1c248e0ec0ffb1819e972d634f01fedaa036887cdb3fc206b57bb0"
 
 [[package]]
 name = "perry"
