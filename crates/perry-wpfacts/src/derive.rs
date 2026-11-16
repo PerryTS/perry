@@ -2464,14 +2464,25 @@ fn judge(
             // chain lack (`builtins::builtin_value_absent`), with no write of
             // the key onto `Object.prototype` (where the model's builtin
             // prototypes collapse) or through ⊤: `undefined` (10.1.8.1).
+            //
+            // R9READ10: for a call `o.k( … )` that `undefined` is the
+            // callee and the call throws a TypeError (13.3.6.2
+            // EvaluateCall: IsCallable(undefined) is false, 7.3.14): the
+            // receiver's TypeError arm, as for an instance whose chain lacks
+            // the key (`instance_absent`); the other arms' callees are
+            // checked below and the site stays generic (CWN 2026-11-16: an
+            // always-TypeError arm counts as proven).
             TokKind::Builtin(_) | TokKind::BuiltinFn(_)
-                if !s.is_call
-                    && crate::builtins::builtin_value_absent(m, t, s.key)
+                if crate::builtins::builtin_value_absent(m, t, s.key)
                     && object_proto_unwritten(m, s.key)
                     && builtin_protos_unwritten(m, None, s.key).is_ok() =>
             {
                 receivers.push(m.tok_name(t));
-                own_or_absent += 1;
+                if s.is_call {
+                    throw_arms += 1;
+                } else {
+                    own_or_absent += 1;
+                }
             }
             other => {
                 receivers.push(m.tok_name(t));
