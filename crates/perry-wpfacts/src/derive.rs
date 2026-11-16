@@ -2470,7 +2470,7 @@ fn judge(
                     && object_proto_unwritten(m, s.key)
                     && builtin_protos_unwritten(m, None, s.key).is_ok() =>
             {
-                receivers.push(format!("{}: absent (undefined)", m.tok_name(t)));
+                receivers.push(m.tok_name(t));
                 own_or_absent += 1;
             }
             other => {

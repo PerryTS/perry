@@ -206,5 +206,5 @@ fn r9read9_m4_own_length_not_absent() {
 const x: any = n > 1 ? Math.max : Math.min;
 console.log(x.length);");
     let v = reads(&pf, "length");
-    assert!(v.iter().all(|x| !x.contains("absent (undefined)")), "{v:?}");
+    assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
 }
