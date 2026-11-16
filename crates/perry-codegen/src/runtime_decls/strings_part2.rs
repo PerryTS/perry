@@ -1014,6 +1014,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
     );
+    // ONCHG1: a guarded call's own late-slot value (receiver, slot word,
+    // dispatch id, args).
+    module.declare_function(
+        "js_call_late_own_value",
+        DOUBLE,
+        &[DOUBLE, I64, I64, PTR, I64],
+    );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to
     // js_native_call_method. Used by `Expr::CallSpread` for the

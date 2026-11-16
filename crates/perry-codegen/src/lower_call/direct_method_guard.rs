@@ -185,6 +185,14 @@ pub(crate) fn family_method_word_holed(
 /// decision 2026-11-16 accepts at an unproven, already guarded site of a key
 /// that has a late slot.
 pub(crate) fn emit_late_slot_holds_hole(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
+    let value = emit_late_slot_word(ctx, recv_box, slot);
+    ctx.block().icmp_eq(I64, &value, crate::nanbox::TAG_HOLE_I64)
+}
+
+/// `i64`: the word in family slot `slot` of the object `recv_box` (whose
+/// exact family word the caller has compared): the hole, or the own data
+/// value of the late key (ONCHG1: the own-value arm calls it).
+pub(crate) fn emit_late_slot_word(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form())
             as i64;
@@ -193,8 +201,7 @@ pub(crate) fn emit_late_slot_holds_hole(ctx: &mut FnCtx<'_>, recv_box: &str, slo
     let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let obj = blk.inttoptr(I64, &handle);
     let ptr = blk.gep(I8, &obj, &[(I64, &(header + 8 * i64::from(slot)).to_string())]);
-    let value = blk.load(I64, &ptr);
-    blk.icmp_eq(I64, &value, crate::nanbox::TAG_HOLE_I64)
+    blk.load(I64, &ptr)
 }
 
 /// The i32 layout id of class `class_id`'s family descriptor, loaded from the

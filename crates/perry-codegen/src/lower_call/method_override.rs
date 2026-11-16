@@ -1111,11 +1111,28 @@ pub(super) fn emit_guarded_direct_method_call(
         None => family_target,
     };
     let family_guard = family_arm.as_deref().zip(family_guard_target.as_deref());
+    // ONCHG1: a present own value (the slot is not the hole) is the value
+    // OrdinaryGet finds first (10.1.8.1: under the exact family word the late
+    // key is the object's own data property). Its arm calls that value with
+    // the receiver as `this` (`js_call_late_own_value`, 13.3.6.2 / 7.3.14)
+    // instead of the by-name call, which re-derived the same slot from the
+    // key's name. A certificate's split fallback keeps the old edge.
+    let mut late_own: Option<(usize, String, String)> = None;
     if let Some((idx, _, slot, target)) = &hole_block {
         let resume = ctx.current_block;
         ctx.current_block = *idx;
-        let hole = super::direct_method_guard::emit_late_slot_holds_hole(ctx, recv_box, *slot);
-        ctx.block().cond_br(&hole, target, &fallback_label);
+        let word = super::direct_method_guard::emit_late_slot_word(ctx, recv_box, *slot);
+        let hole = ctx.block().icmp_eq(I64, &word, crate::nanbox::TAG_HOLE_I64);
+        let own_target = if certificate.is_none() {
+            let own_idx = ctx.new_block("method_direct.late_own");
+            let own_label = ctx.block_label(own_idx);
+            late_own = Some((own_idx, own_label.clone(), word));
+            own_label
+        } else {
+            fallback_label.clone()
+        };
+        ctx.current_block = *idx;
+        ctx.block().cond_br(&hole, target, &own_target);
         ctx.current_block = resume;
     }
     if inline_single_arm && certificate.is_none() {
@@ -1903,6 +1920,27 @@ pub(super) fn emit_guarded_direct_method_call(
         sub_values.push((value, after));
     }
 
+    // ONCHG1: the own late-slot value's arm (see the hole block above).
+    if let Some((own_idx, _, word)) = &late_own {
+        ctx.current_block = *own_idx;
+        let (args_ptr, args_len) = fallback_args_buffer(ctx, fallback_user_args);
+        let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+        let value = ctx.block().call(
+            DOUBLE,
+            "js_call_late_own_value",
+            &[
+                (DOUBLE, recv_box),
+                (I64, word),
+                (I64, &method_id),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        );
+        let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        layout_misses.push((value, truthy, end));
+    }
     ctx.current_block = fallback_idx;
     let (args_ptr, args_len) = if fallback_user_args.is_empty() {
         ("null".to_string(), "0".to_string())
@@ -2013,4 +2051,24 @@ pub(super) fn emit_guarded_direct_method_call(
         ctx.pending_truthy_call_result = Some((boxed.clone(), truthy));
     }
     Some(boxed)
+}
+
+/// The `double` argument buffer of a by-id call: `(ptr, len)`, `null, 0`
+/// when there are no arguments.
+fn fallback_args_buffer(ctx: &mut FnCtx<'_>, args: &[String]) -> (String, String) {
+    if args.is_empty() {
+        return ("null".to_string(), "0".to_string());
+    }
+    let n = args.len();
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+    for (i, a_val) in args.iter().enumerate() {
+        let slot = ctx.block().gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+        ctx.block().store(DOUBLE, a_val, &slot);
+    }
+    let ptr_reg = ctx.block().next_reg();
+    ctx.block().emit_raw(format!(
+        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+        ptr_reg, n, buf_reg
+    ));
+    (ptr_reg, n.to_string())
 }
