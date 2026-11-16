@@ -1140,7 +1140,7 @@ impl<'a> Gen<'a> {
                     && matches!(value.as_ref(), Expr::Binary { left, .. }
                         if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
                 if compound {
-                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false }] {
+                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false, uint_value: false }] {
                         self.store_sites.push(ReadSite {
                             module: mi,
                             byte_offset: *byte_offset,
@@ -1198,6 +1198,11 @@ impl<'a> Gen<'a> {
                 {
                     if *element_offset != 0 && !s.starts_with('#') {
                         let a = self.m.atom(s);
+                        let uint_value = match value.as_ref() {
+                            Expr::Integer(n) => (0..=u32::MAX as i64).contains(n),
+                            Expr::Number(n) => n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n),
+                            _ => false,
+                        };
                         self.store_sites.push(ReadSite {
                             module: mi,
                             byte_offset: *element_offset,
@@ -1206,7 +1211,7 @@ impl<'a> Gen<'a> {
                             is_call: false,
                             value_call: false,
                             func: fx.f,
-                            access: crate::derive::Access::Set { strict: *strict },
+                            access: crate::derive::Access::Set { strict: *strict, uint_value },
                         });
                     }
                 }

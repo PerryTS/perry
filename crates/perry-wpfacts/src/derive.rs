@@ -304,7 +304,9 @@ pub enum Access {
     Read,
     /// A named store `o.k = v` or a compound's PutValue (13.15.2-3);
     /// `strict`: a failed [[Set]] throws (10.1.9, 13.15.2 PutValue step 5.d).
-    Set { strict: bool },
+    /// `uint_value`: the stored value is a Number literal that is an integer
+    /// in 0 ..= 2^32 - 1 (R9STORE6: `ArraySetLength` runs no user code).
+    Set { strict: bool, uint_value: bool },
     /// A compound's GetValue (13.15.3 step 2), at the store's offset.
     UpdateGet,
 }
@@ -2070,7 +2072,7 @@ fn judge(
     prim: u16,
     top_recv: NodeId,
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
-    if let Access::Set { strict } = s.access {
+    if let Access::Set { strict, .. } = s.access {
         return judge_store(m, by_id, s, key, toks, prim, strict);
     }
     if s.value_call {
@@ -2864,6 +2866,19 @@ fn judge_store(
                         slots.push(f.slot.unwrap_or_default())
                     }
                     _ => match accessor_one(m, t, s.key, true) {
+                        // R9STORE6: the setter is the FIRST holder for every
+                        // instance only if none owns the key as data: a class
+                        // field (DefineField, 7.3.33: a birth key), a birth
+                        // descriptor or a later data definition (rule D2,
+                        // `defined_keys`) makes an own property that 10.1.9.2
+                        // step 1 finds first. `accessor_one`'s precondition.
+                        Ok(AccOne::Fn(_))
+                            if m.tmpls[*tm as usize].birth_keys.contains(&s.key)
+                                || m.birth_attrs.contains_key(&(*tm, s.key))
+                                || m.defined_keys.get(tm).is_some_and(|ks| ks.contains(&s.key)) =>
+                        {
+                            why.get_or_insert("store: an instance may own the key".into());
+                        }
                         Ok(AccOne::Fn(x)) => acc.push(x),
                         Ok(AccOne::GetterOnly) if strict => throws += 1,
                         Ok(AccOne::GetterOnly) => {
@@ -2874,11 +2889,22 @@ fn judge_store(
                         Ok(AccOne::Absent) => {
                             why.get_or_insert("store: key not a definite birth field".into());
                         }
+                        // R9STORE6 item 2: the first holder is a writable data
+                        // property of a program prototype (a class method).
+                        Err(_) if proto_data_sets(m, t, key, s.key) => sets += 1,
                         Err(w) => {
                             why.get_or_insert(format!("store: {w}"));
                         }
                     },
                 }
+            }
+            // R9STORE6 item 3: `arr.length = n` onto an Array.
+            _ if key == "length"
+                && matches!(s.access, Access::Set { uint_value: true, .. })
+                && array_length_sets(m, t, s.key) =>
+            {
+                receivers.push(m.tok_name(t));
+                sets += 1;
             }
             // R9STORE5 (i): a builtin function value or an Array.
             _ if builtin_store_sets(m, t, key, s.key) => {
@@ -2926,6 +2952,12 @@ fn judge_store(
         .iter()
         .filter(|&&b| b)
         .count();
+    let one_setter = {
+        let mut a = acc.clone();
+        a.sort_unstable();
+        a.dedup();
+        a.len() == 1
+    };
     let verdict = match why {
         Some(w) => Verdict::No(w),
         None if only_nullish => {
@@ -2934,6 +2966,16 @@ fn judge_store(
         }
         None if sets > 0 && acc.is_empty() && throws == 0 => Verdict::KnownObjectStore,
         None if kinds == 0 => Verdict::Dead,
+        // R9STORE6 item 1 (CWN decision 2026-11-16: a per-kind store verdict
+        // counts as proven): receivers whose chain ends at ONE known setter
+        // (`accessor_one`: 10.1.9.2 step 3 / 7, Call(setter, Receiver, << V >>))
+        // beside receivers whose store adds or sets an own data property
+        // (rules A / R9STORE5, step 2.c-e). Every arm exact; no slot claim and
+        // no setter claim (`targets` stays empty): codegen keeps the generic
+        // store, which performs each arm's [[Set]].
+        None if one_setter && throws == 0 && slots.is_empty() && (sets > 0 || adds > 0) => {
+            Verdict::KnownObjectStore
+        }
         None if kinds > 1 => Verdict::No("store: receivers mix store kinds".into()),
         None if !slots.is_empty() => {
             if slots.iter().all(|&x| x == slots[0]) {
@@ -3032,6 +3074,26 @@ fn builtin_store_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     builtin_chain_plain(m, key, a) && (crate::builtins::builtin_value_sets(m, t, a) || array())
 }
 
+/// R9STORE6 item 3: `t.length = n`, `t` an Array exotic object
+/// (`exact_array`), `n` a Number literal integer in 0 ..= 2^32 - 1
+/// (`Access::Set::uint_value`). 10.1.9.2 OrdinarySet: `length` is an own
+/// data property of every Array (10.4.2.2 ArrayCreate step 6), so step 2.d
+/// calls the array's [[DefineOwnProperty]] (10.4.2.1 step 1) and
+/// ArraySetLength (10.4.2.4): ToUint32(n) = ToNumber(n) (no RangeError, no
+/// user code: a primitive); `length` stays writable and every element
+/// configurable unless a definition or an integrity operation reaches the
+/// array: `Object.defineProperty` / freeze / seal / preventExtensions mark
+/// it HARD (E5 / E8), so step 17-19 deletes the elements >= n and sets the
+/// length; nothing throws. Not escaped (unknown code could define), no own
+/// accessor (none can exist on an Array's `length`).
+fn array_length_sets(m: &Model, t: Tok, a: Atom) -> bool {
+    exact_array(m, t)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+}
+
 /// R9STORE4 rule A (CWN decision 2026-11-16): a named store of `key`
 /// (atom `a`) onto `t`, an instance of a prefix-stable program class (the
 /// caller's row: no hard operation on any instance (E5 defineProperty, E8
@@ -3058,6 +3120,83 @@ fn instance_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && !m.accessors.contains_key(&(t, a))
         && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
         && chain_absent(m, t, key, a, false)
+}
+
+/// R9STORE6 item 2: a named store of `key` (atom `a`) onto `t`, a program
+/// class instance with the own conditions of [`instance_sets`], whose chain
+/// holds the key as a DATA property of a program prototype (a class method:
+/// DefineMethodProperty, ECMA-262 15.7.14 / 10.2.8, [[Writable]] true; or a
+/// plain store onto the prototype). 10.1.9.2 OrdinarySetWithOwnDescriptor:
+/// the walk (step 1.c, the parent's [[Set]]) stops at the first holder; its
+/// descriptor is a writable data property (step 2.a passes: only a
+/// definition makes one non-writable, and `Object.defineProperty` of a
+/// member key marks the prototype HARD, solve/apply.rs ~915; freeze /
+/// seal too), so step 2.c-e sets the Receiver's own writable data
+/// property or creates it on the extensible `t`. No user code runs. Each
+/// prototype on the way: a program prototype with no accessor and no
+/// accessor definition under the key, no computed store, not HARD, not
+/// escaped, not relinked; a branch that holds no data property reaches
+/// %Object.prototype%, which lacks the key and which no program write
+/// reaches under it (as `chain_absent`).
+fn proto_data_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let own = matches!(m.toks[t as usize], TokKind::Obj(..))
+        && !m.is_marker(t)
+        && !m.is_private_atom(a)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && !m.super_relink.contains(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a));
+    let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
+        return false;
+    };
+    if !own {
+        return false;
+    }
+    let has = |n: Option<&NodeId>| {
+        n.is_some_and(|&n| {
+            let nd = &m.nodes[n as usize];
+            nd.dropped || !nd.pts.is_empty() || nd.prim != 0
+        })
+    };
+    let (mut held, mut ends) = (false, false);
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    while let Some(h) = todo.pop() {
+        let Some(protos) = m.proto_node.get(&h).map(|&pn| &m.nodes[pn as usize]) else {
+            return false;
+        };
+        if protos.prim != 0 || protos.dropped || protos.pts.is_empty() {
+            return false;
+        }
+        for p in protos.pts.to_sorted() {
+            if !seen.insert(p) {
+                continue;
+            }
+            if p == op {
+                ends = true;
+                continue;
+            }
+            let plain = matches!(m.toks[p as usize], TokKind::Proto(_))
+                && !m.hard.contains_key(&p)
+                && !m.is_escaped(p)
+                && !m.super_relink.contains(&p)
+                && !m.accessors.contains_key(&(p, a))
+                && m.accessor_keys.get(&p).is_none_or(|k| !k.contains(&a))
+                && !has(m.field_any.get(&p));
+            if !plain {
+                return false;
+            }
+            if has(m.fields.get(&(p, a))) {
+                held = true;
+            } else {
+                todo.push(p);
+            }
+        }
+    }
+    held
+        && (!ends
+            || (crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()))
 }
 
 /// R9STORE1: may a named store of `key` (atom `a`) onto `t`, one object
