@@ -478,6 +478,23 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             } else {
                 "private"
             };
+            // A key of the other kind in a format that names one: node reports
+            // the kind it wanted. `raw` / `raw-secret` fit neither kind.
+            match format_lower.as_str() {
+                "spki" | "raw-public" => {
+                    return reject_with_dom_exception(
+                        "InvalidAccessError",
+                        "Key must be a public key",
+                    )
+                }
+                "pkcs8" | "raw-seed" => {
+                    return reject_with_dom_exception(
+                        "InvalidAccessError",
+                        "Key must be a private key",
+                    )
+                }
+                _ => {}
+            }
             let message = format!("Unable to export {name} {kind} key using {format_lower} format");
             return reject_with_dom_exception("NotSupportedError", &message);
         }
@@ -1042,14 +1059,6 @@ pub(super) unsafe fn akp_jwk_export_object(
     }
     set_object_value_field(obj, b"key_ops", key_ops_array(mat.usages));
     set_object_bool_field(obj, b"ext", mat.extractable);
-    // node's member order: `priv` (when present) comes before `kty`.
-    if let Some(seed) = private_seed {
-        set_object_string_field(
-            obj,
-            b"priv",
-            &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&seed),
-        );
-    }
     set_object_string_field(obj, b"kty", "AKP");
     set_object_string_field(obj, b"alg", alg);
     set_object_string_field(
@@ -1057,6 +1066,13 @@ pub(super) unsafe fn akp_jwk_export_object(
         b"pub",
         &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
     );
+    if let Some(seed) = private_seed {
+        set_object_string_field(
+            obj,
+            b"priv",
+            &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&seed),
+        );
+    }
     Some(obj)
 }
 
