@@ -140,13 +140,21 @@ fn own_or_absent_control_getter_defined() {
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
 
-/// The brief's input-key store: `k` may be `"__proto__"`, and storing an
-/// object under it runs %Object.prototype%'s `__proto__` setter (B.2.2.1.2),
-/// which makes the object the receiver's [[Prototype]]: the chain is the
-/// stored value's, not proven absent.
+/// The brief's input-key store: `k` is an unknown string. OPTIMISTIC
+/// (owner 2026-11-16): an unknown string key of a store is never
+/// "__proto__", so the store runs no `__proto__` setter (B.2.2.1.2) and
+/// `a`'s chain stays Object.prototype: `a.FOO` is own data or absent.
 #[test]
 fn own_or_absent_control_input_key_object_value() {
     let src = "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
+    all(src, "FOO", false, "OwnDataOrAbsent");
+}
+
+/// KEEP: a key whose known strings include "__proto__" still runs the
+/// setter: the chain is the stored value's, not proven absent.
+#[test]
+fn own_or_absent_control_known_proto_key_object_value() {
+    let src = "const a: any = {};\nconst k = process.argv[2] ? \"x\" : \"__proto__\";\na[k] = { n: 1 };\nconsole.log(a.FOO);";
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
 

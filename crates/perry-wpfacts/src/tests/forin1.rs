@@ -101,10 +101,15 @@ fn f1_clone_uniforms_shape_does_not_hold_the_realm() {
     assert!(!held_unsummarized(&src), "cloneUniforms copy held the realm (every-key for-in run)");
 }
 
+/// K1: keys from `JSON.parse(process.argv[2])` are unknown strings. The
+/// realm was held only through the copy's store `dst[u][p] = ...` under
+/// that unknown key running the `__proto__` setter: OPTIMISTIC (owner
+/// 2026-11-16): an unknown string key of a store is never "__proto__",
+/// so the copy relinks no chain and the realm stays free.
 #[test]
 fn k1_json_keys_stay_unknown() {
     let src = clone_prog("const SRC: any = { diffuse: JSON.parse(process.argv[2]), opacity: { value: 1 } };");
-    assert!(held_unsummarized(&src), "keys of a JSON.parse object are unknown: the copy may read any member");
+    assert!(!held_unsummarized(&src), "an unknown store key never runs the __proto__ setter");
 }
 
 #[test]
