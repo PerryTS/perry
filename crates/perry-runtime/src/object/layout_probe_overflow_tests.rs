@@ -231,9 +231,13 @@ fn owned_fixed_entry_reader_keeps_inline_and_spill_semantics() {
                 // GC_STORE_AUDIT(POINTER_FREE): a null-pointer sentinel has no
                 // child edge; this fixture exercises the reader's default.
                 fields.add(fixed as usize).write(0x7ffd_0000_0000_0000);
+                // The probe declines the null-pointer word (`found_data_word`);
+                // the full read that the compiled site then takes answers
+                // undefined (`object_field_at_with_live`'s null-pointer guard).
+                assert_eq!(perry_probe_get(dir, biased, key, hash).to_bits(), TAG_HOLE);
                 assert_eq!(
-                    perry_probe_get(dir, biased, key, hash).to_bits(),
-                    crate::value::TAG_UNDEFINED
+                    crate::object::overflow::get_from(table, object, entry),
+                    Some(crate::value::TAG_UNDEFINED)
                 );
                 assert_eq!(
                     (*raw).probe,
