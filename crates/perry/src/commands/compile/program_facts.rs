@@ -43,6 +43,65 @@ use std::sync::Arc;
 /// bound and gets no facts.
 const DEFAULT_MAX_WORK: u64 = 1_000_000_000;
 
+/// ASSUMED (owner 2026-11-16, "Assume it for now", interim until an exact
+/// link-time check of each library's imports): the native-library externs
+/// whose manifest parameters and result are all primitives, with the JS kind
+/// of the result, keyed as the codegen's `ffi_signatures` (a later manifest
+/// entry of a name replaces an earlier one). Perry lowers such a parameter by
+/// a check (`js_native_abi_check_*`: a TypeError, never ToNumber / ToString)
+/// or by ToBoolean (`bool`), so no program code runs at the call
+/// (perry-codegen `lower_call/extern_func.rs`, `lower_manifest_param`).
+/// `PERRY_FACTS_NATIVE_EXTERN=0`: none (every extern call is unknown code).
+pub(crate) fn native_externs<'a>(
+    functions: impl Iterator<Item = &'a super::types::NativeFunctionDecl>,
+) -> BTreeMap<String, perry_wpfacts::NativeResult> {
+    use perry_api_manifest::NativeAbiType as T;
+    use perry_wpfacts::NativeResult as K;
+    let mut out = BTreeMap::new();
+    if std::env::var("PERRY_FACTS_NATIVE_EXTERN").is_ok_and(|v| v == "0") {
+        return out;
+    }
+    let numeric = |t: &T| {
+        matches!(
+            t,
+            T::F64
+                | T::F32
+                | T::I8
+                | T::I16
+                | T::I32
+                | T::I64
+                | T::U8
+                | T::U16
+                | T::U32
+                | T::U64
+                | T::USize
+                | T::ISize
+        )
+    };
+    for f in functions {
+        let result = match &f.returns {
+            T::Void => Some(K::Undefined),
+            T::String | T::I64String => Some(K::String),
+            T::Bool => Some(K::Boolean),
+            t if numeric(t) => Some(K::Number),
+            _ => None,
+        };
+        let params = f
+            .params
+            .iter()
+            .all(|t| numeric(t) || matches!(t, T::String | T::I64String | T::Bool));
+        match result {
+            Some(r) if params => {
+                out.insert(f.name.clone(), r);
+            }
+            _ => {
+                out.remove(&f.name);
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn contracts_requested() -> bool {
     std::env::var("PERRY_CHECK_CONTRACTS")
         .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
@@ -114,6 +173,7 @@ pub(crate) fn run(
     roots: Vec<String>,
     cache_dir: &Path,
     activation: Option<perry_wpfacts::Activation>,
+    native_externs: BTreeMap<String, perry_wpfacts::NativeResult>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -236,6 +296,7 @@ pub(crate) fn run(
             d.push(".diag");
             PathBuf::from(d)
         }),
+        native_externs,
     };
     // Entry outlining moves module bindings into compiler-owned functions.
     // Facts need the same logical module scope that codegen's globals and
@@ -341,6 +402,10 @@ pub(crate) fn run(
             .filter(|s| matches!(s.verdict, perry_wpfacts::Verdict::KnownObjectStore))
             .count();
         eprintln!("perry: wpfacts: {st_known} known-object stores");
+        eprintln!(
+            "perry: wpfacts: {} sites rest on the native-extern assumption",
+            pf.native_extern_sites.len()
+        );
         eprintln!(
             "perry: wpfacts: {} modules, {} templates ({} fact units), {} nodes, {} constraints; \
              {} of {} read/call sites proven, {} of {} stores proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",

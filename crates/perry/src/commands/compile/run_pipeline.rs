@@ -1949,6 +1949,9 @@ pub fn run_with_parse_cache(
             .collect(),
         &ctx.cache_dir,
         activation,
+        super::program_facts::native_externs(
+            ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
+        ),
     );
     // The optional-feature scan read each pair as its intrinsic arm
     // (`feature_detect::detect_program_optional_feature_usage`); a module
