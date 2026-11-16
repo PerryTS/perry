@@ -1568,7 +1568,7 @@ fn js_process_env_impl() -> f64 {
         return cached;
     }
     let census_mark = crate::snap_census::env_storage_begin();
-    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, crate::object::INLINE_SLOT_FLOOR as u32); realm { process.env, kind = exotic, members = { }; } };
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, crate::object::INLINE_SLOT_FLOOR as u32); realm { process.env, kind = exotic, members = { }, values = string; } };
     crate::snap_census::env_storage_end(census_mark, obj as usize);
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };

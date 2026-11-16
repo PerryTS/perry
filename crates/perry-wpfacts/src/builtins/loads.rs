@@ -1294,7 +1294,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     // prototype the program gave it is read on the chain
                     // (`Model::load_from`, ordinary box).
                     (_, None) if ordinary_box(m, t) => {
-                        m.add_prim(dst, prim::ALL);
+                        // A host object of strings holds Strings only; an
+                        // absent key is `undefined` or the chain's.
+                        m.add_prim(dst, match what {
+                            "stringrecord" => prim::STR | prim::UNDEF,
+                            _ => prim::ALL,
+                        });
                         family_any(m, Some(t), Family::Object, None, key, dst);
                     }
                     // A computed key on a null-prototype object a builtin makes
@@ -1373,6 +1378,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         // keys …) holds them under every key.
                         if what == "primbox" || what == "arraybox" {
                             m.add_prim(dst, prim::ALL);
+                        }
+                        // A host object of strings (`process.env`): an own
+                        // value is a String, an absent key reads the chain
+                        // (%Object.prototype%, `family_load`) or `undefined`.
+                        if what == "stringrecord" {
+                            m.add_prim(dst, prim::STR | prim::UNDEF);
                         }
                         family_load(m, t, fam, Some(what), a, dst);
                     }

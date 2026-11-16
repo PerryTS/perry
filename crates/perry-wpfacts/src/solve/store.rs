@@ -303,6 +303,13 @@ impl Model {
         }
     }
 
+    /// `t` is the host object of a `values = string` declaration
+    /// (`Model::host_string_record`).
+    pub(crate) fn string_record(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "stringrecord", .. }))
+    }
+
     fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
         let f = match self.is_elem_array(t) {
             true => self.field_any(t),
@@ -386,6 +393,21 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A host object of strings (`process.env`): the runtime's [[Set]]
+        // hook (`process_env_set_field` -> `js_setenv`) runs before any
+        // other step and stores ToString(v), never `v` (a program
+        // `toString` / `@@toPrimitive` runs); no setter of the chain is met.
+        if self.string_record(t) {
+            let f = match key {
+                Key::Named(a) => self.field(t, a),
+                Key::Any(_) => self.field_any(t),
+            };
+            self.add_prim(f, prim::STR);
+            if self.ta_store_done.insert((src, site)) {
+                builtins::string_methods::to_prim(self, src, "a host string record's [[Set]] ToString");
+            }
+            return;
+        }
         // SKINROOT12: a same-key copy's named `__proto__` store runs into
         // `t` only once the copy's own store into `t` may name `__proto__`
         // (its key is the copy's key: B.2.2.1.2 applies under that key only).

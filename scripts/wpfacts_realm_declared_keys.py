@@ -23,6 +23,9 @@ the realm defines (every other global name is the program's).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
+`record <owner> <key> <declaration>` rows name a key whose value the realm declares a host object whose
+own values are strings (`kind = exotic, values = string`: `process.env`): the one object the runtime makes,
+of prototype %Object.prototype%, its own values strings; a [[Set]] on it stores ToString(v).
 `accessor <owner> <key> <get> [<set>]` rows name a key the realm declares an
 accessor: its getter (`-` none) and setter (no column: none). A [[Set]] of a key
 whose accessor has no setter writes nothing (sloppy) or throws (strict).
@@ -123,6 +126,9 @@ def rows(realm):
                 if (prop.get("value", {}).get("kind") == "dynamic"
                         and declarations.get(value, {}).get("elements") == "string"):
                     out.add(("strings", name, prop["key"], value))
+                if (prop.get("value", {}).get("kind") == "dynamic"
+                        and declarations.get(value, {}).get("values") == "string"):
+                    out.add(("record", name, prop["key"], value))
                 # The one primitive type a runtime value is declared with
                 # (`runtime(process.pid, number)`; ECMA-262 6.1).
                 vtype = prop.get("type")

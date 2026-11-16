@@ -196,6 +196,11 @@ pub struct RealmDeclaration {
     /// values in the array it makes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<String>,
+    /// What an exotic host object declares every own value to be
+    /// (`process.env, kind = exotic, …, values = string`): its hooks read and
+    /// store only such values (a [[Set]] stores ToString(v)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
     #[serde(default)]

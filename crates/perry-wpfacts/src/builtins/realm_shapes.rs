@@ -13,6 +13,10 @@ pub(crate) struct Property {
     /// The realm declares the key's value a host array of strings
     /// (`value = dynamic, elements = string`): the declaration's name.
     pub strings: Option<&'static str>,
+    /// The realm declares the key's value a host object whose own values
+    /// are strings (`kind = exotic, values = string`: `process.env`): the
+    /// declaration's name.
+    pub record: Option<&'static str>,
     /// The realm declares the key's value another node module object
     /// (`node:inspector` `default`: `node:inspector.default`): its name.
     pub object: Option<&'static str>,
@@ -160,6 +164,7 @@ impl Declarations {
                 "getter-this" => property.getter_this = true,
                 "ns" | "held" => property.own_namespace = true,
                 "strings" => property.strings = value,
+                "record" => property.record = value,
                 "object" => property.object = value,
                 "prim" => property.prim = value.map(prim_kind),
                 "accessor" => (property.get, property.set) = accessor.unwrap(),
@@ -183,6 +188,9 @@ impl Declarations {
                 }
                 if kind == "strings" {
                     p.strings = value;
+                }
+                if kind == "record" {
+                    p.record = value;
                 }
                 if kind == "object" {
                     p.object = value;
