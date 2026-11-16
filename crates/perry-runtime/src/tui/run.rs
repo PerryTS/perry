@@ -16,6 +16,10 @@ use crate::value::JSValue;
 use super::input::{disable_raw_mode, drain_input, enable_raw_mode, EXIT_FLAG};
 use super::state::STATE_DIRTY;
 
+/// Pumps async work only between frames, never inside component construction,
+/// and checks `EXIT_FLAG` after every phase so an exit requested by a callback
+/// builds no further frame. Dirty is cleared before the frame, so a set made
+/// during construction or input dispatch skips the idle sleep.
 fn run_frames(mut frame: impl FnMut()) {
     while !EXIT_FLAG.load(Ordering::Acquire) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +29,8 @@ fn run_frames(mut frame: impl FnMut()) {
             break;
         }
         STATE_DIRTY.store(false, Ordering::Release);
+        // Hooks bind to a per-frame index: slot N is the slot the previous
+        // frame's Nth hook saw (#679).
         super::hooks::reset_hook_index();
         frame();
         if EXIT_FLAG.load(Ordering::Acquire) {
@@ -52,7 +58,7 @@ fn run_frames(mut frame: impl FnMut()) {
 ///      - Call component → Widget handle.
 ///      - Paint into back buffer + flush diff.
 ///      - Drain pending input bytes (dispatching to useInput handler).
-///      - If state was set during dispatch, re-render immediately.
+///      - If state was set during the frame or dispatch, re-render immediately.
 ///      - Otherwise sleep ~16 ms (≈60 fps polling cap).
 ///      - Exit when EXIT_FLAG is set.
 ///   4. Restore cooked-mode termios, cursor and the primary screen.
@@ -84,6 +90,8 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
                 })
             })
             .0;
+        // Resolve through the handle brand: a non-widget return paints nothing
+        // rather than addressing whichever node its low bits name (#340/#341).
         let widget_handle = super::handle_object::tui_widget_id_from_bits(widget_v.to_bits());
         super::ffi::paint_root_for_run(widget_handle);
     });
