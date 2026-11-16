@@ -854,7 +854,7 @@ fn collect_module_one(
     {
         ctx.patched_builtins_grew_after_lower = true;
     }
-    ctx.patched_builtins.namespace_pairs = std::env::var_os("PERRY_NS_PAIRS").is_some_and(|v| v == "1");
+    ctx.patched_builtins.namespace_pairs = super::program_facts::namespace_pairs_on();
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
