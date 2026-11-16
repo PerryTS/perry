@@ -21,7 +21,9 @@
 //! accessor), `prototype`, `name`, `length` (own non-writable data of a
 //! class) or `caller` / `arguments` (Function.prototype accessors).
 //! Inert values: literals, a binding or class reference, a closure (its
-//! creation runs no code), an object literal of inert values, and a read of
+//! creation runs no code), an object literal or an array literal (no
+//! spread, no hole) of inert values, a read `Y.prototype.m` of a method of
+//! the class body of `Y` (R9READ3), and a read of
 //! a global builtin name (`derive` checks the program made no global of
 //! that name: then it is the realm's own data property). A class
 //! declaration's own evaluation statements (parent registration, computed
@@ -173,6 +175,34 @@ fn inert_value(module: &Module, e: &Expr, globals: &mut Vec<String>) -> bool {
             globals.push(property.clone());
             true
         }
+        // R9READ3: an array literal without spread or hole: ArrayCreate and
+        // one CreateDataPropertyOrThrow per element (13.2.4.1
+        // ArrayAccumulation, 10.4.2.2) on the new array run no program code
+        // when no element evaluation runs any.
+        Expr::Array(elems, _) => elems.iter().all(|a| inert_value(module, a, globals)),
+        // R9READ3: `Y.prototype.m` for an instance method `m` of the class
+        // body of `Y` (a class of this module) with no accessor of `m` there.
+        // `Y.prototype` is an own non-writable data property of `Y`
+        // (15.7.14 MakeConstructor), and ClassDefinitionEvaluation defines
+        // `m` on it as an own data property (10.2.8 DefineMethodProperty):
+        // OrdinaryGet (10.1.8.1) finds an own data property at both steps
+        // and runs no code. An inert store in the window (`store_target`:
+        // no accessor of the key on the chain) keeps `m` a data property;
+        // every other statement closes the window.
+        Expr::PropertyGet { object, property, .. } => match object.as_ref() {
+            Expr::PropertyGet { object: y, property: pp, .. } if pp == "prototype" => match y.as_ref() {
+                Expr::ClassRef(x) => module.classes.iter().any(|c| {
+                    &c.name == x
+                        && !c.is_nested
+                        && property != "__proto__"
+                        && c.methods.iter().any(|m| &m.name == property)
+                        && !c.getters.iter().any(|(n, _)| n == property)
+                        && !c.setters.iter().any(|(n, _)| n == property)
+                }),
+                _ => false,
+            },
+            _ => false,
+        },
         // An object literal's layout class: its construction stores the
         // values as own data keys (13.2.5.5), no constructor code of the
         // program runs.
