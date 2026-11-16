@@ -43,6 +43,7 @@ static PARSE_RESULT: Hook<
     unsafe fn(*const StringHeader) -> Result<JSValue, crate::error::CoreError>,
 > = Hook::empty();
 static PARSE: Hook<unsafe extern "C" fn(*const StringHeader) -> JSValue> = Hook::empty();
+static SCAN_PARSE: Hook<fn(&mut crate::gc::RuntimeRootVisitor<'_>)> = Hook::empty();
 static NOTE_CARRIERS: Hook<fn()> = Hook::empty();
 static AFTER_COLD_READ: Hook<unsafe fn(*mut LazyArrayHeader, bool, bool)> = Hook::empty();
 
@@ -63,6 +64,11 @@ pub(crate) unsafe fn parse(text: *const StringHeader) -> JSValue {
         .get()
         .map_or_else(JSValue::undefined, |parse| parse(text))
 }
+pub(crate) fn scan_parser_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if let Some(scan) = SCAN_PARSE.get() {
+        scan(visitor);
+    }
+}
 pub(crate) fn note_carriers() {
     if let Some(note) = NOTE_CARRIERS.get() {
         note();
@@ -80,6 +86,7 @@ pub(crate) fn install() {
     COLD_GET.set(crate::json_tape::lazy_get_rooted_impl);
     PARSE.set(crate::json::js_json_parse);
     PARSE_RESULT.set(crate::json::js_json_parse_core_result);
+    SCAN_PARSE.set(crate::json::scan_parser_roots_mut);
     NOTE_CARRIERS.set(crate::json::note_parse_shape_cache_carriers);
     AFTER_COLD_READ.set(crate::json::traversal_feedback::after_cold_read);
 }

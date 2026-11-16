@@ -1248,10 +1248,12 @@ fn detect_optional_feature_usage_with_capabilities(
         if module_uses_global_math(hir_module) {
             ctx.uses_global_math = true;
         }
+        // Direct serialization needs its cache roots, but cannot create a
+        // parsed value or lazy tape. Namespace values still select the engine.
+        ctx.uses_json_format |= hir_debug.contains("JsonStringify")
+            || hir_debug.contains("JsonIsRawJson");
         if hir_debug.contains("JsonParse")
-            || hir_debug.contains("JsonStringify")
             || hir_debug.contains("JsonRawJson")
-            || hir_debug.contains("JsonIsRawJson")
             || hir_debug.contains("property: \"json\"")
             || hir_debug.contains("method: \"json\"")
         {
@@ -1825,12 +1827,35 @@ class C {
         assert!(format.uses_json_format);
         assert!(!format.uses_global_json);
         let direct = detect_for_source("console.log(JSON.stringify({x:1}));");
-        assert!(direct.uses_json_engine);
+        assert!(direct.uses_json_format);
+        assert!(!direct.uses_json_engine);
         assert!(!direct.uses_global_json);
         let namespace = detect_for_source("const j = JSON; console.log(j.stringify({x: 1}));");
         assert!(namespace.uses_global_json);
         let literal = detect_for_source("console.log(\"literal %j\");");
         assert!(!literal.uses_json_format && !literal.uses_global_json);
+    }
+    #[test]
+    fn json_parser_selection_covers_producers_and_excludes_serialization() {
+        for source in [
+            "JSON.stringify({x:1}, null, 2);",
+            "JSON.stringify({x:1}, (key, value) => value);",
+            "JSON.isRawJSON({});",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(ctx.uses_json_format, "{source}");
+            assert!(!ctx.uses_json_engine && !ctx.uses_global_json, "{source}");
+        }
+        for source in ["JSON.parse('[1]');", "JSON.rawJSON('1');"] {
+            assert!(detect_for_source(source).uses_json_engine, "{source}");
+        }
+        for source in [
+            "JSON[process.argv[2]]('[1]');",
+            "const parse = JSON.parse; parse('[1]');",
+            "const j = JSON; function f(key) { return j[key]('[1]'); }",
+        ] {
+            assert!(detect_for_source(source).uses_global_json, "{source}");
+        }
     }
     #[test]
     fn escaped_globals_keep_json_namespace_available() {
@@ -2024,7 +2049,7 @@ class C {
                     flags(&ctx).into_iter().zip(flags(&fin)).filter(|(a, b)| b.1 && !a.1).collect();
                 assert!(dropped.is_empty(), "all_generic={all_generic}: {dropped:?}: {source}");
                 // The runtime features selected are those of the final HIR (a
-                // gate the view adds, `uses_json_engine` of an intrinsic
+                // gate the view adds, `uses_json_format` of an intrinsic
                 // `JSON.stringify` kept generic, is subsumed by the JSON
                 // namespace its generic call selects).
                 let none = std::collections::BTreeSet::new();
