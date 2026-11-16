@@ -1667,7 +1667,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         | Verdict::T0Set
                         | Verdict::KnownObjectStore
                         | Verdict::PerKind
-                ))
+                )))
             && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
