@@ -662,6 +662,9 @@ mod tests {
 
     #[test]
     fn typed_arrays_are_not_named_parameter_objects() {
+        // A typed array is born only once its runtime family is installed;
+        // the empty constructor slot aborts (`family_never`).
+        perry_runtime::feature_hooks::js_runtime_install_typedarray();
         let typed_array = perry_runtime::typedarray_hook_slots::js_typed_array_new_empty(
             perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             1,
