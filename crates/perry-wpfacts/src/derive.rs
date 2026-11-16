@@ -2219,7 +2219,7 @@ fn judge(
                         }
                         continue;
                     }
-                    match native_arm(m, t, key, s.key, s.is_call) {
+                    match native_arm(m, s, t, key) {
                         Some(true) => native_arms += 1,
                         Some(false) => throw_arms += 1,
                         None => {
@@ -2276,17 +2276,7 @@ fn judge(
                         // appear (the `absent_key` walk: own field node, computed stores,
                         // accessors, the chain): GetValue gives `undefined`, Call
                         // throws (7.3.14): the receiver's TypeError arm.
-                        Err(_)
-                            if tf
-                                    .fields
-                                    .iter()
-                                    .find(|f| f.is(key, m.is_private_atom(s.key)))
-                                    .is_none_or(|f| {
-                                        f.writers_ctor + f.writers_post == 0
-                                            && !tf.birth_keys.contains(&f.key)
-                                    })
-                                && absent_key(m, t, key, s.key) =>
-                        {
+                        Err(_) if instance_absent(m, tf, t, key, s.key) => {
                             throw_arms += 1
                         }
                         Err(why) => {
@@ -2300,9 +2290,7 @@ fn judge(
                     .iter()
                     .find(|f| f.is(key, m.is_private_atom(s.key)));
                 // No store names the key: a row only a read made, or none.
-                let unwritten = row.is_none_or(|f| {
-                    f.writers_ctor + f.writers_post == 0 && !tf.birth_keys.contains(&f.key)
-                });
+                let unwritten = key_unwritten(m, tf, key, s.key);
                 match row {
                     Some(f)
                         if (f.definite || f.declared || f.reserved)
@@ -2322,7 +2310,8 @@ fn judge(
                     },
                     // An absent key is one outcome, as one slot is: the
                     // read gives `undefined` (`None` in `slots`).
-                    _ if unwritten && tf.fixed_layout && absent_key(m, t, key, s.key) => {
+                    // (`fixed_layout`: the `None` slot names the full layout.)
+                    _ if tf.fixed_layout && instance_absent(m, tf, t, key, s.key) => {
                         slots.push(None)
                     }
                     _ if own_data_or_absent(m, tf, t, key, s.key) => own_or_absent += 1,
@@ -3326,6 +3315,23 @@ fn builtin_protos_unwritten(
     Ok(())
 }
 
+/// No store of the program names key `a` on instances of `tf`: its row
+/// is one only a read made, or there is none.
+fn key_unwritten(m: &Model, tf: &TemplateFacts, key: &str, a: Atom) -> bool {
+    tf.fields
+        .iter()
+        .find(|f| f.is(key, m.is_private_atom(a)))
+        .is_none_or(|f| f.writers_ctor + f.writers_post == 0 && !tf.birth_keys.contains(&f.key))
+}
+
+/// Key `a` is absent on class instance `t` (template `tf`) and its whole
+/// chain for the instance's life: no store names it (`key_unwritten`) and
+/// the `absent_key` walk holds. [[Get]] gives `undefined` (10.1.8.1); the
+/// one proof of a read's absent arm and of a call's TypeError arm (7.3.14).
+fn instance_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> bool {
+    key_unwritten(m, tf, key, a) && absent_key(m, t, key, a)
+}
+
 /// Key `a` (`key`) is absent on receiver `t`, a closed fixed layout without
 /// the key as a field, and on its whole prototype chain: nothing is stored
 /// on `t` or on a program prototype of the chain under the key (no named
@@ -3420,40 +3426,31 @@ fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// prototype written: `builtin_protos_unwritten`); `Some(false)` for a call
 /// on an Array whose chain lacks the key (`array_absent`): GetV gives
 /// `undefined` and Call throws a TypeError (7.3.14). `None`: undecided.
-fn native_arm(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> Option<bool> {
-    use crate::builtins::NativeFamily;
-    if m.is_marker(t) {
-        return None;
-    }
-    let fam = if exact_array(m, t) {
-        NativeFamily::Array
-    } else {
-        match m.toks[t as usize] {
-            TokKind::Obj(tm, _)
-                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }) =>
-            {
-                NativeFamily::TypedArray
-            }
-            _ => return None,
-        }
-    };
+/// One receiver of a mixed read or call (`judge`) decided by its native
+/// family: `Some(true)` when the single-kind proof of that receiver alone
+/// holds (the same functions: `own_length` / `indexed_length` for a
+/// `length` read, `native_member`), so a per-kind verdict never accepts a
+/// receiver its own kind's rule refuses; `Some(false)` for a call on an
+/// Array whose chain lacks the key (`array_absent`: Call of `undefined`
+/// throws, 7.3.14).
+fn native_arm(m: &Model, s: &crate::gen::ReadSite, t: Tok, key: &str) -> Option<bool> {
+    let one = [t];
+    let call = s.is_call;
+    let own = !call
+        && key == "length"
+        && (own_length(m, &one, 0).is_some() || indexed_length(m, s, &one, 0).is_some());
+    let member = native_member(m, s, &one, 0);
     if why_indexed() {
         eprintln!(
-            "WHY_NARM {} .{key} call={call} described={} own_free={} protos={:?} absent={}",
+            "WHY_NARM {} .{key} call={call} own_length={own} native_member={:?}",
             m.tok_name(t),
-            crate::builtins::native_described(m, fam, &m.atoms[a as usize], call),
-            native_own_free(m, fam, t, a),
-            builtin_protos_unwritten(m, Some(fam), a),
-            array_absent(m, t, key, a),
+            member.as_ref().map(|_| ())
         );
     }
-    if crate::builtins::native_described(m, fam, &m.atoms[a as usize], call)
-        && native_own_free(m, fam, t, a)
-        && builtin_protos_unwritten(m, Some(fam), a).is_ok()
-    {
+    if own || member.is_ok() {
         return Some(true);
     }
-    if call && matches!(fam, NativeFamily::Array) && array_absent(m, t, key, a) {
+    if call && exact_array(m, t) && array_absent(m, t, key, s.key) {
         return Some(false);
     }
     None

@@ -49,6 +49,27 @@ fn not_proven(src: &str, key: &str) {
     assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
 }
 
+// The accessor runs `sz(this)` before the store: `o.times` keeps
+// `undefined`, so no `.length` read may be a present verdict (OwnLength,
+// NativeMember); a per-kind verdict must carry the TypeError arm
+// (7.3.2 GetV, 7.1.18 ToObject of `undefined`).
+fn undefined_arm_kept(src: &str, key: &str) {
+    let pf = facts(src);
+    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let sites: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == key && !s.access.is_store())
+        .collect();
+    let kept = sites.iter().any(|s| match format!("{:?}", s.verdict).as_str() {
+        v if v.starts_with("No(") => true,
+        "PerKind" => s.receivers.iter().any(|r| r == "primitive:undefined (TypeError)"),
+        _ => false,
+    });
+    let v: Vec<_> = sites.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    assert!(kept, "{v:?}");
+}
+
 // i: a construction-phase read of a prototype data key the program defines
 // no accessor under (KeyframeTrack `this.TimeBufferType`), before the store
 // of the key a later read takes `.length` of.
@@ -86,7 +107,7 @@ fn r9read2_i2_subclass_without_constructor() {
 #[test]
 fn r9read2_ik1_accessor_under_the_key() {
     let src = I.replace("K.prototype.TB = Float32Array;", &format!("Object.defineProperty(K.prototype, \"TB\", {GET});"));
-    not_proven(&src, "length");
+    undefined_arm_kept(&src, "length");
 }
 
 // KEEP: an accessor under a computed key that may spell it.
@@ -106,5 +127,5 @@ fn r9read2_ik3_subclass_getter() {
         "const k = new K(",
         "class S extends K { get TB() { if (Math.random() < 0) sz(this); return Float32Array; } }\nconst k = new S(",
     );
-    not_proven(&src, "length");
+    undefined_arm_kept(&src, "length");
 }
