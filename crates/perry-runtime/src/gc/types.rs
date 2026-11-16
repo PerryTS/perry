@@ -125,6 +125,9 @@ pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
 /// `perex::dfa` reads and writes, reached through its program cell's one traced
 /// edge. Allocated old at the program's first automaton search; a leaf.
 pub const GC_TYPE_REGEX_CACHE: u8 = 41;
+/// A `vm` realm's [[Intrinsics]] record (`array::RealmRecord`): its cells
+/// are raw-address edges, reached from the realm global's `[[Intrinsics]]` slot.
+pub const GC_TYPE_REALM_RECORD: u8 = 42;
 pub const GC_TYPE_BOX: u8 = 22;
 const _: () = assert!(GC_TYPE_BOX == perry_abi::GC_TYPE_BOX);
 pub const GC_TYPE_I32_BOX: u8 = 23;
@@ -474,6 +477,9 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// A Perex program cell: its one traced edge is the raw pointer to its
     /// lazy automaton's storage (`regex::perex_owner::ProgramCell::dfa`).
     RegexProgram,
+    /// A realm's [[Intrinsics]] record: every born cell is a raw-address edge
+    /// (`array::for_each_realm_record_cell`).
+    RealmRecord,
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,
     NativePodView,
@@ -1058,6 +1064,21 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         true,
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::ArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_REALM_RECORD,
+        "realm_record",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::RealmRecord,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,

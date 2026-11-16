@@ -24,6 +24,7 @@ mod bigint_promise;
 pub(super) mod builtin_thunks;
 pub(super) mod ctor_thunks;
 pub(super) mod fetch_globals;
+pub(crate) use fetch_globals::{js_new_realm_global, realm_of};
 
 /// `dyn-eval` install: every hub slot the script evaluator fills in this
 /// module (see `crate::feature_hooks`).

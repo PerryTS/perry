@@ -564,6 +564,7 @@ pub extern "C" fn js_nm_install_v8() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_vm() {
+    crate::array::install_realm_record_cells();
     NM_DISPATCH_REGISTRY[NmBucket::Vm as usize]
         .store(nm_dispatch_vm as NmDispatchFn as *mut (), Ordering::Relaxed);
     nm_register_ctor(NmBucket::Vm, nm_ctor_vm);

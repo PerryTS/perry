@@ -400,6 +400,124 @@ pub(crate) fn scan_realm_intrinsics(
     }
 }
 
+/// A `vm` realm's [[Intrinsics]] record as a GC heap object
+/// (`GC_TYPE_REALM_RECORD`): exactly the realm's [`RealmIntrinsics`] plus its
+/// `global` cell. Reached only from the realm's own objects (its global's
+/// `[[Intrinsics]]` slot); the thread realm's record stays thread state.
+/// Every cell holds a raw address under the algebra of
+/// [`scan_realm_intrinsics`] (0 = unborn), traced by the type's gc arm.
+#[repr(C)]
+pub(crate) struct RealmRecord {
+    intrinsics: RealmIntrinsics,
+    /// The realm global's address.
+    global: Cell<usize>,
+}
+
+/// A new record of the realm whose global is `global`, every family unborn.
+///
+/// # Safety
+/// Inside a no-move window; `global` is the realm global just born.
+pub(crate) unsafe fn alloc_realm_record(global: usize) -> *mut RealmRecord {
+    let size = std::mem::size_of::<RealmRecord>();
+    let record = crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_REALM_RECORD)
+        as *mut RealmRecord;
+    // GC_STORE_AUDIT(INIT): unpublished record; zero cells are unborn, and the
+    // global is born in the same no-move window (no older-to-younger edge).
+    std::ptr::write_bytes(record as *mut u8, 0, size);
+    (*record).global.set(global);
+    record
+}
+
+/// The [[Intrinsics]] of the record at `record`.
+///
+/// # Safety
+/// `record` is a live `GC_TYPE_REALM_RECORD` payload; no collection runs while
+/// the reference lives.
+pub(crate) unsafe fn realm_record_intrinsics<'a>(record: usize) -> &'a RealmIntrinsics {
+    &(*(record as *const RealmRecord)).intrinsics
+}
+
+/// The record at `user_ptr` as its cell words: every field of
+/// [`RealmRecord`] is a `Cell<usize>` (the family entries, the function
+/// intrinsics, `global`), so the record is exactly its cells, each under the
+/// algebra of [`scan_realm_intrinsics`] ([`realm_record_cell_is_born`]).
+///
+/// # Safety
+/// `user_ptr` is a live `GC_TYPE_REALM_RECORD` payload.
+unsafe fn realm_record_cell_words(user_ptr: usize) -> (*mut usize, usize) {
+    const WORDS: usize = std::mem::size_of::<RealmRecord>() / std::mem::size_of::<usize>();
+    const _: () = assert!(WORDS * std::mem::size_of::<usize>() == std::mem::size_of::<RealmRecord>());
+    (user_ptr as *mut usize, WORDS)
+}
+
+/// The `GC_TYPE_REALM_RECORD` arm's view of a record (see `crate::feature_hooks`).
+/// Records are born only by `vm` realm globals, so the `vm` install fills it
+/// before any record exists; empty, no record exists and the arm never runs.
+static REALM_RECORD_CELLS: crate::feature_hooks::Hook<unsafe fn(usize) -> (*mut usize, usize)> =
+    crate::feature_hooks::Hook::empty();
+
+/// The cell words of the record at `user_ptr` for the GC arm of
+/// `GC_TYPE_REALM_RECORD` (mark, relocation and rescan).
+///
+/// # Safety
+/// `user_ptr` is a live `GC_TYPE_REALM_RECORD` payload.
+#[inline(always)]
+pub(crate) unsafe fn realm_record_cells(user_ptr: usize) -> (*mut usize, usize) {
+    match REALM_RECORD_CELLS.peek() {
+        Some(cells) => cells(user_ptr),
+        None => (std::ptr::null_mut(), 0),
+    }
+}
+
+/// Whether a record cell word names a born object (0 = unborn, `usize::MAX`
+/// = the not-a-constructor mark), the algebra of [`scan_realm_intrinsics`].
+#[inline(always)]
+pub(crate) fn realm_record_cell_is_born(word: usize) -> bool {
+    word != 0 && word != usize::MAX
+}
+
+/// The `vm` install's part here: the only writer of [`REALM_RECORD_CELLS`].
+pub(crate) fn install_realm_record_cells() {
+    REALM_RECORD_CELLS.set(realm_record_cell_words);
+}
+
+#[cfg(test)]
+mod realm_record_tests {
+    use super::*;
+
+    /// The record is an ordinary heap object of its realm: its cells keep
+    /// what they name alive and follow it through moving collections, and the
+    /// global's `[[Intrinsics]]` slot follows the record.
+    #[test]
+    fn vm_realm_record_traces_and_rewrites_its_cells() {
+        crate::object::js_nm_install_vm();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let global = crate::object::global_this::js_new_realm_global();
+        let global = scope.root_raw_mut_ptr((global.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader);
+        let target = crate::object::js_object_alloc(0, 0);
+        let target = scope.root_raw_mut_ptr(target);
+        global.with_mut_ptr::<crate::object::ObjectHeader, _>(|g| unsafe {
+            let realm = crate::object::global_this::realm_of(g);
+            assert!(!std::ptr::eq(realm, &crate::state::state().realm_intrinsics));
+            target.with_mut_ptr::<crate::object::ObjectHeader, _>(|t| {
+                realm.functions[0].set(t as usize);
+            });
+        });
+        for _ in 0..3 {
+            let _ = crate::gc::gc_collect_minor();
+        }
+        global.with_mut_ptr::<crate::object::ObjectHeader, _>(|g| unsafe {
+            let realm = crate::object::global_this::realm_of(g);
+            target.with_mut_ptr::<crate::object::ObjectHeader, _>(|t| {
+                assert_eq!(realm.functions[0].get(), t as usize, "the cell follows its object");
+            });
+            let record = (realm as *const RealmIntrinsics) as *const RealmRecord;
+            assert_eq!((*record).global.get(), g as usize, "the global cell follows the global");
+            assert_eq!(realm.entries[0].prototype.get(), 0, "families stay unborn");
+        });
+    }
+}
+
 /// The per-cell half of [`scan_prototype_addr_cache_roots_mut`].
 ///
 /// Split out so the #6981 rewrite algebra can be exercised on a cell the test

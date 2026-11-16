@@ -615,6 +615,17 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
                 visit(pointer_slot(slot));
             }
         }
+        GcRewriteDescriptorKind::RealmRecord => {
+            // Mark, relocation and dirty-slot rescan: the record's born cells
+            // (the `vm` install's slot gives its cell words).
+            let (cells, count) = crate::array::realm_record_cells(user_ptr as usize);
+            for i in 0..count {
+                let slot = cells.add(i);
+                if crate::array::realm_record_cell_is_born(*slot) {
+                    visit(pointer_slot(slot));
+                }
+            }
+        }
         GcRewriteDescriptorKind::Buffer => {
             #[cfg(test)]
             let trace_link = !crate::buffer::bytes::b4_sabotage("view_edge");

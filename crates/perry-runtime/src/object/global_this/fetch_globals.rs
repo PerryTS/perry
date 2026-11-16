@@ -102,6 +102,93 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
             == crate::value::js_nanbox_pointer(obj as i64).to_bits()
 }
 
+/// The %Global% birth every realm shares: one allocation on GLOBAL_OBJECT,
+/// every builtin slot undefined (population fills them). The caller holds a
+/// no-move window.
+///
+/// # Safety
+/// Runs inside a `GcSuppressScope`; the result is unpublished.
+#[inline(always)]
+pub(crate) unsafe fn birth_realm_global() -> *mut ObjectHeader {
+    let new_ptr = unsafe {
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { Object = ref(Object); Function = ref(Function); Array = ref(Array); Number = ref(Number); parseFloat = observed(parseFloat); parseInt = observed(parseInt); Infinity = Infinity; NaN = NaN; undefined = undefined; Boolean = ref(Boolean); String = ref(String); Symbol = ref(Symbol); Date = ref(Date); Promise = ref(Promise); RegExp = ref(RegExp); Error = ref(Error); AggregateError = ref(AggregateError); EvalError = ref(EvalError); RangeError = ref(RangeError); ReferenceError = ref(ReferenceError); SyntaxError = ref(SyntaxError); TypeError = ref(TypeError); URIError = ref(URIError); globalThis = ref("%Global%"); JSON = ref(JSON); Math = ref(Math); Intl = ref(Intl); ArrayBuffer = ref(ArrayBuffer); Atomics = ref(Atomics); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); BigUint64Array = ref(BigUint64Array); BigInt64Array = ref(BigInt64Array); Uint8ClampedArray = ref(Uint8ClampedArray); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); DataView = ref(DataView); Map = ref(Map); BigInt = ref(BigInt); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); Proxy = ref(Proxy); Reflect = ref(Reflect); FinalizationRegistry = ref(FinalizationRegistry); WeakRef = ref(WeakRef); decodeURI = observed(decodeURI); decodeURIComponent = observed(decodeURIComponent); encodeURI = observed(encodeURI); encodeURIComponent = observed(encodeURIComponent); escape = observed(escape); unescape = observed(unescape); eval = observed(eval); isFinite = observed(isFinite); isNaN = observed(isNaN); console = ref(console); process = ref(process); global = ref("%Global%"), attrs = writable | enumerable | configurable; Buffer = ref(Buffer); clearImmediate = observed(clearImmediate), attrs = writable | enumerable | configurable; setImmediate = observed(setImmediate), attrs = writable | enumerable | configurable; URL = ref(URL); URLSearchParams = ref(URLSearchParams); DOMException = ref(DOMException); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); Event = ref(Event); EventTarget = ref(EventTarget); CustomEvent = ref(CustomEvent); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TransformStream = ref(TransformStream); WritableStream = ref(WritableStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); clearInterval = observed(clearInterval), attrs = writable | enumerable | configurable; clearTimeout = observed(clearTimeout), attrs = writable | enumerable | configurable; setInterval = observed(setInterval), attrs = writable | enumerable | configurable; setTimeout = observed(setTimeout), attrs = writable | enumerable | configurable; queueMicrotask = observed(queueMicrotask), attrs = writable | enumerable | configurable; gc = observed(gc); structuredClone = observed(structuredClone), attrs = writable | enumerable | configurable; atob = observed(atob), attrs = writable | enumerable | configurable; btoa = observed(btoa), attrs = writable | enumerable | configurable; BroadcastChannel = ref(BroadcastChannel); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); Blob = ref(Blob); File = ref(File); Performance = ref(Performance); PerformanceEntry = ref(PerformanceEntry); PerformanceMark = ref(PerformanceMark); PerformanceMeasure = ref(PerformanceMeasure); PerformanceObserver = ref(PerformanceObserver); PerformanceObserverEntryList = ref(PerformanceObserverEntryList); PerformanceResourceTiming = ref(PerformanceResourceTiming); performance = accessor(get = "performance.<get>", set = "performance.<set>"), attrs = enumerable | configurable; URLPattern = ref(URLPattern); fetch = observed(fetch), attrs = writable | enumerable | configurable; FormData = ref(FormData); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageEvent = ref(MessageEvent); WebSocket = ref(WebSocket); crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Temporal = ref(Temporal); SuppressedError = ref(SuppressedError); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); Float16Array = ref(Float16Array); SharedArrayBuffer = ref(SharedArrayBuffer); WebAssembly = observed(WebAssembly); Navigator = ref(Navigator); navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; }; } }
+    } as i64;
+    // Born on its static layout: every builtin key is declared, and
+    // population fills the declared slots (each starts undefined).
+    // SAFETY: just born, not yet reachable; GLOBAL_OBJECT's slots are inline.
+    unsafe {
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+        for slot in 0..crate::object::runtime_layouts::GLOBAL_OBJECT::SLOT_COUNT {
+            // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
+            *fields.add(slot) = crate::value::TAG_UNDEFINED;
+        }
+    }
+    new_ptr as *mut ObjectHeader
+}
+
+/// A new realm's global (a `vm` context's): born by [`birth_realm_global`],
+/// then given the own private `[[Intrinsics]]` key (the canonical key-add
+/// transition) holding the realm's own record, whose `global` cell names it
+/// back. The main global never takes that key. Unpopulated: the realm's families are born on first
+/// observation.
+#[allow(dead_code)] // node_vm contexts take it in S4
+pub(crate) fn js_new_realm_global() -> f64 {
+    crate::gc::ensure_gc_initialized();
+    let key = realm_intrinsics_key();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    // SAFETY: inside the no-move window; both objects are born here.
+    unsafe {
+        let global = birth_realm_global();
+        let record = crate::array::alloc_realm_record(global as usize);
+        let defined = crate::object::shaped_symbols::define(
+            global as usize,
+            key,
+            crate::value::js_nanbox_pointer(record as i64).to_bits(),
+            crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
+        );
+        assert!(defined, "a vm realm global takes its [[Intrinsics]] key");
+        crate::value::js_nanbox_pointer(global as i64)
+    }
+}
+
+/// The private `[[Intrinsics]]` key of every `vm` realm global: a persistent
+/// symbol the first [`js_new_realm_global`] makes (0 before it), the same in
+/// every agent. Vm-only: its description lives in the `vm` entry's code.
+static REALM_INTRINSICS_KEY: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn realm_intrinsics_key() -> usize {
+    use std::sync::atomic::Ordering;
+    let bound = REALM_INTRINSICS_KEY.load(Ordering::Acquire);
+    if bound != 0 {
+        return bound;
+    }
+    let made = crate::symbol::persistent_symbol("[[Intrinsics]]") as usize;
+    match REALM_INTRINSICS_KEY.compare_exchange(0, made, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => made,
+        Err(other) => other,
+    }
+}
+
+/// The [[Intrinsics]] record of the realm whose global is `global`: the
+/// thread record for the thread realm global (which has no such key), else
+/// the record under the global's own private `[[Intrinsics]]` key.
+///
+/// # Safety
+/// `global` is a live realm global; no collection runs while the reference lives.
+#[allow(dead_code)] // births take it in S3a
+pub(crate) unsafe fn realm_of<'a>(global: *mut ObjectHeader) -> &'a crate::array::RealmIntrinsics {
+    if is_thread_realm_global(global) {
+        return &crate::state::state().realm_intrinsics;
+    }
+    let key = REALM_INTRINSICS_KEY.load(std::sync::atomic::Ordering::Acquire);
+    assert!(key != 0, "a realm global other than the thread's is born by js_new_realm_global");
+    let word = crate::object::shaped_symbols::own_private(global, key)
+        .expect("a realm global holds its [[Intrinsics]] record");
+    crate::array::realm_record_intrinsics((word & crate::value::POINTER_MASK) as usize)
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
@@ -128,20 +215,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // its own birth as well as its population (SNAP census, design §2.10.20).
     let _realm = crate::snap_census::realm_build();
     let bootstrap_window = crate::gc::GcSuppressScope::new();
-    let new_ptr = unsafe {
-        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { Object = ref(Object); Function = ref(Function); Array = ref(Array); Number = ref(Number); parseFloat = observed(parseFloat); parseInt = observed(parseInt); Infinity = Infinity; NaN = NaN; undefined = undefined; Boolean = ref(Boolean); String = ref(String); Symbol = ref(Symbol); Date = ref(Date); Promise = ref(Promise); RegExp = ref(RegExp); Error = ref(Error); AggregateError = ref(AggregateError); EvalError = ref(EvalError); RangeError = ref(RangeError); ReferenceError = ref(ReferenceError); SyntaxError = ref(SyntaxError); TypeError = ref(TypeError); URIError = ref(URIError); globalThis = ref("%Global%"); JSON = ref(JSON); Math = ref(Math); Intl = ref(Intl); ArrayBuffer = ref(ArrayBuffer); Atomics = ref(Atomics); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); BigUint64Array = ref(BigUint64Array); BigInt64Array = ref(BigInt64Array); Uint8ClampedArray = ref(Uint8ClampedArray); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); DataView = ref(DataView); Map = ref(Map); BigInt = ref(BigInt); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); Proxy = ref(Proxy); Reflect = ref(Reflect); FinalizationRegistry = ref(FinalizationRegistry); WeakRef = ref(WeakRef); decodeURI = observed(decodeURI); decodeURIComponent = observed(decodeURIComponent); encodeURI = observed(encodeURI); encodeURIComponent = observed(encodeURIComponent); escape = observed(escape); unescape = observed(unescape); eval = observed(eval); isFinite = observed(isFinite); isNaN = observed(isNaN); console = ref(console); process = ref(process); global = ref("%Global%"), attrs = writable | enumerable | configurable; Buffer = ref(Buffer); clearImmediate = observed(clearImmediate), attrs = writable | enumerable | configurable; setImmediate = observed(setImmediate), attrs = writable | enumerable | configurable; URL = ref(URL); URLSearchParams = ref(URLSearchParams); DOMException = ref(DOMException); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); Event = ref(Event); EventTarget = ref(EventTarget); CustomEvent = ref(CustomEvent); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TransformStream = ref(TransformStream); WritableStream = ref(WritableStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); clearInterval = observed(clearInterval), attrs = writable | enumerable | configurable; clearTimeout = observed(clearTimeout), attrs = writable | enumerable | configurable; setInterval = observed(setInterval), attrs = writable | enumerable | configurable; setTimeout = observed(setTimeout), attrs = writable | enumerable | configurable; queueMicrotask = observed(queueMicrotask), attrs = writable | enumerable | configurable; gc = observed(gc); structuredClone = observed(structuredClone), attrs = writable | enumerable | configurable; atob = observed(atob), attrs = writable | enumerable | configurable; btoa = observed(btoa), attrs = writable | enumerable | configurable; BroadcastChannel = ref(BroadcastChannel); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); Blob = ref(Blob); File = ref(File); Performance = ref(Performance); PerformanceEntry = ref(PerformanceEntry); PerformanceMark = ref(PerformanceMark); PerformanceMeasure = ref(PerformanceMeasure); PerformanceObserver = ref(PerformanceObserver); PerformanceObserverEntryList = ref(PerformanceObserverEntryList); PerformanceResourceTiming = ref(PerformanceResourceTiming); performance = accessor(get = "performance.<get>", set = "performance.<set>"), attrs = enumerable | configurable; URLPattern = ref(URLPattern); fetch = observed(fetch), attrs = writable | enumerable | configurable; FormData = ref(FormData); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageEvent = ref(MessageEvent); WebSocket = ref(WebSocket); crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Temporal = ref(Temporal); SuppressedError = ref(SuppressedError); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); Float16Array = ref(Float16Array); SharedArrayBuffer = ref(SharedArrayBuffer); WebAssembly = observed(WebAssembly); Navigator = ref(Navigator); navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; }; } }
-    } as i64;
-    // Born on its static layout: every builtin key is declared, and
-    // population fills the declared slots (each starts undefined).
-    // SAFETY: just born, not yet reachable; GLOBAL_OBJECT's slots are inline.
-    unsafe {
-        let fields =
-            crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
-        for slot in 0..crate::object::runtime_layouts::GLOBAL_OBJECT::SLOT_COUNT {
-            // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
-            *fields.add(slot) = crate::value::TAG_UNDEFINED;
-        }
-    }
+    let new_ptr = unsafe { birth_realm_global() } as i64;
     THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
     // The thread-local cache stores the tagged JSValue, independently of
     // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
@@ -1458,4 +1532,130 @@ pub(crate) fn born_thread_global() -> Option<*mut ObjectHeader> {
     let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
     (mine != 0 && GLOBAL_THIS_READY.load(Ordering::Acquire))
         .then(|| (mine & crate::value::POINTER_MASK) as *mut ObjectHeader)
+}
+
+#[cfg(test)]
+mod realm_intrinsics_slot_tests {
+    //! The `[[Intrinsics]]` key is a private own key of a `vm` realm's global
+    //! only: the main global never has it, and no key enumeration of either
+    //! global sees it.
+    use super::*;
+
+    fn strings(arr: *const crate::array::ArrayHeader) -> Vec<String> {
+        (0..crate::array::js_array_length(arr))
+            .map(|i| {
+                let s = crate::builtins::js_string_coerce(crate::array::js_array_get_f64(arr, i));
+                unsafe {
+                    let bytes = std::slice::from_raw_parts(
+                        (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                        (*s).byte_len as usize,
+                    );
+                    String::from_utf8_lossy(bytes).into_owned()
+                }
+            })
+            .collect()
+    }
+
+    fn array_of(v: f64) -> *const crate::array::ArrayHeader {
+        crate::value::js_nanbox_get_pointer(v) as *const crate::array::ArrayHeader
+    }
+
+    /// The fixture's expected list `const <name> = [...]` (node's order).
+    fn fixture_list(name: &str) -> Vec<String> {
+        let src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/node-suite/globals/test_gap_global_key_order.ts"
+        ));
+        let line = src
+            .lines()
+            .find(|l| l.starts_with(&format!("const {name} = [")))
+            .expect("fixture list");
+        let body = &line[line.find('[').unwrap() + 1..line.rfind(']').unwrap()];
+        body.split(',').map(|s| s.trim().trim_matches('"').to_string()).collect()
+    }
+
+    /// The fixture's relation: `actual` restricted to `expected` names, in
+    /// `expected`'s order.
+    fn in_fixture_order(actual: &[String], expected: &[String]) -> bool {
+        let x: Vec<&String> = actual.iter().filter(|k| expected.contains(k)).collect();
+        let y: Vec<&String> = expected.iter().filter(|k| actual.contains(k)).collect();
+        x == y
+    }
+
+    struct Keys {
+        own_keys_len: u32,
+        names: Vec<String>,
+        keys: Vec<String>,
+        for_in: Vec<String>,
+        descriptor_keys: Vec<String>,
+    }
+
+    fn keys_of(global: f64) -> Keys {
+        let obj = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
+        let own = array_of(crate::object::property_ops::reflect_misc::js_reflect_own_keys(global));
+        let descriptors = crate::object::js_object_get_own_property_descriptors(global);
+        Keys {
+            own_keys_len: crate::array::js_array_length(own),
+            names: strings(array_of(crate::object::js_object_get_own_property_names(global))),
+            keys: strings(crate::object::field_get_set::enumeration::js_object_keys(obj)),
+            for_in: strings(crate::object::field_get_set::enumeration::js_for_in_keys_value(global)),
+            descriptor_keys: strings(array_of(
+                crate::object::property_ops::reflect_misc::js_reflect_own_keys(descriptors),
+            )),
+        }
+    }
+
+    fn assert_unobservable(what: &str, k: &Keys, names: &[String], enumerable: &[String]) {
+        assert_eq!(k.own_keys_len as usize, k.names.len(), "{what}: Reflect.ownKeys lists no symbol key");
+        assert_eq!(k.descriptor_keys, k.names, "{what}: getOwnPropertyDescriptors keys = names");
+        assert!(!k.names.iter().any(|n| n.contains("Intrinsics")), "{what}: no [[Intrinsics]] name");
+        assert!(in_fixture_order(&k.names, names), "{what}: getOwnPropertyNames in node order");
+        assert!(in_fixture_order(&k.keys, enumerable), "{what}: Object.keys in node order");
+        assert_eq!(k.for_in, k.keys, "{what}: for-in = Object.keys");
+    }
+
+    #[test]
+    fn realm_intrinsics_slot_is_unobservable_on_every_realm_global() {
+        let _gc = crate::gc::GcSuppressScope::new();
+        let names = fixture_list("NAMES");
+        let enumerable = fixture_list("KEYS");
+        let main = js_get_global_this();
+        let before = keys_of(main);
+        assert_unobservable("main", &before, &names, &enumerable);
+        let vm = js_new_realm_global();
+        let vm_keys = keys_of(vm);
+        assert_unobservable("vm", &vm_keys, &names, &enumerable);
+        let key = REALM_INTRINSICS_KEY.load(std::sync::atomic::Ordering::Acquire);
+        assert!(key != 0, "js_new_realm_global makes the [[Intrinsics]] key");
+        let ptr = |v: f64| crate::value::js_nanbox_get_pointer(v) as *mut ObjectHeader;
+        unsafe {
+            assert!(
+                crate::object::shaped_symbols::own_private(ptr(main), key).is_none(),
+                "the main global never takes the [[Intrinsics]] key"
+            );
+            assert!(
+                crate::object::shaped_symbols::own_private(ptr(vm), key).is_some(),
+                "a vm realm global holds its [[Intrinsics]] record"
+            );
+            assert!(
+                !std::ptr::eq(realm_of(ptr(vm)), realm_of(ptr(main))),
+                "a vm realm has its own record"
+            );
+        }
+        let after = keys_of(main);
+        assert_eq!(after.names, before.names, "a vm realm leaves the main global's keys as they were");
+        assert_eq!(after.keys, before.keys);
+        assert_eq!(vm_keys.names, before.names, "both realms list the one %Global% layout's keys");
+    }
+
+    /// Red until S4: a `vm` realm global's enumerable keys are the main
+    /// global's (the population that writes the non-enumerable attributes
+    /// runs for vm contexts from S4 on).
+    #[test]
+    fn vm_realm_global_enumerable_keys_match_main() {
+        let _gc = crate::gc::GcSuppressScope::new();
+        let main = keys_of(js_get_global_this());
+        let vm = keys_of(js_new_realm_global());
+        assert_eq!(vm.keys, main.keys, "a vm realm global enumerates the main global's keys");
+    }
 }

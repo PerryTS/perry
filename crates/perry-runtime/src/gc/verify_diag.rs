@@ -143,6 +143,7 @@ fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
         GcRewriteDescriptorKind::Overflow => "Overflow",
         GcRewriteDescriptorKind::MetaOnly => "MetaOnlyFields",
         GcRewriteDescriptorKind::RegexProgram => "RegexProgramFields",
+        GcRewriteDescriptorKind::RealmRecord => "RealmRecordCells",
         GcRewriteDescriptorKind::NativeHandle => "NativeHandleOwner",
         GcRewriteDescriptorKind::Buffer => "BufferBacking",
     }
