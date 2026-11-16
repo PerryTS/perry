@@ -8,6 +8,7 @@
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
 mod global_object;
+mod native_constants;
 mod process_ipc;
 mod regex_members;
 mod usage;
@@ -832,6 +833,7 @@ fn detect_optional_feature_usage_with_capabilities(
         .iter()
         .any(|name| hir_debug.contains(name));
     ctx.uses_json_format |= module_uses_json_format(hir_module);
+    ctx.uses_dynamic_native_constants |= native_constants::may_escape(hir_module);
     if global_object::may_escape(hir_module) {
         ctx.uses_global_json = true;
         ctx.uses_url = true;
