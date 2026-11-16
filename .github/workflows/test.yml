@@ -3973,7 +3973,9 @@ jobs:
   # against tests/compat/test262/baseline.json.
   # ---------------------------------------------------------------------------
   test262:
-    needs: [plan, check]
+    # Every tier that runs test262 runs gap-suite-build (ci_plan.py
+    # self-test), whose build it links: the release's package graph.
+    needs: [plan, check, gap-suite-build]
     if: fromJSON(needs.plan.outputs.plan).jobs.test262
     strategy:
       fail-fast: false
@@ -4004,13 +4006,10 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      # perry asks rustc for its sysroot when it links; nothing is compiled.
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
@@ -4022,14 +4021,15 @@ jobs:
           git init -q vendor/test262
           git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat tests/compat/test262/pinned-sha.txt)"
           git -C vendor/test262 checkout -q FETCH_HEAD
-      # The workspace compiler refuses to link archives that have no matching
-      # `.gc-effects` sidecar ("the runtime GC effects sidecar cannot speak for
-      # the archives this program links"); every other job that builds then
-      # compiles writes them here.
-      - name: Build compiler
-        run: |
-          cargo build --release
-          scripts/gc_call_effects/sidecars.sh target/release
+      # The compiler, its archives and their `.gc-effects` sidecars; every case
+      # compiles with PERRY_NO_AUTO_OPTIMIZE=1, so nothing else is built.
+      - name: Download the shared fast-mode build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Ensure the downloaded perry binary is executable
+        run: chmod +x target/release/perry
       - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
         run: >-
           python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
