@@ -158,7 +158,9 @@ mod snap_image_state_tests {
         let mut r = record();
         r.extras = new_extras(&[], &[]);
         let before = r.snap_image_state();
-        r.set_integrity_flags(3);
+        // SAFETY: the extension was allocated above; only its own field changes, so the
+        // record words stay equal and only the extension contents can tell the states apart.
+        unsafe { &mut *(r.extras as usize as *mut ShapeExtras) }.integrity_flags = 3;
         assert_ne!(before, r.snap_image_state());
         // SAFETY: the extension was allocated above and is freed once.
         drop(unsafe { Box::from_raw(r.extras as usize as *mut ShapeExtras) });
