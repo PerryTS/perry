@@ -1920,6 +1920,43 @@ pub fn run_with_parse_cache(
     let dropped_source = super::source_need::drop_unread_source(&mut ctx, &need);
     let source_need_seconds = source_need_started.elapsed().as_secs_f64();
 
+    // wpfacts: the whole-program facts run here, over the final HIR (the
+    // passes above are the last to change it; the class maps below borrow
+    // it until codegen). MATHC1/MATHC2: each namespace pair of the facts
+    // lowering then becomes the one arm its call site's verdict picks
+    // (`perry_hir::namespace_pairs`), before any analysis below reads the
+    // HIR: a proven call is the same HIR a build without the pair has, so
+    // class layouts, births, constructor contracts, providers and module
+    // options see what they see there.
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+    );
+    if ctx.patched_builtins.namespace_pairs_by_verdict() {
+        for (path, module) in ctx.native_modules.iter_mut() {
+            let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
+            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven);
+        }
+    }
+
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
@@ -6648,31 +6685,6 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
     // ACCBUILD3: a proven accessor site calls the holder's accessor by the
     // symbol its own module emits, named from the holder's module and class.
@@ -6946,18 +6958,6 @@ pub fn run_with_parse_cache(
             .collect::<Vec<_>>()
     });
     program_step("module options", Some(options_started));
-    // MATHC1: each namespace pair of the facts lowering becomes the one arm
-    // its call site's verdict picks (`perry_hir::namespace_pairs`), applied
-    // to the owned modules below, before any module is lowered.
-    let pair_picks: Vec<(PathBuf, std::collections::BTreeSet<u32>)> =
-        if ctx.patched_builtins.namespace_pairs_by_verdict() {
-            ctx.native_modules
-                .keys()
-                .map(|p| (p.clone(), super::program_facts::namespace_pair_proven(&program_facts, p)))
-                .collect()
-        } else {
-            Vec::new()
-        };
     // `family_reach`, for the generated installer below.
     let family_live = crate::commands::stdlib_installs::family_live(program_facts.as_deref());
     // Per-module options now own the facts needed by lowering. Release the
@@ -6974,11 +6974,6 @@ pub fn run_with_parse_cache(
         object_literal_method_candidates,
     ));
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);
-    for (path, proven) in &pair_picks {
-        if let Some(module) = owned_modules.get_mut(path) {
-            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, proven);
-        }
-    }
     for (path, module) in &owned_modules {
         let mut link_module = perry_hir::Module::new(module.name.clone());
         link_module.exports = module.exports.clone();
