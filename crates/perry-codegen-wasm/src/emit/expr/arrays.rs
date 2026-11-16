@@ -503,7 +503,6 @@ impl<'a> FuncEmitCtx<'a> {
             } => {
                 self.emit_frame_begin(func, if end.is_some() { 4 } else { 3 });
                 // emit local get for array_id
-                self.emit_frame_begin(func, if end.is_some() { 4 } else { 3 });
                 func.instruction(&Instruction::LocalGet(*array_id));
                 func.instruction(&Instruction::LocalSet(self.temp_local));
                 self.emit_slot_addr(func, 0);
