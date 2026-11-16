@@ -251,6 +251,7 @@ struct Classified {
 /// Name every changed root word. A word in a pristine static is dropped; a
 /// word no symbol covers, one a static's rule stops, or one that holds a heap,
 /// stack or symbol-space address outside a pristine static, is unresolved.
+#[cfg(test)]
 fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
     classify_with(words, st, data_start, false)
 }
