@@ -903,6 +903,16 @@ impl<'a> W<'a> {
     fn expr(&mut self, st: &mut St, e: &Expr) {
         match e {
             Expr::This => self.leak(st),
+            // MATHB1B: the namespace pair `NamespacePatched(N) ? N.m(…) :
+            // <intrinsic>` is the call of the original member, walked as its
+            // intrinsic arm (`Gen::namespace_pair`): what a replaced member
+            // does with `this` is the generic call's escape in the solve,
+            // added only for the values a write brings to the member read.
+            Expr::Conditional {
+                condition,
+                else_expr,
+                ..
+            } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => self.expr(st, else_expr),
             // R9BIRTH3 rule M: `this.m(args)` with `m` the class's own method
             // (`followable`). The call reads `this.m` (the prototype's
             // method: no code runs), evaluates the arguments, then runs the

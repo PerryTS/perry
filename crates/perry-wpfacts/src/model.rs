@@ -2538,6 +2538,12 @@ pub struct Model {
     /// `construct`): a bound target reached by one of them goes through
     /// that bound value's one merged call (`Model::bound_merged`).
     pub bound_synth: crate::pts::FxHashSet<CallId>,
+    /// MATHB1B: the generic-arm call of a namespace pair
+    /// `NamespacePatched(N) ? N.m(…) : <intrinsic>` and the member (N, m)
+    /// it names (`Gen::namespace_pair`). The pair's intrinsic arm is walked
+    /// for the original member's effect; this call binds every callee but
+    /// that original (`call_tok`).
+    pub ns_pair_calls: crate::pts::FxHashMap<CallId, (BuiltinNs, Atom)>,
     /// Calls `Model::solver_call` made (`Stats::solver_calls`).
     pub solver_made: u64,
     /// (bound value, `new`) → its merged call.

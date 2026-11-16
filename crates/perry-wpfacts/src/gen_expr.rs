@@ -622,11 +622,68 @@ impl<'a> Gen<'a> {
         (tm, t)
     }
 
+    /// MATHB1B R2: the namespace pair `NamespacePatched(N) ? N.m(…) :
+    /// <intrinsic>` is ONE call of `N.m` with the arguments evaluated once.
+    /// The intrinsic arm is walked as the call of the original member: its
+    /// node's model is the original's effect (ECMA-262: calling the realm's
+    /// own `N.m`), exactly what the call does while nothing replaced the
+    /// member. The generic arm is walked as the ordinary member call `N.m(…)`
+    /// (the member read, then the call) with the argument nodes the
+    /// intrinsic arm evaluated (no argument is walked twice); it binds every
+    /// callee the read yields except the original (`Model::call_tok`), so it
+    /// adds the ordinary call's effect for exactly the values a write of the
+    /// member, of the global binding `N` or of an unknown receiver brings to
+    /// the read (stored values, ⊤). The state only grows: the original's
+    /// effect is always there, another callee's is added when it arrives.
+    pub(crate) fn namespace_pair(&mut self, fx: &Fx, ns: &str, generic: &Expr, intrinsic: &Expr) -> NodeId {
+        let ns_tok = crate::builtins::ns_by_name(ns);
+        let (Some(ns_b), Expr::Call { callee, args, byte_offset, byte_end, .. }) = (ns_tok, generic) else {
+            return self.expr_zs(fx, generic);
+        };
+        let Expr::PropertyGet { property, .. } = callee.as_ref() else {
+            return self.expr_zs(fx, generic);
+        };
+        let prev = self.pair_args.replace(args.iter().map(|a| (a.clone(), None)).collect());
+        let ri = self.expr_zs(fx, intrinsic);
+        let got = std::mem::replace(&mut self.pair_args, prev).expect("pair args");
+        let a: Vec<NodeId> = got
+            .into_iter()
+            .zip(args.iter())
+            .map(|((_, n), x)| n.unwrap_or_else(|| self.expr_zs(fx, x)))
+            .collect();
+        self.call_lit_arg = args
+            .first()
+            .and_then(|x| self.const_property_key(fx.module, x))
+            .map(|s| self.m.atom(&s));
+        let c0 = self.m.calls.len();
+        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
+        let key = self.m.atom(property);
+        let made: Vec<CallId> = (c0..self.m.calls.len())
+            .filter(|&c| self.m.calls[c].ret == rg && self.m.calls[c].args == a)
+            .map(|c| c as CallId)
+            .collect();
+        for c in made {
+            self.m.ns_pair_calls.insert(c, (ns_b, key));
+        }
+        let out = self.tmp("nspair");
+        self.m.edge(ri, out);
+        self.m.edge(rg, out);
+        out
+    }
+
     /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let zs_ok = std::mem::take(&mut self.zs_ok);
         let n = self.expr_inner(fx, e);
+        if let Some(pa) = self.pair_args.as_mut() {
+            if let Some(slot) = pa
+                .iter_mut()
+                .find(|(a, s)| s.is_none() && perry_hir::stable_hash::same_expr_structure(a, e))
+            {
+                slot.1 = Some(n);
+            }
+        }
         self.zs_mark(n, zs_ok);
         self.note_element_value(fx, e, n);
         if self.diagnostic.is_some() {
@@ -971,15 +1028,15 @@ impl<'a> Gen<'a> {
                 );
                 out
             }
-            // MATHB1 R2: the namespace pair `NamespacePatched(N) ? <generic>
-            // : <intrinsic>` is ONE call: the generic arm's ordinary member
-            // call `N.m(…)`, which also runs the original member when nothing
-            // replaced it. The intrinsic arm is not a second call.
+            // MATHB1B R2: the namespace pair (`namespace_pair`).
             Expr::Conditional {
                 condition,
                 then_expr,
-                ..
-            } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => self.expr_zs(fx, then_expr),
+                else_expr,
+            } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
+                let Expr::NamespacePatched(ns) = condition.as_ref() else { unreachable!() };
+                self.namespace_pair(fx, ns, then_expr, else_expr)
+            }
             Expr::Conditional {
                 condition,
                 then_expr,
