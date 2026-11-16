@@ -703,138 +703,20 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     }
 }
 
-/// Allocate the shared `%TypedArray%` intrinsic constructor (a closure) and
-/// its `.prototype` object, cache both in the GC-rooted atomics, and wire the
-/// closure's `prototype` dynamic-prop to point at the shared prototype.
-///
-/// Spec: `%TypedArray%` is the abstract parent constructor for `Int8Array`,
-/// `Uint8Array`, … — `Int8Array.__proto__ === %TypedArray%` and
-/// `Object.getPrototypeOf(Int8Array.prototype) === %TypedArray%.prototype`.
-/// Perry didn't model this before #2145, so test262's TypedArray-prototype
-/// walks read `null.prototype` and the constructor's `__proto__` returned the
-/// `0.0` no-value placeholder (`typeof Int8Array.__proto__ === "number"`).
-///
-/// Idempotent within the current agent: subsequent calls return its cached
-/// pointer. The owning agent is the only thread that accesses these roots.
-#[rustfmt::skip] pub(crate) fn ensure_typed_array_intrinsic(
-) -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
-    let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);
-    let existing_proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
-    if existing_ctor != 0 && existing_proto != 0 {
-        return (
-            existing_ctor as *mut crate::closure::ClosureHeader,
-            existing_proto as *mut ObjectHeader,
-        );
-    }
-    // #7251: same invariant and same hazard as `build_generator_tower` — this
-    // threads `ctor`/`proto` as raw pointers across ~a dozen allocating
-    // installs (accessors, to-string-tag, the 44-method proto-methods table,
-    // static `from`/`of`) to build an immortal graph that hangs off
-    // `TYPED_ARRAY_INTRINSIC_PTR`/`_PROTO_PTR` for the life of the thread.
-    // Reachable ahead of `populate_global_this_builtins` from
-    // `typedarray_props.rs:812` on the allocation-point route. See
-    // `gc::tests::lazy_intrinsic_towers` for the gate.
-    // %TypedArray% is the realm's, whichever init first asks (SNAP census).
-    let _realm = crate::snap_census::realm_build();
-    let _no_move = crate::gc::GcSuppressScope::new();
-    let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Uint8Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
-        1,
-    );
-    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); length = accessor(get = "%TypedArray%.prototype.length.<get>"); entries; keys; values; at; copyWithin; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; lastIndexOf; map; reverse; reduce; reduceRight; set; slice; some; sort; subarray; toReversed; toSorted; with; toLocaleString; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
-    if ctor.is_null() || proto.is_null() {
-        return (std::ptr::null_mut(), std::ptr::null_mut());
-    }
-
-    super::super::native_module::set_bound_native_closure_name(ctor, realm_typed_array_public!(name));
-    super::super::native_module::set_builtin_closure_length(ctor as usize, 0);
-    super::super::set_builtin_property_attrs(
-        ctor as usize,
-        "name".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
-    );
-    super::super::set_builtin_property_attrs(
-        ctor as usize,
-        "length".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
-    );
-    // Wire `%TypedArray%.prototype` so `getPrototypeOf(Int8Array).prototype`
-    // hits a real object instead of undefined.
-    let proto_key_bytes = b"prototype";
-    let proto_key =
-        crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    super::super::define_builtin_data_property(
-        ctor as *mut ObjectHeader,
-        proto_key,
-        proto_value,
-        "prototype".to_string(),
-        super::super::PropertyAttrs::new(false, false, false),
-    );
-    let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    super::super::define_builtin_data_property(
-        proto,
-        constructor_key,
-        crate::value::js_nanbox_pointer(ctor as i64),
-        "constructor".to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
-    // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
-    // accessor descriptors are own properties of `%TypedArray%.prototype` per
-    // spec, NOT of the per-kind proto. Pre-#2145 they were installed on each
-    // per-kind proto because `getPrototypeOf(per_kind_proto)` returned the
-    // per-kind proto itself (identity), so the same lookup happened to land
-    // there. After #2145 wires the per-kind protos to share the intrinsic
-    // proto, the descriptors must live on the intrinsic itself for
-    // `Object.getOwnPropertyDescriptor(getPrototypeOf(Int8Array.prototype),
-    // "length")` to keep working.
+/// `%TypedArray%.prototype`'s own members, installed by the `%TypedArray%`
+/// family's birth (`birth_family`, after its `constructor`). The per-kind
+/// prototypes (`Int8Array.prototype`, ...) inherit them through their declared
+/// `extends`, so `Int8Array.prototype.map === %TypedArray%.prototype.map` and
+/// the brand checks fire when a method is read off the parent (test262's
+/// `testTypedArray.js`). Order is node's own-key order: the four accessors
+/// (#2060), the spec methods, `toString` (= `Array.prototype.toString`),
+/// `@@iterator` (= `values`, so after the methods) and `@@toStringTag`.
+pub(crate) fn install_typed_array_prototype_members(proto: *mut ObjectHeader) {
     install_typed_array_proto_accessors(proto);
     install_typed_array_to_string_tag(proto);
-    // #11193: `%TypedArray%[Symbol.species]`, inherited by `Uint8Array` & co.
-    super::install_builtin_species_accessor(ctor);
-    // The per-kind prototypes (`Int8Array.prototype`, …) inherit ALL of their
-    // methods from this shared `%TypedArray%.prototype` (their `[[Prototype]]`),
-    // so `Int8Array.prototype.hasOwnProperty("map") === false` and
-    // `Int8Array.prototype.map === %TypedArray%.prototype.map` (test262's
-    // `prototype/*/inherited.js`).
-    //
-    // NOTE: the generic `Object.prototype` data methods (`hasOwnProperty`,
-    // `valueOf`, …) are intentionally NOT installed here. The intrinsic prototype
-    // is allocated with zero inline field slots and already carries ~34 own
-    // properties (accessors + `@@iterator` + the spec methods below); adding the
-    // extra ~5 crosses an inline-storage boundary that trips a latent field-count
-    // overflow (a heap-layout-dependent SIGSEGV under GC pressure). They are not
-    // needed for parity — `hasOwnProperty`/`valueOf`/etc. dispatch natively.
-    // `toString` is aliased after all constructors are set up in
-    // `populate.rs:alias_typed_array_proto_to_string` (ECMA-262 §23.2.3.33).
-    // Install the brand-checking spec methods on the shared `%TypedArray%`
-    // intrinsic prototype. test262's `testTypedArray.js` harness reads
-    // `TypedArray.prototype.<m>` (where `TypedArray ===
-    // Object.getPrototypeOf(Int8Array)`), so the brand check for
-    // `%TypedArray%.prototype.<m>.call(badReceiver)` must fire when the method
-    // is read off the intrinsic, and the per-kind protos resolve their reads
-    // here via the `[[Prototype]]` chain.
     typed_array_proto_thunks::install_typed_array_proto_methods(proto);
-    // @@iterator must be installed AFTER install_typed_array_proto_methods so
-    // that it captures the final `values` closure (the `%TypedArray%.prototype
-    // [@@iterator] === %TypedArray%.prototype.values` identity invariant).
     install_typed_array_iterator_symbol(proto);
-    install_constructor_static(
-        ctor,
-        "from",
-        crate::fn_info!(#[realm("%TypedArray%.from", spec = {length = 1}, emit = metadata(realm_typedarray_from_metadata))] export crate::object::global_this::bigint_promise::typed_array_from_thunk, 3; with_declared(3)),
-        realm_typedarray_from_metadata!(length),
-    );
-    install_constructor_static(
-        ctor,
-        "of",
-        crate::fn_info!(#[realm("%TypedArray%.of")] export crate::object::global_this::bigint_promise::typed_array_of_thunk, 1; with_rest(0)),
-        0,
-    );
-    crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
-    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
-    super::populate::alias_typed_array_proto_to_string();
-    (ctor, proto)
+    super::populate::alias_typed_array_proto_to_string(proto);
 }
 
 /// Public accessor for the `%TypedArray%.prototype` object. Returns the cached
@@ -842,7 +724,8 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// initialised), else null. Used by `js_object_get_prototype_of` to resolve
 /// `Object.getPrototypeOf(Int8Array.prototype)` to the shared prototype.
 pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
-    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut ObjectHeader
+    crate::array::intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::TypedArray)
+        as *mut ObjectHeader
 }
 
 // ---------------------------------------------------------------------------
@@ -852,13 +735,7 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 /// The original Uint8Array prototype is owned by the traced intrinsic
 /// constructor, independent of writable globalThis.Uint8Array.
 pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
-    let (ctor, _) = ensure_typed_array_intrinsic();
-    let value = crate::closure::js_closure_get_capture_f64(ctor, 0);
-    if crate::value::JSValue::from_bits(value.to_bits()).is_pointer() {
-        return value;
-    }
-    // Uint8Array's family is observed through its own birth, which stores
-    // its original prototype in capture 0.
+    // Uint8Array's family record: its original prototype.
     let proto = crate::array::intrinsic_prototype_addr(
         crate::object::BuiltinConstructorIdentity::Uint8Array,
     );

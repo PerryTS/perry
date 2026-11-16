@@ -398,6 +398,10 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
     if proto_obj.is_null() {
         return;
     }
+    if builtin_name == "TypedArray" {
+        super::typed_array::install_typed_array_prototype_members(proto_obj);
+        return;
+    }
     // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
@@ -1168,7 +1172,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         // function. The accessor descriptors
         // (`length`/`byteLength`/`byteOffset`/`buffer`) are installed
         // *only* on the shared `%TypedArray%.prototype` (#2145, in
-        // `ensure_typed_array_intrinsic`) — reached via
+        // the `%TypedArray%` family birth) — reached via
         // `Object.getPrototypeOf(Int8Array.prototype) ===
         // %TypedArray%.prototype`. Pre-#2145 they were also stamped on
         // each per-kind proto because `getPrototypeOf(per_kind)`

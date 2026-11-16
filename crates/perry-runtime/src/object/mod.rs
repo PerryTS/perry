@@ -528,8 +528,6 @@ crate::perry_thread_local! {
     static OS_CONSTANTS_ERRNO_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
     static OS_CONSTANTS_PRIORITY_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
     static OS_CONSTANTS_DLOPEN_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
-    static TYPED_ARRAY_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
-    static TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ASYNC_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
@@ -557,10 +555,6 @@ static OS_CONSTANTS_PRIORITY_CACHE: RealmAtomicU64 =
 static OS_CONSTANTS_DLOPEN_CACHE: RealmAtomicU64 =
     RealmAtomicU64::new(&OS_CONSTANTS_DLOPEN_CACHE_SLOT);
 
-pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: RealmAtomicI64 =
-    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PTR_SLOT);
-pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
-    RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static ASYNC_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&ASYNC_FUNCTION_INTRINSIC_PTR_SLOT);
 pub(crate) static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
@@ -1575,8 +1569,6 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // Realm intrinsic towers and Web Storage brands point into the calling
     // thread's arena, so visit only this agent's backing atomics.
     for slot in [
-        &TYPED_ARRAY_INTRINSIC_PTR,
-        &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
         &ASYNC_FUNCTION_INTRINSIC_PTR,
         &ASYNC_FUNCTION_INTRINSIC_PROTO_PTR,
         &GENERATOR_FUNCTION_INTRINSIC_PTR,

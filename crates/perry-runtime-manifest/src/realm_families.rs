@@ -4,7 +4,7 @@ use super::{info, tokens, Token};
 use crate::realm_json::Value;
 use std::collections::BTreeMap;
 
-pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
+pub(crate) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
     let ts = tokens(source)?;
     let start = ts
         .windows(3)
@@ -32,7 +32,7 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
         if head.len() < 4 || head[1].text != "=" || head[2].text != ">" {
             return Err("malformed constructor family".into());
         }
-        let name = head[0].text.to_owned();
+        let mut name = head[0].text.to_owned();
         let mut facts = BTreeMap::from([
             ("identity".into(), Value::Number((index + 1).to_string())),
             ("prototype_callable".into(), Value::Bool(false)),
@@ -62,6 +62,14 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 "extends" | "extends_prototype" => continue,
                 // The `[Symbol.species]` accessor its birth defines (#11193).
                 "species" => continue,
+                // `global false`: %Global% does not bind it; the realm names
+                // the intrinsic `%Name%` (`%TypedArray%`).
+                "global" => {
+                    if info::text(&clause[1..]) == "false" {
+                        name = format!("%{name}%");
+                    }
+                    continue;
+                }
                 other => return Err(format!("unknown constructor family field {other}")),
             };
             let value = if field == "prototype_callable" {

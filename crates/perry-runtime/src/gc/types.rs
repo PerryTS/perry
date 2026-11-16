@@ -1675,7 +1675,7 @@ pub use perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
-// `TYPED_ARRAY_INTRINSIC_PROTO_PTR` (a single object shared across all
+// the `%TypedArray%` family's prototype (a single object shared across all
 // 11 typed-array kinds) when this bit is set.
 pub use perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO;
 /// Array payload is stored as canonical raw `f64` values, not NaN-boxed

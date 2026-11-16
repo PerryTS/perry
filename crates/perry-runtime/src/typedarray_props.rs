@@ -1004,10 +1004,11 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
     // so the membership check doesn't depend on a registered typed array having
     // been created first (#6164 — otherwise the result was creation-order
     // dependent, and buffer-backed `Uint8Array` never populated it).
-    let _ = crate::object::ensure_typed_array_intrinsic();
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    // %TypedArray%.prototype intrinsic.
-    let intrinsic = crate::object::typed_array_intrinsic_proto_ptr();
+    // %TypedArray%.prototype: its family record (asking births it).
+    let intrinsic = crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::TypedArray,
+    ) as *mut crate::object::ObjectHeader;
     if !intrinsic.is_null() {
         if crate::object::own_key_present(intrinsic, key) {
             return true;

@@ -437,6 +437,20 @@ pub(crate) fn install_builtin_constructor_statics(
     );
     let s = &mut statics;
     match name {
+        "TypedArray" => {
+            // The row name is the declared public name ().
+            debug_assert_eq!(name, realm_typed_array_public!(name));
+            s.method(
+                "of",
+                crate::fn_info!(#[realm("%TypedArray%.of")] export crate::object::global_this::bigint_promise::typed_array_of_thunk, 1; with_rest(0)),
+                0,
+            );
+            s.method(
+                "from",
+                crate::fn_info!(#[realm("%TypedArray%.from", spec = {length = 1}, emit = metadata(realm_typedarray_from_metadata))] export crate::object::global_this::bigint_promise::typed_array_from_thunk, 3; with_declared(3)),
+                realm_typedarray_from_metadata!(length),
+            );
+        }
         "Error" => {
             if let Some(prototype) = prototype.take() {
                 s.data(

@@ -21,7 +21,7 @@ pub mod effects;
 #[path = "realm_facts.rs"]
 mod facts;
 #[path = "realm_families.rs"]
-mod families;
+pub(crate) mod families;
 #[path = "realm_hash.rs"]
 mod hash;
 #[path = "realm_imports.rs"]

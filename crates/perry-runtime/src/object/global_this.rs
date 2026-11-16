@@ -171,7 +171,7 @@ pub(crate) use proto_methods::{
     install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
-    ensure_typed_array_intrinsic, install_function_has_instance_symbol,
+    install_function_has_instance_symbol,
     typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,
     validate_array_buffer_species_constructor,
 };

@@ -112,7 +112,7 @@ pub(crate) fn test_materialize_realm_owned_roots() {
     crate::object::global_this::ensure_generator_intrinsics();
     // %TypedArray% is born by a typed-array family observation, not by
     // %Global%'s (Buffer no longer births Uint8Array at setup): observe it.
-    let _ = crate::object::global_this::ensure_typed_array_intrinsic();
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::TypedArray);
     // The storage areas are made by the first read of their globals.
     crate::web_storage::test_read_storage_globals();
     unsafe {
@@ -148,11 +148,6 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
         roots.push((name, slot.test_slot_addr(), slot.load(Ordering::Acquire)));
     }
     for (name, slot) in [
-        ("TYPED_ARRAY_INTRINSIC_PTR", &TYPED_ARRAY_INTRINSIC_PTR),
-        (
-            "TYPED_ARRAY_INTRINSIC_PROTO_PTR",
-            &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
-        ),
         (
             "GENERATOR_FUNCTION_INTRINSIC_PTR",
             &GENERATOR_FUNCTION_INTRINSIC_PTR,

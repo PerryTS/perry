@@ -86,9 +86,10 @@ fn snake(name: &str) -> String {
     s
 }
 
-/// A family name (no realm path, no %intrinsic%).
-fn family(name: &str) -> Option<&str> {
-    (!name.contains('.') && !name.contains('%') && name != "Object" && name != "Function").then_some(name)
+/// The family identity a realm name `name` declares: a constructor family row (its realm
+/// name; a row %Global% does not bind is `%Name%`), not one of the two root families.
+fn family<'a>(rows: &std::collections::BTreeMap<String, Value>, name: &'a str) -> Option<&'a str> {
+    (rows.contains_key(name) && name != "Object" && name != "Function").then(|| name.trim_matches('%'))
 }
 
 /// perry-runtime's generated sources: `global_bindings.rs` (the `global_bindings!` rows; a row
@@ -110,18 +111,21 @@ pub fn write_runtime(manifest: &Value, out: &Path) -> Result<(), String> {
     std::fs::write(out.join("global_bindings.rs"), rows).map_err(|e| e.to_string())?;
 
     let ds = declarations(manifest)?;
+    let rows = crate::realm_source::families::read(include_str!(
+        "../../perry-runtime/src/object/global_this_tables.rs"
+    ))?;
     let mut links = String::from("macro_rules! declared_family_links {\n");
     for d in ds {
-        let Some(name) = d.get("name").and_then(Value::string).and_then(family) else { continue };
+        let Some(name) = d.get("name").and_then(Value::string).and_then(|n| family(&rows, n)) else { continue };
         if d.get("kind").and_then(Value::string) != Some("constructor") {
             continue;
         }
-        let ctor = d.get("prototype").and_then(Value::string).and_then(family);
+        let ctor = d.get("prototype").and_then(Value::string).and_then(|n| family(&rows, n));
         let proto = find(ds, &format!("{name}.prototype"))
             .and_then(|p| p.get("prototype"))
             .and_then(Value::string)
             .and_then(|p| p.strip_suffix(".prototype"))
-            .and_then(family);
+            .and_then(|n| family(&rows, n));
         let species = properties(d).iter().any(|p| {
             p.get("key").and_then(Value::string) == Some("@@species")
                 && p.get("get").and_then(Value::string).and_then(|g| find(ds, g)).and_then(|g| g.get("body")).and_then(Value::string)

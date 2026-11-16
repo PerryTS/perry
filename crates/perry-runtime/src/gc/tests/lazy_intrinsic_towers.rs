@@ -253,7 +253,7 @@ fn realm_owned_intrinsic_module_and_storage_roots_are_distinct() {
     let a = a.join().expect("agent A panicked");
     let b = b.join().expect("agent B panicked");
 
-    assert_eq!(a.len(), 28, "the gate must cover every #8002/#8003 root");
+    assert_eq!(a.len(), 26, "the gate must cover every #8002/#8003 root");
     assert_eq!(a.len(), b.len());
     for ((a_name, a_slot, a_root), (b_name, b_slot, b_root)) in a.iter().zip(&b) {
         assert_eq!(a_name, b_name, "snapshot wiring diverged between agents");
@@ -347,10 +347,13 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
     on_a_fresh_thread(|| {
         let _pacing = crate::gc::policy::force_legacy_gc_pacing();
         crate::gc::ensure_gc_initialized();
+        // The realm exists first: the subject is %TypedArray%'s family birth.
+        crate::object::js_get_global_this();
+        let family = crate::object::BuiltinConstructorIdentity::TypedArray;
         assert_eq!(
-            crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(StdOrdering::Acquire),
+            crate::array::intrinsic_prototype_addr_if_bound(family),
             0,
-            "TYPED_ARRAY_INTRINSIC_PTR was already built before this test's \
+            "%TypedArray% was already born before this test's \
              first touch — the per-test-global isolation (#7251/#7672) did \
              not give this thread a fresh tower, so this test proved nothing"
         );
@@ -359,10 +362,11 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
         let collections_before = gc_collection_count();
 
         // THE SUBJECT.
-        let (ctor, proto) = crate::object::ensure_typed_array_intrinsic();
+        let proto = crate::array::intrinsic_prototype_addr(family);
+        let ctor = crate::array::intrinsic_constructor_addr_if_bound(family);
 
         assert!(
-            !ctor.is_null() && !proto.is_null(),
+            ctor != 0 && proto != 0,
             "the intrinsic did not build at all, so this test measured \
              nothing"
         );
@@ -370,7 +374,7 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
         let collections_after = gc_collection_count();
         assert_eq!(
             collections_after, collections_before,
-            "a collection ran inside `ensure_typed_array_intrinsic` — its \
+            "a collection ran inside the `%TypedArray%` family birth — its \
              `ctor` / `proto` locals are now dangling or from-space"
         );
         assert!(

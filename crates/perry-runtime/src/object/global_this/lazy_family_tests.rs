@@ -21,7 +21,13 @@ fn own_names(value: f64) -> Vec<String> {
         .collect()
 }
 
+/// The family's constructor: its globalThis binding, or (a row %Global% does
+/// not bind) the realm's [[Intrinsics]] entry.
 fn constructor(declaration: &BuiltinConstructorDeclaration) -> f64 {
+    if !declaration.global {
+        let ctor = crate::array::intrinsic_constructor_addr_if_bound(declaration.identity);
+        return crate::value::js_nanbox_pointer(ctor as i64);
+    }
     js_get_global_this_builtin_value(declaration.name.as_ptr(), declaration.name.len())
 }
 
@@ -68,7 +74,7 @@ fn realm_population_does_not_birth_lazy_families() {
         );
     }
     for declaration in &lazy {
-        let proto = builtin_prototype_value(declaration.name);
+        let proto = builtin_prototype_value(declaration.realm_name);
         assert!(JSValue::from_bits(proto.to_bits()).is_pointer());
         assert_eq!(
             crate::array::intrinsic_prototype_addr_if_bound(declaration.identity),
@@ -169,7 +175,7 @@ fn lazy_declared_statics_are_the_realm_sources() {
     for declaration in lazy_declarations() {
         let source = declarations
             .iter()
-            .find(|d| d["kind"] == "constructor" && d["name"] == declaration.name)
+            .find(|d| d["kind"] == "constructor" && d["name"] == declaration.realm_name)
             .unwrap_or_else(|| panic!("{}: no realm constructor declaration", declaration.name));
         let order: Vec<&str> = source["own_key_order"]
             .as_array()
@@ -545,4 +551,53 @@ fn perf_hooks_families_are_born_by_their_first_read() {
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let length = js_object_get_field_by_name_f64(mark as *const ObjectHeader, length_key);
     assert_eq!(length.to_bits(), 1.0f64.to_bits(), "PerformanceMark.length === 1");
+}
+
+/// %TypedArray% is a declared lazy family without a globalThis binding: one
+/// constructor that is the [[Prototype]] of all 12 typed-array constructors
+/// (their declared `extends`), born by the first typed-array observation.
+#[test]
+fn typed_array_parent_is_one_lazy_family_born_by_its_first_observation() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    let parent = crate::object::BuiltinConstructorIdentity::TypedArray;
+    assert_eq!(crate::object::BuiltinConstructorIdentity::for_name("%TypedArray%"), Some(parent));
+    assert!(born_by_its_observation(parent.declaration()), "%TypedArray% is declared lazy");
+    assert!(!parent.declaration().global, "%TypedArray% has no globalThis binding");
+    assert_eq!(
+        js_get_global_this_builtin_value(b"TypedArray".as_ptr(), 10).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "globalThis.TypedArray is undefined"
+    );
+    assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(parent), 0, "%TypedArray% born at realm setup");
+    let children: Vec<_> = GLOBAL_THIS_BUILTIN_CONSTRUCTORS
+        .iter()
+        .filter(|d| d.extends == Some(parent))
+        .collect();
+    assert_eq!(children.len(), 12, "the 12 typed-array families extend %TypedArray%");
+    // The first observation: Int8Array's family. It births its parent.
+    let int8 = crate::object::BuiltinConstructorIdentity::Int8Array;
+    crate::array::intrinsic_prototype_addr(int8);
+    let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent);
+    let parent_proto = crate::array::intrinsic_prototype_addr_if_bound(parent);
+    assert_ne!(parent_proto, 0, "observing Int8Array births %TypedArray%");
+    assert_ne!(parent_ctor, 0);
+    for child in children {
+        let proto_of_ctor = crate::object::js_object_get_prototype_of(constructor(child));
+        assert_eq!(
+            proto_of_ctor.to_bits(),
+            crate::value::js_nanbox_pointer(parent_ctor as i64).to_bits(),
+            "Object.getPrototypeOf({}) is %TypedArray%",
+            child.name
+        );
+        let child_proto = crate::array::intrinsic_prototype_addr(child.identity);
+        let proto_of_proto = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(child_proto as i64));
+        assert_eq!(
+            proto_of_proto.to_bits(),
+            crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
+            "Object.getPrototypeOf({}.prototype) is %TypedArray%.prototype",
+            child.name
+        );
+    }
+    assert_eq!(crate::array::intrinsic_constructor_addr_if_bound(parent), parent_ctor, "one %TypedArray%");
 }

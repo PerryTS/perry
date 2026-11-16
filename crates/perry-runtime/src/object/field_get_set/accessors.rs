@@ -836,9 +836,10 @@ pub(crate) unsafe fn is_typed_array_prototype(addr: usize) -> bool {
     if addr == 0 || (addr as u64) >> 48 != 0 || !super::super::is_valid_obj_ptr(addr as *const u8) {
         return false;
     }
-    let intrinsic_proto =
-        super::super::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Relaxed);
-    if intrinsic_proto != 0 && addr as i64 == intrinsic_proto {
+    let intrinsic_proto = crate::array::intrinsic_prototype_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::TypedArray,
+    );
+    if intrinsic_proto != 0 && addr == intrinsic_proto {
         return true;
     }
     // Per-kind protos are plain `GC_TYPE_OBJECT`s carrying the proto flag in the

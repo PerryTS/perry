@@ -1545,7 +1545,9 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
 
     let mut with_recorded_length = 0usize;
     let mut offenders: Vec<String> = Vec::new();
-    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
+    // The globalThis constructors: a family %Global% does not bind
+    // (`global false`, %TypedArray%) is no `this.<Name>` value.
+    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().filter(|d| d.global) {
         let name = declaration.name;
         let ctor_raw = test_global_this_builtin_constructor_value(name);
         let ctor = JSValue::from_bits(ctor_raw.to_bits());
