@@ -536,7 +536,11 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
             .class_writers
             .get(&(tm, a))
             .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
-        if m.static_fields.contains(&(tm, a)) || !stored {
+        // R9BIRTH7: a settled top-level `X.k = v` defines the own data
+        // property before any code can read `X` (`gen::settled`), as a
+        // class-body static field does.
+        let settled = m.settled_static.get(&(tm, a)).is_some_and(|gs| window_globals_own(m, gs));
+        if m.static_fields.contains(&(tm, a)) || !stored || settled {
             out.push(m.atoms[a as usize].clone());
         }
     }
@@ -1786,6 +1790,115 @@ fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
         .then_some(receivers)
 }
 
+/// R9BIRTH7: a `length` read whose receivers are each an Array exotic
+/// object or a String ([`own_length`]'s: an own, non-configurable data
+/// property, 10.4.2, 10.4.3) or a typed array, at least one of them a
+/// typed array: an integer-indexed exotic object's [[GetOwnProperty]] of a
+/// non-numeric key is ordinary (10.4.5.1), so it owns `length` only when
+/// the program defines it (its writes: [`native_own_free`]; a store does
+/// not create it, the chain's accessor has no setter, 10.1.9.2); its
+/// [[Get]] then reaches `get %TypedArray%.prototype.length` (23.2.3.21)
+/// unless a builtin prototype is written ([`builtin_protos_unwritten`]).
+/// Each receiver's read is its builtin's: a NativeMember over two
+/// families, as OwnLength is over Arrays and Strings.
+fn indexed_length(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+) -> Option<Vec<String>> {
+    use crate::builtins::NativeFamily;
+    let (prim, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
+    if prim != 0 && prim != crate::model::prim::STR {
+        return None;
+    }
+    let mut typed = false;
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        if !exact_array(m, t) {
+            let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+                return None;
+            };
+            let is_typed = matches!(
+                m.tmpls[tm as usize].kind,
+                TmplKind::BObj {
+                    what: "TypedArray",
+                    ..
+                }
+            );
+            if !is_typed || m.is_marker(t) || !native_own_free(m, NativeFamily::TypedArray, t, s.key) {
+                if is_typed && why_indexed() {
+                    let a = s.key;
+                    eprintln!(
+                        "WHY_INDEXED {} marker={} escaped={:?} hard={} writers={} relink={} acc={}",
+                        m.tok_name(t),
+                        m.is_marker(t),
+                        m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone()),
+                        m.hard.contains_key(&t),
+                        m.writers.get(&(tm, a)).is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty()),
+                        m.super_relink.contains(&t),
+                        m.accessor_keys.get(&t).is_some_and(|k| !k.is_empty()),
+                    );
+                }
+                return None;
+            }
+            typed = true;
+        }
+        receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
+    }
+    if !typed
+        || !crate::builtins::native_described(m, NativeFamily::TypedArray, "length", false)
+        || builtin_protos_unwritten(m, Some(NativeFamily::TypedArray), s.key).is_err()
+    {
+        if typed && why_indexed() {
+            eprintln!(
+                "WHY_INDEXED protos {:?}",
+                builtin_protos_unwritten(m, Some(NativeFamily::TypedArray), s.key)
+            );
+        }
+        return None;
+    }
+    if prim != 0 {
+        receivers.push("primitive:string".into());
+    }
+    receivers.sort();
+    receivers.dedup();
+    Some(receivers)
+}
+
+/// `PERRY_FACTS_WHY_INDEXED=1`: one stderr line per typed-array receiver
+/// [`indexed_length`] refuses, naming the failing condition.
+fn why_indexed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_FACTS_WHY_INDEXED").is_some())
+}
+
+/// R9BIRTH7: `arguments.length` on an arguments object `t` (10.4.4.6,
+/// 10.4.4.7: CreateMappedArgumentsObject / CreateUnmappedArgumentsObject
+/// define `length` as an own data property, writable and configurable).
+/// It stays an own data property unless the program deletes or redefines
+/// it: no hard operation on `t` (delete, defineProperty, a prototype or
+/// extensibility change), no accessor on it or its template, no data
+/// descriptor definition of the key, and `t` never reaches unknown code
+/// (no escape). A store keeps it data (10.1.9.2 OrdinarySetWithOwnDescriptor:
+/// the existing writable data property takes the value). The value is
+/// whatever was last stored (the solve's field) or the argument count.
+fn args_own_length(m: &Model, t: Tok, a: Atom) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let tpl = &m.tmpls[tm as usize];
+    matches!(tpl.kind, TmplKind::Args { .. })
+        && !m.is_marker(t)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && tpl.accessor_keys.is_empty()
+        && !m.defined_keys.get(&tm).is_some_and(|ks| ks.contains(&a))
+}
+
 /// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
 /// An array site of this unit (a literal, a rest parameter, an ArrayCreate
 /// result), an own-keys result (`keys`, `arraybox`), or another unit's
@@ -1873,6 +1986,15 @@ fn judge(
                 receivers,
                 false,
                 Verdict::OwnLength,
+                true,
+                FxHashMap::default(),
+            );
+        }
+        if let Some(receivers) = indexed_length(m, s, toks, prim) {
+            return (
+                receivers,
+                false,
+                Verdict::NativeMember,
                 true,
                 FxHashMap::default(),
             );
@@ -1970,6 +2092,10 @@ fn judge(
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));
+                    if !s.is_call && key == "length" && args_own_length(m, t, s.key) {
+                        own_or_absent += 1;
+                        continue;
+                    }
                     // An array the program stores no named key on reads
                     // `undefined` under a key its chain lacks.
                     if !s.is_call && array_absent(m, t, key, s.key) {
@@ -2699,6 +2825,9 @@ pub(crate) fn native_member(
                     // The per-unit solve misses a write onto `Buffer.prototype`
                     // through `Object.assign`: it proves no Buffer member.
                     TmplKind::BObj { what: "Buffer", .. } if !m.unit_mode => NativeFamily::Buffer,
+                    TmplKind::BObj {
+                        what: "TypedArray", ..
+                    } => NativeFamily::TypedArray,
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -3342,7 +3471,8 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
         NativeFamily::Collection(_)
         | NativeFamily::RegExp
         | NativeFamily::Buffer
-        | NativeFamily::Promise => {
+        | NativeFamily::Promise
+        | NativeFamily::TypedArray => {
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };
@@ -3554,6 +3684,25 @@ fn lookup_holders(
     Ok(out)
 }
 
+/// The globals a settled window read (`gen::settled`) are the realm's own
+/// data properties: no ⊤ global, no program write of a global, and no
+/// program value under any of the names.
+fn window_globals_own(m: &Model, gs: &[Atom]) -> bool {
+    gs.is_empty()
+        || (!m.global_in_top
+            && !m.global_written_own
+            && gs.iter().all(|g| {
+                m.global_fields.iter().filter(|(k, _)| k == g).all(|&(_, n)| {
+                    let nd = &m.nodes[n as usize];
+                    nd.pts.to_sorted().into_iter().all(|t| {
+                        t != TOP
+                            && m.tmpl_of(t).is_none()
+                            && !matches!(m.toks[t as usize], TokKind::Func(..))
+                    })
+                })
+            }))
+}
+
 /// R9BIRTH6: holder `p`'s own key `a` exists at every read or call that
 /// can reach `p` on a chain: a class-body member is defined while the class
 /// is created (15.7.14), before anything can reach the prototype; a key a
@@ -3576,21 +3725,7 @@ fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
             let Some(gs) = m.settled_proto.get(&(tm, a)) else {
                 return false;
             };
-            !m.hard.contains_key(&p)
-                && !m.is_escaped(p)
-                && (gs.is_empty()
-                    || (!m.global_in_top
-                        && !m.global_written_own
-                        && gs.iter().all(|g| {
-                            m.global_fields.iter().filter(|(k, _)| k == g).all(|&(_, n)| {
-                                let nd = &m.nodes[n as usize];
-                                nd.pts.to_sorted().into_iter().all(|t| {
-                                    t != TOP
-                                        && m.tmpl_of(t).is_none()
-                                        && !matches!(m.toks[t as usize], TokKind::Func(..))
-                                })
-                            })
-                        })))
+            !m.hard.contains_key(&p) && !m.is_escaped(p) && window_globals_own(m, gs)
         }
         TokKind::Obj(tm, _) => {
             let tpl = &m.tmpls[tm as usize];

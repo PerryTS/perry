@@ -2222,6 +2222,7 @@ mod r9birth3;
 mod r9birth4;
 mod r9birth5;
 mod r9birth6;
+mod r9birth7;
 mod onchange1;
 mod r9birth1;
 mod accsite1;

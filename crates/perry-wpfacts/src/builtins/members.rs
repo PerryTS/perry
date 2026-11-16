@@ -798,7 +798,7 @@ impl Own {
 }
 
 /// Is the realm's own property `p` the key atoms spell `name`?
-fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
+pub(super) fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
     match name.strip_prefix(super::WK_PREFIX) {
         Some(wk) => p.symbol && p.key.strip_prefix("@@") == Some(wk),
         None => !p.symbol && p.key == name,

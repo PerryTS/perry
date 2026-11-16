@@ -77,13 +77,18 @@ impl<'a> Gen<'a> {
         }
         // R9BIRTH6: settled top-level prototype stores (`gen::settled`).
         for (mi, (_, module)) in modules.iter().enumerate() {
-            for (cname, key, globals) in super::settled::settled_proto_stores(module) {
+            for (cname, key, globals, proto) in super::settled::settled_proto_stores(module) {
                 let Some(&tm) = self.mods[mi].classes.get(&cname) else {
                     continue;
                 };
                 let a = self.m.atom(&key);
                 let gs: Vec<Atom> = globals.iter().map(|g| self.m.atom(g)).collect();
-                self.m.settled_proto.entry((tm, a)).or_default().extend(gs);
+                let into = if proto {
+                    &mut self.m.settled_proto
+                } else {
+                    &mut self.m.settled_static
+                };
+                into.entry((tm, a)).or_default().extend(gs);
             }
         }
         // Birth keys: root → leaf.

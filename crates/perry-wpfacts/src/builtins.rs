@@ -934,6 +934,13 @@ pub(crate) enum NativeFamily {
     /// a Boolean wrapper owns no property, 20.3.4). Only the absent-key
     /// claim (`derive::family_absent`) is over it; no NativeMember.
     Bool,
+    /// Typed arrays (integer-indexed exotic objects, ECMA-262 10.4.5) the
+    /// realm made (`TmplKind::BObj { what: "TypedArray" }`; their kind is
+    /// not kept, so their [[Prototype]] is one of the kinds' prototypes,
+    /// each of whose [[Prototype]] is `%TypedArray%.prototype`, 23.2.7).
+    /// R9BIRTH7: reads only (`typed_array_read_member`); a call keeps its
+    /// other reason.
+    TypedArray,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -953,12 +960,35 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::Num => members::intrinsic_member(Family::Num, name),
         NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
         NativeFamily::Bool => members::intrinsic_member(Family::Bool, name),
+        NativeFamily::TypedArray => return !call && typed_array_read_member(name),
     };
     match mem {
         Some(Mem::Fn) => true,
         Some(Mem::Prim(_)) => !call,
         _ => false,
     }
+}
+
+/// R9BIRTH7: a key whose [[Get]] on every typed array names one builtin
+/// member whatever its kind: `BYTES_PER_ELEMENT`, a non-writable,
+/// non-configurable data property of every kind's prototype (23.2.7.2),
+/// or a key the realm declares on `%TypedArray%.prototype` (its accessors
+/// `length`, `byteLength`, `byteOffset`, `buffer`, 23.2.3; its methods)
+/// that no kind's prototype holds (each holds only `constructor` and
+/// `BYTES_PER_ELEMENT`; `Uint8Array.prototype` also its base64/hex
+/// methods). Not `constructor` (each kind's own constructor).
+fn typed_array_read_member(name: &str) -> bool {
+    if name == "BYTES_PER_ELEMENT" {
+        return true;
+    }
+    if name == "constructor" || name.starts_with(WK_PREFIX) {
+        return false;
+    }
+    let on = |e: &str| {
+        members::realm_entry(e)
+            .is_some_and(|e| e.own.iter().any(|p| members::realm_key_is(p, name)))
+    };
+    on("%TypedArray%.prototype") && !on("Uint8Array.prototype")
 }
 
 /// A read-only accessor of `%RegExp.prototype%` whose getter reads only
@@ -1283,6 +1313,9 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         NativeFamily::Num => members::locked_read(Family::Num, None, name),
         NativeFamily::Promise => members::locked_read(Family::Promise, None, name),
         NativeFamily::Bool => members::locked_read(Family::Bool, None, name),
+        // `%TypedArray%.prototype` is no locked prototype: its writes are
+        // obligation 4's (`derive::builtin_protos_unwritten`).
+        NativeFamily::TypedArray => false,
     }
 }
 

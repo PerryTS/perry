@@ -2087,6 +2087,9 @@ pub struct Model {
     /// R9BIRTH6: class prototype keys a top-level store adds before any
     /// code can read through the prototype (`gen::settled`), with the
     /// global names read between the class declaration and the store.
+    /// R9BIRTH7: settled top-level static stores `X.k = v` (`gen::settled`),
+    /// with the globals read in their window, as `settled_proto`.
+    pub settled_static: FxHashMap<(TmplId, Atom), Vec<Atom>>,
     pub settled_proto: FxHashMap<(TmplId, Atom), Vec<Atom>>,
     /// RPG1b: the functions whose body runs at most once per evaluation of
     /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once

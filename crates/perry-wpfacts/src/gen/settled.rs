@@ -31,8 +31,11 @@
 use perry_hir::{Class, Expr, Module, Stmt};
 
 /// Per settled store: (class name, key, the global names read between the
-/// class declaration and the store).
-pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Vec<String>)> {
+/// class declaration and the store, `X.prototype.k` (true) or the static
+/// `X.k` (false)). R9BIRTH7: a settled `X.k = v` is the class object's own
+/// data property from the store on, as a class-body static field is from
+/// the declaration on: no code can read `X` between them (the same window).
+pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Vec<String>, bool)> {
     let mut out = Vec::new();
     // Open windows: class name -> globals read since its declaration.
     let mut open: Vec<(String, Vec<String>)> = Vec::new();
@@ -58,16 +61,15 @@ pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Vec<
             }) => match (target.as_ref(), key.as_ref()) {
                 (t, Expr::String(k)) if same_target(t, receiver) => {
                     match store_target(module, t, k) {
-                        Some((x, true)) if inert_value(module, value, &mut globals) => {
+                        Some((x, proto)) if inert_value(module, value, &mut globals) => {
                             for (name, g) in open.iter_mut() {
                                 g.extend(globals.iter().cloned());
                                 if *name == x {
-                                    out.push((x.clone(), k.clone(), g.clone()));
+                                    out.push((x.clone(), k.clone(), g.clone(), proto));
                                 }
                             }
                             continue;
                         }
-                        Some((_, false)) => inert_value(module, value, &mut globals),
                         _ => false,
                     }
                 }
