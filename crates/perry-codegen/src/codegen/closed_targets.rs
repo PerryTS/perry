@@ -42,11 +42,25 @@ pub(crate) fn note_closed_call(target: &str, distinct: usize) {
 /// Admit the closed targets whose lowered body fits the budget.
 pub(crate) fn apply(llmod: &mut LlModule) {
     let closed = CLOSED.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    // A closed body is inlined only when no call in it can record the frame
+    // chain: an error thrown in it or below it lists its frame
+    // (`gc_call_effects::frame_silent_functions`). A body that may throw
+    // stays a call.
+    let silent: std::collections::HashSet<String> = if closed.is_empty() {
+        Default::default()
+    } else {
+        let funcs: Vec<&crate::function::LlFunction> = llmod.diagnostic_functions().collect();
+        crate::gc_call_effects::frame_silent_functions(&llmod.gc_effects(), &funcs)
+    };
     for i in 0..llmod.function_count() {
         let Some(f) = llmod.function_mut(i) else {
             continue;
         };
-        if f.closed_target_preinline && !f.no_inline && closed.contains(&f.name) {
+        if f.closed_target_preinline
+            && !f.no_inline
+            && closed.contains(&f.name)
+            && silent.contains(&f.name)
+        {
             f.pre_statepoint_inline = true;
             f.guarded_preinline = true;
         }
