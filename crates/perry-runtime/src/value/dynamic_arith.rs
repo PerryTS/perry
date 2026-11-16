@@ -210,14 +210,10 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return value;
     }
 
-    // A Proxy is a small registered id, not a heap object — the ToPrimitive
-    // machinery below dereferences the fake pointer and segfaults
-    // (`"" + new Proxy(fn, {})`). A trap-less default ToPrimitive forwards
-    // to the target; a callable target stringifies via
-    // Function.prototype.toString (the NativeFunction form).
+    // A Proxy has no fields of its own: ToPrimitive(p, default) reads each
+    // method through its [[Get]] and calls it with this = p (7.1.1).
     if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
-        let s = crate::value::js_jsvalue_to_string(value);
-        return crate::value::js_nanbox_string(s as i64);
+        return crate::proxy_hooks::proxy_to_primitive(value, 0);
     }
 
     // Buffers / TypedArrays carry NO `ObjectHeader` (a `BufferHeader` /
