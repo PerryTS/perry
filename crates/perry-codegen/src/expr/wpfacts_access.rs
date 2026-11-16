@@ -1576,7 +1576,14 @@ pub(crate) fn proven_accessor_fn(
     offset: u32,
     set: bool,
 ) -> Option<String> {
-    if ctx.wpfacts_off || offset == 0 || property.starts_with('#') || ctx.is_static_class_this(object) {
+    // A scalar-replaced receiver is no object (`scalar_receiver`): its
+    // accesses are the frame slots' own, never a call with a `this`.
+    if ctx.wpfacts_off
+        || offset == 0
+        || property.starts_with('#')
+        || ctx.is_static_class_this(object)
+        || scalar_receiver(ctx, object)
+    {
         return None;
     }
     let map = if set {
@@ -1656,6 +1663,11 @@ pub(crate) fn proven_method_fn(
         || offset == 0
         || property.starts_with('#')
         || ctx.is_static_class_this(object)
+        // A scalar-replaced receiver is no object: the escape pass kept it in
+        // frame slots only because `simple_scalar_method_summary` inlines this
+        // call over those slots (`scalar_method.rs`); a direct entry would pass
+        // the never-written binding slot as `this`.
+        || scalar_receiver(ctx, object)
     {
         return None;
     }
