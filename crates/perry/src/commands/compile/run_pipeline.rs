@@ -1953,7 +1953,8 @@ pub fn run_with_parse_cache(
     if ctx.patched_builtins.namespace_pairs_by_verdict() {
         for (path, module) in ctx.native_modules.iter_mut() {
             let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
-            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven);
+            let inactive = super::program_facts::namespace_pair_inactive(&program_facts, path);
+            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive);
         }
     }
 
