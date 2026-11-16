@@ -127,6 +127,15 @@ pub struct FieldFacts {
     /// I32 at rest, PR C (`rest_fields::admit`): the field is an I32 lane of
     /// its class, stored as an I32 word in every instance for its life.
     pub rest: bool,
+    /// RAYBOX15: the key is absent from every token of the template and
+    /// from its whole prototype chain for the program's life: no birth key,
+    /// no store names it (no `any` store may name it either), no accessor,
+    /// no `[[Prototype]]` write, and the `absent_key` walk ends at
+    /// `%Object.prototype%` without a holder, on a template with a fixed
+    /// layout. OrdinaryGet (ECMA-262 10.1.8.1) of the key on an instance
+    /// gives `undefined`: the outcome the read arm's `slots.push(None)`
+    /// proves for a site, as a fact of the class.
+    pub absent: bool,
     /// The field may hold a String, and every String any store of any unit
     /// puts there is the value of a program string literal
     /// (`literal_strings`, over every token of the template): never with an
@@ -1309,10 +1318,20 @@ fn template_facts(
             && escape.is_none()
             && hard.is_none()
             && crate::booleans::holds(m, &field_nodes());
+        let absent = !birth
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && w.ctor.is_empty()
+            && w.post.is_empty()
+            && any_post == 0
+            && !ts.is_empty()
+            && class_absent(m, &tpl.kind, &ts, a);
         fields.push(FieldFacts {
             rep,
             zero_tol,
             rest: false,
+            absent,
             literal_strings,
             booleans,
             fns,
@@ -1330,6 +1349,12 @@ fn template_facts(
             writers_post: w.post.len() + any_post,
             kind,
         });
+    }
+    // RAYBOX15: an absent row needs the whole layout fixed for life.
+    if !fixed_layout {
+        for f in &mut fields {
+            f.absent = false;
+        }
     }
     let (kind, module, class_id) = match &tpl.kind {
         TmplKind::Class {
@@ -3363,6 +3388,40 @@ fn instance_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) ->
 /// builtin prototype is written under it ([`builtin_protos_unwritten`]).
 /// [[Get]] then walks to the end of the chain: the read gives `undefined`.
 /// A private name is never absent (its read throws without the brand).
+/// `h` holds nothing under `a` (no field value, no `any`-key value), has no
+/// `[[Prototype]]` write and no accessor under `a`.
+fn tok_unwritten(m: &Model, h: Tok, a: Atom) -> bool {
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    holds_nothing(m.fields.get(&(h, a)))
+        && holds_nothing(m.field_any.get(&h))
+        && !m.super_relink.contains(&h)
+        && m.accessor_keys.get(&h).is_none_or(|k| !k.contains(&a))
+}
+
+/// RAYBOX15 (`FieldFacts::absent`): every token of a class template lacks
+/// `a` as its own and along its whole chain. A token the solve never asked
+/// for its `[[Prototype]]` (no `proto_node`) still has the chain the class
+/// seeds at birth (`Model::proto_node`: `Proto(constructor_origin)`, the same
+/// for every token of the template; a `[[Prototype]]` write goes through
+/// that node), so it is judged on its own keys plus a walked token's chain,
+/// which holds the seed and more.
+fn class_absent(m: &Model, kind: &TmplKind, ts: &[Tok], a: Atom) -> bool {
+    if !matches!(kind, TmplKind::Class { .. }) {
+        return false;
+    }
+    let key = &m.atoms[a as usize];
+    let (walked, seeded): (Vec<Tok>, Vec<Tok>) =
+        ts.iter().partition(|t| m.proto_node.contains_key(*t));
+    !walked.is_empty()
+        && walked.iter().all(|&t| absent_key(m, t, key, a))
+        && seeded.iter().all(|&t| tok_unwritten(m, t, a))
+}
+
 fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     chain_absent(m, t, key, a, true)
 }
@@ -3377,12 +3436,7 @@ fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
             !nd.dropped && nd.pts.is_empty() && nd.prim == 0
         })
     };
-    let unwritten = |h: Tok| {
-        holds_nothing(m.fields.get(&(h, a)))
-            && holds_nothing(m.field_any.get(&h))
-            && !m.super_relink.contains(&h)
-            && m.accessor_keys.get(&h).is_none_or(|k| !k.contains(&a))
-    };
+    let unwritten = |h: Tok| tok_unwritten(m, h, a);
     let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
         return false;
     };

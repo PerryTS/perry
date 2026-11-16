@@ -64,6 +64,7 @@ fn ir(rep: FactsRep) -> String {
     elision.classes.insert(
         class.id,
         FactsClass {
+            absent: Vec::new(),
             display: class.name.clone(),
             fixed_layout: true,
             fields: vec![FactsField {

@@ -1145,6 +1145,16 @@ fn elision_for(
                 display: t.display.clone(),
                 fixed_layout: t.fixed_layout,
                 fields,
+                // Interpreted code can add any key to any object.
+                absent: if interp {
+                    Vec::new()
+                } else {
+                    t.fields
+                        .iter()
+                        .filter(|f| f.absent && !f.private)
+                        .map(|f| f.key.clone())
+                        .collect()
+                },
             },
         );
     }

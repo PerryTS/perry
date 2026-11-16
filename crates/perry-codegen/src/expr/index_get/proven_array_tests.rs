@@ -440,6 +440,7 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
     elision.classes.insert(
         class.id,
         FactsClass {
+            absent: Vec::new(),
             display: class.name.clone(),
             fixed_layout: true,
             fields: vec![FactsField {

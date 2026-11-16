@@ -114,6 +114,10 @@ pub struct FactsClass {
     pub display: String,
     pub fixed_layout: bool,
     pub fields: Vec<FactsField>,
+    /// RAYBOX15 (wpfacts `FieldFacts::absent`): keys no instance of the
+    /// class holds and no object on its prototype chain holds, for the
+    /// program's life: `[[Get]]` of one gives `undefined` (10.1.8.1).
+    pub absent: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -707,6 +711,14 @@ impl ElisionFacts {
             .fields
             .iter()
             .find(|f| f.key == key)
+    }
+
+    /// RAYBOX15: `key` is absent from every instance of `class_id` and from
+    /// its whole prototype chain (`FactsClass::absent`).
+    pub fn key_absent(&self, class_id: u32, key: &str) -> bool {
+        self.classes
+            .get(&class_id)
+            .is_some_and(|c| c.absent.iter().any(|k| k == key))
     }
 }
 

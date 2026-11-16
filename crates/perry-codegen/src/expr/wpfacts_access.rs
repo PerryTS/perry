@@ -1222,12 +1222,100 @@ pub(crate) fn emit_nullish_throw_test(
 }
 
 /// `object.property` read through a zero-guard proof.
+/// RAYBOX15: a read whose every receiver class lacks the key on the
+/// instance and on its whole prototype chain (`ElisionFacts::key_absent`):
+/// OrdinaryGet (ECMA-262 10.1.8.1) reaches the chain's end and gives
+/// `undefined`. Unguarded proofs only (a guarded receiver may be another
+/// object). `Some(nullable)`: whether the nullish test stays.
+fn prove_absent(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<bool> {
+    if property.starts_with('#')
+        || crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some()
+    {
+        return None;
+    }
+    let (recv, _) = receiver(ctx, object)?;
+    if recv.checked
+        || ctx.wpfacts.interp_guard
+        || recv.class_ids.is_empty()
+        || !recv
+            .class_ids
+            .iter()
+            .all(|&c| ctx.wpfacts.key_absent(c, property))
+    {
+        return None;
+    }
+    Some(recv.nullable && !tested_in_block(ctx, object))
+}
+
+/// The one test a nullable receiver keeps: null/undefined go to the
+/// complete site operation, which throws the TypeError and never returns
+/// (the arm ends in `unreachable`); the object arm continues.
+fn emit_nullish_arm(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    property: &str,
+    byte_offset: u32,
+    witness: Option<(&FieldProof, u64)>,
+) {
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    let hit_idx = ctx.new_block("wpf.get.obj");
+    let miss_idx = ctx.new_block("wpf.get.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    if let Some((p, site)) = witness {
+        emit_witness(ctx, recv_box, recv_box, property, p, 0, site);
+    }
+    let feedback_site_id = super::emit_typed_feedback_register_site(
+        ctx,
+        super::TypedFeedbackKind::PropertyGet,
+        property,
+        super::TypedFeedbackContract::object_get_by_name(),
+    );
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // A non-object receiver: the complete read throws for nullish.
+    let _ = blk.call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[
+            (I64, &obj_bits),
+            (I64, &key_handle),
+            (I64, &feedback_site_id),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    if let Some(b) = stable_binding(ctx, object) {
+        ctx.wpfacts_tested.push((b, hit_idx));
+    }
+}
+
 pub(crate) fn try_lower_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     byte_offset: u32,
 ) -> Result<Option<String>> {
+    if let Some(nullable) = prove_absent(ctx, object, property) {
+        crate::expr::note_site("case1-wpfacts-absent");
+        let recv_box = lower_expr(ctx, object)?;
+        if nullable {
+            emit_nullish_arm(ctx, object, &recv_box, property, byte_offset, None);
+        }
+        return Ok(Some(crate::nanbox::double_literal(f64::from_bits(
+            crate::nanbox::TAG_UNDEFINED,
+        ))));
+    }
     let Some(p) = prove(ctx, object, property, Access::Get) else {
         return Ok(None);
     };
