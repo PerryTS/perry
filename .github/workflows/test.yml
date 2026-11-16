@@ -2531,99 +2531,20 @@ jobs:
   # The legacy write-barrier corruption-window hunts remain in the final job as
   # an informational continue-on-error step. Only that nondeterministic step is
   # soft; matrix coverage, parity, liveness, and the GC instrument smoke gate.
-  # ---------------------------------------------------------------------------
-  # Build the base compiler/runtime once and share it with every matrix shard.
-  # Release run 33123474583 spent 11m41s here before the unsharded matrix even
-  # started; repeating that fixed cost in each worker would erase much of the
-  # sharding win (#8915).
-  gc-stress-build:
-    needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "true"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install clang
-        run: |
-          # Third-party sources we never install from can fail `apt-get update`,
-          # which exits non-zero if ANY source fails -- a broken Chrome index has
-          # now reddened jobs that only want clang in three separate runs
-          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
-          #
-          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
-          #      moved these to deb822 `.sources` files, so removing
-          #      `google-chrome.list` removed nothing and the job still failed.
-          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
-          #      aggregates sources we care about with sources we do not; if the
-          #      packages we came for resolve, the update did its job.
-          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
-            printf '%s\n' "$_bad" | sudo xargs -r rm -f
-          fi
-          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
-          sudo apt-get install -y clang
-      - name: Build perry + runtime staticlibs (release)
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
-        run: |
-          cargo build-perry --release
-          scripts/gc_call_effects/sidecars.sh target/release
-          scripts/build_instr_runtime.sh
-      - name: Upload shared GC matrix build
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: gc-repsel-release-build
-          path: |
-            target/release/perry
-            target/release/libperry_runtime.a
-            target/release/libperry_stdlib.a
-            target/release/libperry_runtime.a.gc-effects
-            target/release/libperry_runtime_instr.a
-            target/release/libperry_stdlib_instr.a
-            target/release/libperry_runtime_instr.a.gc-effects
-            target/release/libperry_wasm_host.a
-            target/release/libperry_ext_*.a
-          if-no-files-found: error
-          retention-days: 1
-
   # Stable round-robin slices of tests/parity/gc_repsel_corpus.txt. Full/sweep
   # tiers use four shards; the PR subset uses one (scripts/ci_plan.py). Every
   # shard still runs every selected arm, so the complete cross-product remains
   # covered. fail-fast:false preserves evidence from all shards after a red.
   gc-stress-shard:
     name: gc-stress matrix (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }})
-    needs: [plan, gc-stress-build]
+    # The gap-suite builds are this matrix's compiler and archives
+    # (ci_plan.py self-test: gc_stress runs on the gap_suite tiers).
+    needs: [plan, gap-suite-build, gap-suite-build-instr]
     if: >-
       always() &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_stress &&
-      needs.gc-stress-build.result == 'success'
+      needs.gap-suite-build.result == 'success' &&
+      needs.gap-suite-build-instr.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -2684,10 +2605,15 @@ jobs:
           # Node is the byte-exact oracle; the script refuses a version that
           # differs from the repository's single source of truth.
           node-version-file: .node-version
-      - name: Download shared GC matrix build
+      - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
-          name: gc-repsel-release-build
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded compiler is executable
         run: chmod +x target/release/perry
@@ -2722,7 +2648,7 @@ jobs:
   # It rejects missing/duplicate/interrupted shards, proves every expected cell
   # appears exactly once, then applies liveness to the reconstructed corpus.
   gc-stress:
-    needs: [plan, gc-stress-build, gc-stress-shard]
+    needs: [plan, gap-suite-build, gap-suite-build-instr, gc-stress-shard]
     if: ${{ always() && fromJSON(needs.plan.outputs.plan).jobs.gc_stress }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -2795,10 +2721,15 @@ jobs:
           fi
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
-      - name: Download shared GC matrix build
+      - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
-          name: gc-repsel-release-build
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded compiler is executable
         run: chmod +x target/release/perry
