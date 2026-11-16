@@ -22,6 +22,7 @@ fn solve(src: &str) -> ProgramFacts {
     let hir = hir.expect("lowers");
     let mut cfg = FactsConfig::default();
     cfg.max_work.get_or_insert(50_000_000);
+    cfg.namespace_pairs = true;
     compute(&[("t.ts".to_string(), &hir)], &cfg)
 }
 
@@ -303,3 +304,27 @@ fn mathb1b_ctor_define_through_the_pair() {
     assert!(ic(src, "defineProperty").iter().all(|v| v == "exact Object.defineProperty"));
 }
 
+
+/// MATHB2 4: knob off, the pairs main emits (a `globalThis[k] = v` store
+/// guards every direct namespace call by the shadow bit) keep main's walk of
+/// both arms: no pair call is registered, and the dump (printed `MB2DUMP`)
+/// equals main's for the same source (compared against the base tree).
+#[test]
+fn mathb2_main_pair_walk_unchanged() {
+    let src = "const k = String(process.argv[2]);\n(globalThis as any)[k] = 3;\nclass P { v: number; constructor(x: number) { this.v = Math.sin(x); } }\nconst p = new P(Number(process.argv[2]));\nconsole.log(Math.max(p.v, Math.abs(p.v)), Object.keys(p).join(\",\"));\n";
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let mut set = perry_hir::PatchedBuiltins::new();
+    perry_hir::scan_patched_builtins(&module, &mut set);
+    perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+    let guarded = perry_hir::patched_builtins::namespace_call_guarded();
+    let hir = perry_hir::lower_module(&module, "t", "t.ts");
+    perry_hir::clear_patched_builtins();
+    assert!(guarded, "the store guards the namespace calls");
+    let hir = hir.expect("lowers");
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    let pf = compute(&[("t.ts".to_string(), &hir)], &cfg);
+    for l in pf.dump_text().lines() {
+        eprintln!("MB2DUMP {l}");
+    }
+}

@@ -44,7 +44,7 @@ impl<'a> Gen<'a> {
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
                 let setters = self.chain_setters(tm);
-                let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &Default::default(), true, &setters);
+                let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &Default::default(), true, &setters, self.m.ns_pairs);
                 self.ctor_phase.insert(tm, ph);
             }
         }
@@ -772,7 +772,7 @@ impl<'a> Gen<'a> {
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             let setters = self.chain_setters(tm);
-            let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &present, true, &setters);
+            let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &present, true, &setters, self.m.ns_pairs);
             let followed = !ph.m_calls.is_empty() || !ph.s_calls.is_empty();
             self.ctor_phase.insert(tm, ph);
             if followed {
@@ -841,7 +841,7 @@ impl<'a> Gen<'a> {
             }
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
-            let off = crate::ctor_phase::analyze_in_present_m(c, &shapes, present, false);
+            let off = crate::ctor_phase::analyze_in_present_m(c, &shapes, present, false, self.m.ns_pairs);
             if !self.ctor_phase[&tm].same_birth(&off) {
                 self.ctor_phase.insert(tm, off);
             }
@@ -938,7 +938,7 @@ impl<'a> Gen<'a> {
             self.m.store_only.insert(fxi, ks);
         }
         if fn_ctor {
-            self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
+            self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f, self.m.ns_pairs));
         }
         self.rooted_stores.extend(crate::rooted::stores(&f.body));
         // DECISIONS 225: a body generation walks once it can run.

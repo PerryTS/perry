@@ -1040,7 +1040,7 @@ impl<'a> Gen<'a> {
                 condition,
                 then_expr,
                 else_expr,
-            } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
+            } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                 let Expr::NamespacePatched(ns) = condition.as_ref() else { unreachable!() };
                 self.namespace_pair(fx, ns, then_expr, else_expr)
             }

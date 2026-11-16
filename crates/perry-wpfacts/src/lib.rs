@@ -121,6 +121,11 @@ pub struct FactsConfig {
     /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
     /// rejects its template.
     pub no_record_signatures: bool,
+    /// MATHB1: the namespace pairs are the knob's (`PERRY_NS_PAIRS=1`, perry-hir
+    /// `PatchedBuiltins::namespace_pairs`): each is walked as one call of the
+    /// member (`Model::ns_pairs`). Off, the pairs a program has are main's
+    /// shadow-bit guards, walked as before.
+    pub namespace_pairs: bool,
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
@@ -478,6 +483,7 @@ fn generate<'a>(
     g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.m.value_records = cfg.value_records;
+    g.m.ns_pairs = cfg.namespace_pairs;
     g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
