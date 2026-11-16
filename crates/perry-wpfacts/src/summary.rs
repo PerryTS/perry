@@ -446,6 +446,19 @@ impl Model {
             .copied()
     }
 
+    /// The namespace member `(N, m)` whose pair's generic call `call` is
+    /// (`Gen::namespace_pair`): the program call itself, or a copy the
+    /// solver made of it later (a summary instance's renaming, a call made
+    /// for the site), found through its program site (`origin_of`). During
+    /// generation `origin_of` knows no program calls yet, so the call is
+    /// looked up first.
+    pub(crate) fn ns_pair_of(&self, call: CallId) -> Option<(BuiltinNs, Atom)> {
+        self.ns_pair_calls
+            .get(&call)
+            .or_else(|| self.origin_of(call).and_then(|o| self.ns_pair_calls.get(&o)))
+            .copied()
+    }
+
     /// A call the solver makes for `by` (a builtin calling a callback, a
     /// bound target, a step of a protocol): what it allocates is born at
     /// `by`'s program site.
