@@ -587,7 +587,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
         return;
     }
     unsafe {
-        let f = crate::fn_info!(#[realm("%TypedArray%.prototype[\"@@toStringTag\"].<get>", constructible = true)] export crate::object::global_this::typed_array::typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
+        let f = crate::fn_info!(#[realm("%TypedArray%.prototype[\"@@toStringTag\"].<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::object::global_this::typed_array::typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
         let c = crate::closure::js_closure_alloc(f, 0);
         if c.is_null() {
             return;

@@ -1029,6 +1029,12 @@ pub(crate) fn get_field_by_name_object_tail(
                             2 | 5 | 6 => b"ec".as_slice(),
                             3 => b"ed25519".as_slice(),
                             4 => b"x25519".as_slice(),
+                            7 => b"ml-kem-512".as_slice(),
+                            8 => b"ml-kem-768".as_slice(),
+                            9 => b"ml-kem-1024".as_slice(),
+                            10 => b"ml-dsa-44".as_slice(),
+                            11 => b"ml-dsa-65".as_slice(),
+                            12 => b"ml-dsa-87".as_slice(),
                             _ => b"".as_slice(),
                         };
                         if !label.is_empty() {

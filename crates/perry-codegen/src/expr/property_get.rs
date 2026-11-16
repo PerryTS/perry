@@ -109,6 +109,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             return super::private_field_site::lower_get(ctx, site, property);
         }
     }
+    // ACCBUILD2 P3: a read proven to call one getter.
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = expr
+    {
+        if let Some(v) =
+            super::wpfacts_access::try_lower_proven_getter(ctx, object, property, *byte_offset)?
+        {
+            return Ok(v);
+        }
+    }
     if let Expr::PropertyGet {
         object, property, ..
     } = expr

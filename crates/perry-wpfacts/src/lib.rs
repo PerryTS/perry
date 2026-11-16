@@ -18,6 +18,7 @@
 
 pub mod bindings;
 mod booleans;
+mod born_with;
 mod builtins;
 pub mod call_kinds;
 pub mod canonical_numbers;
@@ -52,6 +53,7 @@ mod gen_sources;
 mod named_lengths;
 pub mod native_effects;
 pub mod pts;
+mod provenance;
 mod push_fills;
 mod quiet_sites;
 mod reach;
@@ -65,13 +67,14 @@ mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
+mod unksrc;
 mod zero_sign;
 
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
 pub use derive::{
-    ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
+    Access, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
 pub use family_reach::{FamilyReach, FamilyVerdict};
@@ -146,6 +149,13 @@ pub struct FactsConfig {
     /// local's `null`/`undefined` (`gen::narrow` guards;
     /// `PERRY_FACTS_GUARD_PRESENCE=0`).
     pub no_guard_presence: bool,
+    /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12;
+    /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`): `Model::json_key_optimistic`.
+    pub optimistic_json_key: bool,
+    /// JSON position classes (`solve::json_pos`), default OFF
+    /// (`PERRY_FACTS_JSON_POSITIONS=1`): off, a parse's objects are one
+    /// token (BATCHB28: on, the three.js skin solve runs past its bound).
+    pub json_positions: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -225,6 +235,9 @@ pub struct Stats {
     pub instances: u64,
     pub shared_instances: u64,
     pub composed: u64,
+    /// Calls the solver made (a builtin calling back, a bound target, a
+    /// protocol step: `Model::solver_call`).
+    pub solver_calls: u64,
     /// Closure contexts made (design §14.2).
     pub contexts: u64,
     /// Solve work done (see `FactsConfig::max_work`).
@@ -240,6 +253,13 @@ pub struct Stats {
     /// Contract checks run after the solve (§11.2): none past the bound.
     pub checks: u64,
     pub top_calls: u64,
+    /// Rule G2 filters (`Cons::FieldTruthy`): rules, and the rules whose
+    /// result left out at least one object token of their host.
+    pub field_truthy: (u64, u64),
+    /// Dump only: `# ftr` rows (`field_truthy_rows`).
+    pub field_truthy_rows: Vec<String>,
+    /// Dump only: solve counters (`solve_counters`).
+    pub solve_counters: Vec<String>,
     /// (constraint kind, applications, ms), most expensive first.
     pub profile: Vec<(String, u64, f64)>,
     pub pts_entries: u64,
@@ -296,6 +316,9 @@ pub struct ProgramFacts {
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
+    /// DECISIONS 225: escaped functions of the final solve whose body was
+    /// not walked (`Model::escaped_inactive`); must be 0.
+    pub escaped_inactive: Option<usize>,
     /// Diagnostic-only export of the activation pass's seen body classifications.
     pub verification_bodies: Option<std::collections::BTreeMap<(String, u32, String), bool>>,
     /// Completed whole-program reach, or an incomplete conservative view
@@ -488,7 +511,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
-use program_facts::{big_nodes, builtin_fields};
+use program_facts::{big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows, solve_counters};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -590,6 +613,8 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
+    g.m.optimistic_json_key = cfg.optimistic_json_key;
+    g.m.json_positions = cfg.json_positions;
     g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
     g.m.reach_new_target =
         reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
@@ -608,7 +633,9 @@ fn generate<'a>(
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
-    if cfg.profile && loud {
+    // The activation pass profiles too (same env): its work, curve and
+    // top kinds / nodes are reported when it ends or stops at a bound.
+    if cfg.profile {
         g.m.profile = Some(Default::default());
         g.m.prof = Some(Default::default());
     }
@@ -677,8 +704,9 @@ fn generate<'a>(
         }
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    if cfg.profile && loud {
-        eprintln!("perry: wpfacts after generation {}", g.m.size_line());
+    if cfg.profile {
+        let pass = if loud { "" } else { "activation pass " };
+        eprintln!("perry: wpfacts {pass}after generation {}", g.m.size_line());
     }
     let t1 = std::time::Instant::now();
     g.m.log_seed_accessors();
@@ -707,6 +735,18 @@ fn generate<'a>(
         g.m.refute_own_test(n);
     }
     g.m.summarize_and_replay();
+    if unksrc::on() {
+        let gm = &g;
+        unksrc::flush(if loud { "loud" } else { "quiet" }, |f| {
+            gm.m.funcs
+                .get(f as usize)
+                .map(|fi| {
+                    let p = gm.modules.get(fi.module as usize).map(|(p, _)| p.to_string()).unwrap_or_default();
+                    format!("{}@{}", fi.name, p)
+                })
+                .unwrap_or_else(|| "-".into())
+        });
+    }
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
     if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
@@ -810,6 +850,7 @@ fn activation_pass<'a>(
         ..Default::default()
     };
     let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), t0);
+    crate::diagnostics::keysnap_plan(&mut g);
     g.m.solve();
     while !g.m.aborted && g.walk_activated() {
         g.m.solve();
@@ -831,6 +872,16 @@ fn activation_pass<'a>(
             if g.m.aborted { ", past the bound" } else { "" },
             t0.elapsed().as_secs_f64() * 1000.0
         );
+    }
+    if cfg.profile {
+        eprintln!("perry: wpfacts activation pass profile: {}", g.m.size_line());
+        g.m.prof_mark(crate::model::NO_NODE, "activation end");
+        g.m.prof_report();
+        let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
+        v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+        for (k, (es, ec, pops)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts activation pass labelwork {k} succ={es} cons={ec} pops={pops}");
+        }
     }
     if g.m.aborted {
         return None;
@@ -878,6 +929,7 @@ fn compute_act<'a>(
     };
     let activation = act.as_ref().map(|a| a.on.len());
     let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
+    crate::diagnostics::keysnap_plan(&mut g);
     let activation = activation.map(|n| format!("active={n} functions={}", g.m.funcs.len()));
     g.m.solve();
     let first_solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
@@ -895,6 +947,7 @@ fn compute_act<'a>(
         g.m.solve();
     }
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    let escaped_inactive = g.m.act.is_some().then(|| g.m.escaped_inactive());
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
     g.m.prof_mark(crate::model::NO_NODE, "after solve");
@@ -909,12 +962,14 @@ fn compute_act<'a>(
         // One count per instance key kind (`Summaries::inst_key`).
         let mut kinds = [0usize; 8];
         let mut fnkeyed = 0;
-        for &(k, l, _) in g.m.sum.inst_key.keys() {
+        let mut fnval = 0;
+        for &(k, l, _, v) in g.m.sum.inst_key.keys() {
             kinds[k as usize] += 1;
+            fnval += (v != summary::NO_VAL) as usize;
             fnkeyed += (k == 1 && l == summary::LAY_NONE) as usize;
         }
         eprintln!(
-            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {} for-in {}), program calls {}, calls {}",
+            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {} for-in {}), program calls {}, calls {}, value runs {}",
             g.m.sum.insts.len(),
             kinds[0],
             kinds[1],
@@ -924,7 +979,8 @@ fn compute_act<'a>(
             kinds[3] + kinds[4],
             kinds[6],
             g.m.sum.n_prog,
-            g.m.calls.len()
+            g.m.calls.len(),
+            fnval
         );
     }
     if cfg.profile {
@@ -968,6 +1024,8 @@ fn compute_act<'a>(
     tests::computed_key_members::record(&g.m);
     #[cfg(test)]
     tests::box_computed_read::record(&g.m);
+    #[cfg(test)]
+    tests::described_holder_computed_read::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -1009,6 +1067,9 @@ fn compute_act<'a>(
     // demand is solved before the derive. It reads only the solved graph.
     // −0 tolerance (PR D): settle every interval that may hold `-0` before
     // anything reads one (demand, the derive, the bindings).
+    if g.m.aborted && std::env::var_os("PERRY_FACTS_ABORT_TOP").is_some() {
+        g.m.abort_top();
+    }
     let zero_sign_tolerated = if g.m.aborted {
         0
     } else {
@@ -1208,9 +1269,10 @@ fn compute_act<'a>(
             .sum
             .inst_key
             .keys()
-            .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE)
+            .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE && k.3 == summary::NO_VAL)
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
+        solver_calls: g.m.solver_made,
         contexts: g.m.sum.ctx_nodes.len() as u64,
         work: g.m.work.get(),
         aborted: g.m.aborted,
@@ -1221,6 +1283,9 @@ fn compute_act<'a>(
         big_nodes: big_nodes(&g.m),
         builtin_fields: builtin_fields(&g.m),
         top_calls: g.m.top_calls,
+        field_truthy: field_truthy_filters(&g.m),
+        field_truthy_rows: field_truthy_rows(&g.m),
+        solve_counters: solve_counters(&g.m),
         profile: {
             let mut v: Vec<(String, u64, f64)> =
                 g.m.profile
@@ -1748,6 +1813,24 @@ fn compute_act<'a>(
             cells_out.push((format!("{key}#named"), vc));
         }
     }
+    // A cell is one per key: the copies of one array template (one per
+    // context) all leave through the same `arr:<display>`, so the unit's
+    // write to it is the join of theirs. Two entries under one key would
+    // read as two writers (the unit seeing its own write as another's), and
+    // the round join (`units::driver`) would carry only one of them: the
+    // other, fresh each round, cycles with what it is read back as.
+    let mut at: pts::FxHashMap<String, usize> = pts::FxHashMap::default();
+    let mut one: Vec<(String, units::ValueContract)> = Vec::with_capacity(cells_out.len());
+    for (k, vc) in cells_out {
+        match at.get(&k) {
+            Some(&i) => one[i].1.join(&vc),
+            None => {
+                at.insert(k.clone(), one.len());
+                one.push((k, vc));
+            }
+        }
+    }
+    let mut cells_out = one;
     // What it writes into other units' module-scope bindings (`Gen::local_write`):
     // per binding (its unit's path, its name) a value contract, as of a
     // published binding; ⊤ for one no contract describes, and for every
@@ -2379,6 +2462,7 @@ fn compute_act<'a>(
         diagnostics,
         diagnostic_sites,
         activation,
+        escaped_inactive,
         body_reach,
         super_unrelinked,
         fnproto_bind_written,
@@ -2394,7 +2478,11 @@ fn compute_act<'a>(
         interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
-        relations: g.m.relations.take(),
+        relations: {
+            crate::diagnostics::keyread(&g);
+            g.m.prov_finish();
+            g.m.relations.take()
+        },
         rep_probe,
         zero_sign_tolerated,
         tok_names,

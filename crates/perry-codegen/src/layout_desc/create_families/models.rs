@@ -111,7 +111,6 @@ pub struct ImageEntry {
 /// Attribute entry bits (`perry_abi`, pinned to the runtime's `key_attrs`).
 pub(super) const NON_WRITABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE;
 pub(super) const NON_ENUMERABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE;
-pub(super) const NON_CONFIGURABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
 pub(super) const ACCESSOR: u8 = crate::runtime_abi::LAYOUT_KEY_ACCESSOR;
 pub(super) const HAS_GET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_GET;
 pub(super) const HAS_SET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_SET;

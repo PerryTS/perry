@@ -232,10 +232,12 @@ fn a_delete_on_the_literal_after_the_call_revokes_the_shadow() {
 
 /// A key event (`reshape`, `top_reshape`): a named `defineProperty`
 /// through ⊤ (reached through the call's result) may redefine
-/// `createIdentifier` on a builtin prototype. Only the re-check of the
-/// lookups of that key gives the calls the builtin chain's unknown member.
+/// `createIdentifier` on a builtin prototype. The factory is a literal: its
+/// birth defines the key (CreateDataProperty), which nothing on a
+/// prototype intercepts, and the call finds that own data property first
+/// (ECMA-262 10.1.8.1 OrdinaryGet), so the calls stay proven.
 #[test]
-fn a_named_define_through_top_after_the_call_revokes_the_shadow() {
+fn a_named_define_through_top_after_the_call_keeps_the_literal_key() {
     let more = "host: (globalThis as any).hostGet()";
     assert_eq!(
         revoked_calls(more, "console.log(r.host);"),
@@ -246,6 +248,6 @@ fn a_named_define_through_top_after_the_call_revokes_the_shadow() {
             more,
             "Object.defineProperty(r.host, \"createIdentifier\", { value: 1 });"
         ),
-        vec![UNKNOWN_MEMBER, UNKNOWN_MEMBER]
+        vec!["proven", "proven"]
     );
 }

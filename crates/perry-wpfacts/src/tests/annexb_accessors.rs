@@ -463,3 +463,70 @@ fn object_prototype_getter_install_runs_on_read() {
         false,
     );
 }
+
+/// The solved model of `src` (the pipeline `compute` runs).
+fn solved(src: &str) -> crate::gen::Gen<'static> {
+    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
+    let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
+    g.m.max_work = 50_000_000;
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    g.feed_parent_values();
+    g.m.summarize_and_replay();
+    g.m.solve();
+    g
+}
+
+fn site_verdicts(src: &str, key: &str) -> Vec<String> {
+    let pf = facts(src);
+    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
+    s.sort_by_key(|s| s.byte_offset);
+    assert!(!s.is_empty(), "no site {key}");
+    s.iter().map(|s| format!("{:?}", s.verdict)).collect()
+}
+
+/// SKINACC2 (skin seq 0/1): a descriptor query on a builtin function walks
+/// the one field object that holds the own fields of every builtin function
+/// (`Shared::BuiltinFn`). Its answer is the builtin functions declared
+/// accessors (`Family::Function` and the realm accessors the key may name),
+/// never an unknown value: the getter and setter found here are called with
+/// `o`, and `o.m()` stays the program body; the realm is not held.
+#[test]
+fn skinacc2_builtin_fn_descriptor_lookup_adds_no_unknown() {
+    for key in ["k", "", "true"] {
+        let src = format!(
+            "declare const s: string;\nconst o = {{ m() {{ return 1; }} }};\nconst k = JSON.parse(s)[0];\nconst z: any = (Math as any)[k]; z();\n\
+             const f: any = Object.prototype.toLocaleString;\n\
+             const g = f.__lookupSetter__({key}); const h = f.__lookupGetter__({key});\n\
+             if (g) g.call(o); if (h) h.call(o);\nconst r = o.m();\n"
+        );
+        let v = site_verdicts(&src, "m");
+        assert!(v.iter().all(|x| x.starts_with("T0Mono")), "key {key:?}: the lookup on the builtin fn added an unknown value (accessor_lookup.rs:198/:264): {v:?}");
+        assert!(!solved(&src).m.realm_held, "key {key:?}: realm held");
+    }
+}
+
+/// The soundness side: builtin function objects that own accessors (the
+/// runtime installs `get [Symbol.species]` on Array, ArrayBuffer, Map, Set,
+/// Promise, RegExp, SharedArrayBuffer, %TypedArray%: install_static.rs
+/// `install_builtin_species_accessor`; `caller`/`arguments` on
+/// %Function.prototype%: populate.rs) answer with that accessor function:
+/// a field read of the result is reached (never only `undefined`, which
+/// would make the read a dead site).
+#[test]
+fn skinacc2_builtin_fn_own_accessors_answer_their_function() {
+    for q in [
+        "Array.__lookupGetter__(Symbol.species)",
+        "RegExp.__lookupGetter__(k)",
+        "Function.prototype.__lookupGetter__(\"caller\")",
+        "(Object.prototype.toLocaleString as any).__lookupGetter__(k)",
+    ] {
+        let src = format!(
+            "declare const s: string;\nconst k = JSON.parse(s)[0];\nconst a: any = {q};\nconsole.log(a.wq);\n"
+        );
+        let v = site_verdicts(&src, "wq");
+        assert!(v.iter().all(|x| !x.contains("dead site") && !x.starts_with("Dead")), "{q}: the accessor function is missing from the answer: {v:?}");
+    }
+}

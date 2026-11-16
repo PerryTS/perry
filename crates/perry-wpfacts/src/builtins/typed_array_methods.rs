@@ -43,6 +43,7 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
     let made = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -74,30 +75,55 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
 /// `buffer_dispatch`) on Buffer `t`: start and end ToIntegerOrInfinity,
 /// then a new Buffer over the receiver's bytes (%TypedArray%.prototype.
 /// subarray, 23.2.3.28, makes one of the receiver's kind; Node's Buffer
-/// `slice` is the same view). The runtime constructs no species. Its
-/// elements are Numbers, and the receiver's buffer is shared with it. With
-/// a spread argument the positions are not known: every argument and the
-/// spread value are used implicitly, the result is the same view.
+/// `slice` is the same view, lib/buffer.js). The runtime constructs no
+/// species. Its elements are Numbers, the receiver's buffer is shared with
+/// it, and its [[ViewedArrayBuffer]] is the receiver's (`Cons::ViewedBuffer`,
+/// what `.buffer` reads). A spread argument list reaches here as its view
+/// (`Model::builtin_args_view`): positions 0 and 1 hold every spread
+/// element, so each one is converted.
 pub(super) fn buffer_view(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
-    if c.spread.is_empty() {
-        for &a in c.args.iter().take(2) {
-            to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
-        }
-    } else {
-        implicit_args(m, call, "buffer view argument", Protocol::Any);
+    for &a in c.args.iter().take(2) {
+        to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
     }
-    let out = site_tmpl(m, call, "Buffer");
-    let fa = m.field_any(out);
-    m.add_prim(fa, prim::NUM);
     let recv = m.node_l("buffer-receiver");
     m.add_tok(recv, t);
-    m.cons(recv, Cons::ShareBuffer { ta: out });
-    ret_tok(m, call, out);
+    let view = site_view(m, call, "Buffer");
+    let fa = m.field_any(view);
+    m.add_prim(fa, prim::NUM);
+    ret_tok(m, call, view);
+    m.cons(recv, Cons::ShareBuffer { ta: view });
+    m.cons(
+        recv,
+        Cons::ViewedBuffer {
+            view,
+            fresh: None,
+            share: true,
+        },
+    );
 }
 
 fn fresh(m: &mut Model, call: CallId) -> Tok {
     let out = site_tmpl(m, call, "TypedArray");
+    typed_result(m, call, out)
+}
+
+/// A typed array of the same memory as the receiver (`subarray`, 23.2.3.29):
+/// its [[ViewedArrayBuffer]] is the receiver's.
+fn same_memory(m: &mut Model, call: CallId, recv: NodeId) -> Tok {
+    let out = site_view(m, call, "TypedArray");
+    m.cons(
+        recv,
+        Cons::ViewedBuffer {
+            view: out,
+            fresh: None,
+            share: true,
+        },
+    );
+    typed_result(m, call, out)
+}
+
+fn typed_result(m: &mut Model, call: CallId, out: Tok) -> Tok {
     let fa = m.field_any(out);
     m.add_prim(fa, prim::NUM | prim::BIGINT);
     ret_tok(m, call, out);
@@ -146,7 +172,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     species(m, t, call, vec![num]);
                 }
                 _ => {
-                    let out = fresh(m, call);
+                    let out = same_memory(m, call, recv);
                     m.cons(recv, Cons::ShareBuffer { ta: out });
                     // Internal [[ViewedArrayBuffer]], offset and length:
                     // represented by the same shared owner token.
@@ -156,7 +182,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         }
         // Search element is compared, never coerced; only fromIndex is.
         "includes" | "indexOf" | "lastIndexOf" => {
-            if let Some(&a) = c.args.get(1) {
+            if let Some(&a) = c.arg(1) {
                 to_prim(m, a, "typed-array fromIndex ToIntegerOrInfinity");
             }
             ret_prim(
@@ -170,21 +196,21 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             );
         }
         "set" => {
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 // set does not iterate source, only indexed Get.
                 read_prim(m, src, "length", "typed-array set source ToLength");
                 let ek = m.elem_key();
                 let v = load(m, src, ek);
                 to_prim(m, v, "typed-array set element ToNumber/ToBigInt");
             }
-            if let Some(&off) = c.args.get(1) {
+            if let Some(&off) = c.arg(1) {
                 to_prim(m, off, "typed-array set offset ToIntegerOrInfinity");
             }
             ret_prim(m, call, prim::UNDEF);
         }
         "forEach" | "map" | "filter" | "some" | "every" | "find" | "findLast" | "findIndex"
         | "findLastIndex" => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, this_arg(), vec![elem, num, recv]);
                 if name == "map" {
                     to_prim(m, r, "typed-array map result ToNumber/ToBigInt");
@@ -205,17 +231,17 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         "reduce" | "reduceRight" => {
             let acc = m.node_l("typed-accumulator");
             m.edge(elem, acc);
-            if let Some(&init) = c.args.get(1) {
+            if let Some(&init) = c.arg(1) {
                 m.edge(init, acc);
             }
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elem, num, recv]);
                 m.edge(r, acc);
             }
             m.edge(acc, c.ret); // No coercion or escape of the accumulator.
         }
         "sort" | "toSorted" => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elem, elem]);
                 to_prim(m, r, "typed-array comparator result ToNumber");
             }
@@ -230,25 +256,25 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             fresh(m, call);
         }
         "join" => {
-            if let Some(&a) = c.args.first() {
+            if let Some(&a) = c.arg(0) {
                 to_prim(m, a, "typed-array separator ToString");
             }
             ret_prim(m, call, prim::STR);
         }
         "toLocaleString" => {
-            // Intl locale/option processing has no precise primitive
-            // summary here. Keep those operands conservative until its
-            // dictionary and locale-list preconditions are established.
-            implicit_args(m, call, "typed-array Intl locales/options", Protocol::Any);
-            // Each numeric element's toLocaleString is invoked with the
+            // ECMA-262 23.2.3.31 with ECMA-402 19.5.1: the method reads
+            // neither locales nor options itself; each numeric element's toLocaleString is invoked with the
             // supplied locales/options. Number/BigInt's Intl rule decides
             // their dictionary reads; replacements run through lookup.
             let a = m.atom("toLocaleString");
             let nested = m.calls.len() as CallId;
             let r = m.node_l("typed-locale-result");
-            m.solver_call(
+            let _nested = m.chain_call(
                 call,
+                0,
+                elem,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(elem),
                     args: c.args.iter().take(2).copied().collect(),
                     spread: vec![],
@@ -256,13 +282,10 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                elem,
-                Cons::MCall {
+                move |m, tg, nested| m.cons(tg, Cons::MCall {
                     key: Key::Named(a),
                     call: nested,
-                },
+                }),
             );
             to_prim(m, r, "typed-array locale element ToString");
             ret_prim(m, call, prim::STR);
@@ -271,9 +294,12 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             // Array.prototype.toString invokes the receiver's join.
             let a = m.atom("join");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
+            let _nested = m.chain_call(
                 call,
+                0,
+                recv,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(recv),
                     args: vec![],
                     spread: vec![],
@@ -281,19 +307,16 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
+                move |m, tg, nested| m.cons(tg, Cons::MCall {
                     key: Key::Named(a),
                     call: nested,
-                },
+                }),
             );
             ret_prim(m, call, prim::STR);
         }
         "keys" | "values" | "entries" | "@@__perry_wk_iterator" => {
             let vals = if name == "entries" {
-                super::collections::entry_pairs(m, call, elem, true)
+                super::collections::entry_pairs(m, call, None, elem)
             } else if name == "keys" {
                 num
             } else {

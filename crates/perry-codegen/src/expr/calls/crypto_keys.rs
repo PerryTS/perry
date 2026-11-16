@@ -143,13 +143,40 @@ pub(crate) fn arm_crypto_generate_key_pair_async(
     Ok(result)
 }
 
-/// `crypto.generateKeyPairSync("rsa"|"ec"|"ed25519"|"x25519", options)` —
+/// `crypto.generateKeyPairSync("rsa"|"ec"|"ed25519"|"x25519"|"ml-kem-*"|
+/// "ml-dsa-*", options)` —
 /// returns a plain object with `publicKey`/`privateKey` PEM strings.
 pub(crate) fn arm_crypto_generate_key_pair_sync_alg(
     ctx: &mut FnCtx<'_>,
     _callee: &Expr,
     args: &[Expr],
 ) -> Result<String> {
+    // A type that is not one of the literals below (an ML-KEM / ML-DSA
+    // parameter set, or a value only known at run time) goes to the one
+    // runtime entry keyed by the type string.
+    let literal_fast_path = match args.first() {
+        Some(Expr::String(alg)) => !alg.starts_with("ml-"),
+        None => true,
+        Some(_) => false,
+    };
+    if !literal_fast_path {
+        let (arg_values, arg_group) =
+            crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let options = arg_values
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+        let blk = ctx.block();
+        let alg_handle = unbox_ffi_str_arg(blk, &arg_values[0]);
+        let pair = blk.call(
+            I64,
+            "js_crypto_generate_key_pair_sync_named",
+            &[(I64, &alg_handle), (DOUBLE, &options)],
+        );
+        let result = nanbox_pointer_inline(blk, &pair);
+        arg_group.release(ctx);
+        return Ok(result);
+    }
     let options = if let Some(arg) = args.get(1) {
         lower_expr(ctx, arg)?
     } else {

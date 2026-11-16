@@ -246,6 +246,11 @@ pub(crate) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::Ver
         })
 }
 
+pub(crate) use crate::webcrypto::pq::{
+    pq_decapsulate, pq_encapsulate, pq_private_key_from_pem, pq_public_key_from_pem, pq_public_pem,
+    pq_sign, pq_verify, PqAlgorithm,
+};
+
 pub(super) const ED25519_PRIVATE_PREFIX: &str = "PERRY-ED25519-PRIVATE:";
 pub(super) const ED25519_PUBLIC_PREFIX: &str = "PERRY-ED25519-PUBLIC:";
 pub(super) const X25519_PRIVATE_PREFIX: &str = "PERRY-X25519-PRIVATE:";
@@ -464,7 +469,7 @@ pub(super) fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
     } else if parse_x25519_private_surrogate(pem).is_some() {
         Some(4)
     } else {
-        None
+        pq_private_key_from_pem(pem).map(|(algorithm, _)| algorithm.asym_type())
     }
 }
 
@@ -478,7 +483,7 @@ pub(super) fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
     } else if parse_x25519_public_surrogate(pem).is_some() {
         Some(4)
     } else {
-        None
+        pq_public_key_from_pem(pem).map(|(algorithm, _)| algorithm.asym_type())
     }
 }
 
@@ -818,6 +823,10 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
     }
     if let Some(v) = parse_x25519_public_surrogate(&pem) {
         return Some(x25519_public_surrogate(&v));
+    }
+    // ML-KEM / ML-DSA: a private key yields its public key, as node does.
+    if let Some((_, public_der)) = pq_public_key_from_pem(&pem) {
+        return Some(pq_public_pem(&public_der));
     }
     parse_rsa_public_key_pem(&pem).and_then(|key| rsa_public_key_to_pem(&key))
 }

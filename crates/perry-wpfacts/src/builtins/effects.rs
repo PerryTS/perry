@@ -296,7 +296,7 @@ pub(super) fn declared_setter(proto: &str, key: &str) -> Option<&'static RealmEn
                     && dst
                         .steps
                         .iter()
-                        .all(|st| !matches!(st, RealmSlotStep::Elems))
+                        .all(|st| matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)))
             }
             RealmEffect::Returns(RealmOperand::Prim(_)) => true,
             _ => false,
@@ -445,6 +445,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Iterate => Protocol::Iterate,
         RealmProtocol::IterNext => Protocol::IterNext,
         RealmProtocol::IterResult => Protocol::IterResult,
+        RealmProtocol::AsyncIterate => Protocol::AsyncIterate,
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
@@ -501,9 +502,9 @@ impl Run {
                     v.nodes.push(spread_elems(m, s));
                 }
             }
-            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.args.get(i as usize)),
+            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.arg(i as usize)),
             RealmSlotRoot::Rest(i) => {
-                v.nodes.extend(self.c.args.iter().skip(i as usize));
+                v.nodes.extend(self.c.args_from(i as usize).iter());
                 for s in self.c.spread.clone() {
                     v.nodes.push(spread_elems(m, s));
                 }
@@ -536,6 +537,21 @@ impl Run {
                 self.walk(m, n, rest)
             }
             (r, []) => self.root(m, r),
+            // The values iterating a slot yields, or its own enumerable
+            // properties' values: taken from the slot the step is in.
+            (r, [inner @ .., st @ (RealmSlotStep::Iterated | RealmSlotStep::OwnValues)]) => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                Vals {
+                    nodes: vec![self.value_step(m, n, st)],
+                    spread: vec![],
+                }
+            }
             // The receiver's elements: its element node.
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
                 nodes: vec![m.field_any(
@@ -578,6 +594,9 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
+                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+                        unreachable!("a value step is taken above")
+                    }
                     st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
                         let key = step_key(m, st);
                         let dst = m.node_l("native-get");
@@ -641,6 +660,10 @@ impl Run {
                     nodes: vec![],
                     spread: vec![base],
                 },
+                RealmSlotStep::Iterated | RealmSlotStep::OwnValues => Vals {
+                    nodes: vec![self.value_step(m, base, st)],
+                    spread: vec![],
+                },
                 st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
                     let key = step_key(m, st);
                     let dst = m.node_l("native-get");
@@ -653,6 +676,22 @@ impl Run {
             };
         }
         cur
+    }
+
+    /// The values step `st` takes from node `n`: what iterating it yields
+    /// (`collections::iterate`: the array-like elements and the protocol's
+    /// `next().value`), or the values of its own enumerable properties
+    /// (`Cons::OwnValues`: no inherited member).
+    fn value_step(&mut self, m: &mut Model, n: NodeId, st: &RealmSlotStep) -> NodeId {
+        match st {
+            RealmSlotStep::Iterated => super::collections::iterate(m, self.call, n),
+            RealmSlotStep::OwnValues => {
+                let dst = m.node_l("native-own-values");
+                m.cons(n, Cons::OwnValues { dst });
+                dst
+            }
+            _ => unreachable!("value_step takes a value step"),
+        }
     }
 
     /// The slot's values as one node (`None`: the slot holds nothing, an
@@ -730,10 +769,13 @@ impl Run {
             // What JSON.parse makes (`builtins::json_value`).
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
-                let (j, ja) = crate::builtins::json_value(m, self.call);
+                let positions = m.json_positions;
+                let (j, ja) = crate::builtins::json_value(m, self.call, positions, false);
                 m.add_tok(n, j);
                 m.add_tok(n, ja);
-                m.add_prim(n, prim::ALL);
+                // JSON text holds no other primitive (ECMA-262 25.5.1);
+                // the operand takes no reviver.
+                m.add_prim(n, prim::JSON);
                 n
             }
             // What unknown code hands back: the declaration escaped the
@@ -764,6 +806,13 @@ impl Run {
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
+            // An object of prototype %ArrayBuffer.prototype% the realm makes
+            // (`Body.arrayBuffer()`) is the one AllocateArrayBuffer makes
+            // (25.1.3.1): the ArrayBuffer of `new ArrayBuffer(n)`
+            // (constructors.rs), with its modelled members (`slice`,
+            // 25.1.6.7). Likewise a shared one (25.2.2.1).
+            Cow::Borrowed("ArrayBuffer.prototype") => "ArrayBuffer",
+            Cow::Borrowed("SharedArrayBuffer.prototype") => "SharedArrayBuffer",
             Cow::Borrowed(p) => p,
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
@@ -929,7 +978,7 @@ fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
 }
 
 /// The key of internal slot `name`: `[[name]]`, as the promise's settled
-/// value is `#value` (`promise_value`); a family's chain has no member
+/// value is `[[PromiseResult]]` (`promise_value`); a family's chain has no member
 /// under it (`loads::family_load`).
 pub(crate) fn internal_atom(m: &mut Model, name: &str) -> Atom {
     m.atom(&format!("[[{name}]]"))
@@ -944,7 +993,9 @@ fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
     match st {
         RealmSlotStep::Field(k) => Key::Named(m.atom(k)),
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
-        RealmSlotStep::Elems => unreachable!("an elements step has no key"),
+        RealmSlotStep::Elems | RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+            unreachable!("an elements or value step has no key")
+        }
     }
 }
 
@@ -1004,6 +1055,7 @@ fn run(
         *runs += 1;
         sites.insert(site);
     }
+        let _c = &m.calls[call as usize];
     let mut run = Run {
         name: entry.name,
         t,
@@ -1182,6 +1234,8 @@ fn slot_text(s: &RealmSlot) -> String {
     for st in s.steps.iter() {
         out = match st {
             RealmSlotStep::Elems => format!("elems({out})"),
+            RealmSlotStep::Iterated => format!("iterated({out})"),
+            RealmSlotStep::OwnValues => format!("values({out})"),
             RealmSlotStep::Field(k) => format!("field({out}, {k})"),
             RealmSlotStep::Internal(k) => format!("islot({out}, {k})"),
         };

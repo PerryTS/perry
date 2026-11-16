@@ -799,6 +799,7 @@ js_bun_zstd_decompress	f64	f64
 js_bun_zstd_decompress_sync	f64	f64
 js_byte_length_queuing_strategy_new	f64	f64
 js_call_function	f64	i64,i64,i64,i64,i64
+js_call_late_own_value	f64	f64,i64,i64,ptr,usize
 js_callback_timer_has_pending	i32s	
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
@@ -1099,6 +1100,7 @@ js_crypto_generate_key_pair_async	f64	i64,f64,f64
 js_crypto_generate_key_pair_sync	f64	i64,i64
 js_crypto_generate_key_pair_sync_ec_p256	ptr	f64
 js_crypto_generate_key_pair_sync_ed25519	ptr	f64
+js_crypto_generate_key_pair_sync_named	ptr	i64,f64
 js_crypto_generate_key_pair_sync_rsa	ptr	f64
 js_crypto_generate_key_pair_sync_x25519	ptr	f64
 js_crypto_generate_key_sync	ptr	i64,f64

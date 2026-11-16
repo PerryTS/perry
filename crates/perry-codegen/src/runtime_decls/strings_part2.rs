@@ -633,6 +633,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_crypto_generate_key_pair_sync_ed25519", I64, &[DOUBLE]);
     module.declare_function("js_crypto_generate_key_pair_sync_x25519", I64, &[DOUBLE]);
     module.declare_function(
+        "js_crypto_generate_key_pair_sync_named",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_crypto_generate_key_pair_async",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
@@ -1008,6 +1013,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_by_id",
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
+    );
+    // ONCHG1: a guarded call's own late-slot value (receiver, slot word,
+    // dispatch id, args).
+    module.declare_function(
+        "js_call_late_own_value",
+        DOUBLE,
+        &[DOUBLE, I64, I64, PTR, I64],
     );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to

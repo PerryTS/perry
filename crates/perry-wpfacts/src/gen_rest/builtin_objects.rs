@@ -112,6 +112,14 @@ impl<'a> Gen<'a> {
                 self.name_fold_call(r, "FinalizationRegistry", "unregister", vec![t], out);
                 out
             }
+            // Rule BD-A (`CtorPhase::birth_defines`): the constructor's
+            // define creates fresh keys on the unobserved instance; each
+            // is a birth store of the descriptor's value (or `undefined`).
+            Expr::ObjectDefineProperty(o, ..) | Expr::ObjectDefineProperties(o, ..)
+                if self.birth_define_owner(fx, e, o).is_some() =>
+            {
+                self.birth_define(fx, e, o)
+            }
             Expr::ObjectDefineProperty(o, k, d)
             | Expr::ReflectDefineProperty {
                 target: o,
@@ -164,29 +172,9 @@ impl<'a> Gen<'a> {
                 // (`Cons::DefineAll`); any other map's own values are these
                 // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                let [value, dget, dset] = self.descriptor_reads(descs);
+                let reads = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-                let star = self.m.atom(crate::STAR_KEY);
-                for (f, setter) in [(dget, false), (dset, true)] {
-                    self.m.cons(
-                        f,
-                        Cons::Accessor {
-                            holder: on,
-                            key: star,
-                            setter,
-                        },
-                    );
-                }
-                self.m.cons(
-                    pn,
-                    Cons::DefineAll {
-                        o: on,
-                        descs,
-                        value,
-                        site,
-                        reason: r,
-                    },
-                );
+                crate::builtins::object_statics::define_all(&mut self.m, on, pn, descs, reads, site, r);
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -194,7 +182,10 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 self.to_property_key(kn);
-                self.descriptor_of(mi, on)
+                let d = self.descriptor_of(mi, on);
+                // 20.1.2.8 / 28.1.7: an absent property gives `undefined`.
+                self.m.add_prim(d, prim::UNDEF);
+                d
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
@@ -207,7 +198,6 @@ impl<'a> Gen<'a> {
             Expr::ObjectCreate(proto, props) => {
                 let p = self.expr(fx, proto);
                 let r = self.m.reason("E10 Object.create");
-                self.m.cons(p, Cons::CreateProto { reason: r });
                 let site = self.next_site(mi);
                 let tm = self.m.tmpls.len() as TmplId;
                 self.m.tmpls.push(Template {
@@ -220,6 +210,8 @@ impl<'a> Gen<'a> {
                     definite: vec![],
                     declared: Vec::new(),
                     reserved: Vec::new(),
+                    inert_definite: Vec::new(),
+                    inert_reads: Vec::new(),
                     parent: None,
                     ctor: None,
                     native_parent: None,
@@ -237,8 +229,7 @@ impl<'a> Gen<'a> {
                     static_methods: Vec::new(),
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                let pn = self.m.proto_node(t);
-                self.m.edge(p, pn);
+                crate::builtins::object_statics::create_proto(&mut self.m, p, t, r);
                 let n = self.tok_node(t);
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
@@ -286,19 +277,21 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let pn = self.expr(fx, p);
                 let r = self.m.reason("E6 Object.setPrototypeOf");
-                self.m.cons(
-                    on,
-                    Cons::Hard {
-                        kind: Hard::E6SetPrototypeOf,
-                        reason: r,
-                    },
-                );
-                self.m.cons(on, Cons::ProtoFrom { src: pn });
+                crate::builtins::object_statics::set_prototype_of(&mut self.m, on, pn, r);
+                // ECMA-262 20.1.2.23 step 5: Object.setPrototypeOf returns O
+                // itself; 28.1.13 step 4: Reflect.setPrototypeOf returns the
+                // Boolean of O.[[SetPrototypeOf]](proto), never O.
+                if matches!(e, Expr::ReflectSetPrototypeOf { .. }) {
+                    return self.prim_node(prim::BOOL);
+                }
                 on
             }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
                 let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
-                self.json_value(mi)
+                {
+                    let positions = self.m.json_positions;
+                    self.json_value(mi, positions, false)
+                }
             }
             Expr::JsonParseReviver { text, reviver }
             | Expr::JsonParseWithReviver(text, reviver) => {
@@ -311,7 +304,7 @@ impl<'a> Gen<'a> {
                 );
                 let rv = self.expr(fx, reviver);
                 let born = self.m.tmpls.len();
-                let v = self.json_value(mi);
+                let v = self.json_value(mi, false, true);
                 let s = self.prim_node(prim::STR);
                 // Own values while sure, the rule on (`json_reviver_values`).
                 let vals = match self.json_reviver_values(v, born) {
@@ -453,10 +446,34 @@ impl<'a> Gen<'a> {
                 // Each is a Buffer (the host's file contents too): its own
                 // methods are `Buffer.prototype`'s, the rest its typed
                 // array chain's.
-                let (t, n) = self.bobj(mi, "Buffer");
+                let (t, n) = self.bobj_view(mi, "Buffer");
+                // Its buffer (`VIEWED_BUFFER`): `Buffer.alloc` allocates one
+                // (lib/buffer.js `new FastBuffer(size)`); `Buffer.from` of an
+                // ArrayBuffer views it; the rest may view the pool.
+                let pool = crate::builtins::buffer_pool(&mut self.m);
+                let born = match e {
+                    Expr::BufferAlloc { .. } => Some(self.bobj_view(mi, "ArrayBuffer").0),
+                    Expr::BufferFrom { .. } => None,
+                    _ => Some(pool),
+                };
+                if let Some(ab) = born {
+                    let f = crate::builtins::viewed_buffer(&mut self.m, t);
+                    self.m.add_tok(f, ab);
+                }
                 let owner = self.begin_indexed_owner(mi, t, e);
+                let mut first = born.is_none();
                 for k in ks {
                     let v = self.expr(fx, k);
+                    if std::mem::take(&mut first) {
+                        self.m.cons(
+                            v,
+                            Cons::ViewedBuffer {
+                                view: t,
+                                fresh: Some(pool),
+                                share: false,
+                            },
+                        );
+                    }
                     if owner {
                         if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                             self.m.ta_birth_input.insert(tm, v);
@@ -484,12 +501,35 @@ impl<'a> Gen<'a> {
             | Expr::BufferConcat(..)
             | Expr::BufferConcatWithLength { .. } => {
                 let ks = kids(e);
+                let mut vs = Vec::new();
                 for k in ks {
                     let v = self.expr(fx, k);
                     let it = self.iterate(v);
                     let _ = it;
+                    vs.push(v);
                 }
-                let (t, n) = self.bobj(mi, "TypedArray");
+                let (t, n) = self.bobj_view(mi, "TypedArray");
+                // Its buffer (`VIEWED_BUFFER`): `Buffer.from(ab, ...)` views
+                // ab, a Buffer slice its receiver's, a concatenation may
+                // view the pool (lib/buffer.js `allocUnsafe`).
+                let pool = crate::builtins::buffer_pool(&mut self.m);
+                match (e, vs.first()) {
+                    (Expr::BufferFromArrayBuffer { .. } | Expr::BufferSlice { .. }, Some(&v)) => {
+                        let share = matches!(e, Expr::BufferSlice { .. });
+                        self.m.cons(
+                            v,
+                            Cons::ViewedBuffer {
+                                view: t,
+                                fresh: (!share).then_some(pool),
+                                share,
+                            },
+                        );
+                    }
+                    _ => {
+                        let f = crate::builtins::viewed_buffer(&mut self.m, t);
+                        self.m.add_tok(f, pool);
+                    }
+                }
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
                 n
@@ -737,15 +777,38 @@ impl<'a> Gen<'a> {
                 let name = variant_name(e);
                 self.fail_closed(fx, e, &name)
             }
-            Expr::BoxedPrimitiveNew { .. } => {
+            Expr::BoxedPrimitiveNew { kind, .. } => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);
-                self.bobj(mi, "BoxedPrimitive").1
+                let what = match kind {
+                    perry_hir::ir::BoxedPrimitiveKind::Number => "BoxedNumber",
+                    perry_hir::ir::BoxedPrimitiveKind::String => "BoxedString",
+                    perry_hir::ir::BoxedPrimitiveKind::Boolean => "BoxedBoolean",
+                };
+                self.bobj(mi, what).1
             }
             Expr::DateNew(..) => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);
                 self.bobj(mi, "Date").1
             }
-            Expr::RegExp { .. } => self.bobj(mi, "RegExp").1,
+            Expr::RegExp { pattern, flags } => {
+                let (t, n) = self.bobj(mi, "RegExp");
+                if let &TokKind::Obj(tm, _) = &self.m.toks[t as usize] {
+                    if crate::builtins::regex_tail::source_is_pattern(pattern) {
+                        self.m.regexp_source_of.insert(tm, pattern.to_string());
+                    }
+                    if let Some(mk) = crate::builtins::regex_tail::global_class(pattern, flags) {
+                        self.m.regexp_class_of.insert(tm, mk);
+                    }
+                }
+                if let (&TokKind::Obj(tm, _), Some(tail)) =
+                    (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
+                {
+                    let i = self.m.regexp_tails.len() as u32;
+                    self.m.regexp_tails.push(tail);
+                    self.m.regexp_tail_of.insert(tm, i);
+                }
+                n
+            }
             // ECMA-262 22.2.4.1: IsRegExp(pattern) reads `@@match`; for a
             // regexp-like pattern `source` and `flags` are read (and in the
             // call form `constructor`, returning the pattern itself); then
@@ -765,11 +828,23 @@ impl<'a> Gen<'a> {
                 read_prim(&mut self.m, p, "source", "RegExp pattern source ToString");
                 read_prim(&mut self.m, p, "flags", "RegExp pattern flags ToString");
                 to_prim(&mut self.m, p, "RegExp pattern ToString");
-                if let Some(f) = flags {
-                    let f = self.expr(fx, f);
+                let fnode = flags.as_ref().map(|f| self.expr(fx, f));
+                if let Some(f) = fnode {
                     to_prim(&mut self.m, f, "RegExp flags ToString");
                 }
-                let out = self.bobj(mi, "RegExp").1;
+                let (t, out) = self.bobj(mi, "RegExp");
+                // Rule M9: both operands, for a global one-class pattern.
+                if let Some(f) = fnode {
+                    self.m.regexp_ctor_args.insert(t, (p, f));
+                }
+                // Rule M7 (22.2.3.2 RegExpInitialize): a pattern of one String
+                // constant and no flags operand is the object's
+                // [[OriginalSource]] with flags "", as a literal's
+                // (`Model::regexp_pattern`).
+                if flags.is_none() {
+                    self.m.regexp_ctor_toks.insert(t);
+                    self.m.cons(p, Cons::RegExpPattern { tok: t });
+                }
                 if *is_call {
                     self.m.edge(p, out);
                 }
@@ -867,5 +942,74 @@ impl<'a> Gen<'a> {
             }
             _ => unreachable!("internal compiler error: expr_rest: not a builtin_objects variant"),
         }
+    }
+
+    /// Rule BD-A: the class whose constructor's birth define `e` is
+    /// (`CtorPhase::birth_defines`), when every key it defines is new to the
+    /// whole chain: no ancestor's birth key (a redefinition runs 10.1.6.3
+    /// on an existing property: the general define, HARD) and no member of a
+    /// prototype on the chain (an own data key would shadow it: the general
+    /// define handles that as before).
+    fn birth_define_owner(&self, fx: &Fx, e: &Expr, o: &Expr) -> Option<TmplId> {
+        let tm = self.phase_owner(fx, e, o)?;
+        let ks = self.ctor_phase.get(&tm)?.birth_defines.get(&(e as *const Expr as usize))?;
+        let mut cur = Some(tm);
+        let mut own = true;
+        while let Some(c) = cur {
+            let t = &self.m.tmpls[c as usize];
+            for (k, _) in ks {
+                let a = self.m.atom_index.get(k.as_str()).copied();
+                let held = a.is_some_and(|a| {
+                    (!own && t.birth_keys.contains(&a))
+                        || t.proto_members.contains(&a)
+                        || t.accessor_keys.contains(&a)
+                });
+                if held {
+                    return None;
+                }
+            }
+            if t.parent_value.is_some() && t.parent.is_none() {
+                return None;
+            }
+            own = false;
+            cur = t.parent;
+        }
+        Some(tm)
+    }
+
+    /// Rule BD-A lowering: the descriptor fields are evaluated (in order),
+    /// then each key is stored at birth with its value, its site carrying
+    /// the attribute entry (`StoreSite::define_attrs`).
+    fn birth_define(&mut self, fx: &Fx, e: &Expr, o: &Expr) -> NodeId {
+        let mi = fx.module;
+        let on = self.expr(fx, o);
+        let Some(tm) = self.birth_define_owner(fx, e, o) else {
+            return on;
+        };
+        let shapes = crate::ctor_phase::plain_shapes(&self.modules[mi as usize].1.classes);
+        let ds = crate::ctor_phase::literal_defines(&shapes, e).unwrap_or_default();
+        for (k, attrs, value, values) in ds {
+            let mut vn = None;
+            for v in values {
+                let n = self.expr(fx, v);
+                if value.is_some_and(|x| std::ptr::eq(x, v)) {
+                    vn = Some(n);
+                }
+            }
+            let src = vn.unwrap_or_else(|| self.prim_node(prim::UNDEF));
+            let a = self.m.atom(k);
+            self.m.birth_attrs.insert((tm, a), attrs);
+            let site = self.store_site(mi, fx.f, format!("define {k}"), Some(tm), false);
+            self.m.stores[site as usize].define_attrs = Some(attrs);
+            self.m.cons(
+                on,
+                Cons::Store {
+                    key: Key::Named(a),
+                    src,
+                    site,
+                },
+            );
+        }
+        on
     }
 }

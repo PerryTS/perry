@@ -140,6 +140,11 @@ impl Model {
     }
 
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
+        self.diagnostic_entry_begin(ft, reason);
+        self.escape_this_run(ft, reason);
+        self.diagnostic_entry_end();
+    }
+    fn escape_this_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
             return;

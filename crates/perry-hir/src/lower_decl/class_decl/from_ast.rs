@@ -741,6 +741,7 @@ pub(crate) fn lower_class_from_ast(
         // Declared inside a function body / non-module block → its static-field
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     })

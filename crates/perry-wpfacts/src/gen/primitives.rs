@@ -68,6 +68,8 @@ impl<'a> Gen<'a> {
             prim::UNDEF => self.prim_const[4],
             prim::BIGINT => self.prim_const[5],
             prim::SYMBOL => self.prim_const[6],
+            prim::TRUE => self.prim_const[7],
+            prim::FALSE => self.prim_const[8],
             prim::ALL => self.m.all_prim_node,
             _ => {
                 let n = self.m.node_l("PRIMS");

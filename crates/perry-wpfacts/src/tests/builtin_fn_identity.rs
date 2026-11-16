@@ -388,6 +388,7 @@ fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<Stri
     let extra = m.node_l("extra");
     let ret = m.node_l("return");
     m.calls.push(CallSite {
+        first_arg_fixed: false,
         this: ThisArg::Undef,
         args: vec![cb, delay, extra],
         spread: vec![],

@@ -6,6 +6,7 @@ use super::{
 };
 use crate::model::{CallId, CallSite, Cons, FnIdx, Key, NodeId, TmplId, Tok, NO_NODE};
 use crate::pts::{FxHashMap, FxHashSet};
+use super::REACH_ALL;
 
 /// An environment operand addresses the supplied lexical port, not its
 /// current contents. Absolute operands retain external node identity.
@@ -122,12 +123,19 @@ pub(crate) struct BodyInput {
     pub params: Vec<Operand>,
     pub ret: Operand,
     pub this: Operand,
+    /// The rest parameter's local (`Absolute(NO_NODE)`: none).
+    pub rest: Operand,
     pub seeds: Vec<(u32, Vec<Tok>, u16, bool)>,
     pub edges: Vec<(Operand, Operand)>,
     pub cons: Vec<(Operand, BodyCons)>,
     pub calls: Vec<(CallId, BodyCall)>,
     pub closures: Vec<(u32, FnIdx, Vec<Operand>, u8)>,
     pub births: Vec<(u32, TmplId)>,
+    /// Rule M1 reach masks, parallel to `edges`, `cons`, `calls` (empty:
+    /// every run's; `Summary::edge_reach`).
+    pub edge_reach: Vec<u64>,
+    pub cons_reach: Vec<u64>,
+    pub call_reach: Vec<u64>,
 }
 
 impl BodyInput {
@@ -138,7 +146,11 @@ impl BodyInput {
             params: Vec::new(),
             ret: Operand::Absolute(NO_NODE),
             this: Operand::Absolute(NO_NODE),
+            rest: Operand::Absolute(NO_NODE),
             seeds: Vec::new(),
+            edge_reach: Vec::new(),
+            cons_reach: Vec::new(),
+            call_reach: Vec::new(),
             edges: Vec::new(),
             cons: Vec::new(),
             calls: Vec::new(),
@@ -152,11 +164,27 @@ impl BodyInput {
 /// Publication and all effects require a separate live-model operation.
 pub(crate) fn encode_body(input: BodyInput) -> Summary {
     let lower = |x: Operand| x.lower(&input.environment);
+    // Rule M1: an edge's mask joins its copies' (one without a mask is
+    // every run's).
+    let mut edge_reach: FxHashMap<(NodeId, NodeId), u64> = FxHashMap::default();
+    if !input.edge_reach.is_empty() {
+        let mut all: FxHashSet<(NodeId, NodeId)> = FxHashSet::default();
+        for (&(a, b), &m) in input.edges.iter().zip(&input.edge_reach) {
+            let e = (lower(a), lower(b));
+            if m == REACH_ALL {
+                all.insert(e);
+                edge_reach.remove(&e);
+            } else if !all.contains(&e) {
+                *edge_reach.entry(e).or_insert(0) |= m;
+            }
+        }
+    }
     let mut s = Summary {
         nslots: input.orig.len() as u32,
         params: input.params.into_iter().map(lower).collect(),
         ret: lower(input.ret),
         this: lower(input.this),
+        rest: lower(input.rest),
         seeds: input.seeds,
         edges: input
             .edges
@@ -181,6 +209,9 @@ pub(crate) fn encode_body(input: BodyInput) -> Summary {
         births: input.births,
         orig: input.orig,
         outer: input.environment,
+        edge_reach,
+        cons_reach: input.cons_reach,
+        call_reach: input.call_reach,
         ..Default::default()
     };
     compress(&mut s);
@@ -234,7 +265,7 @@ pub fn compress(s: &mut Summary) {
         }
     };
     let mut pinned = vec![false; n];
-    for &p in s.params.iter().chain([&s.ret, &s.this]) {
+    for &p in s.params.iter().chain([&s.ret, &s.this, &s.rest]) {
         if let Some(i) = sl(p) {
             pinned[i] = true;
         }
@@ -355,6 +386,25 @@ pub fn compress(s: &mut Summary) {
                 }
                 for &a in &ins {
                     for &b in &outs {
+                        // Rule M1: the relayed edge runs where both do.
+                        if !s.edge_reach.is_empty() {
+                            let mask = |e: (NodeId, NodeId)| {
+                                s.edge_reach.get(&e).copied().unwrap_or(REACH_ALL)
+                            };
+                            let m = mask((a, me)) & mask((me, b));
+                            let had = match (sl(a), sl(b)) {
+                                (None, None) => abs_edges.contains(&(a, b)),
+                                (Some(i), _) => out[i].contains(&b),
+                                (None, Some(j)) => inn[j].contains(&a),
+                            };
+                            match s.edge_reach.get_mut(&(a, b)) {
+                                Some(e) => *e |= m,
+                                None if !had && m != REACH_ALL => {
+                                    s.edge_reach.insert((a, b), m);
+                                }
+                                None => {}
+                            }
+                        }
                         add_edge(a, b, &mut out, &mut inn, &mut abs_edges);
                     }
                 }
@@ -400,7 +450,26 @@ pub fn compress(s: &mut Summary) {
     let mut ae: Vec<_> = abs_edges.into_iter().collect();
     ae.sort_unstable();
     edges.extend(ae);
+    // Rule M1: the masks of the edges that stay, in the new numbering.
+    if !s.edge_reach.is_empty() {
+        let old = std::mem::take(&mut s.edge_reach);
+        for (&(a, b), &m) in &old {
+            if sl(a).is_some_and(|i| dead[i]) || sl(b).is_some_and(|i| dead[i]) {
+                continue;
+            }
+            *s.edge_reach.entry((rn(a), rn(b))).or_insert(0) |= m;
+        }
+    }
     s.edges = edges;
+    if !s.cons_reach.is_empty() {
+        let cr = std::mem::take(&mut s.cons_reach);
+        s.cons_reach = cr
+            .into_iter()
+            .zip(cons.iter())
+            .filter(|(_, c)| c.is_some())
+            .map(|(m, _)| m)
+            .collect();
+    }
     s.cons = cons
         .into_iter()
         .flatten()
@@ -418,6 +487,7 @@ pub fn compress(s: &mut Summary) {
     s.params = s.params.iter().map(|&p| rn(p)).collect();
     s.ret = rn(s.ret);
     s.this = rn(s.this);
+    s.rest = rn(s.rest);
     s.outer = s.outer.iter().map(|&o| map[o as usize]).collect();
     for (b, _) in s.births.iter_mut() {
         *b = map[*b as usize];

@@ -23,7 +23,7 @@ fn program(bind: &str) -> String {
     format!(
         r#"
         class Inner {{ witness = 1; }}
-        class Box {{ a = new Inner(); b = "s"; }}
+        class Box {{ a = new Inner(); b: any = (globalThis as any).hostVal(); }}
         function read(box: any) {{
             {bind}
             const v = box[k];
@@ -47,12 +47,25 @@ fn literal_key_names_its_field() {
     ));
 }
 
-/// A binding that may be reassigned names no key.
+/// A binding that may be reassigned names no key: the read sees `b`, a
+/// host value. (Before the program-prototype read took the key's entries,
+/// `Box.prototype`'s `constructor` also failed this proof.)
 #[test]
 fn reassigned_key_names_none() {
     assert!(!proven(&program(
         r#"let k = "a"; if (box.b === "t") k = "b";"#
     )));
+}
+
+/// A key of the constants "a" and "b" reads the own fields `a` and `b`
+/// and, on `Box.prototype`, only those names (ECMA-262 10.1.8.1, 7.3.2):
+/// not its `constructor`. `b` is a String here, whose `witness` is absent.
+#[test]
+fn constant_key_set_reads_no_prototype_member() {
+    assert!(proven(
+        &program(r#"let k = "a"; if (box.b === "t") k = "b";"#)
+            .replace("b: any = (globalThis as any).hostVal();", "b = \"s\";")
+    ));
 }
 
 /// A const holding a non-literal names no key.

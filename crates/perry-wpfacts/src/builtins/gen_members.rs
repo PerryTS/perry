@@ -71,6 +71,7 @@ fn pulled(m: &mut Model, t: Tok, call: CallId) -> NodeId {
         let c2 = m.solver_call(
             call,
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(recv),
                 args: vec![],
                 spread: vec![],
