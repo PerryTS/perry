@@ -2836,6 +2836,10 @@ pub struct Model {
     pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
+    /// GLOBS1: the computed reads of the global object under a known key
+    /// shape (the global object's token, the key, the destination): a
+    /// global named later that the shape can spell is read into each.
+    pub global_shaped_reads: Vec<(Tok, Key, NodeId)>,
     /// GLOBK G2: the global object's one field under any string key: what
     /// the program stores there under a key proven a String it cannot name
     /// (ECMA-262 7.1.19, 10.1.9). Made by the first such store; every

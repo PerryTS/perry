@@ -824,6 +824,80 @@ fn declared_global_getter_load(
     super::effects::getter_load(m, e, g, a, dst);
 }
 
+/// GLOBS1: a computed read `globalThis[k]` whose key has a known shape
+/// (`"on" + type`). The global object is an ordinary object (ECMA-262 9.3,
+/// 19): [[Get]] (10.1.8.1) reads its own property under ToPropertyKey(k)
+/// (7.1.19) or, absent, `Object.prototype`'s. Its own keys are the realm's
+/// declared layout (perry-runtime global_this/populate.rs, the `%Global%`
+/// declaration) and what the program stores. So the read is the union of
+/// the named read of every declared global the shape can spell (the same
+/// arm as `globalThis.n`: a getter runs as it does there), of every
+/// program global it can spell, now or named later (`global_field` replays
+/// the read), of the stores under unknown String keys (`global_any_read`),
+/// of `Object.prototype` under the key, and `undefined`. A key a write by
+/// unmodeled code may have made (any key: `STAR_KEY`) reads ⊤, now or on
+/// that write's replay (`NativeMiss::Global`).
+fn global_shaped_read(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(s) = m.declarations.named("%Global%", m) {
+        for p in &m.declarations.shape(s).properties {
+            let n = match p.key.strip_prefix("@@") {
+                Some(wk) => format!("{WK_PREFIX}{wk}"),
+                None => p.key.to_string(),
+            };
+            if m.key_may_name_str(key, &n) {
+                names.push(n);
+            }
+        }
+    }
+    let mut done: Vec<Atom> = Vec::new();
+    for n in names {
+        let a = m.atom(&n);
+        done.push(a);
+        tok_load(m, t, Key::Named(a), dst);
+    }
+    let star = m.atom(crate::STAR_KEY);
+    let fields: Vec<Atom> = m.global_fields.iter().map(|(a, _)| *a).collect();
+    for a in fields {
+        if a != star && !done.contains(&a) && m.key_may_name_str(key, &m.atoms[a as usize]) {
+            tok_load(m, t, Key::Named(a), dst);
+        }
+    }
+    m.global_shaped_reads.push((t, key, dst));
+    super::native_protocol::global_any_read(m, dst);
+    if global_value_written(m, t, star) {
+        m.add_top(dst, |_| {
+            "globalThis[shaped key] written by unmodeled code".into()
+        });
+        m.add_prim(dst, prim::ALL);
+    } else {
+        let f = m.node_l("global-shaped-read");
+        m.native_missing.push((t, star, NativeMiss::Global(dst, f)));
+    }
+    let op = m.tok(TokKind::ObjectProto);
+    tok_load(m, op, key, dst);
+    m.add_prim(dst, prim::UNDEF);
+}
+
+/// GLOBS1: a program global named after a shaped read of the global object
+/// (`global_shaped_read`) that the shape can spell: that read takes its
+/// named read too.
+pub(super) fn global_shaped_replay(m: &mut Model, a: Atom) {
+    if m.global_shaped_reads.is_empty() || m.atoms[a as usize] == crate::STAR_KEY {
+        return;
+    }
+    let name = m.atoms[a as usize].clone();
+    let hits: Vec<(Tok, NodeId)> = m
+        .global_shaped_reads
+        .iter()
+        .filter(|(_, k, _)| m.key_may_name_str(*k, &name))
+        .map(|(t, _, d)| (*t, *d))
+        .collect();
+    for (t, dst) in hits {
+        tok_load(m, t, Key::Named(a), dst);
+    }
+}
+
 fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
     if super::native_protocol::global_any_names(m, n) {
         super::native_protocol::global_any_read(m, dst);
@@ -977,6 +1051,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         m.edge(f, dst);
                     }
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
+                }
+                None if matches!(key, Key::Any(s) if s != 0) && !m.unit_mode => {
+                    global_shaped_read(m, t, key, dst);
                 }
                 _ => {
                     // A host global, or under a computed key any global: the
