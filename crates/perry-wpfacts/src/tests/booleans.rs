@@ -119,3 +119,50 @@ fn the_probe_lists_locals_and_fields() {
         "{d}"
     );
 }
+
+/// `FieldFacts::nullish_booleans` of `class.key`.
+fn field_nullish(src: &str, class: &str, key: &str) -> bool {
+    let pf = facts_with(src, FactsConfig::default());
+    field(tmpl(&pf, class), key).nullish_booleans
+}
+
+/// `BindingFacts::nullish_booleans` of parameter 0 of function `func`.
+fn param_nullish(src: &str, func: &str) -> bool {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == func)
+        .unwrap_or_else(|| panic!("function {func}"))
+        .params[0]
+        .id;
+    let pf = facts_with(src, FactsConfig::default());
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    mb.locals
+        .iter()
+        .find(|(l, _)| *l == id)
+        .unwrap_or_else(|| panic!("local {id} of {func}"))
+        .1
+        .nullish_booleans
+}
+
+#[test]
+fn a_field_of_booleans_and_undefined_is_nullish_booleans_only() {
+    // `note` holds `undefined` and `true`: ToBoolean is `v === true`.
+    assert!(field_nullish(GAME, "Game", "note"));
+    assert!(!field_fact(GAME, "Game", "note", FactsConfig::default()));
+    // A pure Boolean field is both.
+    assert!(field_nullish(GAME, "Game", "done"));
+    // A Number reaches `mixed` and `n`.
+    assert!(!field_nullish(GAME, "Game", "mixed"));
+    assert!(!field_nullish(GAME, "Game", "n"));
+}
+
+#[test]
+fn a_missing_argument_keeps_a_parameter_nullish_booleans() {
+    // `opt()` and `opt(true)`: undefined and true.
+    assert!(param_nullish(GAME, "opt"));
+    // `any(1)`: a Number.
+    assert!(!param_nullish(GAME, "any"));
+}
