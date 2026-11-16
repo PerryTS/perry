@@ -38,6 +38,10 @@ pub fn map_cons(
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
+        HasProp { key, idx } => HasProp {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+        },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },

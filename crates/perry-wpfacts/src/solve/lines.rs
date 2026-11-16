@@ -6,6 +6,7 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
+            Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))

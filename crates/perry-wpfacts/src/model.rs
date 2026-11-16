@@ -347,6 +347,9 @@ pub enum TokKind {
     Func(FnIdx, CallId),
     /// `f.bind(t, ...)` result: index into `Model::bound`.
     Bound(u32),
+    /// A Proxy exotic object `new Proxy( t, h )` makes (ECMA-262 10.5.14):
+    /// index into `Model::proxies`. Only `solve/proxy.rs` reads it.
+    Proxy(u32),
     /// The class constructor value of a class template.
     ClassObj(TmplId),
     /// The prototype object of a class / constructor-function template.
@@ -2546,6 +2549,9 @@ pub struct Model {
     /// through its contract (DECISIONS 120, `Model::escape`).
     pub interp_free: bool,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
+    /// PROXY2: the Proxy objects, one per birth context of a `new Proxy`.
+    pub proxies: Vec<crate::solve::proxy::ProxyRec>,
+    pub proxy_index: FxHashMap<CallId, u32>,
     /// Calls the solver makes through a bound value's target (`call_bound`,
     /// `construct`): a bound target reached by one of them goes through
     /// that bound value's one merged call (`Model::bound_merged`).

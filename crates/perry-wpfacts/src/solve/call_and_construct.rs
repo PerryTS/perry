@@ -122,6 +122,12 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
+            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
+            // a direct one takes today's path too.
+            TokKind::Proxy(p) => {
+                self.proxy_degrade(p);
+                self.call_tok(call, TOP, this_tok);
+            }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -790,6 +796,9 @@ impl Model {
         }
         let a = name;
         let name = self.atoms[name as usize].clone();
+        if name == proxy::PROXY_NEW {
+            return self.proxy_new(call);
+        }
         // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
         // what the program stored over it (`program_global_fn`) is
         // constructed too. Perry lowers a literal builtin name to the

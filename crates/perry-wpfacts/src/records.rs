@@ -230,6 +230,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
     };
     let layout = |k: &Key| matches!(k, Key::Named(a) if keys.contains(a));
     match c {
+        // `k in o` (no flow; before PROXY2 it made no constraint at all).
+        Cons::HasProp { .. } => Allowed,
         Cons::Identity { route } => match route {
             IdentityRoute::JsonReplacer => Reject(R5Protocol("JsonReplacer".into())),
             r => Reject(R4Identity(r.name().into())),

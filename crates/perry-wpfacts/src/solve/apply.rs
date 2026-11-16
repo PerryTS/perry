@@ -6,6 +6,9 @@ impl Model {
         match *c {
             // An observation for the value-record derive: no flow.
             Cons::Identity { .. } => {}
+            // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
+            // `solve/proxy.rs`).
+            Cons::HasProp { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being

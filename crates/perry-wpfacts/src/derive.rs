@@ -296,6 +296,15 @@ pub enum Verdict {
     /// held by unknown code. Counted proven in its own column ("known-object
     /// stores"); the emitted store stays the generic one.
     KnownObjectStore,
+    /// PROXY3 (owner 2026-11-16: trap sites count as proven, in their own
+    /// column): a read, call or named store whose receivers are all Proxy
+    /// objects of `new Proxy( t, h )` that the solver modeled
+    /// (`solve/proxy.rs`, never degraded): the operation calls the trap read
+    /// from the program handler `h` with `this = h` and the spec arguments
+    /// (ECMA-262 10.5.8 [[Get]], 10.5.9 [[Set]]), or forwards to `t`, and
+    /// both are in the solve. The emitted operation stays the generic one
+    /// (the runtime's Proxy dispatch).
+    ProxyTrap,
     No(String),
 }
 
@@ -1780,15 +1789,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     for (i, recvs, funcs) in &groups {
         let s = all[*i];
         let key = m.atoms[s.key as usize].clone();
-        let (
-            receivers,
-            top,
-            verdict,
-            fixed_shape,
-            targets,
-            receiver_values,
-            receiver_prims,
-        ) = verdict_of(s, recvs);
+        let (receivers, top, verdict, fixed_shape, targets, receiver_values, receiver_prims) =
+            verdict_of(s, recvs);
         let intrinsic_callee = if s.is_call && !matches!(s.access, Access::Set { .. }) {
             let all = element::with_copies(&copies, recvs);
             let set = receiver_set(m, &all);
@@ -2331,8 +2333,14 @@ fn judge(
     // (`native_arm`), and call receivers whose chain lacks the key (the
     // TypeError arm of calling `undefined`).
     let (mut native_arms, mut throw_arms) = (0usize, 0usize);
+    // PROXY3: receivers that are modeled Proxy objects (`Verdict::ProxyTrap`).
+    let mut traps = 0usize;
     for &t in toks {
         match &m.toks[t as usize] {
+            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+                receivers.push(m.tok_name(t));
+                traps += 1;
+            }
             TokKind::Top => {
                 top = true;
                 verdict.get_or_insert_with(|| {
@@ -2785,6 +2793,15 @@ fn judge(
             "mixed: born-with own slot and chain receivers".into(),
         ));
     }
+    // PROXY3: only modeled Proxy objects: the trap verdict. Beside any other
+    // receiver or a primitive the site is not decided by one rule.
+    if traps > 0 {
+        verdict.get_or_insert(if traps == toks.len() && prim == 0 {
+            Verdict::ProxyTrap
+        } else {
+            Verdict::No("mixed: Proxy and other receivers".into())
+        });
+    }
     let mut targets = FxHashMap::default();
     let verdict = match verdict {
         Some(v) => v,
@@ -3051,6 +3068,8 @@ fn judge_store(
     let mut slots: Vec<u32> = Vec::new();
     let mut acc: Vec<Tok> = Vec::new();
     let (mut throws, mut adds) = (0usize, 0usize);
+    // PROXY3: receivers that are modeled Proxy objects.
+    let mut traps = 0usize;
     // R9STORE4 rule A: receivers where the store adds or overwrites an own
     // data property with no user code (`instance_sets`).
     let mut sets = 0usize;
@@ -3157,6 +3176,12 @@ fn judge_store(
                 receivers.push(m.tok_name(t));
                 sets += 1;
             }
+            // PROXY3: a modeled Proxy object: its `set` trap or the forward
+            // (10.5.9; `Verdict::ProxyTrap`).
+            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+                receivers.push(m.tok_name(t));
+                traps += 1;
+            }
             // R9STORE5 (i): a builtin function value or an Array.
             _ if builtin_store_sets(m, t, key, s.key) => {
                 receivers.push(m.tok_name(t));
@@ -3217,6 +3242,8 @@ fn judge_store(
     };
     let verdict = match why {
         Some(w) => Verdict::No(w),
+        None if traps > 0 && traps == toks.len() && prim == 0 => Verdict::ProxyTrap,
+        None if traps > 0 => Verdict::No("store: Proxy beside other receivers".into()),
         None if only_nullish => {
             receivers.extend(prim_throw_arms(prim));
             Verdict::Throws

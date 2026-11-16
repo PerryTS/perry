@@ -1296,6 +1296,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             TokKind::Obj(l, c) => ("object", Some(*l), None, Some(*c)),
             TokKind::Func(f, c) => ("function", None, Some(*f), Some(*c)),
             TokKind::Bound(_) => ("bound", None, None, None),
+            TokKind::Proxy(_) => ("proxy", None, None, None),
             TokKind::ClassObj(l) => ("class", Some(*l), None, None),
             TokKind::Proto(l) => ("prototype", Some(*l), None, None),
             TokKind::Builtin(_) | TokKind::BuiltinFn(_) => ("builtin", None, None, None),

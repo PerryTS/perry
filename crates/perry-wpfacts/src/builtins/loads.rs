@@ -1551,6 +1551,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::Top => {}
+        // PROXY2: only `solve/proxy.rs` models a Proxy: today's path.
+        TokKind::Proxy(p) => {
+            m.proxy_degrade(p);
+            m.add_tok(dst, TOP);
+        }
     }
 }
 

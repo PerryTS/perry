@@ -389,6 +389,7 @@ impl Model {
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n, ..) => format!("native:{n}"),
+            TokKind::Proxy(p) => format!("proxy:{p}"),
         }
     }
 
@@ -494,6 +495,7 @@ impl Model {
                 TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n, ..) => format!("nativeproto {n}"),
+                TokKind::Proxy(p) => format!("proxy {p}"),
             };
             out.push(format!("M tok {i} {d}"));
         }

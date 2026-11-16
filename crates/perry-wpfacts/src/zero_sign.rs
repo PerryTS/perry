@@ -161,6 +161,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. }
         | Cons::Identity { .. }
+        | Cons::HasProp { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
