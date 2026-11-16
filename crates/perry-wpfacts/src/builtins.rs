@@ -985,7 +985,15 @@ fn typed_array_read_member(name: &str) -> bool {
     if name == "BYTES_PER_ELEMENT" {
         return true;
     }
-    if name == "constructor" || name.starts_with(WK_PREFIX) {
+    // R9READ8: each kind's prototype owns `constructor`, a data property
+    // whose value is that kind's constructor (23.2.6.2 / 23.2.7.2): with no
+    // own `constructor` on the receiver and no write onto a builtin
+    // prototype (the caller's checks) the read is one of the kinds'
+    // intrinsic constructors, a closed set of builtin function values.
+    if name == "constructor" {
+        return true;
+    }
+    if name.starts_with(WK_PREFIX) {
         return false;
     }
     let on = |e: &str| {
