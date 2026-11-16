@@ -1992,7 +1992,7 @@ fn indexed_length(
 
 /// `PERRY_FACTS_WHY_INDEXED=1`: one stderr line per typed-array receiver
 /// [`indexed_length`] refuses, naming the failing condition.
-fn why_indexed() -> bool {
+pub(crate) fn why_indexed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_FACTS_WHY_INDEXED").is_some())
 }
@@ -2402,6 +2402,14 @@ fn judge(
                                 absent_key(m, t, key, s.key),
                                 own_data_or_absent(m, tf, t, key, s.key)
                             );
+                            for w in m.writers.get(&(*tm, s.key)).iter().flat_map(|w| w.post.iter()) {
+                                eprintln!("WHY_ARM_W @{} named post {}", s.byte_offset, m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str()));
+                            }
+                            for (w, k) in m.any_writers.get(tm).iter().flat_map(|w| w.post.iter()) {
+                                if m.key_may_name(*k, s.key) {
+                                    eprintln!("WHY_ARM_W @{} any post {} fn={} m={} loop={:?} key={:?} shape={:?}", s.byte_offset, m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str()), m.stores.get(*w as usize).and_then(|x| m.funcs.get(x.func as usize)).map_or("?", |f| f.name.as_str()), m.stores.get(*w as usize).map_or(0, |x| x.module), m.stores.get(*w as usize).map(|x| x.in_loop), k, match k { crate::model::Key::Any(i) => m.key_shapes.get(*i as usize).map(|x| (x.globs.clone(), x.free.len())), _ => None });
+                                }
+                            }
                         }
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
