@@ -177,7 +177,7 @@ fn runs_code(e: &RealmEffect) -> bool {
         | RealmEffect::Open => true,
         RealmEffect::Returns(o) => species(o),
         // A comparison runs no program code.
-        RealmEffect::StoresFresh | RealmEffect::Identity(_) => false,
+        RealmEffect::StoresFresh | RealmEffect::Identity(_) | RealmEffect::StoresBytes(_) => false,
     }
 }
 
@@ -191,7 +191,10 @@ fn keeps(e: &RealmEffect) -> bool {
 
         RealmEffect::Returns(o) => fresh(o) || species(o),
         RealmEffect::Calls { args, this, .. } => species(this) || args.iter().any(species),
-        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } | RealmEffect::Identity(_) => false,
+        RealmEffect::Reads(_)
+        | RealmEffect::Coerce { .. }
+        | RealmEffect::Identity(_)
+        | RealmEffect::StoresBytes(_) => false,
     }
 }
 

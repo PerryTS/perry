@@ -310,6 +310,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
         "escapes" => tagged("escapes", slot(inner()?)?),
         "identity" => tagged("identity", slot(inner()?)?),
         "async_resource" => tagged("async_resource", slot(inner()?)?),
+        "stores_bytes" => tagged("stores_bytes", slot(inner()?)?),
         "coerce" => {
             let parts = info::split(inner()?, ",");
 
