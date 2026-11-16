@@ -1,9 +1,10 @@
 // parity-env: PERRY_REALM_TWO_PHASE=1
-// Two-phase realm, compiled WITH the switch (the header above): the one case
-// of this family every runner compiles for a two-phase realm, so the lanes
-// that link and run on each platform exercise the strong link-time hooks of
-// the entry module. The first touch is a class value (the core alone); then
-// phase-B families are reached through instances, by name and by a store.
+// Two-phase realm with the switch set explicitly (the header above; it is
+// also the default): the lanes that link and run on each platform exercise
+// the strong link-time hooks of the entry module. Its twin with the switch
+// off is test_gap_realm_two_phase_switch_off.ts. The first touch is a class
+// value (the core alone); then phase-B families are reached through
+// instances, by name and by a store.
 class Core { static n = 1; }
 const first = [Core];
 console.log("core", first[0].n, typeof Map, [3, 1, 2].sort().join(","));

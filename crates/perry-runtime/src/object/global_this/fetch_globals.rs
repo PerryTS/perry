@@ -60,7 +60,7 @@ crate::perry_thread_local! {
 }
 
 // The two link-time hooks of the two-phase realm. The runtime defines both
-// WEAK; a program compiled with `PERRY_REALM_TWO_PHASE=1` defines both strong
+// WEAK; a program compiled for a two-phase realm (the default) defines both strong
 // in its entry module (`perry-codegen`, `codegen/entry.rs`), so which entry a
 // runtime reader of a phase-A intrinsic calls is decided by the LINK: no mode
 // is loaded and nothing is tested on any call, and a program that is not
@@ -165,7 +165,7 @@ pub(crate) fn realm_core() -> f64 {
     perry_realm_core_entry()
 }
 
-/// A program compiled with `PERRY_REALM_TWO_PHASE=1` calls this once from its
+/// A program compiled for a two-phase realm (the default) calls this once from its
 /// entry, before its first module init: its compiled static reads of
 /// phase-A names use the core entry, so the runtime may leave phase B for
 /// later. `poison != 0` (check mode, `PERRY_VERIFY_FACTS=1`): a phase-B slot

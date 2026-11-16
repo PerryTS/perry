@@ -52,18 +52,35 @@ fn global_object_expr(name: &str) -> Expr {
     }
 }
 
-/// Two-phase realm (`PERRY_REALM_TWO_PHASE=1`, read by the compiler; off by
-/// default): the program's entry tells the runtime to populate the realm
-/// global in two phases, and a static read of a global name picks its entry
-/// at compile time, by the name alone ([`global_entry`]).
+/// Two-phase realm (the default; `PERRY_REALM_TWO_PHASE=0`, read by the
+/// compiler, turns it off): the program's entry tells the runtime to populate
+/// the realm global in two phases, and a static read of a global name picks
+/// its entry at compile time, by the name alone ([`global_entry`]). With the
+/// switch off the program populates its realm in one pass at the first touch
+/// and does not link the two-phase path.
 pub(crate) fn realm_two_phase() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_REALM_TWO_PHASE").as_deref(),
-            Ok("1" | "on" | "true")
-        )
+        realm_two_phase_setting(std::env::var("PERRY_REALM_TWO_PHASE").ok().as_deref())
     })
+}
+
+/// The switch's reading of its variable: on unless it says off.
+fn realm_two_phase_setting(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false"))
+}
+
+#[cfg(test)]
+mod realm_two_phase_tests {
+    #[test]
+    fn the_two_phase_realm_is_on_unless_the_switch_says_off() {
+        for on in [None, Some("1"), Some("on"), Some("true"), Some("")] {
+            assert!(super::realm_two_phase_setting(on), "{on:?}");
+        }
+        for off in ["0", "off", "false"] {
+            assert!(!super::realm_two_phase_setting(Some(off)), "{off}");
+        }
+    }
 }
 
 /// The runtime entry a static read of the global `name` takes its receiver
