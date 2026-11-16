@@ -145,6 +145,15 @@ pub fn native_accessor_written(m: &Model, np: Tok, a: Atom) -> bool {
     top || own
 }
 
+/// R9READ5: may a write other than a plain store reach `np`'s key `a`
+/// (an accessor, a definition, unknown code, a delete)? A plain store
+/// makes or updates a writable data property (10.1.9.2), so only such a
+/// write can make an OrdinarySet through `np` run code or fail.
+pub fn native_nonplain_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, false, &|w| w.accessor || w.opaque || w.absent);
+    top || own
+}
+
 /// The known getters (setters if `setter`) that writes reaching `np`'s key
 /// `a` installed (definitions through ⊤ with a known descriptor), into
 /// `dst`: what an accessor descriptor query that passes `np` returns

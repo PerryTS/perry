@@ -539,7 +539,7 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
         // R9BIRTH7: a settled top-level `X.k = v` defines the own data
         // property before any code can read `X` (`gen::settled`), as a
         // class-body static field does.
-        let settled = m.settled_static.get(&(tm, a)).is_some_and(|gs| window_globals_own(m, gs));
+        let settled = m.settled_static.get(&(tm, a)).is_some_and(|w| window_own(m, w));
         if m.static_fields.contains(&(tm, a)) || !stored || settled {
             out.push(m.atoms[a as usize].clone());
         }
@@ -3963,6 +3963,34 @@ fn lookup_holders(
     Ok(out)
 }
 
+/// R9READ5: a settled window (`gen::settled`) ran no code: its globals are
+/// the realm's own data properties, and each store an inert construction
+/// made (`this.k = v`, `Y.prototype.k = v`) is an OrdinarySet (10.1.9.2)
+/// along the chain of a fresh `Y` (`Y.prototype`, then `Object.prototype`:
+/// Y has no heritage, 10.1.13) that runs code only through an accessor
+/// under `k` and fails only on a non-writable `k`: on `Y.prototype` no
+/// HARD operation (defineProperty, freeze, delete), no unknown code
+/// (escape), no [[Prototype]] write (`super_relink`) and no accessor under
+/// a stored key (`accessor_keys`; the class body's own `gen` refused); on
+/// `Object.prototype` no write under a stored key but plain stores
+/// (`native_nonplain_written`: a plain store makes writable data).
+/// CLOSED-WORLD PREMISE (owner 2026-11-14): every accessor definition is in
+/// the program.
+fn window_own(m: &Model, w: &SettledWin) -> bool {
+    let op = m.tok_index.get(&TokKind::ObjectProto).copied();
+    window_globals_own(m, &w.globals)
+        && w.classes.iter().all(|&tm| {
+            m.tok_index.get(&TokKind::Proto(tm)).is_some_and(|&p| {
+                !m.hard.contains_key(&p)
+                    && !m.is_escaped(p)
+                    && !m.super_relink.contains(&p)
+                    && !m.accessor_keys.get(&p).is_some_and(|ks| w.keys.iter().any(|k| ks.contains(k)))
+            })
+        })
+        && (w.keys.is_empty()
+            || op.is_some_and(|op| w.keys.iter().all(|&k| !crate::builtins::native_nonplain_written(m, op, k))))
+}
+
 /// The globals a settled window read (`gen::settled`) are the realm's own
 /// data properties: no ⊤ global, no program write of a global, and no
 /// program value under any of the names.
@@ -4018,7 +4046,7 @@ fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
             let Some(gs) = m.settled_proto.get(&(tm, a)) else {
                 return false;
             };
-            !m.hard.contains_key(&p) && !m.is_escaped(p) && window_globals_own(m, gs)
+            !m.hard.contains_key(&p) && !m.is_escaped(p) && window_own(m, gs)
         }
         TokKind::Obj(tm, _) => {
             let tpl = &m.tmpls[tm as usize];

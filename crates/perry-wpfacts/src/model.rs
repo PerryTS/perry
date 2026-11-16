@@ -849,6 +849,16 @@ pub struct ThisContract {
     pub values: Vec<NodeId>,
 }
 
+/// What a settled window read on the way (`gen::settled::Win`): global
+/// names, keys an inert construction stored through `[[Set]]` and the
+/// classes it constructed (R9READ5).
+#[derive(Clone, Debug, Default)]
+pub struct SettledWin {
+    pub globals: Vec<Atom>,
+    pub keys: Vec<Atom>,
+    pub classes: Vec<TmplId>,
+}
+
 /// A property key: a named atom, or a computed key (`Any`). A computed
 /// key built from literal parts (`o[type + "s"]`, a template with literal
 /// text) carries its shape (`KeyShapeId`, `Model::key_shapes`): it names
@@ -2099,8 +2109,8 @@ pub struct Model {
     /// global names read between the class declaration and the store.
     /// R9BIRTH7: settled top-level static stores `X.k = v` (`gen::settled`),
     /// with the globals read in their window, as `settled_proto`.
-    pub settled_static: FxHashMap<(TmplId, Atom), Vec<Atom>>,
-    pub settled_proto: FxHashMap<(TmplId, Atom), Vec<Atom>>,
+    pub settled_static: FxHashMap<(TmplId, Atom), SettledWin>,
+    pub settled_proto: FxHashMap<(TmplId, Atom), SettledWin>,
     /// RPG1b: the functions whose body runs at most once per evaluation of
     /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
     /// with reload (the runtime's path registry may evaluate the module

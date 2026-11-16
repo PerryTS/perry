@@ -82,14 +82,26 @@ impl<'a> Gen<'a> {
                 let Some(&tm) = self.mods[mi].classes.get(&cname) else {
                     continue;
                 };
+                let Some(classes) = globals
+                    .classes
+                    .iter()
+                    .map(|c| self.mods[mi].classes.get(c).copied())
+                    .collect::<Option<Vec<TmplId>>>()
+                else {
+                    continue;
+                };
                 let a = self.m.atom(&key);
-                let gs: Vec<Atom> = globals.iter().map(|g| self.m.atom(g)).collect();
+                let gs: Vec<Atom> = globals.globals.iter().map(|g| self.m.atom(g)).collect();
+                let ks: Vec<Atom> = globals.keys.iter().map(|k| self.m.atom(k)).collect();
                 let into = if proto {
                     &mut self.m.settled_proto
                 } else {
                     &mut self.m.settled_static
                 };
-                into.entry((tm, a)).or_default().extend(gs);
+                let w = into.entry((tm, a)).or_default();
+                w.globals.extend(gs);
+                w.keys.extend(ks);
+                w.classes.extend(classes);
             }
         }
         // Birth keys: root → leaf.

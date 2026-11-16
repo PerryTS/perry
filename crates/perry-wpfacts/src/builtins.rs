@@ -50,7 +50,7 @@ use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
-    native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
+    native_nonplain_written, native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
     require_parts, settle_native_given,
 };

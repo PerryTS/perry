@@ -326,6 +326,11 @@ pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
         .map(|(key, _)| *key)
 }
 
+/// `Object.prototype` holds `name` as an intrinsic member.
+pub(crate) fn object_proto_has(name: &str) -> bool {
+    find(OBJECT, name).is_some()
+}
+
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
 }
