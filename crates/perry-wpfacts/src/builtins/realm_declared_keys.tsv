@@ -3373,6 +3373,7 @@ native	URL	bind	Function.prototype.bind
 native	URL	call	Function.prototype.call
 native	URL	canParse	URL.canParse
 native	URL	constructor	Function
+native	URL	createObjectURL	URL.createObjectURL
 native	URL	hasOwnProperty	Object.prototype.hasOwnProperty
 native	URL	isPrototypeOf	Object.prototype.isPrototypeOf
 native	URL	parse	URL.parse
@@ -3822,6 +3823,7 @@ native	node:buffer	atob	node:buffer.atob
 native	node:buffer	btoa	node:buffer.btoa
 native	node:buffer	isAscii	node:buffer.isAscii
 native	node:buffer	isUtf8	node:buffer.isUtf8
+native	node:buffer	resolveObjectURL	node:buffer.resolveObjectURL
 native	node:buffer.constants	__defineGetter__	Object.prototype.__defineGetter__
 native	node:buffer.constants	__defineSetter__	Object.prototype.__defineSetter__
 native	node:buffer.constants	__lookupGetter__	Object.prototype.__lookupGetter__
@@ -3848,6 +3850,7 @@ native	node:buffer.default	isAscii	node:buffer.isAscii
 native	node:buffer.default	isPrototypeOf	Object.prototype.isPrototypeOf
 native	node:buffer.default	isUtf8	node:buffer.isUtf8
 native	node:buffer.default	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:buffer.default	resolveObjectURL	node:buffer.resolveObjectURL
 native	node:buffer.default	toLocaleString	Object.prototype.toLocaleString
 native	node:buffer.default	toString	Object.prototype.toString
 native	node:buffer.default	valueOf	Object.prototype.valueOf
@@ -9994,6 +9997,7 @@ ns	URIError	length
 ns	URIError	name
 ns	URIError	prototype
 ns	URL	canParse
+ns	URL	createObjectURL
 ns	URL	length
 ns	URL	name
 ns	URL	parse
@@ -10280,6 +10284,8 @@ ns	node:buffer.isAscii	length
 ns	node:buffer.isAscii	name
 ns	node:buffer.isUtf8	length
 ns	node:buffer.isUtf8	name
+ns	node:buffer.resolveObjectURL	length
+ns	node:buffer.resolveObjectURL	name
 ns	node:child_process.ChildProcess	length
 ns	node:child_process.ChildProcess	name
 ns	node:child_process.ChildProcess	prototype

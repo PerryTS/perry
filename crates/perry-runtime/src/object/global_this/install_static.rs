@@ -79,6 +79,16 @@ extern "C" fn abort_signal_any_thunk(
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
+/// `URL.createObjectURL(blob)`: the stdlib native registers the Blob's bytes
+/// and type under a new `blob:nodedata:` URL (a non-Blob: TypeError).
+extern "C" fn url_create_object_url_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    blob: f64,
+) -> f64 {
+    crate::object::global_fetch::call_url_create_object_url(blob)
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -1174,6 +1184,11 @@ pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
             s.method(
                 "parse",
                 crate::fn_info!(#[realm(URL.parse)] export crate::object::global_this::install_static::url_parse_thunk, 2; with_declared(1)),
+                1,
+            );
+            s.method(
+                "createObjectURL",
+                crate::fn_info!(#[realm(URL.createObjectURL, births = [TypeError], effects = { reads(arg(0)); coerce(arg(0), ShallowInspect); returns(prim(str)) })] export crate::object::global_this::install_static::url_create_object_url_thunk, 1),
                 1,
             );
         }
