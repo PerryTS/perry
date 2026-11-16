@@ -7,7 +7,7 @@ impl Model {
         // MATHB1B: the generic-arm call of a namespace pair does not bind
         // the original member: the pair's intrinsic arm is that call
         // (`Gen::namespace_pair`).
-        if let Some(&(ns, key)) = self.ns_pair_calls.get(&call) {
+        if let Some((ns, key)) = self.ns_pair_of(call) {
             if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
                 if identity.rsplit_once('.').is_some_and(|(n, k)| {
                     crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]

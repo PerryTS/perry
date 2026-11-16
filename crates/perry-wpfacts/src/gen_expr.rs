@@ -656,12 +656,19 @@ impl<'a> Gen<'a> {
             .and_then(|x| self.const_property_key(fx.module, x))
             .map(|s| self.m.atom(&s));
         let c0 = self.m.calls.len();
-        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
         let key = self.m.atom(property);
+        // The generic call is registered before it is made: generation solves
+        // online, so `call_with` binds the callee read so far inside it, and
+        // the skip (`Model::ns_pair_of`) must already see the call there.
+        self.m.ns_pair_calls.insert(c0 as CallId, (ns_b, key));
+        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
         let made: Vec<CallId> = (c0..self.m.calls.len())
             .filter(|&c| self.m.calls[c].ret == rg && self.m.calls[c].args == a)
             .map(|c| c as CallId)
             .collect();
+        if !made.contains(&(c0 as CallId)) {
+            self.m.ns_pair_calls.remove(&(c0 as CallId));
+        }
         for c in made {
             self.m.ns_pair_calls.insert(c, (ns_b, key));
         }

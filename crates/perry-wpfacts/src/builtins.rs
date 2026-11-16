@@ -3066,7 +3066,7 @@ fn ns_method_inner(
     // runs no model of the original: the pair's intrinsic arm is that call
     // (`Gen::namespace_pair`). A write that may have replaced the member
     // (above, and the stored values bound as callees) still binds here.
-    if m.ns_pair_calls.get(&call).is_some_and(|&(pns, k)| pns == ns && m.atoms[k as usize] == name) {
+    if m.ns_pair_of(call).is_some_and(|(pns, k)| pns == ns && m.atoms[k as usize] == name) {
         return;
     }
     // VALUE-CALL-MODELS: the eight Object statics run the direct call's steps.
