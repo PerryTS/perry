@@ -1841,3 +1841,8 @@ pub(crate) fn snap_evaluate_init(addr: usize, guard: usize) {
     let _require = crate::snap_census::require_scope();
     let _ = require_path_key(&key);
 }
+
+/// This heap's path-module registry entries, for the image run.
+pub(crate) fn snap_image_registry() -> Vec<(String, Option<usize>, u8, Option<u64>, Option<u64>)> {
+    MODULE_PATH_REGISTRY.with(|r| r.snap_image_entries())
+}

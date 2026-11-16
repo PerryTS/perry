@@ -39,12 +39,15 @@ pub(crate) struct Baseline {
     /// no cut copy: every change counts as the program's.
     pre_data: Vec<u8>,
     pre_tls: Vec<u8>,
-    /// `class_image::snap_image_table_size` at the baseline.
-    classes: usize,
+    /// `class_image::snap_image_table_sizes` at the baseline.
+    classes: [usize; format::CLASS_TABLE_COUNT],
     /// Hot-slot claims at the baseline.
     claims_from: u32,
     /// Names claimed since, read first at the cut (the capture claims its own).
     claims: Vec<(Vec<u8>, u32)>,
+    /// Shape counters and the next class-template token at the baseline.
+    shapes: u64,
+    token: u64,
 }
 
 static BASELINE: AtomicPtr<Baseline> = AtomicPtr::new(std::ptr::null_mut());
@@ -61,7 +64,7 @@ fn copy(lo: usize, hi: usize) -> (usize, Vec<u8>) {
 /// ends at the thread pointer). Only the Linux x86-64 capture calls it, and the
 /// `dl_iterate_phdr` family it uses is missing from `libc` on tvOS and watchOS.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn executable_tls_size() -> usize {
+fn executable_tls_size() -> (usize, usize) {
     unsafe extern "C" fn each(
         info: *mut libc::dl_phdr_info,
         _size: libc::size_t,
@@ -72,13 +75,13 @@ fn executable_tls_size() -> usize {
             let ph = unsafe { &*info.dlpi_phdr.add(i) };
             if ph.p_type == libc::PT_TLS {
                 let align = (ph.p_align as usize).max(1);
-                unsafe { *(data as *mut usize) = (ph.p_memsz as usize).div_ceil(align) * align };
+                unsafe { *(data as *mut (usize, usize)) = (ph.p_memsz as usize, align) };
             }
         }
         1
     }
-    let mut size = 0usize;
-    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut usize).cast()) };
+    let mut size = (0usize, 1usize);
+    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut (usize, usize)).cast()) };
     size
 }
 
@@ -93,19 +96,22 @@ pub extern "C" fn js_snap_image_begin(
     let mut fs = 0usize;
     // SAFETY: ARCH_GET_FS stores the thread pointer.
     unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1003, &mut fs as *mut usize) };
-    let tls_lo = fs.saturating_sub(executable_tls_size());
+    let (memsz, align) = executable_tls_size();
+    let (tls_lo, tls_len) = tls_window(fs, memsz, align);
     let lo = std::ptr::addr_of!(__data_start) as usize;
     let hi = std::ptr::addr_of!(_end) as usize;
     let pre_data = vec![0u8; hi - lo];
-    let pre_tls = vec![0u8; fs - tls_lo];
+    let pre_tls = vec![0u8; tls_len];
     let b = Box::new(Baseline {
         data: copy(lo, hi),
-        tls: copy(tls_lo, fs),
+        tls: copy(tls_lo, tls_lo + tls_len),
         pre_data,
         pre_tls,
-        classes: crate::object::class_image::snap_image_table_size(),
+        classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: crate::tls_hot::js_tls_hot_claimed_slots(),
         claims: Vec::new(),
+        shapes: crate::object::shapes::snap_image_shape_counts(),
+        token: crate::object::field_get_set::snap_image_next_token(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
@@ -175,6 +181,7 @@ fn no_form(t: u8) -> bool {
             | GC_TYPE_BUFFER_SECRET_KEY
             | GC_TYPE_BUFFER_CRYPTO_KEY
             | GC_TYPE_PROMISE
+            | GC_TYPE_REGEX_PROGRAM
     ) || crate::gc::gc_type_info(t).is_none()
 }
 
@@ -387,6 +394,7 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 }
             });
         }
+        cell_forms(&w, &headers, i, h, t, &mut bytes, &mut slots, &mut img.stops);
         slots.sort_by_key(|s| s.0);
         img.cells.push(Cell {
             obj_type: t,
@@ -441,18 +449,33 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             }
             img.claims.push(k.clone());
         }
-        let now = crate::object::class_image::snap_image_table_size();
-        if now != b.classes {
-            img.stops.push(Stop {
-                cell: 0,
-                obj_type: 0,
-                kind: format::STOP_CLASS_TABLES,
-                off: 0,
-                value: now.wrapping_sub(b.classes) as u64,
-            });
+        let now = crate::object::class_image::snap_image_table_sizes();
+        for (i, (n, was)) in now.iter().zip(b.classes.iter()).enumerate() {
+            if n != was {
+                img.stops.push(Stop {
+                    cell: i as u32,
+                    obj_type: 0,
+                    kind: format::STOP_CLASS_TABLES,
+                    off: 0,
+                    value: n.wrapping_sub(*was) as u64,
+                });
+            }
         }
     }
-    img.pending = format::PENDING;
+    match base {
+        Some(b) => {
+            let (pending, stops) = completeness(
+                b.shapes,
+                crate::object::shapes::snap_image_shape_counts(),
+                b.token,
+                crate::object::field_get_set::snap_image_next_token(),
+            );
+            img.pending = pending;
+            img.stops.extend(stops);
+            img.registry = registry_record(&w, &mut img.stops);
+        }
+        None => img.pending = format::PENDING,
+    }
     img
 }
 
@@ -538,4 +561,149 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
         .zip(marked)
         .filter_map(|(h, m)| m.then_some(h))
         .collect()
+}
+
+/// Which forms the image still lacks, and why it stops: a shape minted between the
+/// baseline and the cut (the shape slab has no form), more than the primary's
+/// class-template token. The atom table has no run-time counter: its bit stays set.
+fn completeness(shapes0: u64, shapes1: u64, tok0: u64, tok1: u64) -> (u32, Vec<Stop>) {
+    let mut pending = format::PENDING_ATOMS;
+    let mut stops = Vec::new();
+    let mut stop = |kind: u8, value: u64| {
+        stops.push(Stop { cell: 0, obj_type: 0, kind, off: 0, value });
+    };
+    if shapes0 != shapes1 {
+        pending |= format::PENDING_SHAPES;
+        stop(format::STOP_SHAPES_MINTED, shapes1.wrapping_sub(shapes0));
+    }
+    if tok1 > 2.max(tok0) {
+        pending |= format::PENDING_TOKENS;
+        stop(format::STOP_TOKENS, tok1);
+    }
+    (pending, stops)
+}
+
+/// The forms of one cell: the Map entries alias and a store's native key indexes are
+/// derived (zeroed, named by a `Derived` slot); any other untraced word that holds an
+/// address outside the binary's own sections stops the image.
+#[allow(clippy::too_many_arguments)]
+fn cell_forms(
+    w: &Where,
+    headers: &[usize],
+    i: usize,
+    h: usize,
+    t: u8,
+    bytes: &mut [u8],
+    slots: &mut Vec<(u32, Val)>,
+    stops: &mut Vec<Stop>,
+) {
+    use crate::gc::{GC_HEADER_SIZE, GC_TYPE_MAP, GC_TYPE_MAP_STORE};
+    let le = |b: &[u8], o: usize| {
+        b.get(o..o + 8)
+            .map_or(0, |s| u64::from_le_bytes(s.try_into().unwrap_or([0; 8])))
+    };
+    let stop = |stops: &mut Vec<Stop>, kind: u8, off: usize, value: u64| {
+        stops.push(Stop { cell: i as u32, obj_type: t, kind, off: off as u32, value });
+    };
+    let f = crate::map::image_form();
+    let mut derived: Vec<(usize, u8)> = Vec::new();
+    let user = h + GC_HEADER_SIZE;
+    if t == GC_TYPE_MAP {
+        let (eo, so) = (GC_HEADER_SIZE + f.header_entries, GC_HEADER_SIZE + f.header_store);
+        let store_user = slots.iter().find(|s| s.0 as usize == so).and_then(|s| match s.1 {
+            Val::Cell { index, .. } => headers.get(index as usize).map(|h| h + GC_HEADER_SIZE),
+            _ => None,
+        });
+        let alias = le(bytes, eo);
+        if store_user.is_some_and(|u| alias == (u + f.inline) as u64) {
+            derived.push((eo, format::DERIVED_MAP_ENTRIES));
+        } else {
+            stop(stops, format::STOP_RAW_HEAP_WORD, eo, alias);
+        }
+    } else if t == GC_TYPE_MAP_STORE {
+        // SAFETY: a store cell the allocators hold.
+        if !unsafe { crate::map::image_keys_derivable(user as *const crate::map::MapStore) } {
+            stop(stops, format::STOP_MAP_KEYS, 0, 0);
+        }
+        let eo = GC_HEADER_SIZE + f.entries;
+        let alias = le(bytes, eo);
+        if alias == (user + f.inline) as u64 {
+            derived.push((eo, format::DERIVED_STORE_ENTRIES));
+        } else {
+            stop(stops, format::STOP_RAW_HEAP_WORD, eo, alias);
+        }
+        let mut o = GC_HEADER_SIZE + f.index.0;
+        while o + 8 <= GC_HEADER_SIZE + f.index.1 {
+            derived.push((o, format::DERIVED_STORE_INDEX));
+            o += 8;
+        }
+    }
+    for &(o, k) in &derived {
+        if let Some(word) = bytes.get_mut(o..o + 8) {
+            word.fill(0);
+        }
+        slots.push((o as u32, Val::Derived(k)));
+    }
+    // Strings, big integers and buffers hold character or byte data, not words.
+    use crate::gc::*;
+    let data = matches!(
+        t,
+        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_BUFFER_ARRAY_BUFFER | GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER | GC_TYPE_TYPED_ARRAY
+    );
+    if data || no_form(t) {
+        return;
+    }
+    let mut o = GC_HEADER_SIZE;
+    while o + 8 <= bytes.len() {
+        if !slots.iter().any(|s| s.0 as usize == o) {
+            let bits = le(bytes, o);
+            let ok = match w.val(bits) {
+                Ok(Val::Scalar(_)) => true,
+                Ok(Val::Ext { region, .. }) => region != format::REGION_TLS,
+                _ => false,
+            };
+            if !ok {
+                stop(stops, format::STOP_RAW_HEAP_WORD, o, bits);
+            }
+        }
+        o += 8;
+    }
+}
+
+/// The module-path registry entries the module inits added, as a replay record.
+fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
+    let mut out = Vec::new();
+    for (key, init, status, exports, factory) in crate::module_require::snap_image_registry() {
+        let mut bad = |value: u64| {
+            stops.push(Stop { cell: out.len() as u32, obj_type: 0, kind: format::STOP_REGISTRY, off: 0, value });
+        };
+        let val = |bits: Option<u64>| -> Result<Option<Val>, u64> {
+            match bits.map(|b| w.val(b)) {
+                None => Ok(None),
+                Some(Ok(v @ (Val::Scalar(_) | Val::Cell { .. } | Val::Ext { .. }))) => Ok(Some(v)),
+                Some(Ok(_)) => Err(bits.unwrap_or(0)),
+                Some(Err(b)) => Err(b),
+            }
+        };
+        let init_off = init
+            .filter(|a| *a >= w.exe.0 && *a < w.exe.1)
+            .map(|a| (a - w.exe.0) as u64);
+        let (Some(init_off), true, Ok(exports), Ok(factory)) =
+            (init_off, status == 0 || status == 2, val(exports), val(factory))
+        else {
+            bad(u64::from(status));
+            continue;
+        };
+        out.push(format::RegRec { key: key.into_bytes(), init_off, status, exports, factory });
+    }
+    out
+}
+
+/// The executable's own TLS block: variant II places it at
+/// `[fs - roundup(memsz, align), + memsz)`; the gap above it up to `fs` holds
+/// the C library's blocks (errno among them), so it is not part of the window.
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+fn tls_window(fs: usize, memsz: usize, align: usize) -> (usize, usize) {
+    let lo = fs.saturating_sub(memsz.div_ceil(align.max(1)) * align.max(1));
+    (lo, memsz.min(fs - lo))
 }

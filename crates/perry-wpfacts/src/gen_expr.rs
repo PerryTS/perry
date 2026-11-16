@@ -982,14 +982,7 @@ impl<'a> Gen<'a> {
             }
             Expr::In { property, object } => {
                 let p = self.expr(fx, property);
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    p,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(p);
                 // HasProperty on a Proxy runs its `has` trap.
                 let o = self.expr(fx, object);
                 self.raise_on(o);
@@ -1094,14 +1087,7 @@ impl<'a> Gen<'a> {
             } => {
                 let t = self.expr(fx, target);
                 let k = self.expr_zs(fx, key);
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(k);
                 if let (
                     Expr::Array(v, _),
                     Expr::String(_),
@@ -1235,14 +1221,7 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr_zs(fx, index);
                 self.m.nodes[i as usize].int_use = true;
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    i,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(i);
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
@@ -1320,14 +1299,7 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr_zs(fx, index);
                 self.m.nodes[i as usize].int_use = true;
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    i,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(i);
                 let v = self.expr_zs(fx, value);
                 if let Some(kp) = self.for_in_key_of(fx.module, index) {
                     // A for-in run's key decides the stored key (FVA 4.3b);
@@ -1363,14 +1335,7 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let i = self.expr_zs(fx, index);
                 self.m.nodes[i as usize].int_use = true;
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    i,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(i);
                 let key = self.key_of(fx.module, index);
                 self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Read);
                 self.element_site(fx, e, o, i, key, crate::derive::ElementOp::Write);
@@ -1411,8 +1376,12 @@ impl<'a> Gen<'a> {
                         self.m.cons(o, Cons::DeleteKey { key, reason: r });
                     }
                     Expr::IndexGet { object, index, .. } => {
+                        // ECMA-262 13.5.1.2: `delete o[k]` evaluates the
+                        // reference (13.3.3 EvaluatePropertyAccessWithExpressionKey:
+                        // ToPropertyKey of the key value), then deletes.
                         let o = self.expr(fx, object);
-                        let _ = self.expr(fx, index);
+                        let k = self.expr(fx, index);
+                        self.to_property_key(k);
                         self.m.cons(
                             o,
                             Cons::Hard {
@@ -1864,9 +1833,10 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
+                // ECMA-262 15.4.4 / 13.2.5.4 ComputedPropertyName: ToPropertyKey
+                // of the key value when the class is defined.
                 let key_value = self.expr(fx, key_expr);
-                #[cfg(not(test))]
-                let _ = key_value;
+                self.to_property_key(key_value);
                 let publish = |g: &mut Self| {
                     if let Some(tm) = g.resolve_class_name(mi, class_name) {
                         let holder = if *is_static {
@@ -1903,9 +1873,10 @@ impl<'a> Gen<'a> {
                 is_static,
                 ..
             } => {
+                // ECMA-262 15.4.4 / 13.2.5.4 ComputedPropertyName: ToPropertyKey
+                // of the key value when the class is defined.
                 let key_value = self.expr(fx, key_expr);
-                #[cfg(not(test))]
-                let _ = key_value;
+                self.to_property_key(key_value);
                 // Under a constant key it is that key's accessor, installed
                 // with the class (`Gen::named_computed`).
                 let named = !*is_static && self.const_key(mi, key_expr).is_some();
@@ -1986,8 +1957,12 @@ impl<'a> Gen<'a> {
                         false,
                     );
                 }
+                // ComputedPropertyName of each field (ECMA-262 15.7.10
+                // ClassFieldDefinitionEvaluation): ToPropertyKey at class
+                // definition.
                 for (_, v) in computed_keys {
-                    let _ = self.expr(fx, v);
+                    let k = self.expr(fx, v);
+                    self.to_property_key(k);
                 }
                 for (_, v) in computed_statics {
                     let vn = self.expr(fx, v);
