@@ -125,7 +125,7 @@ impl Model {
             // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
             // a direct one takes today's path too.
             TokKind::Proxy(p) => {
-                self.proxy_degrade(p);
+                self.proxy_degrade(p, "call");
                 self.call_tok(call, TOP, this_tok);
             }
             TokKind::Func(f, _) => {
