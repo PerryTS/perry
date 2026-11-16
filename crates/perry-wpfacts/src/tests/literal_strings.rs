@@ -243,3 +243,21 @@ fn a_folded_string_is_no_literal_whatever_its_text() {
     assert!(field_fact(src, "Box", "keep", FactsConfig::default()));
     assert!(field_fact(src, "Box", "two", FactsConfig::default()));
 }
+
+#[test]
+fn a_string_field_growing_by_plus_ends() {
+    // Rule M5b on a value that depends on itself through `+`: every round
+    // would fold one new constant; the operand holds a set a rule made, so
+    // it folds no more and the solve ends (no count bound).
+    let src = r#"
+    class C { s = "a"; t = "b"; n = 0;
+      run(): void {
+        for (let i = 0; i < 9; i++) { this.s += 1; this.t = this.t + 1 + 2; this.n += 1; }
+      }
+    }
+    const c = new C(); c.run();
+    console.log(c.s, c.t, c.n);
+    "#;
+    assert!(!field_fact(src, "C", "s", FactsConfig::default()));
+    assert!(!field_fact(src, "C", "t", FactsConfig::default()));
+}
