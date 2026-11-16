@@ -98,9 +98,17 @@ fn r9read1_bk3_computed_undefined() {
     not_proven(&B.replace("const p =", "(P.prototype as any)[process.argv[2] ?? \"x\"] = undefined;\nconst p ="), "f");
 }
 
+// R9READ11: `f` then holds the prototype method or `undefined` (the own
+// `_a` stored over it): the call runs `_a` or throws a TypeError: decided
+// per kind, never a claim codegen uses (T0Mono / T0Set).
 #[test]
 fn r9read1_bk4_instance_undefined() {
-    not_proven(&B.replace("let g = this._a;", "if (t.length > 3) (this as any)._a = undefined;\n    let g = this._a;"), "f");
+    let pf = facts(&B.replace("let g = this._a;", "if (t.length > 3) (this as any)._a = undefined;\n    let g = this._a;"));
+    let v = verdicts(&pf, "f");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| x.starts_with("No(") || x.starts_with("PerKind")),
+        "{v:?}"
+    );
 }
 
 #[test]

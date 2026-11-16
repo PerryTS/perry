@@ -117,7 +117,15 @@ fn r9read7_b1_instance_computed_store() {
 }
 
 // KEEP b2 (instance TypeError arm): a named store of `slice` after birth.
+// R9READ11: the instance arm is then "own data if stored, else `undefined`"
+// (the stored function or the TypeError arm): decided per kind, never a
+// claim codegen uses (T0Mono / T0Set / NativeMember).
 #[test]
 fn r9read7_b2_instance_named_store() {
-    not_proven(&s("if (Math.random() < 0.5) v.slice = function () { return 0; };"), "slice");
+    let pf = facts(&s("if (Math.random() < 0.5) v.slice = function () { return 0; };"));
+    let v = reads(&pf, "slice");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| x.starts_with("No(") || x.starts_with("PerKind")),
+        "{v:?}"
+    );
 }

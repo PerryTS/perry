@@ -146,3 +146,66 @@ fn r9read11_s10_own_call_on_fn_kept() {
     let pf = facts(&format!("{SLICE}(Array.prototype.slice as any).call = function () {{ return [n]; }};\n{USE}"));
     assert!(!proven(&sites(&pf, "call")), "call");
 }
+
+const TRACK: &str = "class T {
+  constructor(i: number) { this.set(i); }
+  set(i: number) {
+    let f: any;
+    switch (i) { case 0: f = this.A; break; case 1: f = this.B; break; }
+    if (f === undefined) return;
+    (this as any).ci = f;
+  }
+  copy() { const c: any = new (this.constructor as any)(2); c.ci = (this as any).ci; return c; }
+  A(x: any) { return 1; }
+  B(x: any) { return 2; }
+}
+class U extends T {}
+const n = Number(process.argv[2] ?? \"1\");
+const ts: any[] = [new T(n), new U(n), new T(n).copy()];
+";
+const CI: &str = "for (const t of ts) { try { console.log(t.ci(null)); } catch (e) { console.log(\"TE\"); } }\n";
+
+/// c1 (RED before): `t.ci( … )` where `ci` is an own key a conditional
+/// store in a method (and a copy) gives, the chain lacks it: the callees
+/// are the field's known methods, else the TypeError arm.
+#[test]
+fn r9read11_c1_own_late_key_call() {
+    let pf = facts(&format!("{TRACK}{CI}"));
+    assert!(proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c2: the class prototype has a `ci` method too (the chain holds it).
+#[test]
+fn r9read11_c2_chain_has_key_kept() {
+    let pf = facts(&format!("{TRACK}(T.prototype as any).ci = function () {{ return 3; }};\n{CI}"));
+    assert!(!proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c3: a computed-key store may write `ci` with another value.
+#[test]
+fn r9read11_c3_computed_store_kept() {
+    let pf = facts(&format!("{TRACK}ts[0][process.argv[3] ?? \"z\"] = function () {{ return 4; }};\n{CI}"));
+    assert!(!proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c4: `Object.prototype.ci` written.
+#[test]
+fn r9read11_c4_object_prototype_kept() {
+    let pf = facts(&format!("{TRACK}(Object.prototype as any).ci = function () {{ return 5; }};\n{CI}"));
+    assert!(!proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c5: an accessor `ci` on the class prototype.
+#[test]
+fn r9read11_c5_accessor_kept() {
+    let pf = facts(&format!("{TRACK}Object.defineProperty(T.prototype, \"ci\", {{ get() {{ return () => 6; }}, set(v) {{}} }});\n{CI}"));
+    assert!(!proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c6: the field may hold a non-function (a number): the call of it
+/// throws too, but the callee set is not a set of functions.
+#[test]
+fn r9read11_c6_number_value_kept() {
+    let pf = facts(&format!("{TRACK}ts[1].ci = n;\n{CI}"));
+    assert!(!proven(&sites(&pf, "ci")), "ci");
+}

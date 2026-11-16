@@ -2320,6 +2320,27 @@ fn judge(
                         Err(_) if instance_absent(m, tf, t, key, s.key) => {
                             throw_arms += 1
                         }
+                        // R9READ11: a key the instance gains by a store that
+                        // may not run (a conditional store in a method, a
+                        // copy after birth) and that its chain lacks
+                        // (`own_data_or_absent`: no accessor, escape, hard
+                        // operation or descriptor define on it, nothing on
+                        // the chain or on Object.prototype; the computed-key
+                        // refusal above came first): OrdinaryGet (10.1.8.1)
+                        // reads the own data property, whose values are the
+                        // field's (every store of the key on the token), or
+                        // `undefined`, and the call throws a TypeError
+                        // (13.3.6.2, 7.3.14): the field's callees plus the
+                        // TypeError arm; the site stays generic.
+                        Err(why)
+                            if why == "key not a definite birth field"
+                                && own_data_or_absent(m, tf, t, key, s.key) =>
+                        {
+                            if let Some(&n) = m.fields.get(&(t, s.key)) {
+                                callee.push(n);
+                            }
+                            throw_arms += 1;
+                        }
                         Err(why) => {
                             // Diagnostic (off: one flag read): the refused arm.
                             if why_indexed() {
@@ -2625,6 +2646,13 @@ fn judge(
             ts.sort_unstable();
             ts.dedup();
             let p = callee.iter().fold(0, |p, &n| p | m.nodes[n as usize].prim);
+            // R9READ11: beside a TypeError arm an `undefined` / `null`
+            // callee is that arm (7.3.14 Call: IsCallable false throws).
+            let p = if throw_arms > 0 {
+                p & !(crate::model::prim::UNDEF | crate::model::prim::NULL)
+            } else {
+                p
+            };
             let top_node = callee
                 .iter()
                 .copied()
