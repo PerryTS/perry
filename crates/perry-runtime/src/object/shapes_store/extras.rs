@@ -146,3 +146,35 @@ impl ShapeRecord {
         out
     }
 }
+
+#[cfg(test)]
+mod snap_image_state_tests {
+    use super::super::*;
+
+    fn record() -> ShapeRecord {
+        ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0)
+    }
+
+    #[test]
+    fn snap_image_state_sees_a_change_inside_a_boxed_extension() {
+        let mut r = record();
+        r.extras = new_extras(&[], &[]);
+        let before = r.snap_image_state();
+        r.set_integrity_flags(3);
+        assert_ne!(before, r.snap_image_state());
+        // SAFETY: the extension was allocated above and is freed once.
+        drop(unsafe { Box::from_raw(r.extras as usize as *mut ShapeExtras) });
+    }
+
+    #[test]
+    fn snap_image_state_ignores_the_collector_owned_bits() {
+        let mut r = record();
+        let before = r.snap_image_state();
+        r.set(RECORD_FLAG_CARRIED_SEEN, true);
+        r.set(RECORD_FLAG_OLD_CARRIER, true);
+        r.probe = 5;
+        assert_eq!(before, r.snap_image_state());
+        r.logical_key_count += 1;
+        assert_ne!(before, r.snap_image_state());
+    }
+}
