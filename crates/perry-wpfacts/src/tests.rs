@@ -2227,6 +2227,7 @@ mod r9birth8;
 mod r9read1;
 mod r9store1;
 mod onchange1;
+mod thisbind1;
 mod r9birth1;
 mod accsite1;
 mod d1;
