@@ -12,6 +12,7 @@ mod collections;
 mod constructors;
 mod effects;
 pub(crate) use effects::is_internal_key;
+pub(crate) use effects::strkey_set;
 mod gen_members;
 #[cfg(test)]
 pub(crate) mod effects_for_tests {
@@ -972,6 +973,29 @@ pub(crate) enum NativeFamily {
     /// R9BIRTH7: reads only (`typed_array_read_member`); a call keeps its
     /// other reason.
     TypedArray,
+    /// An object the runtime births as a declaration's `fresh(P)` result
+    /// (`TmplKind::BObj { what: P }`, P a realm prototype such as
+    /// `Storage.prototype`): its [[Prototype]] is P, and a member of it is
+    /// one P declares own (`realm_entry(P).own`). Its own keys are the
+    /// stores the solve saw (`derive::native_own_free`).
+    Declared(&'static str),
+}
+
+/// A realm prototype `what` whose declared fresh objects form a
+/// `NativeFamily::Declared` (whole-program only: a unit does not see the
+/// other units' stores onto it).
+pub(crate) fn declared_family(m: &Model, what: &str) -> bool {
+    !m.unit_mode && what.ends_with(".prototype") && members::realm_entry(what).is_some()
+}
+
+/// An object the runtime births as a declaration's `fresh(P)` result for a
+/// `NativeFamily::Declared` prototype P: an ordinary object for its own
+/// String keys (perry-runtime keeps them as ordinary own properties; a Web
+/// Storage item is mirrored as one, web_storage.rs `sync_named_property`),
+/// so a shaped key writes only the names it admits (`shape_splits`).
+pub(crate) fn declared_box(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what, .. } if declared_family(m, what)))
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -992,6 +1016,24 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
         NativeFamily::Bool => members::intrinsic_member(Family::Bool, name),
         NativeFamily::TypedArray => return !call && typed_array_read_member(name),
+        // A member P declares own: a method (a call or a read of it), or an
+        // accessor with a getter for a read. `constructor` is no member.
+        NativeFamily::Declared(p) => {
+            return name != "constructor"
+                && members::realm_entry(p).is_some_and(|e| {
+                    e.own.iter().any(|o| {
+                        !o.symbol
+                            && o.key == name
+                            && match o.value {
+                                perry_hir::realm_manifest::RealmOwnValue::Reference(_) => true,
+                                perry_hir::realm_manifest::RealmOwnValue::Accessor {
+                                    get, ..
+                                } => !call && get.is_some(),
+                                _ => false,
+                            }
+                    })
+                })
+        }
     };
     match mem {
         Some(Mem::Fn) => true,
@@ -1357,6 +1399,8 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         // `%TypedArray%.prototype` is no locked prototype: its writes are
         // obligation 4's (`derive::builtin_protos_unwritten`).
         NativeFamily::TypedArray => false,
+        // A host prototype the program may write: obligation 4's.
+        NativeFamily::Declared(_) => false,
     }
 }
 

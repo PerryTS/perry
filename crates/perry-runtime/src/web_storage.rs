@@ -296,27 +296,27 @@ pub(crate) fn install_storage_prototype(storage_proto: *mut ObjectHeader, ctor_v
     install_method(
         storage_proto,
         "clear",
-        crate::fn_info!(#[realm(Storage.prototype.clear, constructible = true)] export crate::web_storage::storage_clear, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Storage.prototype.clear, constructible = true, effects = { returns(prim(undefined)) })] export crate::web_storage::storage_clear, 0; with_declared(0)),
     );
     install_method(
         storage_proto,
         "getItem",
-        crate::fn_info!(#[realm(Storage.prototype.getItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_get_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.getItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(str | null)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_get_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "key",
-        crate::fn_info!(#[realm(Storage.prototype.key, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_key, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.key, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(str | null)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_key, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "removeItem",
-        crate::fn_info!(#[realm(Storage.prototype.removeItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_remove_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.removeItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(undefined)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_remove_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "setItem",
-        crate::fn_info!(#[realm(Storage.prototype.setItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_set_item, 2; with_declared(2)),
+        crate::fn_info!(#[realm(Storage.prototype.setItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); stores(arg(1) -> strkey(this)); returns(prim(undefined)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_set_item, 2; with_declared(2)),
     );
     install_storage_length_accessor(storage_proto);
 
@@ -371,7 +371,7 @@ fn install_method(
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true)] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0)),
+        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0)),
         0,
     );
     if getter.is_null() {
@@ -420,8 +420,8 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
 /// rooted store object, so `_value` is not a property value).
 fn set_global_storage_property(global: *mut ObjectHeader, name: &str, _value: *mut ObjectHeader) {
     let getter_fn = match name {
-        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", constructible = true, spec = {name = property_key}, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0)),
-        _ => crate::fn_info!(#[realm("sessionStorage.<get>", constructible = true, spec = {name = property_key}, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0)),
+        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0)),
+        _ => crate::fn_info!(#[realm("sessionStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0)),
     };
     let getter = crate::closure::js_closure_alloc(getter_fn, 0);
     let setter = crate::closure::js_closure_alloc(

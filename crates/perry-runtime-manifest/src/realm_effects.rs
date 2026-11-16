@@ -77,6 +77,12 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
             steps.push(Value::String(tag.into()));
             (base.remove("root").unwrap(), steps)
         }
+        ("strkey", Some(inner)) => {
+            let Value::Object(mut base) = slot(inner)? else { unreachable!() };
+            let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
+            steps.push(Value::String("str_key".into()));
+            (base.remove("root").unwrap(), steps)
+        }
         (step @ ("field" | "islot"), Some(inner)) => {
             let parts = info::split(inner, ",");
             let [of, key] = parts.as_slice() else {
@@ -97,7 +103,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), field(slot, key), islot(slot, name))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), strkey(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }

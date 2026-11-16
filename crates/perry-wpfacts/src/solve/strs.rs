@@ -482,6 +482,7 @@ impl Model {
             return self.key_shape(Some(KeyShape {
                 globs: vec![glob],
                 free: Vec::new(),
+                except: Vec::new(),
             }));
         }
         let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
@@ -492,6 +493,7 @@ impl Model {
         self.key_shape(Some(KeyShape {
             globs: vec![glob],
             free: Vec::new(),
+            except: Vec::new(),
         }))
     }
 

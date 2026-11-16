@@ -33,6 +33,7 @@ impl Model {
                     && !self.is_marker(t)
                     && (!self.is_array_like(t)
                         || builtins::ordinary_box(self, t)
+                        || builtins::declared_box(self, t)
                         || self.is_arr(t)) =>
             {
                 Some(s)

@@ -626,6 +626,21 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     if namespace_getter_load(m, t, t, ns, a, dst) {
         return;
     }
+    // A global accessor whose getter the runtime declares
+    // (`localStorage.<get>`: one Storage object per kind, born on its first
+    // read): the declared result of that getter on the global object,
+    // unless the program wrote the key.
+    if ns == BuiltinNs::GlobalThis
+        && !m.unit_mode
+        && !opaque_written(m, t, a, NativeMiss::Load(dst))
+    {
+        if let Some(e) =
+            super::effects::declared_at(&name, "<get>").filter(|e| !e.effects.is_empty())
+        {
+            super::effects::getter_load(m, e, t, a, dst);
+            return;
+        }
+    }
     if !m.unit_mode {
         if let Some(n) = namespace_native(m, t, ns, &name) {
             if opaque_written(m, t, a, NativeMiss::Load(dst)) {
@@ -776,6 +791,40 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 /// code; a later such write replays the read (`NativeMiss::Global`) to the
 /// same result.
 fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId) {
+    declared_global_value(m, t, n, dst);
+    m.add_tok(dst, birth);
+}
+
+/// Global `n`, an accessor of the global object whose getter the runtime
+/// declares (`localStorage.<get>`: `returns(fresh(Storage.prototype))`):
+/// a read of the bare name or of `globalThis.n` calls that getter on the
+/// global object, the one getter call per key (`effects::getter_load`), so
+/// every read sees the one object it births; plus what the program stored
+/// under the key, as for `declared_global_load`.
+fn declared_global_getter(
+    m: &Model,
+    n: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    if m.unit_mode {
+        return None;
+    }
+    super::effects::declared_at(n, "<get>").filter(|e| !e.effects.is_empty())
+}
+
+fn declared_global_getter_load(
+    m: &mut Model,
+    t: Tok,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    n: &str,
+    dst: NodeId,
+) {
+    declared_global_value(m, t, n, dst);
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let a = m.atom(n);
+    super::effects::getter_load(m, e, g, a, dst);
+}
+
+fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
     if super::native_protocol::global_any_names(m, n) {
         super::native_protocol::global_any_read(m, dst);
     }
@@ -793,7 +842,6 @@ fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId)
             m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
         }
     }
-    m.add_tok(dst, birth);
 }
 
 /// The value the realm declares for global `n` other than a namespace
@@ -833,6 +881,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 } else if realm_global_object(m, n) {
                     let birth = super::native_protocol::navigator_object(m);
                     declared_global_load(m, t, birth, n, dst);
+                } else if let Some(e) = declared_global_getter(m, n) {
+                    declared_global_getter_load(m, t, e, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -910,6 +960,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n) if realm_global_object(m, n) => {
                     let birth = super::native_protocol::navigator_object(m);
                     declared_global_load(m, t, birth, n, dst);
+                }
+                Some(n) if declared_global_getter(m, n).is_some() => {
+                    let e = declared_global_getter(m, n).unwrap();
+                    declared_global_getter_load(m, t, e, n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
