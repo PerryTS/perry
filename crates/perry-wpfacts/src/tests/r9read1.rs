@@ -107,3 +107,35 @@ fn r9read1_bk4_instance_undefined() {
 fn r9read1_bk5_define_property() {
     not_proven(&B.replace("const p =", "if (process.argv[2]) Object.defineProperty(P.prototype, \"_a\", { get() { return 7; } });\nconst p ="), "f");
 }
+
+// d: a settled static `X.k = v` on a class with a well-known-symbol member
+// (`*[Symbol.iterator]()`): the member key is a Symbol, never `k`.
+const D: &str = "class E {
+  x: number; o: any;
+  constructor(o = (E as any).DEFAULT) { this.x = 1; this.o = o; }
+  *[Symbol.iterator]() { yield this.x; }
+}
+(E as any).DEFAULT = 'XYZ';
+const e = new E(process.argv[2] ? undefined : 'abc');
+console.log(e.o, [...e].length);
+";
+
+#[test]
+fn r9read1_d1_static_beside_symbol_member() {
+    proven(D, "DEFAULT");
+}
+
+#[test]
+fn r9read1_dk1_evaluated_computed_member() {
+    not_proven(
+        &D.replace("*[Symbol.iterator]() { yield this.x; }", "[String(Math.random())]() { return 1; }")
+            .replace("[...e].length", "0"),
+        "DEFAULT",
+    );
+}
+
+#[test]
+fn r9read1_dk2_code_runs_before_the_store() {
+    not_proven(&D.replace("(E as any).DEFAULT = ", "const e0 = new E();\n(E as any).DEFAULT = "), "DEFAULT");
+}
+

@@ -52,6 +52,11 @@ pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Vec<
         let mut globals = Vec::new();
         let inert = match &module.init[i] {
             Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| inert_value(module, e, &mut globals)),
+            // A class method under a known Symbol key (15.7.14 step 27:
+            // ClassElementEvaluation): ToPropertyKey of a Symbol is the
+            // Symbol (7.1.19), and DefineMethodProperty (10.2.8) defines a
+            // data property: no code runs.
+            Stmt::Expr(Expr::RegisterClassComputedMethod { key_expr, .. }) => known_symbol_key(key_expr),
             Stmt::Expr(Expr::PutValueSet {
                 target,
                 key,
@@ -119,7 +124,15 @@ fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
         if c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k) {
             return None;
         }
-        if c.extends_expr.is_some() || c.native_extends.is_some() || !c.computed_members.is_empty() {
+        // A computed member whose key is a known Symbol (`known_symbol`: a
+        // well-known symbol or a registered `Symbol.for("lit")`, resolved
+        // at compile time) is named by that Symbol, never by the String `k`
+        // (7.1.19 ToPropertyKey), and its key evaluation runs no program
+        // code: it declares no accessor of `k`. An evaluated key may be `k`.
+        if c.extends_expr.is_some()
+            || c.native_extends.is_some()
+            || c.computed_members.iter().any(|m| m.is_evaluated())
+        {
             return None;
         }
         match c.extends {
@@ -129,6 +142,20 @@ fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
         }
     }
     Some((x.clone(), proto))
+}
+
+/// A computed key that the lowering resolved to a known Symbol
+/// (`ClassComputedMember::known_symbol`), possibly under its
+/// `js_to_property_key` conversion.
+fn known_symbol_key(e: &Expr) -> bool {
+    match e {
+        Expr::SymbolFor(inner) => matches!(inner.as_ref(), Expr::String(_)),
+        Expr::Call { callee, args, .. } => {
+            matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key")
+                && matches!(args.as_slice(), [a] if known_symbol_key(a))
+        }
+        _ => false,
+    }
 }
 
 fn inert_value(module: &Module, e: &Expr, globals: &mut Vec<String>) -> bool {
