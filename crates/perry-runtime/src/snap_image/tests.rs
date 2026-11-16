@@ -250,9 +250,12 @@ fn a_word_outside_every_mapping_is_a_scalar_and_a_tagged_symbol_word_is_sym() {
     assert_eq!(w.val(crate::value::STRING_TAG | m), Ok(Val::Opaque(crate::value::STRING_TAG | m)));
 }
 
+// The probes read the Linux x86-64 thread pointer and static TLS block.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[thread_local]
 static PROBE_TLS: std::cell::Cell<u64> = std::cell::Cell::new(0x77);
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn probe_baseline() -> (Baseline, usize) {
     let lo = std::ptr::addr_of!(__data_start) as usize;
     let hi = std::ptr::addr_of!(_end) as usize;
@@ -278,6 +281,7 @@ fn probe_baseline() -> (Baseline, usize) {
     (b, tls_lo)
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn a_runtime_thread_local_word_written_after_the_baseline_is_a_root_word() {
     let (base, tls_lo) = probe_baseline();
@@ -295,6 +299,7 @@ fn a_runtime_thread_local_word_written_after_the_baseline_is_a_root_word() {
     assert_eq!(w.val, Val::Scalar(0x78));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn a_word_the_capture_writes_after_the_first_copy_is_not_a_root_word() {
     let probe = std::ptr::addr_of_mut!(PROBE);
@@ -349,6 +354,7 @@ fn every_root_source_of_the_full_trace_reaches_the_mark() {
     // SAFETY: a test-owned static word registered as a global root.
     unsafe {
         let slot = std::ptr::addr_of_mut!(LIVE_ROOT);
+        // GC_STORE_AUDIT(ROOT): a static word registered as a global root next.
         slot.write(crate::value::js_nanbox_string(s as i64).to_bits());
         crate::gc::js_gc_register_global_root(slot as i64);
     }
@@ -359,6 +365,7 @@ fn every_root_source_of_the_full_trace_reaches_the_mark() {
     );
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn growth_of_the_class_tables_stops_the_image() {
     let (mut base, _) = probe_baseline();
@@ -399,6 +406,7 @@ fn the_claim_record_lists_late_claims_in_order_and_replays_to_the_same_indices()
     assert!(!claims_replay_matches(from, &rec, &swapped));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_capture_takes_the_claims_before_its_own_code_runs() {
     let (mut base, _) = probe_baseline();
@@ -412,6 +420,7 @@ fn the_capture_takes_the_claims_before_its_own_code_runs() {
     assert_eq!(img.claims.first().map(|k| k.as_slice()), Some(&n[..]));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn a_claim_key_over_four_kib_stops_the_image() {
     let (mut base, _) = probe_baseline();
@@ -512,8 +521,10 @@ fn completeness_names_each_missing_form() {
     assert_eq!((completeness(none, 3, 3).1.len(), completeness(none, 3, 4).1.len()), (0, 1));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 extern "C" fn registry_probe_init() {}
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
     let key = b"\0module-init:img-probe";

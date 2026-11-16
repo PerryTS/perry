@@ -937,10 +937,6 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Prints the at-rest element lowering form per site to stderr; no emitted instructions depend on the report.",
     ),
     (
-        "PERRY_SNAP_FACTS",
-        "Writes the snap census facts dump file only; no fact or emitted code depends on it.",
-    ),
-    (
         "PERRY_TEST_IR_OUT",
         "Read only by perry-codegen unit tests to keep the IR they compile; the compiler never reads it.",
     ),
