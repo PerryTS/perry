@@ -1742,6 +1742,12 @@ pub(super) fn emit_string_pool(
     } else {
         llmod.add_internal_global(&prepared, I8, "0");
     }
+    // The lazily born global bindings this module can observe are armed here, once, before any
+    // of its code runs (perry-codegen global_bindings.rs).
+    let global_installs = crate::global_bindings::install_symbols(hir_module);
+    for sym in &global_installs {
+        llmod.declare_function(sym, VOID, &[]);
+    }
     let prepare_fn = llmod.define_function(&prepare_name, VOID, vec![]);
     prepare_fn.create_block("entry");
     prepare_fn.create_block("prepare");
@@ -1756,6 +1762,9 @@ pub(super) fn emit_string_pool(
     blk.call_void(&agent_strings_name, &[]);
     for cname in &literal_chunks {
         blk.call_void(cname, &[]);
+    }
+    for sym in &global_installs {
+        blk.call_void(sym, &[]);
     }
     blk.store(I8, "1", &format!("@{}", prepared));
     blk.br(&done_label);

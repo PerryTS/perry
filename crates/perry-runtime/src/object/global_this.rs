@@ -163,6 +163,7 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
+    arm_all_global_bindings, global_binding_row,
     birth_lazy_family, born_by_its_observation, ensure_function_intrinsics, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
     populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };

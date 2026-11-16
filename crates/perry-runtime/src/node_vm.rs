@@ -1054,6 +1054,7 @@ fn main_context_state() -> ContextState {
         return state;
     }
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     let global = crate::object::js_get_global_this();
     let state = ContextState {
         returned_bits: global.to_bits(),

@@ -281,157 +281,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // A lazy child links in its own birth (`link_interface_parent`).
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
-    for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
-        let (info, arity, enumerable) = match name {
-            "eval" => (
-                crate::fn_info!(#[realm(eval)] export crate::object::global_this::fetch_globals::global_this_eval_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "fetch" => (
-                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
-                1,
-                true,
-            ),
-            "structuredClone" => (
-                crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] export crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk, 2; with_declared(2)),
-                2,
-                true,
-            ),
-            "atob" => (
-                crate::fn_info!(#[realm(atob, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_atob_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            "btoa" => (
-                crate::fn_info!(#[realm(btoa, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_btoa_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            "setTimeout" => (
-                crate::fn_info!(#[realm(setTimeout)] export crate::object::global_this::array_error::global_this_set_timeout_thunk, 3; with_rest(2)),
-                2,
-                true,
-            ),
-            "clearTimeout" => (
-                crate::fn_info!(#[realm(clearTimeout)] export crate::object::global_this::array_error::global_this_clear_timeout_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            "setInterval" => (
-                crate::fn_info!(#[realm(setInterval)] export crate::object::global_this::array_error::global_this_set_interval_thunk, 3; with_rest(2)),
-                2,
-                true,
-            ),
-            "clearInterval" => (
-                crate::fn_info!(#[realm(clearInterval)] export crate::object::global_this::array_error::global_this_clear_interval_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            "setImmediate" => (
-                crate::fn_info!(#[realm(setImmediate)] export crate::object::global_this::array_error::global_this_set_immediate_thunk, 2; with_rest(1)),
-                1,
-                true,
-            ),
-            "clearImmediate" => (
-                crate::fn_info!(#[realm(clearImmediate)] export crate::object::global_this::array_error::global_this_clear_immediate_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            "queueMicrotask" => (
-                crate::fn_info!(#[realm(queueMicrotask)] export crate::object::global_this::array_error::global_this_queue_microtask_thunk, 1; with_declared(1)),
-                1,
-                true,
-            ),
-            // `gc([force])` — value form of the bare `gc()` call-intrinsic.
-            // Non-enumerable (a debug/diagnostic global). The optional `force`
-            // arg is accepted (arity 1) but ignored — Perry's gc is full.
-            "gc" => (
-                crate::fn_info!(#[realm(gc)] export crate::object::global_this::builtin_thunks::global_this_gc_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            // #2905: standard global helper functions.
-            "parseInt" => {
-                let (info, arity) = realm_parse_function_info(crate::array::RealmFunctionIntrinsic::ParseInt);
-                (info, arity, false)
-            }
-            "parseFloat" => {
-                let (info, arity) = realm_parse_function_info(crate::array::RealmFunctionIntrinsic::ParseFloat);
-                (info, arity, false)
-            }
-            "isNaN" => (
-                crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "isFinite" => (
-                crate::fn_info!(#[realm(isFinite)] export crate::object::global_this::builtin_thunks::global_this_is_finite_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "encodeURI" => (
-                crate::fn_info!(#[realm(encodeURI)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "decodeURI" => (
-                crate::fn_info!(#[realm(decodeURI)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "encodeURIComponent" => (
-                crate::fn_info!(#[realm(encodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "decodeURIComponent" => (
-                crate::fn_info!(#[realm(decodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            // #4511: legacy escape/unescape (ES Annex B).
-            // #4511: legacy escape/unescape (ES Annex B).
-            "escape" => (
-                crate::fn_info!(#[realm(escape)] export crate::object::global_this::builtin_thunks::global_this_escape_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            "unescape" => (
-                crate::fn_info!(#[realm(unescape)] export crate::object::global_this::builtin_thunks::global_this_unescape_thunk, 1; with_declared(1)),
-                1,
-                false,
-            ),
-            _ => continue,
-        };
-        // %parseFloat% / %parseInt% are the thread realm's [[Intrinsics]]
-        // (born by whichever of the global or `Number`'s statics is observed
-        // first); a `vm` realm makes its own.
-        let parse = match name {
-            "parseInt" => Some(crate::array::RealmFunctionIntrinsic::ParseInt),
-            "parseFloat" => Some(crate::array::RealmFunctionIntrinsic::ParseFloat),
-            _ => None,
-        };
-        let closure_ptr = match parse {
-            Some(which) if super::is_thread_realm_global(singleton()) => {
-                crate::value::js_nanbox_get_pointer(realm_parse_function(which))
-                    as *mut crate::closure::ClosureHeader
-            }
-            _ => global_helper_closure(info, name, arity),
-        };
-        if closure_ptr.is_null() {
-            continue;
-        }
-        let name_bytes = name.as_bytes();
-        let name_key = super::global_name_key(name_bytes);
-        let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-        super::super::define_builtin_data_property(
-            singleton(),
-            name_key,
-            fn_value,
-            name.to_string(),
-            super::super::PropertyAttrs::new(true, enumerable, true),
-        );
+    // Each row is born only in a program that can observe it (GLOBAL_BINDING_ROWS); an unarmed
+    // row keeps its key, value undefined.
+    for row in GLOBAL_BINDING_ROWS.iter().filter(|row| !row.namespace) {
+        define_global_binding(singleton(), row, armed_global_binding_value(row, singleton()));
     }
     // ECMA-262 21.1.2.12 / 21.1.2.13: `Number.parseFloat` and `Number.parseInt`
     // are the SAME function objects as the global `parseFloat` / `parseInt`
@@ -469,8 +322,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             crate::value::js_nanbox_pointer(super::web_hooks::json_namespace() as i64)
         } else if name == "Reflect" {
             crate::value::js_nanbox_pointer(super::web_hooks::reflect_namespace() as i64)
-        } else if name == "WebAssembly" {
-            super::global_this_webassembly::create_webassembly_namespace()
+        } else if let Some(row) = global_binding_row(name) {
+            armed_global_binding_value(row, singleton())
         } else {
             let ns_obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { Temporal, kind = namespace, members = { Duration; Instant; PlainDate; PlainTime; PlainDateTime; PlainYearMonth; PlainMonthDay; ZonedDateTime; Now; [Symbol.toStringTag] = "Temporal"; }, births = [Array, BigInt, Error, Number, RangeError, String, TypeError]; Intl, kind = namespace, members = { getCanonicalLocales; supportedValuesOf; Locale; NumberFormat; DateTimeFormat; Collator; Segmenter; ListFormat; RelativeTimeFormat; PluralRules; DurationFormat; DisplayNames; }, births = [Array, String]; Atomics, kind = namespace, members = { load; isLockFree; store; add; sub; and; or; xor; exchange; compareExchange; notify; wait; waitAsync; [Symbol.toStringTag] = "Atomics"; }, births = [ArrayBuffer, Int32Array, Promise]; } };
             if ns_obj.is_null() {
@@ -1346,4 +1199,307 @@ unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     }
     crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
     let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
+}
+
+// Global bindings born only in a program that can observe them (RB6N26).
+//
+// Each row of GLOBAL_BINDING_ROWS is one global function or namespace whose value only a site that
+// names it (or holds %Global% as a value) can read. The row holds its birth cell: 0 until codegen's
+// `js_install_global_<name>` (emitted once per module, in `__perry_prepare_literals_<module>`, for
+// every binding the module's HIR can observe: perry-codegen global_bindings.rs) arms it. %Global%'s
+// population births armed rows into their layout slots in declaration order; an unarmed row keeps
+// its key with value undefined, which no code of that program can read. Arming after %Global% is
+// born births the row into its slot at once (a value store to an existing key). Only the installer
+// references the birth, so a program that cannot observe the binding links none of its code.
+
+pub(crate) type GlobalBirth = fn(*mut ObjectHeader) -> f64;
+
+pub(crate) struct GlobalBindingRow {
+    pub(crate) name: &'static str,
+    pub(crate) enumerable: bool,
+    /// A namespace is defined at its place in GLOBAL_THIS_BUILTIN_NAMESPACES; a function in the
+    /// global-functions block.
+    pub(crate) namespace: bool,
+    /// The armed `GlobalBirth` (as usize); 0 = the program cannot observe the binding.
+    pub(crate) birth: std::sync::atomic::AtomicUsize,
+}
+
+macro_rules! global_bindings {
+    (@one $x:literal) => { 1usize };
+    ($( $name:literal, $install:ident, namespace = $ns:literal, enumerable = $en:literal, $birth:path; )*) => {
+        pub(crate) static GLOBAL_BINDING_ROWS: [GlobalBindingRow; 0 $(+ global_bindings!(@one $name))*] = [
+            $( GlobalBindingRow { name: $name, enumerable: $en, namespace: $ns, birth: std::sync::atomic::AtomicUsize::new(0) }, )*
+        ];
+        $(
+            #[no_mangle]
+            #[allow(non_snake_case)]
+            pub extern "C" fn $install() {
+                arm_global_binding($name, $birth);
+            }
+        )*
+        /// A site that can observe ANY global (dyn-eval / vm entry) arms every row.
+        pub(crate) fn arm_all_global_bindings() {
+            $( $install(); )*
+        }
+    };
+}
+
+global_bindings! {
+    "eval", js_install_global_eval, namespace = false, enumerable = false, birth_global_eval;
+    "fetch", js_install_global_fetch, namespace = false, enumerable = true, birth_global_fetch;
+    "structuredClone", js_install_global_structuredClone, namespace = false, enumerable = true, birth_global_structured_clone;
+    "atob", js_install_global_atob, namespace = false, enumerable = true, birth_global_atob;
+    "btoa", js_install_global_btoa, namespace = false, enumerable = true, birth_global_btoa;
+    "setTimeout", js_install_global_setTimeout, namespace = false, enumerable = true, birth_global_set_timeout;
+    "clearTimeout", js_install_global_clearTimeout, namespace = false, enumerable = true, birth_global_clear_timeout;
+    "setInterval", js_install_global_setInterval, namespace = false, enumerable = true, birth_global_set_interval;
+    "clearInterval", js_install_global_clearInterval, namespace = false, enumerable = true, birth_global_clear_interval;
+    "setImmediate", js_install_global_setImmediate, namespace = false, enumerable = true, birth_global_set_immediate;
+    "clearImmediate", js_install_global_clearImmediate, namespace = false, enumerable = true, birth_global_clear_immediate;
+    "queueMicrotask", js_install_global_queueMicrotask, namespace = false, enumerable = true, birth_global_queue_microtask;
+    "gc", js_install_global_gc, namespace = false, enumerable = false, birth_global_gc;
+    "parseInt", js_install_global_parseInt, namespace = false, enumerable = false, birth_global_parse_int;
+    "parseFloat", js_install_global_parseFloat, namespace = false, enumerable = false, birth_global_parse_float;
+    "isNaN", js_install_global_isNaN, namespace = false, enumerable = false, birth_global_is_na_n;
+    "isFinite", js_install_global_isFinite, namespace = false, enumerable = false, birth_global_is_finite;
+    "encodeURI", js_install_global_encodeURI, namespace = false, enumerable = false, birth_global_encode_u_r_i;
+    "decodeURI", js_install_global_decodeURI, namespace = false, enumerable = false, birth_global_decode_u_r_i;
+    "encodeURIComponent", js_install_global_encodeURIComponent, namespace = false, enumerable = false, birth_global_encode_u_r_i_component;
+    "decodeURIComponent", js_install_global_decodeURIComponent, namespace = false, enumerable = false, birth_global_decode_u_r_i_component;
+    "escape", js_install_global_escape, namespace = false, enumerable = false, birth_global_escape;
+    "unescape", js_install_global_unescape, namespace = false, enumerable = false, birth_global_unescape;
+    "WebAssembly", js_install_global_WebAssembly, namespace = true, enumerable = false, birth_global_webassembly;
+}
+
+pub(crate) fn global_binding_row(name: &str) -> Option<&'static GlobalBindingRow> {
+    GLOBAL_BINDING_ROWS.iter().find(|row| row.name == name)
+}
+
+/// The row's value for a %Global% being populated: its birth if armed, else undefined.
+fn armed_global_binding_value(row: &GlobalBindingRow, global: *mut ObjectHeader) -> f64 {
+    match row.birth.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => f64::from_bits(crate::value::TAG_UNDEFINED),
+        f => unsafe { std::mem::transmute::<usize, GlobalBirth>(f)(global) },
+    }
+}
+
+fn define_global_binding(global: *mut ObjectHeader, row: &GlobalBindingRow, value: f64) {
+    super::super::define_builtin_data_property(
+        global,
+        super::global_name_key(row.name.as_bytes()),
+        value,
+        row.name.to_string(),
+        super::super::PropertyAttrs::new(true, row.enumerable, true),
+    );
+}
+
+fn arm_global_binding(name: &'static str, birth: GlobalBirth) {
+    let Some(row) = global_binding_row(name) else {
+        return;
+    };
+    if row.birth.swap(birth as usize, std::sync::atomic::Ordering::Relaxed) != 0 {
+        return;
+    }
+    if let Some(global) = super::fetch_globals::born_thread_global() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        super::super::own_override::as_builtin_definition(|| define_global_binding(global, row, birth(global)));
+    }
+}
+
+fn global_helper_value(info: *const crate::closure::JsFunctionInfo, name: &'static str, arity: u32) -> f64 {
+    let closure_ptr = global_helper_closure(info, name, arity);
+    if closure_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(closure_ptr as i64)
+}
+
+/// %parseFloat% / %parseInt% are the thread realm's [[Intrinsics]] (born by whichever of the
+/// global or `Number`'s statics is observed first); a `vm` realm makes its own.
+fn birth_global_parse(global: *mut ObjectHeader, which: crate::array::RealmFunctionIntrinsic, name: &'static str) -> f64 {
+    if super::is_thread_realm_global(global) {
+        return realm_parse_function(which);
+    }
+    let (info, arity) = realm_parse_function_info(which);
+    global_helper_value(info, name, arity)
+}
+
+fn birth_global_parse_int(global: *mut ObjectHeader) -> f64 {
+    birth_global_parse(global, crate::array::RealmFunctionIntrinsic::ParseInt, "parseInt")
+}
+
+fn birth_global_parse_float(global: *mut ObjectHeader) -> f64 {
+    birth_global_parse(global, crate::array::RealmFunctionIntrinsic::ParseFloat, "parseFloat")
+}
+
+fn birth_global_webassembly(_global: *mut ObjectHeader) -> f64 {
+    super::global_this_webassembly::create_webassembly_namespace()
+}
+
+fn birth_global_eval(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(eval)] export crate::object::global_this::fetch_globals::global_this_eval_thunk, 1; with_declared(1)),
+        "eval",
+        1,
+    )
+}
+
+fn birth_global_fetch(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+        "fetch",
+        1,
+    )
+}
+
+fn birth_global_structured_clone(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] export crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk, 2; with_declared(2)),
+        "structuredClone",
+        2,
+    )
+}
+
+fn birth_global_atob(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(atob, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_atob_thunk, 1; with_declared(1)),
+        "atob",
+        1,
+    )
+}
+
+fn birth_global_btoa(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(btoa, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_btoa_thunk, 1; with_declared(1)),
+        "btoa",
+        1,
+    )
+}
+
+fn birth_global_set_timeout(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(setTimeout)] export crate::object::global_this::array_error::global_this_set_timeout_thunk, 3; with_rest(2)),
+        "setTimeout",
+        2,
+    )
+}
+
+fn birth_global_clear_timeout(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(clearTimeout)] export crate::object::global_this::array_error::global_this_clear_timeout_thunk, 1; with_declared(1)),
+        "clearTimeout",
+        1,
+    )
+}
+
+fn birth_global_set_interval(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(setInterval)] export crate::object::global_this::array_error::global_this_set_interval_thunk, 3; with_rest(2)),
+        "setInterval",
+        2,
+    )
+}
+
+fn birth_global_clear_interval(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(clearInterval)] export crate::object::global_this::array_error::global_this_clear_interval_thunk, 1; with_declared(1)),
+        "clearInterval",
+        1,
+    )
+}
+
+fn birth_global_set_immediate(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(setImmediate)] export crate::object::global_this::array_error::global_this_set_immediate_thunk, 2; with_rest(1)),
+        "setImmediate",
+        1,
+    )
+}
+
+fn birth_global_clear_immediate(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(clearImmediate)] export crate::object::global_this::array_error::global_this_clear_immediate_thunk, 1; with_declared(1)),
+        "clearImmediate",
+        1,
+    )
+}
+
+fn birth_global_queue_microtask(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(queueMicrotask)] export crate::object::global_this::array_error::global_this_queue_microtask_thunk, 1; with_declared(1)),
+        "queueMicrotask",
+        1,
+    )
+}
+
+fn birth_global_gc(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(gc)] export crate::object::global_this::builtin_thunks::global_this_gc_thunk, 1; with_declared(1)),
+        "gc",
+        1,
+    )
+}
+
+fn birth_global_is_na_n(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_declared(1)),
+        "isNaN",
+        1,
+    )
+}
+
+fn birth_global_is_finite(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(isFinite)] export crate::object::global_this::builtin_thunks::global_this_is_finite_thunk, 1; with_declared(1)),
+        "isFinite",
+        1,
+    )
+}
+
+fn birth_global_encode_u_r_i(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(encodeURI)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk, 1; with_declared(1)),
+        "encodeURI",
+        1,
+    )
+}
+
+fn birth_global_decode_u_r_i(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(decodeURI)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk, 1; with_declared(1)),
+        "decodeURI",
+        1,
+    )
+}
+
+fn birth_global_encode_u_r_i_component(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(encodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk, 1; with_declared(1)),
+        "encodeURIComponent",
+        1,
+    )
+}
+
+fn birth_global_decode_u_r_i_component(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(decodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk, 1; with_declared(1)),
+        "decodeURIComponent",
+        1,
+    )
+}
+
+fn birth_global_escape(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(escape)] export crate::object::global_this::builtin_thunks::global_this_escape_thunk, 1; with_declared(1)),
+        "escape",
+        1,
+    )
+}
+
+fn birth_global_unescape(_global: *mut ObjectHeader) -> f64 {
+    global_helper_value(
+        crate::fn_info!(#[realm(unescape)] export crate::object::global_this::builtin_thunks::global_this_unescape_thunk, 1; with_declared(1)),
+        "unescape",
+        1,
+    )
 }

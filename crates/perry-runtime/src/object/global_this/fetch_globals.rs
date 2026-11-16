@@ -1452,3 +1452,10 @@ mod dynamic_super_new_target_tests {
         }
     }
 }
+
+/// RB6N25 prototype: the thread's %Global% once its population finished.
+pub(crate) fn born_thread_global() -> Option<*mut ObjectHeader> {
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
+    (mine != 0 && GLOBAL_THIS_READY.load(Ordering::Acquire))
+        .then(|| (mine & crate::value::POINTER_MASK) as *mut ObjectHeader)
+}

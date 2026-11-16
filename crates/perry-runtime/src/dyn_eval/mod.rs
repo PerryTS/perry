@@ -368,6 +368,7 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
 pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     let fn_id = prepare_function_args(args);
     // Keep the prepared AST alive across environment/closure allocations.
     let prepared = function_owner::pin_function(fn_id).expect("just prepared function");
@@ -422,6 +423,7 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
 pub(crate) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     let chain = object_environment_chain(global, object_envs);
     let chain_idx = root_push(chain);
     let lexical = env::env_new(root_get(chain_idx));
@@ -445,6 +447,7 @@ pub(crate) fn function_from_strings_in(
 ) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     function_from_strings_in_with_codegen(args, global_this, intrinsics, object_envs, true, true)
 }
 
@@ -459,6 +462,7 @@ pub(crate) fn function_from_strings_in_with_codegen(
     crate::snap_census::dyn_code(0);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
@@ -499,6 +503,7 @@ pub(crate) fn eval_script_in(
 ) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     eval_script_in_with_codegen(source, global_this, intrinsics, lexical_env, true, true)
 }
 
@@ -513,6 +518,7 @@ pub(crate) fn eval_script_in_with_codegen(
     crate::snap_census::dyn_code(1);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     interp_entry(|| {
         eval_script_in_entered(
             source,
@@ -593,6 +599,7 @@ fn eval_direct_in_context(
 ) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    crate::object::arm_all_global_bindings();
     interp_entry(|| {
         eval_direct_in_entered(
             source,

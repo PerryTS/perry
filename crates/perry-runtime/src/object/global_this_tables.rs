@@ -371,43 +371,6 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "Temporal",
 ];
 
-/// JS global built-in functions exposed as function-valued properties on
-/// `globalThis`. Unlike constructor sentinels, these call through to Perry's
-/// real direct-call runtime helpers so rebinding works:
-/// `const clone = globalThis.structuredClone; clone(value)`.
-pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
-    "eval",
-    "fetch",
-    "structuredClone",
-    "atob",
-    "btoa",
-    "setTimeout",
-    "clearTimeout",
-    "setInterval",
-    "clearInterval",
-    "setImmediate",
-    "clearImmediate",
-    "queueMicrotask",
-    // The `gc()` builtin, exposed as a real callable global value so the
-    // capability-guard idioms `if (globalThis.gc) gc()` / `global.gc?.()` /
-    // `const f = gc; f()` work (Perry's `gc()` is always available, unlike
-    // Node's `--expose-gc`-gated one).
-    "gc",
-    // #2905: standard global helper functions. These route through Perry's
-    // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
-    // and `globalThis.encodeURIComponent("a b")` match Node.
-    "parseInt",
-    "parseFloat",
-    "isNaN",
-    "isFinite",
-    "encodeURI",
-    "decodeURI",
-    "encodeURIComponent",
-    "decodeURIComponent",
-    // #4511: legacy escape/unescape (ES Annex B), used by `qs`.
-    "escape",
-    "unescape",
-];
 
 pub(crate) fn is_web_fetch_constructor(name: &str) -> bool {
     matches!(

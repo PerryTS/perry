@@ -319,7 +319,7 @@ pub(crate) fn global_lookup(global_this: f64, intrinsics: f64, name: &str) -> f6
     }
     let builtin = crate::object::is_global_this_builtin_constructor_name(name)
         || crate::object::GLOBAL_THIS_BUILTIN_NAMESPACES.contains(&name)
-        || crate::object::GLOBAL_THIS_BUILTIN_FUNCTIONS.contains(&name);
+        || crate::object::global_binding_row(name).is_some();
     if builtin {
         get_member(intrinsics, name)
     } else {
