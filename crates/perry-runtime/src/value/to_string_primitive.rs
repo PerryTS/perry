@@ -476,6 +476,11 @@ pub(crate) unsafe fn to_primitive_number(value: f64) -> OrdinaryToPrimitiveOutco
     if is_primitive_value(value) {
         return OrdinaryToPrimitiveOutcome::Primitive(value);
     }
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return OrdinaryToPrimitiveOutcome::Primitive(crate::proxy_hooks::proxy_to_primitive(
+            value, 1,
+        ));
+    }
 
     match custom_to_primitive(value, b"number") {
         CustomToPrimitiveOutcome::Absent => {}
