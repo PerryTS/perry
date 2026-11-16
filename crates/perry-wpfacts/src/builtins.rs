@@ -2228,10 +2228,20 @@ pub(crate) fn enum_top_written(m: &mut Model, a: Atom, dst: NodeId) {
 }
 
 pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: NodeId) {
-    let op = m.tok(TokKind::ObjectProto);
-    m.add_tok(dst, op);
-    if let Some(p) = ns.and_then(|ns| builtin_proto_tok(m, ns)) {
-        m.add_tok(dst, p);
+    // R9READ11: the value is the builtin's own prototype object only
+    // (ECMA-262 clause 18: `Array.prototype` is %Array.prototype%, whose
+    // [[Prototype]] is %Object.prototype%; it is not %Object.prototype%).
+    // A read of a key on it reads the builtin's described members, as a
+    // receiver of its family reads them (`load_builtin`'s `NativeProto`
+    // arm); every other operation on it is also the collapsed
+    // builtin-prototype operation (`Model::native_proto_alias`), so a
+    // write through the value stays a write of `ObjectProto`, as before.
+    match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
+        Some(p) => m.add_tok(dst, p),
+        None => {
+            let op = m.tok(TokKind::ObjectProto);
+            m.add_tok(dst, op);
+        }
     }
 }
 
@@ -2804,6 +2814,26 @@ pub(crate) fn builtin_fn_own_length(m: &Model, t: Tok, a: Atom) -> bool {
     // The realm declaration of the own `length` (`native_property`) is that
     // same property: it does not refuse here.
     present && builtin_value_untouched(m, t, a)
+}
+
+/// R9READ11: is `a` a method of `Function.prototype` (`call`, `apply`,
+/// `bind`, ...: `members::member(Function, a)` a builtin function) that
+/// the builtin method value `t` reads off its chain, untouched by the
+/// program? A builtin method value is a builtin function object whose
+/// [[Prototype]] is %Function.prototype% (10.3.4 CreateBuiltinFunction
+/// step 6) with only `length` and `name` own (10.2.9, 10.2.8): no own
+/// `call`; no store, accessor, escape or hard operation reached the key on
+/// `t` (`builtin_value_untouched`). The caller adds that no builtin
+/// prototype is written under `a`. Unknown code holding the realm and
+/// interpreted code refuse.
+pub(crate) fn builtin_fn_proto_method(m: &Model, t: Tok, a: Atom) -> bool {
+    if m.unit_mode || m.realm_held || m.interp_runs || m.is_private_atom(a) {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. }))
+        && matches!(members::member(Family::Function, name), Some(Mem::Fn))
+        && builtin_value_untouched(m, t, a)
 }
 
 /// No store, accessor, `__proto__` store, escape or hard operation reaches
