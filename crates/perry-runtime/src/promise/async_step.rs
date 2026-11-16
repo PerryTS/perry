@@ -304,11 +304,13 @@ pub extern "C" fn js_promise_resolved_then(
     on_fulfilled: ClosurePtr,
     on_rejected: ClosurePtr,
 ) -> *mut Promise {
-    // Every path allocates before it hands the handlers on (`js_promise_new`,
-    // `capture_context`, `js_promise_resolved`, which can also run a user
+    // Every path allocates before it hands the handlers and `value` on
+    // (`js_promise_new`, `capture_context`, the `then` key the inherited-then
+    // probe interns, `js_promise_resolved`, which can also run a user
     // `constructor` or `then` getter), and a copying minor there moves them:
     // each path reads them back from these handles after its last such call.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
     let fulfilled_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_fulfilled));
     let rejected_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_rejected));
 
@@ -379,7 +381,7 @@ pub extern "C" fn js_promise_resolved_then(
                 // abrupt `then` (a non-object `constructor` failing
                 // SpeciesConstructor) rejects it instead of throwing here
                 // (#13556, test262 Promise/resolve/arg-uniq-ctor).
-                let resolved = js_promise_resolved(value);
+                let resolved = js_promise_resolved(value_h.get_nanbox_f64());
                 let promise_val = box_promise_ptr(resolved);
                 let result = super::js_promise_then_checked(
                     promise_val,
@@ -390,7 +392,7 @@ pub extern "C" fn js_promise_resolved_then(
             }
             bump(&MT_FAST_PATH_HIT);
             return js_promise_then(
-                inner,
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise,
                 unboxed_closure(&fulfilled_h),
                 unboxed_closure(&rejected_h),
             );
@@ -400,7 +402,7 @@ pub extern "C" fn js_promise_resolved_then(
     bump(&MT_FAST_PATH_MISS);
     // Pointer-tagged but not a Promise — could be a thenable. Take
     // the unfused path so the assimilation probes can run on it.
-    let p1 = js_promise_resolved(value);
+    let p1 = js_promise_resolved(value_h.get_nanbox_f64());
     js_promise_then(
         p1,
         unboxed_closure(&fulfilled_h),
