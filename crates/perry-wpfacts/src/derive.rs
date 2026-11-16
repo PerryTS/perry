@@ -623,11 +623,7 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
             {
                 continue;
             }
-            let only_first = m.proto_writers.get(&(tm, a)).is_none_or(|w| {
-                w.ctor.is_empty()
-                    && w.post.iter().all(|&s| m.stores[s as usize].proto_first == Some(tm))
-            });
-            if only_first && m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
+            if only_proto_first_writers(m, tm, a) && m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
                 out.push(m.atoms[a as usize].clone());
             }
         }
@@ -635,6 +631,14 @@ fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// Rule 3: every writer of `a` on the prototype of `tm` is a static-block
+/// store opening the class body (`gen::proto_first`).
+fn only_proto_first_writers(m: &Model, tm: TmplId, a: Atom) -> bool {
+    m.proto_writers.get(&(tm, a)).is_none_or(|w| {
+        w.ctor.is_empty() && w.post.iter().all(|&s| m.stores[s as usize].proto_first == Some(tm))
+    })
 }
 
 /// The static prototype chain tokens of a template (plus every prototype
@@ -3743,6 +3747,20 @@ fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
         TokKind::Proto(tm) => {
             let tpl = &m.tmpls[tm as usize];
             if tpl.proto_members.contains(&a) {
+                return true;
+            }
+            // Rule 3 (RAYBOX3, `gen::proto_first`): a static block opening
+            // the class body stored the key; static elements run in
+            // ClassDefinitionEvaluation (15.7.14) before the outer binding is
+            // initialized, so before any read can reach the prototype. Only
+            // such stores write it; no HARD operation or unknown code removes it.
+            if m.proto_first_keys.contains(&(tm, a))
+                && !m.reshaped_any
+                && !m.reshaped_keys.contains(&a)
+                && only_proto_first_writers(m, tm, a)
+                && !m.hard.contains_key(&p)
+                && !m.is_escaped(p)
+            {
                 return true;
             }
             let Some(gs) = m.settled_proto.get(&(tm, a)) else {
