@@ -649,7 +649,7 @@ impl<'a> Gen<'a> {
         let a: Vec<NodeId> = got
             .into_iter()
             .zip(args.iter())
-            .map(|((_, n), x)| n.unwrap_or_else(|| self.expr_zs(fx, x)))
+            .map(|((_, n), x)| n.map_or_else(|| self.expr_zs(fx, x), |(n, _)| n))
             .collect();
         self.call_lit_arg = args
             .first()
@@ -682,13 +682,29 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let zs_ok = std::mem::take(&mut self.zs_ok);
+        let seq = self.expr_seq;
+        self.expr_seq += 1;
         let n = self.expr_inner(fx, e);
+        // A namespace pair's argument (`namespace_pair`): the pair is built
+        // from one argument list (perry-hir `try_patched_builtin_call`), so
+        // the intrinsic arm holds each argument once, as subtrees that do not
+        // nest (each is evaluated once, ECMA-262 13.3.8.1). A structural
+        // match found while this expression was walked (at or after `seq`)
+        // lies inside it: when this expression is itself an argument, that
+        // match is part of it, not another argument (`Math.max(h(f()), f())`:
+        // the inner `f()` is not the second argument), so it is dropped and
+        // the argument it took is matched again by what follows.
         if let Some(pa) = self.pair_args.as_mut() {
-            if let Some(slot) = pa
-                .iter_mut()
-                .find(|(a, s)| s.is_none() && perry_hir::stable_hash::same_expr_structure(a, e))
+            if let Some(i) = pa
+                .iter()
+                .position(|(a, s)| s.is_none() && perry_hir::stable_hash::same_expr_structure(a, e))
             {
-                slot.1 = Some(n);
+                for (_, s) in pa.iter_mut() {
+                    if s.is_some_and(|(_, q)| q >= seq) {
+                        *s = None;
+                    }
+                }
+                pa[i].1 = Some((n, seq));
             }
         }
         self.zs_mark(n, zs_ok);
