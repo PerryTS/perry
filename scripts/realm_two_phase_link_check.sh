@@ -9,7 +9,8 @@
 #   * both binaries link, run and print the same output;
 #   * the program compiled with the switch off does not link the two-phase
 #     path at all;
-#   * the two-phase program does, with the switch unset as with it set.
+#   * the two-phase program does, with the switch unset as with it set, and
+#     does not link the one-pass copy of the population.
 #
 # usage: realm_two_phase_link_check.sh <perry> <work-dir>
 set -euo pipefail
@@ -42,17 +43,23 @@ for arm in on default; do
   fi
 done
 [ -s "$work/realm-off.out" ] || { echo "realm two-phase link check: no output" >&2; exit 1; }
-two_phase='js_get_global_core|js_realm_complete|js_realm_two_phase|js_realm_family_phase|populate_realm_phase|populate_realm_core|populate_realm_rest'
+two_phase='js_get_global_core|js_realm_complete|js_realm_two_phase|js_realm_family_phase|js_realm_populate_whole|populate_realm_phase|populate_realm_core|populate_realm_rest'
 if grep -E "$two_phase" "$work/realm-off.nm"; then
   echo "realm two-phase link check: a program compiled with the switch off links the two-phase path (above)" >&2
   exit 1
 fi
 for arm in on default; do
-  for symbol in js_get_global_core js_realm_complete js_realm_family_phase populate_realm_phase; do
+  for symbol in js_get_global_core js_realm_complete js_realm_family_phase js_realm_populate_whole populate_realm_phase; do
     grep -q "$symbol" "$work/realm-$arm.nm" || {
       echo "realm two-phase link check: the two-phase program ($arm arm) does not link $symbol" >&2
       exit 1
     }
   done
 done
-echo "realm two-phase link check: ok ($(wc -l < "$work/realm-off.out" | tr -d ' ') lines equal in the three arms; the program compiled with the switch off links none of the two-phase path)"
+for arm in on default; do
+  if grep -E 'populate_global_this_builtins_inner' "$work/realm-$arm.nm"; then
+    echo "realm two-phase link check: the two-phase program ($arm arm) links the one-pass copy of the population (above)" >&2
+    exit 1
+  fi
+done
+echo "realm two-phase link check: ok ($(wc -l < "$work/realm-off.out" | tr -d ' ') lines equal in the three arms; the program compiled with the switch off links none of the two-phase path, the two-phase program not the one-pass population)"

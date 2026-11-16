@@ -67,6 +67,22 @@ crate::perry_thread_local! {
 // compiled for two phases does not link the two-phase path at all (nothing
 // in it references `js_get_global_core` or the phase-B driver).
 
+/// Tests: is THIS thread running as a thread of a two-phase program?
+#[cfg(test)]
+pub(super) fn test_two_phase() -> bool {
+    TEST_TWO_PHASE.with(|c| c.get())
+}
+
+/// Tests: this thread's first touch of the realm as a two-phase program's
+/// FULL entry makes it: the complete realm in one pass, through the phased
+/// copy of the rows (`js_realm_populate_whole`).
+#[cfg(test)]
+pub(crate) fn whole_realm_for_test() -> f64 {
+    assert_eq!(THREAD_GLOBAL_THIS.with(|c| c.core.get()), 0);
+    TEST_TWO_PHASE.with(|c| c.set(true));
+    js_get_global_this()
+}
+
 /// The realm global for a runtime reader of a phase-A intrinsic
 /// (`%Function.prototype%`, `%RegExp.prototype%`, a lazy family's birth, a
 /// by-name read of a core name). The default, linked when the program is not
