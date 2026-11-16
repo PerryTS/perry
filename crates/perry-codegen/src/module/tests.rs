@@ -141,7 +141,13 @@ fn render_codegen_units_partitions_and_links() {
         .iter()
         .find(|u| u.contains("define double @perry_fn_m__f("))
         .unwrap();
-    assert!(u_with_f.contains("declare double @perry_fn_m__g()"));
+    // ... or, as here (a small direct callee), carries g as an
+    // `available_externally` body in place of that declaration
+    // (`module/inline_copies.rs`).
+    assert!(
+        u_with_f.contains("declare double @perry_fn_m__g()")
+            || u_with_f.contains("define available_externally double @perry_fn_m__g()")
+    );
 
     // #7174: each shared global is DEFINED exactly once across units;
     // units that reference it get an `external` declaration instead of a
@@ -844,7 +850,16 @@ fn split_unit_declaration_uses_local_definition_signature() {
         .iter()
         .find(|unit| unit.contains("define double @caller("))
         .expect("caller unit");
-    assert!(caller_unit.contains("declare double @constructor(double, double, double)"));
+    // A small direct callee is carried as an `available_externally` body
+    // (`module/inline_copies.rs`) in place of the declaration; either way it
+    // has the definition's signature.
+    assert!(
+        caller_unit.contains("declare double @constructor(double, double, double)")
+            || caller_unit.lines().any(|line| {
+                line.starts_with("define available_externally double @constructor(")
+                    && line.split(')').next().unwrap().matches("double").count() == 4
+            })
+    );
     assert!(!caller_unit.contains("declare double @constructor(double)"));
 }
 
