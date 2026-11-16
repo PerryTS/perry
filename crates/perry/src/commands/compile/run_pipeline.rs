@@ -1498,6 +1498,12 @@ pub fn run_with_parse_cache(
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
     // returned module's methods had no dispatch and all returned undefined.
     // The feature scan sees every spelling, so arm the hooks up front.
+    if !ctx.uses_get_builtin_module
+        && (ctx.uses_dynamic_native_constants
+            || ctx.native_addons_reach(perry_runtime_manifest::NodeApiReach::World))
+    {
+        native_provider_installs.push("js_nm_install_all_constants".to_string());
+    }
     if ctx.uses_get_builtin_module {
         native_provider_installs.push("js_nm_enable_install_all".to_string());
         native_provider_installs.push("js_node_submod_enable_install_all".to_string());

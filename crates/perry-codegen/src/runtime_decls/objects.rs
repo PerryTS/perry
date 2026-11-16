@@ -384,6 +384,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_child_process", VOID, &[]);
     module.declare_function("js_nm_install_cluster", VOID, &[]);
     module.declare_function("js_nm_install_console", VOID, &[]);
+    module.declare_function("js_nm_install_constants", VOID, &[]);
     module.declare_function("js_nm_install_crypto", VOID, &[]);
     module.declare_function("js_nm_install_dgram", VOID, &[]);
     module.declare_function("js_nm_install_dns", VOID, &[]);
@@ -426,6 +427,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
+    module.declare_function("js_nm_install_all_constants", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
     module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
