@@ -231,6 +231,14 @@ declare module "perry/tui" {
     export function useInput(handler: (input: string) => void): void;
 
     /**
+     * Receive lossless stdin byte chunks in independently owned Uint8Arrays.
+     * Chunks may split UTF-8, escape sequences or bracketed paste messages.
+     * Replaces useInput; registering useInput switches back to string mode.
+     * Byte mode does not perform built-in Tab or Shift-Tab focus cycling.
+     */
+    export function useInputBytes(handler: (input: Uint8Array) => void): void;
+
+    /**
      * Enter the interactive render loop. `component()` is called on
      * every state change; the returned widget tree is diffed and
      * painted with no flicker. Call `exit()` from a useInput handler
