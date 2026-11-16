@@ -768,6 +768,9 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 /// code; a later such write replays the read (`NativeMiss::Global`) to the
 /// same result.
 fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId) {
+    if super::native_protocol::global_any_names(m, n) {
+        super::native_protocol::global_any_read(m, dst);
+    }
     if !m.unit_mode {
         let a = m.atom(n);
         let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -796,6 +799,17 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     crate::family_reach::tok(m, t, key);
+    // G2: a node module's export equal to a global a native reads by name
+    // (`require("url").URL`: perry-runtime static_exports.rs:209 and the
+    // others `NATIVE_READ_GLOBALS` lists) is the live global.
+    if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Module(_)))
+        && match key {
+            Key::Named(a) => super::native_protocol::NATIVE_READ_GLOBALS.contains(&m.atoms[a as usize].as_str()),
+            Key::Any(_) => true,
+        }
+    {
+        super::native_protocol::global_any_read(m, dst);
+    }
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any(_) => None,
@@ -829,6 +843,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             match name.as_deref() {
                 Some(n) if global_user_key(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
+                    if super::native_protocol::global_any_names(m, n) {
+                        super::native_protocol::global_any_read(m, dst);
+                    }
                     let f = global_field(m, t, a);
                     if global_value_written(m, t, a) {
                         if m.explain {
@@ -876,6 +893,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
+                    super::native_protocol::global_any_read(m, dst);
                     // What the program stored over it (`program_global_fn`).
                     if super::native_protocol::program_global_fn(m, n) {
                         let f = global_field(m, t, a);

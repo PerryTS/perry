@@ -774,6 +774,9 @@ impl Model {
         // constructed too. Perry lowers a literal builtin name to the
         // intrinsic (below), node constructs the stored value: the union
         // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, call);
+        }
         if builtins::program_global_fn(self, &name) {
             let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let f = builtins::global_field(self, g, a);

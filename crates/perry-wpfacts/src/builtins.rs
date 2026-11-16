@@ -48,7 +48,7 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, program_global_fn, global_value_written, is_builtin_module, native_accessor_known,
+    global_any_field, global_any_names, global_any_new, global_field, global_user_key, program_global_fn, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_nonplain_written, native_parent_value, native_proto, native_written, native_written_by, native_writers_why, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
