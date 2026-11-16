@@ -145,6 +145,10 @@ pub struct FieldFacts {
     /// `false` (`booleans`, over every token of the template): never with
     /// an escaped template, a ⊤ kind or an accessor.
     pub booleans: bool,
+    /// Every value any store puts in the field is `true`, `false`,
+    /// `undefined` or `null` (`booleans::holds_or_nullish`), under the
+    /// conditions of `booleans`.
+    pub nullish_booleans: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -429,6 +433,7 @@ impl FieldFacts {
         self.kind.join(&o.kind);
         self.literal_strings &= o.literal_strings;
         self.booleans &= o.booleans;
+        self.nullish_booleans &= o.nullish_booleans;
         self.ta_stable &= o.ta_stable;
         // The join, not the meet: the row must hold for either class.
         self.rep = crate::bindings::Rep::join(self.rep, o.rep);
@@ -1326,6 +1331,12 @@ fn template_facts(
             && escape.is_none()
             && hard.is_none()
             && crate::booleans::holds(m, &field_nodes());
+        let nullish_booleans = !kind.top
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && crate::booleans::holds_or_nullish(m, &field_nodes());
         let absent = !birth
             && !is_accessor
             && escape.is_none()
@@ -1342,6 +1353,7 @@ fn template_facts(
             absent,
             literal_strings,
             booleans,
+            nullish_booleans,
             fns,
             ta_stable,
             ta_kind,

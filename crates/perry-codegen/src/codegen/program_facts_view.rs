@@ -424,6 +424,10 @@ pub struct ElisionFacts {
     /// `BindingFacts::booleans`): the truthiness of a read is one compare
     /// (`expr::booleans`).
     pub boolean_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose every value is `true`, `false`, `undefined` or `null`
+    /// (wpfacts `BindingFacts::nullish_booleans`): the truthiness of a read
+    /// is one compare (`expr::booleans`).
+    pub nullish_boolean_locals: std::collections::BTreeSet<u32>,
     /// Locals whose Arrays keep their length while the function that
     /// declares them runs (wpfacts `BindingFacts::stable_length`), with
     /// `stable_front` (`expr::held_len`).
@@ -458,6 +462,9 @@ pub struct ElisionFacts {
     /// Booleans into (wpfacts `FieldFacts::booleans`,
     /// `FieldProof::booleans`).
     pub boolean_fields: std::collections::BTreeSet<(u32, String)>,
+    /// Class fields (class id, key) every store puts only `true`, `false`,
+    /// `undefined` or `null` into (wpfacts `FieldFacts::nullish_booleans`).
+    pub nullish_boolean_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -682,6 +689,7 @@ impl ElisionFacts {
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
             && self.boolean_locals.is_empty()
+            && self.nullish_boolean_locals.is_empty()
             && self.stable_length_locals.is_empty()
             && self.named_length_locals.is_empty()
             && self.generator_sources.is_empty()
