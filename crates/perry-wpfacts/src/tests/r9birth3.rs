@@ -35,8 +35,11 @@ fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Ve
         .collect()
 }
 
+/// Proven by the construction-phase layout. R9STORE4: a known-object
+/// store (rule A: the store adds or sets an own data property, exact for
+/// any layout) is no layout claim, so these KEEP tests do not count it.
 fn proven(v: &crate::Verdict) -> bool {
-    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws)
+    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore)
 }
 
 fn show(tag: &str, pf: &crate::ProgramFacts, keys: &[&str]) {

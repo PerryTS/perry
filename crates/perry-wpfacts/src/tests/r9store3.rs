@@ -38,8 +38,11 @@ fn proven(pf: &crate::ProgramFacts, key: &str) -> bool {
     !s.is_empty() && s.iter().all(|v| !v.starts_with("No") && v != "none")
 }
 
+/// Not proven by these rules (S, I, N). R9STORE4: a known-object store
+/// (rule A: the store adds or sets an own data property, exact for any
+/// layout; with rule N beside it) is no slot claim, so it counts here.
 fn unproven(pf: &crate::ProgramFacts, key: &str) -> bool {
-    stores(pf, key).iter().any(|v| v.starts_with("No"))
+    stores(pf, key).iter().any(|v| v.starts_with("No") || v == "KnownObjectStore")
 }
 
 const TAIL: &str = "console.log(JSON.stringify(f(process.argv[2] ?? \"x\")));\n";

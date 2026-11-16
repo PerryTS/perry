@@ -140,3 +140,23 @@ fn r9store4_k7_number_beside() {
     ));
     assert!(refused(&pf, "idx"), "K7 idx proven with a number receiver");
 }
+
+// T1 (RED): only `undefined` reaches the base: the store always throws.
+#[test]
+fn r9store4_t1_only_nullish_throws() {
+    let pf = facts(&format!(
+        "{P}function g(o: any, i: number) {{ o.idx = i; }}\nfunction f(v: string) {{ const p = new P(1); try {{ g(v.length > 99 ? undefined : undefined, 4); }} catch (e) {{}} return [p.a]; }}\n{TAIL}"
+    ));
+    let s = stores(&pf, "idx");
+    assert!(!s.is_empty() && s.iter().all(|v| v == "Throws"), "T1 idx not Throws");
+}
+
+// T2 (KEEP): a string beside `undefined` (no TypeError on every run).
+#[test]
+fn r9store4_t2_string_beside_nullish() {
+    let pf = facts(&format!(
+        "{P}function g(o: any, i: number) {{ o.idx = i; }}\nfunction f(v: string) {{ try {{ g(v.length > 9 ? undefined : v, 4); }} catch (e) {{}} return [v]; }}\n{TAIL}"
+    ));
+    let s = stores(&pf, "idx");
+    assert!(s.iter().all(|v| v != "Throws"), "T2 idx Throws with a string receiver");
+}

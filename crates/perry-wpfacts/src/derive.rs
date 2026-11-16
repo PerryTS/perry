@@ -1623,7 +1623,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     verdict,
                     Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
                 ))
-            || (prim != 0 && matches!(verdict, Verdict::T0Mono | Verdict::T0Set)))
+            || (prim != 0
+                && matches!(verdict, Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore)))
             && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -2733,7 +2734,15 @@ fn judge_store(
     let nullish_beside = prim != 0
         && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0
         && !toks.iter().all(|&t| m.closed_marker(t));
-    if prim != 0 && !nullish_beside {
+    // R9STORE4 rule T: only `undefined` / `null` reach the base (no object,
+    // every token a closed marker): PutValue's ToObject (6.2.5.6 step 3.a,
+    // 7.1.18) throws the TypeError after the value was evaluated (13.15.2),
+    // on every run: `Verdict::Throws` (the caller demotes it when a source
+    // left a value out). The emitted store stays the generic one.
+    let only_nullish = prim != 0
+        && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0
+        && toks.iter().all(|&t| m.closed_marker(t));
+    if prim != 0 && !nullish_beside && !only_nullish {
         why.get_or_insert("store: primitive receiver".into());
     }
     let mut targets = FxHashMap::default();
@@ -2743,6 +2752,16 @@ fn judge_store(
         .count();
     let verdict = match why {
         Some(w) => Verdict::No(w),
+        None if only_nullish => {
+            use crate::model::prim::{NULL, UNDEF};
+            if prim & UNDEF != 0 {
+                receivers.push("primitive:undefined (TypeError)".to_string());
+            }
+            if prim & NULL != 0 {
+                receivers.push("primitive:null (TypeError)".to_string());
+            }
+            Verdict::Throws
+        }
         None if sets > 0 && acc.is_empty() && throws == 0 => Verdict::KnownObjectStore,
         None if kinds == 0 => Verdict::Dead,
         None if kinds > 1 => Verdict::No("store: receivers mix store kinds".into()),
