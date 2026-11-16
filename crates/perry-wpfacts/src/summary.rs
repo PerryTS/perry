@@ -69,6 +69,8 @@ pub const MK_FROM_CONSTRUCT: u8 = 7;
 pub const MK_FN_CALL: u8 = 8;
 pub const MK_FN_APPLY: u8 = 9;
 pub const MK_WRITTEN_PRIM: u8 = 10;
+/// `super(...)` into a realm constructor (`Cons::SuperCtorParent`).
+pub const MK_SUPER_BUILTIN: u8 = 11;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).

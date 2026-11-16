@@ -1207,7 +1207,34 @@ impl Model {
                         }
                         TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
-                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                        // ECMA-262 13.3.7.1 SuperCall step 6: Construct(func,
+                        // argList, NewTarget): a realm constructor runs its
+                        // [[Construct]] (the Promise executor, 27.2.3.1 step
+                        // 9), never its [[Call]] (which throws for Promise,
+                        // 27.2.3.1 step 1). The object it makes has
+                        // NewTarget's prototype, which no builtin model
+                        // gives: the model's object stays apart from the
+                        // instance (the result is ⊤) and leaves, with what
+                        // the construction put into it.
+                        TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                            let c = self.calls[call as usize].clone();
+                            let made = self.node_l("super-builtin-construct");
+                            let key = (crate::summary::MK_SUPER_BUILTIN, parent, 0);
+                            if let Some(call2) = self.solver_call_keyed(
+                                call,
+                                key,
+                                None,
+                                CallSite { ret: made, ..c.clone() },
+                            ) {
+                                self.construct(call2, parent);
+                                let r = self.reason(
+                                    "the object a builtin parent constructor makes for super()",
+                                );
+                                self.sink_node(made, r);
+                            }
+                            self.add_tok(c.ret, TOP);
+                        }
+                        TokKind::Top => {
                             self.call_tok(call, parent, Some(origin));
                             let ret = self.calls[call as usize].ret;
                             self.add_tok(ret, TOP);
