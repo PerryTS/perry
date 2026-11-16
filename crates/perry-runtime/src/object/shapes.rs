@@ -7590,6 +7590,80 @@ pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> 
     d
 }
 
+/// The records minted since `a`, in mint order: dynamic rows by row (rows only grow, so row
+/// order is mint order), then static records by id.
+pub(crate) fn snap_image_mint_collect(a: &SnapShapeState) -> Vec<crate::snap_image::format::MintRec> {
+    let mut v = Vec::new();
+    crate::state::state().shapes.slab().for_each(|id, p| {
+        if a.records.binary_search_by_key(&id.0, |r| r.0).is_err() {
+            // SAFETY: a present record of this agent's slab.
+            v.push(unsafe { &*p }.snap_image_mint());
+        }
+    });
+    v.sort_by_key(|m| {
+        if snap_image_id_band(m.id) == 0 {
+            (1, u64::from(m.id))
+        } else {
+            (0, u64::from(LayoutWord(m.word).row().0))
+        }
+    });
+    v
+}
+
+/// Whether a table rebuilt from the mint record equals the live one: the first record that
+/// differs and why (`format::MINT_BAD_*`), or `None`. A record is rebuilt through the
+/// runtime's own identity lookup (the probe half of the mint: its facts reach the recorded
+/// word) and its recorded state is read against the live record's.
+pub(crate) fn snap_image_mint_check(recs: &[crate::snap_image::format::MintRec]) -> Option<(usize, u32)> {
+    use crate::snap_image::format as f;
+    let slab = crate::state::state().shapes.slab();
+    let mut last_row = 0u32;
+    let mut last_id = [0u32; 8];
+    for (i, r) in recs.iter().enumerate() {
+        let band = snap_image_id_band(r.id);
+        if band == 2 {
+            return Some((i, f::MINT_BAD_DICTIONARY));
+        }
+        // A ConstFn lane is part of the lookup key the probe does not take.
+        if r.constfn.is_empty() {
+            let found = shape_descriptor_find_with_rep(
+                r.keys as usize as *const ArrayHeader,
+                r.logical,
+                r.live,
+                r.generation,
+                shapes_store::snap_image_kind_of_code(r.kind),
+                r.holes,
+                r.proto_id,
+                r.summary,
+                r.rep,
+                &r.brands,
+                r.integrity,
+            );
+            if found != Some(LayoutWord(r.word)) {
+                return Some((i, f::MINT_BAD_IDENTITY));
+            }
+        }
+        let Some(p) = slab.record_ptr(ShapeId(r.id)) else {
+            return Some((i, f::MINT_BAD_FIELDS));
+        };
+        // SAFETY: a present record of this agent's slab.
+        let live = unsafe { &*p };
+        if live.snap_image_mint() != *r {
+            return Some((i, f::MINT_BAD_FIELDS));
+        }
+        if band != 0 {
+            let row = LayoutWord(r.word).row().0;
+            let family = (r.id & SHAPE_ID_KIND_MASK) as usize >> SHAPE_ID_KIND_SHIFT | usize::from(band == 3) << 2;
+            if row <= last_row || r.id <= last_id[family] || live.layout_word.0 != r.word {
+                return Some((i, f::MINT_BAD_ORDER));
+            }
+            last_row = row;
+            last_id[family] = r.id;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod snap_image_delta_tests {
     use super::*;
@@ -7687,5 +7761,84 @@ mod snap_image_delta_tests {
         crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
         assert!(d.changed >= 1, "{d:?}");
+    }
+
+    /// Live shapes minted after a baseline, one of them with attached state (a freeze
+    /// leaves integrity targets in its extension).
+    fn live_mints(tag: &str) -> (SnapShapeState, Vec<crate::snap_image::format::MintRec>) {
+        let before = snap_image_shape_state();
+        let o = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 1.0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 2.0);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
+        let recs = snap_image_mint_collect(&before);
+        (before, recs)
+    }
+
+    fn through_the_file(recs: &[crate::snap_image::format::MintRec]) -> Vec<crate::snap_image::format::MintRec> {
+        let blob = crate::snap_image::format::mint_blob(recs);
+        let (back, used) = crate::snap_image::format::parse_mint_blob(&blob).expect("parses");
+        assert_eq!(used, blob.len());
+        back
+    }
+
+    #[test]
+    fn snap_image_mint_record_holds_only_the_new_records_and_rebuilds_equal() {
+        let (before, recs) = live_mints("snapmintrec");
+        assert!(recs.len() >= 2, "{}", recs.len());
+        assert!(recs.iter().all(|r| before.records.binary_search_by_key(&r.id, |x| x.0).is_err()));
+        let back = through_the_file(&recs);
+        assert_eq!(back, recs);
+        assert_eq!(snap_image_mint_check(&back), None);
+    }
+
+    #[test]
+    fn snap_image_mint_record_carries_the_attached_state_of_a_record() {
+        let (_, recs) = live_mints("snapmintext");
+        assert!(recs.iter().any(|r| r.handles.iter().any(|&h| h != 0)), "{recs:?}");
+        assert!(recs.iter().any(|r| !r.edges.is_empty()), "{recs:?}");
+        // The state read back from the file is what the live record holds.
+        assert_eq!(snap_image_mint_check(&through_the_file(&recs)), None);
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_recorded_field_differs() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintfld");
+        let mut back = through_the_file(&recs);
+        let i = back.iter().position(|r| r.handles.iter().any(|&h| h != 0)).expect("a record with a handle");
+        let h = back[i].handles.iter().position(|&h| h != 0).unwrap_or(0);
+        back[i].handles[h] ^= 1 << 8;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_facts_do_not_reach_its_word() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintid");
+        let mut back = through_the_file(&recs);
+        let i = back.len() - 1;
+        back[i].proto_cell ^= 8;
+        back[i].generation += 1;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_IDENTITY)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_records_out_of_mint_order() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintord");
+        let mut back = through_the_file(&recs);
+        back.reverse();
+        let got = snap_image_mint_check(&back);
+        assert!(matches!(got, Some((_, MINT_BAD_ORDER))), "{got:?}");
+    }
+
+    #[test]
+    fn snap_image_mint_check_refuses_a_dictionary_band_record() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintdict");
+        let mut back = through_the_file(&recs);
+        back[0].id = SITE_SHAPE_ID_END + 1;
+        assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_DICTIONARY)));
     }
 }

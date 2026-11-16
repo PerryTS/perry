@@ -879,6 +879,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         claims_from: img.claims_from,
         claims: img.claims,
         registry: img.registry,
+        mint: Vec::new(),
     };
     Ok(Prepared {
         object,
@@ -1154,6 +1155,7 @@ mod tests {
             claims_from: 3,
             claims: vec![b"ab".to_vec(), b"c".to_vec()],
             registry: vec![rec],
+            mint: Vec::new(),
         };
         assert_eq!(got, want);
     }
@@ -1249,6 +1251,21 @@ fn stop_summary(stops: &[format::Stop]) -> String {
                     band(0) + band(1) + band(2) + band(3), band(0), band(1), band(2), band(3), off, cell
                 )
             }
+            format::STOP_MINT_RECORD => {
+                format!(
+                    "{} shape record(s) were minted between the baseline and the cut (static {}, ordinary {}, dictionary {}, exotic {}); the mint record was written and verified ({} record(s), {} byte(s)); restore does not replay it yet",
+                    value & 0xffff_ffff, cell & 0xffff, off & 0xffff, cell >> 16, off >> 16, value & 0xffff_ffff, value >> 32
+                )
+            }
+            format::STOP_MINT_MISMATCH => format!(
+                "mint record {cell} (shape id {value}) does not rebuild to the live record: {}",
+                match off {
+                    format::MINT_BAD_DICTIONARY => "a dictionary-band record has no form",
+                    format::MINT_BAD_IDENTITY => "its facts do not reach the recorded word",
+                    format::MINT_BAD_FIELDS => "a recorded field differs from the live record",
+                    _ => "a row or an id is out of mint order",
+                }
+            ),
             format::STOP_SHAPE_COUNTERS => format!("the shape counters moved between the baseline and the cut ({} id(s) drawn, {} semantic generation(s))", value & 0xffff_ffff, value >> 32),
             format::STOP_TOKENS => format!("more than the primary's class-template token was claimed (next token {value})"),
             format::STOP_RAW_HEAP_WORD => format!("{n} {} cell(s) (type {t}) hold a raw address outside the binary in an untraced word (first at offset {off}, value {value:#x})", ty(t)),
