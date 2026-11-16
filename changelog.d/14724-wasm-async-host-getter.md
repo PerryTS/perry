@@ -1,0 +1,1 @@
+`--target web`: reading a host getter inside an `async` function (`res.status`, `res.ok`, `res.statusText`, `res.headers` on a fetch `Response`) now yields its value instead of throwing `… is not a function` (#14720). The HIR gives such a read the same shape as a zero-argument method call, so the async-body JavaScript emitter now calls the member only when it is a function.
