@@ -44,6 +44,13 @@ pub struct ReadSite {
     /// A call through a value (`f(x)`): `recv` is the callee node, `key`
     /// the atom `()`.
     pub value_call: bool,
+    /// S8: a bare call of a name the main realm declares neither on the
+    /// global object nor on its chain (`Gen::bare_user_global`), outside a
+    /// module a Worker may run: `recv` is [[Get]](globalThis, name), the
+    /// callee (`value_call`). An `undefined` / `null` there is the absent
+    /// name's ReferenceError (9.1.1.4.6, 9.1.1.2.6) or Call's TypeError
+    /// (7.3.14): nothing is called, the site's throw arm.
+    pub global_get: bool,
     pub func: FnIdx,
     /// ACCSITE1 D2: the access the record names (a read or call, a store,
     /// a compound's GetValue).

@@ -3474,13 +3474,6 @@ impl Model {
         self.worker_side.get(mi as usize).copied().unwrap_or(true)
     }
 
-    /// The module of the code that made call `call` (`call_place`), when
-    /// generation made it.
-    pub(crate) fn call_module(&self, call: CallId) -> Option<u32> {
-        let site = self.calls[call as usize].site;
-        self.call_place.get(&site).map(|&(f, _)| self.funcs[f as usize].module)
-    }
-
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
     }

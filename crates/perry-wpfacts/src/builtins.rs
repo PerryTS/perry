@@ -3048,21 +3048,6 @@ fn promise_resolve_reject(m: &mut Model, name: &str, call: CallId) {
     ret_tok(m, call, p);
 }
 
-/// S8: call `call` of `ns.name` on the global sentinel is the call of
-/// [[Get]](globalThis, name) with `this` undefined: a name the main realm
-/// declares neither on the global object nor on its chain
-/// (`global_user_key`), made by a module no Worker runs
-/// (`Model::worker_side`), without spread arguments. What may write the
-/// key is the global object's own record (`loads::tok_load`), so the
-/// sentinel's replacement check does not apply.
-fn main_global_get_call(m: &Model, ns: BuiltinNs, name: &str, call: CallId) -> bool {
-    ns == BuiltinNs::Other
-        && !m.unit_mode
-        && global_user_key(m, name)
-        && m.calls[call as usize].spread.is_empty()
-        && m.call_module(call).is_some_and(|mi| !m.worker_side_module(mi))
-}
-
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
@@ -3121,10 +3106,7 @@ fn ns_method_inner(
     {
         let t = m.tok(TokKind::Builtin(ns));
         let a = m.atom(name);
-        if !builtin_function(m, t)
-            && !main_global_get_call(m, ns, name, call)
-            && opaque_written(m, t, a, NativeMiss::Call(t, call))
-        {
+        if !builtin_function(m, t) && opaque_written(m, t, a, NativeMiss::Call(t, call)) {
             let prev = m.cur_this.replace(t);
             unknown_method(
                 m,
@@ -3272,25 +3254,6 @@ fn ns_method_inner(
             } else {
                 effects::run_function(m, e, call);
             }
-        }
-        // S8: a bare call of a name the main realm declares neither on the
-        // global object nor on its chain (`addEventListener` outside a
-        // Worker) calls [[Get]](globalThis, n) with `this` undefined
-        // (ECMA-262 13.3.6.1 EvaluateCall: the reference's base is an
-        // environment record, WithBaseObject undefined; 9.1.1.4.6): the
-        // program's values stored there; absent, the runtime's
-        // ReferenceError: nothing is called. In a module a Worker may run
-        // (`Model::worker_side`) the Worker global's native of that name may
-        // be the callee: the unknown call below.
-        (BuiltinNs::Other, n) if main_global_get_call(m, ns, n, call) => {
-            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-            let v = m.node_l("global-get-callee");
-            let a = m.atom(n);
-            loads::tok_load(m, g, Key::Named(a), v);
-            let args = m.calls[call as usize].args.clone();
-            let r = collections::cb_call(m, call, v, ThisArg::Undef, args);
-            let ret = m.calls[call as usize].ret;
-            m.edge(r, ret);
         }
         (
             BuiltinNs::Other,
