@@ -1246,7 +1246,7 @@ fn template_facts(
         // key's shape, ECMA-262 13.15.2 / 10.1.9.2: OrdinarySet creates or
         // changes only property P); a key of unknown content (shape 0) may
         // be any key.
-        let any_post = any.post.iter().filter(|&&(_, k)| m.key_may_name(k, a)).count();
+        let any_post = any.post.iter().filter(|&&(w, k)| m.any_store_may_name(tm, w, k, a)).count();
         let readonly = escape.is_none()
             && hard.is_none()
             && w.post.is_empty()
@@ -2406,7 +2406,7 @@ fn judge(
                                 eprintln!("WHY_ARM_W @{} named post {}", s.byte_offset, m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str()));
                             }
                             for (w, k) in m.any_writers.get(tm).iter().flat_map(|w| w.post.iter()) {
-                                if m.key_may_name(*k, s.key) {
+                                if m.any_store_may_name(*tm, *w, *k, s.key) {
                                     eprintln!("WHY_ARM_W @{} any post {} fn={} m={} loop={:?} key={:?} shape={:?}", s.byte_offset, m.stores.get(*w as usize).map_or("?", |x| x.desc.as_str()), m.stores.get(*w as usize).and_then(|x| m.funcs.get(x.func as usize)).map_or("?", |f| f.name.as_str()), m.stores.get(*w as usize).map_or(0, |x| x.module), m.stores.get(*w as usize).map(|x| x.in_loop), k, match k { crate::model::Key::Any(i) => m.key_shapes.get(*i as usize).map(|x| (x.globs.clone(), x.free.len())), _ => None });
                                 }
                             }
