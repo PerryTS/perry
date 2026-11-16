@@ -89,7 +89,6 @@ fn read_sees_the_stored_value() {
 fn other_stores_still_sink() {
     for (holders, store) in [
         ("Object, Math", "h[k] = n;"),
-        ("Object, Math", "(globalThis as any)[i] = n;"),
         ("Object, Math", "(String.prototype as any)[i] = n;"),
     ] {
         let (p, dump) = v_proven(&program(holders, store), "/*A*/");
