@@ -1243,6 +1243,32 @@ pub(crate) fn namespace_pair_proven(
     }
 }
 
+/// MATHC3: the function ids of module `path` whose bodies the program never
+/// runs (`BodyReach::inactive`: the solve completed, activation classified
+/// the body and no path reaches it; the predicate the dead-body removal
+/// reads). A namespace pair in one takes its intrinsic arm, the HIR a build
+/// without the pair has. Empty under the same conditions as
+/// [`namespace_pair_proven`] and when reach is incomplete.
+pub(crate) fn namespace_pair_inactive(
+    pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
+    path: &Path,
+) -> BTreeSet<u32> {
+    let Some(pf) = pf else {
+        return BTreeSet::new();
+    };
+    if !elide_enabled() || pf.stats.aborted || pf.interp_guard.is_some() {
+        return BTreeSet::new();
+    }
+    let key = path.display().to_string();
+    let reach = &pf.body_reach;
+    reach
+        .seen
+        .iter()
+        .filter(|b| b.0 == key && b.1 != u32::MAX && b.2.is_empty() && reach.inactive(b))
+        .map(|b| b.1)
+        .collect()
+}
+
 /// MATHC1: with the whole-program facts on every
 /// direct builtin namespace call is lowered as the pair whose one arm the
 /// call site's verdict picks; `PERRY_NS_PAIRS=0` keeps the old lowering.
