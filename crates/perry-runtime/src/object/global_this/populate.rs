@@ -293,34 +293,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // Interface inheritance carries prototype methods. DOMException has
     // Error.prototype as its instance parent, but no Error constructor parent.
     // A lazy child links in its own birth (`link_interface_parent`).
-    for (child, parent, constructor_inherits) in INTERFACE_PARENTS {
-        if crate::object::BuiltinConstructorIdentity::for_name(child)
-            .is_some_and(|identity| identity.declaration().lazy)
-        {
-            continue;
-        }
-        let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
-        let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
-        let child_proto = builtin_prototype_value(child);
-        let parent_proto = builtin_prototype_value(parent);
-        if constructor_inherits
-            && JSValue::from_bits(child_ctor.to_bits()).is_pointer()
-            && JSValue::from_bits(parent_ctor.to_bits()).is_pointer()
-        {
-            crate::closure::closure_set_static_prototype(
-                crate::value::js_nanbox_get_pointer(child_ctor) as usize,
-                parent_ctor.to_bits(),
-            );
-        }
-        if JSValue::from_bits(child_proto.to_bits()).is_pointer()
-            && JSValue::from_bits(parent_proto.to_bits()).is_pointer()
-        {
-            super::super::prototype_chain::object_set_static_prototype(
-                crate::value::js_nanbox_get_pointer(child_proto) as usize,
-                parent_proto.to_bits(),
-            );
-        }
-    }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
