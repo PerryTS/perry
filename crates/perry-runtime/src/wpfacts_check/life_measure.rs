@@ -781,9 +781,12 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
             return None;
         }
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let bytes =
-            unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size }
-                as u64;
+        // A POINTER_TAG payload may be a handle-band id, which has no header.
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+            s.unborn += 1;
+            return None;
+        };
+        let bytes = header.size as u64;
         s.bytes += bytes;
         let own = if s.sampled < 32 {
             0
