@@ -713,6 +713,28 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
+// `fetchWithAuth` / `fetchPostWithAuth` in an async body send the request the WASM arms
+// send: the auth header as `Authorization`, POST with the body. A stub `fetch` echoes
+// what it received; the timer lets it be installed after boot.
+#[test]
+fn async_body_fetch_with_auth_sends_the_auth_header() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+async function f(): Promise<string> {
+  const g = await fetchWithAuth("http://h/g", "Bearer a");
+  const p = await fetchPostWithAuth("http://h/p", "Bearer b", '{"x":1}');
+  return (await g.text()) + " " + (await p.text());
+}
+setTimeout(() => { f().then((v) => console.log(v)).catch((e) => console.log("threw " + e)); }, 0);
+"#,
+            r#"globalThis.fetch = async (url, init) => new Response(
+  [url, init.method ?? "GET", init.body ?? "-", init.headers.Authorization].join("|"));"#
+        ),
+        r#"http://h/g|GET|-|Bearer a http://h/p|POST|{"x":1}|Bearer b"#
+    );
+}
+
 // A property name is any string; an async body reads, writes and builds it as a literal.
 #[test]
 fn an_async_body_handles_property_names_that_need_escaping() {
