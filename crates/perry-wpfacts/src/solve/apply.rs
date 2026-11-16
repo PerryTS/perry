@@ -1616,8 +1616,16 @@ impl Model {
                 // `length` a Number (10.4.3.5), any other key a member of
                 // the prototype chain of the kind. A for-in run's key is
                 // that one name; any other key is decided by its values
-                // (`Cons::IdxKey` with `obj` ⊤, rule NUM-KEY-PRIM).
-                if prim != 0 {
+                // (`Cons::IdxKey` with `obj` ⊤, rule NUM-KEY-PRIM). Under
+                // F-A (`enumerable`) the key is an enumerable key of the
+                // ToObject'ed subject (`enum_read_prim`).
+                if prim != 0 && enumerable {
+                    let key = match self.key_nodes.get(&idx) {
+                        Some(&a) => Key::Named(a),
+                        None => Key::Any(shape),
+                    };
+                    self.enum_read_prim(idx, prim, key, dst);
+                } else if prim != 0 {
                     match self.key_nodes.get(&idx) {
                         Some(&a) => self.with_b(|m| builtins::prim_load(m, prim, Key::Named(a), dst)),
                         None => {
