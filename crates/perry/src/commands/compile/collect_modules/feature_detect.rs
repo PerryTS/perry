@@ -1253,6 +1253,7 @@ fn detect_optional_feature_usage_with_capabilities(
         ctx.uses_json_format |= hir_debug.contains("JsonStringify")
             || hir_debug.contains("JsonIsRawJson");
         if hir_debug.contains("JsonParse")
+            || hir_debug.contains("requireJsonDisk")
             || hir_debug.contains("JsonRawJson")
             || hir_debug.contains("property: \"json\"")
             || hir_debug.contains("method: \"json\"")
@@ -1846,7 +1847,11 @@ class C {
             assert!(ctx.uses_json_format, "{source}");
             assert!(!ctx.uses_json_engine && !ctx.uses_global_json, "{source}");
         }
-        for source in ["JSON.parse('[1]');", "JSON.rawJSON('1');"] {
+        for source in [
+            "JSON.parse('[1]');",
+            "JSON.rawJSON('1');",
+            "__perry_require_json_disk(process.argv[2]);",
+        ] {
             assert!(detect_for_source(source).uses_json_engine, "{source}");
         }
         for source in [
