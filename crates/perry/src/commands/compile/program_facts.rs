@@ -124,6 +124,7 @@ pub(crate) fn run(
         && (std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1")
             || std::env::var("PERRY_FACTS_PROVENANCE").is_ok_and(|v| v == "1"));
     let cfg = perry_wpfacts::FactsConfig {
+        namespace_pairs: std::env::var_os("PERRY_NS_PAIRS").is_some_and(|v| v == "1"),
         verify_facts: perry_codegen::verify_facts::enabled(),
         dce_bodies: perry_codegen::verify_facts::dce_enabled(),
         roots,
@@ -1283,6 +1284,7 @@ pub(crate) fn activation(
         return None;
     }
     let cfg = perry_wpfacts::FactsConfig {
+        namespace_pairs: std::env::var_os("PERRY_NS_PAIRS").is_some_and(|v| v == "1"),
         roots,
         // The facts' negative controls act on this pass (it is theirs).
         no_int_ranges: matches!(

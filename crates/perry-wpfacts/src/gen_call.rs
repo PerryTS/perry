@@ -468,7 +468,7 @@ impl<'a> Gen<'a> {
         };
         if !self.walked.contains(&f) {
             if fn_ctor {
-                let ph = crate::ctor_phase::analyze_closure(params, body);
+                let ph = crate::ctor_phase::analyze_closure(params, body, self.m.ns_pairs);
                 self.note_fn_phase(f, ph);
             }
             // DECISIONS 225: its body is walked once the closure can run.

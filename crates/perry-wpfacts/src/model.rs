@@ -2544,6 +2544,12 @@ pub struct Model {
     /// for the original member's effect; this call binds every callee but
     /// that original (`call_tok`).
     pub ns_pair_calls: crate::pts::FxHashMap<CallId, (BuiltinNs, Atom)>,
+    /// The namespace pairs are the knob's (`FactsConfig::namespace_pairs`):
+    /// every direct namespace call is one, walked as one call
+    /// (`Gen::namespace_pair`). Off, a pair is main's shadow-bit guard of a
+    /// program with dynamic code or a `globalThis[k] = v` store, walked as a
+    /// conditional of its two arms.
+    pub ns_pairs: bool,
     /// Calls `Model::solver_call` made (`Stats::solver_calls`).
     pub solver_made: u64,
     /// (bound value, `new`) → its merged call.
