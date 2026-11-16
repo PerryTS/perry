@@ -958,6 +958,10 @@ pub(crate) fn try_lower_typed_method_call(
     let sig_name = format!("{public}$sig");
     crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &sig_name);
     let call_args: Vec<(LlvmType, &str)> = raw.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    // The facts close this site over the one body `M`, entered at `M$sig`:
+    // the symbol called is the closed callee (`closed_targets`), as the
+    // public body is for a proven call that enters it boxed.
+    crate::codegen::closed_targets::note_closed_call(ctx.func, &sig_name, 1);
     let value = ctx
         .block()
         .call(sig_llvm_ty(sig.ret), &sig_name, &call_args);
