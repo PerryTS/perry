@@ -255,6 +255,19 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
     *slot(receiver, 1) = 0.0f64.to_bits();
 }
 
+/// `Set(R, "lastIndex", n, true)` on a receiver [`birth_layout`] admitted:
+/// the birth layout's `lastIndex` is an own writable data property in an
+/// `Any` slot (an own data property is set without consulting the
+/// prototype), so the Set is this store, and a Number needs no write barrier.
+///
+/// # Safety
+/// `receiver` was admitted by [`birth_layout`] with no collection since.
+#[inline(always)]
+pub(crate) unsafe fn birth_set_last_index(receiver: *mut RegExpHeader, n: f64) {
+    // GC_STORE_AUDIT(POINTER_FREE): a Number into an Any lane; no barrier.
+    *slot(receiver, 1) = n.to_bits();
+}
+
 // Read the realm intrinsic through the same private slot machinery as matcher
 // data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
 // Inlined into its one caller (`prepare_shape`), as it always was.
