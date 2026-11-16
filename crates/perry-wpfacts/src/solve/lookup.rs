@@ -584,6 +584,30 @@ impl Model {
         if t == TOP || self.is_marker(t) || self.is_proto_key(Key::Named(a)) || self.is_private_atom(a) {
             return false;
         }
+        // R9READ4: a read on the prototype object itself (`X.prototype.m`)
+        // of a class-body method `m` of `X`: ClassDefinitionEvaluation
+        // (ECMA-262 15.7.14) defines `m` on it as an own writable data
+        // property (10.2.8 DefineMethodProperty) before `X.prototype` can be
+        // reached (the class binding is in its TDZ until then, 9.1.1.1.6),
+        // so OrdinaryGet (10.1.8.1) finds it there; only `delete` /
+        // `defineProperty` (HARD) or unknown code (escaped) remove or
+        // reshape it, and a stored `undefined` ends the rule as below.
+        if let TokKind::Proto(c) = self.toks[t as usize] {
+            let tp = &self.tmpls[c as usize];
+            let undef = |n: Option<&NodeId>| n.is_some_and(|&n| self.nodes[n as usize].prim & prim::UNDEF != 0);
+            return !self.reshaped_any
+                && !self.reshaped_keys.contains(&a)
+                && !tp.per_evaluation
+                && matches!(tp.kind, TmplKind::Class { literal_shape: false, .. })
+                && !self.inst_escaped.contains(&c)
+                && !tp.accessor_keys.contains(&a)
+                && tp.proto_members.contains(&a)
+                && !self.hard.contains_key(&t)
+                && !self.escaped.contains_key(&t)
+                && !self.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&a))
+                && !undef(self.fields.get(&(t, a)))
+                && !undef(self.field_any.get(&t));
+        }
         let TokKind::Obj(tm0, _) = self.toks[t as usize] else {
             return false;
         };
