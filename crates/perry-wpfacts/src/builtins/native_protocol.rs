@@ -1189,8 +1189,43 @@ pub fn global_user_key(m: &Model, name: &str) -> bool {
 /// so the value reaches no unknown code. Constructors and namespaces keep
 /// the sink.
 pub fn program_global_fn(m: &Model, name: &str) -> bool {
-    !m.unit_mode && name != crate::STAR_KEY && super::global_function(m, name) && super::ns_by_name(name).is_none()
+    !m.unit_mode
+        && name != crate::STAR_KEY
+        && super::global_function(m, name)
+        && super::ns_by_name(name).is_none()
+        && !NATIVE_READ_GLOBALS.contains(&name)
 }
+
+/// The global functions a native reads by name after the realm is set up
+/// and hands on (`js_get_global_this_builtin_value` / `builtin_value_core`
+/// = the live `globalThis[name]`): the module exports equal to the global
+/// (perry-runtime native_module/static_exports.rs:209, native_module.rs:1068,
+/// constants.rs:597/678, node_submodules/mod.rs:634), the `.constructor` of
+/// a fresh text-encoding stream (class_meta.rs:402) and the realm's
+/// `Navigator` (navigator.rs:119, at the first `navigator` read). A value
+/// the program stores under one of them reaches that native's caller, so
+/// the store keeps the sink. (The error classes, `Object`, `SyntaxError`
+/// are namespaces: `ns_by_name`.) The other by-name reads are the
+/// program's own (bare-name value reads, `instanceof`, the `super()` of a
+/// builtin parent: class_return.rs:15) or run before program code
+/// (populate.rs).
+const NATIVE_READ_GLOBALS: &[&str] = &[
+    "URL",
+    "URLSearchParams",
+    "URLPattern",
+    "Blob",
+    "File",
+    "TextEncoder",
+    "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
+    "CompressionStream",
+    "DecompressionStream",
+    "Navigator",
+];
 
 /// The global object's field under program-owned key `a`.
 pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
