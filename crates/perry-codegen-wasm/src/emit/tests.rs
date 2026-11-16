@@ -971,3 +971,28 @@ console.log(new B().run());
         "true true"
     );
 }
+
+// An assignment-pattern default applies to `undefined` (a missing element, a
+// missing property) and never to `null` or a falsy value.
+#[test]
+fn assignment_pattern_defaults_apply_to_undefined() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let x: any, y: any, p: any;
+[x = 5] = [];
+console.log(x);
+[x = 5, y = 6] = [undefined, null];
+console.log(x, y);
+[x = 5] = [0];
+console.log(x);
+({ a: p = 8 } = {} as any);
+console.log(p);
+[[x = 1], { b: y = 2 }] = [[], {}] as any;
+console.log(x, y);
+for ([x = 10] of [[], [7]] as any[]) console.log(x);
+"#
+        ),
+        "5\n5 null\n0\n8\n1 2\n10\n7"
+    );
+}
