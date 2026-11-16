@@ -121,6 +121,11 @@ fn index_operands_of_the_runtime_converted_methods_call_their_valueof() {
         "console.log(u.fill(7, v).length);",
         "console.log(f.fill(7, 0, v).length);",
         "console.log(Array.from({ length: v }).length);",
+        "console.log(u.with(0, v).length);",
+        "console.log(f.with(0, v).length);",
+        "a.length = v; console.log(a.length);",
+        "Object.defineProperty(a, 'length', { value: v }); console.log(a.length);",
+        "console.log(Reflect.set(a, 'length', v));",
     ] {
         assert_eq!(
             inactive(&format!("{v}{op}\n")),
