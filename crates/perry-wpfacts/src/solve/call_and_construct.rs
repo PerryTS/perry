@@ -1421,6 +1421,26 @@ impl Model {
                 }
             }
         }
+        // The formatter's `[util.inspect.custom]` hook on a realm object
+        // (`format_jsvalue`, perry-runtime builtins/formatting.rs): an own
+        // entry under the `Symbol.for("nodejs.util.inspect.custom")` key, or
+        // the `__perry_inspect_custom__` method of the object's class. No
+        // realm object carries either, and the runtime declares no member
+        // under that name: the hook is what the program stored on the
+        // object under a key that may name it (a String key never does,
+        // `key_shape`), the ordinary read's values. With none, nothing runs:
+        // the runtime prints the object.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && self.atoms[a as usize] == crate::model::INSPECT_CUSTOM_METHOD
+                && matches!(self.toks[t as usize], TokKind::Builtin(_))
+            {
+                let callee = self.node_l("builtin-inspect-hook");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // A missing intrinsic member calls exactly the ordinary read's
         // values, including program fields, getters and reopened chains.
         // No callable value means a TypeError, with no argument escape.
