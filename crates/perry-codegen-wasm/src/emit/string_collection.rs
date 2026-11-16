@@ -139,6 +139,7 @@ impl WasmModuleEmitter {
             "class_new",
             "tagged_template",
             "template_raw",
+            "class_ref",
             "class_set_method",
             "class_call_method",
             "class_super_get",
