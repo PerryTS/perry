@@ -661,6 +661,43 @@ proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto 
     );
 }
 
+// A bare read of a host getter (`res.status`) reaches an async body as a native call
+// with no arguments, as `res.text()` does: the getter yields its value and the method
+// is still called.
+#[test]
+fn async_body_reads_host_getters_and_calls_host_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  const head = r.status + " " + r.ok + " " + r.statusText + " " + r.headers.get("content-type");
+  return head + " " + (await r.text());
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "200 true OK text/plain hi"
+    );
+}
+
+// A zero-argument native method the object lacks still throws, as the call would.
+#[test]
+fn async_body_call_of_a_missing_host_method_throws() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  return r.missing();
+}
+f().then((v) => console.log("value " + v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "threw TypeError: missing is not a function"
+    );
+}
+
 // A method name is any string (`q["it's"]()`); the async JS emitter quotes it as a literal.
 #[test]
 fn an_async_body_calls_a_method_whose_name_needs_escaping() {

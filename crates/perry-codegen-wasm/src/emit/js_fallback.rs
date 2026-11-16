@@ -575,6 +575,16 @@ impl WasmModuleEmitter {
                     _ => {
                         if let Some(obj) = object {
                             let obj_js = self.emit_js_expr(obj, locals);
+                            // The HIR lowers a bare read of a host getter (`res.status`)
+                            // to this call with no arguments, the same shape as
+                            // `res.text()`; the member's value tells them apart.
+                            if args.is_empty() {
+                                return format!(
+                                    "fromJsValue(__jsNativeMember(toJsValue({}), {}))",
+                                    obj_js,
+                                    js_string_literal(method)
+                                );
+                            }
                             let args_js: Vec<String> = args
                                 .iter()
                                 .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))

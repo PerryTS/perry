@@ -5253,6 +5253,16 @@ function __throwNullReceiver(obj, name) {
   throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
 }
 
+// A zero-argument native member in an async (JS) body: a method is called, a member
+// the object has (a getter such as a Response's `status` or `headers`) is the read, and
+// an absent member throws as calling it would.
+function __jsNativeMember(obj, name) {
+  const member = obj[name];
+  if (typeof member === 'function') return member.call(obj);
+  if (name in Object(obj)) return member;
+  throw new TypeError(String(name) + ' is not a function');
+}
+
 // A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,
 // the method is looked up before the arguments are evaluated. A user-class instance is a
 // `{__class__}` object whose methods live in the WASM function table: a name its class
