@@ -165,7 +165,7 @@ pub(crate) use object_intrinsic::{
 };
 pub(crate) use populate::{
     arm_all_global_bindings, global_binding_row,
-    birth_lazy_family, born_by_its_observation, ensure_function_intrinsics, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
+    birth_lazy_family, birth_lazy_family_in, born_by_its_observation, ensure_function_intrinsics_in, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
     populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{

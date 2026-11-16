@@ -252,9 +252,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         let ctor_value = if bound != 0 {
             crate::value::js_nanbox_pointer(closure_ptr as i64)
         } else if thread_realm {
-            unborn_constructor(declaration.identity, closure_ptr)
+            unborn_constructor(crate::array::thread_realm(), declaration.identity, closure_ptr)
         } else {
-            birth_family(declaration, closure_ptr, &singleton)
+            // The eager `vm` setup (until S4) notes into the thread record,
+            // as before: only cells still 0 there are written.
+            birth_family(crate::array::thread_realm(), declaration, closure_ptr, &singleton)
         };
         // A family %Global% does not bind (`global false`: %TypedArray%)
         // is held by the realm's [[Intrinsics]] entry only.
@@ -481,12 +483,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
 /// whose constructor does not inherit, `C` from `P`. Asking for `P`'s cells
 /// births `P`.
 fn link_extends_parent(
+    realm: &crate::array::RealmIntrinsics,
     declaration: &BuiltinConstructorDeclaration,
     closure_ptr: *mut crate::closure::ClosureHeader,
     proto_obj: *mut ObjectHeader,
 ) {
     if let Some(parent) = declaration.constructor_extends {
-        let parent_ctor = crate::array::intrinsic_constructor_addr(parent);
+        let parent_ctor = crate::array::intrinsic_constructor_addr_in(realm, parent);
         if parent_ctor != 0 {
             crate::closure::closure_set_static_prototype(
                 closure_ptr as usize,
@@ -495,7 +498,7 @@ fn link_extends_parent(
         }
     }
     if let Some(parent) = declaration.extends {
-        let parent_proto = crate::array::intrinsic_prototype_addr(parent);
+        let parent_proto = crate::array::intrinsic_prototype_addr_in(realm, parent);
         if parent_proto != 0 && !proto_obj.is_null() {
             super::super::prototype_chain::object_set_static_prototype(
                 proto_obj as usize,
@@ -507,6 +510,7 @@ fn link_extends_parent(
 
 #[optimize(size)]
 fn birth_family(
+    realm: &crate::array::RealmIntrinsics,
     declaration: &BuiltinConstructorDeclaration,
     closure_ptr: *mut crate::closure::ClosureHeader,
     singleton: &dyn Fn() -> *mut ObjectHeader,
@@ -560,7 +564,8 @@ fn birth_family(
     // allocation on: every read during the birth (a member install walking
     // Array.prototype's chain) gets the object being born, and
     // `birth_lazy_family` returns at once instead of re-entering.
-    crate::array::note_realm_intrinsic(
+    crate::array::note_realm_intrinsic_in(
+        realm,
         declaration.identity,
         proto_obj as usize,
         closure_ptr as usize,
@@ -589,7 +594,8 @@ fn birth_family(
     let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
     // #4533: `Object.getPrototypeOf(TypeError) === Error`. The constructor's
     // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
-    if name == "Error" {
+    // A thread singleton: only the thread realm's birth writes it.
+    if name == "Error" && crate::array::is_thread_realm(realm) {
         ERROR_CONSTRUCTOR_PTR.with(|cell| cell.set(closure_ptr as usize));
     }
     if name == "Iterator" {
@@ -710,7 +716,7 @@ fn birth_family(
                 crate::event_target_hook_slots::install_web_event_proto_methods(name, proto_obj);
             }
         }
-        link_extends_parent(declaration, closure_ptr, proto_obj);
+        link_extends_parent(realm, declaration, closure_ptr, proto_obj);
         if name == "Storage" {
             crate::web_storage::install_storage_prototype(proto_obj, ctor_value);
         }
@@ -790,7 +796,8 @@ fn birth_family(
     // and what its instances inherit from, whatever `globalThis.<name>`
     // later holds.
     let ctor = JSValue::from_bits(ctor_value.to_bits());
-    crate::array::note_realm_intrinsic(
+    crate::array::note_realm_intrinsic_in(
+        realm,
         declaration.identity,
         proto_obj as usize,
         if ctor.is_pointer() {
@@ -803,9 +810,10 @@ fn birth_family(
 }
 
 crate::perry_thread_local! {
-    /// The lazy family this thread is birthing (its identity), 0 when none:
-    /// the birth's own bag install must not ask for the birth again.
-    static BIRTHING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// The lazy family this thread is birthing: (its realm's record address,
+    /// its identity), (0, 0) when none. The birth's own bag install must not
+    /// ask for the birth again.
+    static BIRTHING: std::cell::Cell<(usize, u8)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// Birth the `lazy` family `identity` (`BuiltinConstructorDeclaration::lazy`)
@@ -822,10 +830,11 @@ crate::perry_thread_local! {
 /// keys its base Function shape does not list: FunctionDictionary, so no read
 /// site proves one absent (the read reaches the bag and births the family).
 fn unborn_constructor(
+    realm: &crate::array::RealmIntrinsics,
     identity: crate::object::BuiltinConstructorIdentity,
     closure_ptr: *mut crate::closure::ClosureHeader,
 ) -> f64 {
-    crate::array::note_realm_intrinsic(identity, 0, closure_ptr as usize);
+    crate::array::note_realm_intrinsic_in(realm, identity, 0, closure_ptr as usize);
     unsafe { crate::closure::shape::closure_become_dictionary(closure_ptr.cast()) };
     crate::value::js_nanbox_pointer(closure_ptr as i64)
 }
@@ -839,26 +848,37 @@ pub(crate) fn born_by_its_observation(declaration: &BuiltinConstructorDeclaratio
 }
 
 pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
+    birth_lazy_family_in(crate::array::thread_realm(), identity);
+}
+
+/// [`birth_lazy_family`] in `realm`.
+pub(crate) fn birth_lazy_family_in(
+    realm: &crate::array::RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) {
     debug_assert!(identity.declaration().lazy);
-    birth_own_family(identity);
+    birth_own_family(realm, identity);
 }
 
 /// `%Function%`'s setup birth. Function is a root family like Object: every
 /// closure's [[Prototype]] is %Function.prototype%, so the first closure the
 /// realm setup allocates observes it; "born at setup" is its true state, and
 /// it is not declared `lazy`. This is the one writer of its cells.
-pub(crate) fn ensure_function_intrinsics() {
-    birth_own_family(crate::object::BuiltinConstructorIdentity::Function);
+pub(crate) fn ensure_function_intrinsics_in(realm: &crate::array::RealmIntrinsics) {
+    birth_own_family(realm, crate::object::BuiltinConstructorIdentity::Function);
 }
 
 /// A family's birth: the constructor (made here when it is born before
 /// %Global%), then `birth_family` on it.
-fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
+fn birth_own_family(
+    realm: &crate::array::RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) {
     let declaration = identity.declaration();
-    if crate::array::intrinsic_prototype_addr_if_bound(identity) != 0 {
+    if crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity) != 0 {
         return;
     }
-    let mut ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
+    let mut ctor = crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity);
     if ctor == 0 {
         // Born before %Global%: the thread realm's constructor is made here,
         // as setup makes it. `Object` is made by its own builder,
@@ -868,30 +888,39 @@ fn birth_own_family(identity: crate::object::BuiltinConstructorIdentity) {
         if closure_ptr.is_null() {
             return;
         }
-        unborn_constructor(identity, closure_ptr);
+        unborn_constructor(realm, identity, closure_ptr);
         ctor = closure_ptr as usize;
     }
     // A member install that asks for its own family's prototype is a
     // programming error: it would read the unfinished birth.
+    let birthing = (realm as *const crate::array::RealmIntrinsics as usize, identity as u8);
     debug_assert_ne!(
         BIRTHING.with(|c| c.get()),
-        identity as u8,
+        birthing,
         "{} asked for its own prototype during its birth",
         declaration.name
     );
-    let outer = BIRTHING.with(|c| c.replace(identity as u8));
+    let outer = BIRTHING.with(|c| c.replace(birthing));
     // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
     let _realm = crate::snap_census::realm_build();
     let _no_move = crate::gc::GcSuppressScope::new();
     // %Global% is observed only by the installs that need it.
-    let global = || (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let global = || {
+        if crate::array::is_thread_realm(realm) {
+            (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader
+        } else {
+            // SAFETY: not the thread record, so a `vm` realm's record.
+            unsafe { crate::array::realm_record_global(realm) as *mut ObjectHeader }
+        }
+    };
     super::super::own_override::as_builtin_definition(|| {
         birth_family(
+            realm,
             declaration,
             ctor as *mut crate::closure::ClosureHeader,
             &global,
         );
-        unsafe { crate::object::builtin_proto::seal_born_family(declaration.name, identity) };
+        unsafe { crate::object::builtin_proto::seal_born_family(realm, declaration.name, identity) };
     });
     BIRTHING.with(|c| c.set(outer));
 }
@@ -938,11 +967,25 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
     let realm = crate::array::thread_realm();
+    // The record cells first: a born family stops the test there, so the
+    // BIRTHING pair is read only for a still unborn constructor.
     (identity.declaration().lazy
-        && BIRTHING.with(|c| c.get()) != identity as u8
         && crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity) == 0
-        && crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity) == ptr)
+        && crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity) == ptr
+        && BIRTHING.with(|c| c.get())
+            != (realm as *const crate::array::RealmIntrinsics as usize, identity as u8))
         .then_some(identity)
+}
+
+/// The realm of the family being born: its record from `BIRTHING`; the
+/// thread record for the eager `vm` setup loop's births (which note into the
+/// thread record, until S4 deletes that loop).
+fn birthing_realm() -> &'static crate::array::RealmIntrinsics {
+    match BIRTHING.with(|c| c.get()).0 {
+        0 => crate::array::thread_realm(),
+        // SAFETY: a live record: the birth holding it runs, under its no-move scope.
+        record => unsafe { &*(record as *const crate::array::RealmIntrinsics) },
+    }
 }
 
 /// `%TypedArray%.prototype.toString` is `Array.prototype.toString` (ECMA-262
@@ -951,9 +994,10 @@ fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinC
 pub(super) fn alias_typed_array_proto_to_string(ta_proto_addr: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ta_proto_handle = scope.root_raw_mut_ptr(ta_proto_addr);
-    let arr_proto_ptr =
-        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Array)
-            as *mut ObjectHeader;
+    let arr_proto_ptr = crate::array::intrinsic_prototype_addr_in(
+        birthing_realm(),
+        crate::object::BuiltinConstructorIdentity::Array,
+    ) as *mut ObjectHeader;
     if arr_proto_ptr.is_null() {
         return;
     }

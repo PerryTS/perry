@@ -157,7 +157,7 @@ pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
 pub(crate) use global_this::{arm_all_global_bindings, global_binding_row};
-pub(crate) use global_this::{birth_lazy_family, ensure_function_intrinsics, birth_unborn_family_of, unborn_declared_statics_of};
+pub(crate) use global_this::{birth_lazy_family, birth_lazy_family_in, ensure_function_intrinsics_in, birth_unborn_family_of, unborn_declared_statics_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,

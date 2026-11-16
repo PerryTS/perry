@@ -181,6 +181,13 @@ pub(crate) fn thread_realm() -> &'static RealmIntrinsics {
     &crate::state::state().realm_intrinsics
 }
 
+/// Whether `realm` is the thread realm's record (the one the thread
+/// singletons memoize), not a `vm` realm's [`RealmRecord`].
+#[inline(always)]
+pub(crate) fn is_thread_realm(realm: &RealmIntrinsics) -> bool {
+    std::ptr::eq(realm, thread_realm())
+}
+
 /// This realm's function intrinsic `which` if born, else 0.
 #[inline]
 pub(crate) fn realm_function_intrinsic_if_bound(which: RealmFunctionIntrinsic) -> usize {
@@ -221,10 +228,6 @@ pub(crate) fn note_realm_function_intrinsic_in(
 struct IntrinsicEntry {
     prototype: Cell<usize>,
     constructor: Cell<usize>,
-}
-
-fn intrinsic_entry(identity: crate::object::BuiltinConstructorIdentity) -> &'static IntrinsicEntry {
-    intrinsic_entry_in(thread_realm(), identity)
 }
 
 fn intrinsic_entry_in(
@@ -270,7 +273,17 @@ pub(crate) fn note_realm_intrinsic_in(
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity))
+    intrinsic_prototype_addr_in(thread_realm(), identity)
+}
+
+/// `realm`'s intrinsic prototype of `identity`, born in `realm` first when
+/// the family is still unborn there.
+#[inline(always)]
+pub(crate) fn intrinsic_prototype_addr_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    realm_intrinsic_addr(realm, &intrinsic_entry_in(realm, identity).prototype, Some(identity))
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
@@ -302,7 +315,17 @@ pub(crate) fn intrinsic_prototype_addr_if_bound_in(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, Some(identity))
+    intrinsic_constructor_addr_in(thread_realm(), identity)
+}
+
+/// `realm`'s intrinsic constructor of `identity`, born in `realm` first when
+/// the family is still unborn there.
+#[inline(always)]
+pub(crate) fn intrinsic_constructor_addr_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    realm_intrinsic_addr(realm, &intrinsic_entry_in(realm, identity).constructor, Some(identity))
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -334,18 +357,19 @@ pub(crate) fn intrinsic_constructor_addr_if_bound_in(
 /// here; the `_if_bound` readers never build (an unborn family was never
 /// written either).
 fn realm_intrinsic_addr(
+    realm: &RealmIntrinsics,
     cell: &Cell<usize>,
     family: Option<crate::object::BuiltinConstructorIdentity>,
 ) -> usize {
     let mut addr = cell.get();
     let birth = |addr: usize| match family {
         Some(identity) if addr == 0 && identity.declaration().lazy => {
-            crate::object::birth_lazy_family(identity);
+            crate::object::birth_lazy_family_in(realm, identity);
             cell.get()
         }
         // The root family Function is born by its own setup birth.
         Some(crate::object::BuiltinConstructorIdentity::Function) if addr == 0 => {
-            crate::object::ensure_function_intrinsics();
+            crate::object::ensure_function_intrinsics_in(realm);
             cell.get()
         }
         _ => addr,
@@ -353,7 +377,7 @@ fn realm_intrinsic_addr(
     // A family is born by itself; only what no birth makes (a non-family
     // intrinsic, `Object`, `Buffer`) observes %Global%.
     addr = birth(addr);
-    if addr == 0 && !crate::object::global_this_is_materialized() {
+    if addr == 0 && is_thread_realm(realm) && !crate::object::global_this_is_materialized() {
         crate::object::js_get_global_this();
         addr = birth(cell.get());
     }
@@ -428,11 +452,19 @@ pub(crate) unsafe fn alloc_realm_record(global: usize) -> *mut RealmRecord {
     record
 }
 
-/// The [[Intrinsics]] of the record at `record`.
+/// The global of the `vm` realm whose record holds `realm`.
 ///
 /// # Safety
-/// `record` is a live `GC_TYPE_REALM_RECORD` payload; no collection runs while
-/// the reference lives.
+/// `realm` is a `vm` realm's record intrinsics (not [`thread_realm`]).
+pub(crate) unsafe fn realm_record_global(realm: &RealmIntrinsics) -> usize {
+    // `RealmRecord` is `repr(C)` with its intrinsics first.
+    (*(realm as *const RealmIntrinsics as *const RealmRecord)).global.get()
+}
+
+/// The [[Intrinsics]] record at `record` (a `GC_TYPE_REALM_RECORD` payload).
+///
+/// # Safety
+/// `record` is a live `GC_TYPE_REALM_RECORD` payload.
 pub(crate) unsafe fn realm_record_intrinsics<'a>(record: usize) -> &'a RealmIntrinsics {
     &(*(record as *const RealmRecord)).intrinsics
 }

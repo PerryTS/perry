@@ -487,7 +487,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
             } else {
                 intrinsic_prototype_addr(family, global, name)
             };
-            seal_family_prototype(family, proto);
+            seal_family_prototype(family, proto, true);
         }
         super::builtin_namespace::seal_namespaces(global);
     });
@@ -499,21 +499,27 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
 /// # Safety
 /// Called inside the family's birth (collection suppressed).
 pub(crate) unsafe fn seal_born_family(
+    realm: &crate::array::RealmIntrinsics,
     name: &str,
     identity: crate::object::BuiltinConstructorIdentity,
 ) {
     if let Some((family, _)) = BuiltinProto::ALL.into_iter().find(|(_, n)| *n == name) {
-        seal_family_prototype(family, crate::array::intrinsic_prototype_addr_if_bound(identity));
+        seal_family_prototype(
+            family,
+            crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity),
+            crate::array::is_thread_realm(realm),
+        );
     }
     super::builtin_namespace::seal_born_namespace(
         name,
-        crate::array::intrinsic_constructor_addr_if_bound(identity),
+        crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity),
     );
 }
 
 /// Seal one family's intrinsic prototype `proto` (0: none).
 #[optimize(size)]
-unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize) {
+/// `thread`: `proto` is the thread realm's (the agent table publishes only those).
+unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize, thread: bool) {
     {
         {
             if proto == 0 {
@@ -526,10 +532,12 @@ unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize) {
                 crate::gc_object_type_pat!() => {
                     trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
                     seal_object(proto as *mut ObjectHeader, family);
-                    crate::agent_ptrs::publish_intrinsic_proto(
-                        family as usize,
-                        proto as *const ObjectHeader,
-                    );
+                    if thread {
+                        crate::agent_ptrs::publish_intrinsic_proto(
+                            family as usize,
+                            proto as *const ObjectHeader,
+                        );
+                    }
                 }
                 // `Array.prototype` is an Array exotic: its named members live
                 // in its property bag, an ordinary object. Materialise the bag
