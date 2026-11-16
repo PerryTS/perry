@@ -605,6 +605,10 @@ STEM_EMITTER_ARG_INDEX = {
     # layout notes are gone after ShapeId tracing): 12 args -> 9, and the
     # static-key bookkeeping 8 -> 6. The stems themselves are unchanged.
     "emit_jsvalue_slot_store_pointer_tested": 8,
+    # 0b12532106 split the body into `_known` (the caller states whether the
+    # value is a heap pointer); the class-field store calls it directly, with
+    # the stem at the same index. The plain emitter forwards its stem to it.
+    "emit_jsvalue_slot_store_pointer_tested_known": 8,
     "emit_guarded_inbounds_array_store": 4,
     "emit_guarded_inbounds_array_store_keyed": 4,
     # The static-key store IC (`expr/put_value_store_ic.rs`): its bookkeeping
@@ -616,6 +620,7 @@ STEM_EMITTER_ARG_INDEX = {
 # call passes an identifier, and the stem literal lives at THEIR call sites
 # (which the census scans through the same table above).
 STEM_FORWARDERS = {
+    "emit_jsvalue_slot_store_pointer_tested",
     "emit_guarded_inbounds_array_store",
     "emit_guarded_inbounds_array_store_keyed",
 }

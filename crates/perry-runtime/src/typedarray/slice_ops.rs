@@ -254,6 +254,7 @@ pub extern "C" fn js_typed_array_fill(
             }
         } else {
             let words = total / 8;
+            // GC_STORE_AUDIT(POINTER_FREE): encoded element bytes into a typed array's data buffer.
             for i in 0..words {
                 (base.add(i * 8) as *mut u64).write_unaligned(word);
             }
