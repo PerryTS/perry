@@ -6,6 +6,7 @@ mod audit1;
 mod raw1;
 mod inspect1;
 mod audit2;
+mod usound2;
 mod accessor_after_data_store;
 mod accessor_keys;
 mod accessor_layout_exit;
