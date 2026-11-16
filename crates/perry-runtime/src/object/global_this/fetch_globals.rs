@@ -417,7 +417,7 @@ pub extern "C" fn js_get_global_core() -> f64 {
 
 /// The slow half of the core entry: a realm that was populated in one pass
 /// because its first touch was the full entry serves both entries, and the
-/// core cell gets its own copy of the word here, once. Small, and beside the
+/// core cell gets its own registered copy of the word here, once. Small, and beside the
 /// entry in the hot-text order: a program that starts one-pass runs it once.
 /// The other case, this thread's first touch of the realm, is
 /// [`realm_core_first_touch`].
@@ -437,13 +437,10 @@ fn realm_core_slow() -> f64 {
         return js_get_global_this();
     }
     if whole != 0 {
-        // A second copy of a word whose own cell is a registered root: the
-        // realm global is kept alive through `whole` and never moves
-        // (`never_move` in its declaration), so this copy is not registered.
-        // One more root would be one more push on the root table, the only
-        // allocation a program that starts one-pass would make that a
-        // one-pass program does not.
-        THREAD_GLOBAL_THIS.with(|c| c.core.set(whole));
+        THREAD_GLOBAL_THIS.with(|c| {
+            c.core.set(whole);
+            crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
+        });
         return f64::from_bits(whole);
     }
     realm_core_first_touch(mode & REALM_MODE_POISON != 0)
