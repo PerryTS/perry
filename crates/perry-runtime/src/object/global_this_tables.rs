@@ -152,7 +152,7 @@ builtin_constructors! {
     ReferenceError => crate::fn_info!(#[realm(ReferenceError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::reference_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR); extends Error,
     EvalError => crate::fn_info!(#[realm(EvalError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::eval_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR); extends Error,
     URIError => crate::fn_info!(#[realm(URIError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::uri_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR); extends Error,
-    AggregateError => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_AGGREGATE_ERROR),
+    AggregateError => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_AGGREGATE_ERROR); extends Error,
     Symbol => crate::fn_info!(#[realm(Symbol, kind = constructor, provider = builtin_constructor, members = { for; keyFor; iterator = Symbol.iterator; asyncIterator = Symbol.asyncIterator; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::builtin_thunks::global_this_symbol_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D4); statics ["for", "keyFor", "iterator", "asyncIterator"],
     Promise => crate::fn_info!(#[realm(Promise, kind = constructor, provider = builtin_constructor, members = { resolve; reject; all; race; allSettled; any; withResolvers; try; [Symbol.species] = accessor(get = "Promise[\"@@species\"].<get>"); }, births = [Array])] export crate::object::global_this::ctor_thunks::promise_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0027); statics ["resolve", "reject", "all", "race", "allSettled", "any", "withResolvers", "try"]; species true,
     Map => crate::fn_info!(#[realm(Map, kind = constructor, provider = builtin_constructor, members = { groupBy; [Symbol.species] = accessor(get = "Map[\"@@species\"].<get>"); }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = ["%MapIteratorPrototype%", Array])] export crate::object::global_this::ctor_thunks::map_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0022); statics ["groupBy"]; species true,
@@ -237,7 +237,7 @@ builtin_constructors! {
     // codegen's `lower_builtin_new` to the dedicated runtime ctors.
     DisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
     AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
-    SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true,
+    SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true; extends Error,
     // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
     Iterator => CONSTRUCT_ONLY_INFO; statics ["from", "concat"],
     Buffer => crate::object::native_module::BUFFER_CONSTRUCTOR_INFO; statics ["from", "alloc", "allocUnsafe", "allocUnsafeSlow", "concat", "of", "isBuffer", "isEncoding", "byteLength", "compare", "copyBytesFrom", "poolSize"]; extends Uint8Array,
