@@ -1806,6 +1806,9 @@ impl GcSuppressScope {
         let was_suppressed = gc_is_suppressed();
         if !was_suppressed {
             GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_SUPPRESSED));
+            #[cfg(test)]
+            window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY
+                .with(|c| c.set(super::progress::gc_total_collection_count()));
         }
         GcSuppressScope { was_suppressed }
     }
@@ -1820,6 +1823,14 @@ pub(crate) mod window_exit_probe {
     std::thread_local! {
         pub(crate) static COLLECTIONS_AT_WINDOW_EXIT: std::cell::Cell<Option<u64>> =
             const { std::cell::Cell::new(None) };
+        /// The collection count when the current outermost window opened.
+        pub(crate) static COLLECTIONS_AT_WINDOW_ENTRY: std::cell::Cell<u64> =
+            const { std::cell::Cell::new(0) };
+        /// Set when an outermost window closes with a count other than the
+        /// one it opened with: a collection ran INSIDE that window. A test
+        /// clears it, runs builds made of several windows, and reads it.
+        pub(crate) static WINDOW_SAW_COLLECTION: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
     }
 }
 
@@ -1829,6 +1840,13 @@ impl Drop for GcSuppressScope {
             #[cfg(test)]
             window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT
                 .with(|c| c.set(Some(super::progress::gc_total_collection_count())));
+            #[cfg(test)]
+            {
+                let now = super::progress::gc_total_collection_count();
+                if window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY.with(std::cell::Cell::get) != now {
+                    window_exit_probe::WINDOW_SAW_COLLECTION.with(|c| c.set(true));
+                }
+            }
             let flags = GC_FLAGS.with(|f| {
                 let flags = f.get();
                 f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
