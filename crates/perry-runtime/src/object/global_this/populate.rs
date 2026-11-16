@@ -1244,32 +1244,9 @@ macro_rules! global_bindings {
     };
 }
 
-global_bindings! {
-    "eval", js_install_global_eval, namespace = false, enumerable = false, birth_global_eval;
-    "fetch", js_install_global_fetch, namespace = false, enumerable = true, birth_global_fetch;
-    "structuredClone", js_install_global_structuredClone, namespace = false, enumerable = true, birth_global_structured_clone;
-    "atob", js_install_global_atob, namespace = false, enumerable = true, birth_global_atob;
-    "btoa", js_install_global_btoa, namespace = false, enumerable = true, birth_global_btoa;
-    "setTimeout", js_install_global_setTimeout, namespace = false, enumerable = true, birth_global_set_timeout;
-    "clearTimeout", js_install_global_clearTimeout, namespace = false, enumerable = true, birth_global_clear_timeout;
-    "setInterval", js_install_global_setInterval, namespace = false, enumerable = true, birth_global_set_interval;
-    "clearInterval", js_install_global_clearInterval, namespace = false, enumerable = true, birth_global_clear_interval;
-    "setImmediate", js_install_global_setImmediate, namespace = false, enumerable = true, birth_global_set_immediate;
-    "clearImmediate", js_install_global_clearImmediate, namespace = false, enumerable = true, birth_global_clear_immediate;
-    "queueMicrotask", js_install_global_queueMicrotask, namespace = false, enumerable = true, birth_global_queue_microtask;
-    "gc", js_install_global_gc, namespace = false, enumerable = false, birth_global_gc;
-    "parseInt", js_install_global_parseInt, namespace = false, enumerable = false, birth_global_parse_int;
-    "parseFloat", js_install_global_parseFloat, namespace = false, enumerable = false, birth_global_parse_float;
-    "isNaN", js_install_global_isNaN, namespace = false, enumerable = false, birth_global_is_na_n;
-    "isFinite", js_install_global_isFinite, namespace = false, enumerable = false, birth_global_is_finite;
-    "encodeURI", js_install_global_encodeURI, namespace = false, enumerable = false, birth_global_encode_u_r_i;
-    "decodeURI", js_install_global_decodeURI, namespace = false, enumerable = false, birth_global_decode_u_r_i;
-    "encodeURIComponent", js_install_global_encodeURIComponent, namespace = false, enumerable = false, birth_global_encode_u_r_i_component;
-    "decodeURIComponent", js_install_global_decodeURIComponent, namespace = false, enumerable = false, birth_global_decode_u_r_i_component;
-    "escape", js_install_global_escape, namespace = false, enumerable = false, birth_global_escape;
-    "unescape", js_install_global_unescape, namespace = false, enumerable = false, birth_global_unescape;
-    "WebAssembly", js_install_global_WebAssembly, namespace = true, enumerable = false, birth_global_webassembly;
-}
+// The rows, derived by build.rs from the %Global% declaration's `observed(X)` members
+// (perry-runtime-manifest realm_global_bindings.rs), in declaration order.
+include!(concat!(env!("OUT_DIR"), "/global_bindings.rs"));
 
 pub(crate) fn global_binding_row(name: &str) -> Option<&'static GlobalBindingRow> {
     GLOBAL_BINDING_ROWS.iter().find(|row| row.name == name)
@@ -1332,7 +1309,7 @@ fn birth_global_parse_float(global: *mut ObjectHeader) -> f64 {
     birth_global_parse(global, crate::array::RealmFunctionIntrinsic::ParseFloat, "parseFloat")
 }
 
-fn birth_global_webassembly(_global: *mut ObjectHeader) -> f64 {
+fn birth_global_web_assembly(_global: *mut ObjectHeader) -> f64 {
     super::global_this_webassembly::create_webassembly_namespace()
 }
 

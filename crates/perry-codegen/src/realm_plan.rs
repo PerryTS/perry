@@ -139,6 +139,7 @@ impl RealmPlan {
                 declaration.properties.insert(
                     0,
                     RealmProperty {
+                        observed: false,
                         key: "__module__".into(),
                         symbol: false,
                         attributes: 7,
@@ -544,6 +545,7 @@ mod tests {
     #[test]
     fn descriptor_attributes_preserve_data_and_accessor_semantics() {
         let mut property = RealmProperty {
+            observed: false,
             key: "value".into(),
             symbol: false,
             attributes: 5,

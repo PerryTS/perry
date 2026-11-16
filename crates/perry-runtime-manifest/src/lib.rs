@@ -354,5 +354,6 @@ pub use perry_abi as abi;
 pub mod realm_layouts;
 #[cfg(test)]
 mod realm_owners;
+pub mod realm_global_bindings;
 pub mod realm_source;
 mod realm_storage;

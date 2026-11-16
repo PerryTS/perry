@@ -1,6 +1,6 @@
 //! Which lazily born global bindings a module can observe (RB6N26).
 //!
-//! perry-runtime births a global function or namespace row (populate.rs `GLOBAL_BINDING_ROWS`)
+//! perry-runtime births a global function or namespace row (populate.rs `GLOBAL_BINDING_ROWS`, derived from the realm declaration)
 //! only once `js_install_global_<name>` armed it, so a program that cannot observe the binding links
 //! none of its code. This pass is the observability proof. Every global binding read resolves in HIR
 //! to one of these forms, whatever codegen path later lowers it (value read, call, spread call,
@@ -21,34 +21,9 @@
 //! workers: from their own init).
 use perry_hir::{Expr, Module};
 
-/// The runtime's `GLOBAL_BINDING_ROWS` names, in its declaration order (perry-runtime
-/// object/global_this/populate.rs `global_bindings!`).
-const LAZY_GLOBAL_BINDINGS: &[&str] = &[
-    "eval",
-    "fetch",
-    "structuredClone",
-    "atob",
-    "btoa",
-    "setTimeout",
-    "clearTimeout",
-    "setInterval",
-    "clearInterval",
-    "setImmediate",
-    "clearImmediate",
-    "queueMicrotask",
-    "gc",
-    "parseInt",
-    "parseFloat",
-    "isNaN",
-    "isFinite",
-    "encodeURI",
-    "decodeURI",
-    "encodeURIComponent",
-    "decodeURIComponent",
-    "escape",
-    "unescape",
-    "WebAssembly",
-];
+/// The runtime's `GLOBAL_BINDING_ROWS` names, in declaration order: both derived from the
+/// %Global% declaration's `observed(X)` members (perry-runtime-manifest realm_global_bindings.rs).
+use perry_realm_table::LAZY_GLOBAL_BINDINGS;
 
 /// Names whose read yields %Global% itself.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "self", "window", "frames"];

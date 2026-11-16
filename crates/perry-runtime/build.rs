@@ -601,6 +601,8 @@ fn main() {
     let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
+    perry_runtime_manifest::realm_global_bindings::write_runtime(&realm, &out)
+        .expect("derive global binding rows and family links from the realm declaration");
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");

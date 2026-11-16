@@ -109,10 +109,15 @@ pub(super) fn members_with_defaults(
             default_attrs = reference_attrs;
         } else if halves.len() == 2 {
             let value = halves[1];
-            if value.first().is_some_and(|t| t.text == "ref")
+            if value.first().is_some_and(|t| matches!(t.text, "ref" | "observed"))
                 && value.get(1).is_some_and(|t| t.text == "(")
                 && value.last().is_some_and(|t| t.text == ")")
             {
+                // `observed(X)`: the member's value is `X`, born only in programs whose
+                // code can observe it (realm_global_bindings.rs derives the rows).
+                if value[0].text == "observed" {
+                    property.insert("observed".into(), Value::Bool(true));
+                }
                 let name = facts::path(&value[2..value.len() - 1])?;
                 result.births.insert(name.clone());
                 property.insert("value".into(), reference(name));

@@ -30,6 +30,9 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
         writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects}, own: {own}, proto: {:?} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap(),d.prototype).unwrap();
     }
     rust.push_str("];\n");
+    let bindings = perry_runtime_manifest::realm_global_bindings::observed_global_bindings(&raw)?;
+    writeln!(rust, "/// The lazily born global bindings (%Global%'s `observed(X)` members), in declaration order.").unwrap();
+    writeln!(rust, "pub const LAZY_GLOBAL_BINDINGS: &[&str] = &{:?};", bindings.iter().map(|b| b.name.as_str()).collect::<Vec<_>>()).unwrap();
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;
     std::fs::write(
         out.join("realm-consume-time-ns"),

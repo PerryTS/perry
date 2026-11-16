@@ -57,6 +57,9 @@ pub struct RealmProperty {
     pub get: Option<String>,
     #[serde(default)]
     pub set: Option<String>,
+    /// Declared `observed(X)`: a global binding born only where code can observe it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
