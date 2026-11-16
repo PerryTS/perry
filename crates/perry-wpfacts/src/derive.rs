@@ -2375,6 +2375,10 @@ fn judge(
                         slots.push(f.slot)
                     }
                     Some(f) if !f.data_field => match accessor_one(m, t, s.key, false) {
+                        // An own data property shadows the getter (10.1.8.1).
+                        Ok(AccOne::Fn(_)) if may_own_data_key(m, *tm, s.key) => {
+                            verdict.get_or_insert(Verdict::No("read: an instance may own the key".into()));
+                        }
                         Ok(AccOne::Fn(x)) => acc.push(x),
                         _ => {
                             verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
@@ -2421,8 +2425,12 @@ fn judge(
                     {
                         statics += 1
                     }
-                    // An inherited accessor (ACCSITE1 S5).
-                    Some(_) | None if matches!(accessor_one(m, t, s.key, false), Ok(AccOne::Fn(_))) => {
+                    // An inherited accessor (ACCSITE1 S5), when no instance
+                    // owns the key as data (10.1.8.1 step 1 finds that first).
+                    Some(_) | None
+                        if !may_own_data_key(m, *tm, s.key)
+                            && matches!(accessor_one(m, t, s.key, false), Ok(AccOne::Fn(_))) =>
+                    {
                         if let Ok(AccOne::Fn(x)) = accessor_one(m, t, s.key, false) {
                             acc.push(x);
                         }
@@ -2744,6 +2752,18 @@ fn judge(
     (receivers, top, verdict, fixed_shape, targets)
 }
 
+/// An instance of template `tm` may own `a` as a data property: a class
+/// field (DefineField, 7.3.33: a birth key), a birth descriptor, or a later
+/// data definition (rule D2, `defined_keys`). OrdinaryGet (ECMA-262 10.1.8.1
+/// step 1) and OrdinarySet (10.1.9.2 step 1) find that own property first, so
+/// an inherited accessor of `a` never runs for it: `accessor_one`'s
+/// precondition, checked by every caller that takes its accessor arm.
+fn may_own_data_key(m: &Model, tm: TmplId, a: Atom) -> bool {
+    m.tmpls[tm as usize].birth_keys.contains(&a)
+        || m.birth_attrs.contains_key(&(tm, a))
+        || m.defined_keys.get(&tm).is_some_and(|ks| ks.contains(&a))
+}
+
 /// ACCSITE1: where a named lookup of `a` from receiver `t` ends.
 enum AccOne {
     /// The one accessor function (getter for a read, setter for a store).
@@ -2941,10 +2961,7 @@ fn judge_store(
                         // descriptor or a later data definition (rule D2,
                         // `defined_keys`) makes an own property that 10.1.9.2
                         // step 1 finds first. `accessor_one`'s precondition.
-                        Ok(AccOne::Fn(_))
-                            if m.tmpls[*tm as usize].birth_keys.contains(&s.key)
-                                || m.birth_attrs.contains_key(&(*tm, s.key))
-                                || m.defined_keys.get(tm).is_some_and(|ks| ks.contains(&s.key)) =>
+                        Ok(AccOne::Fn(_)) if may_own_data_key(m, *tm, s.key) =>
                         {
                             why.get_or_insert("store: an instance may own the key".into());
                         }
