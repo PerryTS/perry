@@ -1641,7 +1641,10 @@ impl Model {
                     self.add_s(terms[i], &Vec::new(), (val & !VAL_PRIM) as u16, crate::model::STRS_NONE);
                 } else if by_str {
                     // Rule M1: the parameter is that string constant.
+                    // The run is keyed by the text: a caller may pass a
+                    // String born at run time (`STRS_RUN`).
                     let ss = self.str_set(&[val]);
+                    let ss = self.run_born(ss);
                     self.add_s(terms[i], &Vec::new(), crate::model::prim::STR, ss);
                 } else {
                     self.add_tok(terms[i], val);
