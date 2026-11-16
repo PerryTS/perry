@@ -57,6 +57,8 @@ If you've used ink, the only real difference at the surface is the **factory cal
 
 `run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: reset hook index → call the component closure → diff the returned widget tree against the front buffer → emit minimal ANSI to reconcile → drain pending keypresses (dispatching to `useInput` handlers and the focus ring) → if any state changed, immediately re-render; else idle 16 ms. Exit happens when `exit()` (or `useApp().exit()`) flips a flag the loop checks at the top of every iteration. On exit, raw mode is restored and the alt screen is left so your terminal returns to exactly the state it was in before the program ran.
 
+Widget handles key a hash-indexed registry, so looking one up is average O(1) however many widgets exist; `lookup` still copies the node, so its cost follows the node's text or child count. A handle stays valid for the rest of the process: the registry never reclaims nodes.
+
 ## What's next
 
 - [Widgets](widgets.md) — `Box`, `Text`, `Input`, `List`, `Select`, `Spinner`, `ProgressBar`, `Table`, `Tabs`, and the per-widget style props.
