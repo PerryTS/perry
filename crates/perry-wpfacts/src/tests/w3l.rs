@@ -29,6 +29,21 @@ fn solve(mods: &[(&str, &str)], roots: &[&str], worker_paths: &[&str]) -> (Vec<S
                 *paths = worker_paths.iter().map(|p| p.to_string()).collect();
             }
         });
+        // The driver resolves each Worker specifier through an import of
+        // the creating module (`module_roots`): mirror it.
+        let mut has_worker = false;
+        perry_hir::for_each_worker_new(&hir, &mut |_| has_worker = true);
+        if let Some(base) = hir.imports.first().cloned().filter(|_| has_worker) {
+            for p in worker_paths {
+                let mut i = base.clone();
+                i.source = p.to_string();
+                i.specifiers.clear();
+                i.is_native = false;
+                i.type_only = true;
+                i.resolved_path = p.strip_prefix("./").map(|s| format!("{s}"));
+                hir.imports.push(i);
+            }
+        }
         hirs.push((Box::leak(path.into_boxed_str()) as &str, &*Box::leak(Box::new(hir))));
     }
     let mut g = crate::gen::Gen::new(hirs, false, true);
@@ -148,4 +163,21 @@ fn w3l_r2_compute_path_proves_the_bare_call() {
     let at = STORED.find("addEventListener(").unwrap() as u32;
     let v: Vec<_> = pf.sites.iter().filter(|s| s.byte_offset >= at && s.byte_offset < at + 20).map(|s| (s.key.clone(), s.verdict.clone())).collect();
     assert!(!v.is_empty() && v.iter().all(|(_, v)| !format!("{v:?}").starts_with("No(")), "{v:?}\n{}", pf.dump_text().lines().filter(|l| l.contains("addEventListener") || l.contains("unksrc")).take(20).collect::<Vec<_>>().join("\n"));
+}
+
+// K6: `console.log` lowers to the same sentinel (`GlobalGet(0).log`): the
+// sentinel routes the Console methods (and `resolve` / `reject`) by name,
+// so they are never [[Get]](globalThis, name) (`sentinel_user_global`).
+#[test]
+fn w3l_k6_console_names_keep_their_route() {
+    let src = "const l = console.log; l(\"a\"); console.log(\"b\", process.argv[2]);\n";
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    let pf = crate::compute(&list, &cfg);
+    let d = pf.dump_text();
+    assert!(!d.contains("absent global"), "{d}");
 }

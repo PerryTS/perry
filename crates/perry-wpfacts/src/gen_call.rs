@@ -424,13 +424,14 @@ impl<'a> Gen<'a> {
     }
 
     /// S8: `object.property` is a bare name on the global sentinel (the
-    /// module declares no global 0) that the main realm declares neither
-    /// on the global object nor on its chain (`global_user_key`).
+    /// module declares no global 0) that the sentinel does not route by
+    /// name and the main realm declares neither on the global object nor
+    /// on its chain (`sentinel_user_global`).
     pub(crate) fn bare_user_global(&self, mi: u32, object: &Expr, property: &str) -> bool {
         !self.m.unit_mode
             && matches!(object, Expr::GlobalGet(0))
             && !self.modules[mi as usize].1.globals.iter().any(|g| g.id == 0)
-            && crate::builtins::global_user_key(&self.m, property)
+            && crate::builtins::sentinel_user_global(&self.m, property)
     }
 
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {

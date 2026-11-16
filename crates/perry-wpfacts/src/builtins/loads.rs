@@ -829,7 +829,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.load_from(g, g, key, dst);
                 } else if matches!(n, "undefined" | "NaN" | "Infinity") {
                     m.add_prim(dst, prim::NUM | prim::UNDEF);
-                } else if !m.unit_mode && global_user_key(m, n) {
+                } else if !m.unit_mode && super::native_protocol::sentinel_user_global(m, n) {
                     // S8: a name the realm declares neither on the global
                     // object nor on its chain: the read is [[Get]](globalThis,
                     // n) (ECMA-262 9.1.1.4.6 GetBindingValue of the global

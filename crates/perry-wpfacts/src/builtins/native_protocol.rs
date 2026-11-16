@@ -1179,6 +1179,19 @@ pub fn global_user_key(m: &Model, name: &str) -> bool {
         })
 }
 
+/// S8: a name on the global sentinel (HIR `GlobalGet(0)`: an identifier
+/// with no binding; `console` lowers to it too) that is a program-owned key
+/// of the global object (`global_user_key`) and that the sentinel does not
+/// route by name. Codegen lowers the Console methods (lower_call
+/// console_promise.rs; `host_of`) and `resolve` / `reject` (the Promise
+/// statics) on the sentinel itself, whatever the global object holds. Any
+/// other such name is [[Get]](globalThis, name).
+pub fn sentinel_user_global(m: &Model, name: &str) -> bool {
+    global_user_key(m, name)
+        && !matches!(name, "resolve" | "reject")
+        && super::host_of(BuiltinNs::Other, name, true).is_none()
+}
+
 /// A global function the realm declares (`fetch`, `setTimeout`), stored
 /// over by the program: the global object is an ordinary object (ECMA-262
 /// 9.3, 19), so the store makes the value property `name` of it, read by
