@@ -222,7 +222,12 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
+            // `arrayRecordCloseAbsent` (js_array_record_close_absent): a
+            // shape lookup of `return` on %ArrayIteratorPrototype%'s chain;
+            // an accessor answers false without being called, so no program
+            // code runs here; the close itself is `arrayRecordClose`'s model.
             "arrayRecordNeedsIterator"
+            | "arrayRecordCloseAbsent"
             | "arrayRecordForBound"
             | "hasPathModule"
             | "isBuiltin"
