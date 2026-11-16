@@ -426,7 +426,9 @@ impl<'a> FuncEmitCtx<'a> {
     /// the open frame, whose memory outlives any nested call, because the fixed
     /// temp locals do not survive the expressions that produced them. Slot 2
     /// carries the updated value to `setter`; the result is the updated value
-    /// for prefix and the old one for postfix.
+    /// for prefix and the old one for postfix. The old value goes through
+    /// `number_coerce` first, so `null`, booleans and strings update as numbers
+    /// instead of as NaN-box bits.
     fn emit_member_update(
         &mut self,
         func: &mut Function,
@@ -454,6 +456,16 @@ impl<'a> FuncEmitCtx<'a> {
             }));
         }
         self.emit_memcall(func, getter, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_frame_begin(func, 1);
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_memcall(func, "number_coerce", 1);
         func.instruction(&Instruction::LocalTee(self.temp_local));
         func.instruction(&Instruction::F64ReinterpretI64);
         func.instruction(&f64_const(1.0));

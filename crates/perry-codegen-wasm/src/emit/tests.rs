@@ -1361,3 +1361,17 @@ fn member_update_evaluates_base_and_key_once() {
         "1 2 1\n3 3 2\n5 6,6 1"
     );
 }
+
+#[test]
+fn member_update_converts_the_old_value_to_a_number() {
+    assert_eq!(
+        run_web_source(
+            "const o: any = { x: null, b: true, s: '5' };
+             const a = o.x++; console.log(a, o.x);
+             const b = o.b++; console.log(b, o.b);
+             const c = ++o.s; console.log(c, o.s);
+             const arr: any[] = [null]; const d = arr[0]--; console.log(d, arr[0]);"
+        ),
+        "0 1\n1 2\n6 6\n0 -1"
+    );
+}
