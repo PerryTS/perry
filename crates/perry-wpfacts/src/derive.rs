@@ -1814,8 +1814,33 @@ fn indexed_length(
     use crate::builtins::NativeFamily;
     let (prim, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     if prim != 0 && prim != crate::model::prim::STR {
+        if why_indexed() {
+            eprintln!("WHY_INDEXED length @{} prims {}", s.byte_offset, crate::model::prim::name(prim));
+        }
         return None;
     }
+    // Diagnostic (off: one flag read): a receiver refused before the typed
+    // array check, with its template kind and ArraySpeciesCreate species.
+    let refused = |t: Tok| {
+        if why_indexed() {
+            let (kind, species) = match m.toks[t as usize] {
+                TokKind::Obj(tm, _) => {
+                    let tpl = &m.tmpls[tm as usize];
+                    let sp = tpl.species.map(|c| {
+                        m.nodes[c as usize].pts.to_sorted().into_iter().map(|v| m.tok_name(v)).collect::<Vec<_>>()
+                    });
+                    (format!("{:?}", tpl.kind).chars().take(60).collect::<String>(), sp)
+                }
+                _ => ("not an object".to_string(), None),
+            };
+            eprintln!(
+                "WHY_INDEXED length @{} refused {} marker={} kind={kind} species={species:?}",
+                s.byte_offset,
+                m.tok_name(t),
+                m.is_marker(t)
+            );
+        }
+    };
     let mut typed = false;
     for &t in toks {
         if m.closed_marker(t) {
@@ -1823,6 +1848,7 @@ fn indexed_length(
         }
         if !exact_array(m, t) {
             let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+                refused(t);
                 return None;
             };
             let is_typed = matches!(
@@ -1833,6 +1859,9 @@ fn indexed_length(
                 }
             );
             if !is_typed || m.is_marker(t) || !native_own_free(m, NativeFamily::TypedArray, t, s.key) {
+                if !is_typed {
+                    refused(t);
+                }
                 if is_typed && why_indexed() {
                     let a = s.key;
                     eprintln!(
