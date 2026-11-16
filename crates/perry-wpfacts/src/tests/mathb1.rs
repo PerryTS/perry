@@ -305,6 +305,44 @@ fn mathb1b_ctor_define_through_the_pair() {
 }
 
 
+// ---- MATHB2: the generic call's arguments ----
+
+/// The generic call of the pair takes the nodes the intrinsic arm evaluated
+/// its arguments to, by position: in `Math.max(h(f()), f())` the second
+/// argument is the outer `f()` (f runs twice, h once), not the `f()` inside
+/// `h(…)` that is structurally equal to it.
+#[test]
+fn mathb2_pair_args_by_position() {
+    let src = "let n = Number(process.argv[2]);\nconst f = () => ++n;\nconst h = (y: number) => y * 2;\nconsole.log(Math.max(h(f()), f()));\n";
+    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").expect("parses")));
+    let mut set = perry_hir::PatchedBuiltins::new();
+    perry_hir::scan_patched_builtins(ast, &mut set);
+    set.namespace_pairs = true;
+    perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+    let hir = perry_hir::lower_module(ast, "t", "t.ts");
+    perry_hir::clear_patched_builtins();
+    let hir = Box::leak(Box::new(hir.expect("lowers")));
+    let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
+    g.m.ns_pairs = true;
+    g.m.max_work = 50_000_000;
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    let pair: Vec<crate::model::CallId> = g.m.ns_pair_calls.iter().filter(|(_, &(_, k))| g.m.atoms[k as usize] == "max").map(|(&c, _)| c).collect();
+    assert!(!pair.is_empty());
+    let fr: Vec<crate::model::NodeId> = g.m.calls.iter().filter(|c| c.args.is_empty()).map(|c| c.ret).collect();
+    let hc: Vec<&crate::model::CallSite> = g.m.calls.iter().filter(|c| c.args.len() == 1 && fr.contains(&c.args[0])).collect();
+    assert_eq!(fr.len(), 2, "f runs twice");
+    assert_eq!(hc.len(), 1, "h runs once");
+    for c in pair {
+        let gc = &g.m.calls[c as usize];
+        eprintln!("MB2 generic {c} args {:?} f rets {fr:?} h args {:?}", gc.args, hc[0].args);
+        assert_eq!(gc.args.len(), 2);
+        assert_eq!(gc.args[0], hc[0].ret, "first argument: h's result");
+        assert!(fr.contains(&gc.args[1]) && gc.args[1] != hc[0].args[0], "second argument: the outer f()");
+    }
+}
+
 /// MATHB2 4: knob off, the pairs main emits (a `globalThis[k] = v` store
 /// guards every direct namespace call by the shadow bit) keep main's walk of
 /// both arms: no pair call is registered, and the dump (printed `MB2DUMP`)
