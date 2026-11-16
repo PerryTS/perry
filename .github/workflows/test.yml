@@ -5325,7 +5325,11 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
-  # Linux command profile has a demonstrated green baseline (run39574495557).
+  # The `wasi_execution` plan entry starts three parallel WASI jobs
+  # (wasi-native, wasi-execution, wasi-components) so the PR gate waits for the
+  # longest one, not their sum; `gate` requires each planned one. Each keeps
+  # its own rust-cache key: they compile different units, and one shared key
+  # would hold whichever job saved first.
   wasi-native:
     name: wasi-native
     permissions:
@@ -5365,7 +5369,7 @@ jobs:
     - uses: ./.github/actions/setup-llvm22
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
-        shared-key: Linux-wasi-codegen
+        shared-key: Linux-wasi-native
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: WASI native EH toolchain and codegen regression
       run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
@@ -5379,9 +5383,6 @@ jobs:
         test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
 
   wasi-execution:
-    # The WASI checks run as three parallel jobs (wasi-native, wasi-execution,
-    # wasi-components) so the PR gate waits for the longest one, not their sum.
-    # `gate` requires each planned one.
     name: wasi-execution
     permissions:
       contents: read
@@ -5532,7 +5533,7 @@ jobs:
     - uses: ./.github/actions/setup-llvm22
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
-        shared-key: Linux-wasi-codegen
+        shared-key: Linux-wasi-components
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Install pinned Node oracle for WASI compatibility tests
       uses: ./.github/actions/perry/actions/setup-node
