@@ -303,6 +303,13 @@ impl Model {
         }
     }
 
+    /// `t` is the host object of a `values = string` declaration
+    /// (`Model::host_string_record`).
+    pub(crate) fn string_record(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "stringrecord", .. }))
+    }
+
     fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
         let f = match self.is_elem_array(t) {
             true => self.field_any(t),
@@ -386,6 +393,21 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A host object of strings (`process.env`): the runtime's [[Set]]
+        // hook (`process_env_set_field` -> `js_setenv`) runs before any
+        // other step and stores ToString(v), never `v` (a program
+        // `toString` / `@@toPrimitive` runs); no setter of the chain is met.
+        if self.string_record(t) {
+            let f = match key {
+                Key::Named(a) => self.field(t, a),
+                Key::Any(_) => self.field_any(t),
+            };
+            self.add_prim(f, prim::STR);
+            if self.ta_store_done.insert((src, site)) {
+                builtins::string_methods::to_prim(self, src, "a host string record's [[Set]] ToString");
+            }
+            return;
+        }
         // SKINROOT12: a same-key copy's named `__proto__` store runs into
         // `t` only once the copy's own store into `t` may name `__proto__`
         // (its key is the copy's key: B.2.2.1.2 applies under that key only).
@@ -522,11 +544,38 @@ impl Model {
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
+        // GLOBK G2: a store on the global object under a String key the
+        // solver cannot name (a nonzero key shape never names a symbol;
+        // `Cons::StoreIndexed`) creates or replaces one string-named own
+        // property of the global object (ECMA-262 10.1.9 OrdinarySet,
+        // 10.1.6.3) and writes no other object: its value goes into the
+        // global's any-key field, which every global binding read takes
+        // (`global_any_read`). OPTIMISTIC (owner): an unknown String key
+        // never names `__proto__`; a key whose known strings do keeps the
+        // path below.
+        // A Number key (`num_only`: an element or digits key) names an
+        // index property of the global object (ToString, 7.1.19): a String
+        // key no global binding read names, the same field.
+        if let Key::Any(shape) = key {
+            if (shape != 0 || num_only)
+                && !theirs
+                && !self.unit_mode
+                && !self.global_any_off
+                && builtins::global_object(self, t)
+                && !self.key_names_known_str(key, "__proto__")
+            {
+                let ga = builtins::global_any_field(self);
+                self.edge(src, ga);
+                self.global_any_stores.push((t, key, src, site));
+                return;
+            }
+        }
         // A program-owned global: an ordinary field of the global object
         // (one field per key, whichever token stored it).
         if let Key::Named(a) = key {
             if builtins::global_object(self, t)
-                && builtins::global_user_key(self, &self.atoms[a as usize])
+                && (builtins::global_user_key(self, &self.atoms[a as usize])
+                    || builtins::program_global_fn(self, &self.atoms[a as usize]))
                 && !builtins::native_written(self, t, a)
             {
                 let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));

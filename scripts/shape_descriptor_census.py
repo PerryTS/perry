@@ -350,6 +350,14 @@ DISPATCH_CHECKS = (
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
      r"if\s+r\.is_null\(\)\s*\{(?:\s*//[^\n]*)*\s*return\s+bag_first_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
      "nonordinary read routes to the bag-first own-key path"),
+    # The bag-first arm answers only from the bag's OWN descriptor record;
+    # every decline goes on to the checked array path.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_own",
+     r"let\s+word\s*=\s*\(\*bag\)\.parent_class_id;[\s\S]*?let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\{\s*return\s+Err\(false\);",
+     "bag-first read resolves the bag's own layout record"),
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_first_get",
+     r"Err\(true\)\s*=>\s*array_named_get_past_bag::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),\s*Err\(false\)\s*=>\s*array_named_get::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),",
+     "a bag decline routes to the checked array path"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "set_front",
      r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+Stored\(0\);",
      "store probe rejects a missing or nonordinary receiver record"),

@@ -245,19 +245,47 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             }
         }
         tl::NET_ERROR => {
-            let error = socket::error(
-                // SAFETY: The runtime keeps the completion and its spans valid until this sink
-                // returns; these reads do not retain the borrowed metadata.
-                unsafe { event.code() }.unwrap_or("EIO"),
-                &error_message(event),
-            );
-            socket::destroy(owner.get(), error);
+            // A shutdown completion follows all accepted writes. Node completes
+            // its finalizer when the peer is already gone, without turning a
+            // successful child exit into an unhandled socket error.
+            // SAFETY: Completion strings live through this sink; projection only reads
+            // native state, without retaining a borrow across callbacks or allocation.
+            let ended_peer = event.flags & tl::NET_FLAG_STALE == 0
+                && event.terminal != 0
+                && event.queued == 0
+                && unsafe {
+                    event.code() == Some("ENOTCONN")
+                        && event.syscall() == Some("shutdown")
+                        && p::socket_ptr(link).is_ok_and(|payload| {
+                            let fields = &(*payload).ext;
+                            fields.opened
+                                && !fields.connecting
+                                && fields.write_ended
+                                && !fields.shutdown_done
+                        })
+                };
+            if ended_peer {
+                shutdown(owner.get(), event.user);
+            } else {
+                let error = socket::error(
+                    // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                    // returns; these reads do not retain the borrowed metadata.
+                    unsafe { event.code() }.unwrap_or("EIO"),
+                    &error_message(event),
+                );
+                socket::destroy(owner.get(), error);
+            }
         }
         tl::NET_TIMER => {
             events::emit(owner.get(), "timeout", &[]);
         }
         _ => {}
     }
+}
+
+#[cfg(test)]
+pub(super) fn deliver_for_test(completion: &tl::NetCompletion) {
+    sink(completion);
 }
 
 fn error_message(event: &tl::NetCompletion) -> String {

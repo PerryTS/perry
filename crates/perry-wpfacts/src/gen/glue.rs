@@ -180,14 +180,21 @@ impl<'a> Gen<'a> {
             self.m.add_prim(out, vals);
             return out;
         }
-        let fa = self.m.field_any(t);
-        self.m.add_prim(fa, vals);
-        self.m.add_tok(fa, t);
-        let afa = self.m.field_any(at);
-        self.m.add_prim(afa, vals);
-        self.m.add_tok(afa, t);
-        self.m.add_tok(afa, at);
-        self.m.add_tok(fa, at);
+        // Without a reviver the result `t` / `at` is no value inside its own
+        // tree (`Model::json_inner`): every nested object or array is `io` /
+        // `ia`. A reviver runs with every object of the tree as its `this`
+        // and its results replace values anywhere (25.5.1.1
+        // InternalizeJSONProperty): one token for the whole tree.
+        let (io, ia) = match reviver {
+            true => (t, at),
+            false => self.m.json_inner(t, at),
+        };
+        for o in [t, at, io, ia] {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, vals);
+            self.m.add_tok(fa, io);
+            self.m.add_tok(fa, ia);
+        }
         let out = self.tmp("json");
         self.m.edge(n, out);
         self.m.add_tok(out, at);
@@ -222,7 +229,12 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
+            // `arrayRecordCloseAbsent` (js_array_record_close_absent): a
+            // shape lookup of `return` on %ArrayIteratorPrototype%'s chain;
+            // an accessor answers false without being called, so no program
+            // code runs here; the close itself is `arrayRecordClose`'s model.
             "arrayRecordNeedsIterator"
+            | "arrayRecordCloseAbsent"
             | "arrayRecordForBound"
             | "hasPathModule"
             | "isBuiltin"

@@ -464,16 +464,16 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
     }
     match base {
         Some(b) => {
-            let (pending, stops) = completeness(
-                crate::object::shapes::snap_image_shape_delta(
-                    &b.shapes,
-                    &crate::object::shapes::snap_image_shape_state(),
-                ),
-                b.token,
-                crate::object::field_get_set::snap_image_next_token(),
+            let delta = crate::object::shapes::snap_image_shape_delta(
+                &b.shapes,
+                &crate::object::shapes::snap_image_shape_state(),
             );
+            img.mint = crate::object::shapes::snap_image_mint_collect(&b.shapes);
+            let mint_stop = mint_stop(&delta, &img.mint);
+            let (pending, stops) = completeness(delta, b.token, crate::object::field_get_set::snap_image_next_token());
             img.pending = pending;
             img.stops.extend(stops);
+            img.stops.extend(mint_stop);
             img.registry = registry_record(&w, &mut img.stops);
         }
         None => img.pending = format::PENDING,
@@ -566,6 +566,37 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
         .collect()
 }
 
+/// The mint record of the shape records minted since the baseline is written (as the file
+/// holds it) and a table rebuilt from it is compared with the live one: the stop that
+/// reports its size, or the first record whose rebuilt form differs.
+fn mint_stop(delta: &crate::object::shapes::SnapShapeDelta, recs: &[format::MintRec]) -> Option<Stop> {
+    if recs.is_empty() && crate::object::shapes::snap_image_delta_minted_total(delta) == 0 {
+        return None;
+    }
+    let blob = format::mint_blob(recs);
+    let back = format::parse_mint_blob(&blob).map(|b| b.0).unwrap_or_default();
+    let bad = if back.len() == recs.len() {
+        crate::object::shapes::snap_image_mint_check(&back)
+    } else {
+        Some((back.len().min(recs.len()), format::MINT_BAD_FIELDS))
+    };
+    let mut stop = Stop { cell: 0, obj_type: 0, kind: format::STOP_MINT_RECORD, off: 0, value: 0 };
+    if let Some((i, why)) = bad {
+        stop.kind = format::STOP_MINT_MISMATCH;
+        stop.cell = i as u32;
+        stop.off = why;
+        stop.value = u64::from(recs.get(i).map_or(0, |r| r.id));
+        return Some(stop);
+    }
+    // Records per id band, as the delta counts them (16 bits each, saturating).
+    let sat = |n: u32| n.min(0xffff);
+    let m = delta.minted;
+    stop.cell = sat(m[0]) | sat(m[2]) << 16;
+    stop.off = sat(m[1]) | sat(m[3]) << 16;
+    stop.value = recs.len() as u64 | (blob.len() as u64) << 32;
+    Some(stop)
+}
+
 /// Which forms the image still lacks, and why it stops: a shape minted between the
 /// baseline and the cut (the shape slab has no form), more than the primary's
 /// class-template token. The atom table has no run-time counter: its bit stays set.
@@ -578,7 +609,7 @@ fn completeness(shapes: crate::object::shapes::SnapShapeDelta, tok0: u64, tok1: 
     if crate::object::shapes::snap_image_delta_any(&shapes) {
         pending |= format::PENDING_SHAPES;
     }
-    if crate::object::shapes::snap_image_delta_minted_total(&shapes) != 0 || shapes.changed != 0 || shapes.retired != 0 {
+    if shapes.changed != 0 || shapes.retired != 0 {
         // One stop: the records minted per id band (16 bits each, saturating), the
         // pre-existing records that changed (`off`) and those that are gone (`cell`).
         let sat = |n: u32| u64::from(n.min(0xffff));

@@ -174,6 +174,43 @@ impl Model {
         self.enum_read_key(idx, t, key, dst);
     }
 
+    /// F-A on a primitive subject: `s[k]` inside `for (k in s)` reads an
+    /// enumerable String key of ToObject(s) (ECMA-262 14.7.5.6
+    /// ForIn/OfHeadEvaluation step 6: `null` / `undefined` run no
+    /// iteration, any other value is ToObject'ed; 14.7.5.9
+    /// EnumerateObjectProperties: own, then inherited, enumerable String
+    /// keys). A String object's own enumerable keys are its indices, each
+    /// a one-character String (10.4.3.1, 10.4.3.5 StringGetOwnProperty);
+    /// its `length` is not enumerable (10.4.3.4 StringCreate). A Number,
+    /// Boolean, BigInt or Symbol wrapper has no own property (21.1.1.1,
+    /// 20.3.1.1, 21.2.1.1, 20.4.1.1). On the chain (the kind's prototype,
+    /// then Object.prototype) every built-in member is non-enumerable
+    /// (clause 18), so an inherited key is one the program made enumerable
+    /// there: the enumerable read of the kind's prototype (`enum_read_key`),
+    /// the rule of an object subject's inherited keys.
+    pub(super) fn enum_read_prim(&mut self, idx: NodeId, prim: u16, key: Key, dst: NodeId) {
+        let p = prim & !(prim::NULL | prim::UNDEF);
+        if p & prim::STR != 0 {
+            self.add_prim(dst, prim::STR);
+        }
+        for (b, ns) in [
+            (prim::STR, BuiltinNs::String),
+            (prim::NUM, BuiltinNs::Number),
+            (prim::BOOL, BuiltinNs::Boolean),
+            (prim::BIGINT, BuiltinNs::BigInt),
+            (prim::SYMBOL, BuiltinNs::Symbol),
+        ] {
+            if p & b == 0 {
+                continue;
+            }
+            let pt = match self.with_b(|m| builtins::builtin_proto_tok(m, ns)) {
+                Some(pt) => pt,
+                None => self.tok(TokKind::ObjectProto),
+            };
+            self.enum_read_key(idx, pt, key, dst);
+        }
+    }
+
     /// The enumerable read of `key` on `t` (`enum_read_tok`, `Cons::EnumLoad`);
     /// `idx` keys its one-time chain walk.
     pub(super) fn enum_read_key(&mut self, idx: NodeId, t: Tok, key: Key, dst: NodeId) {

@@ -1650,6 +1650,11 @@ pub struct Model {
     /// store sources it applied to (`true`: a store), reported with the
     /// solve profile.
     pub json_key_fired: Vec<(bool, NodeId)>,
+    /// `FactsConfig::native_externs` (ASSUMED, owner 2026-11-16).
+    pub native_externs: std::collections::BTreeMap<String, crate::NativeResult>,
+    /// The extern calls the native-extern assumption modeled: (module,
+    /// byte offset), reported as `ProgramFacts::native_extern_sites`.
+    pub native_extern_fired: Vec<(u32, u32)>,
     /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold
@@ -2787,16 +2792,47 @@ pub struct Model {
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
     /// The keys of `process` the realm declares as host arrays of strings
-    /// (`argv`, `execArgv`): per key, what the property holds (the one array
-    /// the runtime makes before the program runs, an "arraybox", or what the
-    /// program stores there) and that array.
+    /// (`argv`, `execArgv`) or a host object of strings (`env`): per key,
+    /// what the property holds (the one array / object the runtime makes,
+    /// an "arraybox" / "stringrecord", or what the program stores there) and
+    /// that object.
     pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
+    /// GLOBK G2: the global object's one field under any string key: what
+    /// the program stores there under a key proven a String it cannot name
+    /// (ECMA-262 7.1.19, 10.1.9). Made by the first such store; every
+    /// global binding read takes it (`global_any_reads` until then).
+    pub global_any: Option<NodeId>,
+    /// G2: the global binding reads made before `global_any` exists.
+    pub global_any_reads: Vec<NodeId>,
+    /// G2: the `new K(...)` calls of a literal global name made before
+    /// `global_any` exists.
+    pub global_any_news: Vec<u32>,
+    /// G2: the realm navigator's [[Prototype]] was linked to what the
+    /// any-key stores' `prototype` holds (perry-runtime navigator.rs:119
+    /// reads the live `Navigator` at the first `navigator` read).
+    pub global_any_nav: bool,
+    /// G2 off: a native the model does not follow reads a global by name
+    /// (a text-encoding stream's `.constructor`, class_meta): the any-key
+    /// stores take the realm sink again (`global_any_stores` replayed).
+    pub global_any_off: bool,
+    /// G2: the any-key stores taken, for that replay.
+    pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
+    /// (`implicit`); a computed key's object value stores under what its
+    /// ToPrimitive returns (`Cons::StoreIndexed` on that node).
+    pub to_prim_ret: crate::pts::FxHashMap<Tok, NodeId>,
+    pub to_prim_ret_nodes: crate::pts::FxHashSet<NodeId>,
+    pub to_prim_key_done: crate::pts::FxHashSet<(NodeId, NodeId, u32)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Per module: a Worker of the program may run it (`Gen::worker_side`):
+    /// it is reachable from a Worker entry module, or some Worker's entry
+    /// is not named. A module past the end counts as one (unknown).
+    pub worker_side: Vec<bool>,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
@@ -3434,6 +3470,11 @@ pub const MARK_TOUCHES: u8 = MARK_TOUCH
 mod token_values;
 
 impl Model {
+    /// A Worker of the program may run module `mi` (`worker_side`).
+    pub(crate) fn worker_side_module(&self, mi: u32) -> bool {
+        self.worker_side.get(mi as usize).copied().unwrap_or(true)
+    }
+
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
     }

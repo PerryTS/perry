@@ -29,6 +29,7 @@ mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
+pub use native_protocol::sentinel_user_global;
 pub use undeclared::{
     builtin_function, global_object, native_may_be, realm_reads_store, undeclared,
 };
@@ -48,7 +49,7 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
+    global_any_field, global_any_names, global_any_new, global_field, global_user_key, program_global_fn, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_nonplain_written, native_parent_value, native_proto, native_written, native_written_by, native_writers_why, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
@@ -1663,6 +1664,18 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
             // or [[ArrayBufferMaxByteLength]] (ECMA-262 10.4.5, 23.2.5.1.1
             // AllocateTypedArray, 25.3.2.1): a buffer method on it throws.
             TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. } if buffer => true,
+            // A box whose creator makes an ordinary object, an array or a
+            // null-prototype object (`members::box_chain` known: a
+            // `JSON.parse` object, ECMA-262 25.5.1 / 10.1.12
+            // OrdinaryObjectCreate, 10.4.2.2 ArrayCreate) has no
+            // [[NumberData]], [[BooleanData]], [[SymbolData]] or
+            // [[BigIntData]] either: only the wrapper constructors and
+            // ToObject make those (21.1.1.1, 20.3.1.1, 20.4.1, 21.2.1,
+            // 7.1.18), so thisNumberValue & co. throw a TypeError on it.
+            TmplKind::BObj { what: w, .. } if !slot => {
+                members::bobj_family(w) == Family::Box
+                    && members::box_chain(w) != members::BoxChain::Unknown
+            }
             TmplKind::BObj { what: w, .. } => {
                 slot
                     && !matches!(*w, "TypedArray" | "Buffer")
@@ -1692,7 +1705,13 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // A console `%s` / ToPrimitive lookup that finds such a native on a
         // class (three.core.js `error()`, rule CONSOLE-PCT) only throws.
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
-        TokKind::Builtin(_) => slot,
+        // A built-in function object (a constructor such as `Object`, a
+        // namespace method value) is made by CreateBuiltinFunction (ECMA-262
+        // 10.3.4) with no [[NumberData]], [[BooleanData]], [[SymbolData]]
+        // or [[BigIntData]]; a typed array or buffer slot only a non-function
+        // namespace may stand for (`Number.prototype` is itself a Number
+        // object, 21.1.3: no function).
+        TokKind::Builtin(_) => slot || builtin_function(m, r),
         _ => false,
     }
 }
@@ -2448,12 +2467,21 @@ pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool, reviver: 
         m.json_root(j, ja);
         return (j, ja);
     }
-    let fa = m.field_any(j);
     let vals = if reviver { prim::ALL } else { prim::JSON };
-    for f in [fa, m.field_any(ja)] {
+    // Without a reviver the result `j` / `ja` is no value inside its own
+    // tree (`Model::json_inner`): every nested object or array is `io` /
+    // `ia`. A reviver runs with every object of the tree as its `this` and
+    // its results replace values anywhere (25.5.1.1
+    // InternalizeJSONProperty): one token for the whole tree.
+    let (io, ia) = match reviver {
+        true => (j, ja),
+        false => m.json_inner(j, ja),
+    };
+    for o in [j, ja, io, ia] {
+        let f = m.field_any(o);
         m.add_prim(f, vals);
-        m.add_tok(f, j);
-        m.add_tok(f, ja);
+        m.add_tok(f, io);
+        m.add_tok(f, ia);
     }
     (j, ja)
 }
@@ -3009,6 +3037,27 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
     ret_prim(m, call, prim::UNDEF);
 }
 
+/// %Promise%.resolve / %Promise%.reject with this = %Promise% (ECMA-262
+/// 27.2.4.7 PromiseResolve, 27.2.4.6 NewPromiseCapability and its reject
+/// function): a fresh promise; `resolve` adopts the argument (a thenable's
+/// `then` is called in a later job), `reject` makes the argument the
+/// rejection value a `.catch` handler or an `await`'s throw arm reads.
+fn promise_resolve_reject(m: &mut Model, name: &str, call: CallId) {
+    let p = site_tmpl(m, call, "Promise");
+    let v = promise_value(m, p);
+    if let Some(a) = arg(m, call, 0) {
+        if name == "resolve" {
+            adopt(m, call, a, v);
+        } else {
+            let thrown = m.thrown;
+            m.edge(a, thrown);
+        }
+    } else {
+        m.add_prim(v, prim::UNDEF);
+    }
+    ret_tok(m, call, p);
+}
+
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
@@ -3021,6 +3070,21 @@ fn ns_method_inner(
     call: CallId,
     identified: bool,
 ) {
+    // The step driver of an async function (perry-transform
+    // generator/lower/async_step.rs, resume.rs) settles its promise with
+    // `GlobalGet(0).reject(e)`. Codegen lowers a `resolve` / `reject` call on
+    // the global sentinel to the runtime's function itself
+    // (lower_call/console_promise.rs `try_lower_promise_static_call`:
+    // `js_promise_resolved` / `js_promise_rejected`): it reads no binding of
+    // the global object, so no store replaces it. That is %Promise%.reject /
+    // .resolve with this = %Promise% (ECMA-262 27.2.4.6, 27.2.4.7): a fresh
+    // promise settled by the argument; no program code runs at the call.
+    if ns == BuiltinNs::Other {
+        if let Some(n @ ("resolve" | "reject")) = name {
+            m.diagnostic_builtin(call, |_| format!("Promise.{n}"));
+            return promise_resolve_reject(m, n, call);
+        }
+    }
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
             || ns == BuiltinNs::Other && (identified || global_function(m, name))
@@ -3174,6 +3238,17 @@ fn ns_method_inner(
             } else {
                 ns_method(m, BuiltinNs::Other, Some(n), call);
             }
+        }
+        // A process method whose effects the runtime declares at the body its
+        // dispatch arm calls (`process.cwd`), reached through its function
+        // value (`process.cwd?.()`, `const f = process.cwd; f()`): the
+        // native is the bound method of the one process object, so the
+        // declaration runs whatever `this` is, as the direct call does.
+        (BuiltinNs::Process, n)
+            if !m.unit_mode && effects::declared_member(&format!("process.{n}")).is_some() =>
+        {
+            let e = effects::declared_member(&format!("process.{n}")).expect("the guard found it");
+            effects::run_function(m, e, call);
         }
         // A global function the realm declares (`fetch`), while the global
         // holds it: what its declaration says. A write under the name (now,
@@ -3522,21 +3597,7 @@ fn ns_method_inner(
             implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
         }
-        (BuiltinNs::Promise, "resolve" | "reject") => {
-            let p = site_tmpl(m, call, "Promise");
-            let v = promise_value(m, p);
-            if let Some(a) = arg(m, call, 0) {
-                if name == "resolve" {
-                    adopt(m, call, a, v);
-                } else {
-                    let thrown = m.thrown;
-                    m.edge(a, thrown);
-                }
-            } else {
-                m.add_prim(v, prim::UNDEF);
-            }
-            ret_tok(m, call, p);
-        }
+        (BuiltinNs::Promise, "resolve" | "reject") => promise_resolve_reject(m, name, call),
         (BuiltinNs::Promise, "all" | "allSettled" | "race" | "any") => {
             let p = site_tmpl(m, call, "Promise");
             let v = promise_value(m, p);

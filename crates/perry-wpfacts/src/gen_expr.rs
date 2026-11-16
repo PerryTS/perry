@@ -466,6 +466,7 @@ impl<'a> Gen<'a> {
         let pa = self.member_atom(inner, p);
         if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
+                global_get: false,
                 access: crate::derive::Access::Read,
                 module: mi,
                 byte_offset: *byte_offset,
@@ -1167,6 +1168,7 @@ impl<'a> Gen<'a> {
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
                     if *byte_offset != 0 {
                         self.read_sites.push(ReadSite {
+                            global_get: false,
                             access: crate::derive::Access::Read,
                             module: mi,
                             byte_offset: *byte_offset,
@@ -1188,6 +1190,7 @@ impl<'a> Gen<'a> {
                 let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
+                        global_get: false,
                         access: crate::derive::Access::Read,
                         module: mi,
                         byte_offset: *byte_offset,
@@ -1205,6 +1208,16 @@ impl<'a> Gen<'a> {
                     return callee;
                 }
                 let dst = self.load(o, Key::Named(a));
+                // S8: on the global sentinel a name the main realm does not
+                // declare is [[Get]] on the global object (`loads::tok_load`);
+                // in a module a Worker may run, the Worker global's own
+                // native of that name (perry-stdlib worker_threads
+                // worker_surface.rs: `postMessage`, `addEventListener`, …)
+                // may be the value as well: unknown to the model.
+                if self.bare_user_global(mi, object, property) && self.m.worker_side_module(mi) {
+                    self.m.add_top(dst, |_| format!("Worker global {property}"));
+                    self.m.add_prim(dst, prim::ALL);
+                }
                 self.field_reads.push(dst);
                 if *byte_offset != 0 {
                     self.load_sites.push((mi, *byte_offset, a, dst));
@@ -1231,6 +1244,7 @@ impl<'a> Gen<'a> {
                 if compound {
                     for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false, uint_value: false }] {
                         self.store_sites.push(ReadSite {
+                            global_get: false,
                             module: mi,
                             byte_offset: *byte_offset,
                             key: a,
@@ -1293,6 +1307,7 @@ impl<'a> Gen<'a> {
                             _ => false,
                         };
                         self.store_sites.push(ReadSite {
+                            global_get: false,
                             module: mi,
                             byte_offset: *element_offset,
                             key: a,

@@ -2328,14 +2328,16 @@ unsafe fn probe_set_slot_any(
     core::hint::black_box(1)
 }
 
-/// [`perry_probe_set`]'s barrier for an overflow value word [`own_set`]
-/// wrote ([`OwnSet::Table`]).
+/// [`perry_probe_set`]'s barriered store into the overflow value word
+/// [`own_set`] found ([`OwnSet::Table`]).
 #[inline(never)]
 unsafe fn probe_set_table_barrier(
     t: *mut crate::object::overflow::Table,
     address: *mut u64,
     bits: u64,
 ) -> i32 {
+    // GC_STORE_AUDIT(BARRIERED): the table owns this value word.
+    *address = bits;
     crate::gc::runtime_write_barrier_slot(t as usize, address as usize, bits);
     // Opaque: a known constant return lets IPO take the call out of tail position.
     core::hint::black_box(1)
@@ -2368,7 +2370,8 @@ pub(crate) enum OwnSet {
     /// An own plain writable slot of lane ANY for a value that is no finite
     /// Number: the caller makes the barriered store ([`own_slot_store_any`]).
     Slot(*mut ObjectHeader, *mut u64, u32),
-    /// An overflow-owned plain value word, written: its barrier remains.
+    /// An overflow-owned plain writable value word: the caller makes the
+    /// barriered store.
     Table(*mut crate::object::overflow::Table, *mut u64),
     /// A hole in an own inline slot the record's list names by a plain
     /// writable entry (the key is absent): the caller asks whether the
@@ -2469,11 +2472,7 @@ pub(crate) unsafe fn own_set(
             if !crate::object::overflow::plain_writable_value(t, i) {
                 return OwnSet::Rest;
             }
-            let address = crate::object::overflow::value_at(t, i);
-            // GC_STORE_AUDIT(BARRIERED): the table owns this value word; the
-            // caller's tail call is its barrier.
-            *address = bits;
-            return OwnSet::Table(t, address);
+            return OwnSet::Table(t, crate::object::overflow::value_at(t, i));
         }
     }
     // The hit takes the receiver from its value bits and computes the

@@ -85,6 +85,18 @@ pub use signatures::Signature;
 /// Reserved atom for computed-key accessors ("any key").
 pub(crate) const STAR_KEY: &str = "\u{1}*";
 
+/// The JS kind of a native-library extern's result as perry's lowering makes
+/// it from the manifest descriptor (perry-codegen `lower_call/extern_func.rs`):
+/// `void` is `undefined`, `string` / `i64_str` a string, `bool` a boolean,
+/// every numeric descriptor a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeResult {
+    Number,
+    String,
+    Boolean,
+    Undefined,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
@@ -157,6 +169,13 @@ pub struct FactsConfig {
     /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12;
     /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`): `Model::json_key_optimistic`.
     pub optimistic_json_key: bool,
+    /// ASSUMED (owner 2026-11-16, "Assume it for now", interim until an
+    /// exact link-time check of the library's imports): a native-library
+    /// extern whose manifest signature (`perry.nativeLibrary.functions`) has
+    /// only primitive parameters and result reaches no program object. By
+    /// symbol, the externs the driver found so, with their result kind
+    /// (`Gen::native_extern_call`); empty: every extern call is unknown code.
+    pub native_externs: std::collections::BTreeMap<String, NativeResult>,
     /// JSON position classes (`solve::json_pos`), default OFF
     /// (`PERRY_FACTS_JSON_POSITIONS=1`): off, a parse's objects are one
     /// token (BATCHB28: on, the three.js skin solve runs past its bound).
@@ -361,6 +380,10 @@ pub struct ProgramFacts {
     /// aborted solve answers `Some`). Interpreted code is
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
+    /// ASSUMED (`FactsConfig::native_externs`): the extern call sites
+    /// (module path, byte offset) modeled by the native-extern assumption;
+    /// every fact of the program rests on it when this is non-empty.
+    pub native_extern_sites: Vec<(String, u32)>,
     /// #13645: an array's `@@iterator` may not be the builtin, and why
     /// (`Model::array_iteration_writes`); `None`: compiled code never
     /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
@@ -527,6 +550,7 @@ fn generate<'a>(
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
     g.m.optimistic_json_key = cfg.optimistic_json_key;
+    g.m.native_externs = cfg.native_externs.clone();
     g.m.json_positions = cfg.json_positions;
     g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
     g.m.reach_new_target =
@@ -1215,6 +1239,12 @@ fn compute_act<'a>(
     } else {
         g.m.array_iteration_writes()
     };
+    let native_extern_sites: Vec<(String, u32)> = g
+        .m
+        .native_extern_fired
+        .iter()
+        .map(|&(mi, off)| (sorted.get(mi as usize).map_or(String::new(), |s| s.0.to_owned()), off))
+        .collect();
     let fnproto_bind_written = if stats.aborted {
         Some("solve aborted".to_string())
     } else {
@@ -1340,6 +1370,7 @@ fn compute_act<'a>(
         body_reach,
         super_unrelinked,
         fnproto_bind_written,
+        native_extern_sites,
         array_iteration_written,
         array_iterator_close_written,
         fnproto_borrow_written,

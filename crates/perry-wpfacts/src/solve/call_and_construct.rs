@@ -767,7 +767,21 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
+        let a = name;
         let name = self.atoms[name as usize].clone();
+        // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
+        // what the program stored over it (`program_global_fn`) is
+        // constructed too. Perry lowers a literal builtin name to the
+        // intrinsic (below), node constructs the stored value: the union
+        // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, call);
+        }
+        if builtins::program_global_fn(self, &name) {
+            let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let f = builtins::global_field(self, g, a);
+            self.cons(f, Cons::New { call });
+        }
         self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 

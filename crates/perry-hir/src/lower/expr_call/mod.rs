@@ -81,6 +81,7 @@ mod module_class_static_tests;
 #[cfg(test)]
 mod module_object_prototype_tests;
 mod module_static;
+pub(crate) use module_static::math_intrinsic;
 mod name_fold;
 mod native_module;
 mod native_module_spread_tests;

@@ -106,6 +106,9 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
     img.pending = r.u32()?;
     img.claims_from = r.u32()?;
     let rest = r.take(r.left())?;
+    let (mint, mint_used) = parse_mint_blob(rest).ok_or("bad mint record")?;
+    img.mint = mint;
+    let rest = rest.get(mint_used..).ok_or("bad registry record")?;
     let (registry, used) = parse_registry_blob(rest).ok_or("bad registry record")?;
     img.registry = registry;
     img.claims = parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
@@ -148,6 +151,7 @@ pub fn dump(img: &Image) -> String {
         );
     }
     s += &format!("words={}\n", img.words.len());
+    s += &format!("mint-records={}\n", img.mint.len());
     s += &format!("registry={}\n", img.registry.len());
     for r in &img.registry {
         s += &format!("registry-entry key={} status={}\n", String::from_utf8_lossy(&r.key).escape_debug(), r.status);

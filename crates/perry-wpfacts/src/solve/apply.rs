@@ -1616,8 +1616,16 @@ impl Model {
                 // `length` a Number (10.4.3.5), any other key a member of
                 // the prototype chain of the kind. A for-in run's key is
                 // that one name; any other key is decided by its values
-                // (`Cons::IdxKey` with `obj` ⊤, rule NUM-KEY-PRIM).
-                if prim != 0 {
+                // (`Cons::IdxKey` with `obj` ⊤, rule NUM-KEY-PRIM). Under
+                // F-A (`enumerable`) the key is an enumerable key of the
+                // ToObject'ed subject (`enum_read_prim`).
+                if prim != 0 && enumerable {
+                    let key = match self.key_nodes.get(&idx) {
+                        Some(&a) => Key::Named(a),
+                        None => Key::Any(shape),
+                    };
+                    self.enum_read_prim(idx, prim, key, dst);
+                } else if prim != 0 {
                     match self.key_nodes.get(&idx) {
                         Some(&a) => self.with_b(|m| builtins::prim_load(m, prim, Key::Named(a), dst)),
                         None => {
@@ -2241,13 +2249,55 @@ impl Model {
                 // symbol, a BigInt) keeps the any-key store; any String
                 // stores under the any-String shape, which never names a
                 // symbol-keyed property (`key_may_name_str`).
-                let not_str = !toks.is_empty() || prim & (prim::SYMBOL | prim::BIGINT) != 0;
+                // ECMA-262 7.1.19 ToPropertyKey: an object key is
+                // ToPrimitive(key, string) (7.1.1): what its `@@toPrimitive` /
+                // `toString` / `valueOf` returns (`to_prim_ret`; an object
+                // result is no key: TypeError or the next method). It
+                // stores under that result's key (this rule on that node).
+                // ⊤, a marker or a token without the protocol's result keep
+                // the any-key store. GLOBK.
+                let ret_node = self.to_prim_ret_nodes.contains(&n);
+                let mut obj_key = false;
+                // Only a receiver that may be the global object gains from
+                // the ToPrimitive result key (G2's any-String field); every
+                // other receiver keeps the any-key store for an object key
+                // (no extra nodes).
+                let recv_global = {
+                    let gt = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    let ot = self.tok(TokKind::Builtin(BuiltinNs::Other));
+                    let p = &self.nodes[o as usize].pts;
+                    p.contains_tok(TOP) || p.contains_tok(gt) || p.contains_tok(ot)
+                };
+                if !ret_node && !recv_global {
+                    obj_key = !toks.is_empty();
+                }
+                if !ret_node && recv_global {
+                    let r = self.reason("ToPropertyKey");
+                    for &t in toks {
+                        let ret = match t != TOP && !self.is_marker(t) {
+                            true => {
+                                self.implicit(t, r, crate::model::Protocol::ToPrimitive);
+                                self.to_prim_ret.get(&t).copied()
+                            }
+                            false => None,
+                        };
+                        match ret {
+                            Some(ret) => {
+                                if self.to_prim_key_done.insert((ret, o, site)) {
+                                    self.cons(ret, Cons::StoreIndexed { o, src, site, shape });
+                                }
+                            }
+                            None => obj_key = true,
+                        }
+                    }
+                }
+                let not_str = obj_key || prim & (prim::SYMBOL | prim::BIGINT) != 0;
                 // ECMA-262 7.1.19: a key that is a Number or a BigInt and
                 // nothing else (no String, no Symbol, no object, not ⊤) is
                 // ToString of one: decimal digits, never a non-digit name.
                 // Its store is the `DIGITS` key's (`store_into`); a key
                 // that later holds more stores the Any key as well.
-                let digits = toks.is_empty()
+                let digits = (toks.is_empty() || ret_node)
                     && prim & prim::BIGINT != 0
                     && prim & !(prim::NUM | prim::BIGINT) == 0;
                 let any = not_str || (prim & prim::STR != 0 && strs == STRS_TOP) || any_prefix;
@@ -2875,7 +2925,7 @@ impl Model {
 
     /// Both prototype-change spellings contribute the same chain relation.
     /// Only an object (or `null`) is given: `src` is filtered first.
-    pub(super) fn given_prototype(&mut self, t: Tok, given: NodeId) {
+    pub(crate) fn given_prototype(&mut self, t: Tok, given: NodeId) {
         let src = self.proto_objects(given);
         if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.cons(src, Cons::ParentGiven { of: t });

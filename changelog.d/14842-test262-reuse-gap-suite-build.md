@@ -1,0 +1,1 @@
+CI: the full-tier `test262` shards link the `gap-suite-fast-build` artifact instead of each rebuilding the compiler and archives, so they start at once and judge the same package graph the release builds.

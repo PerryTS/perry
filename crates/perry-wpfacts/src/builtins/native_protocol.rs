@@ -1113,6 +1113,7 @@ pub(super) fn navigator_object(m: &mut Model) -> Tok {
     }
     let t = anon_tmpl(m, "Navigator.prototype");
     m.navigator = Some(t);
+    global_any_navigator(m);
     t
 }
 
@@ -1176,6 +1177,157 @@ pub fn global_user_key(m: &Model, name: &str) -> bool {
                 .named(holder, m)
                 .is_some_and(|s| m.declarations.property(s, name, m).is_some())
         })
+}
+
+/// S8: a name on the global sentinel (HIR `GlobalGet(0)`: an identifier
+/// with no binding; `console` lowers to it too) that is a program-owned key
+/// of the global object (`global_user_key`) and that the sentinel does not
+/// route by name. Codegen lowers the Console methods (lower_call
+/// console_promise.rs; `host_of`) and `resolve` / `reject` (the Promise
+/// statics) on the sentinel itself, whatever the global object holds. Any
+/// other such name is [[Get]](globalThis, name).
+pub fn sentinel_user_global(m: &Model, name: &str) -> bool {
+    global_user_key(m, name)
+        && !matches!(name, "resolve" | "reject")
+        && super::host_of(BuiltinNs::Other, name, true).is_none()
+}
+
+/// A global function the realm declares (`fetch`, `setTimeout`), stored
+/// over by the program: the global object is an ordinary object (ECMA-262
+/// 9.3, 19), so the store makes the value property `name` of it, read by
+/// the program's global reads of `name` (`tok_load`: the global's field
+/// beside the realm function). No native reads a global function by name:
+/// the runtime's by-name reads (`js_get_global_this_builtin_value`) name
+/// constructors (`Error`, `URL`, `Uint8Array`, the error and stream
+/// classes) and answer intrinsics otherwise (`builtin_constructor_value`),
+/// so the value reaches no unknown code. Constructors and namespaces keep
+/// the sink.
+pub fn program_global_fn(m: &Model, name: &str) -> bool {
+    !m.unit_mode
+        && name != crate::STAR_KEY
+        && super::global_function(m, name)
+        && super::ns_by_name(name).is_none()
+        && !NATIVE_READ_GLOBALS.contains(&name)
+}
+
+/// The global functions a native reads by name after the realm is set up
+/// and hands on (`js_get_global_this_builtin_value` / `builtin_value_core`
+/// = the live `globalThis[name]`): the module exports equal to the global
+/// (perry-runtime native_module/static_exports.rs:209, native_module.rs:1068,
+/// constants.rs:597/678, node_submodules/mod.rs:634), the `.constructor` of
+/// a fresh text-encoding stream (class_meta.rs:402) and the realm's
+/// `Navigator` (navigator.rs:119, at the first `navigator` read). A value
+/// the program stores under one of them reaches that native's caller, so
+/// the store keeps the sink. (The error classes, `Object`, `SyntaxError`
+/// are namespaces: `ns_by_name`.) The other by-name reads are the
+/// program's own (bare-name value reads, `instanceof`, the `super()` of a
+/// builtin parent: class_return.rs:15) or run before program code
+/// (populate.rs).
+pub(crate) const NATIVE_READ_GLOBALS: &[&str] = &[
+    "URL",
+    "URLSearchParams",
+    "URLPattern",
+    "Blob",
+    "File",
+    "TextEncoder",
+    "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
+    "CompressionStream",
+    "DecompressionStream",
+    "Navigator",
+];
+
+/// GLOBK G2: does a store under an unknown String key on the global object
+/// (`global_any_field`) replace global binding `n`? Every string-named
+/// own property of the global object, except the non-writable,
+/// non-configurable `undefined`, `NaN`, `Infinity` (ECMA-262 19.1: the
+/// [[Set]] returns false, a strict store throws) and the getter-only
+/// `navigator` (no setter: the same).
+pub fn global_any_names(m: &Model, n: &str) -> bool {
+    !m.unit_mode && !matches!(n, "undefined" | "NaN" | "Infinity" | "navigator") && n != crate::STAR_KEY
+}
+
+/// G2: a read of a global binding (bare name, `globalThis.K`, a module
+/// export equal to a global a native reads by name) also reads what the
+/// program stored under unknown String keys.
+pub fn global_any_read(m: &mut Model, dst: NodeId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_any {
+        Some(ga) => m.edge(ga, dst),
+        None => m.global_any_reads.push(dst),
+    }
+}
+
+/// G2: `new K(...)` of a literal global name constructs what the program
+/// stored under unknown String keys as well (13.3.5.1 evaluates `K`).
+pub fn global_any_new(m: &mut Model, call: CallId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_any {
+        Some(ga) => m.cons(ga, Cons::New { call }),
+        None => m.global_any_news.push(call),
+    }
+}
+
+/// G2: the global object's field under any String key, made by the first
+/// store under an unknown String key (the reads and constructs made before
+/// it are linked now).
+pub fn global_any_field(m: &mut Model) -> NodeId {
+    if let Some(ga) = m.global_any {
+        return ga;
+    }
+    let ga = m.node_l("global-any-key");
+    m.global_any = Some(ga);
+    for d in std::mem::take(&mut m.global_any_reads) {
+        m.edge(ga, d);
+    }
+    for call in std::mem::take(&mut m.global_any_news) {
+        m.cons(ga, Cons::New { call });
+    }
+    global_any_navigator(m);
+    ga
+}
+
+/// G2: the realm's navigator object takes the live `Navigator`'s
+/// `prototype` as its [[Prototype]] when the getter first runs
+/// (perry-runtime navigator.rs:119 `builtin_value_core("Navigator")`,
+/// `navigator_object_with_constructor`): with a value stored under an
+/// unknown String key that may be what `Navigator` holds then.
+pub fn global_any_navigator(m: &mut Model) {
+    let (Some(ga), Some(nav)) = (m.global_any, m.navigator) else {
+        return;
+    };
+    if m.global_any_nav {
+        return;
+    }
+    m.global_any_nav = true;
+    let p = m.node_l("global-any-Navigator.prototype");
+    let key = Key::Named(m.atom("prototype"));
+    m.cons(ga, Cons::Load { key, dst: p });
+    m.given_prototype(nav, p);
+}
+
+/// G2 off: a native the model does not follow reads a global by name and
+/// hands the value on (`TextEncoderStream` / `TextDecoderStream`
+/// `.constructor`, perry-runtime class_meta): the stores under unknown
+/// String keys take the realm's sink as before G2.
+pub fn global_any_disable(m: &mut Model) {
+    if m.global_any_off || m.unit_mode {
+        return;
+    }
+    m.global_any_off = true;
+    for (t, key, src, site) in std::mem::take(&mut m.global_any_stores) {
+        let prev = m.store_at.take();
+        m.store_into(t, key, src, site);
+        m.store_at = prev;
+    }
 }
 
 /// The global object's field under program-owned key `a`.

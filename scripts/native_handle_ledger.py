@@ -121,7 +121,6 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/geisterhand_registry.rs", "REGISTRY"): 1,
     ("crates/perry-runtime/src/tui/hooks.rs", "SLOTS"): 1,
     ("crates/perry-runtime/src/tui/state.rs", "SLOTS"): 1,
-    ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
     ("crates/perry-ffi/src/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
 }

@@ -137,7 +137,7 @@ fn missing(list: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let row: Vec<&str> = line.split('\t').collect();
-        if let ["getter-this" | "strings" | "object", _, _, _] = row[..] {
+        if let ["getter-this" | "strings" | "record" | "object" | "prim", _, _, _] = row[..] {
             continue;
         }
         if let ["native", owner, key, identity] = row[..] {
