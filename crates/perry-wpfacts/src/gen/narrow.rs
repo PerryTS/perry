@@ -768,6 +768,9 @@ pub(crate) enum Presence {
     NotUndefined,
     /// Not `null` (`Cons::NotNull`, rule T1): one that is not `=== null`.
     NotNull,
+    /// Rule T6 (`Cons::TypeIs`): only the primitives of the mask, the one
+    /// type whose `typeof` the guard compared with.
+    TypeIs(u16),
     /// `local.key` decided by a test of the read (`Cons::FieldTruthy`):
     /// rule G2 `guard::TRUTHY` (truthy), rule G1 `guard::IS_FALSE`/
     /// `NOT_FALSE`/`IS_TRUE`/`NOT_TRUE` (`=== false`/`true` decided). Neither
@@ -803,7 +806,9 @@ fn implied<'p>(
             left,
             right,
         } if positive => {
-            implied(left, true, subst, pred, depth, out);
+            let mut l = Vec::new();
+            implied(left, true, subst, pred, depth, &mut l);
+            out.extend(l.into_iter().filter(|f| holds_past(f, right)));
             implied(right, true, subst, pred, depth, out);
         }
         Expr::Logical {
@@ -811,7 +816,9 @@ fn implied<'p>(
             left,
             right,
         } if !positive => {
-            implied(left, false, subst, pred, depth, out);
+            let mut l = Vec::new();
+            implied(left, false, subst, pred, depth, &mut l);
+            out.extend(l.into_iter().filter(|f| holds_past(f, right)));
             implied(right, false, subst, pred, depth, out);
         }
         Expr::Unary {
@@ -984,6 +991,24 @@ fn implied<'p>(
             };
             if let Some(id) = host_of(object, subst, depth) {
                 out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
+        // Rule T6: `typeof local === s` true (`!==` false), `s` "string",
+        // "number", "boolean" or "undefined": the local holds a value of
+        // that one type (13.5.3 typeof table; 7.2.15 IsStrictlyEqual of
+        // Strings), through `&&` (13.13: the right operand runs only when
+        // the left is true) like every guard here. The local's binding is
+        // the narrowing's (`narrowed_read`), as for rule T1.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive) && typeof_local_mask(left, right).is_some() => {
+            let Some((x, mask)) = typeof_local_mask(left, right) else {
+                return;
+            };
+            if let Some(Bound::Local(id)) = bound_of(x, subst) {
+                out.push(Implied::Present(id, Presence::TypeIs(mask)));
             }
         }
         // Rule T2: `host.key !== null` true (`=== null` false), `!==
@@ -1174,6 +1199,39 @@ fn typeof_member_test<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, &'e Str
         _ => return None,
     };
     Some((object.as_ref(), property, test))
+}
+
+/// R9READ6: a fact the left operand of `&&` (`||` false) implies still
+/// holds after the right operand ran (13.13: the right runs between the
+/// test and the code it guards): the right writes not the local (an
+/// assignment or update in it; a predicate body has none), and for a
+/// clip, whose bound may name other locals, writes no local at all.
+fn holds_past(f: &Implied, right: &Expr) -> bool {
+    match f {
+        Implied::Present(id, _) => !expr_has(right, &mut |e| writes(e, *id)),
+        _ => !expr_has(right, &mut |e| matches!(e, Expr::LocalSet(..) | Expr::Update { .. })),
+    }
+}
+
+/// Rule T6: `typeof x` (x a local read) compared with "string", "number",
+/// "boolean" or "undefined" (either order): `x` and the primitive mask of
+/// that type (13.5.3). "object", "function", "bigint", "symbol": `None`.
+fn typeof_local_mask<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, u16)> {
+    use crate::model::prim;
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    if !matches!(o.as_ref(), Expr::LocalGet(_)) {
+        return None;
+    }
+    let mask = match s.as_str() {
+        "string" => prim::STR,
+        "number" => prim::NUM,
+        "boolean" => prim::BOOL,
+        "undefined" => prim::UNDEF,
+        _ => return None,
+    };
+    Some((o.as_ref(), mask))
 }
 
 /// A clause body that never completes normally into the next clause: its
@@ -1426,6 +1484,9 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::NotNull) => {
                     self.m.cons(src, Cons::NotNull { dst: start })
+                }
+                Implied::Present(_, Presence::TypeIs(mask)) => {
+                    self.m.cons(src, Cons::TypeIs { mask, dst: start })
                 }
                 Implied::Present(_, Presence::NotBuffer(shared)) => {
                     self.m.cons(src, Cons::NotBuffer { shared, dst: start });

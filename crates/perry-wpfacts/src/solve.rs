@@ -342,6 +342,7 @@ impl Model {
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
@@ -2054,6 +2055,7 @@ impl Model {
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::NotNull { dst } => format!("notnull {n} {dst}"),
+            Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),

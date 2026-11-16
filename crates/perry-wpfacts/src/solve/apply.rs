@@ -507,6 +507,22 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            // Rule T6: the primitives of `mask`; ⊤ and markers (values
+            // of other units, which may be of that type) pass, no other
+            // token (an object's typeof is "object" or "function").
+            Cons::TypeIs { mask, dst } => {
+                for &t in toks {
+                    if t == TOP || self.is_marker(t) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim & mask != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim & mask, strs);
+                    self.cur_range = saved;
+                }
+            }
             Cons::ProtoObjects { dst } => {
                 for &t in toks {
                     self.add_tok(dst, t);

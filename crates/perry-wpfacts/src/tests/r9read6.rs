@@ -131,3 +131,106 @@ fn k3_object_proto_clone_written() {
 fn k4_unknown_key_on_proto() {
     not_proven(&m("(W.prototype as any)[process.argv[2]] = 1;", ""), "isV");
 }
+
+/// Rule T6: `typeof local === "string"` narrows the local on the right of
+/// `&&`. `params[0]` holds a String, an object literal and a Number.
+const T: &str = "
+function f(...params: any[]) {
+  /*DECL*/
+  /*BODY*/
+  return 0;
+}
+f(process.argv[2]);
+f({ startsWith: (s: string) => s.length });
+f(Number(process.argv.length));
+";
+
+fn t(decl: &str, body: &str) -> String {
+    T.replace("/*DECL*/", decl).replace("/*BODY*/", body)
+}
+
+// t1: a `const` local tested by `typeof`: the right operand reads a String.
+#[test]
+fn t1_typeof_const_narrows() {
+    proven(
+        &t("const message = params[0];", "if (typeof message === 'string' && message.startsWith('T')) return 1;"),
+        "startsWith",
+    );
+}
+
+// KEEP t2: `||`: the right operand runs when the test failed.
+#[test]
+fn t2_or_does_not_narrow() {
+    not_proven(
+        &t("const message = params[0];", "if (typeof message === 'string' || message.startsWith('T')) return 1;"),
+        "startsWith",
+    );
+}
+
+// KEEP t3: `!==` true is the other side.
+#[test]
+fn t3_not_equal_does_not_narrow() {
+    not_proven(
+        &t("const message = params[0];", "if (typeof message !== 'string' && message.startsWith('T')) return 1;"),
+        "startsWith",
+    );
+}
+
+// KEEP t4: a `let` reassigned between the test and the use.
+#[test]
+fn t4_let_reassigned_between() {
+    not_proven(
+        &t(
+            "let message = params[0];",
+            "if (typeof message === 'string' && (message = params[1]) && message.startsWith('T')) return 1;",
+        ),
+        "startsWith",
+    );
+}
+
+// KEEP t5: a closure that assigns the local runs between test and use.
+#[test]
+fn t5_closure_assigns() {
+    not_proven(
+        &t(
+            "let message = params[0]; const g = () => { message = params[1]; return true; };",
+            "if (typeof message === 'string' && g() && message.startsWith('T')) return 1;",
+        ),
+        "startsWith",
+    );
+}
+
+/// `constructor` of an Array: `Array.prototype.constructor`, the intrinsic
+/// %Array% (23.1.3.4), a data property no store reaches.
+const C: &str = "
+/*EXTRA*/
+function k(a: any) { return a.constructor; }
+console.log(k([1, String(Math.random()).length]), k([process.argv[2]]));
+";
+
+// c1: proven (NativeMember over Arrays).
+#[test]
+fn c1_array_constructor() {
+    proven(&C.replace("/*EXTRA*/", ""), "constructor");
+}
+
+// KEEP c2: the program writes `constructor` onto Array.prototype.
+#[test]
+fn c2_array_constructor_written() {
+    not_proven(&C.replace("/*EXTRA*/", "(Array.prototype as any).constructor = process.argv[2];"), "constructor");
+}
+
+// KEEP c3: an own `constructor` stored on one of the Arrays.
+#[test]
+fn c3_own_constructor() {
+    not_proven(
+        &C.replace("/*EXTRA*/", "const z: any = [1]; z.constructor = process.argv[2]; console.log(k(z));"),
+        "constructor",
+    );
+}
+
+// KEEP m5: a stored `slice` on one class instance: the TypeError arm is gone.
+#[test]
+fn m5_instance_gains_slice() {
+    not_proven(&m("const v9: any = new V(9); v9.slice = () => 1; console.log(sl(v9));", ""), "slice");
+}

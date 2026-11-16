@@ -128,6 +128,7 @@ pub fn map_cons(
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         NotNull { dst } => NotNull { dst: n(dst) },
+        TypeIs { mask, dst } => TypeIs { mask, dst: n(dst) },
         ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
         NotBuffer { shared, dst } => NotBuffer {
             shared,
@@ -605,6 +606,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NotBuffer { .. }
             | ProtoObjects { .. }
             | NotNull { .. }
+            | TypeIs { .. }
             | Objects { .. }
             | NotUndefined { .. }
             | Hard { .. }

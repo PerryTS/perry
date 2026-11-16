@@ -297,6 +297,14 @@ pub enum Cons {
     /// equal, and the Null type has the one value `null`; `undefined`
     /// passes). A rule of the program text, like `NotNullish`.
     NotNull { dst: NodeId },
+    /// R9READ6 rule T6: a local `x` where `typeof x === s` held, `s`
+    /// "string", "number", "boolean" or "undefined": only its primitives
+    /// of `mask` (the one type with that typeof result, ECMA-262 13.5.3)
+    /// flow into `dst`; no object or function token (typeof gives
+    /// "object" / "function"), but ⊤ and markers (unknown values, which
+    /// may be of that type) pass. A rule of the program text, like
+    /// `NotNullish`.
+    TypeIs { mask: u16, dst: NodeId },
     /// A failed `x instanceof ArrayBuffer` (`shared`: `SharedArrayBuffer`)
     /// of the intrinsic binding: the values but the built-in buffer objects
     /// of that kind flow into `dst`. The compiled program answers the bare
@@ -903,6 +911,7 @@ impl Cons {
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -927,6 +936,7 @@ impl Cons {
                 | Cons::NotBuffer { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -973,6 +983,7 @@ impl Cons {
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::NotNull { .. } => "notnull",
+            Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",

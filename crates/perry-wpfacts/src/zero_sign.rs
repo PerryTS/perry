@@ -127,6 +127,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NotBuffer { dst, .. }
         | Cons::ProtoObjects { dst }
         | Cons::NotNull { dst }
+        | Cons::TypeIs { dst, .. }
         | Cons::Objects { dst }
         | Cons::NotUndefined { dst } => Use::To(dst),
         Cons::RetInto { call, .. } | Cons::ArgInto { call, .. } => {
