@@ -1,0 +1,1 @@
+`DisposableStack` and `AsyncDisposableStack` instances inherit their constructor's prototype, whether made with `new`, through an aliased constructor or by `move()`: `instanceof`, `Object.getPrototypeOf`, a method read as a value (`typeof stack.use`) and `Object.prototype.toString` now answer like Node (#12629).
