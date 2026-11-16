@@ -1237,7 +1237,7 @@ pub(super) fn native_method(
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
-            let call2 = m.chain_call(
+            let _call2 = m.chain_call(
                 call,
                 0,
                 fl,

@@ -3430,7 +3430,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// `%Object.prototype%`, which lacks it. `own`: `t` itself holds nothing
 /// under `a` either.
 fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
-    let holds_nothing = |n: Option<&NodeId>| {
+    let _holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];
             !nd.dropped && nd.pts.is_empty() && nd.prim == 0

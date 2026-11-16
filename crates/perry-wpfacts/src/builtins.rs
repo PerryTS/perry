@@ -884,7 +884,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     let ret = m.node_l("then-ret");
     let then = m.atom("then");
     let call = m.calls.len() as CallId;
-    let call = m.chain_call(
+    let _call = m.chain_call(
         by,
         0,
         v,
@@ -3288,7 +3288,7 @@ fn ns_method_inner(
                 m.add_prim(s, prim::STR);
                 for (hi, holder) in [j, ja].into_iter().enumerate() {
                     let call2 = m.calls.len() as CallId;
-                    let call2 = m.chain_call(
+                    let _call2 = m.chain_call(
                         call,
                         hi as u32,
                         rv,

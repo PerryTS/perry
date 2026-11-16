@@ -73,7 +73,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.add_tok(jn, rej);
                 let ret = m.node_l("executor-ret");
                 let call2 = m.calls.len() as CallId;
-                let call2 = m.chain_call(
+                let _call2 = m.chain_call(
                     call,
                     0,
                     ex,

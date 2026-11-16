@@ -271,7 +271,6 @@ fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
 /// a primitive kind there (10.1.8.1 OrdinaryGet: the first object of the
 /// chain that owns the key gives its value); `None` otherwise.
 fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
-    use perry_hir::realm_manifest::RealmOwnValue as V;
     // A typed array's or a Buffer's chain (`view_chain`) too:
     // `BYTES_PER_ELEMENT` (23.2.7.2), a Number.
     let born = realm_chain_start(what)?;

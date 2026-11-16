@@ -16,7 +16,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::direct_method_guard::{
     class_chain_may_declare_method_field, emit_inline_direct_method_shape_guard, family_clone_word,
-    family_method_word,
 };
 
 pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
