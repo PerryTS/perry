@@ -102,6 +102,16 @@ pub struct CtorPhase {
     pub inert_definite: Vec<String>,
     /// The keys those chain reads name.
     pub inert_reads: BTreeSet<String>,
+    /// R9STORE3 rule S: keys `k` whose `this.k = v` the walk followed into
+    /// the ONE setter the class's chain declares for `k` (`W::setters`):
+    /// `this` has no own `k` there, so [[Set]] (ECMA-262 10.1.9.2
+    /// OrdinarySetWithOwnDescriptor step 1-2, 3) finds the accessor on the
+    /// prototype and calls the setter with `this`: no key is created, the
+    /// body runs at the store's place. Exact while every instance finds that
+    /// setter (`derive::rule_m_problem`, rule S) and no subclass defines `k`
+    /// (`Gen::m_override_leaks`). CLOSED-WORLD PREMISE (owner 2026-11-14):
+    /// no eval / dynamic code; every accessor definition is in the program.
+    pub s_calls: BTreeSet<String>,
 }
 
 impl CtorPhase {
@@ -184,6 +194,9 @@ struct W<'a> {
     /// Rule I's walk: a chain read of a key that is no own method is no
     /// leak; its key is noted (`CtorPhase::inert_reads`).
     inert: bool,
+    /// Rule S: the setter each key resolves to through the class's chain
+    /// (`Gen::chain_setters`); `None`: rule S off.
+    setters: Option<&'a BTreeMap<String, &'a perry_hir::Function>>,
 }
 
 /// Rule M: the methods of `c` a `this.m()` in its constructor may be
@@ -213,7 +226,7 @@ fn own_callees(c: &Class) -> BTreeMap<String, &perry_hir::Function> {
 
 /// A `return` statement in `ss` (not in a nested function: closures are
 /// expressions).
-fn has_return(ss: &[Stmt]) -> bool {
+pub(crate) fn has_return(ss: &[Stmt]) -> bool {
     ss.iter().any(|s| match s {
         Stmt::Return(_) => true,
         Stmt::If {
@@ -288,6 +301,18 @@ pub fn analyze_in_present_m(
     present: &BTreeSet<String>,
     rule_m: bool,
 ) -> CtorPhase {
+    analyze_in_present_ms(c, shapes, present, rule_m, &BTreeMap::new())
+}
+
+/// [`analyze_in_present_m`] with rule S's setters (`setters`: the one
+/// setter each key resolves to through the class's chain; empty: rule S off).
+pub fn analyze_in_present_ms(
+    c: &Class,
+    shapes: &BTreeMap<String, Vec<String>>,
+    present: &BTreeSet<String>,
+    rule_m: bool,
+    setters: &BTreeMap<String, &perry_hir::Function>,
+) -> CtorPhase {
     let callees = if rule_m { own_callees(c) } else { BTreeMap::new() };
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
@@ -318,11 +343,12 @@ pub fn analyze_in_present_m(
         }
         m
     });
-    let mut ph = analyze_body(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees);
+    let ss = (!setters.is_empty()).then_some(setters);
+    let mut ph = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees, false, ss);
     // Rule I: the same walk with chain reads inert (rule M off: a followed
     // call keeps its own exactness argument, `settle_rule_m`).
     let none = BTreeMap::new();
-    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true);
+    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true, None);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -330,7 +356,7 @@ pub fn analyze_in_present_m(
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body(shapes, &valued, methods, params, body, order, true, present, &callees).definite;
+    ph.stored = analyze_body_i(shapes, &valued, methods, params, body, order, true, present, &callees, false, ss).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     if !inert.inert_reads.is_empty() {
         ph.inert_definite = inert.definite.into_iter().filter(|k| !ph.definite.contains(k)).collect();
@@ -379,7 +405,7 @@ fn analyze_body<'a>(
     present: &'a BTreeSet<String>,
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
 ) -> CtorPhase {
-    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false)
+    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -394,9 +420,11 @@ fn analyze_body_i<'a>(
     present: &'a BTreeSet<String>,
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
     inert: bool,
+    setters: Option<&'a BTreeMap<String, &'a perry_hir::Function>>,
 ) -> CtorPhase {
     let mut w = W {
         inert,
+        setters,
         callees,
         visiting: Vec::new(),
         present,
@@ -485,7 +513,46 @@ fn analyze_body_i<'a>(
     w.ph
 }
 
-impl W<'_> {
+impl<'a> W<'a> {
+    /// Rule S: `key` names a setter on the chain and is no own key here
+    /// (not stored on this path, not a present parent key): `this.key = v`
+    /// is a setter call, not an add.
+    fn setter_key(&self, st: &St, key: &str) -> bool {
+        self.setters.is_some_and(|s| s.contains_key(key)) && !st.assigned.contains(key) && !self.is_present(st, key)
+    }
+
+    /// Rule S: the setter `this.key = v` calls, when the walk may follow it:
+    /// `this` is unobserved and the walk is not inside that setter already.
+    fn setter_for(&self, st: &St, key: &str) -> Option<&'a perry_hir::Function> {
+        let f = *self.setters?.get(key)?;
+        let tag = format!("set {key}");
+        (st.open && self.setter_key(st, key) && !self.visiting.contains(&tag)).then_some(f)
+    }
+
+    /// Rule S: `this.key = value` with the setter `f`: the value first
+    /// (13.15.2 step 1.e, then PutValue), then the setter's body with this
+    /// `this` (10.1.9.2 step 7: Call(setter, Receiver, V)), its stores in
+    /// their order; a setter that cannot be followed is a leak and the store
+    /// is taken as before.
+    fn setter_store(&mut self, st: &mut St, e: &Expr, key: &str, value: &Expr) {
+        self.expr(st, value);
+        let Some(f) = self.setter_for(st, key) else {
+            self.leak(st);
+            self.store(st, e, key);
+            return;
+        };
+        self.ph.s_calls.insert(key.to_string());
+        self.visiting.push(format!("set {key}"));
+        for p in &f.params {
+            if let Some(d) = &p.default {
+                self.expr(st, d);
+            }
+        }
+        self.prescan_aliases(&f.body);
+        self.stmts(st, &f.body);
+        self.visiting.pop();
+    }
+
     /// Rule L's pre-scan: `body`'s top-level `const x = this` aliases.
     fn prescan_aliases(&mut self, body: &[Stmt]) {
         for s in body {
@@ -944,6 +1011,7 @@ impl W<'_> {
                 ..
             } if st.open
                 && matches!(object.as_ref(), Expr::This)
+                && !self.setter_key(st, property)
                 && closure_holder(self.shapes, value) =>
             {
                 self.note_holder_captures(value);
@@ -956,6 +1024,10 @@ impl W<'_> {
                 value,
                 ..
             } if matches!(object.as_ref(), Expr::This) => {
+                if self.setter_key(st, property) {
+                    self.setter_store(st, e, property, value);
+                    return;
+                }
                 self.expr(st, value);
                 self.store(st, e, property);
             }
@@ -969,7 +1041,7 @@ impl W<'_> {
             } if st.open
                 && matches!(target.as_ref(), Expr::This)
                 && matches!(receiver.as_ref(), Expr::This)
-                && matches!(key.as_ref(), Expr::String(_))
+                && matches!(key.as_ref(), Expr::String(k) if !self.setter_key(st, k))
                 && closure_holder(self.shapes, value) =>
             {
                 self.note_holder_captures(value);
@@ -988,6 +1060,12 @@ impl W<'_> {
                 && matches!(receiver.as_ref(), Expr::This)
                 && matches!(key.as_ref(), Expr::String(_)) =>
             {
+                if let Expr::String(k) = key.as_ref() {
+                    if self.setter_key(st, k) {
+                        self.setter_store(st, e, k, value);
+                        return;
+                    }
+                }
                 self.expr(st, value);
                 if let Expr::String(k) = key.as_ref() {
                     self.store(st, e, k);

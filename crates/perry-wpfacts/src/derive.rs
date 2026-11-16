@@ -658,6 +658,47 @@ fn rule_m_problem(m: &Model, tm: TmplId, ts: &[Tok]) -> Option<String> {
     let mut cur = Some(tm);
     let mut checked_instances = false;
     while let Some(q) = cur {
+        // R9STORE3 rule S: every instance of `tm` has `tm`'s prototype, and
+        // from it up to the class `D` that declares the followed setter of
+        // `a` no prototype holds a value, an accessor or an unknown key under
+        // `a`; `D`'s prototype holds exactly one setter there and no value:
+        // the [[Set]] of every instance calls that setter (10.1.9.2).
+        if let Some(ss) = m.rule_s.get(&q) {
+            let own = proto(tm);
+            for t in ts {
+                if let Some(&pn) = m.proto_node.get(t) {
+                    let ps = m.nodes[pn as usize].pts.to_sorted();
+                    if own.is_none() || ps.iter().any(|&p| Some(p) != own) {
+                        return Some("rule S: an instance's prototype is not its class's".into());
+                    }
+                }
+            }
+            for &(a, d) in ss {
+                let Some(d) = d else {
+                    return Some("rule S: setter owner not resolved".into());
+                };
+                let mut x = Some(tm);
+                loop {
+                    let Some(xq) = x else {
+                        return Some("rule S: setter owner not on the chain".into());
+                    };
+                    let Some(p) = proto(xq) else {
+                        return Some("rule S: no prototype token".into());
+                    };
+                    let value = pts_len(m.fields.get(&(p, a))) != 0 || pts_len(m.field_any.get(&p)) != 0;
+                    if xq == d {
+                        if value || m.accessors.get(&(p, a)).is_none_or(|(_, s)| s.len() != 1) {
+                            return Some(format!("rule S: prototype member {} not the setter alone", m.atoms[a as usize]));
+                        }
+                        break;
+                    }
+                    if value || m.accessors.contains_key(&(p, a)) {
+                        return Some(format!("rule S: a prototype below holds {}", m.atoms[a as usize]));
+                    }
+                    x = m.tmpls[xq as usize].parent;
+                }
+            }
+        }
         if let Some(names) = m.rule_m.get(&q) {
             if !checked_instances {
                 checked_instances = true;
@@ -1135,9 +1176,13 @@ fn template_facts(
         // its birth keys are reserved, never owned at birth. A key the
         // construction always adds keeps the template's order; a later key
         // keeps its slot only while every earlier one is such a key.
-        let added = birth && tpl.definite.contains(&a) && !is_accessor;
+        // R9STORE3: a key rule I keeps present from birth on (`inert_sure`:
+        // the construction phase stores it before `this` is observed, its
+        // chain reads run no code) is definite like a `CtorPhase::definite` key.
+        let def_a = tpl.definite.contains(&a) || m.inert_sure(tm, a);
+        let added = birth && def_a && !is_accessor;
         let owned = birth && !tpl.per_evaluation && !is_accessor;
-        let definite = owned && tpl.definite.contains(&a);
+        let definite = owned && def_a;
         let declared = owned && tpl.declared.contains(&a);
         let reserved =
             birth && (tpl.per_evaluation || tpl.reserved.contains(&a)) && !definite && !is_accessor;
@@ -2673,7 +2718,18 @@ fn judge_store(
     }
     let mut seen_r: FxHashSet<String> = FxHashSet::default();
     receivers.retain(|r| seen_r.insert(r.clone()));
-    if prim != 0 {
+    // R9STORE3 rule N: `undefined` / `null` beside object receivers. PutValue
+    // (ECMA-262 6.2.5.6 step 3.a) takes ToObject of the base first: a nullish
+    // base throws the TypeError (7.1.18) before any [[Set]], after the value
+    // was evaluated (13.15.2); the objects store as their own verdict says.
+    // So the store is the object arm's verdict plus its TypeError arm, the
+    // read side's `nullish_arms` form; proven only when the object arm is a
+    // proven slot store (codegen: the receiver test sends a nullish value to
+    // the complete [[Set]], CLS D3). Any other primitive is not this rule.
+    let nullish_beside = prim != 0
+        && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0
+        && !toks.iter().all(|&t| m.closed_marker(t));
+    if prim != 0 && !nullish_beside {
         why.get_or_insert("store: primitive receiver".into());
     }
     let mut targets = FxHashMap::default();
@@ -2699,6 +2755,21 @@ fn judge_store(
         None if !acc.is_empty() => accessor_verdict(m, &mut acc, 0, &mut targets, true),
         None if throws > 0 => Verdict::Throws,
         None => Verdict::AddsKey,
+    };
+    let verdict = match verdict {
+        v @ (Verdict::T0Mono | Verdict::T0Set) if nullish_beside => {
+            use crate::model::prim::{NULL, UNDEF};
+            if prim & UNDEF != 0 {
+                receivers.push("primitive:undefined (TypeError)".to_string());
+            }
+            if prim & NULL != 0 {
+                receivers.push("primitive:null (TypeError)".to_string());
+            }
+            v
+        }
+        Verdict::No(w) => Verdict::No(w),
+        _ if nullish_beside => Verdict::No("store: primitive receiver".into()),
+        v => v,
     };
     // R9STORE1: a store the rules above leave undecided (an add, or a key
     // that is no definite birth field) onto ONE object literal allocation,

@@ -1900,6 +1900,11 @@ pub struct Model {
     /// `this.m()` calls name (`CtorPhase::m_calls`), checked against the
     /// solved prototypes (`derive::rule_m_problem`).
     pub rule_m: FxHashMap<TmplId, Vec<Atom>>,
+    /// R9STORE3 rule S (`CtorPhase::s_calls`): per class, the keys whose
+    /// construction-phase store its constructor followed into a setter, with
+    /// the class that declares that setter (`None`: not resolved: a problem);
+    /// checked against the solved prototypes (`derive::rule_m_problem`).
+    pub rule_s: FxHashMap<TmplId, Vec<(Atom, Option<TmplId>)>>,
     pub field_any: FxHashMap<Tok, NodeId>,
     /// JSON tree positions (`solve::json_pos`): the position class each
     /// JSON token stands for. A fact of the token, keyed by the token.

@@ -43,7 +43,8 @@ impl<'a> Gen<'a> {
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
-                let ph = crate::ctor_phase::analyze_in(c, &shapes);
+                let setters = self.chain_setters(tm);
+                let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &Default::default(), true, &setters);
                 self.ctor_phase.insert(tm, ph);
             }
         }
@@ -486,6 +487,14 @@ impl<'a> Gen<'a> {
                 let names: Vec<Atom> = ph.m_calls.iter().map(|k| self.m.atom(k)).collect();
                 self.m.rule_m.insert(tm, names);
             }
+            if !ph.s_calls.is_empty() {
+                let v: Vec<(Atom, Option<TmplId>)> = ph
+                    .s_calls
+                    .iter()
+                    .map(|k| (self.m.atom(k), self.setter_owner(tm, k)))
+                    .collect();
+                self.m.rule_s.insert(tm, v);
+            }
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
@@ -535,6 +544,77 @@ impl<'a> Gen<'a> {
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
         self.m.tmpls[tm as usize].reserved = reserved;
+    }
+
+    /// This program's class of template `tm` (`None`: not a class template
+    /// or not found).
+    fn class_of(&self, tm: TmplId) -> Option<&'a Class> {
+        let TmplKind::Class { module, name, .. } = &self.m.tmpls[tm as usize].kind else {
+            return None;
+        };
+        self.modules[*module as usize].1.classes.iter().find(|c| &c.name == name)
+    }
+
+    /// R9STORE3 rule S: the key -> setter map of `tm`'s chain: for each key
+    /// the nearest class (`tm` first, then its parents: 10.1.8 / 10.1.9 walk
+    /// the prototypes in that order) that names it as a method, accessor or
+    /// field decides; it counts when that class declares exactly one setter
+    /// under it, no method or field (a field is an own key at construction)
+    /// and the setter body has no `return` (it would end the walk's
+    /// constructor). The walk stops at a class this program does not show.
+    pub(crate) fn chain_setters(&self, tm: TmplId) -> std::collections::BTreeMap<String, &'a perry_hir::Function> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut named = std::collections::BTreeSet::new();
+        let mut cur = Some(tm);
+        while let Some(t) = cur {
+            let Some(c) = self.class_of(t) else {
+                break;
+            };
+            let names = c
+                .methods
+                .iter()
+                .map(|m| m.name.as_str())
+                .chain(c.getters.iter().map(|(k, _)| k.as_str()))
+                .chain(c.setters.iter().map(|(k, _)| k.as_str()))
+                .chain(c.fields.iter().map(|f| f.name.as_str()));
+            for k in names.collect::<Vec<_>>() {
+                if !named.insert(k.to_string()) {
+                    continue;
+                }
+                let mut ss = c.setters.iter().filter(|(n, _)| n == k);
+                if let (Some((_, f)), None) = (ss.next(), ss.next()) {
+                    if !c.methods.iter().any(|m| m.name == k)
+                        && !c.fields.iter().any(|x| x.name == k)
+                        && !crate::ctor_phase::has_return(&f.body)
+                    {
+                        out.insert(k.to_string(), f);
+                    }
+                }
+            }
+            if self.m.tmpls[t as usize].native_parent.is_some() {
+                break;
+            }
+            cur = self.m.tmpls[t as usize].parent;
+        }
+        out
+    }
+
+    /// Rule S: the class on `tm`'s chain whose setter `k` resolves to
+    /// (`chain_setters`).
+    fn setter_owner(&self, tm: TmplId, k: &str) -> Option<TmplId> {
+        let mut cur = Some(tm);
+        while let Some(t) = cur {
+            let c = self.class_of(t)?;
+            if c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+                || c.fields.iter().any(|f| f.name == k)
+            {
+                return c.setters.iter().any(|(n, _)| n == k).then_some(t);
+            }
+            cur = self.m.tmpls[t as usize].parent;
+        }
+        None
     }
 
     /// Some class on `tm`'s chain (itself too) extends a native constructor.
@@ -679,8 +759,9 @@ impl<'a> Gen<'a> {
             }
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
-            let ph = crate::ctor_phase::analyze_in_present(c, &shapes, &present);
-            let followed = !ph.m_calls.is_empty();
+            let setters = self.chain_setters(tm);
+            let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &present, true, &setters);
+            let followed = !ph.m_calls.is_empty() || !ph.s_calls.is_empty();
             self.ctor_phase.insert(tm, ph);
             if followed {
                 self.settle_rule_m(modules, Some((tm, &present)));
@@ -723,7 +804,9 @@ impl<'a> Gen<'a> {
         };
         for (tm, present) in todo {
             let calls = match self.ctor_phase.get(&tm) {
-                Some(ph) if !ph.m_calls.is_empty() => ph.m_calls.clone(),
+                Some(ph) if !ph.m_calls.is_empty() || !ph.s_calls.is_empty() => {
+                    ph.m_calls.union(&ph.s_calls).cloned().collect::<std::collections::BTreeSet<String>>()
+                }
                 _ => continue,
             };
             // Some class below `tm` defines a followed method.
@@ -758,7 +841,7 @@ impl<'a> Gen<'a> {
             let mut cur = self.m.tmpls[c as usize].parent;
             while let Some(p) = cur {
                 if let Some(ph) = self.ctor_phase.get(&p) {
-                    if ph.m_calls.iter().any(|k| {
+                    if ph.m_calls.iter().chain(&ph.s_calls).any(|k| {
                         seen.iter().any(|s| by_tm.get(s).is_some_and(|(_, sc)| defines(sc, k)))
                     }) {
                         leaks.insert(c);
