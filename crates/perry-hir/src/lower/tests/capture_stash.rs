@@ -199,6 +199,26 @@ fn a_capture_the_constructor_assigns_is_restashed_on_every_exit() {
     assert_eq!(capture_stash_count(source, "Counter"), 3);
 }
 
+/// A write inside a declaration initializer counts as a change too.
+#[test]
+fn a_capture_assigned_in_a_declaration_initializer_is_restashed() {
+    let source = r#"
+        function exported() {
+            let made = 0;
+            class Counter {
+                #p = 0;
+                constructor() {
+                    const current = ++made;
+                    this.at = current;
+                }
+                count() { return made; }
+            }
+            return Counter;
+        }
+    "#;
+    assert_eq!(capture_stash_count(source, "Counter"), 2);
+}
+
 /// `this.__perry_cap_* = …` stores anywhere in `class_name`'s constructor.
 fn capture_stash_count(source: &str, class_name: &str) -> usize {
     let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");

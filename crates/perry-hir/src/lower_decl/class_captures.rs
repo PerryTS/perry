@@ -1076,25 +1076,28 @@ pub fn synthesize_class_captures(
     // The late stashes are ordinary [[Set]]s on `this` after user code, which
     // throws once the body has frozen its receiver (`Object.freeze(this)`,
     // mongodb's `HostAddress`, #11043). After an early stash they only matter
-    // for a capture the constructor can still change: one it assigns, or one a
-    // closure it creates names. Every other capture already holds its final
-    // value.
+    // for a capture the constructor or a field initializer can still change:
+    // one it assigns anywhere (declaration initializers and closures
+    // included), or one a closure it creates names. Every other capture
+    // already holds its final value. Field initializers are not remapped yet,
+    // so they name the outer id.
     let late_stashes: Vec<Stmt> = if env_mode || early_insert_at.is_none() {
         assignment_stmts.clone()
     } else {
-        let mut changed: Vec<LocalId> = Vec::new();
-        let mut closure_named: std::collections::HashSet<LocalId> =
-            std::collections::HashSet::new();
+        let mut touched: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
         for stmt in &ctor.body[rebind_count..] {
-            crate::analysis::collect_assigned_locals_stmt(stmt, &mut changed);
-            closure_capture_ids_stmt(stmt, &mut closure_named);
+            crate::lower::shared_mutable_capture::collect_assigned_deep_stmt(stmt, &mut touched);
+            closure_capture_ids_stmt(stmt, &mut touched);
+        }
+        for init in fields.iter().filter_map(|f| f.init.as_ref()) {
+            crate::lower::shared_mutable_capture::collect_assigned_deep_expr(init, &mut touched);
+            closure_capture_ids_expr(init, &mut touched);
         }
         captures_vec
             .iter()
             .zip(assignment_stmts.iter())
             .filter(|(outer_id, _)| {
-                let param_id = ctor_id_map[outer_id];
-                changed.contains(&param_id) || closure_named.contains(&param_id)
+                touched.contains(outer_id) || touched.contains(&ctor_id_map[outer_id])
             })
             .map(|(_, stmt)| stmt.clone())
             .collect()

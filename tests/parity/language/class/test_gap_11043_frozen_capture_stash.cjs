@@ -55,3 +55,17 @@ class Counter {
 new Counter();
 const c = new Counter();
 console.log(JSON.stringify([...c]));
+
+// A write inside a declaration initializer is a change as well.
+let built = 0;
+class Tally {
+  constructor() {
+    const current = ++built;
+    this.at = current;
+  }
+  [Symbol.iterator]() {
+    return [this.at, built][Symbol.iterator]();
+  }
+}
+new Tally();
+console.log(JSON.stringify([...new Tally()]));
