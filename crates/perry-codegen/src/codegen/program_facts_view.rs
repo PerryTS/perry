@@ -650,7 +650,10 @@ pub struct ElisionFacts {
     /// ONCHANGE3: with the body's public entry symbol named from the
     /// holder's own module and class (as `accessor_sets`), and the body's
     /// direct-call ABI read from its own parameters (`DirectAbi`).
-    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi)>,
+    /// NULLCALL1: the last field says the receiver may also be `undefined` /
+    /// `null` (never another primitive): the call tests it first, and the
+    /// nullish edge is the complete member read, which throws.
+    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool)>,
 }
 
 impl ElisionFacts {

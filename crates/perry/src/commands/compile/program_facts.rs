@@ -643,8 +643,14 @@ fn elision_for(
             // ONCHANGE2: the named method calls proven to run one class
             // method body: (holder class id, the body's function id). Every
             // record at an offset must agree, or the offset is left out. A
-            // receiver that may be a primitive (`undefined` / `null` among
-            // them: the read throws first, 13.3.6.2) or ⊤ keeps its site.
+            // receiver that may be a number, string, Boolean, symbol or
+            // BigInt, or ⊤, keeps its site. NULLCALL1: one that may be
+            // `undefined` / `null` besides its objects is served `nullable`:
+            // the site tests the receiver for nullish first, where the
+            // complete call throws (GetValue's ToObject, 6.2.5.5 / 7.1.18,
+            // before ArgumentListEvaluation, 13.3.6.1). The objects' verdict
+            // holds with nullish in the set: derive.rs drops it to `No` when
+            // a source left a value out.
             let mut refused_calls: std::collections::BTreeSet<(u32, String)> = Default::default();
             for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
                 // ONCHANGE3: the body's entry is named from its own module
@@ -652,21 +658,27 @@ fn elision_for(
                 // (reached through a value or a re-export) is served too.
                 let one = match (&s.verdict, s.holder_class, s.target_fns.as_slice()) {
                     (perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set, Some(cid), &[(hm, fid)])
-                        if s.receiver_prims == 0 && !s.top =>
+                        if s.receiver_prims & !(prim::NULL | prim::UNDEF) == 0 && !s.top =>
                     {
+                        let nullable = s.receiver_prims != 0;
                         pf.module_paths
                             .get(hm as usize)
                             .and_then(|p| holder_symbol(p, cid, fid, &s.key, Member::Method))
-                            .map(|(sym, abi)| (cid, fid, sym, abi))
+                            .map(|(sym, abi)| (cid, fid, sym, abi, nullable))
                     }
                     _ => None,
                 };
                 let at = (s.byte_offset, s.key.clone());
                 match one {
                     Some(v) if !refused_calls.contains(&at) => {
-                        if *out.method_calls.entry(at.clone()).or_insert_with(|| v.clone()) != v {
+                        // The records agree on the body; the site is nullable
+                        // when any record's receiver may be nullish.
+                        let e = out.method_calls.entry(at.clone()).or_insert_with(|| v.clone());
+                        if (e.0, e.1, &e.2, e.3) != (v.0, v.1, &v.2, v.3) {
                             out.method_calls.remove(&at);
                             refused_calls.insert(at);
+                        } else {
+                            e.4 |= v.4;
                         }
                     }
                     _ => {

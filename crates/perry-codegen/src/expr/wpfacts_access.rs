@@ -1140,6 +1140,70 @@ pub(crate) fn emit_proof_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, p: &Field
     blk.gep(I8, &base, &[(I64, &off64)])
 }
 
+/// The one receiver test of a proven access whose binding holds an object
+/// or null/undefined (F4; NULLCALL1: a proven method call too). The test
+/// is the tag compare the complete operation performs first; its nullish
+/// edge is that complete read of `property`, which throws the TypeError
+/// (`Cannot read properties of undefined (reading 'm')`, GetValue's
+/// ToObject, 6.2.5.5 / 7.1.18) and so never returns: the arm ends in
+/// `unreachable`, and every later access of the binding on this path sees
+/// an object without testing again. Leaves the current block on the object
+/// edge. `witness`: the read's check-mode claim on the nullish edge.
+pub(crate) fn emit_nullish_throw_test(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    property: &str,
+    byte_offset: u32,
+    witness: Option<(&FieldProof, u64)>,
+) {
+    // The binding holds an object or null/undefined (F4). The one test
+    // that stays sends null/undefined to the complete site operation,
+    // which throws the TypeError and so never returns here: the arm ends
+    // in `unreachable`, and every later access of the binding on this
+    // path sees an object without testing again.
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    let hit_idx = ctx.new_block("wpf.get.obj");
+    let miss_idx = ctx.new_block("wpf.get.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    if let Some((p, site)) = witness {
+        emit_witness(ctx, recv_box, recv_box, property, p, 0, site);
+    }
+    let feedback_site_id = super::emit_typed_feedback_register_site(
+        ctx,
+        super::TypedFeedbackKind::PropertyGet,
+        property,
+        super::TypedFeedbackContract::object_get_by_name(),
+    );
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // A non-object receiver: the complete read throws for nullish.
+    let _ = blk.call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[
+            (I64, &obj_bits),
+            (I64, &key_handle),
+            (I64, &feedback_site_id),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    if let Some(b) = stable_binding(ctx, object) {
+        ctx.wpfacts_tested.push((b, hit_idx));
+    }
+}
+
 /// `object.property` read through a zero-guard proof.
 pub(crate) fn try_lower_get(
     ctx: &mut FnCtx<'_>,
@@ -1161,49 +1225,8 @@ pub(crate) fn try_lower_get(
     });
     let recv_box = lower_expr(ctx, object)?;
     if p.nullable {
-        // The binding holds an object or null/undefined (F4). The one test
-        // that stays sends null/undefined to the complete site operation,
-        // which throws the TypeError and so never returns here: the arm ends
-        // in `unreachable`, and every later access of the binding on this
-        // path sees an object without testing again.
-        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
-        let hit_idx = ctx.new_block("wpf.get.obj");
-        let miss_idx = ctx.new_block("wpf.get.nullish");
-        let hit_label = ctx.block_label(hit_idx);
-        let miss_label = ctx.block_label(miss_idx);
-        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-        let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-        ctx.block()
-            .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
-        ctx.current_block = miss_idx;
-        emit_witness(ctx, &recv_box, &recv_box, property, &p, 0, site);
-        let feedback_site_id = super::emit_typed_feedback_register_site(
-            ctx,
-            super::TypedFeedbackKind::PropertyGet,
-            property,
-            super::TypedFeedbackContract::object_get_by_name(),
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        // A non-object receiver: the complete read throws for nullish.
-        let _ = blk.call(
-            DOUBLE,
-            "js_object_get_field_value",
-            &[
-                (I64, &obj_bits),
-                (I64, &key_handle),
-                (I64, &feedback_site_id),
-            ],
-        );
-        blk.unreachable();
-        ctx.current_block = hit_idx;
-        if let Some(b) = stable_binding(ctx, object) {
-            ctx.wpfacts_tested.push((b, hit_idx));
-        }
+        // The binding holds an object or null/undefined (F4).
+        emit_nullish_throw_test(ctx, object, &recv_box, property, byte_offset, Some((&p, site)));
     }
     let value = {
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
@@ -1610,7 +1633,7 @@ pub(crate) fn proven_method_fn(
     object: &Expr,
     property: &str,
     offset: u32,
-) -> Option<(Option<String>, String, crate::DirectAbi)> {
+) -> Option<(Option<String>, String, crate::DirectAbi, bool)> {
     if ctx.wpfacts_off
         || ctx.wpfacts.interp_guard
         || offset == 0
@@ -1619,7 +1642,11 @@ pub(crate) fn proven_method_fn(
     {
         return None;
     }
-    let (cid, fid, symbol, abi) = ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?.clone();
+    let (cid, fid, symbol, abi, nullable) =
+        ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?.clone();
+    // NULLCALL1: a receiver a dominating access of the same binding has
+    // tested already is an object here.
+    let nullable = nullable && !tested_in_block(ctx, object);
     // The holder's names in this module (as `proven_accessor_fn`): each must
     // declare `F` itself under `property` and give the same entry.
     let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
@@ -1670,13 +1697,13 @@ pub(crate) fn proven_method_fn(
         }
     }
     match found {
-        Some((class, f)) => Some((Some(class), f, abi)),
+        Some((class, f)) => Some((Some(class), f, abi, nullable)),
         // Named here only by an imported stub: the entry is declared already.
-        None if stub_named => Some((None, symbol, abi)),
+        None if stub_named => Some((None, symbol, abi, nullable)),
         None => {
             let params = vec![DOUBLE; abi.params as usize + 1];
             ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
-            Some((None, symbol, abi))
+            Some((None, symbol, abi, nullable))
         }
     }
 }

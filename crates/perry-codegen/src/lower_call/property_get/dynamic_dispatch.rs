@@ -144,6 +144,10 @@ fn build_direct_method_args(
 /// with the receiver as `this`, its arguments adapted to the body's declared
 /// parameters, rest and `arguments` slots exactly as the tower's case arm
 /// does (`build_direct_method_args`). No guard and no by-name fallback.
+/// NULLCALL1: a receiver that may also be `undefined` / `null` is tested
+/// once right after it is evaluated: the nullish edge is the complete member
+/// read, which throws before any argument is evaluated (13.3.6.1: GetValue
+/// of the member reference precedes ArgumentListEvaluation).
 pub(crate) fn try_lower_proven_method_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -163,7 +167,7 @@ pub(crate) fn try_lower_proven_method_call(
     } else {
         crate::codegen::signature_entry::direct_call_offset()
     };
-    let Some((class, fname, abi)) =
+    let Some((class, fname, abi, nullable)) =
         crate::expr::wpfacts_access::proven_method_fn(ctx, object, property, offset)
     else {
         return Ok(None);
@@ -187,6 +191,12 @@ pub(crate) fn try_lower_proven_method_call(
     let bundles = has_rest || has_synthetic_arguments;
     let recv_collects = bundles || crate::rooting::any_operand_may_collect(ctx, args.iter());
     let recv_idx = roots.lower(ctx, object, recv_collects)?;
+    if nullable {
+        let recv_box = roots.reread(ctx, recv_idx)?;
+        crate::expr::wpfacts_access::emit_nullish_throw_test(
+            ctx, object, &recv_box, property, *byte_offset, None,
+        );
+    }
     let mut arg_idxs = Vec::with_capacity(args.len());
     for (i, a) in args.iter().enumerate() {
         let collects = bundles || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
@@ -215,7 +225,7 @@ pub(crate) fn try_lower_proven_method_call(
     super::super::method_override::publish_constructive_method_truthy(ctx, &fname, &value);
     roots.release(ctx);
     if std::env::var_os("PERRY_FACTS_REPORT").is_some() {
-        eprintln!("# proven_method_call offset={offset} callee={fname}");
+        eprintln!("# proven_method_call offset={offset} callee={fname} nullable={}", nullable as u8);
     }
     Ok(Some(value))
 }
