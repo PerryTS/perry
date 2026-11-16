@@ -810,6 +810,27 @@ console.log(p + q);
     );
 }
 
+// perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
+#[test]
+fn picker_on_change_is_called_with_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Picker, pickerAddItem } from "perry/ui";
+const picker = Picker((index: number) => { console.log("picker " + index); });
+pickerAddItem(picker, "first");
+pickerAddItem(picker, "second");
+"#,
+            r#"
+const select = [...uiHandles.values()].find(e => e.tagName === "SELECT");
+select.selectedIndex = 1;
+select.dispatch("change");
+"#
+        ),
+        "picker 1"
+    );
+}
+
 #[test]
 fn a_generator_keeps_its_locals_across_resumes() {
     assert_eq!(

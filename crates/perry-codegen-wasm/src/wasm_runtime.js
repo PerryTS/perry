@@ -3109,13 +3109,12 @@ function perry_ui_image_create(src, alt) {
   }
   return perry_ui_image_create_url(src, alt);
 }
-function perry_ui_picker_create(items_json, selected, callback) {
+function perry_ui_picker_create(callback) {
   const el = document.createElement("select");
   el._perryCallback = callback;
   el.addEventListener("change", () => {
     if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.selectedIndex);
   });
-  if (selected !== undefined) el.selectedIndex = selected;
   return uiAlloc(el);
 }
 function perry_ui_wheel_picker_create(callback) {
