@@ -86,6 +86,12 @@ fn mathb1_global_in_field_unrelated_member() {
     present(&src, "sin", "Math.sin");
 }
 
+/// RED (MATHB2 3): the store `Math.cos = f` hands `f` to unknown code (E20,
+/// builtins/methods.rs `tok_store` -> `sink_node` -> `escape_body`), which
+/// holds the realm (`hold_realm`): every realm member then counts as
+/// written (`realm_replaced`), `Math` read off the global is any value, and
+/// the `Math.sin` site is refused. Fix (next phase): a store on a namespace
+/// whose members no realm algorithm reads hands the value to nobody.
 #[test]
 fn mathb1_other_member_written() {
     let src = p("(Math as any).cos = f;");
@@ -365,4 +371,32 @@ fn mathb2_main_pair_walk_unchanged() {
     for l in pf.dump_text().lines() {
         eprintln!("MB2DUMP {l}");
     }
+}
+
+// ---- MATHB2 5: the verdict, refused and proven ----
+
+#[test]
+fn mathb2_keep_computed_unknown_key() {
+    absent(&p("const k = String(process.argv[2]);\n(Math as any)[k] = f;"), "sin", "Math.sin");
+}
+
+#[test]
+fn mathb2_keep_global_math_replaced() {
+    absent(&p("(globalThis as any).Math = { sin: f, cos: f };"), "sin", "Math.sin");
+}
+
+/// Flow-insensitive: a write placed after the call in program order is
+/// still a write of the member the call may read (a later run, a loop).
+#[test]
+fn mathb2_keep_write_after_the_call() {
+    let src = format!("{X}console.log(Math.sin(x), f(1));\n(Math as any).sin = f;\n");
+    absent(&src, "sin", "Math.sin");
+}
+
+/// A local object with a member named like the namespace's is no write of
+/// the namespace.
+#[test]
+fn mathb2_unrelated_object_written() {
+    let src = p("const Math2: any = { sin: 0 };\nMath2.sin = f;\nconsole.log(Math2.sin(String(Math.random())));");
+    present(&src, "sin", "Math.sin");
 }
