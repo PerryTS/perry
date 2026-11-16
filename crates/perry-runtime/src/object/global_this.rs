@@ -117,10 +117,14 @@ pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
+    realm_core, realm_family_phase, realm_is_complete,
     global_this_response_thunk, is_thread_realm_global,
 };
 pub use fetch_globals::{
-    js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
+    js_fetch_or_value_super, js_get_global_core, js_get_global_this, js_realm_complete,
+    js_realm_family_phase, perry_realm_complete, perry_realm_core_entry,
+    perry_realm_family_phase,
+    js_global_or_console_property_by_name,
     js_module_top_this, js_request_subclass_init, js_response_subclass_init,
 };
 #[cfg(test)]
@@ -164,7 +168,7 @@ pub(crate) use object_intrinsic::{
 };
 pub(crate) use populate::{
     birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
-    populate_global_this_builtins, populate_realm_core, populate_realm_rest,
+    populate_global_this_builtins, populate_realm_core, populate_realm_rest, RealmPhases,
     scan_error_constructor_root_mut, unborn_declared_statics_of, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{

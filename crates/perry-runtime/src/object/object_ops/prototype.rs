@@ -31,13 +31,39 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // an ordinary data read instead of rematerializing a weak intern after
     // every collection. This shared lookup consults the live shape; stores,
     // deletions, accessors and prototype changes keep their ordinary semantics.
-    let global = js_get_global_this();
+    builtin_value_in(js_get_global_this(), name)
+}
+
+/// [`js_get_global_this_builtin_value`] for a caller that names a declared
+/// phase-A data global (`perry_abi::REALM_CORE_GLOBALS`) by a literal: the
+/// realm's core is enough for it, so a two-phase realm is not completed for
+/// the read. The entry is chosen at link time (`realm_core`); nothing looks
+/// at the name per call. Any other name (phase B's, the global itself, an
+/// accessor, a name the realm does not declare, a name that is not a
+/// literal) goes to [`js_get_global_this_builtin_value`], the full entry: an
+/// undeclared name's read can reach a getter on `Object.prototype`, which
+/// must never see an incomplete global as `this`.
+pub fn builtin_value_core(name: &'static str) -> f64 {
+    debug_assert!(
+        crate::codegen_abi::realm_core_global(name),
+        "{name} is not a declared phase-A global"
+    );
+    builtin_value_in(super::super::global_this::realm_core(), name)
+}
+
+/// `global[name]`, the body of both by-name readers.
+#[inline(always)]
+fn builtin_value_in(global: f64, name: &str) -> f64 {
     if let Some(value) = unsafe {
         super::super::native_get::try_data_get_bytes(
             crate::value::JSValue::from_bits(global.to_bits()),
             name.as_bytes(),
         )
     } {
+        // A by-name read gets the realm its name needs (the full entry, or
+        // the core for a declared phase-A name), so it cannot see a slot
+        // phase B has not bound.
+        debug_assert_ne!(value.bits(), crate::codegen_abi::REALM_UNBOUND_POISON);
         return f64::from_bits(value.bits());
     }
 

@@ -234,6 +234,34 @@ pub(super) fn compile_module_entry(
             stub.block_mut(0).unwrap().ret_void();
         }
 
+        // Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): the entry module
+        // defines the runtime's three link-time hooks (weak in the runtime),
+        // so the runtime's own readers of a phase-A intrinsic call the core
+        // entry and the full entry can complete a core-only realm, with no
+        // mode test on any call; a program compiled without the switch
+        // defines none of them and does not link the two-phase path.
+        if crate::expr::property_get::globalget::realm_two_phase() {
+            for (hook, target) in [
+                ("perry_realm_core_entry", "js_get_global_core"),
+                ("perry_realm_complete", "js_realm_complete"),
+            ] {
+                let f = llmod.define_function(hook, DOUBLE, vec![]);
+                let _ = f.create_block("entry");
+                let blk = f.block_mut(0).unwrap();
+                let value = blk.call(DOUBLE, target, &[]);
+                blk.ret(DOUBLE, &value);
+            }
+            let f = llmod.define_function(
+                "perry_realm_family_phase",
+                VOID,
+                vec![(I32, "%identity".to_string())],
+            );
+            let _ = f.create_block("entry");
+            let blk = f.block_mut(0).unwrap();
+            blk.call_void("js_realm_family_phase", &[(I32, "%identity")]);
+            blk.ret_void();
+        }
+
         // For dylib output, emit `void perry_module_init()` instead of
         // `int main()`. The host process calls this once after dlopen to
         // initialize the GC, string pools, module globals (including GC
@@ -570,6 +598,16 @@ pub(super) fn compile_module_entry(
             // Apple pointer tags the emitted key lists cannot carry statically,
             // stored before the first birth can read a list.
             crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            // Two-phase realm: tell the runtime before anything can touch a
+            // realm (an atomic store). Check mode poisons phase-B slots.
+            if crate::expr::property_get::globalget::realm_two_phase() {
+                let poison = if crate::verify_facts::enabled() {
+                    "1"
+                } else {
+                    "0"
+                };
+                blk.call_void("js_realm_two_phase", &[(I32, poison)]);
+            }
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
