@@ -1650,6 +1650,11 @@ pub struct Model {
     /// store sources it applied to (`true`: a store), reported with the
     /// solve profile.
     pub json_key_fired: Vec<(bool, NodeId)>,
+    /// `FactsConfig::native_externs` (ASSUMED, owner 2026-11-16).
+    pub native_externs: std::collections::BTreeMap<String, crate::NativeResult>,
+    /// The extern calls the native-extern assumption modeled: (module,
+    /// byte offset), reported as `ProgramFacts::native_extern_sites`.
+    pub native_extern_fired: Vec<(u32, u32)>,
     /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold
@@ -2538,6 +2543,18 @@ pub struct Model {
     /// `construct`): a bound target reached by one of them goes through
     /// that bound value's one merged call (`Model::bound_merged`).
     pub bound_synth: crate::pts::FxHashSet<CallId>,
+    /// MATHB1B: the generic-arm call of a namespace pair
+    /// `NamespacePatched(N) ? N.m(…) : <intrinsic>` and the member (N, m)
+    /// it names (`Gen::namespace_pair`). The pair's intrinsic arm is walked
+    /// for the original member's effect; this call binds every callee but
+    /// that original (`call_tok`).
+    pub ns_pair_calls: crate::pts::FxHashMap<CallId, (BuiltinNs, Atom)>,
+    /// The namespace pairs are the knob's (`FactsConfig::namespace_pairs`):
+    /// every direct namespace call is one, walked as one call
+    /// (`Gen::namespace_pair`). Off, a pair is main's shadow-bit guard of a
+    /// program with dynamic code or a `globalThis[k] = v` store, walked as a
+    /// conditional of its two arms.
+    pub ns_pairs: bool,
     /// Calls `Model::solver_call` made (`Stats::solver_calls`).
     pub solver_made: u64,
     /// (bound value, `new`) → its merged call.
@@ -2781,6 +2798,32 @@ pub struct Model {
     pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
+    /// GLOBK G2: the global object's one field under any string key: what
+    /// the program stores there under a key proven a String it cannot name
+    /// (ECMA-262 7.1.19, 10.1.9). Made by the first such store; every
+    /// global binding read takes it (`global_any_reads` until then).
+    pub global_any: Option<NodeId>,
+    /// G2: the global binding reads made before `global_any` exists.
+    pub global_any_reads: Vec<NodeId>,
+    /// G2: the `new K(...)` calls of a literal global name made before
+    /// `global_any` exists.
+    pub global_any_news: Vec<u32>,
+    /// G2: the realm navigator's [[Prototype]] was linked to what the
+    /// any-key stores' `prototype` holds (perry-runtime navigator.rs:119
+    /// reads the live `Navigator` at the first `navigator` read).
+    pub global_any_nav: bool,
+    /// G2 off: a native the model does not follow reads a global by name
+    /// (a text-encoding stream's `.constructor`, class_meta): the any-key
+    /// stores take the realm sink again (`global_any_stores` replayed).
+    pub global_any_off: bool,
+    /// G2: the any-key stores taken, for that replay.
+    pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
+    /// (`implicit`); a computed key's object value stores under what its
+    /// ToPrimitive returns (`Cons::StoreIndexed` on that node).
+    pub to_prim_ret: crate::pts::FxHashMap<Tok, NodeId>,
+    pub to_prim_ret_nodes: crate::pts::FxHashSet<NodeId>,
+    pub to_prim_key_done: crate::pts::FxHashSet<(NodeId, NodeId, u32)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.

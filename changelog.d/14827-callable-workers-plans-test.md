@@ -1,0 +1,1 @@
+A test now covers the constructor-layout plans that callable lowering on worker threads receives (#14810): without them a worker emits the generic store where the serial loop emits the family store. No code change.

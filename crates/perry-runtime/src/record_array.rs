@@ -215,6 +215,7 @@ pub extern "C" fn js_record_array_pop(arr: f64, dst: *mut u64) -> f64 {
         }
         let words = (*header).words as usize;
         if words != 0 {
+            // GC_STORE_AUDIT(POINTER_FREE): record words are immediates, copied out to the caller's frame.
             std::ptr::copy_nonoverlapping(
                 (*header).elems.add((length - 1) as usize * words),
                 dst,
@@ -241,6 +242,7 @@ pub extern "C" fn js_record_array_get(arr: f64, index: f64, dst: *mut u64) -> f6
         }
         let words = (*header).words as usize;
         if words != 0 {
+            // GC_STORE_AUDIT(POINTER_FREE): record words are immediates, copied out to the caller's frame.
             std::ptr::copy_nonoverlapping((*header).elems.add(slot as usize * words), dst, words);
         }
         f64::from_bits(TAG_TRUE)

@@ -84,8 +84,10 @@ def check_receipts(root: Path, result: subprocess.CompletedProcess[str]) -> None
             assert cell["result"] == "PASS"
         else:
             assert cell["result"] == "UNVER", "command probes must never certify moving GC"
+            # Every measured arm is compiled with the GC diagnostics, or it cannot report.
+            assert compile_env["PERRY_GC_DIAG"] == "1", (cell["arm"], compile_env)
         if cell["arm"] == "wb_off":
-            assert compile_env == {"PERRY_WRITE_BARRIERS": "0"}
+            assert compile_env == {"PERRY_WRITE_BARRIERS": "0", "PERRY_GC_DIAG": "1"}
             assert run_env["PERRY_WRITE_BARRIERS"] == "0"
 
 

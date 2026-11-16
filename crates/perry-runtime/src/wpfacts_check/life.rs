@@ -102,8 +102,8 @@ pub(super) fn with<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
 /// (`life_regions.rs`): the full's mark (or a pin) on the object at user
 /// address `addr`. Read between the full's mark propagation and its sweep.
 pub(super) fn full_alive(addr: usize) -> bool {
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 }
+    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|h| h.gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0)
 }
 
 /// Does a probe minor's reach decide "alive at the boundary" by itself? Only
@@ -134,8 +134,8 @@ pub(super) fn engine_metadata(addr: usize) -> bool {
     {
         return false;
     }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    unsafe { (*header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 }
+    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|h| h.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0)
 }
 
 pub(super) fn ensure() {

@@ -50,6 +50,9 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_named::note_named_mutation(owner, bytes);
         }
     }
+    if let Some(result) = crate::web_storage::storage_delete_field(obj, key) {
+        return result;
+    }
     if let Some(result) = crate::process::process_env_delete_field(obj, key) {
         return result;
     }

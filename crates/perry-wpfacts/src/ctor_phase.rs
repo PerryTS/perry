@@ -156,6 +156,10 @@ impl St {
 }
 
 struct W<'a> {
+    /// The namespace pairs are the knob's (`Model::ns_pairs`): one is the
+    /// call of the original member, walked as its intrinsic arm. Off, a pair
+    /// is main's guard, walked as a conditional.
+    pairs: bool,
     /// The data keys of the module's plain `__AnonShape_*` literal classes
     /// (`plain_shapes`).
     shapes: &'a BTreeMap<String, Vec<String>>,
@@ -285,8 +289,9 @@ pub fn analyze_in_present_m(
     shapes: &BTreeMap<String, Vec<String>>,
     present: &BTreeSet<String>,
     rule_m: bool,
+    pairs: bool,
 ) -> CtorPhase {
-    analyze_in_present_ms(c, shapes, present, rule_m, &BTreeMap::new())
+    analyze_in_present_ms(c, shapes, present, rule_m, &BTreeMap::new(), pairs)
 }
 
 /// [`analyze_in_present_m`] with rule S's setters (`setters`: the one
@@ -297,6 +302,7 @@ pub fn analyze_in_present_ms(
     present: &BTreeSet<String>,
     rule_m: bool,
     setters: &BTreeMap<String, &perry_hir::Function>,
+    pairs: bool,
 ) -> CtorPhase {
     let callees = if rule_m { own_callees(c) } else { BTreeMap::new() };
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
@@ -329,11 +335,11 @@ pub fn analyze_in_present_ms(
         m
     });
     let ss = (!setters.is_empty()).then_some(setters);
-    let mut ph = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees, false, ss);
+    let mut ph = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees, false, ss, pairs);
     // Rule I: the same walk with chain reads inert (rule M off: a followed
     // call keeps its own exactness argument, `settle_rule_m`).
     let none = BTreeMap::new();
-    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true, None);
+    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true, None, pairs);
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -341,7 +347,7 @@ pub fn analyze_in_present_ms(
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body_i(shapes, &valued, methods, params, body, order, true, present, &callees, false, ss).definite;
+    ph.stored = analyze_body_i(shapes, &valued, methods, params, body, order, true, present, &callees, false, ss, pairs).definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     if !inert.inert_reads.is_empty() {
         ph.inert_definite = inert.definite.into_iter().filter(|k| !ph.definite.contains(k)).collect();
@@ -353,19 +359,19 @@ pub fn analyze_in_present_ms(
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
-pub fn analyze_fn(f: &perry_hir::Function) -> CtorPhase {
-    analyze_closure(&f.params, &f.body)
+pub fn analyze_fn(f: &perry_hir::Function, pairs: bool) -> CtorPhase {
+    analyze_closure(&f.params, &f.body, pairs)
 }
 
 /// Same for a closure body used as a constructor. Its birth keys are its
 /// first-store order (`assigned_order`, `Gen::note_fn_phase`): a second walk
 /// checks the stores against that order.
-pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase {
+pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt], pairs: bool) -> CtorPhase {
     // A closure or function names no class: no class shape to read
     // (`plain_shapes`).
     let shapes = BTreeMap::new();
     let none = BTreeMap::new();
-    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new(), &none);
+    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new(), &none, pairs);
     if !ctor_order() || ph.assigned_order.is_empty() {
         return ph;
     }
@@ -375,7 +381,7 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase 
         .enumerate()
         .map(|(i, k)| (k.clone(), i))
         .collect();
-    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new(), &none)
+    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new(), &none, pairs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -389,8 +395,9 @@ fn analyze_body<'a>(
     class_ctor: bool,
     present: &'a BTreeSet<String>,
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
+    pairs: bool,
 ) -> CtorPhase {
-    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false, None)
+    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false, None, pairs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -406,8 +413,10 @@ fn analyze_body_i<'a>(
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
     inert: bool,
     setters: Option<&'a BTreeMap<String, &'a perry_hir::Function>>,
+    pairs: bool,
 ) -> CtorPhase {
     let mut w = W {
+        pairs,
         inert,
         setters,
         callees,
@@ -903,6 +912,16 @@ impl<'a> W<'a> {
     fn expr(&mut self, st: &mut St, e: &Expr) {
         match e {
             Expr::This => self.leak(st),
+            // MATHB1B: the namespace pair `NamespacePatched(N) ? N.m(…) :
+            // <intrinsic>` is the call of the original member, walked as its
+            // intrinsic arm (`Gen::namespace_pair`): what a replaced member
+            // does with `this` is the generic call's escape in the solve,
+            // added only for the values a write brings to the member read.
+            Expr::Conditional {
+                condition,
+                else_expr,
+                ..
+            } if self.pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => self.expr(st, else_expr),
             // R9BIRTH3 rule M: `this.m(args)` with `m` the class's own method
             // (`followable`). The call reads `this.m` (the prototype's
             // method: no code runs), evaluates the arguments, then runs the

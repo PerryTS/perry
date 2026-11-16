@@ -620,6 +620,11 @@ pub struct ElisionFacts {
     /// prototype) and takes the site's complete generic operation once it
     /// is set.
     pub interp_guard: bool,
+    /// MATHC1 (`PatchedBuiltins::namespace_pairs_by_verdict`): each
+    /// namespace pair `NamespacePatched(ns) ? generic : intrinsic` is lowered
+    /// as one arm, the intrinsic when `native_member_calls` proves the
+    /// generic call reads the original builtin, else the generic call.
+    pub namespace_pair_arms: bool,
     /// Compiled code never writes `%Function.prototype%.bind`, `.name` or
     /// `.length` (wpfacts `fnproto_bind_written`): a `bind` site on a
     /// base-shape function needs no `Pristine(Function)` test, only the

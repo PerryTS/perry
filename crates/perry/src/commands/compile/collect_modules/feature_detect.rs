@@ -554,11 +554,63 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
 
 /// Select features after CJS open arms have been resolved, retaining the full
 /// graph for the detector's imported-enum and other producer facts.
+///
+/// A namespace pair (`NamespacePatched(ns) ? globalThis.<ns>.<m>(..) :
+/// <intrinsic>`, the facts lowering of a direct namespace call) is read as
+/// its intrinsic arm, the HIR the call has without the pair: the generic arm
+/// exists only until the pick, and its `globalThis.<ns>` member read would
+/// select the Proxy / JSON / Reflect namespaces for every program. Where the
+/// pick keeps a generic call, [`detect_kept_generic_calls`] scans the picked
+/// module again, so the selected features are those of the final HIR.
 pub(crate) fn detect_program_optional_feature_usage(ctx: &mut CompilationContext) {
     let modules = std::mem::take(&mut ctx.native_modules);
     for module in modules.values() {
+        let view = intrinsic_view(module);
+        let module = view.as_ref().unwrap_or(module);
         let computed = computed_members::scan(module, &modules);
         detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+    }
+    ctx.native_modules = modules;
+}
+
+/// `module` with every namespace pair replaced by its intrinsic arm, or None
+/// when it holds no pair.
+fn intrinsic_view(module: &perry_hir::Module) -> Option<perry_hir::Module> {
+    fn pair(expr: &perry_hir::Expr) -> bool {
+        match expr {
+            perry_hir::Expr::NamespacePatched(_) => return true,
+            perry_hir::Expr::Closure { body, .. } if stmts_any_expr(body, &mut pair) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| found = found || pair(child));
+        found
+    }
+    if !module_any_expr(module, &mut pair) {
+        return None;
+    }
+    let mut view = module.clone();
+    perry_hir::namespace_pairs::take_intrinsic_arms(&mut view);
+    Some(view)
+}
+
+/// After the namespace pairs are picked: scan again each module of `paths`
+/// (those whose pick kept a generic call, or that still hold pairs), adding
+/// the features its final HIR selects. Every gate only turns a feature on,
+/// so the result is the union of the pre-pick view and the final HIR.
+pub(crate) fn detect_kept_generic_calls(
+    ctx: &mut CompilationContext,
+    paths: &[std::path::PathBuf],
+) {
+    if paths.is_empty() {
+        return;
+    }
+    let modules = std::mem::take(&mut ctx.native_modules);
+    for path in paths {
+        if let Some(module) = modules.get(path) {
+            let computed = computed_members::scan(module, &modules);
+            detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+        }
     }
     ctx.native_modules = modules;
 }
@@ -1837,4 +1889,82 @@ class C {
             );
         }
     }
+
+    /// MATHC4: the runtime features selected through the pre-pick view plus
+    /// the re-scan of a module whose pick kept generic calls equal the
+    /// features of the final HIR, and no gate of the final HIR is missing, at both ends of the pick (every pair generic, every
+    /// pair intrinsic), on the namespace-verdict fixtures.
+    #[test]
+    fn mathc4_pair_features_equal_the_final_hir() {
+        fn flags(ctx: &crate::commands::compile::CompilationContext) -> Vec<(&'static str, bool)> {
+            vec![("needs_wasm_runtime", ctx.needs_wasm_runtime), ("needs_ui", ctx.needs_ui), ("needs_plugins", ctx.needs_plugins), ("needs_stdlib", ctx.needs_stdlib), ("needs_geisterhand", ctx.needs_geisterhand), ("uses_data_url_dynamic_import", ctx.uses_data_url_dynamic_import), ("uses_dynamic_import_options", ctx.uses_dynamic_import_options), ("uses_fetch", ctx.uses_fetch), ("uses_crypto_builtins", ctx.uses_crypto_builtins), ("uses_zlib_brotli", ctx.uses_zlib_brotli), ("uses_zlib_zstd", ctx.uses_zlib_zstd), ("uses_web_compression_stream", ctx.uses_web_compression_stream), ("uses_regex", ctx.uses_regex), ("uses_temporal", ctx.uses_temporal), ("uses_event_emitter", ctx.uses_event_emitter), ("uses_url", ctx.uses_url), ("uses_string_normalize", ctx.uses_string_normalize), ("uses_intl_segmenter", ctx.uses_intl_segmenter), ("uses_intl_namespace", ctx.uses_intl_namespace), ("uses_global_math", ctx.uses_global_math), ("uses_global_json", ctx.uses_global_json), ("uses_json_format", ctx.uses_json_format), ("uses_json_engine", ctx.uses_json_engine), ("uses_computed_member_keys", ctx.uses_computed_member_keys), ("uses_date_computed_member_keys", ctx.uses_date_computed_member_keys), ("uses_file_handle_capability", ctx.uses_file_handle_capability), ("uses_bun_file_capability", ctx.uses_bun_file_capability), ("uses_turnloop", ctx.uses_turnloop), ("uses_bigint", ctx.uses_bigint), ("uses_proxy", ctx.uses_proxy), ("uses_global_reflect", ctx.uses_global_reflect), ("uses_global_atomics", ctx.uses_global_atomics), ("uses_global_url", ctx.uses_global_url), ("uses_global_text", ctx.uses_global_text), ("uses_global_websocket", ctx.uses_global_websocket), ("uses_global_webcrypto", ctx.uses_global_webcrypto), ("uses_global_webfetch", ctx.uses_global_webfetch), ("uses_proc_ipc", ctx.uses_proc_ipc), ("uses_intl_locale", ctx.uses_intl_locale), ("uses_intl_datetime", ctx.uses_intl_datetime), ("uses_diagnostics", ctx.uses_diagnostics), ("uses_dgram", ctx.uses_dgram), ("uses_child_process", ctx.uses_child_process), ("uses_node_test", ctx.uses_node_test), ("uses_get_builtin_module", ctx.uses_get_builtin_module), ("uses_upgrade_to_tls", ctx.uses_upgrade_to_tls), ("uses_dns", ctx.uses_dns), ("needs_thread", ctx.needs_thread)]
+        }
+        fn imports(ctx: &crate::commands::compile::CompilationContext) -> Vec<String> {
+            ctx.native_module_imports.iter().map(|s| s.to_string()).collect()
+        }
+        let mut set = perry_hir::PatchedBuiltins::default();
+        set.namespace_pairs = true;
+        perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+        for source in [
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_after.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_chain.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_defprop.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_globalkey.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_global.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_local.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_nowrite.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_alias.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_assign.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_computed.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_escape_alias.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_escape.ts"),
+            "console.log(globalThis.JSON.parse(process.argv[2] ?? \"1\"), Reflect.ownKeys(new Proxy({}, {})), Math.cos(0));",
+        ] {
+            let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
+            let lowered =
+                perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");
+            assert!(super::intrinsic_view(&lowered).is_some(), "no pair: {source}");
+            let path = std::path::PathBuf::from("/tmp/feature-detect/entry.ts");
+            for all_generic in [true, false] {
+                let mut ctx =
+                    crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
+                ctx.native_modules.insert(path.clone(), lowered.clone());
+                super::detect_program_optional_feature_usage(&mut ctx);
+                let module = ctx.native_modules.get_mut(&path).unwrap();
+                let kept = if all_generic {
+                    perry_hir::namespace_pairs::pick_namespace_pair_arms(
+                        module,
+                        &Default::default(),
+                        &Default::default(),
+                        &Default::default(),
+                    )
+                } else {
+                    perry_hir::namespace_pairs::take_intrinsic_arms(module);
+                    0
+                };
+                assert_eq!(kept > 0, all_generic, "{source}");
+                super::detect_kept_generic_calls(&mut ctx, &if kept > 0 { vec![path.clone()] } else { vec![] });
+                let mut fin =
+                    crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
+                fin.native_modules.insert(path.clone(), ctx.native_modules[&path].clone());
+                super::detect_program_optional_feature_usage(&mut fin);
+                // No gate the final HIR turns on is missing.
+                let dropped: Vec<_> =
+                    flags(&ctx).into_iter().zip(flags(&fin)).filter(|(a, b)| b.1 && !a.1).collect();
+                assert!(dropped.is_empty(), "all_generic={all_generic}: {dropped:?}: {source}");
+                // The runtime features selected are those of the final HIR (a
+                // gate the view adds, `uses_json_engine` of an intrinsic
+                // `JSON.stringify` kept generic, is subsumed by the JSON
+                // namespace its generic call selects).
+                let none = std::collections::BTreeSet::new();
+                let runtime = |c: &crate::commands::compile::CompilationContext| {
+                    crate::commands::compile::optimized_libs::auto_optimized_cross_features(c, &none, &[])
+                };
+                assert_eq!(runtime(&ctx), runtime(&fin), "all_generic={all_generic}: {source}");
+                assert_eq!(imports(&ctx), imports(&fin), "all_generic={all_generic}: {source}");
+            }
+        }
+        perry_hir::set_patched_builtins(std::sync::Arc::new(perry_hir::PatchedBuiltins::default()));
+    }
+
 }

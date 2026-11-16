@@ -1940,6 +1940,10 @@ impl Model {
             return;
         }
         let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
+        if proto == Protocol::ToPrimitive {
+            self.to_prim_ret.insert(t, ret);
+            self.to_prim_ret_nodes.insert(ret);
+        }
         // Protocol results go back to the runtime only (touched below);
         // an awaited one is adopted first (below).
         self.nodes[ret as usize].sink = !proto.awaits_result();

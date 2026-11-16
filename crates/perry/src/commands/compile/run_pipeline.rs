@@ -1920,6 +1920,60 @@ pub fn run_with_parse_cache(
     let dropped_source = super::source_need::drop_unread_source(&mut ctx, &need);
     let source_need_seconds = source_need_started.elapsed().as_secs_f64();
 
+    // wpfacts: the whole-program facts run here, over the final HIR (the
+    // passes above are the last to change it; the class maps below borrow
+    // it until codegen). MATHC1/MATHC2: each namespace pair of the facts
+    // lowering then becomes the one arm its call site's verdict picks
+    // (`perry_hir::namespace_pairs`), before any analysis below reads the
+    // HIR: a proven call is the same HIR a build without the pair has, so
+    // class layouts, births, constructor contracts, providers and module
+    // options see what they see there.
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+        super::program_facts::native_externs(
+            ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
+        ),
+    );
+    // The optional-feature scan read each pair as its intrinsic arm
+    // (`feature_detect::detect_program_optional_feature_usage`); a module
+    // whose pick keeps a generic call, or whose pairs stay for codegen, is
+    // scanned again so its generic calls select their features.
+    let mut generic_kept = Vec::new();
+    if ctx.patched_builtins.namespace_pairs_by_verdict() {
+        for (path, module) in ctx.native_modules.iter_mut() {
+            let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
+            let inactive = super::program_facts::namespace_pair_inactive(&program_facts, path);
+            let aliases = super::program_facts::alias_intrinsic_calls(&program_facts, path);
+            if perry_hir::namespace_pairs::pick_namespace_pair_arms(module, &proven, &inactive, &aliases)
+                > 0
+            {
+                generic_kept.push(path.clone());
+            }
+        }
+    } else if ctx.patched_builtins.namespace_pairs {
+        generic_kept.extend(ctx.native_modules.keys().cloned());
+    }
+    collect_modules::feature_detect::detect_kept_generic_calls(&mut ctx, &generic_kept);
+
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
@@ -6648,31 +6702,6 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
     // ACCBUILD3: a proven accessor site calls the holder's accessor by the
     // symbol its own module emits, named from the holder's module and class.
@@ -6708,6 +6737,8 @@ pub fn run_with_parse_cache(
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                     opts.program_facts = super::program_facts::view_for(&program_facts, path, &accessor_symbol);
+                    std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                        ctx.patched_builtins.namespace_pairs_by_verdict();
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6933,6 +6964,8 @@ pub fn run_with_parse_cache(
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
+                std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                    ctx.patched_builtins.namespace_pairs_by_verdict();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                 if opts.is_entry_module {
                     opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));

@@ -247,8 +247,15 @@ fn an_ext_package_of_another_version_adds_no_candidate() {
 
 // --- locate_or_fetch ----------------------------------------------------------
 
+/// The archive these tests locate. The search probes the PERRY_RUNTIME_DIR /
+/// PERRY_LIB_DIR overrides and the checkout's `target/<triple>/release` before
+/// any package, and CI points PERRY_RUNTIME_DIR at a release dir holding the
+/// real `libperry_runtime.a`, so a real name would be found there and never
+/// miss. No build writes this name.
+const FETCHED: &str = "libperry_fetch_fixture.a";
+
 /// A fetcher that records its calls and, when `install` is set, puts a package
-/// with `LIB` in the ~/.perry root it was asked for.
+/// with `FETCHED` in the ~/.perry root it was asked for.
 fn fetcher<'a>(
     calls: &'a RefCell<Vec<(PackageKind, String)>>,
     home: &'a Path,
@@ -264,7 +271,7 @@ fn fetcher<'a>(
             triple,
             env!("CARGO_PKG_VERSION"),
         );
-        fs::write(dest.join("lib").join(LIB), b"archive").unwrap();
+        fs::write(dest.join("lib").join(FETCHED), b"archive").unwrap();
         Some(PackageFetch::Installed)
     }
 }
@@ -275,7 +282,7 @@ fn a_cross_runtime_miss_fetches_its_target_package_once_and_finds_it() {
     let home = root.join("home");
     let calls = RefCell::new(Vec::new());
     let found = locate_or_fetch_from(
-        LIB,
+        FETCHED,
         Some("wasip1"),
         None,
         Some(&home),
@@ -299,7 +306,7 @@ fn a_refused_fetch_keeps_the_search_list_and_carries_the_reason() {
     let home = root.join("home");
     let calls = RefCell::new(Vec::new());
     let Err(missed) = locate_or_fetch_from(
-        LIB,
+        FETCHED,
         Some("ios"),
         None,
         Some(&home),
@@ -317,11 +324,20 @@ fn nothing_is_fetched_for_the_host_an_instrumented_archive_or_an_installed_packa
     let (_t, root) = tree();
     let home = root.join("home");
     let calls = RefCell::new(Vec::new());
-    // The host's own runtime ships with perry: never a package.
-    let host = locate_or_fetch_from(LIB, None, None, Some(&home), fetcher(&calls, &home, true));
+    // A host core archive ships with perry: never a package.
+    let host = locate_or_fetch_from(
+        FETCHED,
+        None,
+        None,
+        Some(&home),
+        fetcher(&calls, &home, true),
+    );
     assert!(host.is_err());
     // The instrumented variants are not in any package.
-    for name in ["libperry_runtime_instr.a", "perry_stdlib_instr.lib"] {
+    for name in [
+        "libperry_fetch_fixture_instr.a",
+        "perry_fetch_fixture_instr.lib",
+    ] {
         let r = locate_or_fetch_from(
             name,
             Some("wasip1"),
@@ -343,7 +359,7 @@ fn nothing_is_fetched_for_the_host_an_instrumented_archive_or_an_installed_packa
         env!("CARGO_PKG_VERSION"),
     );
     let r = locate_or_fetch_from(
-        LIB,
+        FETCHED,
         Some("wasip1"),
         None,
         Some(&home),

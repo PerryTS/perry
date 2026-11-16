@@ -118,6 +118,26 @@ fn guarded_member(generic: &perry_hir::Expr) -> Option<&str> {
     }
 }
 
+/// The callee `globalThis.<ns>.<member>` of a namespace pair's generic call
+/// (`patched_builtin_call::dynamic_member_call`), spread or not.
+fn pair_callee<'e>(ns: &str, generic: &'e perry_hir::Expr) -> Option<&'e perry_hir::Expr> {
+    use perry_hir::Expr;
+    let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
+        return None;
+    };
+    let Expr::PropertyGet { object, .. } = callee.as_ref() else {
+        return None;
+    };
+    match object.as_ref() {
+        Expr::PropertyGet { object: g, property, .. }
+            if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns =>
+        {
+            Some(callee.as_ref())
+        }
+        _ => None,
+    }
+}
+
 /// A guarded call's generic arm `globalThis.<ns>.<member>(args…)` without
 /// spread: its family, member and arguments.
 fn compact_generic<'e>(
@@ -276,6 +296,22 @@ pub(crate) fn lower_namespace_guard(
     fast: &perry_hir::Expr,
 ) -> anyhow::Result<String> {
     use crate::types::{DOUBLE, PTR};
+    // MATHC1: a pair of the facts lowering is ONE arm, picked by the call
+    // site's verdict: the intrinsic when the generic call is proven to read
+    // the original builtin (ECMA-262 13.3.6.1 reads the member, so the
+    // intrinsic is that member's call), else the generic call. No test.
+    if ctx.wpfacts.namespace_pair_arms {
+        if let Some(callee) = pair_callee(ns, generic) {
+            if !ctx.wpfacts.interp_guard && native_member_proven(ctx, callee) {
+                return crate::expr::lower_expr(ctx, fast);
+            }
+            return match compact_generic(ns, generic) {
+                Some((_, member, args)) if ns == "console" => lower_console_generic_call(ctx, member, args),
+                Some((family, member, args)) => emit_namespace_generic_call(ctx, family, member, args),
+                None => crate::expr::lower_expr(ctx, generic),
+            };
+        }
+    }
     let patched = emit_namespace_patched(ctx, ns);
     let generic_idx = ctx.new_block("ns_guard.generic");
     let fast_idx = ctx.new_block("ns_guard.intrinsic");

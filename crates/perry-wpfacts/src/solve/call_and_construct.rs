@@ -4,6 +4,18 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // MATHB1B: the generic-arm call of a namespace pair does not bind
+        // the original member: the pair's intrinsic arm is that call
+        // (`Gen::namespace_pair`).
+        if let Some((ns, key)) = self.ns_pair_of(call) {
+            if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+                if identity.rsplit_once('.').is_some_and(|(n, k)| {
+                    crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]
+                }) {
+                    return;
+                }
+            }
+        }
         self.diagnostic_callee(call, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
@@ -755,7 +767,21 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
+        let a = name;
         let name = self.atoms[name as usize].clone();
+        // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
+        // what the program stored over it (`program_global_fn`) is
+        // constructed too. Perry lowers a literal builtin name to the
+        // intrinsic (below), node constructs the stored value: the union
+        // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, call);
+        }
+        if builtins::program_global_fn(self, &name) {
+            let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let f = builtins::global_field(self, g, a);
+            self.cons(f, Cons::New { call });
+        }
         self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 

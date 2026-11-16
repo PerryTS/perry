@@ -93,6 +93,45 @@ fn callable_workers_keep_dead_body_removal() {
     assert_same(&serial, &compile(3));
 }
 
+/// A constructor's `this[key] = v` store reads the module's constructor-layout
+/// plans while its body is lowered. A worker must see them too, or it emits
+/// the generic store where the serial loop emits the family store.
+#[test]
+fn callable_workers_keep_constructor_layout_stores() {
+    let mut source = String::from(
+        "const a = Symbol('a'), b = Symbol('b');\n\
+         const F = function (this: any, n: any) { this.x = n; this[a] = n; this[b] = 'q'; this.z = 1; };\n\
+         function mk(k: symbol) { return function H(this: any) { this.first = 1; this[k] = 2; this.last = 3; }; }\n",
+    );
+    for i in 0..72 {
+        source.push_str(&format!(
+            "const pc{i} = function (x: any) {{ return '' + x + '{i}'; }};\n"
+        ));
+    }
+    source.push_str("console.log(new (F as any)(1)[a], new (mk(b) as any)()[b], pc0(0));");
+    let parsed = perry_parser::parse_typescript(&source, "callable-plans.ts").unwrap();
+    let hir = perry_hir::lower_module(&parsed, "callable-plans", "callable-plans.ts").unwrap();
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(
+        String::from_utf8_lossy(&serial).contains("call double @perry_function_family_symbol_set"),
+        "the family store must be live"
+    );
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
+}
+
 #[test]
 fn owned_function_roundtrip_keeps_builder_state() {
     let mut module = LlModule::new("x86_64-unknown-linux-gnu");

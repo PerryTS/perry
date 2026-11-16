@@ -397,9 +397,13 @@ fn merge_effects(
         if entry.contains_key("effects") {
             return Err(format!("{at}: a second effects clause"));
         }
+        // A node module member (`node:fs.existsSync`) or a member of the
+        // process object (`process.cwd`): the dispatch arm is keyed by the
+        // bare module name.
         let (module, key) = name
             .strip_prefix("node:")
-            .and_then(|n| n.rsplit_once('.'))
+            .unwrap_or(name.as_str())
+            .rsplit_once('.')
             .ok_or_else(|| format!("{at}: not a node module member"))?;
         let text = arm(module, key)
             .ok_or_else(|| format!("{at}: no native_module_dispatch arm ({module:?}, {key:?})"))?;

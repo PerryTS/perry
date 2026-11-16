@@ -1073,13 +1073,42 @@ pub fn synthesize_class_captures(
     } else {
         Some(rebind_count)
     };
+    // The late stashes are ordinary [[Set]]s on `this` after user code, which
+    // throws once the body has frozen its receiver (`Object.freeze(this)`,
+    // mongodb's `HostAddress`, #11043). After an early stash they only matter
+    // for a capture the constructor or a field initializer can still change:
+    // one it assigns anywhere (declaration initializers and closures
+    // included), or one a closure it creates names. Every other capture
+    // already holds its final value. Field initializers are not remapped yet,
+    // so they name the outer id.
+    let late_stashes: Vec<Stmt> = if env_mode || early_insert_at.is_none() {
+        assignment_stmts.clone()
+    } else {
+        let mut touched: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+        for stmt in &ctor.body[rebind_count..] {
+            crate::lower::shared_mutable_capture::collect_assigned_deep_stmt(stmt, &mut touched);
+            closure_capture_ids_stmt(stmt, &mut touched);
+        }
+        for init in fields.iter().filter_map(|f| f.init.as_ref()) {
+            crate::lower::shared_mutable_capture::collect_assigned_deep_expr(init, &mut touched);
+            closure_capture_ids_expr(init, &mut touched);
+        }
+        captures_vec
+            .iter()
+            .zip(assignment_stmts.iter())
+            .filter(|(outer_id, _)| {
+                touched.contains(outer_id) || touched.contains(&ctor_id_map[outer_id])
+            })
+            .map(|(_, stmt)| stmt.clone())
+            .collect()
+    };
     if let Some(early_insert_at) = early_insert_at {
         for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
             ctor.body.insert(early_insert_at + i, stmt);
         }
     }
-    insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
-    for stmt in assignment_stmts {
+    insert_stashes_before_returns(&mut ctor.body, &late_stashes);
+    for stmt in late_stashes {
         ctor.body.push(stmt);
     }
     *constructor = Some(ctor);

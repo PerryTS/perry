@@ -155,6 +155,11 @@ pub(super) fn try_patched_builtin_call(
         return Ok(NamespaceCall::Plain(args));
     }
     if !duplicable(&args) {
+        // A definition in the arguments cannot sit in both arms. A pair made
+        // only for the facts lowering stays the call it was (MATHC1).
+        if !crate::patched_builtins::namespace_call_guarded_by_scan() {
+            return Ok(NamespaceCall::Plain(args));
+        }
         // A definition in the arguments: the one dynamic call.
         let object = live_namespace(&ns);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(

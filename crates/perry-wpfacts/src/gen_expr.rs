@@ -622,11 +622,91 @@ impl<'a> Gen<'a> {
         (tm, t)
     }
 
+    /// MATHB1B R2: the namespace pair `NamespacePatched(N) ? N.m(…) :
+    /// <intrinsic>` is ONE call of `N.m` with the arguments evaluated once.
+    /// The intrinsic arm is walked as the call of the original member: its
+    /// node's model is the original's effect (ECMA-262: calling the realm's
+    /// own `N.m`), exactly what the call does while nothing replaced the
+    /// member. The generic arm is walked as the ordinary member call `N.m(…)`
+    /// (the member read, then the call) with the argument nodes the
+    /// intrinsic arm evaluated (no argument is walked twice); it binds every
+    /// callee the read yields except the original (`Model::call_tok`), so it
+    /// adds the ordinary call's effect for exactly the values a write of the
+    /// member, of the global binding `N` or of an unknown receiver brings to
+    /// the read (stored values, ⊤). The state only grows: the original's
+    /// effect is always there, another callee's is added when it arrives.
+    pub(crate) fn namespace_pair(&mut self, fx: &Fx, ns: &str, generic: &Expr, intrinsic: &Expr) -> NodeId {
+        let ns_tok = crate::builtins::ns_by_name(ns);
+        let (Some(ns_b), Expr::Call { callee, args, byte_offset, byte_end, .. }) = (ns_tok, generic) else {
+            return self.expr_zs(fx, generic);
+        };
+        let Expr::PropertyGet { property, .. } = callee.as_ref() else {
+            return self.expr_zs(fx, generic);
+        };
+        let prev = self.pair_args.replace(args.iter().map(|a| (a.clone(), None)).collect());
+        let ri = self.expr_zs(fx, intrinsic);
+        let got = std::mem::replace(&mut self.pair_args, prev).expect("pair args");
+        let a: Vec<NodeId> = got
+            .into_iter()
+            .zip(args.iter())
+            .map(|((_, n), x)| n.map_or_else(|| self.expr_zs(fx, x), |(n, _)| n))
+            .collect();
+        self.call_lit_arg = args
+            .first()
+            .and_then(|x| self.const_property_key(fx.module, x))
+            .map(|s| self.m.atom(&s));
+        let c0 = self.m.calls.len();
+        let key = self.m.atom(property);
+        // The generic call is registered before it is made: generation solves
+        // online, so `call_with` binds the callee read so far inside it, and
+        // the skip (`Model::ns_pair_of`) must already see the call there.
+        self.m.ns_pair_calls.insert(c0 as CallId, (ns_b, key));
+        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
+        let made: Vec<CallId> = (c0..self.m.calls.len())
+            .filter(|&c| self.m.calls[c].ret == rg && self.m.calls[c].args == a)
+            .map(|c| c as CallId)
+            .collect();
+        if !made.contains(&(c0 as CallId)) {
+            self.m.ns_pair_calls.remove(&(c0 as CallId));
+        }
+        for c in made {
+            self.m.ns_pair_calls.insert(c, (ns_b, key));
+        }
+        let out = self.tmp("nspair");
+        self.m.edge(ri, out);
+        self.m.edge(rg, out);
+        out
+    }
+
     /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let zs_ok = std::mem::take(&mut self.zs_ok);
+        let seq = self.expr_seq;
+        self.expr_seq += 1;
         let n = self.expr_inner(fx, e);
+        // A namespace pair's argument (`namespace_pair`): the pair is built
+        // from one argument list (perry-hir `try_patched_builtin_call`), so
+        // the intrinsic arm holds each argument once, as subtrees that do not
+        // nest (each is evaluated once, ECMA-262 13.3.8.1). A structural
+        // match found while this expression was walked (at or after `seq`)
+        // lies inside it: when this expression is itself an argument, that
+        // match is part of it, not another argument (`Math.max(h(f()), f())`:
+        // the inner `f()` is not the second argument), so it is dropped and
+        // the argument it took is matched again by what follows.
+        if let Some(pa) = self.pair_args.as_mut() {
+            if let Some(i) = pa
+                .iter()
+                .position(|(a, s)| s.is_none() && perry_hir::stable_hash::same_expr_structure(a, e))
+            {
+                for (_, s) in pa.iter_mut() {
+                    if s.is_some_and(|(_, q)| q >= seq) {
+                        *s = None;
+                    }
+                }
+                pa[i].1 = Some((n, seq));
+            }
+        }
         self.zs_mark(n, zs_ok);
         self.note_element_value(fx, e, n);
         if self.diagnostic.is_some() {
@@ -970,6 +1050,15 @@ impl<'a> Gen<'a> {
                     },
                 );
                 out
+            }
+            // MATHB1B R2: the namespace pair (`namespace_pair`).
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
+                let Expr::NamespacePatched(ns) = condition.as_ref() else { unreachable!() };
+                self.namespace_pair(fx, ns, then_expr, else_expr)
             }
             Expr::Conditional {
                 condition,
