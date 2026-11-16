@@ -1728,7 +1728,7 @@ function __classCtor(className, ctorIdx, caps) {
   const proto = { constructor: ctor };
   for (let c = className; c; c = classParentTable[c] || null) {
     for (const m of Object.keys(classMethodTable[c] || {})) {
-      if (m in proto || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+      if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
       proto[m] = __classMethodValue(c, m, evaluated ? ctor : undefined);
     }
   }
@@ -2195,6 +2195,7 @@ const __memDispatch = {
   // closure has no `this` to give.
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : [];
+    if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __memDispatch.closure_call_spread(fn, argArr);
   },
@@ -5531,8 +5532,7 @@ function __superGet(home, key, receiver) {
     let last = null;
     for (let c = classParentTable[cls] || null; c; c = classParentTable[c] || null) {
       last = c;
-      const methods = classMethodTable[c];
-      if (!methods) continue;
+      const methods = classMethodTable[c] || {};
       if (('__get_' + name) in methods) {
         const fn = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
         return __bitsToJsValue(fn(__jsValueToBits(receiver)));
@@ -5541,6 +5541,8 @@ function __superGet(home, key, receiver) {
         const evaluation = receiver && typeof receiver === 'object' ? __instanceEvaluation.get(receiver) : undefined;
         return __classMethodValue(c, name, evaluation);
       }
+      // `class N extends null`: N.prototype has no prototype past it.
+      if (__nullParentClasses.has(c)) return undefined;
     }
     const host = last && !classMethodTable[last] ? globalThis[last] : undefined;
     const base = typeof host === 'function' ? host.prototype : Object.prototype;

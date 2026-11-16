@@ -704,9 +704,12 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(a);
                 }
             }
-            Expr::InstanceOf { expr, ty, .. } => {
+            Expr::InstanceOf { expr, ty, ty_expr } => {
                 self.collect_strings_in_expr(expr);
                 self.intern_string(ty);
+                if let Some(ty_expr) = ty_expr {
+                    self.collect_strings_in_expr(ty_expr);
+                }
             }
             Expr::In { property, object } => {
                 self.collect_strings_in_expr(property);
