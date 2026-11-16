@@ -43,6 +43,16 @@ console.log(arrayScope([1, 2, 3]));
 // A function found through the with-object is called with it as `this`.
 const methodThis = make(["obj"], ["with (obj) { return describe(); }"]);
 console.log(methodThis({ name: "box", describe() { return "I am " + this.name; } }));
+// Parenthesized and optional calls keep the reference, and so the receiver.
+const refThis = make(["obj"], ["with (obj) { return (describe)() + ',' + describe?.(); }"]);
+console.log(refThis({ name: "box", describe() { return this.name; } }));
+
+// A `var` in a function created inside `with` shadows the with-binding.
+const shadow = make(["obj"], [
+  "with (obj) { var f = function () { var x = 2; return x; }; }",
+  "return f() + ',' + obj.x;",
+]);
+console.log(shadow({ x: 1 }));
 
 // Primitives are boxed; null and undefined throw a TypeError.
 const prim = make(["v"], ["with (v) { return length + ':' + charAt(0); }"]);

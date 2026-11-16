@@ -524,13 +524,14 @@ fn eval_opt_chain(ctx: &Ctx, o: &ast::OptChainExpr, env_idx: usize) -> f64 {
             }
         }
         ast::OptChainBase::Call(call) => {
-            let callee = eval_expr(ctx, &call.callee, env_idx);
+            let (callee, this) = eval_call_callee(ctx, &call.callee, env_idx);
             if bridge::is_nullish(callee) {
                 return bridge::undefined();
             }
             let callee_idx = root_push(callee);
+            let this_idx = root_push(this);
             let args = eval_args(ctx, &call.args, env_idx);
-            let result = call_with_args(root_get(callee_idx), bridge::undefined(), &args);
+            let result = call_with_args(root_get(callee_idx), root_get(this_idx), &args);
             roots_truncate(callee_idx);
             result
         }
@@ -948,6 +949,9 @@ fn eval_call_callee(ctx: &Ctx, e: &ast::Expr, env_idx: usize) -> (f64, f64) {
             }
             _ => bridge::throw_reference_error(&format!("{name} is not defined")),
         }
+    } else if let ast::Expr::Paren(p) = e {
+        // `(f)()` keeps the reference, so a `with` binding stays the receiver.
+        eval_call_callee(ctx, &p.expr, env_idx)
     } else {
         (eval_expr(ctx, e, env_idx), bridge::undefined())
     }

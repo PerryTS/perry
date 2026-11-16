@@ -455,11 +455,10 @@ fn invoke_interp_fn_entered(
         };
         bind_pattern(&ctx, pat, value, env_idx, true);
     }
-    // `var` hoisting (params win over the undefined pre-binding).
+    // `var` hoisting (params win over the undefined pre-binding). Only the
+    // call scope counts: an outer binding of the same name is shadowed.
     for name in &fun.hoisted_vars {
-        if !env::is_bound(root_get(env_idx), name) {
-            env::define(root_get(env_idx), name, bridge::undefined());
-        }
+        env::ensure_var_binding(root_get(env_idx), name);
     }
 
     match &fun.body {
