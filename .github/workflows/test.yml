@@ -3473,7 +3473,6 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
-          scripts/build_instr_runtime.sh
 
       # Only what the harness links (PERRY_BIN / PERRY_RUNTIME_DIR), not the
       # rest of target/release.
@@ -3486,16 +3485,72 @@ jobs:
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
             target/release/libperry_runtime.a.gc-effects
-            target/release/libperry_runtime_instr.a
-            target/release/libperry_stdlib_instr.a
-            target/release/libperry_runtime_instr.a.gc-effects
             target/release/libperry_wasm_host.a
             target/release/libperry_ext_*.a
           if-no-files-found: error
           retention-days: 1
 
+  # The instrumented archives `parity-env` knobs link: a second Cargo graph
+  # (PERRY_RUNTIME_INSTRUMENTS=1), built beside gap-suite-build on its own
+  # runner so the shards wait for the longer of the two builds, not their sum.
+  gap-suite-build-instr:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry-instr"
+          # The instrumented graph builds in target-instr; target/ holds the
+          # gc-effects analyzer that writes the sidecars.
+          workspaces: |
+            . -> target
+            . -> target-instr
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the instrumented runtime archives
+        run: scripts/build_instr_runtime.sh
+
+      - name: Upload the instrumented build
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: gap-suite-instr-build
+          path: |
+            target/release/libperry_runtime_instr.a
+            target/release/libperry_stdlib_instr.a
+            target/release/libperry_runtime_instr.a.gc-effects
+            target/release/libperry_ext_*_instr.a
+          if-no-files-found: error
+          retention-days: 1
+
   gap-suite:
-    needs: [plan, gap-suite-build]
+    needs: [plan, gap-suite-build, gap-suite-build-instr]
     if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     # Diffs compiled programs against Node on every core PR: every
     # test_gap_* case in tests/fixtures/programs/ and the subject trees, judged
@@ -3569,6 +3624,11 @@ jobs:
         with:
           name: gap-suite-fast-build
           path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
+          path: target/release
 
       # The artifact round-trip does not preserve the executable bit.
       - name: Ensure the downloaded perry binary is executable
@@ -3616,7 +3676,7 @@ jobs:
   #
   # Linux reuses gap-suite-build's archives.
   gc-call-effects-linux:
-    needs: [plan, gap-suite-build, lint]
+    needs: [plan, gap-suite-build, gap-suite-build-instr, lint]
     if: >-
       always() && needs.plan.result == 'success' &&
       (needs.lint.result == 'success' ||
@@ -3625,7 +3685,8 @@ jobs:
         fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
         needs.lint.outputs.formatting == 'failure')) &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
-      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
+      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped') &&
+      (needs.gap-suite-build-instr.result == 'success' || needs.gap-suite-build-instr.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -3657,6 +3718,12 @@ jobs:
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' && needs.lint.result == 'success'
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       # With lint failed there is no shared build to download, so build here.
       - name: Install Rust toolchain
@@ -3891,7 +3958,7 @@ jobs:
     # Chained behind `check` so a full run's fan-out does not take every runner
     # slot at once; PR gates share the same 20-slot pool. Every tier that runs
     # parity runs gap-suite-build (ci_plan.py self-test), whose build it links.
-    needs: [plan, check, gap-suite-build]
+    needs: [plan, check, gap-suite-build, gap-suite-build-instr]
     if: fromJSON(needs.plan.outputs.plan).jobs.parity
     strategy:
       fail-fast: false
@@ -3952,6 +4019,11 @@ jobs:
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded perry binary is executable
         run: chmod +x target/release/perry
@@ -5587,6 +5659,7 @@ jobs:
       - repsel-census
       - native-abi-evidence-packet
       - gap-suite-build
+      - gap-suite-build-instr
       - gap-suite
       - gc-call-effects-linux
       - gc-call-effects
