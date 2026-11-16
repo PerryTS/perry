@@ -2280,6 +2280,16 @@ fn judge(
                             throw_arms += 1
                         }
                         Err(why) => {
+                            // Diagnostic (off: one flag read): the refused arm.
+                            if why_indexed() {
+                                eprintln!(
+                                    "WHY_ARM @{} {} .{key} call: {why} unwritten={} absent_key={}",
+                                    s.byte_offset,
+                                    m.tok_name(t),
+                                    key_unwritten(m, tf, key, s.key),
+                                    absent_key(m, t, key, s.key)
+                                );
+                            }
                             verdict.get_or_insert(Verdict::No(why));
                         }
                     }
@@ -2356,6 +2366,18 @@ fn judge(
                         }
                     }
                     Some(_) | None => {
+                        // Diagnostic (off: one flag read): the refused arm.
+                        if why_indexed() {
+                            eprintln!(
+                                "WHY_ARM @{} {} .{key} read: row={:?} unwritten={unwritten} fixed={} absent_key={} own_or_absent={}",
+                                s.byte_offset,
+                                m.tok_name(t),
+                                row.map(|f| (f.writers_ctor, f.writers_post, f.definite, f.declared, f.data_field, tf.birth_keys.contains(&f.key))),
+                                tf.fixed_layout,
+                                absent_key(m, t, key, s.key),
+                                own_data_or_absent(m, tf, t, key, s.key)
+                            );
+                        }
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
                         verdict.get_or_insert(Verdict::No("key not a definite birth field".into()));
