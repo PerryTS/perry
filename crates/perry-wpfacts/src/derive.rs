@@ -2140,8 +2140,22 @@ fn judge(
     // A host object's member (console, the stdio streams): the runtime's
     // own native until a store reaches the key (`builtins::host_native`,
     // the predicate the solver's host calls and loads read).
-    if let Some(r) = host_member(m, s, toks, prim) {
+    // R9READ10: a nullish value beside the builtin namespaces is the
+    // read's TypeError arm (13.3.2.1, 7.3.2 GetV: ToObject(undefined /
+    // null) throws, 7.1.18); the namespaces' arm stays the realm's member.
+    // The site is then decided per kind (PerKind: no claim, generic read).
+    let nn = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF);
+    if let Some(r) = host_member(m, s, toks, prim & !nn) {
         return match r {
+            Ok(mut receivers) if nn != 0 => {
+                if nn & crate::model::prim::UNDEF != 0 {
+                    receivers.push("primitive:undefined (TypeError)".into());
+                }
+                if nn & crate::model::prim::NULL != 0 {
+                    receivers.push("primitive:null (TypeError)".into());
+                }
+                (receivers, false, Verdict::PerKind, true, FxHashMap::default())
+            }
             Ok(receivers) => (
                 receivers,
                 false,
