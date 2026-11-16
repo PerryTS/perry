@@ -9,7 +9,7 @@ use super::FnCtx;
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I1, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 #[cfg(test)]
 #[path = "generic_overhead_tests.rs"]
@@ -695,6 +695,57 @@ pub(crate) fn emit_scalar_aware_store_gated_on_pointerness(
     }
     ctx.current_block = done_idx;
     value_bits
+}
+
+/// `_reserved` bits under which `layout_note_slot` may act on a non-pointer
+/// value stored at an array's append position: `0x0800`
+/// `GC_ARRAY_ELEMENT_SHAPE` (the shape proof must be cleared), `0x2000`
+/// `GC_LAYOUT_ALL_POINTERS` (a scalar demotes it to UNKNOWN), and `0x1000`.
+/// These are the bits `array_push`'s `ARRAY_PUSH_NUMERIC_CLEAN_I16` proves
+/// clear before skipping the same note; its doc carries the per-bit reasoning
+/// and why `SIDE_MASK` is absent.
+const APPEND_LAYOUT_NOTE_HEADER_BITS_I16: &str = "14336"; // 0x3800
+
+/// The layout note of a dense append (`a[a.length] = v` within capacity),
+/// gated inline on the runtime note's own early return. With none of
+/// [`APPEND_LAYOUT_NOTE_HEADER_BITS_I16`] set and a value that cannot carry a
+/// heap pointer, `layout_note_slot` returns without acting in every layout
+/// state, so the call is skipped; otherwise it is made exactly as before.
+/// Without the gate a `boolean[]` fill loop paid one call per element to be
+/// told there was nothing to note (#13491).
+///
+/// `arr_handle` must be a live, non-forwarded array head (the caller's guard
+/// already read its `_reserved` word), and the caller must bump `length` only
+/// after this returns: an append is noted at `slot_index == length`.
+pub(crate) fn emit_append_layout_note_gated(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    slot_index: &str,
+    value_bits: &str,
+    stem: &str,
+) {
+    let note_idx = ctx.new_block(&format!("{stem}.laynote"));
+    let done_idx = ctx.new_block(&format!("{stem}.laynote.done"));
+    let note_label = ctx.block_label(note_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let may_carry_pointer = emit_may_carry_heap_pointer_check(blk, value_bits);
+        let reserved_addr = blk.sub(I64, arr_handle, "6");
+        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+        let reserved = blk.load(I16, &reserved_ptr);
+        let state_bits = blk.and(I16, &reserved, APPEND_LAYOUT_NOTE_HEADER_BITS_I16);
+        let header_needs_note = blk.icmp_ne(I16, &state_bits, "0");
+        let needs_note = blk.or(I1, &may_carry_pointer, &header_needs_note);
+        blk.cond_br(&needs_note, &note_label, &done_label);
+    }
+    ctx.current_block = note_idx;
+    {
+        let blk = ctx.block();
+        emit_layout_note_slot_on_block(blk, arr_handle, slot_index, value_bits);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
 }
 
 pub(crate) fn emit_array_numeric_write_note_on_block(

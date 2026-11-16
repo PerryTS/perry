@@ -3,6 +3,7 @@
 
 use anyhow::{anyhow, Result};
 
+use super::write_barrier::emit_append_layout_note_gated;
 use super::{
     emit_jsvalue_slot_store_with_flags_on_block, emit_scalar_aware_store_gated_on_pointerness,
     emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
@@ -700,23 +701,43 @@ pub(crate) fn lower_index_set_fast(
         ctx.note_ek_frontier(&arr_handle, &idx_i32, &ext_bits);
         ctx.block().br(&merge_label);
     } else {
-        let blk = ctx.block();
-        let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
-        {
-            // The kind was settled above; the returned bits are not needed.
-            let _ = emit_jsvalue_slot_store_with_flags_on_block(
-                blk,
-                &element_ptr,
-                &ext_value,
-                &arr_handle,
-                &idx_i32,
-                string_addref_needed,
-                layout_note_needed,
-                &arr_handle,
-                &element_addr,
-                write_barrier_needed,
-            );
+        let (element_addr, element_ptr) = element_slot(ctx.block(), &arr_handle, &idx_i32);
+        // The kind was settled above. The layout note is emitted separately,
+        // behind its inline gate, and the barrier after it, keeping the
+        // store / addref / note / barrier order.
+        let _ = emit_jsvalue_slot_store_with_flags_on_block(
+            ctx.block(),
+            &element_ptr,
+            &ext_value,
+            &arr_handle,
+            &idx_i32,
+            string_addref_needed,
+            false,
+            &arr_handle,
+            &element_addr,
+            false,
+        );
+        if layout_note_needed || write_barrier_needed {
+            let value_bits = ctx.block().bitcast_double_to_i64(&ext_value);
+            if layout_note_needed {
+                emit_append_layout_note_gated(
+                    ctx,
+                    &arr_handle,
+                    &idx_i32,
+                    &value_bits,
+                    "idxset.extend",
+                );
+            }
+            if write_barrier_needed {
+                emit_write_barrier_slot_on_block(
+                    ctx.block(),
+                    &arr_handle,
+                    &element_addr,
+                    &value_bits,
+                );
+            }
         }
+        let blk = ctx.block();
         // Bump length: store idx+1 to arr_ptr+0.
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle); // length is at offset 0
