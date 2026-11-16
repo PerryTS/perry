@@ -269,8 +269,13 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // typed-array constructors can link their `__proto__` to it as they're
     // built below, and the per-kind `.prototype` objects can be flagged with
     // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
-    // (Idempotent: phase B reads the intrinsic phase A built.)
-    let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
+    // Built by the pass that binds the typed arrays; phase A alone leaves it
+    // to phase B (or to the first reader that asks for it on its own).
+    let typed_array_intrinsic_ctor = if phases.binds("Uint8Array") {
+        ensure_typed_array_intrinsic().0
+    } else {
+        std::ptr::null_mut()
+    };
     // #3664: build the generator / async-generator intrinsic prototype towers
     // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
     // `%Generator(.prototype)%` chains resolve to real objects.
@@ -289,6 +294,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     if phases == RealmPhases::Rest {
         // Phase A bound `Error`: a phase-B family reads it as a lazy birth does.
         birth = FamilyBirthState::of_bound_realm();
+        birth.typed_array_intrinsic_ctor = typed_array_intrinsic_ctor;
     }
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
@@ -388,6 +394,9 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             // before the global's slot can name its constructor: phase A's
             // realm seal has already run and will not come back for it.
             crate::object::builtin_proto::seal_realm_family_of(declaration);
+            // A constructor that is also a builtin namespace (`Date`): its
+            // member holder (the constructor's bag) is sealed with it.
+            super::super::builtin_namespace::seal_namespace_value(name, ctor_value.to_bits());
         }
         if name == "Storage" {
             // Node: `localStorage` / `sessionStorage` are accessors whose
@@ -851,8 +860,9 @@ pub(super) struct FamilyBirthState {
 }
 
 impl FamilyBirthState {
-    /// The state for a family born after its realm's phase A: `Error` and
-    /// `%TypedArray%` as the realm bound them.
+    /// The state for a family born after its realm's phase A: `Error` as the
+    /// realm bound it, and `%TypedArray%` if it exists (only a typed-array
+    /// row reads it, and the pass that binds those builds it first).
     fn of_bound_realm() -> Self {
         let bits = |addr: usize| {
             (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits())
@@ -861,7 +871,9 @@ impl FamilyBirthState {
         FamilyBirthState {
             error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
             error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
-            typed_array_intrinsic_ctor: ensure_typed_array_intrinsic().0,
+            typed_array_intrinsic_ctor: crate::object::TYPED_ARRAY_INTRINSIC_PTR
+                .load(Ordering::Acquire)
+                as *mut crate::closure::ClosureHeader,
         }
     }
 }
@@ -1365,10 +1377,10 @@ fn unborn_lazy_identity(
         .then_some(identity)
 }
 
-// Inlined into the population (its one-pass copy and its phase copy), as it was
-// when the population was its only caller.
+// Inlined into its callers (the population's two copies, and `%TypedArray%`'s
+// late build), as it was when the population was its only caller.
 #[inline(always)]
-fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
+pub(super) fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {
         return;

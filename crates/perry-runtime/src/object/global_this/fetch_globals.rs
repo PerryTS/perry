@@ -110,10 +110,28 @@ pub extern "C" fn perry_realm_family_phase(_identity: u32) {}
 /// get the realm as it is (`js_realm_complete`).
 #[no_mangle]
 pub extern "C" fn js_realm_family_phase(identity: u32) {
+    if identity == REALM_TYPED_ARRAY_BUILT_LATE {
+        return super::typed_array::alias_to_string_late();
+    }
     let name = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS[identity as usize - 1].name;
     if crate::codegen_abi::realm_rest_global(name) {
         js_get_global_this();
     }
+}
+
+/// Not a family (identities start at 1): `%TypedArray%` was built after the
+/// realm's `Array`, which only a two-phase realm does. Sent through the same
+/// hook as a family's phase, so a one-pass program links none of it.
+const REALM_TYPED_ARRAY_BUILT_LATE: u32 = 0;
+
+/// `%TypedArray%` was just built in a realm whose `Array` is already bound.
+#[inline(always)]
+pub(crate) fn realm_typed_array_built_late() {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_realm_family_phase(REALM_TYPED_ARRAY_BUILT_LATE);
+    }
+    perry_realm_family_phase(REALM_TYPED_ARRAY_BUILT_LATE)
 }
 
 /// [`perry_realm_family_phase`] for the runtime's one caller.

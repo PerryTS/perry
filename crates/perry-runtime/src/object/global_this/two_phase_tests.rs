@@ -169,18 +169,21 @@ fn core_then_rest_equals_one_pass() {
                 reference.undefined.contains(name),
                 "{name} after phase B"
             );
-            if let Some(identity) = BuiltinConstructorIdentity::for_name(name) {
-                let ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
-                assert_ne!(ctor, 0, "{name}");
-                assert_eq!(
-                    crate::value::js_nanbox_get_pointer(f64::from_bits(word)) as usize,
-                    ctor,
-                    "{name}: the global binds the realm's one constructor"
-                );
+            if BuiltinConstructorIdentity::for_name(name).is_some() && word != UNDEFINED {
+                // The realm's one constructor of the family: what the global
+                // binds, what `%name%` answers, and (for every family that
+                // records one: `Buffer` is a host family with cells of its
+                // own) the realm's intrinsic cell.
+                let bound = crate::value::js_nanbox_get_pointer(f64::from_bits(word)) as usize;
+                assert_ne!(bound, 0, "{name}");
                 assert_eq!(
                     crate::value::js_nanbox_get_pointer(builtin_constructor_value(name)) as usize,
-                    ctor
+                    bound,
+                    "{name}: the global binds the realm's one constructor"
                 );
+                let identity = BuiltinConstructorIdentity::for_name(name).unwrap();
+                let cell = crate::array::intrinsic_constructor_addr_if_bound(identity);
+                assert!(cell == bound || (cell == 0 && *name == "Buffer"), "{name}");
             }
         }
     });
@@ -193,7 +196,7 @@ fn core_then_rest_equals_one_pass() {
 fn internal_readers_run_the_phase_they_need() {
     let _lock = crate::gc::global_side_table_test_lock();
     on_core_realm(|_| {
-        for name in ["Map", "Array", "Promise", "Error", "Uint8Array"] {
+        for name in ["Map", "Array", "Promise", "Error", "RegExp"] {
             assert!(JSValue::from_bits(builtin_prototype_value(name).to_bits()).is_pointer());
             assert!(JSValue::from_bits(builtin_constructor_value(name).to_bits()).is_pointer());
             // The core variant of the by-name reader (a literal phase-A name).
@@ -219,6 +222,36 @@ fn internal_readers_run_the_phase_they_need() {
             "prototype",
         );
         assert_eq!(via_ctor.to_bits(), proto.to_bits());
+    });
+    on_core_realm(|_| {
+        // The byte-cell families: a typed array's prototype, `%TypedArray%`
+        // above it, and `Buffer` (a host family, a `Uint8Array` subclass).
+        assert_eq!(crate::object::typed_array_intrinsic_proto_ptr() as usize, 0);
+        let proto = builtin_prototype_value("Uint8Array");
+        assert!(fetch_globals::realm_is_complete());
+        assert!(JSValue::from_bits(proto.to_bits()).is_pointer());
+        assert_ne!(crate::object::typed_array_intrinsic_proto_ptr() as usize, 0);
+        let buffer = js_get_global_this_builtin_value("Buffer".as_ptr(), 6);
+        assert_eq!(
+            buffer.to_bits(),
+            builtin_constructor_value("Buffer").to_bits()
+        );
+    });
+    on_core_realm(|_| {
+        // `%TypedArray%` asked for on its own between the phases: built
+        // without phase B, with `toString` already `Array.prototype`'s.
+        let (_, intrinsic) = ensure_typed_array_intrinsic();
+        assert!(!fetch_globals::realm_is_complete());
+        let key = || crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+        let array_proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value("Array"))
+            as *const ObjectHeader;
+        let ours = js_object_get_field_by_name(intrinsic, key());
+        let arrays = js_object_get_field_by_name(array_proto, key());
+        assert_eq!(ours.bits(), arrays.bits());
+        assert!(!fetch_globals::realm_is_complete());
+        // Phase B then binds the typed arrays under the same intrinsic.
+        js_get_global_this();
+        assert_eq!(ensure_typed_array_intrinsic().1, intrinsic);
     });
     on_core_realm(|_| {
         let ctor = builtin_constructor_value("WeakRef");
@@ -257,7 +290,7 @@ fn phase_b_families_are_sealed_when_bound() {
     let _lock = crate::gc::global_side_table_test_lock();
     on_core_realm(|_| {
         js_get_global_this();
-        for name in ["WeakMap", "WeakSet"] {
+        for name in ["WeakMap", "WeakSet", "Date"] {
             let proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value(name))
                 as *mut ObjectHeader;
             // SAFETY: the live intrinsic prototype.
