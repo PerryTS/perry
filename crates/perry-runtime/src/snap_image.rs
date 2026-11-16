@@ -483,6 +483,7 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 &crate::object::shapes::snap_image_shape_state(),
             );
             img.mint = crate::object::shapes::snap_image_mint_collect(&b.shapes);
+            let mint_notes = mint_capture(&w, &mut img.mint, &b.data.1, &b.pre_data, &b.shapes);
             let mint_stop = mint_stop(&delta, &img.mint);
             let (pending, stops) = completeness(
                 delta,
@@ -492,6 +493,7 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             img.pending = pending;
             img.stops.extend(stops);
             img.stops.extend(mint_stop);
+            img.stops.extend(mint_notes);
             img.registry = registry_record(&w, &mut img.stops);
         }
         None => img.pending = format::PENDING,
@@ -604,7 +606,12 @@ fn mint_stop(
         .map(|b| b.0)
         .unwrap_or_default();
     let bad = if back.len() == recs.len() {
-        crate::object::shapes::snap_image_mint_check(&back)
+        // The references are added after the live record is read: the check compares the rest.
+        let mut plain = Vec::new();
+        for r in &back {
+            plain.push(format::mint_without_refs(r));
+        }
+        crate::object::shapes::snap_image_mint_check(&plain)
     } else {
         Some((back.len().min(recs.len()), format::MINT_BAD_FIELDS))
     };
@@ -629,6 +636,164 @@ fn mint_stop(
     stop.off = sat(m[1]) | sat(m[3]) << 16;
     stop.value = recs.len() as u64 | (blob.len() as u64) << 32;
     Some(stop)
+}
+
+/// A reference to a word that is valid in the relinked binary: an image cell or binary data. A scalar
+/// is accepted when it is zero, or when `scalar_any` (a word that is not an address, such as a tagged
+/// null prototype); a heap or stack address that is not a cell is not a reference.
+fn mint_ref(w: &Where, bits: u64, scalar_any: bool) -> Option<Val> {
+    match w.val(bits) {
+        Ok(Val::Scalar(x)) if scalar_any || x == 0 => Some(Val::Scalar(x)),
+        Ok(v @ (Val::Cell { .. } | Val::Ext { .. })) => Some(v),
+        _ => None,
+    }
+}
+
+/// The runtime layout descriptors whose `shape_id` word changed to `id` between the baseline copy `was`
+/// and the cut copy `now` of the data window, and whose `layout_id` is `word`: how many, and the offset
+/// of the last from the window start.
+fn mint_desc_matches(was: &[u8], now: &[u8], id: u32, word: u32) -> (u32, u64) {
+    use crate::object::layout_desc::PerryLayoutDesc;
+    let (so, lo) = (std::mem::offset_of!(PerryLayoutDesc, shape_id), std::mem::offset_of!(PerryLayoutDesc, layout_id));
+    let u32at = |b: &[u8], o: usize| {
+        b.get(o..o + 4)
+            .map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])))
+    };
+    let (mut n, mut at) = (0u32, 0u64);
+    let words = now.len().min(was.len()) / 8;
+    for i in 0..words {
+        if now[i * 8..i * 8 + 8] == was[i * 8..i * 8 + 8] {
+            continue;
+        }
+        for half in 0..2usize {
+            let c = i * 8 + half * 4;
+            if u32at(now, c) != id {
+                continue;
+            }
+            let Some(d) = c.checked_sub(so) else { continue };
+            if u32at(now, d + lo) == word {
+                n += 1;
+                at = d as u64;
+            }
+        }
+    }
+    (n, at)
+}
+
+fn mint_note(n: &mut [u32], first: &mut [usize], k: usize, i: usize) {
+    if let (Some(c), Some(f)) = (n.get_mut(k), first.get_mut(k)) {
+        if *c == 0 {
+            *f = i;
+        }
+        *c += 1;
+    }
+}
+
+/// What replay needs of the minted records and the capture adds: each record's references (key list,
+/// prototype word, a runtime layout's descriptor cell), a stop per reason replay cannot rebuild a record
+/// through the normal mint path (the first record and how many), and the census stops. `was` and `now`
+/// are the data window at the baseline and at the cut.
+fn mint_capture(
+    w: &Where,
+    recs: &mut [format::MintRec],
+    was: &[u8],
+    now: &[u8],
+    begin: &crate::object::shapes::SnapShapeState,
+) -> Vec<Stop> {
+    use crate::object::shapes as sh;
+    use format as f;
+    let mut stops = Vec::new();
+    if recs.is_empty() {
+        return stops;
+    }
+    let flags = sh::snap_image_mint_replay_flags(recs);
+    // Reasons: keys, canonical, proto word, no descriptor, row gap, successor.
+    let (mut n, mut first): (Vec<u32>, Vec<usize>) = (Vec::new(), Vec::new());
+    // Census items (`MINT_CENSUS_*` order).
+    let mut c: Vec<u64> = Vec::new();
+    for _ in 0..6 {
+        n.push(0);
+        first.push(0);
+    }
+    for _ in 0..f::MINT_CENSUS_ITEMS {
+        c.push(0);
+    }
+    for (i, r) in recs.iter_mut().enumerate() {
+        if let Some(x) = c.get_mut(r.route as usize) {
+            *x += 1;
+        }
+        r.keys_ref = mint_ref(w, r.keys, false);
+        match &r.keys_ref {
+            Some(Val::Cell { .. }) => c[14] += 1,
+            Some(Val::Ext { .. }) => c[15] += 1,
+            Some(_) => {}
+            None => mint_note(&mut n, &mut first, 0, i),
+        }
+        if r.proto_cell != 0 {
+            // SAFETY: the slot of the prototype identity words, a live allocation of the shape table.
+            let bits = unsafe { std::ptr::read_volatile(r.proto_cell as usize as *const u64) };
+            r.proto_ref = mint_ref(w, bits, true);
+            if r.proto_ref.is_none() {
+                mint_note(&mut n, &mut first, 2, i);
+            }
+        }
+        if r.route == f::MINT_ROUTE_RUNTIME {
+            let (m, off) = mint_desc_matches(was, now, r.id, r.word);
+            if m == 1 {
+                r.desc_off = Some(off);
+                c[16] += 1;
+            } else {
+                mint_note(&mut n, &mut first, 3, i);
+            }
+        }
+        let fl = flags.get(i).copied().unwrap_or(0);
+        if fl & f::MINT_FLAG_CANONICAL != 0 {
+            c[4] += 1;
+            mint_note(&mut n, &mut first, 1, i);
+        }
+        if fl & f::MINT_FLAG_SUCCESSOR != 0 {
+            c[5] += 1;
+            mint_note(&mut n, &mut first, 5, i);
+        }
+        if fl & f::MINT_FLAG_ROW_GAP != 0 {
+            c[6] += 1;
+            mint_note(&mut n, &mut first, 4, i);
+        }
+        let p = r.proto_id;
+        let k = if p == crate::object::shapes::PROTO_ID_DEFAULT {
+            7
+        } else if (sh::PROTO_ID_CLASS..sh::PROTO_ID_MIXED).contains(&p) {
+            8
+        } else if (sh::PROTO_ID_MIXED..sh::PROTO_ID_UNIQUE).contains(&p) {
+            9
+        } else if (sh::PROTO_ID_UNIQUE..sh::PROTO_ID_RECORD_HELD).contains(&p) {
+            10
+        } else {
+            11
+        };
+        c[k] += 1;
+    }
+    let (unique, serial) = sh::snap_image_mint_counters_moved(begin);
+    c[12] = unique;
+    c[13] = serial;
+    let kinds = [
+        f::STOP_MINT_KEYS,
+        f::STOP_MINT_CANONICAL,
+        f::STOP_MINT_PROTO_WORD,
+        f::STOP_MINT_NO_DESC,
+        f::STOP_MINT_ROW_GAP,
+        f::STOP_MINT_SUCCESSOR,
+    ];
+    for (k, kind) in kinds.iter().enumerate() {
+        if n[k] > 0 {
+            let id = recs.get(first[k]).map_or(0, |r| r.id);
+            stops.push(Stop { cell: first[k] as u32, obj_type: 0, kind: *kind, off: n[k], value: u64::from(id) });
+        }
+    }
+    for (item, value) in c.iter().enumerate() {
+        stops.push(Stop { cell: 0, obj_type: item as u8, kind: f::STOP_MINT_CENSUS, off: 0, value: *value });
+    }
+    stops
 }
 
 /// Which forms the image still lacks, and why it stops: a shape minted between the

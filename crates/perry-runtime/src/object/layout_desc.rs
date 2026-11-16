@@ -1441,6 +1441,11 @@ fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
+/// Image run: whether `word` is a runtime layout's (installed at its first birth).
+pub(crate) fn snap_image_runtime_layout_word(word: u32) -> bool {
+    registration::is_runtime_layout_word(word)
+}
+
 /// Image run: whether a record on a static row below the dynamic rows belongs there: the word
 /// is a runtime layout's (installed at its first birth) or a lazy image row whose descriptor
 /// carries the word.
