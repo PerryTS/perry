@@ -12,6 +12,15 @@
 //! holds Number (and possibly `undefined`, for a hole or an index past the
 //! end) and nothing else: no other primitive and no token. A copy that does
 //! not qualify drops the site.
+//!
+//! A copy whose value node holds nothing at all (no primitive, no token, not
+//! dropped) constrains nothing: every value a run can produce at that copy
+//! reaches its node (a value the solver cannot see is ⊤), so an empty node
+//! means no run of that instance yields a value there, and the claim holds
+//! for it vacuously. Such a copy is skipped; the site still needs one copy
+//! that holds a value. (A summarized body instanced for a call whose
+//! arguments never hold a value has empty nodes: without the skip, one such
+//! instance drops a read that holds Numbers at every live copy.)
 
 use crate::bindings::ModuleBindings;
 use crate::gen::Gen;
@@ -56,6 +65,8 @@ pub(crate) fn collect(
     let mut int32: std::collections::BTreeMap<(u32, u32), bool> = Default::default();
     // (module, offset) -> Some(may be undefined), or None once a copy fails.
     let mut sites: std::collections::BTreeMap<(u32, u32), Option<bool>> = Default::default();
+    // (module, offset) -> (copies that hold a value, empty copies skipped).
+    let mut held: std::collections::BTreeMap<(u32, u32), (u32, u32)> = Default::default();
     // A summarized body's value node has one copy per instance
     // (`Inst::fresh`); the fact must hold for each of them too.
     let mut copies: std::collections::HashMap<u32, Vec<u32>> = Default::default();
@@ -71,6 +82,12 @@ pub(crate) fn collect(
     });
     for (mi, offset, n) in nodes {
         let node = &g.m.nodes[n as usize];
+        let h = held.entry((mi, offset)).or_insert((0, 0));
+        if !node.dropped && node.prim == 0 && node.pts.is_empty() {
+            h.1 += 1;
+            continue;
+        }
+        h.0 += 1;
         let number = node.pts.is_empty()
             && node.prim & prim::NUM != 0
             && node.prim & !(prim::NUM | prim::UNDEF) == 0;
@@ -89,7 +106,18 @@ pub(crate) fn collect(
         };
     }
     for ((mi, offset), fact) in sites {
+        let (live, empty) = held.get(&(mi, offset)).copied().unwrap_or((0, 0));
+        if live == 0 {
+            continue;
+        }
         if let (Some(undef), Some(mb)) = (fact, bindings.get_mut(mi as usize)) {
+            if empty > 0 {
+                if let Some(p) = probe.as_deref_mut() {
+                    p.push(format!(
+                        "# num_read module={mi} offset={offset} live={live} empty_skipped={empty}"
+                    ));
+                }
+            }
             mb.number_element_reads.push((offset, undef));
             if int32_on && int32.get(&(mi, offset)).copied().unwrap_or(false) {
                 mb.int32_element_reads.push(offset);
