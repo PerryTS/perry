@@ -3211,6 +3211,17 @@ fn ns_method_inner(
                 ns_method(m, BuiltinNs::Other, Some(n), call);
             }
         }
+        // A process method whose effects the runtime declares at the body its
+        // dispatch arm calls (`process.cwd`), reached through its function
+        // value (`process.cwd?.()`, `const f = process.cwd; f()`): the
+        // native is the bound method of the one process object, so the
+        // declaration runs whatever `this` is, as the direct call does.
+        (BuiltinNs::Process, n)
+            if !m.unit_mode && effects::declared_member(&format!("process.{n}")).is_some() =>
+        {
+            let e = effects::declared_member(&format!("process.{n}")).expect("the guard found it");
+            effects::run_function(m, e, call);
+        }
         // A global function the realm declares (`fetch`), while the global
         // holds it: what its declaration says. A write under the name (now,
         // or later in the solve: the replay) is the unknown call again.
