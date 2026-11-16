@@ -31,6 +31,7 @@ use crate::model::*;
 mod apply;
 mod arr_len;
 mod builtin_fields;
+pub(crate) mod proxy;
 
 #[path = "solve/store.rs"]
 mod store;
@@ -901,6 +902,7 @@ impl Model {
                 c,
                 // No flow: the recomputation has nothing to check.
                 Cons::Identity { .. }
+                    | Cons::HasProp { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
@@ -1413,6 +1415,23 @@ impl Model {
         Some(v)
     }
     fn apply_tokens(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        // PROXY2: a Proxy token reaches `proxy_apply` only.
+        if toks
+            .iter()
+            .any(|&t| matches!(self.toks[t as usize], TokKind::Proxy(_)))
+        {
+            let mut rest: Vec<Tok> = Vec::new();
+            for &t in toks.iter() {
+                match self.toks[t as usize] {
+                    TokKind::Proxy(p) => self.proxy_apply(n, c, p),
+                    _ => rest.push(t),
+                }
+            }
+            if rest.is_empty() && prim == 0 {
+                return;
+            }
+            return self.apply_tokens(n, c, Tokens::Slice(&rest), prim);
+        }
         if let Some(v) = self.native_proto_alias(c, toks) {
             return self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
         }

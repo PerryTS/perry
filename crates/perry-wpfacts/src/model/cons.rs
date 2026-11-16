@@ -336,6 +336,10 @@ pub enum Cons {
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
     /// builtin prototype) a write of `key` only.
     DeleteKey { key: Atom, reason: u32 },
+    /// `key in o` (ECMA-262 13.10.1 HasProperty): no flow on an ordinary
+    /// object; a Proxy runs its `has` trap (`solve/proxy.rs`). `idx`: the
+    /// key value, or `NO_NODE` for a named key.
+    HasProp { key: Key, idx: NodeId },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -998,6 +1002,7 @@ impl Cons {
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
+            Cons::HasProp { .. } => "hasprop",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",

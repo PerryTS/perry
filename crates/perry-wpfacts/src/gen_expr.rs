@@ -1174,6 +1174,11 @@ impl<'a> Gen<'a> {
                 self.to_property_key(p);
                 // HasProperty on a Proxy runs its `has` trap.
                 let o = self.expr(fx, object);
+                let (key, idx) = match property.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    _ => (Key::any(), p),
+                };
+                self.m.cons(o, Cons::HasProp { key, idx });
                 self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }

@@ -60,7 +60,8 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::AccessorGet
         | crate::Verdict::AccessorSet
         | crate::Verdict::KnownObjectStore
-        | crate::Verdict::PerKind => 2,
+        | crate::Verdict::PerKind
+        | crate::Verdict::ProxyTrap => 2,
         crate::Verdict::E0 => 1,
         crate::Verdict::AddsKey => 0,
         crate::Verdict::No(_) => 0,

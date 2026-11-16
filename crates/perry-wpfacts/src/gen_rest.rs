@@ -1070,10 +1070,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyGet { .. }
-            | Expr::ProxySet { .. }
-            | Expr::ProxyHas { .. }
-            | Expr::ProxyDelete { .. }
             | Expr::ProxyApply { .. }
             | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
@@ -1218,6 +1214,10 @@ impl<'a> Gen<'a> {
             | Expr::GetAsyncIterator { .. }
             | Expr::ObjectCoerce { .. } => self.expr_rest_collections(fx, e),
             Expr::ProxyNew { .. }
+            | Expr::ProxyGet { .. }
+            | Expr::ProxySet { .. }
+            | Expr::ProxyHas { .. }
+            | Expr::ProxyDelete { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

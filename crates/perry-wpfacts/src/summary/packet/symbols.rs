@@ -44,6 +44,9 @@ impl Model {
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
+            Cons::HasProp { key, idx } => {
+                format!("HasProp key={:?} idx={idx}", self.packet_key(key))
+            }
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),

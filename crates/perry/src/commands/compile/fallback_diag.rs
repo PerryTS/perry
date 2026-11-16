@@ -96,6 +96,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::KnownObjectStore => {
                 "known-object store recorded; generic path emitted".into()
             }
+            perry_wpfacts::Verdict::ProxyTrap => {
+                "proxy trap proof recorded; generic path emitted".into()
+            }
         };
         let key = (site.byte_offset, site.key.clone(), site.is_call);
         if ambiguous.contains(&key) {
