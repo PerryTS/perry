@@ -901,6 +901,7 @@ mod tests {
             body,
             catch: catch.map(|body| perry_hir::CatchClause { param: None, body }),
             finally,
+            forof_completion: None,
         }
     }
 
