@@ -4071,6 +4071,39 @@
    ],
    "verdict": "no_heap_address",
    "why": "Turnloop fetch engine lifetime statistics counter (failed requests): fetch_add(1) on Outcome::Err and load for PERRY_LOOP_STATS, like REUSED/CONNECTED. The counter-only rule cannot discharge it mechanically because it matches mentions by name across both crates: async_module.rs `const FAILED: u64` (module status, #14413) is compared and assigned."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_census/inventory.rs",
+   "names": [
+    "TRANS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumented snapshot census only: the owning ThreadId, a reliability flag, and (malloc-tracked object list length, init id) pairs pushed by frame_changed; lengths and ids, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_image.rs",
+   "names": [
+    "BASELINE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Execution-prefix image capture (Linux x86-64, build knob): points to a Box<Baseline> leaked with Box::into_raw in `begin` and never freed (the cut only clears the pointer); Rust global-allocator memory no thread's arena owns. Baseline holds byte copies of data/bss and the main TLS block, their bounds, and table sizes and counters."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/ffi.rs",
+   "names": [
+    "GRID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The TUI cell grid: width, height and two Vec<Cell>, where Cell is a char, two Color enums and a u8 Style; no field holds an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/addr_class/image_checks.rs",
+   "names": [
+    "IMAGE",
+    "COUNTERFEIT_DATA"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Test and wasm-image-selftest builds only: immutable string-literal images (GcHeader, StringHeader, eight literal bytes, hash 0) built by the const fn literal_image; scalar headers and bytes in static data, never an arena address."
   }
  ]
 }
