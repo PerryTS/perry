@@ -2357,6 +2357,13 @@ pub struct Model {
     /// 23.1.3.36 step 3): a callee without [[Call]] is no throw there, the
     /// result is the String of Object.prototype.toString (20.1.3.6).
     pub tostring_join_calls: crate::pts::FxHashSet<CallId>,
+    /// What `Array.prototype.<name>` does to a receiver `t` that is no
+    /// array beyond its indices (`non_array_this`): it reads only `t`
+    /// (`length`, ToPrimitive of it, the length store, an index delete,
+    /// `@@isConcatSpreadable`), never the call, so one model per
+    /// (receiver, method) serves every call site (`array_like_this`);
+    /// `toString`'s `join` call is the call's own.
+    pub array_like_this: crate::pts::FxHashMap<(Tok, crate::model::Atom), NodeId>,
     /// The template a `GetIterator` site makes for the iterator object its
     /// source's `@@iterator` may return (`[iterator#n]`), with the node of
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
