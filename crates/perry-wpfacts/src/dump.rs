@@ -341,6 +341,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::Dead => "dead".to_string(),
             Verdict::OwnDataOrAbsent => "own-data-or-absent".to_string(),
             Verdict::Throws => "throws".to_string(),
+            Verdict::PerKind => "per-kind".to_string(),
             Verdict::NsExport => "ns-export".to_string(),
             Verdict::AccessorGet => format!("accessor-get:{}", st.targets.join(",")),
             Verdict::AccessorSet => format!("accessor-set:{}", st.targets.join(",")),

@@ -225,6 +225,18 @@ pub enum Verdict {
     /// 7.1.18; for a call 13.3.6.1 throws before the arguments are
     /// evaluated). The site runs (unlike Dead) and names no slot or body.
     Throws,
+    /// R9READ6: a read or call whose receivers mix kinds (program class
+    /// instances, Arrays and typed arrays, String / Number / Boolean
+    /// primitives), each decided by the proof its own kind has alone: an
+    /// own data slot, a constant prototype member, an absent key
+    /// (`undefined`), the intrinsic member of its builtin family
+    /// (`native_arm`), one of a closed set of bodies, or, for a call, the
+    /// TypeError of calling `undefined` where its chain lacks the key
+    /// (7.3.14). The operation's own type dispatch (7.3.2 GetV, 7.1.18
+    /// ToObject, 10.1.8.1 OrdinaryGet) tells the kinds apart at run time.
+    /// Count-only: no consumer lowers it (codegen keeps the generic path,
+    /// no quiet read, no check-mode claim).
+    PerKind,
     /// A value call whose callee set is exactly one builtin function object
     /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
     /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
@@ -1624,7 +1636,13 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
                 ))
             || (prim != 0
-                && matches!(verdict, Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore)))
+                && matches!(
+                    verdict,
+                    Verdict::T0Mono
+                        | Verdict::T0Set
+                        | Verdict::KnownObjectStore
+                        | Verdict::PerKind
+                ))
             && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -2139,6 +2157,10 @@ fn judge(
     let mut statics = 0usize;
     // ACCSITE1 P2: the getter each receiver's lookup ends at.
     let mut acc: Vec<Tok> = Vec::new();
+    // R9READ6: receivers decided by their builtin family's intrinsic member
+    // (`native_arm`), and call receivers whose chain lacks the key (the
+    // TypeError arm of calling `undefined`).
+    let (mut native_arms, mut throw_arms) = (0usize, 0usize);
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -2197,9 +2219,15 @@ fn judge(
                         }
                         continue;
                     }
-                    verdict.get_or_insert_with(|| {
-                        Verdict::No(not_unit_why(m, t, key, s.key, s.is_call))
-                    });
+                    match native_arm(m, t, key, s.key, s.is_call) {
+                        Some(true) => native_arms += 1,
+                        Some(false) => throw_arms += 1,
+                        None => {
+                            verdict.get_or_insert_with(|| {
+                                Verdict::No(not_unit_why(m, t, key, s.key, s.is_call))
+                            });
+                        }
+                    }
                     continue;
                 };
                 receivers.push(tf.display.clone());
@@ -2243,6 +2271,23 @@ fn judge(
                                 }
                                 callee.push(n);
                             }
+                        }
+                        // R9READ6: no holder on the chain and none can
+                        // appear (the `absent_key` walk: own field node, computed stores,
+                        // accessors, the chain): GetValue gives `undefined`, Call
+                        // throws (7.3.14): the receiver's TypeError arm.
+                        Err(_)
+                            if tf
+                                    .fields
+                                    .iter()
+                                    .find(|f| f.is(key, m.is_private_atom(s.key)))
+                                    .is_none_or(|f| {
+                                        f.writers_ctor + f.writers_post == 0
+                                            && !tf.birth_keys.contains(&f.key)
+                                    })
+                                && absent_key(m, t, key, s.key) =>
+                        {
+                            throw_arms += 1
                         }
                         Err(why) => {
                             verdict.get_or_insert(Verdict::No(why));
@@ -2393,11 +2438,9 @@ fn judge(
         match beside_prims(m, key, s.key, prim, s.is_call) {
             Some((r, absent)) => {
                 receivers.extend(r);
-                if absent && statics > 0 {
-                    verdict = Some(Verdict::No(
-                        "receivers mix class objects and primitives".into(),
-                    ));
-                } else if absent && own_or_absent > 0 {
+                // R9READ6: beside constant chain members the primitive's
+                // absent outcome is one more decided arm (PerKind below).
+                if absent && own_or_absent > 0 {
                     own_or_absent += 1;
                 } else if absent {
                     slots.push(None);
@@ -2435,6 +2478,33 @@ fn judge(
     let mut targets = FxHashMap::default();
     let verdict = match verdict {
         Some(v) => v,
+        // R9READ6: a call where some receiver runs its family's intrinsic
+        // or throws: the bodies the others reach must still be a closed
+        // set; the site stays generic (no `method_calls` target).
+        None if s.is_call && native_arms + throw_arms > 0 => {
+            callee.sort_unstable();
+            callee.dedup();
+            let mut ts: Vec<Tok> = callee
+                .iter()
+                .flat_map(|&n| m.nodes[n as usize].pts.to_sorted())
+                .collect();
+            ts.sort_unstable();
+            ts.dedup();
+            let p = callee.iter().fold(0, |p, &n| p | m.nodes[n as usize].prim);
+            let top_node = callee
+                .iter()
+                .copied()
+                .find(|&n| m.nodes[n as usize].pts.contains_tok(TOP))
+                .unwrap_or(top_recv);
+            if callee.is_empty() {
+                Verdict::PerKind
+            } else {
+                match callee_set(m, runtime, &ts, p, top_node) {
+                    Ok(_) => Verdict::PerKind,
+                    Err(why) => Verdict::No(why),
+                }
+            }
+        }
         None if s.is_call => {
             callee.sort_unstable();
             callee.dedup();
@@ -2463,16 +2533,20 @@ fn judge(
                 Err(why) => Verdict::No(why),
             }
         }
-        None if !acc.is_empty() => {
-            accessor_verdict(m, &mut acc, slots.len() + own_or_absent + statics, &mut targets, false)
-        }
-        None if own_or_absent > 0 && statics > 0 => {
-            Verdict::No("receivers mix class objects and instances".into())
-        }
+        None if !acc.is_empty() => accessor_verdict(
+            m,
+            &mut acc,
+            slots.len() + own_or_absent + statics + native_arms,
+            &mut targets,
+            false,
+        ),
+        // R9READ6: each receiver's [[Get]] decided by its own kind: an own
+        // data slot or `undefined`, a constant member on its chain, the
+        // intrinsic member of its family.
+        None if native_arms > 0 => Verdict::PerKind,
+        None if own_or_absent > 0 && statics > 0 => Verdict::PerKind,
         None if own_or_absent > 0 => Verdict::OwnDataOrAbsent,
-        None if statics > 0 && !slots.is_empty() => {
-            Verdict::No("receivers mix class objects and instances".into())
-        }
+        None if statics > 0 && !slots.is_empty() => Verdict::PerKind,
         None if statics > 0 => {
             if receivers.len() == 1 {
                 Verdict::T0Mono
@@ -3148,7 +3222,18 @@ fn host_member(
                 realm_ns = true;
                 receivers.push(m.tok_name(t));
             }
-            None => return None,
+            None => {
+                // Diagnostic (off: one flag read): who writes the key.
+                if why_indexed() {
+                    eprintln!(
+                        "WHY_NS @{} {} .{name}: {:?}",
+                        s.byte_offset,
+                        m.tok_name(t),
+                        crate::builtins::native_writers_why(m, t, s.key)
+                    );
+                }
+                return None;
+            }
         }
     }
     if !native {
@@ -3328,6 +3413,52 @@ fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// The reason of a receiver token without layout facts that no
 /// template-free rule admits: for a `JSON.parse` object the first failing
 /// condition of [`own_data_or_absent_tok`].
+/// R9READ6: receiver `t`, an Array exotic object (`exact_array`) or a typed
+/// array, decided by its family alone, as `native_member` decides a
+/// one-family set: `Some(true)` when it reads its family's intrinsic member
+/// (described, no own key under `a`: `native_own_free`, no builtin
+/// prototype written: `builtin_protos_unwritten`); `Some(false)` for a call
+/// on an Array whose chain lacks the key (`array_absent`): GetV gives
+/// `undefined` and Call throws a TypeError (7.3.14). `None`: undecided.
+fn native_arm(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> Option<bool> {
+    use crate::builtins::NativeFamily;
+    if m.is_marker(t) {
+        return None;
+    }
+    let fam = if exact_array(m, t) {
+        NativeFamily::Array
+    } else {
+        match m.toks[t as usize] {
+            TokKind::Obj(tm, _)
+                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }) =>
+            {
+                NativeFamily::TypedArray
+            }
+            _ => return None,
+        }
+    };
+    if why_indexed() {
+        eprintln!(
+            "WHY_NARM {} .{key} call={call} described={} own_free={} protos={:?} absent={}",
+            m.tok_name(t),
+            crate::builtins::native_described(m, fam, &m.atoms[a as usize], call),
+            native_own_free(m, fam, t, a),
+            builtin_protos_unwritten(m, Some(fam), a),
+            array_absent(m, t, key, a),
+        );
+    }
+    if crate::builtins::native_described(m, fam, &m.atoms[a as usize], call)
+        && native_own_free(m, fam, t, a)
+        && builtin_protos_unwritten(m, Some(fam), a).is_ok()
+    {
+        return Some(true);
+    }
+    if call && matches!(fam, NativeFamily::Array) && array_absent(m, t, key, a) {
+        return Some(false);
+    }
+    None
+}
+
 fn not_unit_why(m: &Model, t: Tok, key: &str, a: Atom, call: bool) -> String {
     let base = "receiver is not a fact unit";
     let TokKind::Obj(tm, _) = m.toks[t as usize] else {

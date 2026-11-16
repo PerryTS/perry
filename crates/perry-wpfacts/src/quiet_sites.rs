@@ -196,6 +196,8 @@ pub(crate) fn collect(
             Verdict::AccessorGet | Verdict::AccessorSet => Some("verdict:accessor"),
             Verdict::AddsKey => Some("verdict:adds-key"),
             Verdict::KnownObjectStore => Some("verdict:known-object"),
+            // Count-only (R9READ6): no consumer reads it.
+            Verdict::PerKind => Some("verdict:per-kind"),
             Verdict::No(_) => Some("verdict:none"),
         };
         join(

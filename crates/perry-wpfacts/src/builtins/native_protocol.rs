@@ -136,6 +136,24 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     written_by(m, np, a, false, &|_| true)
 }
 
+/// Diagnostic: the reasons of the writes [`native_written`] counts for
+/// `np`'s key `a`, with the written key (`None`: any key).
+pub fn native_writers_why(m: &Model, np: Tok, a: Atom) -> Vec<String> {
+    let mut out = Vec::new();
+    for (&(t, k), w) in m.native_writes.iter() {
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            out.push(format!(
+                "{} key={:?} top={top} own={own}: {}",
+                m.tok_name(t),
+                k.map(|k| m.atoms[k as usize].to_string()),
+                m.reasons[w.reason as usize]
+            ));
+        }
+    }
+    out
+}
+
 /// [`native_written`] for an accessor descriptor query (`__lookupGetter__`,
 /// a getter walk): only writes that may install an accessor
 /// ([`crate::model::NativeWrite`]) count; a plain store makes a data

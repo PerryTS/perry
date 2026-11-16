@@ -71,6 +71,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::Throws => {
                 "always-throws site proof recorded; generic path emitted".into()
             }
+            perry_wpfacts::Verdict::PerKind => {
+                "per-kind mixed receiver proof recorded; generic path emitted".into()
+            }
             perry_wpfacts::Verdict::IntrinsicCall => {
                 "intrinsic callee proof recorded; generic call emitted".into()
             }

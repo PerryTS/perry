@@ -1454,6 +1454,7 @@ fn verification_sites(
                 | perry_wpfacts::Verdict::AccessorSet
                 | perry_wpfacts::Verdict::AddsKey
                 | perry_wpfacts::Verdict::KnownObjectStore
+                | perry_wpfacts::Verdict::PerKind
                 | perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {
