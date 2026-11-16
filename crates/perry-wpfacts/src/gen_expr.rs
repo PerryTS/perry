@@ -1205,6 +1205,21 @@ impl<'a> Gen<'a> {
                     return callee;
                 }
                 let dst = self.load(o, Key::Named(a));
+                // S8: on the global sentinel a name the main realm does not
+                // declare is [[Get]] on the global object (`loads::tok_load`);
+                // in a module a Worker may run, the Worker global's own
+                // native of that name (perry-stdlib worker_threads
+                // worker_surface.rs: `postMessage`, `addEventListener`, …)
+                // may be the value as well: unknown to the model.
+                if !self.m.unit_mode
+                    && matches!(object.as_ref(), Expr::GlobalGet(0))
+                    && !self.modules[mi as usize].1.globals.iter().any(|g| g.id == 0)
+                    && self.m.worker_side_module(mi)
+                    && crate::builtins::global_user_key(&self.m, property)
+                {
+                    self.m.add_top(dst, |_| format!("Worker global {property}"));
+                    self.m.add_prim(dst, prim::ALL);
+                }
                 self.field_reads.push(dst);
                 if *byte_offset != 0 {
                     self.load_sites.push((mi, *byte_offset, a, dst));

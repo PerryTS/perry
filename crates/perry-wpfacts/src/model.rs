@@ -2829,6 +2829,10 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Per module: a Worker of the program may run it (`Gen::worker_side`):
+    /// it is reachable from a Worker entry module, or some Worker's entry
+    /// is not named. A module past the end counts as one (unknown).
+    pub worker_side: Vec<bool>,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
@@ -3466,6 +3470,18 @@ pub const MARK_TOUCHES: u8 = MARK_TOUCH
 mod token_values;
 
 impl Model {
+    /// A Worker of the program may run module `mi` (`worker_side`).
+    pub(crate) fn worker_side_module(&self, mi: u32) -> bool {
+        self.worker_side.get(mi as usize).copied().unwrap_or(true)
+    }
+
+    /// The module of the code that made call `call` (`call_place`), when
+    /// generation made it.
+    pub(crate) fn call_module(&self, call: CallId) -> Option<u32> {
+        let site = self.calls[call as usize].site;
+        self.call_place.get(&site).map(|&(f, _)| self.funcs[f as usize].module)
+    }
+
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
     }
