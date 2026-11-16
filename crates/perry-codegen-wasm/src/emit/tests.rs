@@ -1775,6 +1775,8 @@ async function main() {
   if (typeof f === "function") console.log(f(21));
   const m: any = Math.max;
   console.log(m(3, 7));
+  const from: any = Array.from;
+  console.log(from([1, 2], o.h).join(","));
   const t = o.t;
   t();
 }
@@ -1782,6 +1784,6 @@ o.t = () => { throw new Error("boom"); };
 main().catch((e: any) => console.log("caught " + e.message));
 "#
         ),
-        "42\n7\ncaught boom"
+        "42\n7\n2,4\ncaught boom"
     );
 }

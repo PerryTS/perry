@@ -5424,7 +5424,7 @@ function __jsMethodInvoke(ref, args) {
     return result;
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
-  return ref.f.apply(ref.r, args);
+  return ref.f.apply(ref.r, args.map(__hostCallback));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.
