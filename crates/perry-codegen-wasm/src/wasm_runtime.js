@@ -2450,7 +2450,8 @@ const __memDispatch = {
     else key = (classStaticTable[String(className)] || {})[name];
     Object.defineProperty(instance, key, { value, writable: true, configurable: true, enumerable: true });
   },
-  to_property_key: (v) => (typeof v === 'symbol' ? v : String(v)),
+  // ToPropertyKey, object-to-primitive conversion included (`Object(Symbol.iterator)`).
+  to_property_key: (v) => Reflect.ownKeys({ [v]: 0 })[0],
   // A refresh of a path that never evaluated the class gets `undefined`: a no-op.
   class_env_refresh: (ctor, caps) => {
     const evaluation = __evaluationOf(ctor);
@@ -5645,13 +5646,16 @@ function __hostCallback(value) {
 // value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
+// Keyed by class, then by method name (a computed name may be a Symbol); a wrapper
+// whose slot was redefined (`__classDefineComputed`) is rebuilt.
 function __classMethodValue(cls, mname, evaluation) {
-  const key = cls + '\u0000' + mname;
   const cache = evaluation ? __evaluationOf(evaluation) : null;
   const values = cache ? (cache.methods ||= new Map()) : __classMethodValues;
-  let fn = values.get(key);
-  if (!fn) {
-    const funcIdx = classMethodTable[cls][mname];
+  let byName = values.get(cls);
+  if (!byName) values.set(cls, (byName = new Map()));
+  const funcIdx = classMethodTable[cls][mname];
+  let fn = byName.get(mname);
+  if (!fn || fn.funcIdx !== funcIdx) {
     fn = function (...args) {
       const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
       const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
@@ -5666,7 +5670,7 @@ function __classMethodValue(cls, mname, evaluation) {
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
     __classMethodFns.add(fn);
-    values.set(key, fn);
+    byName.set(mname, fn);
   }
   return fn;
 }

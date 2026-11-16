@@ -885,6 +885,8 @@ impl WasmModuleEmitter {
                 // key when the class definition evaluates it (`class_define_computed`).
                 for member in &class.computed_members {
                     let param_count = 1 + member.function.params.len();
+                    // The type section is emitted before the bodies: intern the signature now.
+                    self.get_type_idx(vec![ValType::I64; param_count], vec![ValType::I64]);
                     self.class_computed_map.insert(
                         (class.name.clone(), member.function.name.clone()),
                         user_func_idx,
