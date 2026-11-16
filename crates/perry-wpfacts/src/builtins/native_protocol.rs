@@ -1393,6 +1393,7 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    super::loads::global_shaped_replay(m, a);
     if m.global_cells {
         m.global_late = true;
         m.global_written_own |= !m.shared_replay;
