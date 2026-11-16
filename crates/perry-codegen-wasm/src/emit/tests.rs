@@ -1460,3 +1460,27 @@ pick([1, 2]).then((v) => console.log(v)).catch((e) => console.log("threw " + e.n
     );
     assert_eq!(out, "threw TypeError\nthrew TypeError");
 }
+
+// A logical operator in an async body evaluates its left operand once, and an `await`
+// in its right operand still runs in the async body.
+#[test]
+fn async_body_logical_operators_evaluate_the_left_operand_once() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  let i = 1;
+  const a = i++ || 0;
+  let j = 0;
+  const b = j++ && 9;
+  let k: any = 4;
+  const c = k ?? 0;
+  const d = (i > 100) || (await Promise.resolve(7));
+  return i + "," + a + " " + j + "," + b + " " + c + " " + d;
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "2,1 1,0 4 7"
+    );
+}

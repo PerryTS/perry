@@ -334,11 +334,15 @@ impl WasmModuleEmitter {
             Expr::Logical { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                match op {
-                    LogicalOp::And => format!("(toJsValue({l}) ? {r} : {l})"),
-                    LogicalOp::Or => format!("(toJsValue({l}) ? {l} : {r})"),
-                    LogicalOp::Coalesce => format!("(isNull({l}) || isUndefined({l}) ? {r} : {l})"),
-                }
+                // The left operand runs once: the arrow yields `[left]` when it is the
+                // result, else null. The right operand stays outside the arrow so an
+                // `await` in it remains inside the async body.
+                let keep_left = match op {
+                    LogicalOp::And => "!toJsValue(__t)",
+                    LogicalOp::Or => "toJsValue(__t)",
+                    LogicalOp::Coalesce => "!(isNull(__t) || isUndefined(__t))",
+                };
+                format!("((((__t) => ({keep_left} ? [__t] : null))({l}) ?? [{r}])[0])")
             }
             Expr::Unary { op, operand } => {
                 let o = self.emit_js_expr(operand, locals);
