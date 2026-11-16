@@ -153,6 +153,19 @@ pub fn native_construct_fold(module: &str, method: &str) -> bool {
     )
 }
 
+/// The realm constructor `C` when `NativeMethodCall { module, object: None,
+/// method }` is the HIR's fold of the static call `C.<method>(..args)`:
+/// `URL.createObjectURL(blob)` lowers to `{ module: "url", method:
+/// "createObjectURL" }` (expr_call/module_static.rs). Codegen calls the
+/// static's runtime function directly, whatever the program stored under the
+/// name, and wpfacts models the node as a call of the static `C.<method>`.
+pub fn native_static_fold(module: &str, method: &str) -> Option<&'static str> {
+    match (module, method) {
+        ("url", "createObjectURL") => Some("URL"),
+        _ => None,
+    }
+}
+
 /// `recv.push(..args)` as the HIR folds it for a receiver that is no local:
 /// `NativeMethodCall { module: "array", method: "push_single" | "push" }`
 /// (`this.items.push(v)` in value position or in a constructor, `o.list.push(v)`).

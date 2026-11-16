@@ -96,13 +96,21 @@ impl<'a> Gen<'a> {
     /// runs.
     /// A member whose effects the runtime declares at its body
     /// (`builtins::declared_member`: `node:util/types.isArrayBufferView`)
-    /// is called the same way: the solver runs the declaration.
+    /// is called the same way: the solver runs the declaration. So is a
+    /// declared static the HIR folds to this form (`URL.createObjectURL`).
     pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
         let identity = crate::builtins::solved_namespace_call(module, method).or_else(|| {
             let bare = module.strip_prefix("node:").unwrap_or(module);
             crate::builtins::declared_member(&format!("node:{bare}.{method}"))
                 .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
                 .map(|e| e.name)
+                .or_else(|| {
+                    // The HIR's fold of a realm constructor's static call
+                    // (`URL.createObjectURL(blob)`): a call of that static,
+                    // whose declaration the solver runs.
+                    let owner = perry_hir::folded_call::native_static_fold(module, method)?;
+                    crate::builtins::declared_static(&format!("{owner}.{method}")).map(|e| e.name)
+                })
         })?;
         Some(self.m.tok(TokKind::BuiltinFn(Native::Member {
             identity,
