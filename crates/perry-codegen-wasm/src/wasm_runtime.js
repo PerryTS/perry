@@ -1734,6 +1734,9 @@ function __iterableToArray(v) {
   return out;
 }
 
+// A tagged template's strings array per call site, keyed by the HIR site id's halves.
+const __taggedTemplates = new Map();
+
 const __memDispatch = {
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
   // `value` must use the iterator protocol instead of its indices.
@@ -1774,6 +1777,10 @@ const __memDispatch = {
     ? v[Symbol.iterator]() : v,
   rt_iterableToArray: (v) => __iterableToArray(v),
   rt_arrayIterationPatched: () => __arrayIterationPatched(),
+  rt_requireObjectCoercible: (v) => {
+    if (v == null) throw new TypeError('Cannot convert undefined or null to object');
+    return v;
+  },
   generator_new: (record, paramCount) => {
     const gen = Object.create(__GeneratorPrototype);
     __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
@@ -1888,6 +1895,19 @@ const __memDispatch = {
 
   // Arrays — args are plain JS values (arr is the array itself, etc.)
   array_new: () => [],
+  // GetTemplateObject: the first evaluation of a site freezes `cooked` with a frozen,
+  // non-enumerable `raw`; every evaluation of that site returns the same object.
+  tagged_template: (siteHi, siteLo, cooked, raw) => {
+    const key = siteHi + ':' + siteLo;
+    let strings = __taggedTemplates.get(key);
+    if (strings === undefined) {
+      Object.defineProperty(cooked, 'raw', { value: Object.freeze(raw) });
+      strings = Object.freeze(cooked);
+      __taggedTemplates.set(key, strings);
+    }
+    return strings;
+  },
+  template_raw: (strings) => strings.raw,
   // `new Array(x)`: single number = length (ES2015 §22.1.1), else element.
   array_constructor_single: (value) => {
     if (typeof value === 'number') {
@@ -2348,6 +2368,16 @@ const __memDispatch = {
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(msg)` in a class extending a built-in Error: the instance is a plain
+  // `{__class__}` object, so it takes the message the Error constructor would
+  // give it, non-enumerable as on a real Error. Returns the instance.
+  error_super_init: (obj, msg) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    Object.defineProperty(obj, 'message', {
+      value: msg === undefined ? '' : String(msg), writable: true, configurable: true, enumerable: false,
+    });
+    return obj;
+  },
 
   global_receiver: () => __hostGlobal,
   global_property: (name) => __hostGlobal[name],
@@ -5251,6 +5281,16 @@ function __classMethodValue(cls, mname) {
 // the pending exception under a WASM `try` and rethrows it outside one.
 function __throwNullReceiver(obj, name) {
   throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
+}
+
+// A zero-argument native member in an async (JS) body: a method is called, a member
+// the object has (a getter such as a Response's `status` or `headers`) is the read, and
+// an absent member throws as calling it would.
+function __jsNativeMember(obj, name) {
+  const member = obj[name];
+  if (typeof member === 'function') return member.call(obj);
+  if (name in Object(obj)) return member;
+  throw new TypeError(String(name) + ' is not a function');
 }
 
 // A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,

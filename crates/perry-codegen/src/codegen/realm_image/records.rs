@@ -174,7 +174,7 @@ mod tests {
             assert_eq!(fixup, None);
             let ir = module.to_ir();
             assert!(ir.contains("i8 32, i8 5, i16 0, i32 32"));
-            assert!(ir.contains("i8 19, i8 5, i16 0, i32 168"));
+            assert!(ir.contains("i8 19, i8 5, i16 0, i32 176"));
             if triple.contains("apple") {
                 assert_eq!(fixups.len(), 1);
                 assert_eq!(fixups[0].offset, GC_HEADER_SIZE);

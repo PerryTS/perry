@@ -620,6 +620,28 @@ try {
     );
 }
 
+// An async body is emitted as JavaScript, and every `JSON.stringify` reaches it as
+// `JsonStringifyFull`: a request body built there must be the JSON text, and the
+// replacer and space arguments must apply.
+#[test]
+fn async_body_json_stringify_feeds_a_request_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function tok(): string { return "Bearer " + String(6 * 7); }
+async function f(obj: any): Promise<string> {
+  const req = new Request("http://127.0.0.1/x", { method: "POST", body: JSON.stringify(obj) });
+  const pretty = JSON.stringify([1], null, 2);
+  const keys = JSON.stringify(obj, ["a", "t"]);
+  return (await req.text()) + " " + pretty.length + " " + keys;
+}
+f({ a: 1, b: [2, 3], t: tok() }).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        r#"{"a":1,"b":[2,3],"t":"Bearer 42"} 7 {"a":1,"t":"Bearer 42"}"#
+    );
+}
+
 // `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
 // user instance throws TypeError instead of reaching the bridge fallback.
 #[test]
@@ -636,6 +658,43 @@ proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto 
 "#
         ),
         "proto threw TypeError"
+    );
+}
+
+// A bare read of a host getter (`res.status`) reaches an async body as a native call
+// with no arguments, as `res.text()` does: the getter yields its value and the method
+// is still called.
+#[test]
+fn async_body_reads_host_getters_and_calls_host_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  const head = r.status + " " + r.ok + " " + r.statusText + " " + r.headers.get("content-type");
+  return head + " " + (await r.text());
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "200 true OK text/plain hi"
+    );
+}
+
+// A zero-argument native method the object lacks still throws, as the call would.
+#[test]
+fn async_body_call_of_a_missing_host_method_throws() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  return r.missing();
+}
+f().then((v) => console.log("value " + v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "threw TypeError: missing is not a function"
     );
 }
 
@@ -947,5 +1006,149 @@ console.log(new B().run());
 "#
         ),
         "true true"
+    );
+}
+
+// An assignment-pattern default applies to `undefined` (a missing element, a
+// missing property) and never to `null` or a falsy value.
+#[test]
+fn assignment_pattern_defaults_apply_to_undefined() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let x: any, y: any, p: any;
+[x = 5] = [];
+console.log(x);
+[x = 5, y = 6] = [undefined, null];
+console.log(x, y);
+[x = 5] = [0];
+console.log(x);
+({ a: p = 8 } = {} as any);
+console.log(p);
+[[x = 1], { b: y = 2 }] = [[], {}] as any;
+console.log(x, y);
+for ([x = 10] of [[], [7]] as any[]) console.log(x);
+"#
+        ),
+        "5\n5 null\n0\n8\n1 2\n10\n7"
+    );
+}
+
+/// #14734: a bridge call stores its arguments only into the frame it opened.
+/// A slot above the open frame is where the next nested frame is written, so
+/// the calls overwrote each other's arguments (`join` on an `any` receiver, and
+/// the `class_call_method` fallback that a value-position `o.list.push(v)` takes).
+#[test]
+fn bridge_calls_store_only_into_the_frame_they_open() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function f(s: any) { return s.join(","); }
+function g(s: any, t: any) { return s.join("-") + "|" + t.join("+"); }
+console.log(f([1, 2]));
+console.log("pair", g([1, 2], [3, 4]), g(["a"], ["b", "c"]));
+const o = { list: [] as number[] };
+console.log("push", o.list.push(7), o.list.push(8), o.list.join(","));
+"#
+        ),
+        "1,2\npair 1-2|3+4 a|b+c\npush 1 2 7,8"
+    );
+}
+
+// A tagged template calls its tag with the call site's strings array, whose `raw`
+// holds the unescaped text and which is the same object on every evaluation, through
+// a static method, an instance method or a function.
+#[test]
+fn a_tagged_template_passes_its_strings_array_to_any_tag() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { static tag(s: string[], a: any, b: any) { return s.join("|") + "/" + a + "," + b; } }
+console.log(T.tag`a${1}b${2}c`);
+class K { m = "M"; tag(s: any, v: any) { return this.m + s[0] + v + s[1]; } }
+console.log(new K().tag`v=${3}!`);
+function raw(s: TemplateStringsArray) { return s.raw[0] + "|" + s.raw.length + "|" + s[0]; }
+console.log(raw`a\nb`);
+function anyRaw(s: any) { return s.raw[0] + "," + s.raw[1]; }
+console.log(anyRaw`x\ty${0}z`);
+function id(s: any) { return s; }
+function site() { return id`q`; }
+const a = site();
+console.log(a === site(), a === id`q`, Array.isArray(a), a.length);
+"#
+        ),
+        "a|b|c/1,2\nMv=3!\na\\nb|1|a\nb\nx\\ty,z\ntrue false true 1"
+    );
+}
+
+/// #14733: every object pattern opens with RequireObjectCoercible on its
+/// source, which hands the source through or throws a TypeError for a nullish one.
+#[test]
+fn object_patterns_bind_from_their_source_and_reject_nullish() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const arr = [{ k: 1 }, { k: 2 }];
+for (const { k } of arr) console.log("k", k);
+const v: any = { a: 3, b: { c: 4 } };
+const { a, b: { c } } = v;
+console.log("decl", a, c);
+let reads = 0;
+function src(): any { reads++; return { x: 5 }; }
+const { x } = src();
+console.log("once", x, reads);
+function nullish(o: any): string {
+  try { const { y } = o; return "no throw " + y; } catch (e) { return "caught " + (e instanceof TypeError); }
+}
+console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
+"#
+        ),
+        "k 1\nk 2\ndecl 3 4\nonce 5 1\ncaught true caught true no throw 6"
+    );
+}
+
+// `.message` is an ordinary property read: only an Error's message comes from the
+// Error itself.
+#[test]
+fn message_reads_the_property_of_any_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = JSON.parse('{"message":"hi","phone":"p"}');
+const lit: any = { message: "lit" };
+class G { get message(): string { return "getter"; } }
+class F { message: string; constructor() { this.message = "field"; } }
+const none: any = {};
+console.log(o.message + " " + o.phone + " " + lit.message + " " + new G().message + " " + new F().message + " " + none.message);
+try { throw { message: "thrown" }; } catch (e: any) { console.log(e.message); }
+const err = new Error("boom");
+const empty = new Error();
+console.log(err.message + " [" + empty.message + "]");
+try { JSON.parse("{bad"); } catch (e: any) { console.log(e.message.length > 0); }
+"#
+        ),
+        "hi p lit getter field undefined\nthrown\nboom []\ntrue"
+    );
+}
+
+#[test]
+fn an_error_subclass_takes_its_message_from_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class MyErr extends Error { constructor(m?: string) { super(m); this.name = "MyErr"; } }
+class Coded extends Error { code: number; constructor(m: string, c: number) { super(m); this.code = c; } }
+class Bare extends Error {}
+class Deep extends Bare { constructor() { super("deep"); } }
+class Ranged extends RangeError { constructor(m: string) { super(m); } }
+class Fielded extends Error { code = 5; }
+const c = new Coded("coded", 7);
+console.log(new MyErr("sub").message + " [" + new MyErr().message + "] " + c.message + " " + c.code);
+console.log(new Bare("bare").message + " " + new Deep().message + " " + new Ranged("ranged").message + " [" + new Fielded().message + "]");
+try { throw new MyErr("caught"); } catch (e: any) { console.log(e.message + " " + (e instanceof Error)); }
+console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k")).length);
+"#
+        ),
+        "sub [] coded 7\nbare deep ranged []\ncaught true\n{\"name\":\"MyErr\"} 0"
     );
 }

@@ -82,6 +82,22 @@ fn prefix(body: &[Stmt], has_operand: &impl Fn(u32) -> bool) -> Vec<Key> {
 }
 thread_local! { static PLANS: std::cell::RefCell<Vec<Plan>> = const { std::cell::RefCell::new(Vec::new()) }; }
 
+/// The module's constructor-layout plans as a parallel lowering worker must
+/// see them (`codegen::callable_workers`): a store site reads them while its
+/// body is lowered, so a worker without them would lower the generic store.
+#[derive(Clone)]
+pub(crate) struct CallableState(Vec<Plan>);
+
+pub(crate) fn callable_state() -> CallableState {
+    CallableState(PLANS.with(|p| p.borrow().clone()))
+}
+
+impl CallableState {
+    pub(crate) fn install(&self) {
+        PLANS.with(|p| *p.borrow_mut() = self.0.clone());
+    }
+}
+
 fn plan(body: String, stmts: &[Stmt], operand: impl Fn(u32) -> Option<Operand>) -> Option<Plan> {
     let keys = prefix(stmts, &|id| operand(id).is_some());
     if keys.is_empty() {

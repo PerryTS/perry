@@ -1,5 +1,6 @@
 //! The `__perry_runtime` iterator-record intrinsics the HIR lowers `for...of` and
-//! array destructuring to (contract: `perry-hir/src/iterator_record.rs`), and the
+//! array destructuring to (contract: `perry-hir/src/iterator_record.rs`), the
+//! `requireObjectCoercible` check that opens every object pattern, and the
 //! iteration nodes beside them. The runtime side is the `rt_*` bridges.
 
 use super::*;
@@ -38,6 +39,7 @@ pub(in crate::emit) const BRIDGES: &[&str] = &[
     "rt_iterableToArray",
     "rt_arrayIterationPatched",
     "rt_typedArrayForOfAdmits",
+    "rt_requireObjectCoercible",
 ];
 
 impl<'a> FuncEmitCtx<'a> {
@@ -124,6 +126,15 @@ impl<'a> FuncEmitCtx<'a> {
                 if self.expr_has_value(output) {
                     func.instruction(&Instruction::Drop);
                 }
+            }
+            // The source of an object pattern, or a TypeError for a nullish one. The
+            // second operand is a source offset for native `--debug-symbols` only.
+            ("requireObjectCoercible", [value, ..]) => {
+                self.emit_bridge(
+                    func,
+                    "rt_requireObjectCoercible",
+                    std::slice::from_ref(value),
+                );
             }
             (name, args) if EAGER.contains(&name) => {
                 self.emit_bridge(func, &format!("rt_{name}"), args);
