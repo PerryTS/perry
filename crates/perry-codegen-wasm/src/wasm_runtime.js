@@ -2197,7 +2197,6 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
-  object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};

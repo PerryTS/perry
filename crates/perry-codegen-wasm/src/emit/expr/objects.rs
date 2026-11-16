@@ -384,12 +384,6 @@ impl<'a> FuncEmitCtx<'a> {
                 );
             }
 
-            Expr::ObjectSetPrototypeOf(obj, proto) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, obj);
-                self.emit_store_arg(func, 1, proto);
-                self.emit_memcall(func, "object_set_prototype_of", 2);
-            }
             Expr::ObjectKeys(obj) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, obj);
