@@ -37,7 +37,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -107,7 +106,7 @@ console.log(total.toFixed(3));
 #[test]
 fn proven_number_returns_add_without_the_dynamic_helper() {
     let dir = tempfile::tempdir().unwrap();
-    let (ir, out) = compile_and_run(dir.path(), SHAPES, false);
+    let (ir, out) = compile_and_run(dir.path(), SHAPES, true);
     let describe = body(&ir, "perry_method_main_ts__Shape__describe");
     assert!(
         !describe.contains("js_dynamic_string_or_number_add"),
@@ -141,7 +140,7 @@ fn a_subclass_returning_a_string_keeps_the_dynamic_add() {
         "{SHAPES}\nclass Odd extends Shape {{ area(): number {{ return \"7\" as any; }} }}\nconsole.log(new Odd(1, 2).describe());\n"
     );
     let dir = tempfile::tempdir().unwrap();
-    let (ir, out) = compile_and_run(dir.path(), &source, false);
+    let (ir, out) = compile_and_run(dir.path(), &source, true);
     let describe = body(&ir, "perry_method_main_ts__Shape__describe");
     assert!(
         describe.contains("js_dynamic_string_or_number_add")
@@ -156,7 +155,7 @@ fn a_field_that_becomes_a_string_keeps_the_dynamic_add() {
     let source =
         format!("{SHAPES}\n(shapes[0] as any).y = \"y\";\nconsole.log(shapes[0].describe());\n");
     let dir = tempfile::tempdir().unwrap();
-    let (ir, out) = compile_and_run(dir.path(), &source, false);
+    let (ir, out) = compile_and_run(dir.path(), &source, true);
     let describe = body(&ir, "perry_method_main_ts__Shape__describe");
     assert!(
         describe.contains("js_dynamic_string_or_number_add")

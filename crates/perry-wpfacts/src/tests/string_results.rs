@@ -7,18 +7,6 @@
 //! runs that value's method: both stay unknown.
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
 
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
@@ -168,5 +156,18 @@ fn number_or_string_receiver_result_is_a_string() {
     for per_unit in [false, true] {
         let v = verdict_at(&facts_of(src, per_unit), src, "(typeof", "length");
         assert!(proven(&v), "per_unit={per_unit}: {v:?}");
+    }
+}
+
+fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
     }
 }

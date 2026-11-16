@@ -41,7 +41,6 @@ fn compile_and_run(setting: Option<&str>) -> (String, usize) {
     clean(&mut compile)
         .current_dir(dir.path())
         .env("PERRY_NO_CACHE", "1")
-        .env("PERRY_FACTS_UNITS", "0")
         .env("PERRY_SAVE_LL", &ll_dir);
     if let Some(value) = setting {
         compile.env("PERRY_FACTS_DCE", value);

@@ -25,21 +25,6 @@ fn verdicts(pf: &ProgramFacts, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
-
-#[test]
-fn a_field_array_push_stores_its_element() {
-    for pf in [facts(ENG), units(ENG)] {
-        for k in ["a", "b"] {
-            assert_eq!(verdicts(&pf, k), ["T0Mono"], "{k}\n{}", pf.dump_text());
-        }
-    }
-}
-
 /// What the pushed value is still reaches the reader: a value of unknown
 /// code pushed beside the instance refuses the reads.
 #[test]
@@ -48,13 +33,22 @@ fn a_field_array_push_of_an_unknown_value_refuses() {
         "push(): void { this.played.push(new U()); }",
         "push(): void { this.played.push(new U()); this.played.push(JSON.parse(\"{}\")); }",
     );
-    for pf in [facts(&src), units(&src)] {
+    for pf in [facts(&src)] {
         for k in ["a", "b"] {
             assert!(
                 verdicts(&pf, k).iter().all(|v| !v.starts_with("T0")),
                 "{k}\n{}",
                 pf.dump_text()
             );
+        }
+    }
+}
+
+#[test]
+fn a_field_array_push_stores_its_element() {
+    for pf in [facts(ENG)] {
+        for k in ["a", "b"] {
+            assert_eq!(verdicts(&pf, k), ["T0Mono"], "{k}\n{}", pf.dump_text());
         }
     }
 }

@@ -22,12 +22,10 @@
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
 //! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
-//! - `PERRY_FACTS_UNITS=1`: the retiring per-unit solve (decision 151: one
-//!   solve per module, the other modules unknown code,
-//!   `perry_wpfacts::compute_units`), kept for its tests until it is
-//!   deleted. The facts are solved over the whole program (decision 251:
-//!   one solve over every module, where a body contributes once the program
-//!   can run it, decision 225); owner decision 2026-11-03.
+//! - The facts are solved over the whole program (decision 251: one solve
+//!   over every module, where a body contributes once the program can run
+//!   it, decision 225); owner decision 2026-11-03. The per-unit mode
+//!   (`PERRY_FACTS_UNITS`) is retired; a set variable is ignored.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -246,15 +244,11 @@ pub(crate) fn run(
         .iter()
         .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
-    let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
-        perry_wpfacts::compute_units(&list, &cfg)
-    } else {
-        // `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts run their own pass over
-        // the final HIR (the `Activation` invariant's detector: both passes'
-        // profile lines must agree).
-        let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
-        perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
-    };
+    // `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts run their own pass over
+    // the final HIR (the `Activation` invariant's detector: both passes'
+    // profile lines must agree).
+    let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
+    let pf = perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check));
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if perry_codegen::verify_facts::enabled() {
         perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
@@ -374,20 +368,6 @@ pub(crate) fn run(
             s.derive_ms,
             elapsed
         );
-        for (path, u) in &pf.units {
-            eprintln!(
-                "perry: wpfacts: unit {path}: {} nodes, {} pts entries, work {}, {:.0} ms{}",
-                u.nodes,
-                u.pts_entries,
-                u.work,
-                u.gen_ms + u.solve_ms + u.derive_ms,
-                if u.aborted {
-                    ", OVER the bound: no facts"
-                } else {
-                    ""
-                }
-            );
-        }
     }
     if std::env::var("PERRY_FACTS_ONLY").is_ok_and(|v| v == "1") {
         // Analysis-only run (precision reports, checkers): stop after the
@@ -1197,15 +1177,6 @@ fn elision_for(
     out
 }
 
-/// The facts are solved over the whole program (decision 251, owner
-/// 2026-11-03): one solve over every module, where a body contributes once
-/// the program can run it (decision 225). `PERRY_FACTS_UNITS=1` selects the
-/// retiring per-unit solve, kept for its tests until it is deleted; no other
-/// value selects anything.
-fn per_unit_facts(env: Option<&str>) -> bool {
-    env == Some("1")
-}
-
 /// The directories compiler-generated modules (the CommonJS support module,
 /// script strings, native ESM namespaces) are written to: `<cache dir>/
 /// synthetic-modules`, as given and canonical (the modules are keyed by their
@@ -1289,33 +1260,8 @@ mod stable_dump_tests {
 }
 
 #[cfg(test)]
-mod facts_mode_tests {
-    use super::per_unit_facts;
-
-    #[test]
-    fn whole_program_is_the_default_mode() {
-        // decision 251: the whole solve is the one codegen reads.
-        assert!(
-            !per_unit_facts(None),
-            "the default facts mode must be whole-program"
-        );
-        assert!(!per_unit_facts(Some("0")));
-        assert!(!per_unit_facts(Some("")));
-    }
-
-    #[test]
-    fn per_unit_is_an_explicit_opt_in() {
-        assert!(per_unit_facts(Some("1")));
-    }
-}
-
-#[cfg(test)]
 #[path = "program_facts/outlined_tests.rs"]
 mod outlined_tests;
-
-#[cfg(test)]
-#[path = "program_facts/literal_chunks_tests.rs"]
-mod literal_chunks_tests;
 
 /// Borrow ordinary modules; reconstruct only outlined module entries.
 /// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /

@@ -39,7 +39,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -107,7 +106,7 @@ console.log(total());
 #[test]
 fn annotated_and_this_receivers_use_the_proven_class_switch() {
     let d = tmp("proven");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, PROVEN, whole);
         assert_eq!(out, "18\n", "whole={whole}");
         for (what, f) in [
@@ -171,7 +170,7 @@ const UNPROVEN: [(&str, &str, &str, &[&str]); 4] = [
 fn receivers_the_facts_do_not_prove_keep_the_typed_path() {
     for (name, source, expected, unproven) in UNPROVEN {
         let d = tmp(name);
-        for whole in [true, false] {
+        for whole in [true] {
             let (ll, out) = compile_and_run(&d, source, whole);
             assert_eq!(out, expected, "{name} whole={whole}");
             for f in unproven {
