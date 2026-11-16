@@ -71,6 +71,9 @@ impl Observed {
     fn visit(&mut self, expr: &Expr) {
         match expr {
             Expr::GlobalThisExpr => self.all = true,
+            // A bare builtin global function identifier (, ) lowers to an
+            //  named after it; codegen reads its value from the global object.
+            Expr::ExternFuncRef { name, .. } => self.name(name),
             Expr::PropertyGet { object, property, .. } if matches!(**object, Expr::GlobalGet(_)) => {
                 self.name(property)
             }
