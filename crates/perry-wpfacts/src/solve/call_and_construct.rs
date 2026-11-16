@@ -4,6 +4,18 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // MATHB1B: the generic-arm call of a namespace pair does not bind
+        // the original member: the pair's intrinsic arm is that call
+        // (`Gen::namespace_pair`).
+        if let Some(&(ns, key)) = self.ns_pair_calls.get(&call) {
+            if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+                if identity.rsplit_once('.').is_some_and(|(n, k)| {
+                    crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]
+                }) {
+                    return;
+                }
+            }
+        }
         self.diagnostic_callee(call, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an

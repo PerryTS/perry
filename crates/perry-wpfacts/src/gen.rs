@@ -510,6 +510,10 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
+    /// MATHB1B: while a namespace pair's intrinsic arm is walked, the
+    /// generic arm's arguments and the node each one evaluated to there
+    /// (`Gen::namespace_pair`).
+    pub(crate) pair_args: Option<Vec<(perry_hir::Expr, Option<NodeId>)>>,
     /// Reads guarded by an own-property test (the `IndexGet`'s address)
     /// and the invalidation node watched by `Cons::OwnGate`.
     pub(crate) own_reads: FxHashMap<usize, NodeId>,
@@ -852,6 +856,7 @@ impl<'a> Gen<'a> {
             lit_births: FxHashMap::default(),
             default_args: FxHashMap::default(),
             call_lit_arg: None,
+            pair_args: None,
             own_reads: FxHashMap::default(),
             own_store_reads: Default::default(),
             own_test_recv: None,

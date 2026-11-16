@@ -282,3 +282,24 @@ let t = 0; for ( let r = 0; r < 2000; r++ ) for ( let i = 0; i < 100; i++ ) { co
 console.log( t, (qs[ 0 ] as any).id, q2.id, q2.seen, Object.keys( q2 ).join( "," ), "id" in q2 );
 "#, "defineProperty", "Object.defineProperty");
 }
+
+// ---- MATHB1B: the pair keeps the facts of the code around it ----
+
+/// A constructor that defines a key on `this` through the pair: the
+/// intrinsic arm is the birth define (ctor_phase Rule BD-A), the generic
+/// call binds nothing while `Object.defineProperty` is the original, so the
+/// instance is no HARD object and its reads and stores stay proven.
+/// RED (MATHB1B): ctor_phase registers the define (birth_defines = [id])
+/// but the intrinsic arm still takes the non-birth E5 path
+/// (gen_rest/builtin_objects.rs:118 `birth_define_owner`): next phase.
+#[test]
+fn mathb1b_ctor_define_through_the_pair() {
+    let src = "let n = Number(process.argv[2]);\nclass A { x: number; constructor() { Object.defineProperty(this, 'id', { value: n++ }); this.x = Math.sin(n); } }\nconst a = new A();\nconsole.log(a.x, (a as any).id);\n";
+    let pf = solve(src);
+    let d = pf.dump_text();
+    let bad: Vec<&str> = d.lines().filter(|l| l.starts_with("S ") && l.contains("verdict=no")).collect();
+    eprintln!("MB1B {bad:?}");
+    assert!(bad.is_empty(), "{bad:?}");
+    assert!(ic(src, "defineProperty").iter().all(|v| v == "exact Object.defineProperty"));
+}
+
