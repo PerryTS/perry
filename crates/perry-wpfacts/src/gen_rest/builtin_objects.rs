@@ -773,9 +773,73 @@ impl<'a> Gen<'a> {
             | Expr::ReflectGetMetadataKeys { .. }
             | Expr::ReflectGetOwnMetadataKeys { .. }
             | Expr::ReflectDeleteMetadata { .. }
-            | Expr::WorkerNew { .. } => {
+            | Expr::WorkerNew { is_eval: true, .. } => {
                 let name = variant_name(e);
                 self.fail_closed(fx, e, &name)
+            }
+            // `new Worker(filename, options)` (node:worker_threads Worker;
+            // an eval-mode Worker runs JS SOURCE and stays unmodeled above:
+            // CLOSED-WORLD PREMISE: no eval / dynamic code). The worker
+            // module is a program module run in its own agent with its own
+            // realm; the construct shares no value with it: the filename is
+            // converted to a string (a URL: ToString, its href), each option
+            // is read by [[Get]] (getters run), workerData / argv / env are
+            // cloned (StructuredSerialize reads their values recursively,
+            // getters run; argv and env values are string-coerced),
+            // transferList items are detached. The result is a fresh host
+            // Worker object: no program alias, never a realm global; its
+            // members are host members the model does not describe.
+            Expr::WorkerNew {
+                filename,
+                options,
+                is_eval: false,
+                ..
+            } => {
+                let f = self.expr(fx, filename);
+                let rf = self.m.reason("Worker filename");
+                self.m.cons(
+                    f,
+                    Cons::Implicit {
+                        reason: rf,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                if let Some(o) = options {
+                    let o = self.expr(fx, o);
+                    let opt = self.load(o, Key::any());
+                    let rc = self.m.reason("Worker option cloned");
+                    self.m.cons(
+                        opt,
+                        Cons::Implicit {
+                            reason: rc,
+                            proto: Protocol::Clone,
+                        },
+                    );
+                    let item = self.load(opt, Key::any());
+                    let rs = self.m.reason("Worker argv/env value");
+                    self.m.cons(
+                        item,
+                        Cons::Implicit {
+                            reason: rs,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                    let rb = self.m.reason("B3 transfer list");
+                    self.m.cons(
+                        item,
+                        Cons::Hard {
+                            kind: Hard::B3Transfer,
+                            reason: rb,
+                        },
+                    );
+                }
+                // The host holds the Worker: it calls the listeners stored
+                // on it (`onmessage`, `on`, `addEventListener`) with events
+                // of its own making, so what the program stores into it or
+                // passes to its members is given to the host.
+                let (_, n) = self.bobj(mi, "Worker");
+                self.to_sink(n, "host Worker object: the runtime calls its listeners");
+                n
             }
             Expr::BoxedPrimitiveNew { kind, .. } => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);
