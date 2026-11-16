@@ -17,20 +17,20 @@
     }
   },
   "crates/perry-runtime/src/object/class_family_birth.rs::LAYOUT": {
-    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer. Re-audited 2026-11-03 (RELPREP) against #13817: the only change to layout_desc.rs is a test-only `use atoms::image_atoms` becoming pub(crate); no descriptor writer is added. Re-audited 2026-11-15 against the diffs since f134e5b860 (39359ae502, 3ead4bc1d8, 5d13b3e5a8, 19331b9bbe; e6e12b84f7 in class_family_birth.rs): store.rs gains fill_in_order and an attrs field on FamilyAdd::Late, layout_desc.rs gains family_define_own in prepare_hole_define and a class_id copy into a prototype image object; these write object slots, an object's class_id and its GC header flags, never a PerryLayoutDesc. class_family_birth.rs only renumbers two test layout_id constants and excludes wasm from a link_section. No new descriptor writer. Re-audited 2026-11-16 against b0b6a2a6e0 (#14782): store.rs gains family_own_data_slot, a read-only descriptor-index probe (desc_own_key plus an attrs read), and layout_desc.rs only re-exports it. No new descriptor writer.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer. Re-audited 2026-11-03 (RELPREP) against #13817: the only change to layout_desc.rs is a test-only `use atoms::image_atoms` becoming pub(crate); no descriptor writer is added. Re-audited 2026-11-15 against the diffs since f134e5b860 (39359ae502, 3ead4bc1d8, 5d13b3e5a8, 19331b9bbe; e6e12b84f7 in class_family_birth.rs): store.rs gains fill_in_order and an attrs field on FamilyAdd::Late, layout_desc.rs gains family_define_own in prepare_hole_define and a class_id copy into a prototype image object; these write object slots, an object's class_id and its GC header flags, never a PerryLayoutDesc. class_family_birth.rs only renumbers two test layout_id constants and excludes wasm from a link_section. No new descriptor writer. Re-audited 2026-11-16 against b0b6a2a6e0 (#14782): store.rs gains family_own_data_slot, a read-only descriptor-index probe (desc_own_key plus an attrs read), and layout_desc.rs only re-exports it. No new descriptor writer. Re-audited 2026-11-16 against 954fbcfc35: the diff adds snap_image_static_row_names_word, a read-only query of registered runtime layout words and lazy image rows; no descriptor writer is added.",
     "source_sha256": {
       "crates/perry-runtime/src/object/class_family_birth.rs": "e3ebff3e5e0949c0c74bfe01f770d0fbd36619e3d9f713fb6684ad6767599709",
-      "crates/perry-runtime/src/object/layout_desc.rs": "91e827578485f99642cec817ec5893db9855fd26ab88cf8acf571a54c6128e43",
+      "crates/perry-runtime/src/object/layout_desc.rs": "90f62caaea295d3ea42ec4e35e88231cd85bf1f488bf19630d7e280da6001698",
       "crates/perry-runtime/src/object/layout_desc/registration.rs": "dba028773015e302543a2a2cf99ea4e921ff7817b8b56d44b75b8b5ba1e5c32f",
       "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "03381f73ffc06906c296d995730b39829051f3c11814cd86ae79d100a1a28314",
       "crates/perry-runtime/src/object/layout_desc/store.rs": "07e84277d0680979a28c9800b2a506cba7d44c5397921c27d443628a58bff234"
     }
   },
   "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
-    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer. Re-audited 2026-11-03 (RELPREP) against #13817: the only change to layout_desc.rs is a test-only `use atoms::image_atoms` becoming pub(crate); no descriptor writer is added. Re-audited 2026-11-15 against the diffs since f134e5b860 (39359ae502, 3ead4bc1d8, 5d13b3e5a8, 19331b9bbe): store.rs gains fill_in_order and an attrs field on FamilyAdd::Late, layout_desc.rs gains family_define_own in prepare_hole_define and a class_id copy into a prototype image object; these write object slots, an object's class_id and its GC header flags, never a PerryLayoutDesc. No new descriptor writer. Re-audited 2026-11-16 against b0b6a2a6e0 (#14782): store.rs gains family_own_data_slot, a read-only descriptor-index probe (desc_own_key plus an attrs read), and layout_desc.rs only re-exports it. No new descriptor writer.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer. Re-audited 2026-11-03 (RELPREP) against #13817: the only change to layout_desc.rs is a test-only `use atoms::image_atoms` becoming pub(crate); no descriptor writer is added. Re-audited 2026-11-15 against the diffs since f134e5b860 (39359ae502, 3ead4bc1d8, 5d13b3e5a8, 19331b9bbe): store.rs gains fill_in_order and an attrs field on FamilyAdd::Late, layout_desc.rs gains family_define_own in prepare_hole_define and a class_id copy into a prototype image object; these write object slots, an object's class_id and its GC header flags, never a PerryLayoutDesc. No new descriptor writer. Re-audited 2026-11-16 against b0b6a2a6e0 (#14782): store.rs gains family_own_data_slot, a read-only descriptor-index probe (desc_own_key plus an attrs read), and layout_desc.rs only re-exports it. No new descriptor writer. Re-audited 2026-11-16 against 954fbcfc35: the diff adds snap_image_static_row_names_word, a read-only query of registered runtime layout words and lazy image rows; no descriptor writer is added.",
     "source_sha256": {
       "crates/perry-runtime/src/object/function_family_birth_tests.rs": "43bd87ba08ab4d0eb838899d74b09870dcf02758f8e58f7f98227b6c3dab06bf",
-      "crates/perry-runtime/src/object/layout_desc.rs": "91e827578485f99642cec817ec5893db9855fd26ab88cf8acf571a54c6128e43",
+      "crates/perry-runtime/src/object/layout_desc.rs": "90f62caaea295d3ea42ec4e35e88231cd85bf1f488bf19630d7e280da6001698",
       "crates/perry-runtime/src/object/layout_desc/registration.rs": "dba028773015e302543a2a2cf99ea4e921ff7817b8b56d44b75b8b5ba1e5c32f",
       "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "03381f73ffc06906c296d995730b39829051f3c11814cd86ae79d100a1a28314",
       "crates/perry-runtime/src/object/layout_desc/store.rs": "07e84277d0680979a28c9800b2a506cba7d44c5397921c27d443628a58bff234"
@@ -93,15 +93,15 @@
     }
   },
   "crates/perry-runtime/src/arena/alloc_life.rs::ON": {
-    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. This private allocation-census switch (alloc_life.rs has no test module) is asserted by no test; the hits are the words \"ON\" inside assertion messages in error_stack_frames.rs and probe_dispatch_tests.rs.",
+    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. This private allocation-census switch (alloc_life.rs has no test module) is asserted by no test; the hits are the words \"ON\" inside assertion messages in error_stack_frames.rs and probe_dispatch_tests.rs. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff routes the header read through addr_class::try_read_gc_header; ON and SHAPE_SHARED are untouched and still asserted by no test.",
     "source_sha256": {
-      "crates/perry-runtime/src/arena/alloc_life.rs": "96fe315065e5c2f3a403e9f048d2612a6c58ab8602d5776a39dae189262b11cc"
+      "crates/perry-runtime/src/arena/alloc_life.rs": "55b0fe2e4c43804838c8508ae7eeac6fd5399625433140fd785980a0f68b841b"
     }
   },
   "crates/perry-runtime/src/arena/alloc_life.rs::SHAPE_SHARED": {
-    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. This private census counter (alloc_life.rs has no test module) is asserted by no test; the hit is the text \"SHAPE_SHARED\" in an assertion message of canonical_keys_tests.rs, which tests GC_FLAG_SHAPE_SHARED on a header.",
+    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. This private census counter (alloc_life.rs has no test module) is asserted by no test; the hit is the text \"SHAPE_SHARED\" in an assertion message of canonical_keys_tests.rs, which tests GC_FLAG_SHAPE_SHARED on a header. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff routes the header read through addr_class::try_read_gc_header; ON and SHAPE_SHARED are untouched and still asserted by no test.",
     "source_sha256": {
-      "crates/perry-runtime/src/arena/alloc_life.rs": "96fe315065e5c2f3a403e9f048d2612a6c58ab8602d5776a39dae189262b11cc"
+      "crates/perry-runtime/src/arena/alloc_life.rs": "55b0fe2e4c43804838c8508ae7eeac6fd5399625433140fd785980a0f68b841b"
     }
   },
   "crates/perry-runtime/src/external_family.rs::INFO": {
@@ -129,21 +129,21 @@
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life.rs::SABOTAGE": {
-    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. Both SABOTAGE statics are fn-local OnceLock<bool> negative-control switches (minor_decides, engine_metadata), initialized once from PERRY_FACTS_SABOTAGE and never asserted; the hit is the word \"SABOTAGE\" in an assertion message of gc/large_extent_selection_tests.rs.",
+    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. Both SABOTAGE statics are fn-local OnceLock<bool> negative-control switches (minor_decides, engine_metadata), initialized once from PERRY_FACTS_SABOTAGE and never asserted; the hit is the word \"SABOTAGE\" in an assertion message of gc/large_extent_selection_tests.rs. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff routes two flag reads through addr_class::try_read_gc_header; SABOTAGE, DIED_IN_CALL and UNBORN are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/wpfacts_check/life.rs": "d036f180700bbff68859dd09c144c28cdfbe111f5f7af84a16190ae0b5da6a29"
+      "crates/perry-runtime/src/wpfacts_check/life.rs": "73c86eb5614cafb2b91c7d2191c9fc685d22fd336f69d4eb13164360615b72b3"
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life_measure.rs::K": {
-    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. A fn-local OnceLock<bool> env switch (life_measure.rs has no test module); the hits are local constants named K in object/canonical_keys_tests.rs and gc/tests/young_log_tests.rs.",
+    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. A fn-local OnceLock<bool> env switch (life_measure.rs has no test module); the hits are local constants named K in object/canonical_keys_tests.rs and gc/tests/young_log_tests.rs. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff counts a headerless POINTER_TAG payload in the local stats instead of reading a header; the K and R switches are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/wpfacts_check/life_measure.rs": "0f1a878469aedba45d225ad5b719531108b0fa0c88eaf9c3ca5a4e0397277560"
+      "crates/perry-runtime/src/wpfacts_check/life_measure.rs": "37f304b2372b91518b7ae72244aed6831a8f8489d1770e003bddf7d65b3e38a2"
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life_measure.rs::R": {
-    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. A fn-local OnceLock<bool> env switch in rate_one (life_measure.rs has no test module); the hits are the letter R in assertion messages of object/class_birth_rep_tests.rs and object/region_numeric_read_tests.rs.",
+    "claim": "Reviewed 2026-11-15: a lexical name collision, not a reader. A fn-local OnceLock<bool> env switch in rate_one (life_measure.rs has no test module); the hits are the letter R in assertion messages of object/class_birth_rep_tests.rs and object/region_numeric_read_tests.rs. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff counts a headerless POINTER_TAG payload in the local stats instead of reading a header; the K and R switches are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/wpfacts_check/life_measure.rs": "0f1a878469aedba45d225ad5b719531108b0fa0c88eaf9c3ca5a4e0397277560"
+      "crates/perry-runtime/src/wpfacts_check/life_measure.rs": "37f304b2372b91518b7ae72244aed6831a8f8489d1770e003bddf7d65b3e38a2"
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life_regions.rs::F": {
@@ -203,21 +203,21 @@
     }
   },
   "crates/perry-runtime/src/thread/error_stack_clone_tests.rs::GETS": {
-    "claim": "Reviewed 2026-11-15: private to error_stack_clone_tests.rs (the other hits read other statics named GETS), incremented only by its stack_getter; both asserting tests store 0 to it first. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process.",
+    "claim": "Reviewed 2026-11-15: private to error_stack_clone_tests.rs (the other hits read other statics named GETS), incremented only by its stack_getter; both asserting tests store 0 to it first. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process. Re-audited 2026-11-16 against 0a784843db (#14751): the diff reads the string payload through string_data; GETS and its two asserting tests are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/thread/error_stack_clone_tests.rs": "029b4ec567eed9fabcd4ea58acc4b43a007e57a812515d56011927ff855ea7b6"
+      "crates/perry-runtime/src/thread/error_stack_clone_tests.rs": "5931f0d4bdd9171cbc3015f862c9a75175c810218986cd0b21206958c594ef22"
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life.rs::DIED_IN_CALL": {
-    "claim": "Reviewed 2026-11-15: a check-build total whose one assertion (life.rs tests) is a delta from a `before` read in the same test. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process.",
+    "claim": "Reviewed 2026-11-15: a check-build total whose one assertion (life.rs tests) is a delta from a `before` read in the same test. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff routes two flag reads through addr_class::try_read_gc_header; SABOTAGE, DIED_IN_CALL and UNBORN are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/wpfacts_check/life.rs": "d036f180700bbff68859dd09c144c28cdfbe111f5f7af84a16190ae0b5da6a29"
+      "crates/perry-runtime/src/wpfacts_check/life.rs": "73c86eb5614cafb2b91c7d2191c9fc685d22fd336f69d4eb13164360615b72b3"
     }
   },
   "crates/perry-runtime/src/wpfacts_check/life.rs::UNBORN": {
-    "claim": "Reviewed 2026-11-15: a check-build total whose one assertion (life.rs tests) is a delta from a `before` read in the same test. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process.",
+    "claim": "Reviewed 2026-11-15: a check-build total whose one assertion (life.rs tests) is a delta from a `before` read in the same test. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own (test_support.rs, current_test_name): no sibling test shares the process. Re-audited 2026-11-16 against f30c7abe28 (#14760): the diff routes two flag reads through addr_class::try_read_gc_header; SABOTAGE, DIED_IN_CALL and UNBORN are untouched.",
     "source_sha256": {
-      "crates/perry-runtime/src/wpfacts_check/life.rs": "d036f180700bbff68859dd09c144c28cdfbe111f5f7af84a16190ae0b5da6a29"
+      "crates/perry-runtime/src/wpfacts_check/life.rs": "73c86eb5614cafb2b91c7d2191c9fc685d22fd336f69d4eb13164360615b72b3"
     }
   },
   "crates/perry-runtime/src/arkts_callbacks.rs::CALLBACKS": {
@@ -233,9 +233,9 @@
     }
   },
   "crates/perry-runtime/src/object/shapes.rs::N": {
-    "claim": "Reviewed 2026-11-16: a lexical name collision, not a reader. This N is the fn-local uniqueness counter of the test helper fresh_key in shapes.rs, only fetch_add'ed to mint distinct key strings and never asserted; the hits are local `const N` loop bounds in array/tests.rs, array/dense_move_tests.rs and object/shapes_store_tests.rs.",
+    "claim": "Reviewed 2026-11-16: a lexical name collision, not a reader. This N is the fn-local uniqueness counter of the test helper fresh_key in shapes.rs, only fetch_add'ed to mint distinct key strings and never asserted; the hits are local `const N` loop bounds in array/tests.rs, array/dense_move_tests.rs and object/shapes_store_tests.rs. Re-audited 2026-11-16 against 954fbcfc35, 9b218ad2fd and 28a4c31ea5: the new mint-record tests call fresh_key for distinct keys; N is still only fetch_add'ed and never asserted.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/shapes.rs": "a3537c70ee5beae6fc301fc0fbf88f02fc52ee1ebe108860c7ac6579fe1a6ab3"
+      "crates/perry-runtime/src/object/shapes.rs": "6d8614d9d8baa938c592c95d534cf32762d0e101603732dd155744b1d1e4923c"
     }
   },
   "crates/perry-runtime/src/tui/run.rs::CALLBACKS": {
@@ -245,15 +245,22 @@
     }
   },
   "crates/perry-runtime/src/tui/input.rs::CAPTURED": {
-    "claim": "Reviewed 2026-11-16 (c6bf6e91f1, #14547): private to input.rs tests, pushed only by their capture_bytes callback, and cleared immediately before each assertion; both asserting tests hold event_pump::tests::serial() through reset(). Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own: no sibling test shares the process.",
+    "claim": "Reviewed 2026-11-16 (c6bf6e91f1, #14547): private to input.rs tests, pushed only by their capture_bytes callback, and cleared immediately before each assertion; both asserting tests hold event_pump::tests::serial() through reset(). Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own: no sibling test shares the process. Re-audited 2026-11-16 against f2bf060c58 (#14552): reset() is pub(super) for the new input/reader_tests.rs, whose tests hold serial() through it and touch neither CAPTURED nor INPUT_BYTES_MODE.",
     "source_sha256": {
-      "crates/perry-runtime/src/tui/input.rs": "2eb7086e803fc4cc1f2508d3c7b6a87d5ca14f0cb828275db74fef91717bd93e"
+      "crates/perry-runtime/src/tui/input.rs": "9daa70627aa6e1840f472b05ad9f7375a820b47de44922e7d8222af5f774218e"
     }
   },
   "crates/perry-runtime/src/tui/input.rs::INPUT_BYTES_MODE": {
-    "claim": "Reviewed 2026-11-16 (c6bf6e91f1, #14547): a private input-mode flag written only by js_perry_tui_use_input/_bytes (called from no other module) and by the test reset(), which every input.rs test calls first and which holds event_pump::tests::serial(); the one asserting test sets it and reads it back under that lock. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own: no sibling test shares the process.",
+    "claim": "Reviewed 2026-11-16 (c6bf6e91f1, #14547): a private input-mode flag written only by js_perry_tui_use_input/_bytes (called from no other module) and by the test reset(), which every input.rs test calls first and which holds event_pump::tests::serial(); the one asserting test sets it and reads it back under that lock. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own: no sibling test shares the process. Re-audited 2026-11-16 against f2bf060c58 (#14552): reset() is pub(super) for the new input/reader_tests.rs, whose tests hold serial() through it and touch neither CAPTURED nor INPUT_BYTES_MODE.",
     "source_sha256": {
-      "crates/perry-runtime/src/tui/input.rs": "2eb7086e803fc4cc1f2508d3c7b6a87d5ca14f0cb828275db74fef91717bd93e"
+      "crates/perry-runtime/src/tui/input.rs": "9daa70627aa6e1840f472b05ad9f7375a820b47de44922e7d8222af5f774218e"
+    }
+  },
+  "crates/perry-runtime/src/tui/input.rs::READER": {
+    "claim": "Reviewed 2026-11-16 (f2bf060c58, #14552): the Unix stdin reader slot, written only by enable_raw_mode/disable_raw_mode. Its one asserting test, input/reader_tests.rs enable_restarts_after_eof, runs inside test_isolation::in_own_process and holds event_pump::tests::serial() through reset(), and ends by disabling raw mode, which takes the reader back to None. Independently, the workspace builds tests with panic-abort-tests (.cargo/config.toml), so libtest runs every test in a fresh process of its own: no sibling test shares the process.",
+    "source_sha256": {
+      "crates/perry-runtime/src/tui/input.rs": "9daa70627aa6e1840f472b05ad9f7375a820b47de44922e7d8222af5f774218e",
+      "crates/perry-runtime/src/tui/input/reader_tests.rs": "02aa01655324b8bdea0915825f0399d88642a8e7529ee762fb093695b256c1f5"
     }
   }
 }
