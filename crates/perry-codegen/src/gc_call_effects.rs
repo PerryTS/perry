@@ -520,11 +520,8 @@ fn is_shadow_call_text(line: &str) -> bool {
     line.contains("@js_shadow_slot_bind(") || line.contains("@js_shadow_slot_set(")
 }
 
-fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
-    effects_of_ignoring(gc, function, defined, None)
-}
-
-/// [`effects_of`] with the direct calls of `ignored` not counted as edges.
+/// What `function` can do to the heap, with the direct calls of `ignored`
+/// not counted as edges.
 fn effects_of_ignoring(
     gc: &GcEffects,
     function: &LlFunction,

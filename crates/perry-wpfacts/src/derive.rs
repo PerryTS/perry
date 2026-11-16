@@ -374,10 +374,6 @@ pub struct SiteFacts {
     /// `this` template's class); codegen calls that body directly with the
     /// receiver as `this` (ECMA-262 13.3.6.2, 7.3.14 Call).
     pub holder_class: Option<u32>,
-    /// Per-unit run: the receiver is a parameter whose TS object type
-    /// names these keys; its verdict is decided after the census
-    /// (`units::typed_param_verdicts`).
-    pub(crate) guard_keys: Option<Vec<String>>,
     /// DECISIONS 225: the bodies holding the site, in its module (HIR
     /// function id, and for a synthetic context its name; `Model::act_key`).
     pub bodies: Vec<(u32, String)>,
@@ -1748,22 +1744,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
         // over C's layout (the generic body keeps the full site). A
-        // parameter typed with a class type is guarded the same way; one
-        // typed with an object type is decided after the census.
-        let mut guard_keys = None;
+        // parameter typed with a class type is guarded the same way.
         if let Verdict::No(_) = verdict {
-            let guards: Option<Vec<&crate::gen::ParamGuard>> =
-                recvs.iter().map(|r| g.param_guard.get(r)).collect();
-            match guards.as_deref() {
-                Some([crate::gen::ParamGuard::Keys(k), rest @ ..])
-                    if rest
-                        .iter()
-                        .all(|x| matches!(x, crate::gen::ParamGuard::Keys(k2) if k2 == k)) =>
-                {
-                    guard_keys = Some(k.clone());
-                }
-                _ => {}
-            }
             let guarded = recvs
                 .iter()
                 .map(|r| match g.param_guard.get(r) {
@@ -1791,7 +1773,6 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             verdict,
             fixed_shape,
             targets,
-            guard_keys,
             set.values(m),
             prim,
         )
@@ -1805,7 +1786,6 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             verdict,
             fixed_shape,
             targets,
-            guard_keys,
             receiver_values,
             receiver_prims,
         ) = verdict_of(s, recvs);
@@ -1910,7 +1890,6 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             target_fns,
             target_bodies,
             holder_class,
-            guard_keys,
         });
     }
     out
