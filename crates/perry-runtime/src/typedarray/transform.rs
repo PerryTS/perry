@@ -359,6 +359,15 @@ pub extern "C" fn js_typed_array_with(
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_raw_const_ptr(ta);
     let value = scope.root_nanbox_f64(value);
+    // 23.2.3.36 step 6: ToIntegerOrInfinity( index ) before the value's
+    // coercion (an object operand runs its `valueOf`); both stay rooted.
+    let (index, ta) = source.across_const::<TypedArrayHeader, _>(|| {
+        if (index.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+            index
+        } else {
+            crate::builtins::js_number_coerce(index)
+        }
+    });
     unsafe {
         let kind = crate::typedarray::element_kind(ta);
         let len = crate::typedarray::element_length(ta) as usize;
