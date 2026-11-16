@@ -667,6 +667,26 @@ pub(super) fn try_module_static_methods(
                     ) {
                         Ok(e) => return Ok(Ok(e)),
                         Err(a) if has_spread => return Ok(Err(a)),
+                        // A member the intrinsic declined (a count of arguments
+                        // other than its arity): the ordinary property-get-then-call
+                        // on the live `Math` object, `this` = Math, every argument
+                        // already evaluated in order (13.3.6.1). The bare
+                        // `GlobalGet(0).<m>` receiver of the fall-through below would
+                        // read `globalThis.<m>`.
+                        Err(a) if super::super::array_fold::is_known_math_static_method(method_name) => {
+                            let math = Expr::PropertyGet {
+                                byte_end: 0,
+                                byte_offset: 0,
+                                object: Box::new(Expr::GlobalThisExpr),
+                                property: "Math".to_string(),
+                            };
+                            return Ok(Ok(super::patched_builtin_call::dynamic_member_call(
+                                call,
+                                math,
+                                method_name.to_string(),
+                                a,
+                            )));
+                        }
                         Err(a) => args = a, // Fall through to generic handling
                     }
                 }
@@ -1449,6 +1469,23 @@ pub(crate) fn math_intrinsic(
     // Only `min` / `max` have arms written for a spread; every
     // other spread call declines (see `call_has_spread_arg`).
     if has_spread && !matches!(method_name, "min" | "max") {
+        return Err(args);
+    }
+    // ECMA-262 13.3.6.1 / 13.3.8.1 ArgumentListEvaluation evaluates EVERY
+    // argument expression, left to right, before the call, and the builtin
+    // then coerces only the ones its algorithm reads (21.3.2.x). A call with
+    // more arguments than the member's arity would lose the extra ones in an
+    // intrinsic with fixed operands (`Math.cos( 0, side() )` never ran
+    // `side()`): it keeps the generic call, which evaluates them all. Too few
+    // arguments also keep the generic call (the missing ones are undefined).
+    // `min` / `max` / `hypot` take any number of arguments.
+    let arity = match method_name {
+        "min" | "max" | "hypot" => None,
+        "random" => Some(0),
+        "pow" | "imul" | "atan2" => Some(2),
+        _ => Some(1),
+    };
+    if arity.is_some_and(|n| args.len() != n) {
         return Err(args);
     }
     match method_name {
