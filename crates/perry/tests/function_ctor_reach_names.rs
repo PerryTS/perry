@@ -40,8 +40,7 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> (String, String) {
     clean(&mut cmd)
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
-        .env("PERRY_FACTS_DUMP", &dump)
-        .env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
+        .env("PERRY_FACTS_DUMP", &dump);
     let out = cmd
         .arg("compile")
         .arg(dir.join(files[0].0))
@@ -92,7 +91,7 @@ console.log(flags, Local.Mixed, Kind.Both, pick({ a: 3 }, 'a'), map([1, 2], (x) 
 #[test]
 fn enum_members_and_shadowing_names_do_not_link_the_interpreter() {
     let dir = tempfile::tempdir().unwrap();
-    for whole in [true, false] {
+    for whole in [true] {
         let (stdout, guard) = build(
             dir.path(),
             &[("main.ts", NAMES), ("kinds.ts", KINDS)],
@@ -113,7 +112,7 @@ console.log(f(1));
 #[test]
 fn a_function_built_from_a_string_keeps_the_guard() {
     let dir = tempfile::tempdir().unwrap();
-    for whole in [true, false] {
+    for whole in [true] {
         let (stdout, guard) = build(dir.path(), &[("main.ts", CONTROL)], whole);
         assert_eq!(stdout.trim(), "5", "whole={whole}");
         assert_ne!(guard, "# interp_guard none", "whole={whole}");

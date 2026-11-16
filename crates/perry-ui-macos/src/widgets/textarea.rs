@@ -115,13 +115,15 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let autoresizing: u64 = 1 << 1; // NSViewWidthSizable
         let _: () = msg_send![text_view, setAutoresizingMask: autoresizing];
 
-        // Set monospace font
+        // System font (matches TextField); apps style the surrounding box.
         let font_cls = AnyClass::get(c"NSFont").unwrap();
-        let font_name = NSString::from_str("Menlo");
-        let font: *mut AnyObject = msg_send![font_cls, fontWithName: &*font_name, size: 13.0f64];
+        let font: *mut AnyObject = msg_send![font_cls, systemFontOfSize: 14.0f64];
         if !font.is_null() {
             let _: () = msg_send![text_view, setFont: font];
         }
+        let inset = objc2_core_foundation::CGSize::new(8.0, 10.0);
+        let _: () = msg_send![text_view, setTextContainerInset: inset];
+        let _: () = msg_send![text_view, setDrawsBackground: false];
 
         // Text container should track width
         let container: *mut AnyObject = msg_send![text_view, textContainer];
@@ -137,7 +139,9 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let scroll: *mut AnyObject = msg_send![scroll, initWithFrame: frame];
         let _: () = msg_send![scroll, setHasVerticalScroller: true];
         let _: () = msg_send![scroll, setHasHorizontalScroller: false];
-        let _: () = msg_send![scroll, setBorderType: 1i64]; // NSBezelBorder
+        // No bezel: a widget background / corner radius styles the box.
+        let _: () = msg_send![scroll, setBorderType: 0i64]; // NSNoBorder
+        let _: () = msg_send![scroll, setDrawsBackground: false];
         let _: () = msg_send![scroll, setDocumentView: text_view];
 
         // Disable autoresizing mask so Auto Layout works

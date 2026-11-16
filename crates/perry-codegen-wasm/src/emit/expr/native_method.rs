@@ -882,8 +882,10 @@ impl<'a> FuncEmitCtx<'a> {
                                         .copied()
                                         .unwrap_or(0);
                                     // obj is already on the stack from emit_expr(obj) above
-                                    // Save obj to temp, build args array, then store all to memory
+                                    // Open the frame before any slot store, then build the args array in
+                                    // frames above it.
                                     func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 0 = obj handle
+                                    self.emit_frame_begin(func, 3);
                                     self.emit_slot_addr(func, 0);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));
                                     func.instruction(&Instruction::I64Store(
@@ -914,7 +916,6 @@ impl<'a> FuncEmitCtx<'a> {
                                         self.emit_memcall(func, "array_push", 2);
                                         // push into array, returns handle
                                     }
-                                    self.emit_frame_begin(func, 3);
                                     func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array handle
                                     self.emit_slot_addr(func, 2);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));

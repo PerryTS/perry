@@ -570,14 +570,13 @@ impl WasmModuleEmitter {
             Vec<LocalId>,
             usize,
         )> = Vec::new();
+        // The class whose constructor, instance method, accessor or field initializer
+        // holds an arrow: `super` inside it resolves from that class. Any other closure
+        // (an object literal's method) has its own home object.
+        let mut closure_class: std::collections::HashMap<(usize, FuncId), String> =
+            Default::default();
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            let mut module_closures: Vec<(
-                FuncId,
-                Vec<Param>,
-                Vec<Stmt>,
-                Vec<LocalId>,
-                Vec<LocalId>,
-            )> = Vec::new();
+            let mut module_closures: Vec<CollectedClosure> = Vec::new();
             collect_closures_from_stmts(&module.init, &mut module_closures);
             for global in &module.globals {
                 if let Some(init) = &global.init {
@@ -593,6 +592,7 @@ impl WasmModuleEmitter {
                 collect_closures_from_stmts(&func.body, &mut module_closures);
             }
             for class in &module.classes {
+                let instance_start = module_closures.len();
                 if let Some(ctor) = &class.constructor {
                     for param in &ctor.params {
                         if let Some(default) = &param.default {
@@ -609,6 +609,7 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
+                let statics_start = module_closures.len();
                 for method in &class.static_methods {
                     for param in &method.params {
                         if let Some(default) = &param.default {
@@ -617,6 +618,7 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
+                let statics_end = module_closures.len();
                 for (_, getter) in &class.getters {
                     for param in &getter.params {
                         if let Some(default) = &param.default {
@@ -638,16 +640,25 @@ impl WasmModuleEmitter {
                         collect_closures_from_expr(init, &mut module_closures);
                     }
                 }
+                let instance_end = module_closures.len();
                 for field in &class.static_fields {
                     if let Some(init) = &field.init {
                         collect_closures_from_expr(init, &mut module_closures);
+                    }
+                }
+                for closure in module_closures[instance_start..statics_start]
+                    .iter()
+                    .chain(&module_closures[statics_end..instance_end])
+                {
+                    if closure.5 {
+                        closure_class.insert((mod_idx, closure.0), class.name.clone());
                     }
                 }
             }
             // One function per FuncId: a closure the HIR reaches by two paths (a static
             // field initializer is also in `init`) is emitted once.
             let mut seen = std::collections::HashSet::new();
-            for (fid, params, body, caps, mut_caps) in module_closures {
+            for (fid, params, body, caps, mut_caps, _) in module_closures {
                 if seen.insert(fid) {
                     closure_funcs.push((fid, params, body, caps, mut_caps, mod_idx));
                 }
@@ -1415,7 +1426,7 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for method in &class.methods {
-                    let func = self.compile_class_method(method);
+                    let func = self.compile_class_method(&class.name, method);
                     code_section.function(&func);
                 }
                 for method in &class.static_methods {
@@ -1431,11 +1442,11 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for (_name, getter) in &class.getters {
-                    let func = self.compile_class_method(getter);
+                    let func = self.compile_class_method(&class.name, getter);
                     code_section.function(&func);
                 }
                 for (_name, setter) in &class.setters {
-                    let func = self.compile_class_method(setter);
+                    let func = self.compile_class_method(&class.name, setter);
                     code_section.function(&func);
                 }
             }
@@ -1446,7 +1457,9 @@ impl WasmModuleEmitter {
             if self.module_func_maps[*mod_idx].contains_key(func_id) {
                 self.func_map = self.module_func_maps[*mod_idx].clone();
                 self.current_mod_idx = *mod_idx;
-                let func = self.compile_closure(params, body, captures, mutable_captures);
+                let home_class = closure_class.get(&(*mod_idx, *func_id)).map(String::as_str);
+                let func =
+                    self.compile_closure(params, body, captures, mutable_captures, home_class);
                 code_section.function(&func);
             }
         }

@@ -117,12 +117,15 @@ pub fn widen(old: Iv, next: Iv) -> Iv {
 pub struct Rg {
     pub num: Iv,
     pub chr: Iv,
+    /// `Node::frac` of the delivered Numbers (rule INT-OR-NAN).
+    pub frac: bool,
 }
 
 impl Rg {
     pub const TOP: Rg = Rg {
         num: Iv::TOP,
         chr: Iv::TOP,
+        frac: true,
     };
 }
 
@@ -347,6 +350,10 @@ pub const CLIP_LT: u8 = 0;
 pub const CLIP_LE: u8 = 1;
 pub const CLIP_GT: u8 = 2;
 pub const CLIP_GE: u8 = 3;
+/// `x !== k` true (`===` false; loose alike on Numbers): every Number but
+/// `k` (ECMA-262 7.2.15 / 7.2.14 on Numbers: only `k` equals `k`; `-0`
+/// equals `0`).
+pub const CLIP_NE: u8 = 4;
 
 impl RangeOp {
     pub fn name(self) -> &'static str {
@@ -368,6 +375,7 @@ impl RangeOp {
             RangeOp::Clip(CLIP_LT) => "clip-lt",
             RangeOp::Clip(CLIP_LE) => "clip-le",
             RangeOp::Clip(CLIP_GT) => "clip-gt",
+            RangeOp::Clip(CLIP_NE) => "clip-ne",
             RangeOp::Clip(_) => "clip-ge",
             RangeOp::Abs => "abs",
             RangeOp::Min => "min",
@@ -612,6 +620,16 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
                 CLIP_LT => Iv::int(l.lo, l.hi.min(r.hi.saturating_sub(1))),
                 CLIP_LE => Iv::int(l.lo, l.hi.min(r.hi)),
                 CLIP_GT => Iv::int(l.lo.max(r.lo.saturating_add(1)), l.hi),
+                // An interval only loses a point at an end: `k` there.
+                CLIP_NE if r.lo == r.hi && !r.big() && (l.lo == r.lo || l.hi == r.lo) => {
+                    let k = r.lo;
+                    let (lo, hi) = (if l.lo == k { k + 1 } else { l.lo }, if l.hi == k { k - 1 } else { l.hi });
+                    let mut out = Iv::int(lo, hi);
+                    // `-0 !== 0` is false: past a `0` clip no `-0` either.
+                    out.nz = l.nz && k != 0 && !out.is_empty() && lo <= 0 && 0 <= hi;
+                    out
+                }
+                CLIP_NE => l,
                 _ => Iv::int(l.lo.max(r.lo), l.hi),
             }
         }
@@ -817,6 +835,7 @@ mod tests {
                     CLIP_LT => a < b,
                     CLIP_LE => a <= b,
                     CLIP_GT => a > b,
+                    CLIP_NE => a != b,
                     _ => a >= b,
                 };
                 return if pass { vec![a] } else { vec![] };

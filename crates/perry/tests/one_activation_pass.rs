@@ -48,7 +48,6 @@ fn facts_only(dir: &Path, check: bool) -> String {
     }
     cmd.current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
-        .env("PERRY_FACTS_UNITS", "0")
         .env("PERRY_FACTS_ONLY", "1")
         .env("PERRY_FACTS_PROFILE", "1");
     if check {

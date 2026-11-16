@@ -66,6 +66,26 @@ impl<'a> FuncEmitCtx<'a> {
                             _ => {}
                         }
                     }
+                    // `C.m(args)` names a static method directly, as `StaticMethodCall`
+                    // does; a tagged template (`` C.m`x` ``) reaches here in this shape.
+                    if let Expr::ClassRef(class_name) = object.as_ref() {
+                        let is_static = self
+                            .emitter
+                            .class_static_map
+                            .get(class_name.as_str())
+                            .is_some_and(|statics| statics.contains_key(property.as_str()));
+                        if is_static {
+                            self.emit_expr(
+                                func,
+                                &Expr::StaticMethodCall {
+                                    class_name: class_name.clone(),
+                                    method_name: property.clone(),
+                                    args: args.clone(),
+                                },
+                            );
+                            return true;
+                        }
+                    }
                     // String/Array method calls: expr.method(args)
                     if self.emit_method_call(func, object, property, args) {
                         return true;

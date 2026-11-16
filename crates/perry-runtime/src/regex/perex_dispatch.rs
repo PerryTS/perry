@@ -345,7 +345,21 @@ pub(crate) fn same_value(
 /// polls (`api::search_builtin`). Any other receiver takes the observable
 /// path, rooted, exactly as `execute` runs it.
 pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
-    if let Some(data) = crate::object::regex_read_sites::builtin_exec_data(receiver) {
+    // RegExpBuiltinExec step 2: Get(R, "lastIndex") (ECMA-262 22.2.7.2). On
+    // the builtin fact the receiver is on its birth layout, whose own keys are
+    // `[[RegExpMatcher]]` (slot 0) and the own writable data `lastIndex` every
+    // RegExp has (slot 1, 22.2.3.1 RegExpAlloc): the Get is that slot's value.
+    if let Some(re) = super::instance::builtin(receiver) {
+        crate::object::regex_read_sites::count_exec_proof(true);
+        // SAFETY: admitted just now; nothing collected since.
+        let (data, last_index) =
+            unsafe { (super::instance::builtin_data(re), super::instance::builtin_last_index(re)) };
+        return test_builtin(re, data, input, last_index);
+    }
+    // Any other layout keeps the keyed brand read and the ordinary Get.
+    let data = crate::object::regex_read_sites::observable_exec_data(receiver);
+    crate::object::regex_read_sites::count_exec_proof(data.is_some());
+    if let Some(data) = data {
         // The proof read the receiver's shape: it is an object pointer.
         let re = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader;
         return test_builtin(re, data, input, super::get_last_index(re));

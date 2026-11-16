@@ -33,6 +33,7 @@ fn field(key: &str, slot: u32) -> FactsField {
 fn facts() -> ElisionFacts {
     let mut f = ElisionFacts::default();
     let class = |fields| FactsClass {
+        absent: Vec::new(),
         display: "C".into(),
         fixed_layout: true,
         fields,

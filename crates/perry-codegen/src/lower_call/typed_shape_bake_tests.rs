@@ -202,6 +202,7 @@ fn two_field_class(name: &str, f1_ty: Type) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

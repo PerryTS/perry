@@ -1302,29 +1302,6 @@ impl<'a> Gen<'a> {
         n
     }
 
-    /// The store effects this unit publishes (decision 17), by template
-    /// display and key, with the nodes of what it stores: their value
-    /// contracts are published (design §17.16 (c), DECISIONS 73 their kinds).
-    pub(crate) fn store_effects(&self) -> Vec<(String, String, Vec<NodeId>)> {
-        let mut by: FxHashMap<(TmplId, Atom), Vec<NodeId>> = FxHashMap::default();
-        for &(tm, a, n) in &self.m.foreign_stores {
-            by.entry((tm, a)).or_default().push(n);
-        }
-        let mut out: Vec<(String, String, Vec<NodeId>)> = by
-            .into_iter()
-            .map(|((tm, a), mut ns)| {
-                ns.sort_unstable();
-                ns.dedup();
-                (
-                    self.m.tmpls[tm as usize].display.clone(),
-                    self.m.atoms[a as usize].clone(),
-                    ns,
-                )
-            })
-            .collect();
-        out.sort();
-        out
-    }
 
     /// A literal-shape object, a plain object literal (DECISIONS 94) or an
     /// enum's object (§18.2) of this unit no census report broke.

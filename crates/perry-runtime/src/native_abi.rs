@@ -236,6 +236,15 @@ static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
 ) -> f64 = crate::object::js_native_call_method_by_id;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
+static KEEP_JS_CALL_LATE_OWN_VALUE: unsafe extern "C-unwind" fn(
+    f64,
+    i64,
+    i64,
+    *const f64,
+    usize,
+) -> f64 = crate::object::js_call_late_own_value;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
 #[cfg(feature = "keepalive-anchors")]

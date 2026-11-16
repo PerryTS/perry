@@ -60,8 +60,8 @@ fn product_element_identity_preserves_codegen_facts() {
             element_offsets(expr, &mut sites);
         }
     }
-    let (old_elision, old_keys) = take_element_keyed(elision_for(&old, "product.ts"));
-    let (new_elision, new_keys) = take_element_keyed(elision_for(&new, "product.ts"));
+    let (old_elision, old_keys) = take_element_keyed(elision_for(&old, "product.ts", &|_, _, _, _, _| None));
+    let (new_elision, new_keys) = take_element_keyed(elision_for(&new, "product.ts", &|_, _, _, _, _| None));
     assert!(
         old_keys.is_empty(),
         "element facts without element identity: {old_keys:?}"

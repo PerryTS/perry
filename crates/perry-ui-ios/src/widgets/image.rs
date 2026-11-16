@@ -114,10 +114,71 @@ pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
     }
 }
 
+/// Longest side, in pixels, that a remote image is decoded at. Phones show
+/// images at most ~1200 px wide; decoding a 4000 px upload at full size
+/// costs ~64 MB per image and stalls the main thread.
+const REMOTE_MAX_PIXELS: f64 = 1400.0;
+/// Upper bound for the decoded-image cache (bytes of pixel data).
+const REMOTE_CACHE_BYTES: i64 = 160 * 1024 * 1024;
+
+/// Process-wide NSCache of decoded remote images keyed by URL. NSCache is
+/// thread-safe and evicts under memory pressure; it makes re-rendered
+/// screens show their images instantly instead of refetching them.
+fn image_cache() -> *mut AnyObject {
+    static CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| unsafe {
+        let cls = objc2::runtime::AnyClass::get(c"NSCache").unwrap();
+        let c: *mut AnyObject = msg_send![cls, new];
+        let _: () = msg_send![c, setTotalCostLimit: REMOTE_CACHE_BYTES];
+        c as usize
+    }) as *mut AnyObject
+}
+
+/// Decode `data` into a display-ready UIImage no larger than
+/// REMOTE_MAX_PIXELS on its longest side. Runs on a background queue.
+unsafe fn decode_for_display(data: *mut AnyObject) -> *mut AnyObject {
+    let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
+    let img: *mut AnyObject = msg_send![img_cls, alloc];
+    let img: *mut AnyObject = msg_send![img, initWithData: data];
+    if img.is_null() {
+        return img;
+    }
+    let size: objc2_core_foundation::CGSize = msg_send![img, size];
+    let scale: f64 = msg_send![img, scale];
+    let (w, h) = (size.width * scale, size.height * scale);
+    let longest = if w > h { w } else { h };
+    let prepared: *mut AnyObject = if longest > REMOTE_MAX_PIXELS && longest > 0.0 {
+        let f = REMOTE_MAX_PIXELS / longest;
+        // imageByPreparingThumbnailOfSize: takes points at the image's scale.
+        let target = objc2_core_foundation::CGSize::new(
+            (size.width * f).floor().max(1.0),
+            (size.height * f).floor().max(1.0),
+        );
+        msg_send![img, imageByPreparingThumbnailOfSize: target]
+    } else {
+        msg_send![img, imageByPreparingForDisplay]
+    };
+    if prepared.is_null() {
+        return img; // +1 from alloc/init
+    }
+    let _: *mut AnyObject = msg_send![prepared, retain];
+    let _: () = msg_send![img, release];
+    prepared
+}
+
 /// Background-fetch + main-thread-apply for a remote URL (or data: URI).
 /// Retain/release pair on `image_view` keeps the view alive across the
 /// async hop. Failure paths silently leave the image unset (no crash).
+/// Decoded images are cached by URL (see `image_cache`).
 fn load_remote(url: &str, image_view: *mut AnyObject) {
+    unsafe {
+        let key = NSString::from_str(url);
+        let hit: *mut AnyObject = msg_send![image_cache(), objectForKey: &*key];
+        if !hit.is_null() {
+            let _: () = msg_send![image_view, setImage: hit];
+            return;
+        }
+    }
     let url_str = url.to_string();
     struct Pkg {
         url: String,
@@ -148,26 +209,29 @@ fn load_remote(url: &str, image_view: *mut AnyObject) {
                     let _: () = msg_send![pkg.view, release];
                     return;
                 }
-                let _: *mut AnyObject = msg_send![data, retain];
+                let img = decode_for_display(data);
+                if img.is_null() {
+                    let _: () = msg_send![pkg.view, release];
+                    return;
+                }
+                let size: objc2_core_foundation::CGSize = msg_send![img, size];
+                let scale: f64 = msg_send![img, scale];
+                let cost = (size.width * scale * size.height * scale * 4.0) as i64;
+                let _: () = msg_send![image_cache(), setObject: img, forKey: &*ns, cost: cost];
                 struct Apply {
-                    data: *mut AnyObject,
+                    img: *mut AnyObject,
                     view: *mut AnyObject,
                 }
                 let apply = Box::into_raw(Box::new(Apply {
-                    data,
+                    img,
                     view: pkg.view,
                 }));
                 unsafe extern "C" fn finish(ctx: *mut std::ffi::c_void) {
                     let _ = std::panic::catch_unwind(|| {
                         let p = Box::from_raw(ctx as *mut Apply);
                         unsafe {
-                            let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
-                            let img: *mut AnyObject = msg_send![img_cls, alloc];
-                            let img: *mut AnyObject = msg_send![img, initWithData: p.data];
-                            if !img.is_null() {
-                                let _: () = msg_send![p.view, setImage: img];
-                            }
-                            let _: () = msg_send![p.data, release];
+                            let _: () = msg_send![p.view, setImage: p.img];
+                            let _: () = msg_send![p.img, release];
                             let _: () = msg_send![p.view, release];
                         }
                     });

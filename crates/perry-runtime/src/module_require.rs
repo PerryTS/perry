@@ -1643,7 +1643,16 @@ fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Optio
             crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(spec))
         },
     };
-    match data_import::load(&spec_str, options.get_nanbox_f64()) {
+    let attributes = match data_import::check_options(options.get_nanbox_f64()) {
+        Ok(attributes) => attributes,
+        Err(reason) => {
+            let reason = scope.root_nanbox_f64(reason);
+            return js_nanbox_pointer(
+                crate::promise::js_promise_rejected(reason.get_nanbox_f64()) as i64
+            );
+        }
+    };
+    match data_import::load(&spec_str, &attributes) {
         Ok(Some(namespace)) => {
             let namespace = scope.root_nanbox_f64(namespace);
             return js_nanbox_pointer(

@@ -72,13 +72,30 @@ fn a_shadowed_member_stays_unknown() {
     assert!(!proven(&v), "{v:?}");
 }
 
-/// node: prints `1`. A computed key names any member: the value is a
-/// native the solver cannot name, called as before (the receiver escapes).
+/// node: prints `1`. A computed read of an array names one of the members
+/// its chain describes (or none: `undefined`, the call throws); the solver
+/// names each and runs its model with the array as `this`, and none of them
+/// hands an element to unknown code.
 #[test]
-fn a_native_under_a_computed_key_stays_unknown() {
+fn a_native_under_a_computed_key_runs_the_named_members() {
     let v = sv(r#"
         const k = String(Math.random());
         const fs: any[] = [([] as any)[k]];
+        const arr = [new Sym(1)];
+        try { fs[0].call(arr); } catch (e) {}
+        console.log(g(arr[0]));
+    "#);
+    assert!(proven(&v), "{v:?}");
+}
+
+/// Control: a function from unknown code (a module outside the program,
+/// run at load) is a callee the solver cannot name: called as before (the
+/// receiver escapes).
+#[test]
+fn a_function_from_unknown_code_stays_unknown() {
+    let v = sv(r#"
+        import "unseen-host";
+        const fs: any[] = [(globalThis as any).unseenFn];
         const arr = [new Sym(1)];
         try { fs[0].call(arr); } catch (e) {}
         console.log(g(arr[0]));

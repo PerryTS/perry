@@ -1779,7 +1779,7 @@ pub(super) fn emit_callee_binding_resolutions(
 pub(crate) fn generator_method_owner_name(body: &str) -> String {
     format!("{body}$generator_owner")
 }
-pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
+pub fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
     function_body_is_fixed_state_generator(body)
 }
 

@@ -1119,6 +1119,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

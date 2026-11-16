@@ -122,17 +122,98 @@ pub(super) fn collect_this_field_assigns(expr: &ast::Expr, out: &mut Vec<String>
 /// store's key. A run that skips the branch leaves the key's slot a hole;
 /// the runtime's in-order rule still decides enumeration, so a wrong
 /// prediction costs a table, never an order.
-pub(crate) fn constructor_store_keys(stmts: &[ast::Stmt], out: &mut Vec<String>) {
+///
+/// With a `class`, R9BIRTH3 rule M:
+/// an expression statement `this.m(..)` with `m` one of the class's own
+/// instance methods runs `m`'s body there (ECMA-262 13.3.6.1 with `this`):
+/// its `this.x = v` keys take the call's place in the order, the method's
+/// calls of further own methods too (each once on a path: no recursion).
+pub(crate) fn constructor_store_keys_of(
+    class: Option<&ast::Class>,
+    stmts: &[ast::Stmt],
+    out: &mut Vec<String>,
+) {
+    let mut cx = StoreKeysCx {
+        methods: class.map(own_method_bodies).unwrap_or_default(),
+        visiting: Vec::new(),
+    };
     let mut exits = Vec::new();
-    store_keys_in(stmts, out, Some(&mut exits));
+    store_keys_in(stmts, out, Some(&mut exits), &mut cx);
     out.append(&mut exits);
+}
+
+struct StoreKeysCx<'a> {
+    methods: std::collections::HashMap<String, &'a [ast::Stmt]>,
+    visiting: Vec<String>,
+}
+
+/// The bodies of `class`'s own plain instance methods by name (a name
+/// declared twice, or also as an accessor, is left out).
+fn own_method_bodies(class: &ast::Class) -> std::collections::HashMap<String, &[ast::Stmt]> {
+    let mut out: std::collections::HashMap<String, &[ast::Stmt]> = Default::default();
+    let mut dup = std::collections::HashSet::new();
+    for member in &class.body {
+        let ast::ClassMember::Method(m) = member else {
+            continue;
+        };
+        let name = match &m.key {
+            ast::PropName::Ident(i) => i.sym.to_string(),
+            ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+            _ => continue,
+        };
+        if m.is_static {
+            continue;
+        }
+        let plain = m.kind == ast::MethodKind::Method && !m.function.is_async && !m.function.is_generator;
+        match (&m.function.body, plain) {
+            (Some(b), true) if !dup.contains(&name) => {
+                if out.insert(name.clone(), b.stmts.as_slice()).is_some() {
+                    dup.insert(name.clone());
+                }
+            }
+            _ => {
+                dup.insert(name.clone());
+            }
+        }
+    }
+    out.retain(|k, _| !dup.contains(k));
+    out
+}
+
+/// `e` is `this.m(..)` with `m` a method `cx` follows: its body.
+fn followed_call<'a>(e: &ast::Expr, cx: &StoreKeysCx<'a>) -> Option<(String, &'a [ast::Stmt])> {
+    let ast::Expr::Call(call) = e else {
+        return None;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(mem) = &**callee else {
+        return None;
+    };
+    if !matches!(&*mem.obj, ast::Expr::This(_)) {
+        return None;
+    }
+    let ast::MemberProp::Ident(id) = &mem.prop else {
+        return None;
+    };
+    let name = id.sym.to_string();
+    if cx.visiting.contains(&name) {
+        return None;
+    }
+    cx.methods.get(&name).map(|b| (name, *b))
 }
 
 /// The keys of `stmts` into `out`; an `if` arm that leaves the constructor
 /// puts its keys into `exits` (`None`: already on such a path, into `out`).
-fn store_keys_in(stmts: &[ast::Stmt], out: &mut Vec<String>, mut exits: Option<&mut Vec<String>>) {
+fn store_keys_in(
+    stmts: &[ast::Stmt],
+    out: &mut Vec<String>,
+    mut exits: Option<&mut Vec<String>>,
+    cx: &mut StoreKeysCx<'_>,
+) {
     for stmt in stmts {
-        statement_store_keys(stmt, out, exits.as_deref_mut());
+        statement_store_keys(stmt, out, exits.as_deref_mut(), cx);
     }
 }
 
@@ -152,38 +233,46 @@ fn statement_store_keys(
     stmt: &ast::Stmt,
     out: &mut Vec<String>,
     mut exits: Option<&mut Vec<String>>,
+    cx: &mut StoreKeysCx<'_>,
 ) {
     match stmt {
-        ast::Stmt::Expr(e) => collect_this_field_assigns(&e.expr, out),
-        ast::Stmt::Block(b) => store_keys_in(&b.stmts, out, exits),
-        ast::Stmt::If(s) => {
-            let mut arm = |arm: &ast::Stmt, exits: Option<&mut Vec<String>>| match exits {
-                Some(e) if leaves_constructor(arm) => statement_store_keys(arm, e, None),
-                exits => statement_store_keys(arm, out, exits),
-            };
-            arm(&s.cons, exits.as_deref_mut());
-            if let Some(alt) = &s.alt {
-                arm(alt, exits);
+        ast::Stmt::Expr(e) => {
+            collect_this_field_assigns(&e.expr, out);
+            if let Some((name, body)) = followed_call(&e.expr, cx) {
+                cx.visiting.push(name);
+                store_keys_in(body, out, None, cx);
+                cx.visiting.pop();
             }
         }
-        ast::Stmt::For(s) => statement_store_keys(&s.body, out, exits),
-        ast::Stmt::ForIn(s) => statement_store_keys(&s.body, out, exits),
-        ast::Stmt::ForOf(s) => statement_store_keys(&s.body, out, exits),
-        ast::Stmt::While(s) => statement_store_keys(&s.body, out, exits),
-        ast::Stmt::DoWhile(s) => statement_store_keys(&s.body, out, exits),
-        ast::Stmt::Labeled(s) => statement_store_keys(&s.body, out, exits),
+        ast::Stmt::Block(b) => store_keys_in(&b.stmts, out, exits, cx),
+        ast::Stmt::If(s) => {
+            let mut arm = |arm: &ast::Stmt, exits: Option<&mut Vec<String>>, cx: &mut StoreKeysCx<'_>| match exits {
+                Some(e) if leaves_constructor(arm) => statement_store_keys(arm, e, None, cx),
+                exits => statement_store_keys(arm, out, exits, cx),
+            };
+            arm(&s.cons, exits.as_deref_mut(), cx);
+            if let Some(alt) = &s.alt {
+                arm(alt, exits, cx);
+            }
+        }
+        ast::Stmt::For(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::ForIn(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::ForOf(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::While(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::DoWhile(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::Labeled(s) => statement_store_keys(&s.body, out, exits, cx),
         ast::Stmt::Try(s) => {
-            store_keys_in(&s.block.stmts, out, exits.as_deref_mut());
+            store_keys_in(&s.block.stmts, out, exits.as_deref_mut(), cx);
             if let Some(h) = &s.handler {
-                store_keys_in(&h.body.stmts, out, exits.as_deref_mut());
+                store_keys_in(&h.body.stmts, out, exits.as_deref_mut(), cx);
             }
             if let Some(f) = &s.finalizer {
-                store_keys_in(&f.stmts, out, exits);
+                store_keys_in(&f.stmts, out, exits, cx);
             }
         }
         ast::Stmt::Switch(s) => {
             for case in &s.cases {
-                store_keys_in(&case.cons, out, exits.as_deref_mut());
+                store_keys_in(&case.cons, out, exits.as_deref_mut(), cx);
             }
         }
         _ => {}
@@ -1293,7 +1382,7 @@ pub fn lower_class_decl(
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 if let Some(ref body) = ctor.body {
-                    constructor_store_keys(&body.stmts, &mut names);
+                    constructor_store_keys_of(Some(&class_decl.class), &body.stmts, &mut names);
                 }
             }
         }
@@ -1484,6 +1573,7 @@ pub fn lower_class_decl(
         // Declared inside a function body / non-module block → its static-field
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     })

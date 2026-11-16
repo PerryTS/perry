@@ -83,9 +83,8 @@ define_class!(
         #[unsafe(method(application:didFinishLaunchingWithOptions:))]
         fn did_finish_launching(&self, _application: &AnyObject, _options: *const AnyObject) -> bool {
             // Window creation is handled by PerrySceneDelegate.
-            // Fire notification auth prompt once here so notificationSend() doesn't
-            // re-prompt on every call (per #94).
-            crate::notifications::request_authorization();
+            // Notification permission is requested on first use (see
+            // notifications::request_authorization), not at launch.
             // Drain pending BGTaskScheduler registrations from `registerTask`
             // calls during module init (#538). BGTaskScheduler enforces a
             // "register all handlers during launch" contract — if we miss
@@ -705,6 +704,16 @@ define_class!(
                     // Issue #1865: perry/ui `onFrame` display-link callbacks.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // Turn this agent's turnloop once (non-blocking). Since the
+                    // tokio removal, fetch / node:net / node:http complete on
+                    // NET_* completions that only a loop turn collects. A CLI
+                    // program turns it in `js_wait_for_event`; a UI app never
+                    // calls that, so without this no network I/O ever finishes
+                    // and `await fetch(...)` hangs forever.
+                    {
+                        extern "C" { fn js_loop_settle_once(); }
+                        js_loop_settle_once();
+                    }
                     // Drain deferred promise resolutions from perry-stdlib
                     // tokio workers (async fetch/network completions). Without
                     // this, `await fetch(...)` never resolves on iOS — the

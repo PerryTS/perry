@@ -799,6 +799,7 @@ js_bun_zstd_decompress	f64	f64
 js_bun_zstd_decompress_sync	f64	f64
 js_byte_length_queuing_strategy_new	f64	f64
 js_call_function	f64	i64,i64,i64,i64,i64
+js_call_late_own_value	f64	f64,i64,i64,ptr,usize
 js_callback_timer_has_pending	i32s	
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
@@ -1099,6 +1100,7 @@ js_crypto_generate_key_pair_async	f64	i64,f64,f64
 js_crypto_generate_key_pair_sync	f64	i64,i64
 js_crypto_generate_key_pair_sync_ec_p256	ptr	f64
 js_crypto_generate_key_pair_sync_ed25519	ptr	f64
+js_crypto_generate_key_pair_sync_named	ptr	i64,f64
 js_crypto_generate_key_pair_sync_rsa	ptr	f64
 js_crypto_generate_key_pair_sync_x25519	ptr	f64
 js_crypto_generate_key_sync	ptr	i64,f64
@@ -2012,6 +2014,7 @@ js_link_path_module_parent	void	f64
 js_literal_shape_initialize	void	f64,ptr,ptr,i32u
 js_load_module	i64	i64,i64
 js_loop_interrupt	void	
+js_loop_settle_once	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64
 js_main_thread_notified	i32s	
@@ -2116,6 +2119,7 @@ js_module_constants	f64
 js_module_create_require	f64	f64
 js_module_create_require_devirt	f64	f64
 js_module_dynamic_import_apply_hooks	f64	f64
+js_module_dynamic_import_check_options	i64	f64
 js_module_dynamic_import_deferred	f64	f64,f64,f64
 js_module_dynamic_import_fallback	f64	f64,f64
 js_module_enable_compile_cache	f64	f64
@@ -2905,6 +2909,7 @@ js_parcel_watcher_unsubscribe	ptr	ptr,i64,f64
 js_parcel_watcher_write_snapshot	ptr	ptr,ptr,f64
 js_parse_float	f64	ptr
 js_parse_int	f64	ptr,f64
+js_parse_int_value	f64	f64,f64
 js_path_arg_header	i64	f64
 js_path_basename	ptr	ptr
 js_path_basename_ext	ptr	ptr,ptr
@@ -3170,6 +3175,7 @@ js_perry_tui_use_effect	f64	i64,i64
 js_perry_tui_use_focus	f64	f64,f64
 js_perry_tui_use_focus_manager	i64	
 js_perry_tui_use_input	f64	i64
+js_perry_tui_use_input_bytes	f64	i64
 js_perry_tui_use_memo	f64	i64,i64
 js_perry_tui_use_ref	i64	f64
 js_perry_tui_use_state	f64	f64

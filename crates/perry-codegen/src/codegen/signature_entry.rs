@@ -52,6 +52,32 @@ pub(crate) fn direct_call_offset() -> u32 {
     DIRECT_CALL.with(|s| s.get())
 }
 
+thread_local! {
+    /// ONCHG2: the facts site offset of the named method call being lowered
+    /// (`with_method_site`).
+    static METHOD_SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Lower the named method call `o.k(args)` with its facts site offset
+/// visible to the lowering below it: the member read's own offset, else the
+/// call's (wpfacts `gen_call`'s site key, as `proven_method_fn`). Nested
+/// calls in the arguments set and restore their own.
+pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
+    let off = match callee {
+        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => *byte_offset,
+        _ => direct_call_offset(),
+    };
+    let saved = METHOD_SITE.with(|s| s.replace(off));
+    let out = f();
+    METHOD_SITE.with(|s| s.set(saved));
+    out
+}
+
+/// The facts site offset of the named method call being lowered (0: none).
+pub(crate) fn method_site_offset() -> u32 {
+    METHOD_SITE.with(|s| s.get())
+}
+
 fn literal_number(e: &Expr) -> Option<f64> {
     match e {
         Expr::Number(n) => Some(*n),
@@ -932,6 +958,10 @@ pub(crate) fn try_lower_typed_method_call(
     let sig_name = format!("{public}$sig");
     crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &sig_name);
     let call_args: Vec<(LlvmType, &str)> = raw.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    // The facts close this site over the one body `M`, entered at `M$sig`:
+    // the symbol called is the closed callee (`closed_targets`), as the
+    // public body is for a proven call that enters it boxed.
+    crate::codegen::closed_targets::note_closed_call(ctx.func, &sig_name, 1);
     let value = ctx
         .block()
         .call(sig_llvm_ty(sig.ret), &sig_name, &call_args);

@@ -286,6 +286,8 @@ mod family_guard_tests;
 #[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
+mod index_append_layout_note_tests;
+#[cfg(test)]
 mod index_set_barrier_tests;
 #[cfg(test)]
 mod instanceof_imported_rhs_tests;

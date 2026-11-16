@@ -755,6 +755,12 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     if !recv_unknown {
         return Ok(None);
     }
+    // The facts' Arr rep proves every value of the receiver an Array of
+    // that rep: `lower`'s array route reads it through the rep tier
+    // (`proven_array`), not through the unknown-receiver probe.
+    if proven_array::receiver_is_proven_array(ctx, object) {
+        return Ok(None);
+    }
     // Bail if this local is tracked by any specialized lowering that `lower`
     // would dispatch ahead of the inline-TA path.
     if ctx.scalar_replaced_arrays.contains_key(id)
@@ -1474,9 +1480,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 _ => false,
             };
             let readonly_array_claim = matches!(recv_ty.as_ref(), Some(HirType::Generic { base, .. }) if base == "ReadonlyArray");
+            // The facts' Arr rep proves every value of the receiver an Array
+            // (`proven_array::receiver_rep`): the array route's rep tier
+            // reads it with no receiver test.
             let declared_array_claim = scoped_array_claim
                 || readonly_array_claim
-                || crate::type_analysis::declared_array_property_claim(ctx, object);
+                || crate::type_analysis::declared_array_property_claim(ctx, object)
+                || proven_array::receiver_is_proven_array(ctx, object);
             let claimed_array =
                 recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
             let recv_unknown = recv_unknown && !claimed_array;

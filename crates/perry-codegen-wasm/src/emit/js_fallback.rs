@@ -575,6 +575,16 @@ impl WasmModuleEmitter {
                     _ => {
                         if let Some(obj) = object {
                             let obj_js = self.emit_js_expr(obj, locals);
+                            // The HIR lowers a bare read of a host getter (`res.status`)
+                            // to this call with no arguments, the same shape as
+                            // `res.text()`; the member's value tells them apart.
+                            if args.is_empty() {
+                                return format!(
+                                    "fromJsValue(__jsNativeMember(toJsValue({}), {}))",
+                                    obj_js,
+                                    js_string_literal(method)
+                                );
+                            }
                             let args_js: Vec<String> = args
                                 .iter()
                                 .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
@@ -674,6 +684,17 @@ impl WasmModuleEmitter {
             Expr::JsonStringify(val) => {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(JSON.stringify(toJsValue({})))", v)
+            }
+            // The HIR lowers every `JSON.stringify` call to this form. The bridge
+            // is the one WASM code calls, so a closure replacer runs the same way.
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                let v = self.emit_js_expr(val, locals);
+                let r = self.emit_js_expr(replacer, locals);
+                let s = self.emit_js_expr(space, locals);
+                format!(
+                    "fromJsValue(__memDispatch.json_stringify(toJsValue({}), toJsValue({}), toJsValue({})))",
+                    v, r, s
+                )
             }
             Expr::This => "__this".to_string(),
             Expr::IndexGet { object, index, .. } => {

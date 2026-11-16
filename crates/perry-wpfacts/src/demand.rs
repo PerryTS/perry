@@ -136,8 +136,12 @@ pub(crate) fn solve(m: &mut Model) {
                     // values, so demand on the result is demand on the
                     // operand.
                     Cons::NotNullish { dst }
+                    | Cons::FieldTruthy { dst, .. }
                     | Cons::Fulfil { dst }
                     | Cons::Defined { dst }
+                    | Cons::NotBuffer { dst, .. }
+                    | Cons::NotNull { dst }
+                    | Cons::TypeIs { dst, .. }
                     | Cons::NotUndefined { dst }
                     | Cons::Falsy { dst }
                     | Cons::Objects { dst }

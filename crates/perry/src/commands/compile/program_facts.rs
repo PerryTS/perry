@@ -22,12 +22,10 @@
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
 //! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
-//! - `PERRY_FACTS_UNITS=1`: the retiring per-unit solve (decision 151: one
-//!   solve per module, the other modules unknown code,
-//!   `perry_wpfacts::compute_units`), kept for its tests until it is
-//!   deleted. The facts are solved over the whole program (decision 251:
-//!   one solve over every module, where a body contributes once the program
-//!   can run it, decision 225); owner decision 2026-11-03.
+//! - The facts are solved over the whole program (decision 251: one solve
+//!   over every module, where a body contributes once the program can run
+//!   it, decision 225); owner decision 2026-11-03. The per-unit mode
+//!   (`PERRY_FACTS_UNITS`) is retired; a set variable is ignored.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -38,12 +36,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
-/// the whole pass costs a few seconds at most. With `this` bound per
+/// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`):
+/// 1,000 million (owner 2026-11-15; was 200 million). With `this` bound per
 /// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
 /// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
 /// bound and gets no facts.
-const DEFAULT_MAX_WORK: u64 = 200_000_000;
+const DEFAULT_MAX_WORK: u64 = 1_000_000_000;
 
 pub(crate) fn contracts_requested() -> bool {
     std::env::var("PERRY_CHECK_CONTRACTS")
@@ -122,8 +120,9 @@ pub(crate) fn run(
     }
     let started = std::time::Instant::now();
     let dump = std::env::var_os("PERRY_FACTS_DUMP").map(PathBuf::from);
-    let relations =
-        dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
+    let relations = dump.is_some()
+        && (std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1")
+            || std::env::var("PERRY_FACTS_PROVENANCE").is_ok_and(|v| v == "1"));
     let cfg = perry_wpfacts::FactsConfig {
         verify_facts: perry_codegen::verify_facts::enabled(),
         dce_bodies: perry_codegen::verify_facts::dce_enabled(),
@@ -189,6 +188,9 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()
+            == Ok("1"),
+        json_positions: std::env::var("PERRY_FACTS_JSON_POSITIONS").as_deref() == Ok("1"),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -209,7 +211,7 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_MAX_PTS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
+                .unwrap_or(2_000_000_000),
         ),
         export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
@@ -242,15 +244,11 @@ pub(crate) fn run(
         .iter()
         .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
-    let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
-        perry_wpfacts::compute_units(&list, &cfg)
-    } else {
-        // `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts run their own pass over
-        // the final HIR (the `Activation` invariant's detector: both passes'
-        // profile lines must agree).
-        let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
-        perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
-    };
+    // `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts run their own pass over
+    // the final HIR (the `Activation` invariant's detector: both passes'
+    // profile lines must agree).
+    let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
+    let pf = perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check));
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if perry_codegen::verify_facts::enabled() {
         perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
@@ -318,18 +316,42 @@ pub(crate) fn run(
         let t0 = pf
             .sites
             .iter()
-            .filter(|s| !matches!(s.verdict, perry_wpfacts::Verdict::No(_)))
+            .filter(|s| !s.access.is_store() && !matches!(s.verdict, perry_wpfacts::Verdict::No(_)))
             .count();
+        let reads = pf.sites.iter().filter(|s| !s.access.is_store()).count();
+        // ACCSITE1 (owner 11-15): stores in their own column; AddsKey is
+        // unproven in round one (D1).
+        let st_all = pf.sites.iter().filter(|s| s.access.is_store()).count();
+        let st_ok = pf
+            .sites
+            .iter()
+            .filter(|s| {
+                s.access.is_store()
+                    && !matches!(
+                        s.verdict,
+                        perry_wpfacts::Verdict::No(_) | perry_wpfacts::Verdict::AddsKey
+                    )
+            })
+            .count();
+        // R9BIRTH4 (owner 11-15): the known-object stores apart.
+        let st_known = pf
+            .sites
+            .iter()
+            .filter(|s| matches!(s.verdict, perry_wpfacts::Verdict::KnownObjectStore))
+            .count();
+        eprintln!("perry: wpfacts: {st_known} known-object stores");
         eprintln!(
             "perry: wpfacts: {} modules, {} templates ({} fact units), {} nodes, {} constraints; \
-             {} of {} read/call sites proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",
+             {} of {} read/call sites proven, {} of {} stores proven; gen {:.0} ms, solve {:.0} ms ({} pops, work {}{}), derive {:.0} ms, wall {:.0} ms",
             s.modules,
             s.templates,
             s.fact_units,
             s.nodes,
             s.constraints,
             t0,
-            pf.sites.len(),
+            reads,
+            st_ok,
+            st_all,
             s.gen_ms,
             s.solve_ms,
             s.pops,
@@ -346,20 +368,6 @@ pub(crate) fn run(
             s.derive_ms,
             elapsed
         );
-        for (path, u) in &pf.units {
-            eprintln!(
-                "perry: wpfacts: unit {path}: {} nodes, {} pts entries, work {}, {:.0} ms{}",
-                u.nodes,
-                u.pts_entries,
-                u.work,
-                u.gen_ms + u.solve_ms + u.derive_ms,
-                if u.aborted {
-                    ", OVER the bound: no facts"
-                } else {
-                    ""
-                }
-            );
-        }
     }
     if std::env::var("PERRY_FACTS_ONLY").is_ok_and(|v| v == "1") {
         // Analysis-only run (precision reports, checkers): stop after the
@@ -369,10 +377,100 @@ pub(crate) fn run(
     Some(Arc::new(pf))
 }
 
+/// ACCBUILD3: the symbol of the accessor function `func` (a getter when
+/// `!set`) for `key` of class `class_id` defined in `module`, exactly as that
+/// module's codegen names it (`method_registry.rs`: `scoped_method_name(
+/// module prefix, class name, "__set_" + setter fn name)`). `None` unless the
+/// module holds one class with that id and name whose own `key` accessor is
+/// the function `func` and the class has no evaluated or static accessor of
+/// that name.
+pub(crate) fn accessor_symbol_in(
+    hir: &perry_hir::Module,
+    prefix: &str,
+    class_id: u32,
+    func: u32,
+    key: &str,
+    set: bool,
+) -> Option<String> {
+    let mut classes = hir.classes.iter().filter(|c| c.id == class_id);
+    let c = classes.next()?;
+    if classes.next().is_some()
+        || hir.classes.iter().filter(|o| o.name == c.name).count() != 1
+        || c.has_evaluated_accessor()
+        || c.static_accessor_names.iter().any(|n| n == key)
+    {
+        return None;
+    }
+    let list = if set { &c.setters } else { &c.getters };
+    let mut own = list.iter().filter(|(k, _)| k == key);
+    let (_, f) = own.next()?;
+    if own.next().is_some() || f.id != func {
+        return None;
+    }
+    let member = format!("{}{}", if set { "__set_" } else { "__get_" }, f.name);
+    Some(perry_codegen::symbol_names::method(prefix, &c.name, &member))
+}
+
+/// ONCHANGE3: what a proven site calls in the holder's module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Member {
+    Get,
+    Set,
+    Method,
+}
+
+/// The holder's symbol for a proven site (`Member::Get` / `Set`:
+/// `accessor_symbol_in`; `Method`: `method_symbol_in`).
+pub(crate) type HolderSymbol<'a> =
+    dyn Fn(&str, u32, u32, &str, Member) -> Option<(String, perry_codegen::DirectAbi)> + 'a;
+
+/// ONCHANGE3: the public entry of class `class_id`'s method `key` in the
+/// module that defines it, as that module's codegen names it
+/// (`method_registry.rs`: `symbol_names::method(module prefix, class name,
+/// method name)`; importers declare the same name, method_registry.rs:188),
+/// with the ABI its definition has (`DirectAbi`). `None` unless the module
+/// holds one class with that id and name whose last method `key` (the one
+/// codegen registers) is the body `func`, an ordinary method (not a
+/// generator, not async, no fixed generator state), and the class has no
+/// evaluated accessor and no static accessor of that name.
+pub(crate) fn method_symbol_in(
+    hir: &perry_hir::Module,
+    prefix: &str,
+    class_id: u32,
+    func: u32,
+    key: &str,
+) -> Option<(String, perry_codegen::DirectAbi)> {
+    let mut classes = hir.classes.iter().filter(|c| c.id == class_id);
+    let c = classes.next()?;
+    if classes.next().is_some()
+        || hir.classes.iter().filter(|o| o.name == c.name).count() != 1
+        || c.has_evaluated_accessor()
+        || c.static_accessor_names.iter().any(|n| n == key)
+    {
+        return None;
+    }
+    let m = c.methods.iter().rev().find(|m| m.name == key)?;
+    if m.id != func
+        || m.is_generator
+        || m.is_async
+        || perry_codegen::body_has_fixed_generator_state(&m.body)
+    {
+        return None;
+    }
+    let abi = perry_codegen::DirectAbi {
+        params: m.params.len() as u32,
+        rest: m.params.iter().any(|p| p.is_rest),
+        synthetic_arguments: m.params.last().is_some_and(|p| p.arguments_object.is_some()),
+        user_rest: m.params.iter().any(|p| p.is_rest && p.arguments_object.is_none()),
+    };
+    Some((perry_codegen::symbol_names::method(prefix, &c.name, key), abi))
+}
+
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
+    holder_symbol: &HolderSymbol<'_>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -383,7 +481,7 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let elision = elision_for(pf, &key);
+    let elision = elision_for(pf, &key, holder_symbol);
     // The bodies this module's code is removed for: its object depends on
     // them, so they join the digest (only with removal on and some inactive).
     let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
@@ -462,7 +560,11 @@ fn elide_enabled() -> bool {
 /// CHECKED (`checked`): the site compares the receiver's class id against
 /// the prefix-stable classes and takes its complete generic operation
 /// otherwise. An over-budget solve gives no entry at all.
-fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
+fn elision_for(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: &str,
+    holder_symbol: &HolderSymbol<'_>,
+) -> perry_codegen::ElisionFacts {
     use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
     let mut out = ElisionFacts {
@@ -518,6 +620,93 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 })
                 .map(|s| s.byte_offset)
                 .collect();
+            // ONCHANGE2: the named method calls proven to run one class
+            // method body: (holder class id, the body's function id). Every
+            // record at an offset must agree, or the offset is left out. A
+            // receiver that may be a number, string, Boolean, symbol or
+            // BigInt, or ⊤, keeps its site. NULLCALL1: one that may be
+            // `undefined` / `null` besides its objects is served `nullable`:
+            // the site tests the receiver for nullish first, where the
+            // complete call throws (GetValue's ToObject, 6.2.5.5 / 7.1.18,
+            // before ArgumentListEvaluation, 13.3.6.1). The objects' verdict
+            // holds with nullish in the set: derive.rs drops it to `No` when
+            // a source left a value out.
+            let mut refused_calls: std::collections::BTreeSet<(u32, String)> = Default::default();
+            for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
+                // ONCHANGE3: the body's entry is named from its own module
+                // (`method_symbol_in`), so a holder this module never names
+                // (reached through a value or a re-export) is served too.
+                let one = match (&s.verdict, s.holder_class, s.target_fns.as_slice()) {
+                    (perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set, Some(cid), &[(hm, fid)])
+                        if s.receiver_prims & !(prim::NULL | prim::UNDEF) == 0 && !s.top =>
+                    {
+                        let nullable = s.receiver_prims != 0;
+                        pf.module_paths
+                            .get(hm as usize)
+                            .and_then(|p| holder_symbol(p, cid, fid, &s.key, Member::Method))
+                            .map(|(sym, abi)| (cid, fid, sym, abi, nullable))
+                    }
+                    _ => None,
+                };
+                let at = (s.byte_offset, s.key.clone());
+                match one {
+                    Some(v) if !refused_calls.contains(&at) => {
+                        // The records agree on the body; the site is nullable
+                        // when any record's receiver may be nullish.
+                        let e = out.method_calls.entry(at.clone()).or_insert_with(|| v.clone());
+                        if (e.0, e.1, &e.2, e.3) != (v.0, v.1, &v.2, v.3) {
+                            out.method_calls.remove(&at);
+                            refused_calls.insert(at);
+                        } else {
+                            e.4 |= v.4;
+                        }
+                    }
+                    _ => {
+                        out.method_calls.remove(&at);
+                        refused_calls.insert(at);
+                    }
+                }
+            }
+            // ACCBUILD2 P3: the named sites proven to call one accessor.
+            // Every record at an offset must agree, or the offset is left out.
+            let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
+            for s in pf.sites.iter().filter(|s| s.module as usize == module && !s.is_call) {
+                // PutValue's record is the store; a compound's GetValue
+                // (`UpdateGet`, at the store's offset) reads the getter.
+                let set = matches!(s.access, perry_wpfacts::derive::Access::Set { .. });
+                // The one accessor body (`target_fns`) names the holder's
+                // module; its symbol comes from that module's class.
+                let holder = match (&s.verdict, set, s.holder_class, s.target_fns.as_slice()) {
+                    (perry_wpfacts::Verdict::AccessorSet, true, Some(cid), &[(m, f)])
+                    | (perry_wpfacts::Verdict::AccessorGet, false, Some(cid), &[(m, f)]) => pf
+                        .module_paths
+                        .get(m as usize)
+                        .and_then(|p| {
+                            let member = if set { Member::Set } else { Member::Get };
+                            holder_symbol(p, cid, f, &s.key, member)
+                        })
+                        .map(|(sym, _)| (cid, sym)),
+                    _ => None,
+                };
+                let map = if set {
+                    &mut out.accessor_sets
+                } else {
+                    &mut out.accessor_gets
+                };
+                let at = (s.byte_offset, s.key.clone());
+                match holder {
+                    Some(h) if !refused.contains(&(set, at.0, at.1.clone())) => {
+                        if *map.entry(at.clone()).or_insert_with(|| h.clone()) != h {
+                            map.remove(&at);
+                            refused.insert((set, at.0, at.1));
+                        }
+                    }
+                    _ => {
+                        map.remove(&at);
+                        refused.insert((set, at.0, at.1));
+                    }
+                }
+            }
         }
     }
     let Some(mb) = pf.bindings_for(path) else {
@@ -815,6 +1004,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.booleans {
                 out.boolean_locals.insert(*id);
             }
+            if b.nullish_booleans {
+                out.nullish_boolean_locals.insert(*id);
+            }
             if b.stable_length {
                 out.stable_length_locals.insert(*id, b.stable_front);
             }
@@ -846,6 +1038,39 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         }
         if let Some(cid) = b.class_object.filter(|_| !interp) {
             out.local_classes.insert(*id, cid);
+        }
+    }
+    // ONCHG2: the named method calls proven to call one of a closed set of
+    // compiled closures / declarations of this module (`T0Mono` / `T0Set`
+    // whose `target_bodies` is the set): the value the member read gives is
+    // one of them (13.3.6.2), so the call runs that body with the function
+    // object as its environment and the receiver as `this` (10.2.1). The
+    // bodies of every record at an offset are joined (each record bounds its
+    // own evaluations); a record proving less leaves the offset out. A
+    // receiver that may be a primitive, `undefined`, `null` or top keeps the
+    // site (no nullish arm here). Interpreted code may write any member
+    // (decision 150): as the method calls, only without the guard word.
+    if let Some(module) = pf.module_paths.iter().position(|p| p == path).filter(|_| !interp) {
+        let mut refused: std::collections::BTreeSet<(u32, String)> = Default::default();
+        for s in pf.sites.iter().filter(|s| s.module as usize == module && s.is_call) {
+            let at = (s.byte_offset, s.key.clone());
+            let fs = match s.verdict {
+                perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set
+                    if s.receiver_prims == 0 && !s.top =>
+                {
+                    bodies(&s.target_bodies)
+                }
+                _ => Vec::new(),
+            };
+            if fs.is_empty() || refused.contains(&at) {
+                out.late_call_bodies.remove(&at);
+                refused.insert(at);
+                continue;
+            }
+            let e = out.late_call_bodies.entry(at).or_default();
+            e.extend(fs);
+            e.sort();
+            e.dedup();
         }
     }
     // FVA 3.4: every class's constant statics (a static call names its class
@@ -916,6 +1141,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 if f.booleans && !interp {
                     out.boolean_fields.insert((cid, f.key.clone()));
                 }
+                if f.nullish_booleans && !interp {
+                    out.nullish_boolean_fields.insert((cid, f.key.clone()));
+                }
                 Some(FactsField {
                     classes,
                     nullable,
@@ -939,19 +1167,20 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 display: t.display.clone(),
                 fixed_layout: t.fixed_layout,
                 fields,
+                // Interpreted code can add any key to any object.
+                absent: if interp {
+                    Vec::new()
+                } else {
+                    t.fields
+                        .iter()
+                        .filter(|f| f.absent && !f.private)
+                        .map(|f| f.key.clone())
+                        .collect()
+                },
             },
         );
     }
     out
-}
-
-/// The facts are solved over the whole program (decision 251, owner
-/// 2026-11-03): one solve over every module, where a body contributes once
-/// the program can run it (decision 225). `PERRY_FACTS_UNITS=1` selects the
-/// retiring per-unit solve, kept for its tests until it is deleted; no other
-/// value selects anything.
-fn per_unit_facts(env: Option<&str>) -> bool {
-    env == Some("1")
 }
 
 /// The directories compiler-generated modules (the CommonJS support module,
@@ -1037,33 +1266,8 @@ mod stable_dump_tests {
 }
 
 #[cfg(test)]
-mod facts_mode_tests {
-    use super::per_unit_facts;
-
-    #[test]
-    fn whole_program_is_the_default_mode() {
-        // decision 251: the whole solve is the one codegen reads.
-        assert!(
-            !per_unit_facts(None),
-            "the default facts mode must be whole-program"
-        );
-        assert!(!per_unit_facts(Some("0")));
-        assert!(!per_unit_facts(Some("")));
-    }
-
-    #[test]
-    fn per_unit_is_an_explicit_opt_in() {
-        assert!(per_unit_facts(Some("1")));
-    }
-}
-
-#[cfg(test)]
 #[path = "program_facts/outlined_tests.rs"]
 mod outlined_tests;
-
-#[cfg(test)]
-#[path = "program_facts/literal_chunks_tests.rs"]
-mod literal_chunks_tests;
 
 /// Borrow ordinary modules; reconstruct only outlined module entries.
 /// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /
@@ -1145,6 +1349,9 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()
+            == Ok("1"),
+        json_positions: std::env::var("PERRY_FACTS_JSON_POSITIONS").as_deref() == Ok("1"),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -1223,6 +1430,9 @@ fn verification_sites(
         .iter()
         .enumerate()
         .filter_map(|(ordinal, site)| {
+            if site.access.is_store() {
+                return None;
+            }
             let module = pf.module_paths.get(site.module as usize)?;
             if path.is_some_and(|path| path != module) {
                 return None;
@@ -1233,7 +1443,17 @@ fn verification_sites(
                 perry_wpfacts::Verdict::T0Mono => SiteVerdict::T0Mono,
                 perry_wpfacts::Verdict::T0Set => SiteVerdict::T0Set,
                 perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
-                perry_wpfacts::Verdict::No(_) => return None,
+                perry_wpfacts::Verdict::Dead => SiteVerdict::Dead,
+                perry_wpfacts::Verdict::OwnDataOrAbsent => SiteVerdict::OwnDataOrAbsent,
+                perry_wpfacts::Verdict::Throws => SiteVerdict::Throws,
+                perry_wpfacts::Verdict::NsExport => SiteVerdict::NsExport,
+                perry_wpfacts::Verdict::IntrinsicCall => SiteVerdict::IntrinsicCall,
+                perry_wpfacts::Verdict::AccessorGet
+                | perry_wpfacts::Verdict::AccessorSet
+                | perry_wpfacts::Verdict::AddsKey
+                | perry_wpfacts::Verdict::KnownObjectStore
+                | perry_wpfacts::Verdict::PerKind
+                | perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {
                 ordinal,

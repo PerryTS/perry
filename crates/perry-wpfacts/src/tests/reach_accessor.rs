@@ -30,16 +30,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
         .collect()
 }
 
-fn run(m: &str, units: bool) -> ProgramFacts {
-    let mods = [("a", A), ("m", &format!("{CLASSES}{m}")[..])];
-    let hirs = hirs(&mods);
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    match units {
-        true => crate::compute_units(&list, &FactsConfig::default()),
-        false => crate::compute(&list, &FactsConfig::default()),
-    }
-}
 
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
@@ -169,4 +159,15 @@ console.log(b.f.lm);
         "per unit Box.f {uk:?} covers whole {wk:?}\n{}",
         u.dump_text()
     );
+}
+
+fn run(m: &str, units: bool) -> ProgramFacts {
+    let mods = [("a", A), ("m", &format!("{CLASSES}{m}")[..])];
+    let hirs = hirs(&mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    match units {
+        true => crate::compute(&list, &FactsConfig::default()),
+        false => crate::compute(&list, &FactsConfig::default()),
+    }
 }

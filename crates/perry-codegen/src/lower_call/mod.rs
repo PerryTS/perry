@@ -610,6 +610,10 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     {
         return Ok(value);
     }
+    // ONCHANGE2: a call the facts prove runs one class method body calls it.
+    if let Some(value) = property_get::try_lower_proven_method_call(ctx, callee, args)? {
+        return Ok(value);
+    }
     // The call's site offset, for every route that consults the call-site
     // argument intervals (`index_split::with_call_site`).
     let value = index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))?;
@@ -772,7 +776,9 @@ fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
 
     // String / array / class / Map / Set / Promise / fetch / static /
     // instance method dispatch — the big PropertyGet branch.
-    if let Some(v) = property_get::try_lower_property_get_method_call(ctx, callee, args)? {
+    if let Some(v) = crate::codegen::signature_entry::with_method_site(callee, || {
+        property_get::try_lower_property_get_method_call(ctx, callee, args)
+    })? {
         return Ok(v);
     }
 

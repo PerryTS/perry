@@ -8,6 +8,49 @@ fn run_web_source(source: &str) -> String {
 /// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, STUB_DOM, after_boot)
+}
+
+/// The runtime injects a `<style>` at load, so `document` must exist even for
+/// programs that never build a widget.
+const STUB_DOM: &str = r#"
+const stub = {appendChild() {}, style: {}};
+globalThis.document = {createElement: () => ({...stub}), getElementById: () => null, head: stub, body: stub};
+"#;
+
+/// Enough of the DOM for a perry/ui widget to be built, inspected and sent an
+/// event: an element tree with text, attributes as properties, listeners that
+/// `dispatch(type)` fires, and descendant tag selectors for `querySelector`.
+const WIDGET_DOM: &str = r#"
+class FakeElement {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
+  get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
+  set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { this.text = ""; this.children = []; }
+  setAttribute(name, value) { this[name] = String(value); }
+  descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
+  querySelector(selector) {
+    let found = this;
+    for (const tag of selector.toUpperCase().split(" ")) {
+      found = found.descendants().find(e => e.tagName === tag);
+      if (!found) return null;
+    }
+    return found;
+  }
+}
+globalThis.document = {createElement: tag => new FakeElement(tag), getElementById: () => null, head: new FakeElement("head"), body: new FakeElement("body")};
+"#;
+
+/// `run_web_source_then` against `WIDGET_DOM`; `after_boot` finds the widgets in
+/// the runtime's `uiHandles`.
+fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, WIDGET_DOM, after_boot)
+}
+
+fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     // The HIR transforms `perry --target web` runs before wasm emission.
@@ -32,8 +75,7 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let script = format!(
         r#"
 globalThis.window = globalThis;
-const stub = {{appendChild() {{}}, style: {{}}}};
-globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () => null, head: stub, body: stub}};
+{dom}
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
@@ -578,6 +620,28 @@ try {
     );
 }
 
+// An async body is emitted as JavaScript, and every `JSON.stringify` reaches it as
+// `JsonStringifyFull`: a request body built there must be the JSON text, and the
+// replacer and space arguments must apply.
+#[test]
+fn async_body_json_stringify_feeds_a_request_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function tok(): string { return "Bearer " + String(6 * 7); }
+async function f(obj: any): Promise<string> {
+  const req = new Request("http://127.0.0.1/x", { method: "POST", body: JSON.stringify(obj) });
+  const pretty = JSON.stringify([1], null, 2);
+  const keys = JSON.stringify(obj, ["a", "t"]);
+  return (await req.text()) + " " + pretty.length + " " + keys;
+}
+f({ a: 1, b: [2, 3], t: tok() }).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        r#"{"a":1,"b":[2,3],"t":"Bearer 42"} 7 {"a":1,"t":"Bearer 42"}"#
+    );
+}
+
 // `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
 // user instance throws TypeError instead of reaching the bridge fallback.
 #[test]
@@ -594,6 +658,43 @@ proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto 
 "#
         ),
         "proto threw TypeError"
+    );
+}
+
+// A bare read of a host getter (`res.status`) reaches an async body as a native call
+// with no arguments, as `res.text()` does: the getter yields its value and the method
+// is still called.
+#[test]
+fn async_body_reads_host_getters_and_calls_host_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  const head = r.status + " " + r.ok + " " + r.statusText + " " + r.headers.get("content-type");
+  return head + " " + (await r.text());
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "200 true OK text/plain hi"
+    );
+}
+
+// A zero-argument native method the object lacks still throws, as the call would.
+#[test]
+fn async_body_call_of_a_missing_host_method_throws() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  return r.missing();
+}
+f().then((v) => console.log("value " + v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "threw TypeError: missing is not a function"
     );
 }
 
@@ -631,6 +732,26 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 #[test]
+fn table_update_row_count_renders_the_new_rows() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Table, Text, tableSetColumnHeader, tableUpdateRowCount } from "perry/ui";
+const table = Table(3, 1, (row: number, col: number) => Text("r" + row));
+tableSetColumnHeader(table, 0, "Name");
+tableUpdateRowCount(table, 4);
+"#,
+            r#"
+const table = [...uiHandles.values()].find(e => e.tagName === "TABLE");
+const rows = table.querySelector("tbody").children;
+console.log(table.querySelector("thead tr").textContent + " " + rows.length + " " + rows[rows.length - 1].textContent);
+"#
+        ),
+        "Name 4 r3"
+    );
+}
+
+#[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(
         run_web_source(
@@ -658,6 +779,26 @@ console.log(bump(5) + " " + total);
     );
 }
 
+// `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
+// is a symbol, as `ImageSymbol(name)` is.
+#[test]
+fn image_keeps_alt_text_in_both_forms() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+import { Image } from "perry/ui";
+Image("x.png", "photo");
+Image({ url: "y.png", alt: "avatar" });
+Image({ systemName: "gear" });
+"#,
+            r#"
+for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.textContent);
+"#
+        ),
+        "x.png photo\ny.png avatar\n\u{2b1c} gear"
+    );
+}
+
 #[test]
 fn a_generator_resumes_returns_and_throws_like_node() {
     assert_eq!(
@@ -680,6 +821,23 @@ console.log(d.next("hi").value);
 "#
         ),
         "fin\n{\"value\":1,\"done\":false}{\"value\":2,\"done\":false}{\"done\":true}\nfin\n{\"value\":7,\"done\":true}\nthrew boom\n{\"done\":true}\ngot hi"
+    );
+}
+
+#[test]
+fn section_renders_its_children_after_the_legend() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Section, Text } from "perry/ui";
+Section("Contact", [Text("phone"), Text("email")]);
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+console.log(fieldset.children.map(c => c.tagName + ":" + c.textContent).join(" "));
+"#
+        ),
+        "LEGEND:Contact SPAN:phone SPAN:email"
     );
 }
 
@@ -711,6 +869,27 @@ console.log(p + q);
     );
 }
 
+// perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
+#[test]
+fn picker_on_change_is_called_with_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Picker, pickerAddItem } from "perry/ui";
+const picker = Picker((index: number) => { console.log("picker " + index); });
+pickerAddItem(picker, "first");
+pickerAddItem(picker, "second");
+"#,
+            r#"
+const select = [...uiHandles.values()].find(e => e.tagName === "SELECT");
+select.selectedIndex = 1;
+select.dispatch("change");
+"#
+        ),
+        "picker 1"
+    );
+}
+
 #[test]
 fn a_generator_keeps_its_locals_across_resumes() {
     assert_eq!(
@@ -723,5 +902,279 @@ console.log(first.join(","));
 "#
         ),
         "0,1,2,3"
+    );
+}
+
+// `super.m()` runs the parent's `m` on the same receiver, even when the receiver's
+// class overrides `m`, and skips a parent that does not define it.
+#[test]
+fn a_super_method_call_runs_the_parent_implementation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { k = "a"; who(n: number): string { return "A" + n + this.k; } }
+class B extends A { who(n: number): string { return "B>" + super.who(n + 1); } }
+class C extends B { k = "c"; }
+class D extends C { who(n: number): string { return "D>" + super.who(n * 10); } }
+console.log(new B().who(1));
+console.log(new D().who(2));
+class E extends A { r: string; constructor() { super(); this.r = super.who(5); } who(n: number): string { return "E"; } }
+console.log(new E().r);
+"#
+        ),
+        "B>A2a\nD>B>A21c\nA5a"
+    );
+}
+
+// An accessor on a class in the walk shadows an ancestor's method of that name:
+// `super.m()` calls what B's `get m` returns, not A's `m`.
+#[test]
+fn a_super_method_call_reads_a_shadowing_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { get m(): any { return () => "B.get"; } }
+class C extends B { m(): string { return "C>" + super.m(); } }
+console.log(new C().m());
+"#
+        ),
+        "C>B.get"
+    );
+}
+
+// An arrow inside a class method resolves `super` from the method's class.
+#[test]
+fn a_super_method_call_in_an_arrow_starts_at_the_enclosing_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A2 { m(): string { return "A2"; } }
+class B2 extends A2 { m(): string { const f = () => super.m(); return "B2>" + f(); } }
+console.log(new B2().m());
+"#
+        ),
+        "B2>A2"
+    );
+}
+
+// A setter-only accessor on a class in the walk ends the lookup: its read value is
+// undefined, so `super.m()` throws a TypeError instead of reaching an ancestor's `m`.
+#[test]
+fn a_super_method_call_stops_at_a_setter_only_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { set m(v: any) { } }
+class C extends B { m(): string { try { return "C>" + super.m(); } catch (e) { return (e instanceof TypeError) + ""; } } }
+console.log(new C().m());
+"#
+        ),
+        "true"
+    );
+}
+
+// `super.m(args)` reads `super.m` before it evaluates the arguments, as `o.m(args)` does.
+#[test]
+fn a_super_method_call_reads_the_property_before_the_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let state = 0;
+class A { get m(): any { const seen = state; return (x: number) => seen + ":" + x; } }
+class B extends A { m(): any { return super.m(state = 1); } }
+console.log(new B().m());
+"#
+        ),
+        "0:1"
+    );
+}
+
+// A getter that returns a non-callable makes `super.m()` throw a TypeError.
+#[test]
+fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { get n(): any { return null; } get k(): any { return 42; } }
+class B extends A {
+  t(f: () => any): string { try { f(); return "no throw"; } catch (e) { return (e instanceof TypeError) + ""; } }
+  run(): string { return this.t(() => super.n()) + " " + this.t(() => super.k()); }
+}
+console.log(new B().run());
+"#
+        ),
+        "true true"
+    );
+}
+
+// An assignment-pattern default applies to `undefined` (a missing element, a
+// missing property) and never to `null` or a falsy value.
+#[test]
+fn assignment_pattern_defaults_apply_to_undefined() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let x: any, y: any, p: any;
+[x = 5] = [];
+console.log(x);
+[x = 5, y = 6] = [undefined, null];
+console.log(x, y);
+[x = 5] = [0];
+console.log(x);
+({ a: p = 8 } = {} as any);
+console.log(p);
+[[x = 1], { b: y = 2 }] = [[], {}] as any;
+console.log(x, y);
+for ([x = 10] of [[], [7]] as any[]) console.log(x);
+"#
+        ),
+        "5\n5 null\n0\n8\n1 2\n10\n7"
+    );
+}
+
+/// #14734: a bridge call stores its arguments only into the frame it opened.
+/// A slot above the open frame is where the next nested frame is written, so
+/// the calls overwrote each other's arguments (`join` on an `any` receiver, and
+/// the `class_call_method` fallback that a value-position `o.list.push(v)` takes).
+#[test]
+fn bridge_calls_store_only_into_the_frame_they_open() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function f(s: any) { return s.join(","); }
+function g(s: any, t: any) { return s.join("-") + "|" + t.join("+"); }
+console.log(f([1, 2]));
+console.log("pair", g([1, 2], [3, 4]), g(["a"], ["b", "c"]));
+const o = { list: [] as number[] };
+console.log("push", o.list.push(7), o.list.push(8), o.list.join(","));
+"#
+        ),
+        "1,2\npair 1-2|3+4 a|b+c\npush 1 2 7,8"
+    );
+}
+
+// A tagged template calls its tag with the call site's strings array, whose `raw`
+// holds the unescaped text and which is the same object on every evaluation, through
+// a static method, an instance method or a function.
+#[test]
+fn a_tagged_template_passes_its_strings_array_to_any_tag() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { static tag(s: string[], a: any, b: any) { return s.join("|") + "/" + a + "," + b; } }
+console.log(T.tag`a${1}b${2}c`);
+class K { m = "M"; tag(s: any, v: any) { return this.m + s[0] + v + s[1]; } }
+console.log(new K().tag`v=${3}!`);
+function raw(s: TemplateStringsArray) { return s.raw[0] + "|" + s.raw.length + "|" + s[0]; }
+console.log(raw`a\nb`);
+function anyRaw(s: any) { return s.raw[0] + "," + s.raw[1]; }
+console.log(anyRaw`x\ty${0}z`);
+function id(s: any) { return s; }
+function site() { return id`q`; }
+const a = site();
+console.log(a === site(), a === id`q`, Array.isArray(a), a.length);
+"#
+        ),
+        "a|b|c/1,2\nMv=3!\na\\nb|1|a\nb\nx\\ty,z\ntrue false true 1"
+    );
+}
+
+/// #14733: every object pattern opens with RequireObjectCoercible on its
+/// source, which hands the source through or throws a TypeError for a nullish one.
+#[test]
+fn object_patterns_bind_from_their_source_and_reject_nullish() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const arr = [{ k: 1 }, { k: 2 }];
+for (const { k } of arr) console.log("k", k);
+const v: any = { a: 3, b: { c: 4 } };
+const { a, b: { c } } = v;
+console.log("decl", a, c);
+let reads = 0;
+function src(): any { reads++; return { x: 5 }; }
+const { x } = src();
+console.log("once", x, reads);
+function nullish(o: any): string {
+  try { const { y } = o; return "no throw " + y; } catch (e) { return "caught " + (e instanceof TypeError); }
+}
+console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
+"#
+        ),
+        "k 1\nk 2\ndecl 3 4\nonce 5 1\ncaught true caught true no throw 6"
+    );
+}
+
+// `.message` is an ordinary property read: only an Error's message comes from the
+// Error itself.
+#[test]
+fn message_reads_the_property_of_any_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = JSON.parse('{"message":"hi","phone":"p"}');
+const lit: any = { message: "lit" };
+class G { get message(): string { return "getter"; } }
+class F { message: string; constructor() { this.message = "field"; } }
+const none: any = {};
+console.log(o.message + " " + o.phone + " " + lit.message + " " + new G().message + " " + new F().message + " " + none.message);
+try { throw { message: "thrown" }; } catch (e: any) { console.log(e.message); }
+const err = new Error("boom");
+const empty = new Error();
+console.log(err.message + " [" + empty.message + "]");
+try { JSON.parse("{bad"); } catch (e: any) { console.log(e.message.length > 0); }
+"#
+        ),
+        "hi p lit getter field undefined\nthrown\nboom []\ntrue"
+    );
+}
+
+#[test]
+fn an_error_subclass_takes_its_message_from_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class MyErr extends Error { constructor(m?: string) { super(m); this.name = "MyErr"; } }
+class Coded extends Error { code: number; constructor(m: string, c: number) { super(m); this.code = c; } }
+class Bare extends Error {}
+class Deep extends Bare { constructor() { super("deep"); } }
+class Ranged extends RangeError { constructor(m: string) { super(m); } }
+class Fielded extends Error { code = 5; }
+const c = new Coded("coded", 7);
+console.log(new MyErr("sub").message + " [" + new MyErr().message + "] " + c.message + " " + c.code);
+console.log(new Bare("bare").message + " " + new Deep().message + " " + new Ranged("ranged").message + " [" + new Fielded().message + "]");
+try { throw new MyErr("caught"); } catch (e: any) { console.log(e.message + " " + (e instanceof Error)); }
+console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k")).length);
+"#
+        ),
+        "sub [] coded 7\nbare deep ranged []\ncaught true\n{\"name\":\"MyErr\"} 0"
+    );
+}
+
+// `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
+// 0..1 scale, mapped onto CSS 100..900 and clamped.
+#[test]
+fn text_set_font_weight_applies_the_size_and_the_weight() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text, textSetFontWeight } from "perry/ui";
+const a = Text("A");
+textSetFontWeight(a, 28, 1.0);
+const b = Text("B");
+textSetFontWeight(b, 16, 0.5);
+const c = Text("C");
+textSetFontWeight(c, 12, 700);
+"#,
+            r#"
+for (const label of ["A", "B", "C"]) {
+  const el = [...uiHandles.values()].find(e => e.textContent === label);
+  console.log(label + " " + el.style.fontSize + " " + el.style.fontWeight);
+}
+"#
+        ),
+        "A 28px 900\nB 16px 500\nC 12px 900"
     );
 }

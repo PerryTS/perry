@@ -93,21 +93,3 @@ fn a_data_descriptor_or_an_unknown_key_stays_hard() {
     }
 }
 
-#[test]
-fn another_units_layout_stays_hard_per_unit() {
-    // Per unit, the statement defining the getter holds `m` as a stand-in of
-    // the declaring unit's layout: an accessor its owner does not describe
-    // is beyond the contract, so the census breaks the layout (readers see
-    // TOP), as whole program refuses it.
-    let src = r#"
-        const m: any = { tag: 2 };
-        Object.defineProperty(m, "tag", { get: () => 7 });
-        function rd(o: any) { return o.tag; }
-        console.log(rd(m));
-    "#;
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let u = crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
-    let d = lit(&u, "tag").display.clone();
-    assert!(u.broken.contains(&d), "{:?}\n{}", u.broken, u.dump_text());
-}

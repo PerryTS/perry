@@ -40,12 +40,16 @@ impl<'a> Gen<'a> {
         self.m.eval_deps = (0..modules.len()).map(|mi| self.eval_deps_of(mi)).collect();
         // Constructor phase analysis first (needs every class).
         for mi in 0..modules.len() {
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
-                let ph = crate::ctor_phase::analyze(c);
+                let setters = self.chain_setters(tm);
+                let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &Default::default(), true, &setters);
                 self.ctor_phase.insert(tm, ph);
             }
         }
+        self.settle_rule_m(&modules, None);
+        self.ctor_phase_present(&modules);
         // The push-filled births (`push_fills`), with the birth lengths.
         if self.m.push_fills
             && self.m.rest_elems
@@ -70,6 +74,34 @@ impl<'a> Gen<'a> {
             let leaks = self.parent_chain_leaks(tm);
             if let Some(ph) = self.ctor_phase.get_mut(&tm) {
                 ph.parent_leaks = leaks;
+            }
+        }
+        // R9BIRTH6: settled top-level prototype stores (`gen::settled`).
+        for (mi, (_, module)) in modules.iter().enumerate() {
+            for (cname, key, globals, proto) in super::settled::settled_proto_stores(module) {
+                let Some(&tm) = self.mods[mi].classes.get(&cname) else {
+                    continue;
+                };
+                let Some(classes) = globals
+                    .classes
+                    .iter()
+                    .map(|c| self.mods[mi].classes.get(c).copied())
+                    .collect::<Option<Vec<TmplId>>>()
+                else {
+                    continue;
+                };
+                let a = self.m.atom(&key);
+                let gs: Vec<Atom> = globals.globals.iter().map(|g| self.m.atom(g)).collect();
+                let ks: Vec<Atom> = globals.keys.iter().map(|k| self.m.atom(k)).collect();
+                let into = if proto {
+                    &mut self.m.settled_proto
+                } else {
+                    &mut self.m.settled_static
+                };
+                let w = into.entry((tm, a)).or_default();
+                w.globals.extend(gs);
+                w.keys.extend(ks);
+                w.classes.extend(classes);
             }
         }
         // Birth keys: root → leaf.
@@ -381,6 +413,8 @@ impl<'a> Gen<'a> {
         let mut keys = Vec::new();
         let mut definite = Vec::new();
         let mut reserved = Vec::new();
+        let mut inert_definite = Vec::new();
+        let mut inert_reads = Vec::new();
         if let Some(p) = self.m.tmpls[tm as usize].parent {
             if let TmplKind::Class { module: pm, .. } = self.m.tmpls[p as usize].kind {
                 let pmod = self.modules[pm as usize].1;
@@ -389,6 +423,8 @@ impl<'a> Gen<'a> {
             keys = self.m.tmpls[p as usize].birth_keys.clone();
             definite = self.m.tmpls[p as usize].definite.clone();
             reserved = self.m.tmpls[p as usize].reserved.clone();
+            inert_definite = self.m.tmpls[p as usize].inert_definite.clone();
+            inert_reads = self.m.tmpls[p as usize].inert_reads.clone();
         }
         if let Some((_, np)) = self.m.tmpls[tm as usize].native_parent.clone() {
             // Keys the native parent constructor defines (summary, E21).
@@ -406,6 +442,7 @@ impl<'a> Gen<'a> {
         let Some(c) = module.classes.iter().find(|c| c.name == name) else {
             return;
         };
+        self.proto_first_class(tm, c);
         let mut declared = Vec::new();
         let phase = self.ctor_phase.get(&tm).cloned();
         // A parent constructor that leaks `this` lets an observer see the
@@ -458,6 +495,18 @@ impl<'a> Gen<'a> {
         }
         self.m.tmpls[tm as usize].declared = declared;
         if let Some(ph) = phase {
+            if !ph.m_calls.is_empty() {
+                let names: Vec<Atom> = ph.m_calls.iter().map(|k| self.m.atom(k)).collect();
+                self.m.rule_m.insert(tm, names);
+            }
+            if !ph.s_calls.is_empty() {
+                let v: Vec<(Atom, Option<TmplId>)> = ph
+                    .s_calls
+                    .iter()
+                    .map(|k| (self.m.atom(k), self.setter_owner(tm, k)))
+                    .collect();
+                self.m.rule_s.insert(tm, v);
+            }
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
@@ -466,6 +515,18 @@ impl<'a> Gen<'a> {
                 for k in &ph.definite {
                     let a = self.m.atom(k);
                     push_unique(&mut definite, a);
+                }
+                // Rule I: a native parent's prototypes hold builtin
+                // accessors no program definition names: no inert read.
+                if !self.native_on_chain(tm) {
+                    for k in &ph.inert_definite {
+                        let a = self.m.atom(k);
+                        push_unique(&mut inert_definite, a);
+                    }
+                    for k in &ph.inert_reads {
+                        let a = self.m.atom(k);
+                        push_unique(&mut inert_reads, a);
+                    }
                 }
             }
         }
@@ -477,16 +538,107 @@ impl<'a> Gen<'a> {
         if self.parent_pending(tm) {
             definite.clear();
             reserved.clear();
+            inert_definite.clear();
         } else if self.value_parent_on_chain(tm) && self.parent_chain_leaks(tm) {
+            inert_definite.clear();
             let n = self.m.tmpls[tm as usize]
                 .parent
                 .map_or(0, |p| self.m.tmpls[p as usize].definite.len());
             definite.truncate(n);
         }
         reserved.retain(|a| !definite.contains(a));
+        inert_definite.retain(|a| !definite.contains(a));
+        if inert_definite.is_empty() {
+            inert_reads.clear();
+        }
+        self.m.tmpls[tm as usize].inert_definite = inert_definite;
+        self.m.tmpls[tm as usize].inert_reads = inert_reads;
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
         self.m.tmpls[tm as usize].reserved = reserved;
+    }
+
+    /// This program's class of template `tm` (`None`: not a class template
+    /// or not found).
+    fn class_of(&self, tm: TmplId) -> Option<&'a Class> {
+        let TmplKind::Class { module, name, .. } = &self.m.tmpls[tm as usize].kind else {
+            return None;
+        };
+        self.modules[*module as usize].1.classes.iter().find(|c| &c.name == name)
+    }
+
+    /// R9STORE3 rule S: the key -> setter map of `tm`'s chain: for each key
+    /// the nearest class (`tm` first, then its parents: 10.1.8 / 10.1.9 walk
+    /// the prototypes in that order) that names it as a method, accessor or
+    /// field decides; it counts when that class declares exactly one setter
+    /// under it, no method or field (a field is an own key at construction)
+    /// and the setter body has no `return` (it would end the walk's
+    /// constructor). The walk stops at a class this program does not show.
+    pub(crate) fn chain_setters(&self, tm: TmplId) -> std::collections::BTreeMap<String, &'a perry_hir::Function> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut named = std::collections::BTreeSet::new();
+        let mut cur = Some(tm);
+        while let Some(t) = cur {
+            let Some(c) = self.class_of(t) else {
+                break;
+            };
+            let names = c
+                .methods
+                .iter()
+                .map(|m| m.name.as_str())
+                .chain(c.getters.iter().map(|(k, _)| k.as_str()))
+                .chain(c.setters.iter().map(|(k, _)| k.as_str()))
+                .chain(c.fields.iter().map(|f| f.name.as_str()));
+            for k in names.collect::<Vec<_>>() {
+                if !named.insert(k.to_string()) {
+                    continue;
+                }
+                let mut ss = c.setters.iter().filter(|(n, _)| n == k);
+                if let (Some((_, f)), None) = (ss.next(), ss.next()) {
+                    if !c.methods.iter().any(|m| m.name == k)
+                        && !c.fields.iter().any(|x| x.name == k)
+                        && !crate::ctor_phase::has_return(&f.body)
+                    {
+                        out.insert(k.to_string(), f);
+                    }
+                }
+            }
+            if self.m.tmpls[t as usize].native_parent.is_some() {
+                break;
+            }
+            cur = self.m.tmpls[t as usize].parent;
+        }
+        out
+    }
+
+    /// Rule S: the class on `tm`'s chain whose setter `k` resolves to
+    /// (`chain_setters`).
+    fn setter_owner(&self, tm: TmplId, k: &str) -> Option<TmplId> {
+        let mut cur = Some(tm);
+        while let Some(t) = cur {
+            let c = self.class_of(t)?;
+            if c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+                || c.fields.iter().any(|f| f.name == k)
+            {
+                return c.setters.iter().any(|(n, _)| n == k).then_some(t);
+            }
+            cur = self.m.tmpls[t as usize].parent;
+        }
+        None
+    }
+
+    /// Some class on `tm`'s chain (itself too) extends a native constructor.
+    fn native_on_chain(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.m.tmpls[c as usize].native_parent.is_some() {
+                return true;
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
     }
 
     /// Some class on `tm`'s chain has a parent value not settled to one
@@ -561,7 +713,173 @@ impl<'a> Gen<'a> {
         false
     }
 
+    /// R9BIRTH1 rule C: a derived class's construction phase again, with
+    /// the keys its parent chain's constructors definitely leave as own data
+    /// properties (`CtorPhase::definite`) present after `super()`: storing
+    /// one is no add (`ctor_phase::analyze_in_present_m`). Parents first. Only
+    /// for a chain of this program's classes that never leaks `this` before
+    /// its keys are stored (no observer could delete one) and whose
+    /// constructors return no value (`super()` binds `this` to the object
+    /// the parent constructed).
+    fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)]) {
+        let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+        for mi in 0..modules.len() {
+            for c in self.classes_of(mi) {
+                by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+            }
+        }
+        let depth = |m: &Model, tm: TmplId| {
+            let (mut d, mut cur) = (0usize, m.tmpls[tm as usize].parent);
+            while let Some(p) = cur {
+                d += 1;
+                cur = m.tmpls[p as usize].parent;
+            }
+            d
+        };
+        let mut todo: Vec<TmplId> = by_tm
+            .keys()
+            .copied()
+            .filter(|&tm| self.m.tmpls[tm as usize].parent.is_some())
+            .collect();
+        todo.sort_by_key(|&tm| (depth(&self.m, tm), tm));
+        for tm in todo {
+            if self.parent_chain_leaks(tm) {
+                continue;
+            }
+            let mut present = std::collections::BTreeSet::new();
+            let mut cur = self.m.tmpls[tm as usize].parent;
+            let mut ok = true;
+            while let Some(p) = cur {
+                match (self.ctor_phase.get(&p), by_tm.get(&p)) {
+                    (Some(ph), Some((_, pc)))
+                        if !pc
+                            .constructor
+                            .as_ref()
+                            .is_some_and(|f| crate::ctor_phase::returns_value(&f.body)) =>
+                    {
+                        present.extend(ph.definite.iter().cloned());
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+                cur = self.m.tmpls[p as usize].parent;
+            }
+            if !ok || present.is_empty() {
+                continue;
+            }
+            let (mi, c) = by_tm[&tm];
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
+            let setters = self.chain_setters(tm);
+            let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &present, true, &setters);
+            let followed = !ph.m_calls.is_empty() || !ph.s_calls.is_empty();
+            self.ctor_phase.insert(tm, ph);
+            if followed {
+                self.settle_rule_m(modules, Some((tm, &present)));
+            }
+        }
+    }
+
+    /// R9BIRTH3 rule M. A class `P` whose constructor's `this.m()` call the
+    /// phase followed (`CtorPhase::m_calls`) keeps it when no class below
+    /// `P` defines `m` (every instance that runs the call finds P's method:
+    /// 10.1.8 from its own prototype, a subclass's prototype first), or when
+    /// the birth is the same with the call taken as a leak
+    /// (`CtorPhase::same_birth`): then a subclass whose prototype holds
+    /// another `m` only leaks at the call (`m_override_leaks`). Otherwise
+    /// the phase takes the call as a leak, as before. `only`: settle this
+    /// class (with its parent chain's present keys, rule C) instead of all.
+    /// CLOSED-WORLD PREMISE (owner 2026-11-14): every class is in the program.
+    fn settle_rule_m(
+        &mut self,
+        modules: &[(&str, &'a Module)],
+        only: Option<(TmplId, &std::collections::BTreeSet<String>)>,
+    ) {
+        let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+        for mi in 0..modules.len() {
+            for c in self.classes_of(mi) {
+                by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+            }
+        }
+        let defines = |c: &Class, k: &str| {
+            c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+        };
+        let mut tms: Vec<TmplId> = by_tm.keys().copied().collect();
+        tms.sort_unstable();
+        let empty = std::collections::BTreeSet::new();
+        let todo: Vec<(TmplId, &std::collections::BTreeSet<String>)> = match only {
+            Some((tm, present)) => vec![(tm, present)],
+            None => tms.iter().map(|&tm| (tm, &empty)).collect(),
+        };
+        for (tm, present) in todo {
+            let calls = match self.ctor_phase.get(&tm) {
+                Some(ph) if !ph.m_calls.is_empty() || !ph.s_calls.is_empty() => {
+                    ph.m_calls.union(&ph.s_calls).cloned().collect::<std::collections::BTreeSet<String>>()
+                }
+                _ => continue,
+            };
+            // Some class below `tm` defines a followed method.
+            let overridden = tms.iter().any(|&d| {
+                let mut cur = Some(d);
+                let mut between = Vec::new();
+                while let Some(x) = cur {
+                    if x == tm {
+                        return between.iter().any(|b: &TmplId| {
+                            by_tm.get(b).is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
+                        });
+                    }
+                    between.push(x);
+                    cur = self.m.tmpls[x as usize].parent;
+                }
+                false
+            });
+            if !overridden {
+                continue;
+            }
+            let (mi, c) = by_tm[&tm];
+            let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
+            let off = crate::ctor_phase::analyze_in_present_m(c, &shapes, present, false);
+            if !self.ctor_phase[&tm].same_birth(&off) {
+                self.ctor_phase.insert(tm, off);
+            }
+        }
+        // The classes that reach a followed call with another method there.
+        let mut leaks = crate::pts::FxHashSet::default();
+        for &c in &tms {
+            let mut seen: Vec<TmplId> = vec![c];
+            let mut cur = self.m.tmpls[c as usize].parent;
+            while let Some(p) = cur {
+                if let Some(ph) = self.ctor_phase.get(&p) {
+                    if ph.m_calls.iter().chain(&ph.s_calls).any(|k| {
+                        seen.iter().any(|s| by_tm.get(s).is_some_and(|(_, sc)| defines(sc, k)))
+                    }) {
+                        leaks.insert(c);
+                        break;
+                    }
+                }
+                seen.push(p);
+                cur = self.m.tmpls[p as usize].parent;
+            }
+        }
+        self.m_override_leaks = leaks;
+    }
+
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
+        if self.m_override_leaks.contains(&tm) {
+            return true;
+        }
+        // Rule K: a parent's closure key is a present key in this class's
+        // constructor, whose read hands out a closure that holds `this`.
+        let mut up = self.m.tmpls[tm as usize].parent;
+        while let Some(p) = up {
+            if self.ctor_phase.get(&p).is_some_and(|ph| !ph.closure_keys.is_empty()) {
+                return true;
+            }
+            up = self.m.tmpls[p as usize].parent;
+        }
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;
         }
@@ -615,6 +933,10 @@ impl<'a> Gen<'a> {
         ctor_of: Option<TmplId>,
     ) {
         let fn_ctor = class.is_none() && ctor_of.is_none();
+        if let Some(ks) = crate::born_with::store_only_keys(f) {
+            let ks = ks.iter().map(|k| self.m.atom(k)).collect();
+            self.m.store_only.insert(fxi, ks);
+        }
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
@@ -725,6 +1047,7 @@ impl<'a> Gen<'a> {
         ctor_of: Option<TmplId>,
     ) {
         self.m.note_walked(fxi);
+        self.proto_first_stmts(mi, f);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let mut fx = Fx {
@@ -741,7 +1064,7 @@ impl<'a> Gen<'a> {
         if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
             // The view belongs to the function's body, like its parameters.
             let prev = std::mem::replace(&mut self.m.cur_fn, fxi);
-            fx.this = self.sloppy_this(info.this);
+            fx.this = self.sloppy_this(mi, info.this);
             self.m.cur_fn = prev;
         }
         if f.is_async && !f.is_generator {
@@ -771,7 +1094,11 @@ impl<'a> Gen<'a> {
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
         let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
+        // Rule M1: a clause of an enclosing function's switch is not this
+        // body's.
+        let clause = self.m.clause.take();
         self.stmts(&fx, &f.body);
+        self.m.clause = clause;
         if ctor_of.is_none() && narrow::may_complete(&f.body) {
             // The body's normal completion returns `undefined` (a class
             // constructor's completion is never its result: `new` and
@@ -783,18 +1110,30 @@ impl<'a> Gen<'a> {
     }
 
     /// The `this` a sloppy function's body reads: its callers' `this`,
-    /// where a nullish one is the global object and a primitive one is
-    /// boxed, an object the model does not hold (anything). The function's
-    /// own `this` node, its interface, stays what callers pass.
-    pub(crate) fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+    /// where a nullish one is the realm's global this value and a primitive
+    /// one is ToObject of it (ECMA-262 10.2.1.2 OrdinaryCallBindThis steps
+    /// 5-6): a fresh wrapper object of the primitive's kind (7.1.18), one
+    /// per function and kind. The function's own `this` node, its
+    /// interface, stays what callers pass.
+    pub(crate) fn sloppy_this(&mut self, mi: u32, this: NodeId) -> NodeId {
         let view = self.m.node_l("sloppy-this");
         self.m.own(view);
         self.m.edge(this, view);
         let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
         let global = self.tok_node(global_tok);
+        use crate::model::guard;
+        let num = self.bobj(mi, "BoxedNumber").1;
+        let str_ = self.bobj(mi, "BoxedString").1;
+        let boolean = self.bobj(mi, "BoxedBoolean").1;
+        // A BigInt or Symbol wrapper: an object whose kind the model does
+        // not name, like `Object(prim)`.
+        let other = self.bobj(mi, "Object(prim)").1;
         for (test, from) in [
-            (crate::model::guard::NULLISH, global),
-            (crate::model::guard::BOXED, self.m.top_tok_node),
+            (guard::NULLISH, global),
+            (guard::BOXED_NUM, num),
+            (guard::BOXED_STR, str_),
+            (guard::BOXED_BOOL, boolean),
+            (guard::BOXED_OTHER, other),
         ] {
             self.m.cons(
                 view,
@@ -946,6 +1285,21 @@ impl<'a> Gen<'a> {
                     // An object literal's shape: its constructor stores
                     // every key from the literal's values first.
                     continue;
+                }
+                // R9READ2 rule I: a reservation the construction stores
+                // first once its chain reads run no code: its `undefined`
+                // only while that may fail (`Model::inert_undef`).
+                None if f.key_expr.is_none()
+                    && !f.is_private
+                    && matches!(f.origin, perry_hir::ClassFieldOrigin::ConstructorStore)
+                    && self.m.atom_index.get(f.name.as_str()).is_some_and(|&a| {
+                        self.m.tmpls[tm as usize].inert_definite.contains(&a)
+                    }) =>
+                {
+                    let a = self.m.atom(&f.name);
+                    let v = self.m.node_l("inert-birth");
+                    self.m.inert_undef(tm, a, v);
+                    v
                 }
                 None => self.prim_node(prim::UNDEF),
             };
@@ -1111,6 +1465,7 @@ impl<'a> Gen<'a> {
     ) -> SiteId {
         let id = self.m.stores.len() as SiteId;
         self.m.stores.push(StoreSite {
+            proto_first: self.m.proto_first_cur,
             module: mi,
             func: f,
             desc,
@@ -1120,7 +1475,11 @@ impl<'a> Gen<'a> {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            assign: false,
+            proto_of: None,
             in_loop: self.order_ok.then_some(self.loop_depth > 0),
+            define_attrs: None,
         });
         id
     }
@@ -1140,6 +1499,14 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
+        // ONCHANGE3 rule A: the born-with runs of this list (`born_with.rs`).
+        for r in crate::born_with::runs(ss) {
+            let e = self.local(fx.module, r.e);
+            let news = r.news.iter().map(|&x| self.local(fx.module, x)).collect();
+            let calls = r.calls.iter().map(|(o, k, on_e)| (*o, self.m.atom(k), *on_e)).collect();
+            let module = fx.module;
+            self.m.born_recs.push(crate::born_with::BornRec { module, e, news, calls });
+        }
         let mut pushed = 0;
         let mut i = 0;
         // A local derived below a guarded counter in this block
@@ -1164,7 +1531,11 @@ impl<'a> Gen<'a> {
                 i += 3;
                 continue;
             }
+            self.last_local_set = None;
+            let da = self.def_assign_begin(fx, &ss[i]);
             self.stmt(fx, &ss[i]);
+            pushed += self.narrow_assigned(fx, &ss[i]);
+            pushed += self.def_assign_end(fx, da);
             // An `if` whose one branch always leaves: what follows runs
             // under the other outcome of its test (`narrow_guard`).
             if let Stmt::If {
@@ -1191,7 +1562,10 @@ impl<'a> Gen<'a> {
             self.for_of_walks.insert((fx.module, array, counter));
         }
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let first = self.m.proto_first_stmts.get(&(s as *const Stmt as usize)).copied();
+        let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
         self.stmt_inner(fx, s);
+        self.m.proto_first_cur = prev_first;
         self.m.cur_fn = prev;
     }
 
@@ -1232,21 +1606,22 @@ impl<'a> Gen<'a> {
         match s {
             Stmt::Let {
                 id,
+                name,
                 init,
                 ty,
                 mutable,
-                name,
                 ..
             } => {
                 let n = self.local(fx.module, *id);
-                if [
-                    "__forof_lit_src_",
-                    "__forof_lit_arr_",
-                    "__iterator_record_",
-                    "__arr_",
-                ]
-                .iter()
-                .any(|p| name.starts_with(p))
+                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) = (*mutable, init) {
+                    if let perry_hir::Expr::LocalGet(k) = index.as_ref() {
+                        self.same_key_reads
+                            .insert((fx.module, *id), (*k, object.as_ref().clone(), fx.f));
+                    }
+                }
+                if ["__forof_lit_src_", "__forof_lit_arr_", "__iterator_record_", "__arr_"]
+                    .iter()
+                    .any(|p| name.starts_with(p))
                 {
                     self.m.for_of_relays.insert(n);
                 }
@@ -1268,6 +1643,12 @@ impl<'a> Gen<'a> {
                     Some(e) => {
                         let v = self.expr_zs(fx, e);
                         self.m.edge(v, n);
+                        // A `var` redeclared with an initializer writes the
+                        // same local: it ends every narrowing of it.
+                        self.narrowed_write(fx.module, *id, v);
+                        // The local's node takes the value unguarded, and so
+                        // does its version (`narrow_assigned`).
+                        self.last_local_set = Some((fx.module, *id, v, None));
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
@@ -1283,6 +1664,14 @@ impl<'a> Gen<'a> {
                 if let Some(perry_hir::Expr::ForInKeys(o)) = init {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
                         self.for_in_keys_of.insert((fx.module, *id), *obj);
+                    }
+                }
+                if let Some(perry_hir::Expr::LocalGet(src)) = init {
+                    self.local_copies.insert((fx.module, *id), *src);
+                }
+                if name.starts_with("__forin_obj_") {
+                    if let Some(p) = init.as_ref().and_then(super::for_in::subj_path) {
+                        self.for_in_paths.insert((fx.module, *id), p);
                     }
                 }
             }
@@ -1381,9 +1770,17 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_in_update(false);
                 }
+                let scope = self.enum_scope(fx, body);
+                let scoped = scope.is_some();
+                if let Some(s) = scope {
+                    self.for_in_reads.push(s);
+                }
                 match self.for_in_of(fx, body) {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
+                }
+                if scoped {
+                    self.for_in_reads.pop();
                 }
                 if narrowed {
                     self.narrow_end();
@@ -1446,14 +1843,96 @@ impl<'a> Gen<'a> {
                 // `===` against case values: no coercion, identity.
                 self.jumps += 1;
                 self.m.identity(d, IdentityRoute::Switch);
-                for c in cases {
+                // Rule M1: a switch outside every loop, try and other switch
+                // of the body (blocks and `if` around it only), switching on
+                // a parameter (its own node: no default value, no
+                // `arguments` object, never assigned: no `=` or `++` of it)
+                // with string-literal case tests only.
+                // Per clause, the runs that reach it: the run entering at
+                // clause j runs j and each next clause while the one before
+                // may complete normally (ECMA-262 14.12.4: fallthrough; the
+                // default clause is entered when no case test is equal).
+                let f = self.m.cur_fn;
+                // `jumps` counts this switch itself.
+                let top = self.jumps == 1 && self.tries == 0 && self.m.clause.is_none();
+                let param = match discriminant {
+                    Expr::LocalGet(id)
+                        if top
+                            && f != NO_FN
+                            && cases.len() < 64
+                            && !self.m.funcs[f as usize].has_arguments
+                            && !self.m.switch_runs.contains_key(&f)
+                            && !self.written_locals(fx.module).contains(id) =>
+                    {
+                        let pn = self.local(fx.module, *id);
+                        self.m.funcs[f as usize].params.iter().position(|&q| q == pn)
+                    }
+                    _ => None,
+                };
+                let mut labels: Vec<Option<crate::model::Atom>> = Vec::new();
+                let mut masks: Vec<u64> = Vec::new();
+                if param.is_some() {
+                    for c in cases.iter() {
+                        match &c.test {
+                            None => labels.push(None),
+                            Some(Expr::String(t)) => labels.push(Some(self.m.atom(t))),
+                            Some(_) => {
+                                labels.clear();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if labels.len() == cases.len()
+                    && !cases.is_empty()
+                    && labels.iter().filter(|l| l.is_none()).count() <= 1
+                {
+                    if let Some(j) = param {
+                        let ends = |c: &perry_hir::SwitchCase| {
+                            matches!(
+                                c.body.last(),
+                                Some(
+                                    Stmt::Break
+                                        | Stmt::Continue
+                                        | Stmt::LabeledBreak(_)
+                                        | Stmt::LabeledContinue(_)
+                                        | Stmt::Return(_)
+                                        | Stmt::Throw(_)
+                                )
+                            )
+                        };
+                        for i in 0..cases.len() {
+                            let mut m = 0u64;
+                            let mut k = i;
+                            loop {
+                                m |= 1 << k;
+                                if k == 0 || ends(&cases[k - 1]) {
+                                    break;
+                                }
+                                k -= 1;
+                            }
+                            masks.push(m);
+                        }
+                        self.m.switch_runs.insert(f, (j as u32, labels));
+                    }
+                }
+                for (i, c) in cases.iter().enumerate() {
                     if let Some(t) = &c.test {
                         let tv = self.expr_zs(fx, t);
                         self.m.identity(tv, IdentityRoute::Switch);
                         // N1: a case test is the strict equality it means.
                         self.equality_demand(discriminant, t, d, tv);
                     }
+                    let clause = self.m.clause;
+                    if let Some(&m) = masks.get(i) {
+                        self.m.clause = Some((f, m));
+                    }
+                    // Rule G3: a clause only literal tests select narrows
+                    // the host of the discriminant (`Gen::case_narrow`).
+                    let g3 = self.case_narrow(fx, discriminant, cases, i);
                     self.stmts(fx, &c.body);
+                    self.narrow_pop(g3);
+                    self.m.clause = clause;
                 }
                 self.jumps -= 1;
             }

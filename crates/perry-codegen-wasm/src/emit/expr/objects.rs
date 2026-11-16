@@ -168,13 +168,6 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_memcall(func, "string_len", 1);
                     return true;
                 }
-                // Special case: .message on error objects
-                if property == "message" {
-                    self.emit_frame_begin(func, 1);
-                    self.emit_store_arg(func, 0, object);
-                    self.emit_memcall(func, "error_message", 1);
-                    return true;
-                }
                 self.emit_expr(func, object);
                 let key_id = self
                     .emitter

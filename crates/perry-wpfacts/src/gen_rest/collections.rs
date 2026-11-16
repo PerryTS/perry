@@ -130,7 +130,7 @@ impl<'a> Gen<'a> {
             // ---------------------------------------------- maps and sets
             Expr::MapNew => {
                 let (t, n) = self.bobj(mi, "Map");
-                self.m.map_born(t, true);
+                self.m.map_born(t);
                 n
             }
             Expr::SetNew => self.bobj(mi, "Set").1,
@@ -143,6 +143,18 @@ impl<'a> Gen<'a> {
                 let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
+                // AddEntriesFromIterable (24.1.1.2 step 4.f): each value is
+                // Get(entry, "1"), as the constructor call does
+                // (`builtins/constructors.rs`).
+                self.m.map_born(t);
+                let one = Key::Named(self.m.atom("1"));
+                let val = self.load(it, one);
+                let mv = self.m.map_vals(t);
+                self.m.edge(val, mv);
+                let zero = Key::Named(self.m.atom("0"));
+                let key = self.load(it, zero);
+                let mk = self.m.map_keys(t);
+                self.m.edge(key, mk);
                 n
             }
             Expr::SetNewFromArray(x) => {
@@ -180,11 +192,9 @@ impl<'a> Gen<'a> {
                 let it = self.iterate_closed(v);
                 // Each entry's key and value: its `"0"` and `"1"` (a
                 // [[Get]] under a number key), not every member of its chain.
-                let num = Key::Named(self.m.atom(crate::model::NUM_KEY));
-                let inner = self.load(it, num);
+                let inner = self.tmp("load");
                 let (t, n) = self.bobj(mi, "fromEntries");
-                let fa = self.m.field_any(t);
-                self.m.edge(inner, fa);
+                crate::builtins::object_statics::from_entries(&mut self.m, it, inner, t);
                 n
             }
             Expr::ObjectValues(x) => {
@@ -205,14 +215,6 @@ impl<'a> Gen<'a> {
                 let f = self.expr(fx, key_fn);
                 let num = self.prim_node(prim::NUM);
                 let k = self.callback(f, vec![it, num]);
-                let why = self.m.reason("groupBy key");
-                self.m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
                 let group = self.new_arr_from(mi, "group", &[it]);
                 // `Object.groupBy` makes a null-prototype object
                 // (`members::box_chain`); `Map.groupBy` a Map, whose keys and
@@ -225,11 +227,13 @@ impl<'a> Gen<'a> {
                     "groups"
                 };
                 let (t, n) = self.bobj(mi, kind);
-                let fa = self.m.field_any(t);
-                self.m.edge(group, fa);
-                self.m.edge(k, fa);
+                crate::builtins::object_statics::group_by(&mut self.m, k, group, t);
                 if kind == "Map" {
-                    self.m.map_born(t, false);
+                    // A birth of the Map (`map_born`) whose contents no
+                    // modelled `set` wrote: open (`map_open`), its values
+                    // are the groups in its any-key field.
+                    self.m.map_born(t);
+                    self.m.map_open(t);
                 }
                 n
             }

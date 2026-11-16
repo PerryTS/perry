@@ -37,6 +37,11 @@ pub enum SiteVerdict {
     T0Mono,
     T0Set,
     E0,
+    Dead,
+    OwnDataOrAbsent,
+    NsExport,
+    IntrinsicCall,
+    Throws,
 }
 impl SiteVerdict {
     pub(crate) fn name(self) -> &'static str {
@@ -46,6 +51,11 @@ impl SiteVerdict {
             Self::T0Mono => "T0Mono",
             Self::T0Set => "T0Set",
             Self::E0 => "E0",
+            Self::Dead => "Dead",
+            Self::OwnDataOrAbsent => "OwnDataOrAbsent",
+            Self::NsExport => "NsExport",
+            Self::IntrinsicCall => "IntrinsicCall",
+            Self::Throws => "Throws",
         }
     }
     pub(crate) fn slice(self) -> u8 {
@@ -55,6 +65,11 @@ impl SiteVerdict {
             Self::T0Mono => 3,
             Self::T0Set => 4,
             Self::E0 => 5,
+            Self::Dead => 6,
+            Self::OwnDataOrAbsent => 9,
+            Self::NsExport => 8,
+            Self::IntrinsicCall => 7,
+            Self::Throws => 10,
         }
     }
 }
@@ -170,6 +185,7 @@ pub(crate) fn witnesses() -> bool {
     enabled() || crate::codegen::helpers::check_contracts()
 }
 
+#[derive(Clone)]
 struct Module {
     name: String,
     line_starts: Vec<usize>,
@@ -543,6 +559,69 @@ pub(crate) fn bodies(view: &crate::codegen::ProgramFactsView) {
     BODIES.with(|b| {
         *b.borrow_mut() = view.verification_bodies.clone().map(|map| (name, map));
     });
+}
+
+/// The module's body classifications as a parallel lowering worker must see
+/// them (`codegen::callable_workers`): without them a worker emits every
+/// inactive body in full, so dead-body removal would depend on whether the
+/// module's callables were lowered on one thread or several.
+///
+/// A contract build also names each witness site from the module's name
+/// and line starts (`here`), so the worker gets those too. A verification
+/// build lowers serially (its ordinals and records are per module), so the
+/// copy is read-only.
+#[derive(Clone)]
+pub(crate) struct CallableState(Option<Bodies>, Option<Module>);
+
+pub(crate) fn callable_state() -> CallableState {
+    let module = if witnesses() && !enabled() {
+        MODULE.with(|m| m.borrow().clone())
+    } else {
+        None
+    };
+    CallableState(BODIES.with(|b| b.borrow().clone()), module)
+}
+
+impl CallableState {
+    pub(crate) fn install(&self) {
+        BODIES.with(|b| *b.borrow_mut() = self.0.clone());
+        MODULE.with(|m| *m.borrow_mut() = self.1.clone());
+    }
+}
+
+#[cfg(test)]
+mod callable_state_tests {
+    use super::*;
+
+    /// A worker names a site as the module thread does.
+    #[test]
+    fn worker_names_sites_like_the_module_thread() {
+        MODULE.with(|m| {
+            *m.borrow_mut() = Some(Module {
+                name: "m.ts".to_owned(),
+                line_starts: vec![0, 10, 25],
+                prefix_lines: 0,
+                raw: Vec::new(),
+                ordinal: 0,
+                site_ordinal: 0,
+                copy: String::new(),
+            })
+        });
+        SITE.with(|s| s.set(Some((13, "call"))));
+        let serial = here();
+        assert_eq!(serial, "m.ts:2:3 call");
+        let state = CallableState(None, MODULE.with(|m| m.borrow().clone()));
+        let worker = std::thread::spawn(move || {
+            state.install();
+            SITE.with(|s| s.set(Some((13, "call"))));
+            here()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(worker, serial);
+        MODULE.with(|m| *m.borrow_mut() = None);
+        SITE.with(|s| s.set(None));
+    }
 }
 
 /// The body is classified and no path reaches it. An absent map (give-up,

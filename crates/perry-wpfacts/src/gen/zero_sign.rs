@@ -111,13 +111,21 @@ impl Model {
     /// footprint. Once a builtin declared a call's arguments absorbing, a
     /// later builtin for the call that leaves no footprint observes them
     /// (its effects may be the absorbing one's).
-    pub(crate) fn with_native<R>(&mut self, call: CallId, f: impl FnOnce(&mut Self) -> R) -> R {
+    /// The model reads the call's positional argument view
+    /// (`Model::builtin_args_view`: a spread's elements may be any
+    /// argument); the sign bookkeeping stays on `call`.
+    pub(crate) fn with_native<R>(
+        &mut self,
+        call: CallId,
+        f: impl FnOnce(&mut Self, CallId) -> R,
+    ) -> R {
+        let view = self.builtin_args_view(call);
         if !self.zero_sign {
-            return self.with_b(f);
+            return self.with_b(|m| f(m, view));
         }
         let before = self.zs_footprint(call);
         let prev = std::mem::replace(&mut self.zs_absorbing, false);
-        let r = self.with_b(f);
+        let r = self.with_b(|m| f(m, view));
         let absorbing = std::mem::replace(&mut self.zs_absorbing, prev);
         if absorbing {
             self.zs_absorbed.insert(call);

@@ -136,6 +136,104 @@ fn build_direct_method_args(
     direct_args
 }
 
+/// ONCHANGE2: `object.property( args )` the facts prove runs one class
+/// method body (`wpfacts_access::proven_method_fn`): the receiver is
+/// evaluated first, then the arguments (13.3.6.1: the member's value is
+/// read before the arguments; the proof makes that read the fixed body, so
+/// reading it later is unobservable), and the body's public entry is called
+/// with the receiver as `this`, its arguments adapted to the body's declared
+/// parameters, rest and `arguments` slots exactly as the tower's case arm
+/// does (`build_direct_method_args`). No guard and no by-name fallback.
+/// NULLCALL1: a receiver that may also be `undefined` / `null` is tested
+/// once right after it is evaluated: the nullish edge is the complete member
+/// read, which throws before any argument is evaluated (13.3.6.1: GetValue
+/// of the member reference precedes ArgumentListEvaluation).
+pub(crate) fn try_lower_proven_method_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    let offset = if *byte_offset != 0 {
+        *byte_offset
+    } else {
+        crate::codegen::signature_entry::direct_call_offset()
+    };
+    let Some((class, fname, abi, nullable)) =
+        crate::expr::wpfacts_access::proven_method_fn(ctx, object, property, offset)
+    else {
+        return Ok(None);
+    };
+    // A holder named here: this module's registration of it; else the
+    // holder module's own (the facts' `DirectAbi`).
+    let (has_rest, has_synthetic_arguments, has_user_rest, decl) = match &class {
+        Some(class) => {
+            let key = (class.clone(), property.to_string());
+            (
+                matches!(ctx.method_has_rest.get(&key), Some(&true)),
+                matches!(ctx.method_has_synthetic_arguments.get(&key), Some(&true)),
+                crate::codegen::arguments::method_has_user_rest(ctx, class, property),
+                ctx.method_param_counts.get(&key).copied().unwrap_or(0),
+            )
+        }
+        None => (abi.rest, abi.synthetic_arguments, abi.user_rest, abi.params as usize),
+    };
+    crate::facts_consumed::used();
+    let mut roots = crate::rooting::open_rooted_group(1 + args.len());
+    let bundles = has_rest || has_synthetic_arguments;
+    let recv_collects = bundles || crate::rooting::any_operand_may_collect(ctx, args.iter());
+    let recv_idx = roots.lower(ctx, object, recv_collects)?;
+    if nullable {
+        let recv_box = roots.reread(ctx, recv_idx)?;
+        crate::expr::wpfacts_access::emit_nullish_throw_test(
+            ctx, object, &recv_box, property, *byte_offset, None,
+        );
+    }
+    let mut arg_idxs = Vec::with_capacity(args.len());
+    for (i, a) in args.iter().enumerate() {
+        let collects = bundles || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        arg_idxs.push(roots.lower(ctx, a, collects)?);
+    }
+    let recv_box = roots.reread(ctx, recv_idx)?;
+    let mut user_args: Vec<String> = Vec::with_capacity(args.len());
+    for &idx in &arg_idxs {
+        user_args.push(roots.reread(ctx, idx)?);
+    }
+    let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let direct_args = build_direct_method_args(
+        ctx,
+        &recv_box,
+        &user_args,
+        has_rest,
+        has_synthetic_arguments,
+        has_user_rest,
+        false,
+        decl,
+        &undefined_lit,
+    );
+    let slices: Vec<(crate::types::LlvmType, &str)> =
+        direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+    // The facts close this site over exactly one body, as they close a
+    // tower arm (`closed_targets`): that body joins the early inliner when it
+    // fits the budget, so the call does not become a statepoint first.
+    crate::codegen::closed_targets::note_closed_call(ctx.func, &fname, 1);
+    let value = ctx.block().call(DOUBLE, &fname, &slices);
+    super::super::method_override::publish_constructive_method_truthy(ctx, &fname, &value);
+    roots.release(ctx);
+    if std::env::var_os("PERRY_FACTS_REPORT").is_some() {
+        eprintln!("# proven_method_call offset={offset} callee={fname} nullable={}", nullable as u8);
+    }
+    Ok(Some(value))
+}
+
 /// Is implementor `class`'s `property` (body `function`) a prototype constant
 /// a proven site may call directly? (`select::cased`.)
 pub(crate) fn method_target_is_cased(
@@ -654,6 +752,7 @@ fn lower_instance_method_call(
                     None => {
                         if closed_bodies.contains(&fname.as_str()) {
                             crate::codegen::closed_targets::note_closed_call(
+                                ctx.func,
                                 fname,
                                 closed_bodies.len(),
                             );

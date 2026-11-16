@@ -20,18 +20,11 @@ impl<'a> Gen<'a> {
     /// [[Get]], getters run. The values of `value`, `get` and `set`, the keys
     /// a definition uses.
     pub(crate) fn descriptor_reads(&mut self, desc: NodeId) -> [NodeId; 3] {
-        let mut used = [desc; 3];
-        for name in DESCRIPTOR_KEYS {
-            let a = self.m.atom(name);
-            let v = self.load(desc, Key::Named(a));
-            match name {
-                "value" => used[0] = v,
-                "get" => used[1] = v,
-                "set" => used[2] = v,
-                _ => {}
-            }
-        }
-        used
+        crate::builtins::object_statics::descriptor_reads(&mut self.m, desc, |m| {
+            let n = m.node_l("load");
+            m.own(n);
+            n
+        })
     }
 
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
@@ -135,7 +128,7 @@ impl<'a> Gen<'a> {
         let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
+            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site, subj: NO_NODE });
         }
         for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             let f = own.unwrap_or(read);
@@ -151,28 +144,16 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
-        let r = self
-            .m
-            .reason("getOwnPropertyDescriptor (accessors handed out)");
-        self.m.cons(
-            o,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Any,
-            },
-        );
-        let vals = self.load(o, Key::any());
+        let vals = self.tmp("load");
         let (t, n) = self.bobj(mi, "descriptor");
-        let fa = self.m.field_any(t);
-        self.m.edge(vals, fa);
-        // get/set functions of the object: handed to user code without a
-        // receiver — ⊤-called.
-        self.m.add_tok(fa, TOP);
-        self.m.add_prim(fa, prim::ALL);
+        crate::builtins::object_statics::own_descriptor(&mut self.m, o, vals, t);
         n
     }
 
-    pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+    /// `positions`: the parse's objects are position classes
+    /// (`solve::json_pos`); a reviver may put its results at any position,
+    /// so a reviver parse keeps one object token for the whole tree.
+    pub(crate) fn json_value(&mut self, mi: u32, positions: bool, reviver: bool) -> NodeId {
         if self.m.arr_lazy_sabotage {
             // Negative control (`arrlazy`): a plain Array of Numbers, where
             // the runtime may return a lazy JSON array header.
@@ -182,21 +163,35 @@ impl<'a> Gen<'a> {
             self.m.add_prim(afa, prim::NUM);
             return self.tok_node(at);
         }
+        // JSON text holds strings, numbers, booleans and null and no other
+        // primitive (ECMA-262 25.5.1). A reviver's results replace values
+        // anywhere in the tree (25.5.1.1 InternalizeJSONProperty), which
+        // the reviver path's one store on the root does not place: any
+        // primitive then.
+        let vals = if reviver { prim::ALL } else { prim::JSON };
         let (t, n) = self.bobj(mi, "json");
-        let fa = self.m.field_any(t);
-        self.m.add_prim(fa, prim::ALL);
-        self.m.add_tok(fa, t);
         let arr = self.new_arr_template(mi, "json");
         let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        if positions {
+            self.m.json_root(t, at);
+            let out = self.tmp("json");
+            self.m.edge(n, out);
+            self.m.add_tok(out, at);
+            self.m.add_prim(out, vals);
+            return out;
+        }
+        let fa = self.m.field_any(t);
+        self.m.add_prim(fa, vals);
+        self.m.add_tok(fa, t);
         let afa = self.m.field_any(at);
-        self.m.add_prim(afa, prim::ALL);
+        self.m.add_prim(afa, vals);
         self.m.add_tok(afa, t);
         self.m.add_tok(afa, at);
         self.m.add_tok(fa, at);
         let out = self.tmp("json");
         self.m.edge(n, out);
         self.m.add_tok(out, at);
-        self.m.add_prim(out, prim::ALL);
+        self.m.add_prim(out, vals);
         out
     }
 

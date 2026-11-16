@@ -85,6 +85,7 @@ impl<'a> Gen<'a> {
                     // Its parameter is the literal's birth, not a call input.
                     let f = self.fn_by_id(fx.module, *func_id);
                     self.m.funcs[f as usize].no_summary = true;
+                    self.m.funcs[f as usize].foreign_params = true;
                 }
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
@@ -224,6 +225,7 @@ impl<'a> Gen<'a> {
                 }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset: off,
                         key: a,
@@ -344,6 +346,7 @@ impl<'a> Gen<'a> {
                 {
                     let key = self.m.atom("()");
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset,
                         key,
@@ -438,6 +441,8 @@ impl<'a> Gen<'a> {
             body,
         );
         let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
+        self.m.funcs[f as usize].ret_param =
+            crate::gen::ret_param::ret_param(params, body, *is_async || *is_generator);
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule
@@ -552,7 +557,7 @@ impl<'a> Gen<'a> {
         let cfx = if sloppy {
             sfx = cfx.clone();
             let prev = std::mem::replace(&mut self.m.cur_fn, f);
-            sfx.this = self.sloppy_this(cfx.this);
+            sfx.this = self.sloppy_this(cfx.module, cfx.this);
             self.m.cur_fn = prev;
             &sfx
         } else {
@@ -918,6 +923,14 @@ impl<'a> Gen<'a> {
                     birth_tm,
                     birth_tm.is_some(),
                 );
+                // U8: the literal's own key of computed name: an
+                // `Object.assign` copy of it may be a `__proto__` Set.
+                if name == "js_object_literal_set_computed" {
+                    if let Some(k) = arg(1) {
+                        let k = self.prop_key_of.get(&k).copied().unwrap_or(k);
+                        self.m.cons(o, Cons::OwnComputedKey { key: k, val: v });
+                    }
+                }
                 // Method closures see the object as `this`.
                 if name != "js_object_literal_define" && name != "js_object_literal_set_computed" {
                     self.m.cons(v, Cons::ThisFrom { recv: o });
@@ -1101,6 +1114,11 @@ impl<'a> Gen<'a> {
                 }
                 let out = self.tmp("rt-prim");
                 self.m.add_prim(out, prim::ALL);
+                if name == "js_object_literal_to_property_key" {
+                    if let Some(k) = arg(0) {
+                        self.prop_key_of.insert(out, k);
+                    }
+                }
                 if name == "js_weakset_add" {
                     if let Some(v) = arg(0) {
                         self.m.edge(v, out);
@@ -1237,8 +1255,13 @@ impl<'a> Gen<'a> {
                 let Some(k) = lit(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-                let recv = self.tok_node(t);
+                // Under a rule T5 test (`gen/narrow.rs`): the global object
+                // as the test narrowed it.
+                let narrowed = self.narrowed_read(fx.module, crate::gen::narrow::GLOBAL_LOCAL);
+                let recv = narrowed.unwrap_or_else(|| {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    self.tok_node(t)
+                });
                 let key = Key::Named(self.m.atom(&k));
                 self.load(recv, key)
             }

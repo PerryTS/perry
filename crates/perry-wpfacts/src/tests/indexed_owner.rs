@@ -1,4 +1,4 @@
-use crate::{compute, compute_units, FactsConfig, ProgramFacts};
+use crate::{compute, FactsConfig, ProgramFacts};
 
 fn run(src: &str, units: bool) -> (perry_hir::Module, ProgramFacts) {
     let ast = perry_parser::parse_typescript(src, "owner.ts").unwrap();
@@ -9,7 +9,7 @@ fn run(src: &str, units: bool) -> (perry_hir::Module, ProgramFacts) {
     };
     let input = [("owner.ts".to_string(), &hir)];
     let facts = if units {
-        compute_units(&input, &cfg)
+        compute(&input, &cfg)
     } else {
         compute(&input, &cfg)
     };
@@ -143,20 +143,6 @@ fn numeric_constructor_arguments_keep_owner_identity_without_inventing_an_extent
     }
 }
 
-#[test]
-fn a_unit_over_its_work_budget_cannot_certify_program_wide_metadata_effects() {
-    let ast = perry_parser::parse_typescript("const x = new Uint8Array(4); Object.defineProperty(Uint8Array.prototype, length, {get() {return 2;}}); console.log(x.length);", "budget.ts").unwrap();
-    let hir = perry_hir::lower_module(&ast, "budget", "budget.ts").unwrap();
-    let facts = compute_units(
-        &[("budget.ts".into(), &hir)],
-        &FactsConfig {
-            max_work: Some(1),
-            ..Default::default()
-        },
-    );
-    assert!(facts.units.iter().any(|(_, s)| s.aborted));
-    assert!(!facts.indexed_metadata_pristine());
-}
 
 #[test]
 fn numeric_element_writes_do_not_masquerade_as_metadata_writes() {

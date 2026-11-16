@@ -104,9 +104,25 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// The `value` field of an own-property descriptor of each t (20.1.2.8,
+    /// 10.1.5.1 OrdinaryGetOwnProperty): `OwnValues`, plus the own data
+    /// properties the realm makes, which `OwnValues` (EnumerableOwnProperties
+    /// of a namespace or a function) leaves out: a function's `name` and
+    /// `length` (10.2.9, 10.2.10), its `prototype` (10.2.5), a namespace's
+    /// members (`Math.PI`, 21.3.1.6), the methods of `Object.prototype`, a
+    /// String's `length` (10.4.3). Those values are read by an any-key [[Get]]
+    /// on the intrinsic-bearing object (a superset of its own data values).
+    OwnDescValues { dst: NodeId },
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
+    /// A store under an index of each Array in the node whose key node
+    /// `key` holds Numbers only: it leaves a hole only at an index past the
+    /// end (10.4.2.1 [[DefineOwnProperty]] of an index below the length
+    /// writes that element, the length stays). A program Array of this unit
+    /// with a length interval watches the key and the length
+    /// (`Model::index_hole_in`); any other Array may get one at once.
+    IndexHoleIn { key: NodeId },
     /// A store under an index of each Array in the node, at a site whose
     /// key gen proved at most the Array's length there
     /// (`Model::inbounds_sites`): it leaves no hole in an Array whose length
@@ -238,6 +254,20 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// Rule G2 (property truthiness): `x` read where `x.key` tested truthy
+    /// (`if (x && x.key)`, ECMA-262 7.1.2, 13.13, 14.6, 13.14). Its values
+    /// flow into `dst` but the ones the test excludes: `null` and
+    /// `undefined` (reading `key` on them throws), and an object token whose
+    /// read of `key` (own field, prototype chain, unknown-key field,
+    /// accessor; `Model::load_from`) holds only `undefined`/`null`. One
+    /// predicate (`guard::TRUTHY` on that read): any object, function,
+    /// marker, ⊤ or primitive kind other than `undefined`/`null` in the read
+    /// passes the token, re-checked as the read grows (monotone). ⊤ and
+    /// markers in `x` always pass. A rule of the program text, like
+    /// `NotNullish`. `test` is the read's guard: `guard::TRUTHY` (rule G2,
+    /// `x.key` truthy) or one of `guard::IS_FALSE`/`NOT_FALSE`/`IS_TRUE`/
+    /// `NOT_TRUE` (rule G1, `x.key === false`/`true` decided).
+    FieldTruthy { key: Key, test: u8, dst: NodeId },
     /// A value a promise is resolved with (Promise Resolve Functions,
     /// ECMA-262 27.2.1.3.2 steps 7-15; a then-callback's result,
     /// `Promise.resolve`, `await`): it fulfils the promise as itself only
@@ -247,7 +277,7 @@ pub enum Cons {
     /// takes (`guard::NOT_CALLABLE`: a primitive, `undefined` of a missing
     /// key, a non-function object, ⊤), re-checked as the read grows
     /// (monotone). A token whose `then` is callable is adopted instead
-    /// (`builtins::adopt`: its settled value, its `then` called with
+    /// (`builtins::adopt`: its [[PromiseResult]], its `then` called with
     /// resolve functions). One predicate for every resolution.
     Fulfil { dst: NodeId },
     /// The left operand of `l && r`: its falsy part flows into `dst` (the
@@ -261,11 +291,40 @@ pub enum Cons {
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
     /// like `NotNullish`.
     NotUndefined { dst: NodeId },
+    /// Rule T1: a local `x` where `x !== null` held (`x === null` failed):
+    /// its values but `null` flow into `dst` (ECMA-262 7.2.16
+    /// IsStrictlyEqual: values of different types are never strictly
+    /// equal, and the Null type has the one value `null`; `undefined`
+    /// passes). A rule of the program text, like `NotNullish`.
+    NotNull { dst: NodeId },
+    /// R9READ6 rule T6: a local `x` where `typeof x === s` held, `s`
+    /// "string", "number", "boolean" or "undefined": only its primitives
+    /// of `mask` (the one type with that typeof result, ECMA-262 13.5.3)
+    /// flow into `dst`; no object or function token (typeof gives
+    /// "object" / "function"), but ⊤ and markers (unknown values, which
+    /// may be of that type) pass. A rule of the program text, like
+    /// `NotNullish`.
+    TypeIs { mask: u16, dst: NodeId },
+    /// A failed `x instanceof ArrayBuffer` (`shared`: `SharedArrayBuffer`)
+    /// of the intrinsic binding: the values but the built-in buffer objects
+    /// of that kind flow into `dst`. The compiled program answers the bare
+    /// built-in name by the cell's buffer brand (perry-runtime
+    /// `instanceof/static_dispatch.rs`), so a built-in buffer of the kind
+    /// never takes the false side; every other value, ⊤ and every
+    /// primitive pass. The binding's other values pass all (a `Guard`,
+    /// `guard::NOT_BUFFER_CTOR`, on the read of the global).
+    NotBuffer { shared: bool, dst: NodeId },
+    /// A value given as a prototype (`__proto__` store, `setPrototypeOf`,
+    /// `Object.create`): dst ⊇ the node's objects (⊤ included) and `null`.
+    /// No other primitive is ever one: the `__proto__` setter ignores it
+    /// (ECMA-262 B.2.2.1.2 step 4), `setPrototypeOf` and `Object.create`
+    /// throw (20.1.2.23, 20.1.2.2).
+    ProtoObjects { dst: NodeId },
     /// ToObject of the node's values (ECMA-262 7.1.18) for what is an
     /// object already: its object and function tokens, ⊤ and its markers
     /// flow into `dst`; no primitive does (ToObject never returns one). A
-    /// primitive's wrapper is a separate `Guard` (`guard::BOXED`) of the
-    /// caller (`builtins::to_object`). A rule of the program text, like
+    /// primitive's wrapper is a separate `Guard` of the caller, one per
+    /// kind (`guard::BOXED_NUM` .. `BOXED_OTHER`, `builtins::to_object_into`). A rule of the program text, like
     /// `NotNullish`.
     Objects { dst: NodeId },
     /// Every object token reaches a HARD operation.
@@ -317,6 +376,12 @@ pub enum Cons {
     /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
     /// left-hand side value (`Call(instOfHandler, C, « V »)`).
     HasInstance { reason: u32, arg: NodeId },
+    /// The node is the target of `bound`, a bound function the runtime may
+    /// call with anything (`Protocol::Any`): the call is the target's
+    /// [[Call]] (10.4.1.1). A class constructor throws a TypeError before
+    /// its body runs (10.2.1 step 2); a bound target forwards the call;
+    /// any other target is called with anything: `bound` escapes.
+    BoundCall { reason: u32, bound: Tok },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
@@ -447,14 +512,22 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        /// `o[k]` in `for (k in o)`, the loop's own key on the binding it
+        /// iterates (`Gen::enum_read`): the key is one of `o`'s enumerable
+        /// string keys, so on a built-in object (`Model::enum_free`) the
+        /// read is what the program wrote there, never a built-in member.
+        enumerable: bool,
         kept: bool,
     },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be
     /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
     /// an unknown string key; only the named forms read it).
+    /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds
+    /// (`Cons::IdxLoad`'s primitive read, decided by the key's values).
     IdxKey {
         obj: Tok,
+        prim: u16,
         dst: NodeId,
         shape: KeyShapeId,
     },
@@ -475,6 +548,8 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        /// As `IdxLoad`'s.
+        enumerable: bool,
     },
     /// The node is the key of an own-only read of object token `obj`
     /// (`IdxOwnLoad`): a primitive key reads `obj`'s own fields it may name;
@@ -495,6 +570,46 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        enumerable: bool,
+    },
+    /// The node is `ProtoNode(from)` on the chain of receiver `of` of an
+    /// enumerable-key read (`IdxLoad` `enumerable`): dst ⊇ what the program
+    /// wrote under `key` on each prototype, further up while the prototype
+    /// has no enumerable built-in member (`Model::enum_link`, which needs
+    /// `from` for the collapsed `ObjectProto`); any other prototype reads
+    /// `key` in full.
+    EnumChain {
+        key: Key,
+        dst: NodeId,
+        of: Tok,
+        from: Tok,
+    },
+    /// SKINROOT13: the node is the subject `S` of a same-key copy whose own
+    /// read `S[k]` is an enumerable read (`Gen::enum_read`): dst ⊇ the
+    /// enumerable properties of S's chain under `key`, as that read finds
+    /// them (`Model::enum_read_key`); on a link the rule does not cover,
+    /// the ordinary read of `key`.
+    EnumLoad { key: Key, dst: NodeId },
+    /// F-A (`Gen::path_watch`): the accessor functions a body site of a
+    /// for-in over a path may run (a getter, or a setter for a store) on
+    /// this node's values under `key`, into `probe`.
+    ForInAcc {
+        key: Key,
+        setter: bool,
+        probe: NodeId,
+    },
+    /// SKINDESC1: the property descriptors of this node's values
+    /// (`Object.getOwnPropertyDescriptor`, ECMA-262 6.2.6.4
+    /// FromPropertyDescriptor): per value, its OWN getters (or setters),
+    /// no prototype walk (`Model::own_accessor_lookup`), into `dst`.
+    OwnDescAcc { setter: bool, dst: NodeId },
+    /// F-A: a value of this node that is ⊤ or also in `other` (with
+    /// `other` `NO_NODE`: any value but a built-in function) opens the
+    /// gate: `src` flows into `gate`, whose loads are the ordinary reads.
+    ForInMeet {
+        other: NodeId,
+        src: NodeId,
+        gate: NodeId,
     },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
@@ -531,8 +646,32 @@ pub enum Cons {
         accessor: bool,
     },
     /// The node is the key of a store into `o` in a for-in body: a run's one
-    /// key stores under that key, any other under `Key::Any`.
+    /// key stores under that key; any other under the keys the loop's
+    /// subject enumerates when `subj` is that subject's node (ENUM3,
+    /// `Cons::EnumKeyStore`), else under `Key::Any`.
     StoreKeyed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+        subj: NodeId,
+    },
+    /// ENUM3: on the subject `s` of `for (k in s)` (`from: None`) or on the
+    /// prototype node of its chain link `from`: `o[k] = src` stores under
+    /// each String key the for-in may yield (ECMA-262 14.7.5.9
+    /// EnumerateObjectProperties, 14.7.5.10: the enumerable String keys of
+    /// `s` and its chain), the names written on each link the ENUM1/ENUM2
+    /// read rule covers (`Model::enum_key_store`), growing as fields
+    /// appear; under any String key for any other value.
+    EnumKeyStore {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+        from: Option<Tok>,
+    },
+    /// ENUM3: on a link's any-key field (or what a store into ⊤ wrote on a
+    /// built-in link): once it holds a value, a key no name lists may be
+    /// enumerated, so `o[k] = src` stores under any String key.
+    EnumKeyAny {
         o: NodeId,
         src: NodeId,
         site: SiteId,
@@ -558,7 +697,10 @@ pub enum Cons {
     /// The node is a ToNumeric operand (`-`, `*`, `++`, unary `-`, ...):
     /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
     /// BigInt; both for an object, whose ToPrimitive may return either).
-    Arith { dst: NodeId },
+    /// `other` is a binary operator's other operand (`NO_NODE`: a unary
+    /// operator or an update): ECMA-262 13.15.3 throws for a BigInt beside
+    /// a Number, so a BigInt result needs `other` to be one as well.
+    Arith { dst: NodeId, other: NodeId },
     /// The node is an operand of a numeric operator whose result `dst`
     /// takes its integer interval from this rule (`range::eval`), the
     /// operand's interval beside `other`'s (`NO_NODE`: a unary operator).
@@ -585,7 +727,75 @@ pub enum Cons {
     /// ECMA-262 13.15.3: after ToPrimitive a String operand concatenates,
     /// so the generation rule lets `num` reach the result only through a
     /// [`Cons::Guard`] with test [`guard::NOT_STR`] on the other operand.
-    Plus { str: NodeId, num: NodeId },
+    /// Rule M3: `other` is the other operand and `right` says this node is
+    /// the right one; `str`'s string constants and known prefixes are the
+    /// pair's (`Model::plus_strs`).
+    /// Rule K7: the node is the receiver of `toLowerCase` / `toUpperCase`
+    /// (ECMA-262 22.1.3.28 / .29, `upper`: `toUpperCase`): `dst` holds a
+    /// String, the receiver's entries case-mapped (`Model::case_map_strs`).
+    CaseMap { dst: NodeId, upper: bool },
+    /// Rule CONSOLE-PCT: the node may be the first argument of a console
+    /// method that formats (`builtins::console_args`). `js_util_format`
+    /// parses a specifier only in a String first argument and only at a
+    /// `%`: once the node may hold a String with `%`
+    /// (`Model::may_hold_percent`), `agg`, which holds every argument a
+    /// specifier may consume, takes `Protocol::Inspect` with `reason`.
+    ConsoleFormat { reason: u32, agg: NodeId },
+    /// Rule RT: the node is the input of an `exec` of the regex literal of
+    /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
+    /// derived groups hold the captures (`Model::capture_strs`).
+    Captures { rec: Tok, pat: u32 },
+    /// Rule OBJECT-TO-STRING: the node is what [[Get]] of key `key` (0
+    /// `@@toPrimitive`, 1 `toString`, 2 `valueOf`, 3 `@@toStringTag`)
+    /// finds on object `t`: anything but `undefined` (keys 0, 3) or
+    /// `%Object.prototype.toString%` / `%Object.prototype.valueOf%` (keys
+    /// 1, 2) makes ToString(`t`) any string (`Model::objtag_widen`).
+    ObjTagProbe { t: Tok, key: u8 },
+    /// Rule M6: the node is the receiver, search string or replacement of
+    /// `String.prototype.replace` (22.1.3.19): `dst` holds a String, the
+    /// one result of constants (`Model::replace_strs`).
+    StrReplace {
+        dst: NodeId,
+        recv: NodeId,
+        search: NodeId,
+        repl: NodeId,
+    },
+    /// Rule M9: the node is the replacement (or the pattern or flags
+    /// operand, or an own `exec`/flag field) of a `RegExp.prototype
+    /// [@@replace]` call on `tok` (22.2.6.11): `dst` holds a String, an
+    /// exclusion entry when `tok` is a global one-class pattern
+    /// (`Model::class_replace_strs`).
+    ClassReplace { dst: NodeId, tok: Tok, repl: NodeId },
+    /// Rule KEY2a: the node is the receiver or search string of
+    /// `String.prototype.indexOf` / `lastIndexOf` (22.1.3.9 / 22.1.3.12)
+    /// called with no position: `dst` holds the Numbers StringIndexOf (the
+    /// last match for `last`) gives on the constants, as an interval
+    /// (`Model::str_index`); any Number otherwise.
+    StrIndex {
+        dst: NodeId,
+        recv: NodeId,
+        search: NodeId,
+        last: bool,
+    },
+    /// Rule KEY2b: the node is the receiver, start or end (`NO_NODE`:
+    /// absent) of `String.prototype.substring` (22.1.3.25): `dst` holds the
+    /// substring of every constant over every clamped integer operand pair
+    /// (`Model::str_substring`); any String otherwise.
+    StrSubstring {
+        dst: NodeId,
+        recv: NodeId,
+        start: NodeId,
+        end: NodeId,
+    },
+    /// Rule M7: the node is the pattern operand of the `new RegExp(P)` that
+    /// made `tok` (`Model::regexp_pattern`).
+    RegExpPattern { tok: Tok },
+    Plus {
+        str: NodeId,
+        num: NodeId,
+        other: NodeId,
+        right: bool,
+    },
     /// The node is the only argument of `Array(x)` / `new Array(x)`: a Number
     /// is the length (the array has holes, no element), any other value is
     /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its
@@ -594,6 +804,12 @@ pub enum Cons {
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
     ShareBuffer { ta: Tok },
+    /// The node holds the source of view `view`'s [[ViewedArrayBuffer]]
+    /// (`VIEWED_BUFFER`). `share`: a view of the same memory (`subarray`,
+    /// Buffer `slice`): the source view's buffer. Otherwise a constructor
+    /// argument: an ArrayBuffer is the buffer (23.2.5.1.3, 25.3.2.1), any
+    /// other value makes `fresh` (`None`: the birth throws).
+    ViewedBuffer { view: Tok, fresh: Option<Tok>, share: bool },
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
@@ -623,6 +839,16 @@ pub enum Cons {
         site: SiteId,
         from: NodeId,
     },
+    /// The node is an object literal: each of its objects has an own key
+    /// of computed name (`key`: the node of the key's values) whose value
+    /// is `val` (13.2.5.5: CreateDataPropertyOrThrow, no setter runs).
+    OwnComputedKey { key: NodeId, val: NodeId },
+    /// The node is the key of a computed own key of an `Object.assign`
+    /// source: once it may be `"__proto__"`, the copy's Set(target,
+    /// "__proto__", v, true) runs the Object.prototype setter (20.1.2.1
+    /// step 3.a.iii.2.b, B.2.2.1.2): `val`'s objects (or null) become
+    /// prototypes of `target`, as a `__proto__` store gives them.
+    ProtoKeySet { target: Tok, val: NodeId, site: SiteId },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -666,10 +892,26 @@ impl Cons {
         matches!(
             self,
             Cons::StoreIndexed { .. }
+                | Cons::Plus { .. }
+                | Cons::IdxKey { .. }
+                | Cons::CaseMap { .. }
+                | Cons::ConsoleFormat { .. }
+                | Cons::Captures { .. }
+                | Cons::StrReplace { .. }
+                | Cons::StrIndex { .. }
+                | Cons::StrSubstring { .. }
+                | Cons::Falsy { .. }
+                | Cons::ClassReplace { .. }
+                | Cons::RegExpPattern { .. }
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
+                | Cons::NotBuffer { .. }
+                | Cons::ProtoObjects { .. }
+                | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -681,13 +923,20 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::StrIndex { .. }
+                | Cons::StrSubstring { .. }
                 | Cons::LenPermuted { .. }
                 | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
+                | Cons::NotBuffer { .. }
+                | Cons::ProtoObjects { .. }
+                | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -699,7 +948,9 @@ impl Cons {
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
+            Cons::IndexHoleIn { .. } => "indexholein",
             Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
@@ -727,9 +978,14 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::FieldTruthy { .. } => "fieldtruthy",
             Cons::Fulfil { .. } => "fulfil",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
+            Cons::NotNull { .. } => "notnull",
+            Cons::TypeIs { .. } => "typeis",
+            Cons::NotBuffer { .. } => "notbuffer",
+            Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
@@ -740,8 +996,14 @@ impl Cons {
             Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
             Cons::HasInstance { .. } => "hasinstance",
+            Cons::BoundCall { .. } => "boundcall",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::EnumChain { .. } => "enumchain",
+            Cons::EnumLoad { .. } => "enumload",
+            Cons::ForInAcc { .. } => "forinacc",
+            Cons::OwnDescAcc { .. } => "owndescacc",
+            Cons::ForInMeet { .. } => "forinmeet",
             Cons::ProtoGiven { .. } => "protogiven",
             Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",
@@ -772,6 +1034,8 @@ impl Cons {
             Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
+            Cons::CaseMap { .. } => "casemap",
+            Cons::ConsoleFormat { .. } => "consolefmt",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ElemUndef { .. } => "elemundef",
@@ -785,15 +1049,27 @@ impl Cons {
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
             Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::EnumKeyStore { .. } => "enumkeystore",
+            Cons::EnumKeyAny { .. } => "enumkeyany",
             Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
+            Cons::Captures { .. } => "captures",
+            Cons::ObjTagProbe { .. } => "objtagprobe",
+            Cons::StrReplace { .. } => "strreplace",
+            Cons::StrIndex { .. } => "strindex",
+            Cons::StrSubstring { .. } => "strsubstring",
+            Cons::ClassReplace { .. } => "classreplace",
+            Cons::RegExpPattern { .. } => "regexppattern",
+            Cons::ViewedBuffer { .. } => "viewedbuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
             Cons::RetInto { .. } => "retinto",
             Cons::ArgInto { .. } => "arginto",
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
+            Cons::OwnComputedKey { .. } => "owncomputedkey",
+            Cons::ProtoKeySet { .. } => "protokeyset",
             Cons::ThisInst { .. } => "thisinst",
             Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",

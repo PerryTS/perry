@@ -630,7 +630,20 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
             false
         };
         if is_stack {
-            let align = alignment as i64;
+            // The public constants are macOS NSLayoutAttribute values (the
+            // docs' 5 Leading / 9 CenterX / 7 Width / 3 Top / 10 CenterY / 4
+            // Bottom). UIStackView only accepts 0..=5 and throws
+            // NSInternalInconsistencyException ("failed to convert
+            // stackAlignment") for anything else, so translate.
+            let align: i64 = match alignment as i64 {
+                0 | 7 | 8 => 0, // fill (width/height = stretch)
+                1 | 3 | 5 => 1, // left / top / leading -> leading (top)
+                2 | 4 | 6 => 4, // right / bottom / trailing -> trailing (bottom)
+                9 | 10 => 3,    // centerX / centerY -> center
+                11 => 5,        // lastBaseline
+                12 => 2,        // firstBaseline
+                _ => return,
+            };
             unsafe {
                 let _: () = objc2::msg_send![&*view, setAlignment: align];
             }

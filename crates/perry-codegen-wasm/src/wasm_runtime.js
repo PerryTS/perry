@@ -1734,6 +1734,9 @@ function __iterableToArray(v) {
   return out;
 }
 
+// A tagged template's strings array per call site, keyed by the HIR site id's halves.
+const __taggedTemplates = new Map();
+
 const __memDispatch = {
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
   // `value` must use the iterator protocol instead of its indices.
@@ -1774,6 +1777,10 @@ const __memDispatch = {
     ? v[Symbol.iterator]() : v,
   rt_iterableToArray: (v) => __iterableToArray(v),
   rt_arrayIterationPatched: () => __arrayIterationPatched(),
+  rt_requireObjectCoercible: (v) => {
+    if (v == null) throw new TypeError('Cannot convert undefined or null to object');
+    return v;
+  },
   generator_new: (record, paramCount) => {
     const gen = Object.create(__GeneratorPrototype);
     __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
@@ -1888,6 +1895,19 @@ const __memDispatch = {
 
   // Arrays — args are plain JS values (arr is the array itself, etc.)
   array_new: () => [],
+  // GetTemplateObject: the first evaluation of a site freezes `cooked` with a frozen,
+  // non-enumerable `raw`; every evaluation of that site returns the same object.
+  tagged_template: (siteHi, siteLo, cooked, raw) => {
+    const key = siteHi + ':' + siteLo;
+    let strings = __taggedTemplates.get(key);
+    if (strings === undefined) {
+      Object.defineProperty(cooked, 'raw', { value: Object.freeze(raw) });
+      strings = Object.freeze(cooked);
+      __taggedTemplates.set(key, strings);
+    }
+    return strings;
+  },
+  template_raw: (strings) => strings.raw,
   // `new Array(x)`: single number = length (ES2015 §22.1.1), else element.
   array_constructor_single: (value) => {
     if (typeof value === 'number') {
@@ -2246,6 +2266,35 @@ const __memDispatch = {
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
+  // `super[key]` in a method of `cls`: the lookup starts at cls's parent and the
+  // receiver stays `this`. As on a prototype chain, the nearest class defining an
+  // accessor or a method of that name wins; a setter-only accessor reads as
+  // undefined. Past the class chain the name resolves on Object.prototype.
+  class_super_get: (obj, cls, mname) => {
+    const name = String(mname);
+    const own = (methods, k) => Object.prototype.hasOwnProperty.call(methods, k);
+    for (let c = classParentTable[String(cls)] || null; c; c = classParentTable[c] || null) {
+      const methods = classMethodTable[c];
+      if (!methods) continue;
+      if (own(methods, '__get_' + name)) {
+        const getter = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
+        return __bitsToJsValue(getter(__jsValueToBits(obj)));
+      }
+      if (own(methods, '__set_' + name)) return undefined;
+      if (own(methods, name)) return __classMethodValue(c, name);
+    }
+    return Reflect.get(Object.prototype, name, obj);
+  },
+  // Calls what class_super_get read, after the arguments were evaluated. A compiled
+  // method gets its arguments as Perry values; a non-callable throws, as in JS.
+  class_super_call: (fn, obj, mname, args) => {
+    if (__classMethodFns.has(fn)) return fn.apply(obj, args);
+    if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
+    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') {
+      return __memDispatch.closure_call_spread(fn, args);
+    }
+    throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
+  },
 
   // JSON — args are plain JS values
   json_parse: (str) => { try { return JSON.parse(String(str)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
@@ -2319,6 +2368,16 @@ const __memDispatch = {
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(msg)` in a class extending a built-in Error: the instance is a plain
+  // `{__class__}` object, so it takes the message the Error constructor would
+  // give it, non-enumerable as on a real Error. Returns the instance.
+  error_super_init: (obj, msg) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    Object.defineProperty(obj, 'message', {
+      value: msg === undefined ? '' : String(msg), writable: true, configurable: true, enumerable: false,
+    });
+    return obj;
+  },
 
   global_receiver: () => __hostGlobal,
   global_property: (name) => __hostGlobal[name],
@@ -3071,20 +3130,21 @@ function perry_ui_progressview_create(value) {
   if (value !== undefined && value > 0) { el.max = 1; el.value = value; }
   return uiAlloc(el);
 }
-function perry_ui_image_create(src, width, height) {
-  const el = document.createElement("img");
-  if (src) el.src = src;
-  if (width) el.style.width = width + "px";
-  if (height) el.style.height = height + "px";
-  return uiAlloc(el);
+// perry/ui `Image(url, alt?)`, `Image({url, alt?})` and `Image({systemName})`,
+// routed as the native backends route them: to `image_create_url` / `_symbol`.
+function perry_ui_image_create(src, alt) {
+  if (src && typeof src === "object") {
+    if (src.systemName !== undefined) return perry_ui_image_create_symbol(src.systemName);
+    return perry_ui_image_create_url(src.url, src.alt);
+  }
+  return perry_ui_image_create_url(src, alt);
 }
-function perry_ui_picker_create(items_json, selected, callback) {
+function perry_ui_picker_create(callback) {
   const el = document.createElement("select");
   el._perryCallback = callback;
   el.addEventListener("change", () => {
     if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.selectedIndex);
   });
-  if (selected !== undefined) el.selectedIndex = selected;
   return uiAlloc(el);
 }
 function perry_ui_wheel_picker_create(callback) {
@@ -3104,11 +3164,15 @@ function perry_ui_form_create() {
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
   return uiAlloc(el);
 }
-function perry_ui_section_create(title) {
+// `Section(title)` or `Section(title, children)`: the children array appends like a
+// VStack's, after the legend.
+function perry_ui_section_create(title, children) {
   const el = document.createElement("fieldset");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
   if (title) { const lg = document.createElement("legend"); lg.textContent = title; el.appendChild(lg); }
-  return uiAlloc(el);
+  const h = uiAlloc(el);
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  return h;
 }
 function perry_ui_navigationstack_create() {
   const el = document.createElement("div");
@@ -3162,19 +3226,26 @@ function perry_ui_table_create(rowCount, colCount, renderClosure) {
   const headerRow = document.createElement("tr"); thead.appendChild(headerRow);
   for (let c = 0; c < colCount; c++) { const th = document.createElement("th"); th.textContent = "Col " + c; headerRow.appendChild(th); }
   const tbody = document.createElement("tbody"); table.appendChild(tbody);
-  for (let r = 0; r < rowCount; r++) {
+  __tableRenderRows(table);
+  return uiAlloc(table);
+}
+// Fill a table's tbody with `_rowCount` rows from its render closure; shared by create
+// and `tableUpdateRowCount`, which re-renders every row the way lazyvstack_update does.
+function __tableRenderRows(table) {
+  const tbody = table.querySelector("tbody");
+  tbody.innerHTML = '';
+  for (let r = 0; r < table._rowCount; r++) {
     const tr = document.createElement("tr"); tr.style.cursor = "pointer";
     tr.addEventListener("click", () => { table._selectedRow = r; if (table._onRowSelect) callWasmClosure(table._onRowSelect, r); });
-    for (let c = 0; c < colCount; c++) {
+    for (let c = 0; c < table._colCount; c++) {
       const td = document.createElement("td"); td.style.padding = "4px 8px"; td.style.borderBottom = "1px solid #eee";
-      const cellVal = callWasmClosure(renderClosure, r, c);
+      const cellVal = callWasmClosure(table._renderClosure, r, c);
       const cellEl = uiGet(typeof cellVal === 'number' ? cellVal : 0);
       if (cellEl) td.appendChild(cellEl); else td.textContent = String(toJsValue(cellVal) ?? "");
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
   }
-  return uiAlloc(table);
 }
 function perry_ui_table_set_column_header(h, col, title) {
   const t = uiGet(h); if (!t) return; const th = t.querySelector("thead tr")?.children[col]; if (th) th.textContent = title;
@@ -3182,7 +3253,12 @@ function perry_ui_table_set_column_header(h, col, title) {
 function perry_ui_table_set_column_width(h, col, width) {
   const t = uiGet(h); if (!t) return; const th = t.querySelector("thead tr")?.children[col]; if (th) th.style.width = width + "px";
 }
-function perry_ui_table_update_row_count(h, count) { /* simplified: just update count */ }
+function perry_ui_table_update_row_count(h, count) {
+  const t = uiGet(h); if (!t) return;
+  t._rowCount = count | 0;
+  if (t._selectedRow >= t._rowCount) t._selectedRow = -1;
+  __tableRenderRows(t);
+}
 function perry_ui_table_set_on_row_select(h, cb) { const t = uiGet(h); if (t) t._onRowSelect = cb; }
 function perry_ui_table_get_selected_row(h) { const t = uiGet(h); return t ? t._selectedRow : -1; }
 function perry_ui_textarea_create(placeholder, callback) {
@@ -3234,6 +3310,14 @@ function perry_ui_set_foreground(h, r, g, b, a) {
 }
 function perry_ui_set_font_size(h, size) { const el = uiGet(h); if (el) el.style.fontSize = size + "px"; }
 function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.style.fontWeight = weight; }
+// `textSetFontWeight(widget, size, weight)` sets the size and the weight together.
+// The weight is the native 0..1 scale (Apple's `systemFont(ofSize:weight:)`), mapped
+// onto CSS 100..900 and clamped, as the HarmonyOS backend maps it.
+function perry_ui_text_set_font_weight(h, size, weight) {
+  const el = uiGet(h); if (!el) return;
+  el.style.fontSize = size + "px";
+  el.style.fontWeight = String(Math.round(1 + 8 * Math.min(Math.max(weight, 0), 1)) * 100);
+}
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
   const el = uiGet(h); if (!el) return;
@@ -4987,6 +5071,7 @@ const __perryUiDispatch = {
   perry_ui_widget_add_overlay, perry_ui_widget_set_overlay_frame,
   // Styling
   perry_ui_set_background, perry_ui_set_foreground, perry_ui_set_font_size, perry_ui_set_font_weight,
+  perry_ui_text_set_font_weight,
   perry_ui_set_font_family, perry_ui_set_padding, perry_ui_set_frame, perry_ui_set_corner_radius,
   perry_ui_set_border, perry_ui_set_opacity, perry_ui_set_enabled, perry_ui_set_tooltip,
   perry_ui_set_control_size, perry_ui_set_widget_hidden, perry_ui_widget_set_background_gradient,
@@ -5182,6 +5267,7 @@ function __hostCallback(value) {
 // `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
 // which call it with an undefined `this`, as JS does for a detached method.
 const __classMethodValues = new Map();
+const __classMethodFns = new WeakSet();
 function __classMethodValue(cls, mname) {
   const key = cls + '\u0000' + mname;
   let fn = __classMethodValues.get(key);
@@ -5194,6 +5280,7 @@ function __classMethodValue(cls, mname) {
     };
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
+    __classMethodFns.add(fn);
     __classMethodValues.set(key, fn);
   }
   return fn;
@@ -5203,6 +5290,16 @@ function __classMethodValue(cls, mname) {
 // the pending exception under a WASM `try` and rethrows it outside one.
 function __throwNullReceiver(obj, name) {
   throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
+}
+
+// A zero-argument native member in an async (JS) body: a method is called, a member
+// the object has (a getter such as a Response's `status` or `headers`) is the read, and
+// an absent member throws as calling it would.
+function __jsNativeMember(obj, name) {
+  const member = obj[name];
+  if (typeof member === 'function') return member.call(obj);
+  if (name in Object(obj)) return member;
+  throw new TypeError(String(name) + ' is not a function');
 }
 
 // A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,

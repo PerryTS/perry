@@ -1143,7 +1143,9 @@ fn lower_stmt_inner(
                 }
                 ast::Decl::Class(class_decl) => {
                     let binding_name = class_decl.ident.sym.to_string();
-                    let class = lower_class_decl(ctx, class_decl, false)?;
+                    let mut class = lower_class_decl(ctx, class_decl, false)?;
+                    // R9BIRTH6: the init index its evaluation starts at.
+                    class.decl_stmt = (!class.is_nested).then_some(module.init.len() as u32);
                     // #5833: give the class NAME a real mutable lexical
                     // binding slot, matching GlobalDeclarationInstantiation's
                     // "a class declaration creates a MUTABLE binding" step

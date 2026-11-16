@@ -439,9 +439,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathPow(base, exp) => {
             let b = lower_math_operand(ctx, base)?;
             let e = lower_math_operand(ctx, exp)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
+            Ok(super::binary::lower_number_pow(ctx, &b, exp, &e))
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------

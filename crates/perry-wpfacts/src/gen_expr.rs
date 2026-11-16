@@ -46,7 +46,9 @@ impl<'a> Gen<'a> {
         if let Some(d) = &mut self.m.diagnostic {
             d.source_calls.insert(id);
         }
+        let first_arg_fixed = !spread.is_empty() && self.fixed_spreads.as_ref() == Some(&spread);
         self.m.calls.push(CallSite {
+            first_arg_fixed,
             this,
             args,
             spread,
@@ -54,6 +56,12 @@ impl<'a> Gen<'a> {
             site: id,
             region: self.region(),
         });
+        self.m.call_place.insert(id, (self.m.cur_fn, self.loop_depth));
+        if let Some((f, m)) = self.m.clause {
+            if self.m.cur_fn == f {
+                self.m.call_reach.insert(id, m);
+            }
+        }
         (id, ret)
     }
 
@@ -171,6 +179,37 @@ impl<'a> Gen<'a> {
         (self.expr_zs(fx, condition), TRUTHY, FALSY)
     }
 
+    /// Rule R2 (ECMA-262 14.6.2: an `if`'s branch runs only when its
+    /// test selects it): inside a branch whose test is a presence test
+    /// (`x === undefined`, `x !== undefined`, `x == null`, `x != null`),
+    /// a read of a local or of `this` holds the read node's values only
+    /// once the tested value can select the branch (`Cons::Guard`, the
+    /// gate the branch's local writes already pass). A branch the test
+    /// never selects reads nothing: its calls find no receiver or callee,
+    /// its stores no object, so none of its effects apply. The gate opens
+    /// once and stays open (values only grow), so the fixpoint is the same
+    /// one. `PERRY_FACTS_GUARD_REGIONS=0` turns it off.
+    pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        use crate::model::guard::*;
+        let Some((t, test)) = fx.guard else {
+            return n;
+        };
+        if !matches!(test, UNDEF | NOT_UNDEF | NULLISH | NOT_NULLISH) || !guard_regions_on() {
+            return n;
+        }
+        let g = self.tmp("guard-read");
+        self.zs_carrier(g);
+        self.m.cons(
+            t,
+            Cons::Guard {
+                test,
+                from: n,
+                dst: g,
+            },
+        );
+        g
+    }
+
     pub(crate) fn fail_closed(&mut self, fx: &Fx, e: &Expr, name: &str) -> NodeId {
         let why = format!("{UNMODELED_OPERAND} {name}");
         let mut kids: Vec<&Expr> = Vec::new();
@@ -212,7 +251,7 @@ impl<'a> Gen<'a> {
     }
 
     /// Is this store a construction-phase writer of the current ctor?
-    fn phase_owner(&self, fx: &Fx, e: &Expr, object: &Expr) -> Option<TmplId> {
+    pub(crate) fn phase_owner(&self, fx: &Fx, e: &Expr, object: &Expr) -> Option<TmplId> {
         let tm = fx.ctor_of?;
         if !matches!(object, Expr::This) {
             return None;
@@ -427,6 +466,7 @@ impl<'a> Gen<'a> {
         let pa = self.member_atom(inner, p);
         if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
+                access: crate::derive::Access::Read,
                 module: mi,
                 byte_offset: *byte_offset,
                 key: pa,
@@ -560,6 +600,8 @@ impl<'a> Gen<'a> {
             definite: atoms,
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -599,7 +641,8 @@ impl<'a> Gen<'a> {
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
-            Expr::Bool(_) => self.prim_node(prim::BOOL),
+            Expr::Bool(true) => self.prim_node(prim::TRUE),
+            Expr::Bool(false) => self.prim_node(prim::FALSE),
             Expr::Number(v) => self.num_literal(*v),
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
@@ -611,10 +654,13 @@ impl<'a> Gen<'a> {
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
-                _ => match self.narrowed_read(mi, *id) {
-                    Some(n) => n,
-                    None => self.local(mi, *id),
-                },
+                _ => {
+                    let n = match self.narrowed_read(mi, *id) {
+                        Some(n) => n,
+                        None => self.local(mi, *id),
+                    };
+                    self.region_read(fx, n)
+                }
             },
             // Program code never writes a `const` (lowering throws
             // `Assignment to constant variable`): `undefined` written into
@@ -646,12 +692,14 @@ impl<'a> Gen<'a> {
                     None => self.m.edge(vn, l),
                 }
                 self.narrowed_write(mi, *id, vn);
+                self.last_local_set = Some((mi, *id, vn, fx.guard));
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
                 let vn = self.expr_zs(fx, value);
                 let l = self.local(mi, *id);
                 self.m.edge(vn, l);
+                self.narrowed_write(mi, *id, vn);
                 self.expr_zs(fx, body)
             }
             Expr::GlobalGet(id) => {
@@ -726,6 +774,7 @@ impl<'a> Gen<'a> {
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
                         let l = self.local_write(mi, *id);
                         self.m.edge(v, l);
+                        self.narrowed_write(mi, *id, v);
                     }
                     _ => {}
                 }
@@ -750,7 +799,7 @@ impl<'a> Gen<'a> {
                     perry_hir::UpdateOp::Decrement => -1,
                 };
                 self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
-                self.m.cons(l, Cons::Arith { dst: out });
+                self.m.cons(l, Cons::Arith { dst: out, other: crate::model::NO_NODE });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 self.narrowed_write(mi, *id, out);
@@ -801,8 +850,24 @@ impl<'a> Gen<'a> {
                     use crate::model::guard::NOT_STR;
                     let nl = self.tmp("plus-num");
                     let nr = self.tmp("plus-num");
-                    self.m.cons(l, Cons::Plus { str: out, num: nl });
-                    self.m.cons(rv, Cons::Plus { str: out, num: nr });
+                    self.m.cons(
+                        l,
+                        Cons::Plus {
+                            str: out,
+                            num: nl,
+                            other: rv,
+                            right: false,
+                        },
+                    );
+                    self.m.cons(
+                        rv,
+                        Cons::Plus {
+                            str: out,
+                            num: nr,
+                            other: l,
+                            right: true,
+                        },
+                    );
                     self.m.cons(
                         rv,
                         Cons::Guard {
@@ -820,8 +885,8 @@ impl<'a> Gen<'a> {
                         },
                     );
                 } else {
-                    for v in [l, rv] {
-                        self.m.cons(v, Cons::Arith { dst: out });
+                    for (v, other) in [(l, rv), (rv, l)] {
+                        self.m.cons(v, Cons::Arith { dst: out, other });
                     }
                 }
                 if shift {
@@ -854,7 +919,7 @@ impl<'a> Gen<'a> {
                         _ => crate::model::RangeOp::BitNot,
                     };
                     self.range_rule(rop, v, None, out);
-                    self.m.cons(v, Cons::Arith { dst: out });
+                    self.m.cons(v, Cons::Arith { dst: out, other: crate::model::NO_NODE });
                     out
                 }
             },
@@ -1013,6 +1078,7 @@ impl<'a> Gen<'a> {
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
                     if *byte_offset != 0 {
                         self.read_sites.push(ReadSite {
+                            access: crate::derive::Access::Read,
                             module: mi,
                             byte_offset: *byte_offset,
                             key: a,
@@ -1033,6 +1099,7 @@ impl<'a> Gen<'a> {
                 let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
+                        access: crate::derive::Access::Read,
                         module: mi,
                         byte_offset: *byte_offset,
                         key: a,
@@ -1059,11 +1126,33 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 value,
+                byte_offset,
                 ..
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr_zs(fx, value);
                 let a = self.member_atom(object, property);
+                // ACCSITE1 P4: a compound `o.k op= v` (13.15.3): GetValue
+                // then PutValue of one reference, one base evaluation: two
+                // sites at the member's offset.
+                let compound = *byte_offset != 0
+                    && !matches!(object.as_ref(), Expr::PrivateGuard { .. })
+                    && matches!(value.as_ref(), Expr::Binary { left, .. }
+                        if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
+                if compound {
+                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false, uint_value: false }] {
+                        self.store_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *byte_offset,
+                            key: a,
+                            recv: o,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                            access,
+                        });
+                    }
+                }
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1102,13 +1191,47 @@ impl<'a> Gen<'a> {
                 let v = self.expr_zs(fx, value);
                 self.direct_arr = None;
                 let rv = self.expr(fx, receiver);
+                // ACCSITE1 P1: a named store `o.k = v` (13.15.2 PutValue,
+                // 10.1.9 [[Set]]) is a site at the member's offset.
+                if let (Expr::String(s), Expr::PutValueSet { element_offset, strict, .. }) =
+                    (key.as_ref(), e)
+                {
+                    if *element_offset != 0 && !s.starts_with('#') {
+                        let a = self.m.atom(s);
+                        let uint_value = match value.as_ref() {
+                            Expr::Integer(n) => (0..=u32::MAX as i64).contains(n),
+                            Expr::Number(n) => n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n),
+                            _ => false,
+                        };
+                        self.store_sites.push(ReadSite {
+                            module: mi,
+                            byte_offset: *element_offset,
+                            key: a,
+                            recv: rv,
+                            is_call: false,
+                            value_call: false,
+                            func: fx.f,
+                            access: crate::derive::Access::Set { strict: *strict, uint_value },
+                        });
+                    }
+                }
                 let owner = self.phase_owner(fx, e, target);
                 if let Some(kp) = self.for_in_key_of(fx.module, key) {
                     // A for-in run's key decides the stored key (FVA 4.3b).
+                    let subj = self.enum_key_subject(fx, key);
+                    let named = self.same_key_proto_src(fx, key, value);
                     for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        if let Some(nm) = named {
+                            self.m.stores[site as usize].proto_named = true;
+                            let ps = self.store_site(fx.module, fx.f, format!("{what}-proto"), owner, false);
+                            self.m.stores[ps as usize].proto_of = Some(site);
+                            self.mark_fn_phase(fx, e, target, ps);
+                            let key = Key::Named(self.m.atom("__proto__"));
+                            self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                        }
                         self.mark_fn_phase(fx, e, target, site);
-                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                     }
                 } else if let Some(ks) = self.const_key_set(fx.module, key) {
                     // One of a few constant keys: a named store under each.
@@ -1174,7 +1297,7 @@ impl<'a> Gen<'a> {
                 v
             }
             Expr::PropertyUpdate {
-                object, property, ..
+                object, property, op, ..
             } => {
                 let o = self.expr(fx, object);
                 let a = self.member_atom(object, property);
@@ -1189,7 +1312,11 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv2 });
+                self.m.cons(cur, Cons::Arith { dst: nv2, other: crate::model::NO_NODE });
+                // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
+                // the hull of the old and the new value (prefix or postfix).
+                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv2);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1219,7 +1346,7 @@ impl<'a> Gen<'a> {
                 index,
             } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 self.to_property_key(i);
                 let key = self.read_key(fx.module, index);
@@ -1246,10 +1373,33 @@ impl<'a> Gen<'a> {
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                         let shape = self.key_shape(fx.module, index);
+                        let enumerable = self.enum_read(fx.module, object, index);
+                        // F-A: once the body may change the path, the
+                        // ordinary read too (`Gen::path_watch`).
+                        if let Some(g) = self.enum_gate(fx.module, object, index) {
+                            self.m.cons(
+                                g,
+                                Cons::IdxLoad {
+                                    idx,
+                                    dst,
+                                    shape,
+                                    enumerable: false,
+                                    kept: false,
+                                },
+                            );
+                        }
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
                             Some(bad) => {
-                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
+                                self.m.cons(
+                                    o,
+                                    Cons::IdxOwnLoad {
+                                        idx,
+                                        dst,
+                                        shape,
+                                        enumerable,
+                                    },
+                                );
                                 self.m.cons(
                                     bad,
                                     Cons::OwnGate {
@@ -1257,13 +1407,22 @@ impl<'a> Gen<'a> {
                                         idx,
                                         dst,
                                         shape,
+                                        enumerable,
                                     },
                                 );
                             }
                             // After a store of the same object and key
                             // (`gen/own_store.rs`).
                             None if self.own_store_reads.contains(&(e as *const Expr as usize)) => {
-                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape })
+                                self.m.cons(
+                                    o,
+                                    Cons::IdxOwnLoad {
+                                        idx,
+                                        dst,
+                                        shape,
+                                        enumerable,
+                                    },
+                                )
                             }
                             None => {
                                 let kept = self.in_bounds_read(fx, object, index, o, idx);
@@ -1271,6 +1430,7 @@ impl<'a> Gen<'a> {
                                     idx,
                                     dst,
                                     shape,
+                                    enumerable,
                                     kept,
                                 };
                                 self.m.cons(o, c)
@@ -1297,7 +1457,7 @@ impl<'a> Gen<'a> {
                 value,
             } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 self.to_property_key(i);
                 let v = self.expr_zs(fx, value);
@@ -1306,7 +1466,16 @@ impl<'a> Gen<'a> {
                     // rooted as any element store (DECISIONS 149b).
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
                     self.mark_rooted(e, site);
-                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                    if let Some(nm) = self.same_key_proto_src(fx, index, value) {
+                        self.m.stores[site as usize].proto_named = true;
+                        let ps = self.store_site(fx.module, fx.f, "[]=-proto".into(), None, false);
+                        self.m.stores[ps as usize].proto_of = Some(site);
+                        self.mark_rooted(e, ps);
+                        let key = Key::Named(self.m.atom("__proto__"));
+                        self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                    }
+                    let subj = self.enum_key_subject(fx, index);
+                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
                     // One of a few constant keys: a named store under each.
                     for s in ks {
@@ -1331,9 +1500,9 @@ impl<'a> Gen<'a> {
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
-            Expr::IndexUpdate { object, index, .. } => {
+            Expr::IndexUpdate { object, index, op, .. } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 self.to_property_key(i);
                 let key = self.key_of(fx.module, index);
@@ -1349,7 +1518,11 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv });
+                self.m.cons(cur, Cons::Arith { dst: nv, other: crate::model::NO_NODE });
+                // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
+                // the hull of the old and the new value (prefix or postfix).
+                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv);
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
@@ -1507,12 +1680,15 @@ impl<'a> Gen<'a> {
                 // result, and what the sources copy into, is ToObject(target)
                 // (ECMA-262 20.1.2.1 step 1): never a primitive.
                 let target = self.expr(fx, target);
-                let (wrapper, w) = self.bobj(mi, "Object(prim)");
+                // One wrapper per primitive kind (`builtins::to_object_into`).
+                let ws = ["BoxedNumber", "BoxedString", "BoxedBoolean", "Object(prim)"]
+                    .map(|what| self.bobj(mi, what));
                 let t = self.tmp("to-object");
-                crate::builtins::to_object_into(&mut self.m, target, wrapper, w, t);
+                crate::builtins::to_object_into(&mut self.m, target, ws, t);
                 for s in sources {
                     let sv = self.expr(fx, s);
                     let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);
+                    self.m.stores[site as usize].assign = true;
                     self.m.cons(sv, Cons::Spread { into: t, site });
                 }
                 t
@@ -1542,11 +1718,15 @@ impl<'a> Gen<'a> {
                 }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
+                let mut vs = Vec::with_capacity(elems.len());
                 for el in elems {
                     let v = self.expr_zs(fx, el);
                     self.m.edge(v, fa);
+                    vs.push(v);
                 }
-                self.tok_node(t)
+                let n = self.tok_node(t);
+                self.m.arr_lit_elems.insert(n, vs);
+                n
             }
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
@@ -1587,8 +1767,24 @@ impl<'a> Gen<'a> {
             }
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
-                let _ = (&a, &s);
-                self.call_with(fx, callee, a, s, (0, 0))
+                // The calls made from this argument list hold its spread
+                // nodes (fresh above): their `args[0]` is the first argument
+                // unless a spread leads the list.
+                let lead = matches!(args.first(), Some(CallArg::Spread(_)));
+                let (c0, spreads) = (self.m.calls.len(), s.clone());
+                // The call is fixed when it is made (`new_call`): a builtin
+                // model run for it then (the console formatter) reads it.
+                let prev = std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
+                let ret = self.call_with(fx, callee, a, s, (0, 0));
+                self.fixed_spreads = prev;
+                if !lead {
+                    for c in &mut self.m.calls[c0..] {
+                        if c.spread == spreads {
+                            c.first_arg_fixed = true;
+                        }
+                    }
+                }
+                ret
             }
             Expr::FuncRef(id) if self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) => {
                 let name = &self.view.expect("view").foreign_funcs[id];
@@ -2081,7 +2277,12 @@ impl<'a> Gen<'a> {
                 let k = self.m.atom(method_name);
                 self.mcall(c, Key::Named(k), a, vec![])
             }
-            Expr::This => fx.this,
+            Expr::This => {
+                let n = self
+                    .narrowed_read(fx.module, crate::gen::narrow::THIS_LOCAL)
+                    .unwrap_or(fx.this);
+                self.region_read(fx, n)
+            }
             Expr::ModuleTopThis => fx.this,
             Expr::SuperCall(args) => {
                 let a = self.evaluate_all(fx, args);
@@ -2132,4 +2333,10 @@ impl<'a> Gen<'a> {
         let s = self.key_shape_of(mi, e, &mut Vec::new());
         self.m.key_shape(s.filter(|s| !s.globs.is_empty()))
     }
+}
+
+/// `PERRY_FACTS_GUARD_REGIONS=0`: branch reads are not gated (rule R2 off).
+fn guard_regions_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_GUARD_REGIONS").as_deref() != Ok("0"))
 }

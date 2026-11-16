@@ -85,13 +85,23 @@ fn spread_of_a_given_parameter_stays_unproven() {
     assert!(matches!(m[0].verdict, Verdict::No(_)), "{:?}", m[0].verdict);
 }
 
-/// Control: an opaque source that is not top (a built-in function) stays an origin: its injection
-/// keeps the target node as its cause, which is not top.
+/// Control: an opaque source that is not top (a built-in Error object) stays an origin: its
+/// injection keeps the target node as its cause, which is not top.
 #[test]
 fn spread_of_an_opaque_builtin_stays_an_origin() {
-    let src = format!("{K}const a: any = {{ k: new K(), ...Math.max }};\nconsole.log(a.k.m());\n");
+    let src = format!("{K}const a: any = {{ k: new K(), ...new Error(\"e\") }};\nconsole.log(a.k.m());\n");
     let pf = census(&src);
     for s in spread_sources(&pf) {
         assert!(!node_is_top(&pf, &s), "source {s} is top");
     }
+}
+
+/// Twin: a Map is born with no own property (ECMA-262 24.1.1.1): its spread
+/// is modelled and injects nothing.
+#[test]
+fn spread_of_an_object_born_without_own_props_injects_nothing() {
+    let src = format!("{K}const a: any = {{ k: new K(), ...new Map() }};\nconsole.log(a.k.m());\n");
+    let pf = census(&src);
+    assert!(!lines(&pf).iter().any(|l| l.starts_with("{\"record\":\"birth-injection\"")
+        && l.contains("\"why\":\"spread of an unmodeled object\"")));
 }

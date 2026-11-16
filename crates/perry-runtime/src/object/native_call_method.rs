@@ -490,6 +490,44 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     js_native_call_method_str_key(object, method_id, args_ptr, args_len)
 }
 
+/// ONCHG1: the own-value arm of a guarded named call `o.k( ... )`. The
+/// compiled caller compared `o`'s exact class family word and read `value`
+/// from the family's late slot of `k` (not the hole). Under that word the
+/// layout names every own key and the late key is a data property, so
+/// OrdinaryGet (10.1.8.1) gives `value`; EvaluateCall (13.3.6.2) then calls
+/// it with `o` as `this` (7.3.14). A compiled user closure enters its body
+/// directly; any other value (a builtin, a bound function, a non-callable
+/// that throws) takes the complete by-id call, which performs the same
+/// Get-then-Call. The tests here are a subset of the by-id path's own-slot
+/// arm (`call_by_id`): no name decode, descriptor probe or key compare.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_call_late_own_value(
+    object: f64,
+    value: i64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let v = value as u64;
+    if v & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((v & crate::value::POINTER_MASK) as usize)
+    {
+        let closure = (v & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if let Some(info) = (*closure).info.as_ref() {
+            if info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0 {
+                return compiled_target::enter_compiled_body(
+                    closure,
+                    info,
+                    crate::closure::JsThis::from_f64(object),
+                    args_ptr,
+                    args_len,
+                );
+            }
+        }
+    }
+    js_native_call_method_by_id(object, method_id, args_ptr, args_len)
+}
+
 /// Apply/spread sibling of `js_native_call_method_by_id`.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(

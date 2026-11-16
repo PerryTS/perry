@@ -1850,6 +1850,7 @@ mod store;
 pub(crate) use store::desc_own_key;
 pub(crate) use store::desc_position_hashed;
 pub(crate) use store::family_create;
+pub(crate) use store::family_own_data_slot;
 pub(crate) use store::family_own_key;
 pub(crate) use store::family_own_key_hashed;
 pub(crate) use store::family_store;

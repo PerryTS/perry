@@ -1238,14 +1238,22 @@ fn filled_records(modules: &[&HirModule]) -> BTreeSet<String> {
 
 /// A static family before its late keys: the class, its runtime parent, its
 /// constructor keys in store order, the names its prototype chain defines
-/// (methods and accessors: a store of one may run a setter or shadow it, so
-/// it never gets a late slot), and the chain's class ids, leaf first.
+/// (methods and accessors), and the chain's class ids, leaf first. A member
+/// name gets no late slot ([`RawFamily::late_blocked`]) unless it is only a
+/// writable data member of the chain (an ordinary method): a `[[Set]]` on a
+/// receiver whose chain holds a writable data property creates an own data
+/// property (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor steps 2-3), so
+/// its slot is exact; a store of an accessor's name runs the setter.
 #[derive(Debug, Clone)]
 pub(crate) struct RawFamily {
     pub class_id: u32,
     pub parent: u32,
     pub keys: Vec<FamilyKey>,
     pub members: BTreeSet<String>,
+    /// The member names that are an ordinary method on some class of the
+    /// chain and an accessor on none: a store of one creates an own data
+    /// property (owner decision 2026-11-16: one fixed late slot per class).
+    pub data_methods: BTreeSet<String>,
     pub chain: Vec<u32>,
     /// [`FamilyLayout::init_count`].
     pub init: usize,
@@ -1257,6 +1265,16 @@ pub(crate) struct RawFamily {
     /// reads, and per constant the variant's keys in key order.
     pub discriminant: u32,
     pub variants: Vec<(f64, Vec<FamilyKey>)>,
+}
+
+impl RawFamily {
+    /// Does the chain keep `k` out of the late slots? An accessor (a store
+    /// runs it), and a generator or async method (kept out with the
+    /// accessors); an ordinary method is a writable data property, so a
+    /// store of its name creates an own data property: it may hold a slot.
+    pub(crate) fn late_blocked(&self, k: &str) -> bool {
+        self.members.contains(k) && !self.data_methods.contains(k)
+    }
 }
 
 /// A root class's constructor keys stored straight from a parameter, as
@@ -1302,6 +1320,63 @@ mod parents;
 
 /// Every class chain is resolved over the whole program, with the owning
 /// module retained at every step (local ids and names are module scoped).
+/// The classes that are not families because `Reflect.construct(Q, args, P)`
+/// may name two different classes. ECMA-262 28.1.2 and 10.1.13: the object
+/// gets `P.prototype` (OrdinaryCreateFromConstructor on newTarget) and its
+/// keys are the stores Q's constructor chain runs, in that order: neither
+/// P's layout nor Q's. Such objects are ordinary objects, so neither class
+/// is a family (one layout per family class, D-CG1). Decided from the whole
+/// program: CLOSED-WORLD PREMISE (no eval / dynamic code): every
+/// `Reflect.construct` of the program is in its HIR. When the newTarget may
+/// be a class this cannot name, every class the program uses as a value is
+/// not a family. Without a newTarget, with the same class twice, or with a
+/// function expression as the newTarget (the object is the target's own,
+/// prototype relinked) the target stays a family.
+fn reflect_construct_classes(modules: &[(&str, &HirModule)]) -> BTreeSet<String> {
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    let mut values: BTreeSet<String> = BTreeSet::new();
+    let mut unbounded = false;
+    for (_, hir) in modules {
+        let bindings = class_bindings(hir);
+        let class_of = |e: &Expr| match e {
+            Expr::ClassRef(n) => Some(n.clone()),
+            Expr::LocalGet(id) => bindings.get(id).cloned(),
+            _ => None,
+        };
+        for body in module_bodies(hir) {
+            visit_stmts(body, &mut |_| {}, &mut |e| match e {
+                Expr::ClassRef(n) => {
+                    values.insert(n.clone());
+                }
+                Expr::ReflectConstruct {
+                    target, new_target, ..
+                } => {
+                    if matches!(**new_target, Expr::Undefined | Expr::Closure { .. }) {
+                        return;
+                    }
+                    let t = class_of(target);
+                    let nt = class_of(new_target);
+                    if t.is_some() && t == nt {
+                        return;
+                    }
+                    named.extend(t);
+                    match nt {
+                        Some(n) => {
+                            named.insert(n);
+                        }
+                        None => unbounded = true,
+                    }
+                }
+                _ => {}
+            });
+        }
+    }
+    if unbounded {
+        named.extend(values);
+    }
+    named
+}
+
 fn program_families(
     modules: &[(&str, &HirModule)],
     reexports: &BTreeMap<(String, String), String>,
@@ -1329,8 +1404,13 @@ fn program_families(
         })
         .collect();
     let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
+    let reflect_made = reflect_construct_classes(modules);
     let mut out = Vec::new();
     'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
+        if reflect_made.contains(&c.name) {
+            refuse(c, "reflect-construct-new-target");
+            continue 'class;
+        }
         // The chain, leaf first.
         let mut chain: Vec<&Class> = vec![c];
         let mut cur = c;
@@ -1435,16 +1515,29 @@ fn program_families(
             );
         }
         let mut members = BTreeSet::new();
+        let mut accessors = BTreeSet::new();
+        let mut methods = BTreeSet::new();
         for x in &chain {
             members.extend(x.methods.iter().map(|m| m.name.clone()));
             members.extend(x.getters.iter().map(|(n, _)| n.clone()));
             members.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.getters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            for m in &x.methods {
+                if m.is_generator || m.is_async {
+                    accessors.insert(m.name.clone());
+                } else {
+                    methods.insert(m.name.clone());
+                }
+            }
         }
+        let data_methods = methods.difference(&accessors).cloned().collect();
         out.push(RawFamily {
             class_id: c.id,
             parent,
             keys,
             members,
+            data_methods,
             chain: chain.iter().map(|x| x.id).collect(),
             init,
             params: if chain.len() == 1 && !c.is_literal_shape() {

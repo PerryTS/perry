@@ -800,6 +800,18 @@ pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
     })
 }
 
+/// Does any completed shape hold a constant function at `slot` under the key
+/// `key`? The family-layout twin of `slot_may_be_constfn`: a family class's
+/// birth keys are not in constructor order, so the key names the slot.
+pub(crate) fn key_may_be_constfn_at(key: &str, slot: u32) -> bool {
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow().keys().any(|s| {
+            s.constfn.iter().any(|i| i.slot as u32 == slot)
+                && s.keys.split(|&b| b == 0).nth(slot as usize) == Some(key.as_bytes())
+        })
+    })
+}
+
 /// Does any completed shape of the program name `body` (a JS body symbol) in
 /// a ConstFn lane? Such a body is the target of static method-lane calls.
 pub(crate) fn body_has_constfn_lane(body: &str) -> bool {

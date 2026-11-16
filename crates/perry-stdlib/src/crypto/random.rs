@@ -563,13 +563,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
         "generateKeyPair" => js_crypto_generate_key_pair_async(str_ptr(0), arg(1), arg(2)),
         "generateKeyPairSync" => {
-            let alg = bytes_from_ptr(str_ptr(0));
-            let pair = match alg.as_slice() {
-                b"ec" => js_crypto_generate_key_pair_sync_ec_p256(arg(1)),
-                b"ed25519" => js_crypto_generate_key_pair_sync_ed25519(arg(1)),
-                b"x25519" => js_crypto_generate_key_pair_sync_x25519(arg(1)),
-                _ => js_crypto_generate_key_pair_sync_rsa(arg(1)),
-            };
+            let pair = js_crypto_generate_key_pair_sync_named(str_ptr(0), arg(1));
             pointer_value(pair as *mut u8)
         }
         "generateKey" => js_crypto_generate_key_async(str_ptr(0), arg(1), arg(2)),

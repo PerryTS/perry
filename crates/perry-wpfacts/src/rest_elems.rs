@@ -265,11 +265,15 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         Cons::Identity { .. }
         | Cons::Raise { .. }
         | Cons::IndexHole
+        | Cons::IndexHoleIn { .. }
         | Cons::IndexKept
         | Cons::LenIndex { .. }
         | Cons::Guard { .. }
         | Cons::Defined { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
+        | Cons::NotNull { .. }
+        | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }
         | Cons::Objects { .. }

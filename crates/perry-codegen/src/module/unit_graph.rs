@@ -54,7 +54,7 @@ pub(crate) fn reference_edges(funcs: &[&LlFunction]) -> Vec<UnitEdge> {
                 edges.push(UnitEdge { from, to, direct });
             }
         };
-        let mut operand = |value: &str, note: &mut dyn FnMut(&str, bool)| {
+        let operand = |value: &str, note: &mut dyn FnMut(&str, bool)| {
             if value.contains('@') {
                 for_each_symbol(value, &mut |name, _| note(name, false));
             }

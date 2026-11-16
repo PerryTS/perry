@@ -968,6 +968,15 @@ fn coerced_start(
 /// the TypeError for a non-writable `lastIndex` returned instead of thrown.
 /// Neither branch runs user code.
 fn store_last_index(re: *mut RegExpHeader, n: usize) -> Result<(), EngineError> {
-    super::set_last_index_caught(crate::value::js_nanbox_pointer(re as i64), n as f64)
-        .map_err(EngineError::Abrupt)
+    let receiver = crate::value::js_nanbox_pointer(re as i64);
+    // On the birth layout `lastIndex` is an own writable data property
+    // (22.2.3.1), so the Set is OrdinarySet's store of the value into its
+    // slot (10.1.9.2). A non-writable `lastIndex`, a frozen receiver or any
+    // other layout keeps the ordinary Set and its TypeError.
+    if let Some(re) = super::instance::birth_layout(receiver) {
+        // SAFETY: admitted just now; nothing collected since.
+        unsafe { super::instance::birth_set_last_index(re, n as f64) };
+        return Ok(());
+    }
+    super::set_last_index_caught(receiver, n as f64).map_err(EngineError::Abrupt)
 }

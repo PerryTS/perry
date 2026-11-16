@@ -201,7 +201,7 @@ impl<'a> Gen<'a> {
             }
             let token = fi.token;
             let n = fi.params.len();
-            let name = crate::contracts::fn_contract_name(self, f).0;
+            let name = crate::fn_contract_name(self, f).0;
             let broken = unit_in.broken(&format!("fn:{name}"));
             let runs = unit_in.ctor_runs.get(&name);
             if broken {
@@ -533,6 +533,8 @@ impl<'a> Gen<'a> {
             static_methods: Vec::new(),
             declared: vec![],
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         self.stand_in_arrs.insert(display.to_string(), t);
@@ -945,6 +947,8 @@ impl<'a> Gen<'a> {
             definite,
             declared: Vec::new(),
             reserved,
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(ctor),
             native_parent: c.native_parent.clone(),
@@ -1364,11 +1368,13 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: true,
+            arguments: None,
             own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
+            foreign_params: true,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -1378,6 +1384,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded,
+            ret_param: None,
         });
         if sink_args {
             self.m.sink_node(args_all, reason);

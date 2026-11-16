@@ -21,13 +21,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
-    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
-    match unit {
-        true => crate::compute_units(&list, &FactsConfig::default()),
-        false => crate::compute(&list, &FactsConfig::default()),
-    }
-}
 
 // The target's side of the wrapper: its record binding, assigned by the
 // factory before the body.
@@ -194,4 +187,12 @@ fn a_literal_builtin_require_is_its_module() {
     assert!(hook.iter().any(|t| t.contains("createHook")), "{hook:?}");
     let fs = create_require_member("\"fs\"", "createHook");
     assert!(!fs.iter().any(|t| t.contains("createHook")), "{fs:?}");
+}
+
+fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    match unit {
+        true => crate::compute(&list, &FactsConfig::default()),
+        false => crate::compute(&list, &FactsConfig::default()),
+    }
 }

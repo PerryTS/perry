@@ -19,7 +19,7 @@ impl<'a> Gen<'a> {
         // One rule with `builtins::adopt`: a value fulfils as itself only
         // when its `then` read is not callable (`Cons::Fulfil`).
         self.m.cons(v, Cons::Fulfil { dst: out });
-        let pa = self.m.atom("#value");
+        let pa = crate::builtins::promise_result_atom(&mut self.m);
         self.m.cons(
             v,
             Cons::Load {
@@ -53,7 +53,7 @@ impl<'a> Gen<'a> {
     /// resolve function copies what a thenable passes it.
     fn awaited_plain(&mut self, v: NodeId, out: NodeId) -> NodeId {
         self.m.edge(v, out);
-        let pa = self.m.atom("#value");
+        let pa = crate::builtins::promise_result_atom(&mut self.m);
         self.m.cons(
             v,
             Cons::Load {
@@ -104,7 +104,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let a = self.m.atom("#value");
+        let a = crate::builtins::promise_result_atom(&mut self.m);
         let f = self.m.field(t, a);
         let aw = self.awaited(value);
         self.m.edge(aw, f);

@@ -10,6 +10,7 @@ pub mod capability;
 mod class_accessors;
 pub mod crypto_chain;
 pub mod deferral;
+pub mod descriptor;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
 pub mod egress;

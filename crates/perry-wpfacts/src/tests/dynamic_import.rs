@@ -91,7 +91,7 @@ fn program(main: &str, paths: &[&str], units: bool, sabotage: Option<&str>) -> P
         ..Default::default()
     };
     if units {
-        crate::compute_units(&list, &cfg)
+        crate::compute(&list, &cfg)
     } else {
         crate::compute(&list, &cfg)
     }

@@ -169,6 +169,7 @@ fn not_array_member(m: &Model, key: crate::model::Atom, recvs: &[NodeId]) -> Opt
         return why("receiver:not-array");
     }
     let site = crate::gen::ReadSite {
+        access: crate::derive::Access::Read,
         module: 0,
         byte_offset: 0,
         key,

@@ -5,6 +5,18 @@
 
 use super::*;
 
+/// Built-in Error constructors whose first argument is the message. A user class
+/// extending one of them has no compiled parent constructor to call.
+const BUILTIN_ERROR_PARENTS: &[&str] = &[
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+];
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_classes(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
@@ -288,8 +300,19 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
                 self.emit_store_const(func, 1, args.len() as f64);
                 self.emit_memcall(func, "class_new", 2);
+                let ctor = self
+                    .emitter
+                    .class_ctor_map
+                    .get(class_name.as_str())
+                    .copied();
+                if self.extends_builtin_error(class_name) {
+                    // An Error's message is "" until a `super(msg)` sets it. With no
+                    // compiled constructor, the implicit one forwards its args there.
+                    let fwd: &[Expr] = if ctor.is_none() { args } else { &[] };
+                    self.emit_error_super_init(func, fwd);
+                }
                 // Call the compiled constructor if it exists
-                if let Some(&ctor_idx) = self.emitter.class_ctor_map.get(class_name.as_str()) {
+                if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
                     for arg in args {
                         self.emit_expr(func, arg);
@@ -354,7 +377,17 @@ impl<'a> FuncEmitCtx<'a> {
                         }
                     }
                 }
-                if !called {
+                let error_parent = !called
+                    && self
+                        .current_class
+                        .as_ref()
+                        .is_some_and(|c| self.extends_builtin_error(c));
+                if error_parent {
+                    // `super(msg)` into a built-in Error sets this.message.
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_error_super_init(func, args);
+                    func.instruction(&Instruction::Drop);
+                } else if !called {
                     // No parent constructor found, drop args
                     for arg in args {
                         self.emit_expr(func, arg);
@@ -364,48 +397,18 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::SuperMethodCall { method, args } => {
-                // Call parent method on this via class_call_method (walks parent chain)
-                self.emit_slot_addr(func, 0); // this handle
-                func.instruction(&Instruction::LocalGet(0));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                })); // slot 0 = this (already i64)
-                let method_id = self
-                    .emitter
-                    .string_map
-                    .get(method.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let method_bits = (STRING_TAG << 48) | (method_id as u64);
-                self.emit_store_const(func, 1, f64::from_bits(method_bits)); // slot 1 = method name
-                                                                             // Build args array
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall(func, "array_new", 0);
-                for arg in args {
-                    self.emit_frame_begin(func, 2);
-                    func.instruction(&Instruction::LocalSet(self.temp_local));
-                    self.emit_slot_addr(func, 0);
-                    func.instruction(&Instruction::LocalGet(self.temp_local));
-                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
-                    self.emit_store_arg(func, 1, arg);
-                    self.emit_memcall(func, "array_push", 2);
-                }
-                self.emit_frame_begin(func, 3);
-                func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array
-                self.emit_slot_addr(func, 2);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "class_call_method", 3);
+                let key = Expr::String(method.clone());
+                self.emit_super_method_call(func, &key, &Expr::This, args);
+            }
+            // A class method's `super.m()` lowers to this form with the class as its
+            // home object; its body is compiled with `current_class` set to that class.
+            Expr::ObjectSuperMethodCall {
+                key,
+                receiver,
+                args,
+                ..
+            } if self.current_class.is_some() => {
+                self.emit_super_method_call(func, key, receiver, args);
             }
             Expr::ClassRef(_) => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
@@ -502,6 +505,9 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let method_bits = (STRING_TAG << 48) | (method_id as u64);
+                // The frame is open before any slot store; the args array is built in
+                // frames above it.
+                self.emit_frame_begin(func, 3);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits)); // slot 0 = class handle
                 self.emit_store_const(func, 1, f64::from_bits(method_bits)); // slot 1 = method name
                                                                              // Build args array
@@ -520,7 +526,6 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_arg(func, 1, arg);
                     self.emit_memcall(func, "array_push", 2);
                 }
-                self.emit_frame_begin(func, 3);
                 func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array
                 self.emit_slot_addr(func, 2);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -606,5 +611,88 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+}
+
+impl<'a> FuncEmitCtx<'a> {
+    /// `super[key](args)` in a method of `current_class`: the lookup starts at that
+    /// class's parent, not at the receiver's class, and `receiver` stays `this`.
+    /// As in `o.m(args)`, the property is read before the arguments are evaluated.
+    fn emit_super_method_call(
+        &mut self,
+        func: &mut Function,
+        key: &Expr,
+        receiver: &Expr,
+        args: &[Expr],
+    ) {
+        let class_id = self
+            .current_class
+            .as_ref()
+            .and_then(|name| self.emitter.string_map.get(name.as_str()))
+            .copied()
+            .unwrap_or(0);
+        let class_bits = (STRING_TAG << 48) | (class_id as u64);
+        let store = Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        });
+        // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
+        self.emit_frame_begin(func, 4);
+        self.emit_store_arg(func, 1, receiver);
+        self.emit_frame_begin(func, 3);
+        self.emit_store_arg(func, 0, receiver);
+        self.emit_store_const(func, 1, f64::from_bits(class_bits));
+        self.emit_store_arg(func, 2, key);
+        self.emit_memcall(func, "class_super_get", 3);
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&store);
+        // The key names the callee in the TypeError; a computed one is not evaluated twice.
+        match key {
+            Expr::String(_) => self.emit_store_arg(func, 2, key),
+            _ => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
+        }
+        self.emit_store_arg(func, 3, &Expr::Array(args.to_vec(), None));
+        self.emit_memcall(func, "class_super_call", 4);
+    }
+}
+
+impl FuncEmitCtx<'_> {
+    /// Whether `class_name`'s chain of user classes ends at a built-in Error.
+    fn extends_builtin_error(&self, class_name: &str) -> bool {
+        let mut name = class_name;
+        while let Some(parent) = self.emitter.class_parent_map.get(name) {
+            if !self.emitter.user_classes.contains(parent) {
+                return BUILTIN_ERROR_PARENTS.contains(&parent.as_str());
+            }
+            name = parent;
+        }
+        false
+    }
+
+    /// Stack: [instance] -> [instance], with the instance's message set from `args[0]`
+    /// as the Error constructor sets it. Every arg is evaluated before the message is
+    /// converted; the rest (the options bag) only for their effects.
+    fn emit_error_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_frame_begin(func, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        match args.first() {
+            Some(msg) => self.emit_store_arg(func, 1, msg),
+            None => self.emit_store_const(func, 1, f64::from_bits(TAG_UNDEFINED)),
+        }
+        for arg in args.iter().skip(1) {
+            self.emit_expr(func, arg);
+            func.instruction(&Instruction::Drop);
+        }
+        self.emit_memcall(func, "error_super_init", 2);
     }
 }

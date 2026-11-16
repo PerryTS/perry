@@ -55,6 +55,44 @@ fn callable_workers_preserve_serial_ir() {
     assert!(!text.contains("__perry_callable_site_"));
 }
 
+/// Dead-body removal reads the module's body classifications while each
+/// body is lowered. A worker must see them too: whether a module lowers in
+/// parallel depends on the free CPU slots at that moment, so without them
+/// the same compile emits an inactive body as a trap or in full.
+#[test]
+fn callable_workers_keep_dead_body_removal() {
+    let hir = module();
+    let bodies: std::collections::BTreeMap<(u32, String), bool> = hir
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ((f.id, String::new()), i % 2 == 0))
+        .collect();
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    program_facts: crate::codegen::ProgramFactsView {
+                        verification_bodies: Some(std::sync::Arc::new(bodies.clone())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(
+        String::from_utf8_lossy(&serial).contains("llvm.trap"),
+        "an inactive body must trap"
+    );
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
+}
+
 #[test]
 fn owned_function_roundtrip_keeps_builder_state() {
     let mut module = LlModule::new("x86_64-unknown-linux-gnu");

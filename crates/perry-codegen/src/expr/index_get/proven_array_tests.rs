@@ -440,6 +440,7 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
     elision.classes.insert(
         class.id,
         FactsClass {
+            absent: Vec::new(),
             display: class.name.clone(),
             fixed_layout: true,
             fields: vec![FactsField {
@@ -607,4 +608,66 @@ fn the_array_rep_join_says_what_both_say() {
     };
     let j = FactsArrRep::join(a, holey);
     assert_eq!((j.elem, j.dense), (FactsElemRep::Boxed, false));
+}
+
+/// ELEM4: an erased receiver (`any`, as every three.js local is: `const te
+/// = this.elements`) the facts give `Arr(rep)` reads and stores through the
+/// rep tier, as a typed one does: the facts' rep proves every value it holds
+/// an Array of that rep, whatever its static type.
+const ANY_SRC: &str = "export function rd(a: any): number { return a[3] * 2; }\n\
+                       export function wr(a: any, v: number): number { a[3] = v * 2; return 0; }\n";
+
+fn any_ir(rep: Option<FactsArrRep>) -> String {
+    let m = lower(ANY_SRC);
+    let mut elision = ElisionFacts::default();
+    if let Some(rep) = rep {
+        for f in &m.functions {
+            elision
+                .local_reps
+                .insert(f.params[0].id, FactsRep::Arr(rep));
+        }
+    }
+    for (i, _) in ANY_SRC.match_indices("a[3]") {
+        elision.number_element_reads.insert(i as u32 + 1, false);
+    }
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        program_facts: ProgramFactsView {
+            elision: Arc::new(elision),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&m, opts).expect("fixture compiles")).expect("UTF-8 IR")
+}
+
+fn generic_element_call(b: &str) -> bool {
+    [
+        "@js_packed_arraylike_index_get(",
+        "@js_dyn_index_get",
+        "@js_dyn_index_set",
+        "@js_typed_feedback",
+    ]
+    .iter()
+    .any(|c| b.contains(c))
+}
+
+#[test]
+fn an_erased_receiver_with_an_arr_rep_takes_the_tier() {
+    let ir = any_ir(Some(BOARD));
+    let rd = body(&ir, "__rd").join("\n");
+    assert!(!generic_element_call(&rd), "{rd}");
+    // The store's hit is the raw slot store; only its miss arm keeps the
+    // site's exact runtime-key store (`index_set_rep`).
+    let wr = body(&ir, "__wr").join("\n");
+    assert!(!wr.contains("@js_dyn_index_set") && wr.contains("store double"), "{wr}");
+}
+
+#[test]
+fn an_erased_receiver_without_a_rep_keeps_the_generic_access() {
+    let ir = any_ir(None);
+    for name in ["__rd", "__wr"] {
+        let b = body(&ir, name).join("\n");
+        assert!(generic_element_call(&b), "{name}\n{b}");
+    }
 }

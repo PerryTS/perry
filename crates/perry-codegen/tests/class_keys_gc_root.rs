@@ -140,6 +140,7 @@ fn module_with_declared_field_class() -> Module {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

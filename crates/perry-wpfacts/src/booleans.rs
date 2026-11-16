@@ -55,6 +55,24 @@ pub(crate) fn holds(m: &Model, nodes: &[NodeId]) -> bool {
     prims == prim::BOOL && !tokens
 }
 
+/// Every value `nodes` hold together is `true`, `false`, `undefined` or
+/// `null` (`nullish_booleans`): some node holds one, and none holds any
+/// other primitive or any token. ToBoolean (ECMA-262 7.1.2) of such a value
+/// is `true` exactly for `true`, so its truthiness is one tag compare.
+pub(crate) fn holds_or_nullish(m: &Model, nodes: &[NodeId]) -> bool {
+    if !m.booleans || m.booleans_sabotage {
+        return false;
+    }
+    let mut prims = 0;
+    let mut tokens = false;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        prims |= node.prim;
+        tokens |= !node.pts.is_empty();
+    }
+    prims != 0 && prims & !(prim::BOOL | prim::NULL | prim::UNDEF) == 0 && !tokens
+}
+
 /// The probe (module docs): the locals, then the fields of `templates`
 /// that carry the fact.
 pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<String> {
@@ -74,12 +92,21 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                     "# booleans module={mi} local={id} name={}",
                     name.replace(' ', "_")
                 ));
+            } else if holds_or_nullish(m, &nodes.of(n)) {
+                let name = m.node_names.get(n as usize).map_or("?", |s| s.as_str());
+                out.push(format!(
+                    "# nullish_booleans module={mi} local={id} name={}",
+                    name.replace(' ', "_")
+                ));
             }
         }
     }
     for tf in templates {
         for f in tf.fields.iter().filter(|f| f.booleans) {
             out.push(format!("# booleans field {}.{}", tf.display, f.key));
+        }
+        for f in tf.fields.iter().filter(|f| f.nullish_booleans && !f.booleans) {
+            out.push(format!("# nullish_booleans field {}.{}", tf.display, f.key));
         }
     }
     out
