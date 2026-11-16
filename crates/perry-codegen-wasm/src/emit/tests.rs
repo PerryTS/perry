@@ -1033,3 +1033,24 @@ for ([x = 10] of [[], [7]] as any[]) console.log(x);
         "5\n5 null\n0\n8\n1 2\n10\n7"
     );
 }
+
+/// #14734: a bridge call stores its arguments only into the frame it opened.
+/// A slot above the open frame is where the next nested frame is written, so
+/// the calls overwrote each other's arguments (`join` on an `any` receiver, and
+/// the `class_call_method` fallback that a value-position `o.list.push(v)` takes).
+#[test]
+fn bridge_calls_store_only_into_the_frame_they_open() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function f(s: any) { return s.join(","); }
+function g(s: any, t: any) { return s.join("-") + "|" + t.join("+"); }
+console.log(f([1, 2]));
+console.log("pair", g([1, 2], [3, 4]), g(["a"], ["b", "c"]));
+const o = { list: [] as number[] };
+console.log("push", o.list.push(7), o.list.push(8), o.list.join(","));
+"#
+        ),
+        "1,2\npair 1-2|3+4 a|b+c\npush 1 2 7,8"
+    );
+}
