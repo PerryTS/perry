@@ -183,6 +183,11 @@ fn iterator_prototype_tower_runs_in_a_no_move_window() {
 
         arm_collection_reachable_by_next_allocation();
         let collections_before = gc_collection_count();
+        // Read as the outermost no-move window closes, before the check it
+        // owes runs (global_bootstrap.rs): a request serviced at the exit
+        // runs after the raw locals are dead.
+        let exit_probe = &crate::gc::policy::window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT;
+        exit_probe.with(|c| c.set(None));
 
         crate::object::iterator_prototypes::ensure_iterator_prototypes();
 
@@ -193,11 +198,11 @@ fn iterator_prototype_tower_runs_in_a_no_move_window() {
         );
         let collections_after = gc_collection_count();
         assert_eq!(
-            collections_after, collections_before,
+            exit_probe.with(std::cell::Cell::get).unwrap_or(collections_after), collections_before,
             "a collection ran inside `build_iterator_prototypes` while its shared/family raw pointers were unrewritable"
         );
         assert!(
-            pending_collection_still_owed(),
+            collections_after > collections_before || pending_collection_still_owed(),
             "the window must defer the request, not drop it"
         );
         assert!(
@@ -205,7 +210,8 @@ fn iterator_prototype_tower_runs_in_a_no_move_window() {
             "the no-move window must close when the iterator tower builder returns"
         );
         assert!(
-            armed_collection_is_serviced_by_the_next_allocation(collections_after),
+            collections_after > collections_before
+                || armed_collection_is_serviced_by_the_next_allocation(collections_after),
             "the armed collection was never serviceable, so the no-collection assertion was vacuous"
         );
     });
@@ -296,6 +302,16 @@ fn generator_tower_runs_in_a_no_move_window() {
 
         arm_collection_reachable_by_next_allocation();
         let collections_before = gc_collection_count();
+        // Read as the outermost no-move window closes, before the check it
+        // owes runs (global_bootstrap.rs): a request serviced at the exit
+        // runs after the raw locals are dead.
+        let exit_probe = &crate::gc::policy::window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT;
+        exit_probe.with(|c| c.set(None));
+        // The build is three towers in three windows; the first window's exit
+        // may service the owed request before the next opens. Each window
+        // is checked on its own: none may see a collection inside it.
+        let saw = &crate::gc::policy::window_exit_probe::WINDOW_SAW_COLLECTION;
+        saw.with(|c| c.set(false));
 
         // THE SUBJECT: the lazy generator/async-generator tower build.
         crate::object::ensure_generator_intrinsics();
@@ -317,13 +333,13 @@ fn generator_tower_runs_in_a_no_move_window() {
         let collections_after = gc_collection_count();
         // THE INVARIANT: nothing collected while `ctor`/`proto`/`gen_proto`
         // were raw, un-rewritable locals.
-        assert_eq!(
-            collections_after, collections_before,
+        assert!(
+            !saw.with(std::cell::Cell::get),
             "a collection ran inside `build_generator_tower` — its `ctor` / \
              `proto` / `gen_proto` locals are now dangling or from-space"
         );
         assert!(
-            pending_collection_still_owed(),
+            collections_after > collections_before || pending_collection_still_owed(),
             "the window must DEFER the request, not drop it: leaving it \
              unserviced-and-unset would disable the trigger for the rest of \
              the thread"
@@ -335,7 +351,8 @@ fn generator_tower_runs_in_a_no_move_window() {
 
         // LIVE SUBJECT, half 2 — THE CONTROL.
         assert!(
-            armed_collection_is_serviced_by_the_next_allocation(collections_after),
+            collections_after > collections_before
+                || armed_collection_is_serviced_by_the_next_allocation(collections_after),
             "the armed collection was never serviceable on this thread, so \
              'the tower build did not collect' proved nothing"
         );
@@ -357,6 +374,11 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
 
         arm_collection_reachable_by_next_allocation();
         let collections_before = gc_collection_count();
+        // Read as the outermost no-move window closes, before the check it
+        // owes runs (global_bootstrap.rs): a request serviced at the exit
+        // runs after the raw locals are dead.
+        let exit_probe = &crate::gc::policy::window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT;
+        exit_probe.with(|c| c.set(None));
 
         // THE SUBJECT.
         let (ctor, proto) = crate::object::ensure_typed_array_intrinsic();
@@ -369,12 +391,12 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
 
         let collections_after = gc_collection_count();
         assert_eq!(
-            collections_after, collections_before,
+            exit_probe.with(std::cell::Cell::get).unwrap_or(collections_after), collections_before,
             "a collection ran inside `ensure_typed_array_intrinsic` — its \
              `ctor` / `proto` locals are now dangling or from-space"
         );
         assert!(
-            pending_collection_still_owed(),
+            collections_after > collections_before || pending_collection_still_owed(),
             "the window must DEFER the request, not drop it"
         );
         assert!(
@@ -383,7 +405,8 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
         );
 
         assert!(
-            armed_collection_is_serviced_by_the_next_allocation(collections_after),
+            collections_after > collections_before
+                || armed_collection_is_serviced_by_the_next_allocation(collections_after),
             "the armed collection was never serviceable on this thread, so \
              'the builder did not collect' proved nothing"
         );
