@@ -614,7 +614,13 @@ impl Model {
             self.json_key_fired.push((true, src));
         }
         // An element store's key is a number: it never names `__proto__`.
-        if key.is_any() && !num_only && !json_key && self.key_may_name_str(key, "__proto__")
+        // OPTIMISTIC (owner 2026-11-16): an unknown string key of a store is
+        // never "__proto__" (DECISIONS 217, as for computed reads). Only a
+        // key whose KNOWN strings include it runs the setter.
+        if key.is_any()
+            && !num_only
+            && !json_key
+            && self.key_names_known_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);

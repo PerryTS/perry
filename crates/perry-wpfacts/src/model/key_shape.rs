@@ -375,6 +375,20 @@ impl Model {
     /// `@@__perry_wk_<name>`). Only the any-String shape may be a Number
     /// key, an element or numeric key. The solver's other internal keys
     /// (`#...`, `\u{1}...`) stay possible.
+    /// May `key` name `name` as one of its KNOWN strings: the named key, or
+    /// a shape with `name` as an exact string (a glob of one piece). A
+    /// wildcard (any key, a hole, a free form) knows no string.
+    pub fn key_names_known_str(&self, key: Key, name: &str) -> bool {
+        match key {
+            Key::Named(a) => self.atoms[a as usize] == name,
+            Key::Any(0) => false,
+            Key::Any(s) => self.key_shapes[s as usize]
+                .globs
+                .iter()
+                .any(|g| g.len() == 1 && g[0] == name),
+        }
+    }
+
     pub fn key_may_name_str(&self, key: Key, name: &str) -> bool {
         match key {
             Key::Named(a) => self.atoms[a as usize] == name,
