@@ -3100,12 +3100,14 @@ function perry_ui_progressview_create(value) {
   if (value !== undefined && value > 0) { el.max = 1; el.value = value; }
   return uiAlloc(el);
 }
-function perry_ui_image_create(src, width, height) {
-  const el = document.createElement("img");
-  if (src) el.src = src;
-  if (width) el.style.width = width + "px";
-  if (height) el.style.height = height + "px";
-  return uiAlloc(el);
+// perry/ui `Image(url, alt?)`, `Image({url, alt?})` and `Image({systemName})`,
+// routed as the native backends route them: to `image_create_url` / `_symbol`.
+function perry_ui_image_create(src, alt) {
+  if (src && typeof src === "object") {
+    if (src.systemName !== undefined) return perry_ui_image_create_symbol(src.systemName);
+    return perry_ui_image_create_url(src.url, src.alt);
+  }
+  return perry_ui_image_create_url(src, alt);
 }
 function perry_ui_picker_create(items_json, selected, callback) {
   const el = document.createElement("select");

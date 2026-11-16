@@ -700,6 +700,26 @@ console.log(bump(5) + " " + total);
     );
 }
 
+// `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
+// is a symbol, as `ImageSymbol(name)` is.
+#[test]
+fn image_keeps_alt_text_in_both_forms() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+import { Image } from "perry/ui";
+Image("x.png", "photo");
+Image({ url: "y.png", alt: "avatar" });
+Image({ systemName: "gear" });
+"#,
+            r#"
+for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.textContent);
+"#
+        ),
+        "x.png photo\ny.png avatar\n\u{2b1c} gear"
+    );
+}
+
 #[test]
 fn a_generator_resumes_returns_and_throws_like_node() {
     assert_eq!(
