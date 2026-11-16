@@ -348,6 +348,10 @@ pub use map::*;
 mod for_in;
 mod this_arg;
 
+/// The shared root of the native runs of protocol touches of tokens a
+/// native model bore (`Model::touch_of_solver_born`): no call id.
+const TOUCH_ROOT: CallId = CallId::MAX;
+
 impl Model {
     /// The shared body skips this rule on `n`: an effect on an observation
     /// node, or a call that belongs to a summary.
@@ -503,22 +507,28 @@ impl Model {
         callee: impl FnOnce(&mut Self, NodeId, CallId),
     ) -> CallId {
         let loc = std::panic::Location::caller();
-        let Some(&root) = self.chain_root.get(&by) else {
-            // A program calls native run: its call is the runs own
-            // (its own this, arguments, result and callee), as a program
-            // call site makes one call per callee it reaches; only the
-            // calls made below it share keys.
-            let id = self.solver_call_raw(by, cs);
-            self.chain_root.insert(id, id);
-            callee(self, target, id);
-            return id;
+        let root = match self.chain_root.get(&by) {
+            Some(&root) => root,
+            // A protocol touch of a token a native model bore: one shared
+            // root per code position (`touch_of_solver_born`).
+            None if self.touch_of_solver_born(by) => TOUCH_ROOT,
+            None => {
+                // A program calls native run: its call is the runs own
+                // (its own this, arguments, result and callee), as a program
+                // call site makes one call per callee it reaches; only the
+                // calls made below it share keys.
+                let id = self.solver_call_raw(by, cs);
+                self.chain_root.insert(id, id);
+                callee(self, target, id);
+                return id;
+            }
         };
         let undef = matches!(cs.this, crate::model::ThisArg::Undef);
         let k = (root, loc, disc, cs.args.len() as u32, cs.spread.len() as u32, undef);
         let (c, tg, made) = match self.chain_calls.get(&k) {
             Some(&(c, tg)) => (c, tg, false),
             None => {
-                let frame = self.call_run(root);
+                let frame = self.call_run(if root == TOUCH_ROOT { by } else { root });
                 let fresh = |m: &mut Self, l: &'static str| {
                     let n = m.node_l(l);
                     m.nodes[n as usize].frame = frame;
@@ -536,6 +546,10 @@ impl Model {
                     CallSite { first_arg_fixed: cs.first_arg_fixed, this, args, spread, ret, site, region: cs.region },
                 );
                 self.chain_calls.insert(k, (id, tg));
+                if root == TOUCH_ROOT {
+                    // The shared call is the root of the calls below it.
+                    self.chain_root.insert(id, id);
+                }
                 (id, tg, true)
             }
         };
@@ -563,6 +577,56 @@ impl Model {
             callee(self, tg, c);
         }
         c
+    }
+
+    /// Is `by` a protocol touch (`Model::implicit`), or a call made for one
+    /// (`made_root`), of a token a native model bore: a site template born
+    /// at no program site (site 0, the touch's own, or a solver-made call's
+    /// own site, `>= n_prog`)? Such a touch's native runs share ONE root per
+    /// (code position, disc, counts) (`TOUCH_ROOT` in `chain_call`).
+    ///
+    /// Identity naming, not semantics: a touch is one call per touched
+    /// token, and a root of its own names what the run bears after the
+    /// root's own fresh call (`recv_call`'s site): an element's
+    /// `toLocaleString` reaching `Object.prototype.valueOf` through a written
+    /// key boxes its receiver (7.1.18 ToObject) as a NEW token per root,
+    /// touched again, without end. Shared, the runs of such touches join
+    /// one call per key (their value sets merge: sound, monotone), the
+    /// calls below it are keyed under it, and their births are one
+    /// template per (site, kind).
+    ///
+    /// TERMINATES: roots are (program-born touched tokens: finite, each its
+    /// own root as before) plus (`TOUCH_ROOT`, code position, disc, counts):
+    /// finite; the calls below a root are finite (`chain_call`); births per
+    /// call site and kind are finite; so the touched tokens, the touches and
+    /// the roots are finite. A program-born token's touch keeps its own
+    /// root: no precision changes there.
+    fn touch_of_solver_born(&self, by: CallId) -> bool {
+        // Before the summaries no call is solver-made (`n_prog` unknown).
+        if !self.sum.ready {
+            return false;
+        }
+        let touch = if self.protocol_touch(by) {
+            by
+        } else {
+            match self.made_root.get(&by) {
+                Some(&r) if self.protocol_touch(r) => r,
+                _ => return false,
+            }
+        };
+        let crate::model::ThisArg::Tok(t) = self.calls[touch as usize].this else {
+            return false;
+        };
+        let Some(tm) = self.tmpl_of(t) else {
+            return false;
+        };
+        match self.tmpls[tm as usize].kind {
+            crate::model::TmplKind::BObj { module: u32::MAX, site, .. }
+            | crate::model::TmplKind::Arr { module: u32::MAX, site, .. } => {
+                site as usize == 0 || site as usize >= self.sum.n_prog
+            }
+            _ => false,
+        }
     }
 
     /// `solver_call` without the chain key (`solver_call_keyed` keys it).
