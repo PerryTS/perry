@@ -24,6 +24,51 @@ enum StorageKind {
 thread_local! {
     static LOCAL_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
     static SESSION_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+    /// Set while this module writes its own mirror of a stored key onto the
+    /// storage object (`sync_named_property`): that write is the ordinary
+    /// one, not the program's named-property [[Set]].
+    static MIRROR_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A program [[Set]] of String key `key` on a storage object: WebIDL
+/// 3.9.2 legacy platform object [[Set]]: Storage has a named property
+/// setter, so the write is `setItem(key, value)` (ToString of the value, a
+/// quota error, the stored String mirrored as a named property); the object
+/// itself never holds the program's value. `false`: not a storage object, or
+/// this module's own mirror write.
+pub(crate) fn storage_set_field(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    let Some(kind) = storage_kind_from_value(crate::value::js_nanbox_pointer(obj as i64)) else {
+        return false;
+    };
+    if key.is_null() || MIRROR_WRITE.with(|m| m.get()) {
+        return false;
+    }
+    storage_set_item_impl(kind, crate::value::js_nanbox_string(key as i64), value);
+    true
+}
+
+/// A program [[Delete]] of String key `key` on a storage object: WebIDL
+/// 3.9.4 legacy platform object [[Delete]]: a key the area holds (a visible
+/// named property: not one of the prototype's member names) is
+/// `removeItem(key)`; any other key is the ordinary delete.
+pub(crate) fn storage_delete_field(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<i32> {
+    let kind = storage_kind_from_value(crate::value::js_nanbox_pointer(obj as i64))?;
+    if key.is_null() || MIRROR_WRITE.with(|m| m.get()) {
+        return None;
+    }
+    let name = js_string(crate::value::js_nanbox_string(key as i64));
+    if reserved_storage_name(&name) || !with_store(kind, |s| s.contains_key(&name)) {
+        return None;
+    }
+    storage_remove_item_impl(kind, crate::value::js_nanbox_string(key as i64));
+    Some(1)
 }
 
 pub extern "C" fn storage_constructor_illegal(
@@ -355,27 +400,11 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let proto_bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
     crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
     update_length_on_obj(obj, 0);
-    for name in ["clear", "getItem", "key", "removeItem", "setItem"] {
-        let func_ptr = match name {
-            "clear" => crate::fn_info!(storage_clear, 0; with_declared(0)),
-            "getItem" => crate::fn_info!(storage_get_item, 1; with_declared(1)),
-            "key" => crate::fn_info!(storage_key, 1; with_declared(1)),
-            "removeItem" => crate::fn_info!(storage_remove_item, 1; with_declared(1)),
-            _ => crate::fn_info!(storage_set_item, 2; with_declared(2)),
-        };
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-        if !closure.is_null() {
-            crate::object::set_bound_native_closure_name(closure, name);
-            crate::object::set_builtin_closure_length(closure as usize, realm_storage_method!(length));
-            crate::object::define_builtin_data_property(
-                obj,
-                string(name),
-                crate::value::js_nanbox_pointer(closure as i64),
-                name.to_string(),
-                PropertyAttrs::new(true, false, true),
-            );
-        }
-    }
+    // Its members live on `Storage.prototype` (node); its own properties are
+    // `length` and the stored keys' mirrors. A program [[Set]] / [[Delete]]
+    // on it is the named setter / deleter (`storage_set_field`), which a
+    // shape-keyed store cache must not answer.
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     match kind {
         StorageKind::Local => LOCAL_STORE.with(|s| s.borrow_mut().clear()),
         StorageKind::Session => SESSION_STORE.with(|s| s.borrow_mut().clear()),
@@ -467,12 +496,14 @@ fn sync_named_property(kind: StorageKind, key: &str, value: Option<&str>) {
         return;
     }
     let key_hdr = string(key);
+    MIRROR_WRITE.with(|m| m.set(true));
     match value {
         Some(value) => crate::object::js_object_set_field_by_name(obj, key_hdr, boxed_str(value)),
         None => {
             crate::object::js_object_delete_field(obj, key_hdr);
         }
     }
+    MIRROR_WRITE.with(|m| m.set(false));
 }
 
 fn update_length(kind: StorageKind, len: usize) {
