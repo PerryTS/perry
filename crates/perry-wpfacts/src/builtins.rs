@@ -3009,6 +3009,27 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
     ret_prim(m, call, prim::UNDEF);
 }
 
+/// %Promise%.resolve / %Promise%.reject with this = %Promise% (ECMA-262
+/// 27.2.4.7 PromiseResolve, 27.2.4.6 NewPromiseCapability and its reject
+/// function): a fresh promise; `resolve` adopts the argument (a thenable's
+/// `then` is called in a later job), `reject` makes the argument the
+/// rejection value a `.catch` handler or an `await`'s throw arm reads.
+fn promise_resolve_reject(m: &mut Model, name: &str, call: CallId) {
+    let p = site_tmpl(m, call, "Promise");
+    let v = promise_value(m, p);
+    if let Some(a) = arg(m, call, 0) {
+        if name == "resolve" {
+            adopt(m, call, a, v);
+        } else {
+            let thrown = m.thrown;
+            m.edge(a, thrown);
+        }
+    } else {
+        m.add_prim(v, prim::UNDEF);
+    }
+    ret_tok(m, call, p);
+}
+
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
@@ -3021,6 +3042,21 @@ fn ns_method_inner(
     call: CallId,
     identified: bool,
 ) {
+    // The step driver of an async function (perry-transform
+    // generator/lower/async_step.rs, resume.rs) settles its promise with
+    // `GlobalGet(0).reject(e)`. Codegen lowers a `resolve` / `reject` call on
+    // the global sentinel to the runtime's function itself
+    // (lower_call/console_promise.rs `try_lower_promise_static_call`:
+    // `js_promise_resolved` / `js_promise_rejected`): it reads no binding of
+    // the global object, so no store replaces it. That is %Promise%.reject /
+    // .resolve with this = %Promise% (ECMA-262 27.2.4.6, 27.2.4.7): a fresh
+    // promise settled by the argument; no program code runs at the call.
+    if ns == BuiltinNs::Other {
+        if let Some(n @ ("resolve" | "reject")) = name {
+            m.diagnostic_builtin(call, |_| format!("Promise.{n}"));
+            return promise_resolve_reject(m, n, call);
+        }
+    }
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
             || ns == BuiltinNs::Other && (identified || global_function(m, name))
@@ -3522,21 +3558,7 @@ fn ns_method_inner(
             implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
         }
-        (BuiltinNs::Promise, "resolve" | "reject") => {
-            let p = site_tmpl(m, call, "Promise");
-            let v = promise_value(m, p);
-            if let Some(a) = arg(m, call, 0) {
-                if name == "resolve" {
-                    adopt(m, call, a, v);
-                } else {
-                    let thrown = m.thrown;
-                    m.edge(a, thrown);
-                }
-            } else {
-                m.add_prim(v, prim::UNDEF);
-            }
-            ret_tok(m, call, p);
-        }
+        (BuiltinNs::Promise, "resolve" | "reject") => promise_resolve_reject(m, name, call),
         (BuiltinNs::Promise, "all" | "allSettled" | "race" | "any") => {
             let p = site_tmpl(m, call, "Promise");
             let v = promise_value(m, p);
