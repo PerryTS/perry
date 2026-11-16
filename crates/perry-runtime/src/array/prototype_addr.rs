@@ -175,10 +175,25 @@ pub(crate) enum RealmFunctionIntrinsic {
 }
 const REALM_FUNCTION_INTRINSIC_COUNT: usize = 2;
 
+/// The thread realm's [[Intrinsics]] record (the main realm of this thread).
+#[inline(always)]
+pub(crate) fn thread_realm() -> &'static RealmIntrinsics {
+    &crate::state::state().realm_intrinsics
+}
+
 /// This realm's function intrinsic `which` if born, else 0.
 #[inline]
 pub(crate) fn realm_function_intrinsic_if_bound(which: RealmFunctionIntrinsic) -> usize {
-    let cell = &crate::state::state().realm_intrinsics.functions[which as usize];
+    realm_function_intrinsic_if_bound_in(thread_realm(), which)
+}
+
+/// `realm`'s function intrinsic `which` if born, else 0.
+#[inline(always)]
+pub(crate) fn realm_function_intrinsic_if_bound_in(
+    realm: &RealmIntrinsics,
+    which: RealmFunctionIntrinsic,
+) -> usize {
+    let cell = &realm.functions[which as usize];
     match cell.get() {
         0 => 0,
         addr => heal_prototype_addr(cell, addr),
@@ -187,7 +202,16 @@ pub(crate) fn realm_function_intrinsic_if_bound(which: RealmFunctionIntrinsic) -
 
 /// Record the birth of the function intrinsic `which` (first birth wins).
 pub(crate) fn note_realm_function_intrinsic(which: RealmFunctionIntrinsic, addr: usize) {
-    let cell = &crate::state::state().realm_intrinsics.functions[which as usize];
+    note_realm_function_intrinsic_in(thread_realm(), which, addr)
+}
+
+/// Record in `realm` the birth of its function intrinsic `which` (first birth wins).
+pub(crate) fn note_realm_function_intrinsic_in(
+    realm: &RealmIntrinsics,
+    which: RealmFunctionIntrinsic,
+    addr: usize,
+) {
+    let cell = &realm.functions[which as usize];
     if cell.get() == 0 {
         cell.set(addr);
     }
@@ -200,7 +224,14 @@ struct IntrinsicEntry {
 }
 
 fn intrinsic_entry(identity: crate::object::BuiltinConstructorIdentity) -> &'static IntrinsicEntry {
-    &crate::state::state().realm_intrinsics.entries[identity as usize - 1]
+    intrinsic_entry_in(thread_realm(), identity)
+}
+
+fn intrinsic_entry_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> &IntrinsicEntry {
+    &realm.entries[identity as usize - 1]
 }
 
 /// Record this realm's intrinsic prototype and constructor of `identity`
@@ -212,7 +243,18 @@ pub(crate) fn note_realm_intrinsic(
     prototype: usize,
     constructor: usize,
 ) {
-    let entry = intrinsic_entry(identity);
+    note_realm_intrinsic_in(thread_realm(), identity, prototype, constructor)
+}
+
+/// Record `realm`'s intrinsic prototype and constructor of `identity`, under
+/// the rule of [`note_realm_intrinsic`].
+pub(crate) fn note_realm_intrinsic_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: usize,
+    constructor: usize,
+) {
+    let entry = intrinsic_entry_in(realm, identity);
     if prototype != 0 && entry.prototype.get() == 0 {
         entry.prototype.set(prototype);
     }
@@ -238,7 +280,16 @@ pub(crate) fn intrinsic_prototype_addr(
 pub(crate) fn intrinsic_prototype_addr_if_bound(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    let cell = &intrinsic_entry(identity).prototype;
+    intrinsic_prototype_addr_if_bound_in(thread_realm(), identity)
+}
+
+/// `realm`'s intrinsic prototype of `identity` if bound, else 0. Never builds.
+#[inline(always)]
+pub(crate) fn intrinsic_prototype_addr_if_bound_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry_in(realm, identity).prototype;
     match cell.get() {
         0 => 0,
         addr => heal_prototype_addr(cell, addr),
@@ -260,7 +311,16 @@ pub(crate) fn intrinsic_constructor_addr(
 pub(crate) fn intrinsic_constructor_addr_if_bound(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    let cell = &intrinsic_entry(identity).constructor;
+    intrinsic_constructor_addr_if_bound_in(thread_realm(), identity)
+}
+
+/// `realm`'s intrinsic constructor of `identity` if bound, else 0. Never builds.
+#[inline(always)]
+pub(crate) fn intrinsic_constructor_addr_if_bound_in(
+    realm: &RealmIntrinsics,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry_in(realm, identity).constructor;
     match cell.get() {
         0 => 0,
         addr => heal_prototype_addr(cell, addr),
@@ -322,11 +382,20 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
     for cell in prototype_addrs() {
         rewrite_prototype_addr_slot(cell, visitor);
     }
-    for entry in &crate::state::state().realm_intrinsics.entries {
+    scan_realm_intrinsics(thread_realm(), visitor);
+}
+
+/// Rewrite every cell of one realm's [[Intrinsics]] record through the
+/// forwarding chain, under the algebra of [`rewrite_prototype_addr_slot`].
+pub(crate) fn scan_realm_intrinsics(
+    realm: &RealmIntrinsics,
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    for entry in &realm.entries {
         rewrite_prototype_addr_slot(&entry.prototype, visitor);
         rewrite_prototype_addr_slot(&entry.constructor, visitor);
     }
-    for cell in &crate::state::state().realm_intrinsics.functions {
+    for cell in &realm.functions {
         rewrite_prototype_addr_slot(cell, visitor);
     }
 }

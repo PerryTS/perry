@@ -280,6 +280,7 @@ pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
     intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
+    intrinsic_constructor_addr_if_bound_in, intrinsic_prototype_addr_if_bound_in, thread_realm,
     note_realm_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
     object_prototype_addr_matches, object_prototype_cell, function_prototype_addr_if_bound,
     primitive_wrapper_prototype_addr, RealmIntrinsics, note_realm_function_intrinsic,

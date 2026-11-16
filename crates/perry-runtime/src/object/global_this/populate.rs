@@ -937,10 +937,11 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 /// realm's still unborn `lazy` constructor, outside that family's own birth.
 fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
+    let realm = crate::array::thread_realm();
     (identity.declaration().lazy
         && BIRTHING.with(|c| c.get()) != identity as u8
-        && crate::array::intrinsic_prototype_addr_if_bound(identity) == 0
-        && crate::array::intrinsic_constructor_addr_if_bound(identity) == ptr)
+        && crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity) == 0
+        && crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity) == ptr)
         .then_some(identity)
 }
 
