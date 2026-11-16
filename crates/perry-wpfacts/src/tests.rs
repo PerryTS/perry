@@ -2204,6 +2204,7 @@ mod forin1;
 mod key2;
 mod r9key1;
 mod r9key2;
+mod animoom5;
 mod r9sites1;
 mod r9sites3;
 mod r9sites5;
