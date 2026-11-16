@@ -1,0 +1,1 @@
+Eight new open-coded `StringHeader` payload offsets (the HTTP handle prototype's field lookups, the ArrayBuffer/DataView own-property read and four unit tests) read the payload through `string::string_data`, returning the string payload-access ratchet to its baseline. No behaviour change.

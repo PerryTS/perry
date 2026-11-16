@@ -138,10 +138,7 @@ pub(crate) fn view_get(obj: *const ObjectHeader, key: *const crate::StringHeader
     let addr = obj as usize;
     if !key.is_null() {
         let key_bytes = unsafe {
-            std::slice::from_raw_parts(
-                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                (*key).byte_len as usize,
-            )
+            std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
         };
         if let Ok(name) = std::str::from_utf8(key_bytes) {
             if let Some(v) = crate::buffer::buffer_read_own_prop(addr, name) {

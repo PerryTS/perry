@@ -88,11 +88,7 @@ fn error_stack_clone_reads_a_non_enumerable_getter_once() {
     let ptr =
         crate::value::js_get_string_pointer_unified(stack) as *const crate::string::StringHeader;
     let bytes = unsafe {
-        std::slice::from_raw_parts(
-            ptr.cast::<u8>()
-                .add(std::mem::size_of::<crate::string::StringHeader>()),
-            (*ptr).byte_len as usize,
-        )
+        std::slice::from_raw_parts(crate::string::string_data(ptr), (*ptr).byte_len as usize)
     };
     assert_eq!(bytes, b"getter-stack");
 }

@@ -7,7 +7,7 @@ use crate::string::StringHeader;
 
 unsafe fn text(s: *const StringHeader) -> String {
     let len = (*s).byte_len as usize;
-    let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data = crate::string::string_data(s);
     String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
 }
 
