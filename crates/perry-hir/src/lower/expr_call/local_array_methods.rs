@@ -7,7 +7,10 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use super::url_search_params::build_url_search_params_method_call;
-use super::{is_qualified_type_name, is_typed_array_type, typed_array_lacks_array_method};
+use super::{
+    is_array_generic_base, is_qualified_type_name, is_typed_array_type,
+    typed_array_lacks_array_method,
+};
 use crate::ir::*;
 
 use super::super::{lower_expr, LoweringContext};
@@ -130,12 +133,10 @@ fn type_is_class_instance(
         // must not fold to the array fast path; the generic dispatch still
         // runs the Array method on a genuine array.
         Type::Generic { base, .. } if base == "InstanceType" => true,
+        // Only `Array`/`ReadonlyArray` generics are array receivers; `Pick<Svc, "join">`
+        // and other utility or user generics keep their own methods.
         Type::Generic { base, .. } => {
-            !builtin_generic_bases.contains(&base.as_str())
-                && (ctx.lookup_class(base).is_some()
-                    || ctx.is_interface_type(base)
-                    || is_imported_class_name(base)
-                    || is_qualified_type_name(base))
+            !builtin_generic_bases.contains(&base.as_str()) && !is_array_generic_base(base)
         }
         Type::Union(variants) => variants
             .iter()
