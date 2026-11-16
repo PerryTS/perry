@@ -1288,6 +1288,14 @@ impl LlFunction {
         self.stack_map_requested
     }
 
+    /// Whether this body's `js_shadow_slot_bind` / `js_shadow_slot_set` calls
+    /// are dropped when its text is finished (`lower_roots_for_rs4gc` removes
+    /// every one), so no analysis of the body may count them as calls.
+    /// `PERRY_UNBOXED_CLASS_FIELDS=0` keeps counting them.
+    pub(crate) fn shadow_slot_calls_vanish(&self) -> bool {
+        self.precise_roots_lowered() && !crate::stmt::this_field_fast_off()
+    }
+
     pub(crate) fn text_finish(&self, gc_leaf_callees: &HashSet<String>) -> TextFinish {
         TextFinish {
             name: self.name.clone(),

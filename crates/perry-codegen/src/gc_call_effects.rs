@@ -527,8 +527,7 @@ fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) ->
     // `js_shadow_slot_bind`/`_set`): they are never executed, so they are no
     // edge at all. Counting them as unknown externals made every rooted body
     // "collecting". `PERRY_UNBOXED_CLASS_FIELDS=0` restores that.
-    let shadow_calls_vanish =
-        function.precise_roots_lowered() && !crate::stmt::this_field_fast_off();
+    let shadow_calls_vanish = function.shadow_slot_calls_vanish();
     function
         .for_each_final_item::<std::convert::Infallible>(&mut |item| {
             match item {

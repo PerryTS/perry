@@ -94,6 +94,15 @@ pub(crate) struct GuardSite {
 /// in the caller's hot loop and cannot be hoisted or merged: in the chess
 /// engine's search it cost 7% of all instructions.
 ///
+/// The invariant that makes this exact: every check compares the stack
+/// pointer against a limit that sits `reserve(size)` bytes above the real end of
+/// the stack (`perry-runtime/src/stack_guard.rs`), and a body without a call
+/// adds exactly its own frame, which LLVM sizes at compile time. So a body
+/// that passed its check leaves room for one bounded call-free frame below it.
+/// The shadow-slot calls of a body whose roots lower to native stack maps are
+/// dropped by that lowering (`LlFunction::shadow_slot_calls_vanish`), so they
+/// are no call of the emitted body.
+///
 /// `PERRY_LEAF_STACK_GUARD=1` keeps every check (A/B control).
 pub(crate) fn finish_stack_guard(ctx: &mut FnCtx<'_>, site: Option<GuardSite>) {
     let Some(site) = site else { return };
@@ -101,8 +110,13 @@ pub(crate) fn finish_stack_guard(ctx: &mut FnCtx<'_>, site: Option<GuardSite>) {
         return;
     }
     let gc = ctx.func.gc_effects();
+    // Shadow-slot bookkeeping the native-root lowering drops is no call in
+    // the emitted body (the same predicate the GC-effects scan applies).
+    let shadow_calls_vanish = ctx.func.shadow_slot_calls_vanish();
     let safe = |callee: &str| {
         callee.starts_with("llvm.")
+            || (shadow_calls_vanish
+                && matches!(callee, "js_shadow_slot_bind" | "js_shadow_slot_set"))
             || gc.runtime_class(callee) != crate::gc_call_effects::RuntimeClass::Reenters
     };
     // The check's own blocks are skipped, but `ok` is where the body starts:
