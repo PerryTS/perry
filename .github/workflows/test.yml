@@ -1496,14 +1496,13 @@ jobs:
   cargo-test:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test
-    # Was macos-14 — moved to ubuntu-latest in v0.5.392 to drop the 10×
-    # billing weight. The centralized Linux test scope already filters out
-    # platform-specific UI crates, so
-    # the platform-independent test set runs identically on Linux. The
-    # macOS-host coverage we lose here is negligible — these tests
-    # don't exercise any platform behavior; they're pure logic +
-    # codegen.
+    # The test scope filters out the platform UI crates, so what remains is
+    # platform-independent logic and codegen that runs identically on Linux.
     runs-on: ubuntu-latest
+    # The token lists the PR's files and authenticates mbx's GitHub requests.
+    permissions:
+      contents: read
+      pull-requests: read
     # Use lane-sized job bounds: PR-scoped unit tests must fit the 30-minute
     # required-gate budget; full workspace runs get 120 minutes. The latter
     # leaves headroom above the measured 90-103-minute cold-cache baseline.
@@ -1599,6 +1598,9 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: "0"
           # Complete, expected-head-pinned PR changed-file list for crate scope.
           GH_TOKEN: ${{ github.token }}
+          # mbx resolves its managed mold through the GitHub API; unauthenticated,
+          # the shared runner IP hits the anonymous rate limit and the job fails.
+          GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1777,6 +1779,7 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C force-unwind-tables=yes -C linker-features=-lld"
           CARGO_PROFILE_TEST_DEBUG: "0"
+          GITHUB_TOKEN: ${{ github.token }}
         run: cargo test -p perry-ffi --features runtime-link --lib
 
   # ---------------------------------------------------------------------------
