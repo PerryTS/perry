@@ -1257,6 +1257,19 @@ fn stop_summary(stops: &[format::Stop]) -> String {
                     value & 0xffff_ffff, cell & 0xffff, off & 0xffff, cell >> 16, off >> 16, value & 0xffff_ffff, value >> 32
                 )
             }
+            format::STOP_MINT_CENSUS => {
+                if t == 0 {
+                    format::mint_census_text(stops).unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            }
+            format::STOP_MINT_KEYS => format!("mint record {cell} (shape id {value}): its key list is neither an image cell nor binary data ({off} record(s) in all)"),
+            format::STOP_MINT_CANONICAL => format!("mint record {cell} (shape id {value}) keys a canonical list; replay needs the canonical-keys record ({off} record(s) in all)"),
+            format::STOP_MINT_PROTO_WORD => format!("mint record {cell} (shape id {value}): its prototype word is not an image cell ({off} record(s) in all)"),
+            format::STOP_MINT_NO_DESC => format!("mint record {cell} (shape id {value}) is a runtime layout's first birth whose descriptor cell was not found ({off} record(s) in all)"),
+            format::STOP_MINT_ROW_GAP => format!("mint record {cell} (shape id {value}) leaves a row gap; replay cannot position rows ({off} record(s) in all)"),
+            format::STOP_MINT_SUCCESSOR => format!("mint record {cell} (shape id {value}) was minted by a slot-list successor (holes, tombstone or delete); replay has no route ({off} record(s) in all)"),
             format::STOP_MINT_MISMATCH if off == format::MINT_BAD_LAZY_ROW => {
                 format!("mint record {cell} (shape id {value}) is on a static row that is neither a runtime layout nor a lazy image row naming its word")
             }
@@ -1277,6 +1290,7 @@ fn stop_summary(stops: &[format::Stop]) -> String {
             k => format!("{n} stop(s) of kind {k}"),
         });
     }
+    parts.retain(|p| !p.is_empty());
     parts.join("; ")
 }
 

@@ -328,6 +328,39 @@ pub const MINT_BAD_ORDER: u32 = 4;
 /// A lazy image row whose descriptor does not name the recorded word.
 pub const MINT_BAD_LAZY_ROW: u32 = 5;
 
+/// The record count and its mint facts, one stop per item (`obj_type` = the item,
+/// `value` = its count): the census a capture prints beside the verified record.
+pub const STOP_MINT_CENSUS: u8 = 13;
+/// A record whose key list is neither an image cell nor binary data (`cell` = the first
+/// such record, `value` = its shape id, `off` = how many).
+pub const STOP_MINT_KEYS: u8 = 14;
+/// A record that keys a canonical list (a trie node).
+pub const STOP_MINT_CANONICAL: u8 = 15;
+/// A record whose prototype word is neither an image cell, binary data nor a plain scalar.
+pub const STOP_MINT_PROTO_WORD: u8 = 16;
+/// A runtime layout's first birth whose descriptor cell was not found exactly once.
+pub const STOP_MINT_NO_DESC: u8 = 17;
+/// A dynamic-row record that leaves a row gap behind the one before it.
+pub const STOP_MINT_ROW_GAP: u8 = 18;
+/// A record minted by a slot-list successor (holes, or a key-list family that is not the
+/// set of records carrying the keys).
+pub const STOP_MINT_SUCCESSOR: u8 = 19;
+
+/// How a record was minted: a dynamic row, a runtime layout's first birth, a lazy image
+/// row, or a compile-time shape id.
+pub const MINT_ROUTE_DYNAMIC: u8 = 0;
+pub const MINT_ROUTE_RUNTIME: u8 = 1;
+pub const MINT_ROUTE_LAZY: u8 = 2;
+pub const MINT_ROUTE_STATIC: u8 = 3;
+
+/// Flags of `snap_image_mint_replay_flags`.
+pub const MINT_FLAG_SUCCESSOR: u8 = 1;
+pub const MINT_FLAG_CANONICAL: u8 = 2;
+pub const MINT_FLAG_ROW_GAP: u8 = 4;
+
+/// Items of the census stop (`obj_type`).
+pub const MINT_CENSUS_ITEMS: usize = 17;
+
 /// One shape record minted between the baseline and the cut, as the facts a replay hands
 /// the runtime's mint: the identity facts, the record's attached state and the layout
 /// word the mint must return. The id and the row to position the allocators at before
@@ -356,6 +389,88 @@ pub struct MintRec {
     pub family_desc: u32,
     /// The rep deprecation edges: to-nopointer, to-any, then the tail words.
     pub edges: Vec<u32>,
+    /// How it was minted (`MINT_ROUTE_*`).
+    pub route: u8,
+    /// The canonical key-list node it carries (`u32::MAX` for an owned list).
+    pub node: u32,
+    /// The key list as a reference valid in the relinked binary (an image cell or binary data),
+    /// set where the image is captured; `keys` and `proto_cell` are addresses of this run.
+    pub keys_ref: Option<Val>,
+    /// The content of the prototype slot (`proto_cell`) as a reference, when the record has a slot.
+    pub proto_ref: Option<Val>,
+    /// A runtime layout's descriptor: its offset from the start of the data window.
+    pub desc_off: Option<u64>,
+}
+
+/// The record without the references the capture adds after the live record is read.
+pub fn mint_without_refs(r: &MintRec) -> MintRec {
+    let mut c = r.clone();
+    c.keys_ref = None;
+    c.proto_ref = None;
+    c.desc_off = None;
+    c
+}
+
+fn mint_tail<'a>(b: &'a [u8], o: &mut usize, n: usize) -> Option<&'a [u8]> {
+    let s = b.get(*o..o.checked_add(n)?)?;
+    *o += n;
+    Some(s)
+}
+
+fn mint_tail_u64(b: &[u8], o: &mut usize) -> Option<u64> {
+    Some(u64::from_le_bytes(mint_tail(b, o, 8)?.try_into().ok()?))
+}
+
+fn mint_tail_u16(b: &[u8], o: &mut usize) -> Option<u16> {
+    Some(u16::from_le_bytes(mint_tail(b, o, 2)?.try_into().ok()?))
+}
+
+fn mint_tail_opt(b: &[u8], o: &mut usize) -> Option<Option<Val>> {
+    if mint_tail(b, o, 1)?[0] == 0 {
+        return Some(None);
+    }
+    match mint_tail(b, o, 1)?[0] {
+        0 => Some(Some(Val::Scalar(mint_tail_u64(b, o)?))),
+        1 => {
+            let hi = mint_tail_u16(b, o)?;
+            let bare = mint_tail(b, o, 1)?[0] != 0;
+            let index = mint_tail_u64(b, o)? as u32;
+            Some(Some(Val::Cell { hi, bare, index }))
+        }
+        2 => {
+            let hi = mint_tail_u16(b, o)?;
+            let bare = mint_tail(b, o, 1)?[0] != 0;
+            let region = mint_tail(b, o, 1)?[0];
+            let off = mint_tail_u64(b, o)?;
+            Some(Some(Val::Ext { hi, bare, region, off }))
+        }
+        _ => None,
+    }
+}
+
+/// The census line of the stops of kind `STOP_MINT_CENSUS`, or `None` without one.
+pub fn mint_census_text(stops: &[Stop]) -> Option<String> {
+    let mut v: Vec<u64> = Vec::new();
+    for _ in 0..MINT_CENSUS_ITEMS {
+        v.push(0);
+    }
+    let mut any = false;
+    for s in stops {
+        if s.kind == STOP_MINT_CENSUS {
+            any = true;
+            if let Some(x) = v.get_mut(s.obj_type as usize) {
+                *x = s.value;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let g = |i: usize| v.get(i).copied().unwrap_or(0);
+    Some(format!(
+        "mint census: routes dynamic {}, runtime {}, lazy {}, static {}; canonical key lists {}; successor mints {}; row gaps {}; prototype ids default {}, class {}, mixed {}, unique {}, other {}; unique-prototype counter moved {}, prototype-serial counter moved {}; key lists as image cells {}, as binary data {}; runtime-layout descriptor cells found {}",
+        g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7), g(8), g(9), g(10), g(11), g(12), g(13), g(14), g(15), g(16)
+    ))
 }
 
 /// The mint record as section bytes: count, then per record its fixed fields and its lists.
@@ -391,6 +506,19 @@ pub fn mint_blob(recs: &[MintRec]) -> Vec<u8> {
         o.extend((r.edges.len() as u32).to_le_bytes());
         for e in &r.edges {
             o.extend(e.to_le_bytes());
+        }
+    }
+    for r in recs {
+        o.push(r.route);
+        o.extend(r.node.to_le_bytes());
+        put_opt(&mut o, &r.keys_ref);
+        put_opt(&mut o, &r.proto_ref);
+        match r.desc_off {
+            None => o.push(0),
+            Some(x) => {
+                o.push(1);
+                o.extend(x.to_le_bytes());
+            }
         }
     }
     o
@@ -435,6 +563,16 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
             r.edges.push(le32(take(4)?));
         }
         v.push(r);
+    }
+    for r in &mut v {
+        r.route = mint_tail(b, &mut o, 1)?[0];
+        r.node = u32::from_le_bytes(mint_tail(b, &mut o, 4)?.try_into().ok()?);
+        r.keys_ref = mint_tail_opt(b, &mut o)?;
+        r.proto_ref = mint_tail_opt(b, &mut o)?;
+        r.desc_off = match mint_tail(b, &mut o, 1)?[0] {
+            0 => None,
+            _ => Some(mint_tail_u64(b, &mut o)?),
+        };
     }
     Some((v, o))
 }

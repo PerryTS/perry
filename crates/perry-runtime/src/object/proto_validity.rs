@@ -109,6 +109,11 @@ pub(crate) use perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL;
 static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
 
+/// Image run: the next prototype serial now.
+pub(crate) fn snap_image_prototype_serial_next() -> u64 {
+    PROTOTYPE_SERIAL_NEXT.load(Ordering::Relaxed)
+}
+
 /// Reserve the image's serial interval before any dynamic prototype can be
 /// born. The existing allocator remains the one authority for later serials.
 pub(crate) fn reserve_image_prototype_serials(end: u64) {
