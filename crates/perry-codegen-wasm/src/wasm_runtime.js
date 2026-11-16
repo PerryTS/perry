@@ -1924,6 +1924,7 @@ const __memDispatch = {
     }
     return obj;
   },
+  object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
   // at call time. A home that is not an object is unbound, and reads undefined.
   object_super_get: (home, receiver, key) => {

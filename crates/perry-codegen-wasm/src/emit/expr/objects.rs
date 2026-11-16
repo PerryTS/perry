@@ -41,6 +41,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 3, &Expr::Array(args.clone(), None));
                 self.emit_memcall(func, "object_super_call", 4);
             }
+            Expr::ObjectSetPrototypeOf(obj, proto) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_arg(func, 1, proto);
+                self.emit_memcall(func, "object_set_prototype_of", 2);
+            }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "object_new", 0);
