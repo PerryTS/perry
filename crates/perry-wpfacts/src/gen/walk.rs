@@ -179,6 +179,12 @@ impl<'a> Gen<'a> {
     fn worker_side(&self) -> Vec<bool> {
         let n = self.modules.len();
         let mut unnamed = false;
+        // The Worker entries: each `new Worker( spec )` names its module
+        // through the import the driver resolved for that specifier (as
+        // the driver's `module_roots` does). `FactsConfig::roots` holds the
+        // program entry too, so it does not name them. A specifier with no
+        // such module: unnamed.
+        let mut entries: Vec<u32> = Vec::new();
         for (_, module) in &self.modules {
             perry_hir::for_each_worker_new(module, &mut |e| {
                 if let perry_hir::Expr::WorkerNew {
@@ -189,6 +195,18 @@ impl<'a> Gen<'a> {
                 } = e
                 {
                     unnamed |= *is_eval || *partial || paths.is_empty();
+                    for p in paths {
+                        let t = module
+                            .imports
+                            .iter()
+                            .filter(|i| &i.source == p)
+                            .find_map(|i| i.resolved_path.as_ref())
+                            .and_then(|r| self.path_index.get(r).copied());
+                        match t {
+                            Some(t) => entries.push(t),
+                            None => unnamed = true,
+                        }
+                    }
                 }
             });
         }
@@ -196,9 +214,9 @@ impl<'a> Gen<'a> {
             return vec![true; n];
         }
         let mut side = vec![false; n];
-        let mut work: Vec<u32> = (0..n as u32)
-            .filter(|&m| self.roots.iter().any(|r| r == self.modules[m as usize].0))
-            .collect();
+        entries.sort_unstable();
+        entries.dedup();
+        let mut work = entries;
         for &m in &work {
             side[m as usize] = true;
         }

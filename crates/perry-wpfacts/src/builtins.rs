@@ -29,6 +29,7 @@ mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
+pub use native_protocol::sentinel_user_global;
 pub use undeclared::{
     builtin_function, global_object, native_may_be, realm_reads_store, undeclared,
 };
