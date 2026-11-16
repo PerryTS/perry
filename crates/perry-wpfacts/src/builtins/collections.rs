@@ -1740,7 +1740,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             string_methods::to_prim(m, recv, "Date toJSON time");
             let a = m.atom("toISOString");
             let nested = m.calls.len() as CallId;
-            let nested = m.chain_call(
+            let _nested = m.chain_call(
                 call,
                 0,
                 recv,

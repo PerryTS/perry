@@ -122,11 +122,8 @@ pub(super) fn collect_this_field_assigns(expr: &ast::Expr, out: &mut Vec<String>
 /// store's key. A run that skips the branch leaves the key's slot a hole;
 /// the runtime's in-order rule still decides enumeration, so a wrong
 /// prediction costs a table, never an order.
-pub(crate) fn constructor_store_keys(stmts: &[ast::Stmt], out: &mut Vec<String>) {
-    constructor_store_keys_of(None, stmts, out);
-}
-
-/// [`constructor_store_keys`] of a constructor of `class`. R9BIRTH3 rule M:
+///
+/// With a `class`, R9BIRTH3 rule M:
 /// an expression statement `this.m(..)` with `m` one of the class's own
 /// instance methods runs `m`'s body there (ECMA-262 13.3.6.1 with `this`):
 /// its `this.x = v` keys take the call's place in the order, the method's

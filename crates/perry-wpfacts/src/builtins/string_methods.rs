@@ -176,7 +176,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
     let ret = m.node_l("builtin-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    let call = m.chain_call(
+    let _call = m.chain_call(
         by,
         0,
         recv,
@@ -807,7 +807,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
     let ret = m.node_l("builtin-new");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    let call = m.chain_call(
+    let _call = m.chain_call(
         by,
         0,
         ctor,

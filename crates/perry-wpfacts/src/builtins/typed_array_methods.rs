@@ -269,7 +269,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             let a = m.atom("toLocaleString");
             let nested = m.calls.len() as CallId;
             let r = m.node_l("typed-locale-result");
-            let nested = m.chain_call(
+            let _nested = m.chain_call(
                 call,
                 0,
                 elem,
@@ -294,7 +294,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             // Array.prototype.toString invokes the receiver's join.
             let a = m.atom("join");
             let nested = m.calls.len() as CallId;
-            let nested = m.chain_call(
+            let _nested = m.chain_call(
                 call,
                 0,
                 recv,
