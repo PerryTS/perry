@@ -469,6 +469,7 @@ impl Model {
                     .map(|s| (&s.desc, s.birth, s.rooted)),
                 self.packet_shape(shape)
             ),
+            Cons::DefineAnyKey { o, key, .. } => format!("DefineAnyKey o={:?} key={:?}", o, key),
             Cons::AccessorKeyed { holder, f, setter } => format!(
                 "AccessorKeyed holder={:?} f={:?} setter={:?}",
                 holder, f, setter

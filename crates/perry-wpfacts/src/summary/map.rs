@@ -422,6 +422,25 @@ pub fn map_cons(
             f: n(f),
             setter,
         },
+        DefineAnyKey {
+            o,
+            key,
+            value,
+            get,
+            set,
+            site,
+            reason,
+            accessor,
+        } => DefineAnyKey {
+            o: n(o),
+            key: n(key),
+            value: n(value),
+            get: n(get),
+            set: n(set),
+            site,
+            reason,
+            accessor,
+        },
         Arith { dst, other } => Arith {
             dst: n(dst),
             other: if other == NO_NODE { NO_NODE } else { n(other) },
@@ -655,6 +674,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | StoreKeyed { .. }
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
+            | DefineAnyKey { .. }
             | Arith { .. }
             | Range { .. }
             | LenIndex { .. }

@@ -171,6 +171,121 @@ impl Model {
         }
     }
 
+    /// GLOBK3 (`Cons::DefineAnyKey`): `Object.defineProperty(o, k, d)` under
+    /// a computed key, decided again as `o`, `k` or the setter grows.
+    /// On the global object (ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3
+    /// ValidateAndApplyPropertyDescriptor; 9.1.1.4: the global object is
+    /// an ordinary object whose properties are the global bindings), with a
+    /// key proven never a Symbol (ToPropertyKey 7.1.19 of a primitive other
+    /// than a Symbol is a String; an object key keeps the old path) and no
+    /// setter: the define creates or replaces one string-named own
+    /// property of the global object and writes nothing else. Its `value`,
+    /// and what a call of its `get` with `this` = the global object
+    /// returns (a [[Get]] of an accessor, 10.1.8.1 OrdinaryGet step 7),
+    /// join the global's define field (`global_def_field`), which every
+    /// global binding read takes beside its original (a define that fails
+    /// or comes later keeps the original). `undefined` / `NaN` / `Infinity`
+    /// are non-configurable, non-writable (19.1): the define throws a
+    /// TypeError (`global_any_names` leaves them out). `__proto__` is no
+    /// exception: [[DefineOwnProperty]] never runs the `__proto__` setter.
+    /// Any other receiver, a key that may be a Symbol or an object, a
+    /// setter, unit mode, or G2 off: E5 HARD on `o`, `value` under any key
+    /// and the computed-key accessors (`define_any_old`), as before.
+    pub(crate) fn define_computed_key(&mut self, d: DefineAny) {
+        let kn = &self.nodes[d.key as usize];
+        let str_key = kn.pts.is_empty() && kn.prim & prim::SYMBOL == 0;
+        // A `set` that is not callable (nor undefined) makes the define
+        // throw (ToPropertyDescriptor 6.2.6.5 step 15.b): no define.
+        let no_set = !self.nodes[d.set as usize]
+            .pts
+            .to_sorted()
+            .into_iter()
+            .any(|t| {
+                t == TOP
+                    || matches!(self.toks[t as usize], TokKind::Func(..))
+                    || crate::builtins::accessor_callable(self, t)
+            });
+        let ok = str_key && no_set && !self.unit_mode && !self.global_any_off;
+        // Per receiver: `o` may also hold what a read of `globalThis`
+        // yields after such a define (`globalThis` is configurable).
+        let mut glob = None;
+        for t in self.nodes[d.o as usize].pts.to_sorted() {
+            match crate::builtins::global_object(self, t) && ok {
+                true => glob = Some(t),
+                false => self.define_any_old(d, t),
+            }
+        }
+        let Some(g) = glob else {
+            return;
+        };
+        if !self.global_def_done.insert(d.key) {
+            return;
+        }
+        self.global_defs.push((d, g));
+        let gd = crate::builtins::global_def_field(self);
+        if !d.accessor {
+            self.edge(d.value, gd);
+        }
+        // An accessor without `get` reads `undefined` (10.1.8.1 step 6).
+        self.add_prim(gd, prim::UNDEF);
+        let ret = self.node_l("global-define-get-ret");
+        self.edge(ret, gd);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Tok(g),
+            args: vec![],
+            spread: vec![],
+            ret,
+            site: call,
+            region: self.thrown,
+        });
+        self.why_mint(call, Some(g), u32::MAX);
+        self.cons(d.get, Cons::Call { call });
+    }
+
+    /// GLOBK3: the old path of a computed-key define for receiver `t`: the
+    /// define's holder node (one per define) takes `t`; on it E5 HARD, the
+    /// `value` under any key, the get / set installed under the
+    /// computed-key star, as `o` had before.
+    pub(crate) fn define_any_old(&mut self, d: DefineAny, t: Tok) {
+        if let Some(&h) = self.define_any_old.get(&d.key) {
+            self.add_tok(h, t);
+            return;
+        }
+        let h = self.node_l("define-any-holder");
+        self.define_any_old.insert(d.key, h);
+        self.add_tok(h, t);
+        self.cons(
+            h,
+            Cons::Hard {
+                kind: Hard::E5DefineProperty,
+                reason: d.reason,
+            },
+        );
+        if !d.accessor {
+            self.cons(
+                h,
+                Cons::Store {
+                    key: Key::any(),
+                    src: d.value,
+                    site: d.site,
+                },
+            );
+        }
+        let star = self.atom(crate::STAR_KEY);
+        for (f, setter) in [(d.get, false), (d.set, true)] {
+            self.cons(
+                f,
+                Cons::Accessor {
+                    holder: h,
+                    key: star,
+                    setter,
+                },
+            );
+        }
+    }
+
     /// Map `t` defines its own values under a computed key: they join
     /// `descs` (whose get/set are installed under `*` and whose value is
     /// `value`, by generation), and `o` is E5 HARD with `value` stored under

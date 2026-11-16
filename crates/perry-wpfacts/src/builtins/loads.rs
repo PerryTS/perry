@@ -828,6 +828,9 @@ fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
     if super::native_protocol::global_any_names(m, n) {
         super::native_protocol::global_any_read(m, dst);
     }
+    if n == "navigator" {
+        super::native_protocol::global_def_nav_read(m, dst);
+    }
     if !m.unit_mode {
         let a = m.atom(n);
         let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));

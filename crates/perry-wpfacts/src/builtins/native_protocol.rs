@@ -1317,6 +1317,36 @@ pub fn global_any_field(m: &mut Model) -> NodeId {
     ga
 }
 
+/// GLOBK3: the global object's field of what a `defineProperty` under a
+/// computed key defines there (`Model::define_any_key`): every global
+/// binding the any-key field reaches, and `navigator` (a configurable
+/// accessor a define replaces, though a store cannot).
+pub fn global_def_field(m: &mut Model) -> NodeId {
+    if let Some(d) = m.global_def {
+        return d;
+    }
+    let d = m.node_l("global-define-key");
+    m.global_def = Some(d);
+    let ga = global_any_field(m);
+    m.edge(d, ga);
+    for n in std::mem::take(&mut m.global_def_navs) {
+        m.edge(d, n);
+    }
+    d
+}
+
+/// GLOBK3: a read of `navigator` also reads what a computed-key define
+/// put on the global object.
+pub fn global_def_nav_read(m: &mut Model, dst: NodeId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_def {
+        Some(d) => m.edge(d, dst),
+        None => m.global_def_navs.push(dst),
+    }
+}
+
 /// G2: the realm's navigator object takes the live `Navigator`'s
 /// `prototype` as its [[Prototype]] when the getter first runs
 /// (perry-runtime navigator.rs:119 `builtin_value_core("Navigator")`,
@@ -1349,6 +1379,10 @@ pub fn global_any_disable(m: &mut Model) {
         let prev = m.store_at.take();
         m.store_into(t, key, src, site);
         m.store_at = prev;
+    }
+    // GLOBK3: the computed-key defines on the global object as well.
+    for (d, g) in std::mem::take(&mut m.global_defs) {
+        m.define_any_old(d, g);
     }
 }
 

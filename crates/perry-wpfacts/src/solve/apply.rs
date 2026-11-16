@@ -2099,6 +2099,28 @@ impl Model {
                     self.for_in_tok(call, ft, t);
                 }
             }
+            Cons::DefineAnyKey {
+                o,
+                key,
+                value,
+                get,
+                set,
+                site,
+                reason,
+                accessor,
+            } => {
+                let d = crate::model::DefineAny {
+                    o,
+                    key,
+                    value,
+                    get,
+                    set,
+                    site,
+                    reason,
+                    accessor,
+                };
+                self.define_computed_key(d);
+            }
             Cons::DefineKeyed {
                 o,
                 reason,

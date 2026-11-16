@@ -152,7 +152,7 @@ impl<'a> Gen<'a> {
                 };
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
                     Some(kp) => self.define_keyed(fx, on, kp, dn, r, accessor, own),
-                    None => self.define_property(fx, on, key, dn, r, accessor, own),
+                    None => self.define_property(fx, on, key, dn, r, accessor, own, Some(kn)),
                 }
                 on
             }
@@ -242,7 +242,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::any());
-                    self.define_property(fx, n, None, descs, r, false, [None, None]);
+                    self.define_property(fx, n, None, descs, r, false, [None, None], None);
                 }
                 n
             }

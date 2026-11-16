@@ -140,6 +140,7 @@ fn object_use(c: &Cons) -> Option<NodeId> {
         Cons::StoreIndexed { o, .. }
         | Cons::StoreKeyed { o, .. }
         | Cons::DefineKeyed { o, .. }
+        | Cons::DefineAnyKey { o, .. }
         | Cons::DefineAll { o, .. }
         | Cons::DefineDesc { o, .. } => Some(o),
         Cons::OwnGate { obj, .. } => Some(obj),
