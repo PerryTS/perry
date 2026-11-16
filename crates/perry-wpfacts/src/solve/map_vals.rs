@@ -12,7 +12,8 @@
 //! what `set` stored as a value. That is every value the Map holds only
 //! while each write of its contents is a `set` this model runs: the Map is
 //! **closed**. A Map is closed from its birth when the program's own
-//! `new Map()` (no iterable) bears it in this unit (`map_born`), and it is
+//! `new Map(..)` or `new WeakMap(..)` bears it in this unit (`map_born`;
+//! the constructor's values are element "1" of each entry), and it is
 //! **opened** for good, its value node then holding all its contents as
 //! before, by anything else that may write them:
 //! - an escape or a HARD marker (unknown code may call `set`);
@@ -20,16 +21,19 @@
 //! - a store under a computed key and a copy of another object's
 //!   properties into it (no contents by the language, but the runtime's
 //!   own helpers store through them: `js_weakmap_set`);
-//! - a birth from an iterable, or by anything but `new Map()`.
+//! - a birth by anything but `new Map(..)` / `new WeakMap(..)`.
 //!
 //! Every other Map (another unit's, a marker, a subclass instance, a
-//! WeakMap, a per-unit solve) is never closed. The contents node is
+//! per-unit solve) is never closed. The contents node is
 //! unchanged, so no other reader sees a difference.
 //!
 //! `PERRY_FACTS_MAP_VALUES=0` turns it off (`get` reads the contents).
 //! Probe: one `# map_values` line per Map birth (`probe`).
 
 use super::*;
+
+/// The internal slot holding a Map's keys (`Model::map_keys`).
+pub(crate) const MAP_KEYS: &str = "[[MapKeys]]";
 
 /// `PERRY_FACTS_MAP_VALUES=0` (`off`, `false`): `Map.prototype.get` reads
 /// the Map's whole contents, its keys included.
@@ -41,18 +45,22 @@ pub(crate) fn enabled() -> bool {
 }
 
 impl Model {
-    /// The program's `new Map(...)` bore `t` (`empty`: without an
-    /// iterable). The first empty birth of a Map of this unit closes it; a
-    /// birth from an iterable opens it.
-    pub(crate) fn map_born(&mut self, t: Tok, empty: bool) {
+    /// `t` is a Map or a WeakMap: its entries are `[key, value]` pairs, its
+    /// values the value node (`map_vals`).
+    pub(crate) fn keyed_collection(&self, t: Tok) -> bool {
+        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "Map" | "WeakMap", .. }))
+    }
+
+    /// The program's `new Map(...)` or `new WeakMap(...)` bore `t`. The
+    /// first birth of a Map of this unit closes it; the constructor puts
+    /// element "1" of each entry of its iterable into the value node
+    /// (24.1.1.2 AddEntriesFromIterable).
+    pub(crate) fn map_born(&mut self, t: Tok) {
         if !self.map_values {
             return;
         }
         let first = self.map_seen.insert(t);
-        if !empty {
-            self.map_open(t);
-            return;
-        }
         let own = match self.toks[t as usize] {
             TokKind::Obj(tm, _) => !self.foreign.contains_key(&tm),
             _ => false,
@@ -72,6 +80,29 @@ impl Model {
             let fa = self.field_any(t);
             self.edge(fa, v);
         }
+        let a = self.atom(MAP_KEYS);
+        if let Some(&k) = self.fields.get(&(t, a)) {
+            let fa = self.field_any(t);
+            self.edge(fa, k);
+        }
+    }
+
+    /// The keys of Map `t` apart from its values (an internal slot field,
+    /// `MAP_KEYS`): what `set` and the constructor store as a key while the
+    /// Map is closed, all its contents once it is open. Index 0 of its
+    /// entry pairs (24.1.5.1).
+    pub(crate) fn map_keys(&mut self, t: Tok) -> NodeId {
+        if !self.map_values {
+            return self.field_any(t);
+        }
+        let a = self.atom(MAP_KEYS);
+        let fresh = !self.fields.contains_key(&(t, a));
+        let n = self.field(t, a);
+        if fresh && !self.map_closed.contains(&t) {
+            let fa = self.field_any(t);
+            self.edge(fa, n);
+        }
+        n
     }
 
     /// What `get` of collection `t` reads: the value node of a Map, which
@@ -103,6 +134,11 @@ impl Model {
         if spread {
             self.map_open(t);
             return;
+        }
+        let k = self.map_keys(t);
+        match args.first() {
+            Some(&a) => self.edge(a, k),
+            None => self.add_prim(k, prim::UNDEF),
         }
         let v = self.map_vals(t);
         let at = if self.map_values_sabotage { 0 } else { 1 };

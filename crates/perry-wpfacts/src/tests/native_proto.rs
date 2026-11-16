@@ -34,23 +34,39 @@ fn defined_native_key_stays_opaque() {
     assert!(d_escape(g, FactsConfig::default()).is_some());
 }
 
+/// A key written onto the native prototype holds what the write stored
+/// (ECMA-262 10.1.9.2): the lookup runs that function with the argument,
+/// at once or replayed when the write comes later. Its argument escapes
+/// where that function hands it to unknown code, or where the stored value
+/// itself comes from unknown code; a function that only returns it, or a
+/// delete (the key is absent: the optional call does not run), lets nothing
+/// escape.
 #[test]
 fn written_native_prototype_keeps_the_escape() {
-    let w = "EventEmitter.prototype.absent = function (o: any) { (globalThis as any).kept = o; };";
-    assert!(d_escape(&format!("{w} c.absent?.(d);"), FactsConfig::default()).is_some());
+    let cfg = FactsConfig::default;
+    // Unknown code: a module outside the program, run at load.
+    let unknown = "import \"unseen-host\"; const unk: any = (globalThis as any).unseenFn;";
+    let w = "EventEmitter.prototype.absent = function (o: any) { unk(o); };";
+    assert!(d_escape(&format!("{unknown} {w} c.absent?.(d);"), cfg()).is_some());
     // Written after the lookup was solved: replayed.
-    assert!(d_escape(&format!("c.absent?.(d); {w}"), FactsConfig::default()).is_some());
+    assert!(d_escape(&format!("{unknown} c.absent?.(d); {w}"), cfg()).is_some());
+    // The stored value comes from unknown code.
+    let opaque = "EventEmitter.prototype.absent = unk;";
+    assert!(d_escape(&format!("{unknown} {opaque} c.absent?.(d);"), cfg()).is_some());
+    // A stored function that keeps the argument nowhere unknown code sees.
+    let kept =
+        "EventEmitter.prototype.absent = function (o: any) { (globalThis as any).kept = o; };";
+    assert_eq!(d_escape(&format!("{kept} c.absent?.(d);"), cfg()), None);
     // Another key: this lookup still passes.
     let other = "EventEmitter.prototype.other = function (o: any) { return o; };";
-    assert_eq!(
-        d_escape(&format!("{other} c.absent?.(d);"), FactsConfig::default()),
-        None
-    );
-    // A computed key may be any key.
-    let any = "(EventEmitter.prototype as any)[k] = function (o: any) { return o; };";
-    assert!(d_escape(&format!("{any} c.absent?.(d);"), FactsConfig::default()).is_some());
+    assert_eq!(d_escape(&format!("{other} c.absent?.(d);"), cfg()), None);
+    // A computed key may be any key: the stored function runs.
+    let any = "(EventEmitter.prototype as any)[k] = function (o: any) { unk(o); };";
+    assert!(d_escape(&format!("{unknown} {any} c.absent?.(d);"), cfg()).is_some());
+    let ret = "(EventEmitter.prototype as any)[k] = function (o: any) { return o; };";
+    assert_eq!(d_escape(&format!("{ret} c.absent?.(d);"), cfg()), None);
     let del = "delete (EventEmitter.prototype as any).absent;";
-    assert!(d_escape(&format!("{del} c.absent?.(d);"), FactsConfig::default()).is_some());
+    assert_eq!(d_escape(&format!("{del} c.absent?.(d);"), cfg()), None);
 }
 
 #[test]

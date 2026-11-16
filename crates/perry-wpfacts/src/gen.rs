@@ -17,11 +17,14 @@ pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
+pub(crate) mod settled;
 mod own_guard;
 mod own_store;
+pub(crate) mod ret_param;
 mod param_key;
 pub(crate) use own_guard::Region;
 mod primitives;
+mod proto_first;
 mod private_methods;
 mod shared_closures;
 mod view;
@@ -42,6 +45,9 @@ pub struct ReadSite {
     /// the atom `()`.
     pub value_call: bool,
     pub func: FnIdx,
+    /// ACCSITE1 D2: the access the record names (a read or call, a store,
+    /// a compound's GetValue).
+    pub access: crate::derive::Access,
 }
 
 /// A folded builtin-method node (`perry_hir::folded_call`): the call
@@ -153,6 +159,10 @@ pub struct Gen<'a> {
     pub path_index: FxHashMap<String, u32>,
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
+    /// U8: the key value each `js_object_literal_to_property_key` result
+    /// converts (7.1.19 ToPropertyKey: a String key is itself), for the
+    /// literal's computed own key (`Cons::OwnComputedKey`).
+    pub(crate) prop_key_of: FxHashMap<NodeId, NodeId>,
     pub thrown: NodeId,
     /// The realm error a failed runtime operation throws (`Model::runtime_error`,
     /// held by `thrown`), for a site that throws it into its own region.
@@ -164,6 +174,10 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// ACCSITE1: the named store sites (`o.k = v`, a compound's PutValue and
+    /// GetValue). Kept apart from `read_sites`, which the read-side passes
+    /// walk; `derive::site_facts` judges both.
+    pub store_sites: Vec<ReadSite>,
     /// The folded method nodes that have a site (`method_sites`).
     pub(crate) folded_sites: Vec<FoldedSite>,
     pub(crate) element_sites: Vec<ElementSite>,
@@ -296,8 +310,14 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The (module, local, value node, `Fx::guard`) of the last local
+    /// write walked (`narrow::Gen::narrow_assigned`).
+    pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
+    /// Rule DA collectors of the `if`/`switch` statements being walked
+    /// (module, local, function body, node): `narrow::Gen::def_assign_begin`.
+    pub(crate) def_collect: Vec<(u32, u32, FnIdx, NodeId)>,
     /// In-bounds index stores (`gen/in_bounds.rs`).
     pub(crate) in_bounds: in_bounds::InBounds,
     /// The function body being walked and its locals a guard may narrow
@@ -316,6 +336,11 @@ pub struct Gen<'a> {
     /// `(module, byte offset, byte end, result node)` of every call with a
     /// source offset, whatever its callee (`call_kinds`).
     pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
+    /// The spread nodes of the `CallSpread` being lowered whose first
+    /// argument no spread precedes (`CallSite::first_arg_fixed`): a call
+    /// made with exactly these is fixed when it is made, before a builtin
+    /// model (the console formatter, `builtin_args_view`) reads it.
+    pub(crate) fixed_spreads: Option<Vec<NodeId>>,
     /// The list births and the push sites of the bodies walked, the body
     /// the walk is in (a serial; its loop depth is `loop_depth`) and the
     /// number of bodies entered so far (`list_caps`).
@@ -371,10 +396,15 @@ pub struct Gen<'a> {
     /// tokens whose use beyond the contract is a census report.
     pub stand_ins: FxHashMap<String, (NodeId, TmplId, Vec<Tok>)>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
+    /// R9BIRTH3 rule M: classes whose instances run another method at an
+    /// ancestor constructor's followed `this.m()` call (a class from them up
+    /// to that ancestor defines `m`): that ancestor's constructor leaks
+    /// `this` for them (`Gen::settle_rule_m`).
+    pub m_override_leaks: crate::pts::FxHashSet<TmplId>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
-    pub prim_const: [NodeId; 7],
+    pub prim_const: [NodeId; 9],
     /// One node per integer literal value, holding that Number with its
     /// point interval (`Gen::num_literal`); shared like `prim_const`.
     pub num_lits: FxHashMap<i64, NodeId>,
@@ -494,6 +524,20 @@ pub struct Gen<'a> {
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// ENUM1: the for-in loops being walked, outlined or not, whose key and
+    /// iterated binding are never written: (module, loop variable, the
+    /// local `__forin_obj` copies) (`Gen::enum_read`).
+    pub(crate) for_in_reads: Vec<(u32, u32, for_in::EnumSubject)>,
+    /// F-A: (module, `__forin_obj` local) -> the side-effect-free path
+    /// it is initialized from (`for (k in a.b.c)`).
+    pub(crate) for_in_paths: FxHashMap<(u32, u32), for_in::SubjPath>,
+    /// `let a = b` of locals: (module, a) -> b (the `__forin_obj` copy).
+    pub(crate) local_copies: FxHashMap<(u32, u32), u32>,
+    /// Per module: locals written anywhere (`=`, `++`).
+    pub(crate) written: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// SKINROOT11: `const v = S[k]` lowered so far: (module, v) -> (k, S,
+    /// the function that holds the binding).
+    pub(crate) same_key_reads: FxHashMap<(u32, u32), (u32, perry_hir::Expr, FnIdx)>,
     /// Constant bindings' initializers: (module, global, id) -> init
     /// (`Gen::note_define_keys`, `Gen::const_key`).
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
@@ -600,6 +644,9 @@ impl<'a> Gen<'a> {
         if relations {
             m.relations = Some(Vec::new());
         }
+        m.prov = crate::provenance::Prov::from_env(relations, || {
+            modules.iter().map(|(p, _)| p.to_string()).collect()
+        });
         let top = m.tok(TokKind::Top);
         debug_assert_eq!(top, TOP);
         m.top_node = m.node_l("TOPNODE");
@@ -607,7 +654,7 @@ impl<'a> Gen<'a> {
         m.add_tok(top_tok_node, TOP);
         m.add_prim(top_tok_node, prim::ALL);
         m.top_tok_node = top_tok_node;
-        let mut prim_const = [0; 7];
+        let mut prim_const = [0; 9];
         for (i, p) in [
             prim::NUM,
             prim::STR,
@@ -616,6 +663,8 @@ impl<'a> Gen<'a> {
             prim::UNDEF,
             prim::BIGINT,
             prim::SYMBOL,
+            prim::TRUE,
+            prim::FALSE,
         ]
         .into_iter()
         .enumerate()
@@ -670,12 +719,14 @@ impl<'a> Gen<'a> {
             path_index,
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
+            prop_key_of: FxHashMap::default(),
             thrown,
             runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            store_sites: Vec::new(),
             folded_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
@@ -726,13 +777,16 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            last_local_set: None,
             narrow: Vec::new(),
+            def_collect: Vec::new(),
             in_bounds: Default::default(),
             narrow_scope: None,
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
             call_kinds_at: Vec::new(),
+            fixed_spreads: None,
             list_births: Vec::new(),
             list_pushes: Vec::new(),
             list_body: 0,
@@ -756,6 +810,7 @@ impl<'a> Gen<'a> {
             view: None,
             stand_ins: FxHashMap::default(),
             ctor_phase: FxHashMap::default(),
+            m_override_leaks: crate::pts::FxHashSet::default(),
             fn_inst_of: FxHashMap::default(),
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),
@@ -802,6 +857,11 @@ impl<'a> Gen<'a> {
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
+            for_in_reads: Vec::new(),
+            local_copies: FxHashMap::default(),
+            for_in_paths: FxHashMap::default(),
+            written: FxHashMap::default(),
+            same_key_reads: FxHashMap::default(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
             param_calls: FxHashMap::default(),
@@ -841,6 +901,8 @@ impl<'a> Gen<'a> {
                     f,
                 ));
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
+                let suspends = f.is_async || f.is_generator || f.was_plain_async;
+                self.m.funcs[fx as usize].ret_param = ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -915,7 +977,11 @@ impl<'a> Gen<'a> {
                 // A module outside the program that is no builtin is unseen
                 // code run at load: it may write any key of the global
                 // object (rule G reads an unresolved global as `native_written`
-                // then). In per-unit mode a missing target is another unit.
+                // then). It holds the global object as unknown code does, so
+                // every built-in is in its reach by name and a store into ⊤
+                // may write one (`global_in_top`, as for the global object
+                // given to unknown code). In per-unit mode a missing target
+                // is another unit.
                 if target.is_none()
                     && !self.m.unit_mode
                     && !crate::builtins::is_builtin_module(&imp.source)
@@ -923,6 +989,7 @@ impl<'a> Gen<'a> {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let what = format!("module {} runs unseen", imp.source);
                     crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                    crate::builtins::note_global_in_top(&mut self.m);
                 }
                 for spec in &imp.specifiers {
                     let (local, node) = match (spec, target) {
@@ -1365,8 +1432,17 @@ impl<'a> Gen<'a> {
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
-        for p in params {
+        let mut arguments = None;
+        // DEADFN15 C3 (c): `this` and the parameters but the rest one.
+        self.m.rest_front_watch(this, fx);
+        for (pi, p) in params.iter().enumerate() {
             let n = self.local(mi, p.id);
+            if self.m.prov.is_some() {
+                self.m.why_param(n, name, &p.name, pi);
+            }
+            if !p.is_rest {
+                self.m.rest_front_watch(n, fx);
+            }
             // `arguments` beside a user rest parameter is no rest itself
             // (the HIR appends it after `...r`), but the same object: every
             // argument, never a positional one.
@@ -1375,12 +1451,18 @@ impl<'a> Gen<'a> {
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
                     Some(_) => self.new_args_template(mi),
-                    None => self.new_arr_template(mi, "rest"),
+                    None => {
+                        let t = self.new_arr_template(mi, "rest");
+                        self.m.rest_param_tmpls.insert(t);
+                        self.m.rest_owner.insert(t, self.m.cur_fn);
+                        t
+                    }
                 };
                 let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
                 if let Some(ao) = &p.arguments_object {
+                    arguments = Some((n, ao.strict));
                     self.m.edge(args_all, fa);
                     // Its own `length` is the argument count until code
                     // stores another value; sloppy `callee` is the function
@@ -1456,11 +1538,13 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: params.iter().any(|p| p.arguments_object.is_some()),
+            arguments,
             own_test: OwnTestBody::Pending(own_test),
             token: tok,
             ctor_of: None,
             lexical_this,
             no_summary: false,
+            foreign_params: false,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -1470,6 +1554,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
             forwarded: false,
+            ret_param: None,
         });
         #[cfg(test)]
         self.m.packet_end(packet_prior, false);
@@ -1496,11 +1581,33 @@ impl<'a> Gen<'a> {
         for &(a, _) in named.iter().flatten() {
             push_unique(&mut accessor_keys, a);
         }
+        // A method under a computed key that names one property key
+        // (`*[Symbol.iterator]()`, `["k"]()`) is defined under exactly that
+        // key (ECMA-262 15.4.4 MethodDefinitionEvaluation, 10.2.8
+        // DefineMethodProperty): it is a named method, as `k()` is.
+        let method_named: Vec<Option<Atom>> = c
+            .computed_members
+            .iter()
+            .map(|cm| {
+                if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
+                    return None;
+                }
+                match self.read_key(mi, &cm.key_expr) {
+                    Key::Named(a) => Some(a),
+                    Key::Any(_) => None,
+                }
+            })
+            .collect();
         let proto_members = {
             let mut v = accessor_keys.clone();
             for meth in &c.methods {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
+            }
+            for (cm, a) in c.computed_members.iter().zip(&method_named) {
+                if let (false, Some(a)) = (cm.is_static, a) {
+                    push_unique(&mut v, *a);
+                }
             }
             // A literal has no own `constructor`: it reads
             // `Object.prototype`'s, which a store into ⊤ may replace.
@@ -1538,11 +1645,16 @@ impl<'a> Gen<'a> {
             definite: literal_keys,
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
-            has_computed_members: named.iter().any(|n| n.is_none()),
+            has_computed_members: named
+                .iter()
+                .zip(&method_named)
+                .any(|(n, m)| n.is_none() && m.is_none()),
             field_init: None,
             proto_members,
             parent_value: None,
@@ -1594,10 +1706,10 @@ impl<'a> Gen<'a> {
         // (decision 17).
         if !c.is_literal_shape() {
             let pa = self.m.atom("prototype");
-            let pf = self.m.field(cobj, pa);
+            let pf = self.m.field_r(cobj, pa);
             self.m.add_tok(pf, proto);
             let ca = self.m.atom("constructor");
-            let cf = self.m.field(proto, ca);
+            let cf = self.m.field_r(proto, ca);
             self.m.add_tok(cf, cobj);
         }
         // DECISIONS 108: a function's name is its identity: contracts are
@@ -1617,7 +1729,7 @@ impl<'a> Gen<'a> {
             );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(proto, a);
+                let n = self.m.field_r(proto, a);
                 self.m.add_tok(n, t);
             }
             let this = self.m.funcs[f as usize].this;
@@ -1636,7 +1748,7 @@ impl<'a> Gen<'a> {
             );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(cobj, a);
+                let n = self.m.field_r(cobj, a);
                 self.m.add_tok(n, t);
                 self.m.tmpls[tm as usize].static_methods.push(a);
             }
@@ -1693,7 +1805,12 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for (cm, named) in c.computed_members.iter().zip(named) {
+        for ((cm, named), method_key) in c
+            .computed_members
+            .iter()
+            .zip(named)
+            .zip(method_named)
+        {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -1724,8 +1841,19 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let holder = if cm.is_static { cobj } else { proto };
-            let any = self.m.field_any(holder);
             let t = self.m.funcs[f as usize].token;
+            if let Some(a) = method_key {
+                let n = self.m.field_r(holder, a);
+                self.m.add_tok(n, t);
+                if cm.is_static {
+                    self.m.tmpls[tm as usize].static_methods.push(a);
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                }
+                continue;
+            }
+            let any = self.m.field_any(holder);
             self.m.add_tok(any, t);
             // A computed accessor may be named after any key.
             if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
@@ -1739,6 +1867,7 @@ impl<'a> Gen<'a> {
                 let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
                 self.m.funcs[f as usize].no_summary = true;
+                self.m.funcs[f as usize].foreign_params = true;
                 #[cfg(test)]
                 if self.m.packets_enabled {
                     std::rc::Rc::make_mut(&mut self.m.funcs[f as usize].body_packet)
@@ -1792,11 +1921,13 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            arguments: None,
             own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
+            foreign_params: false,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -1806,6 +1937,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
         #[cfg(test)]
         self.m.packet_end(packet_prior, false);
@@ -2133,6 +2265,8 @@ impl<'a> Gen<'a> {
                 if self.m.cur_fn != NO_FN {
                     let f = self.m.cur_fn;
                     self.m.captures.insert((n, f));
+                    // DEADFN15 C3 (a): a captured variable is shared.
+                    self.m.rest_front_watch(n, NO_FN);
                 }
             }
             return n;
@@ -2283,6 +2417,8 @@ impl<'a> Gen<'a> {
             definite: vec![],
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -2334,6 +2470,8 @@ impl<'a> Gen<'a> {
             definite: vec![],
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

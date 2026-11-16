@@ -1,6 +1,12 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod any_key_builtin_read;
 mod absent_key;
+mod audit1;
+mod raw1;
+mod inspect1;
+mod audit2;
+mod accessor_after_data_store;
 mod accessor_keys;
 mod accessor_layout_exit;
 mod accessor_reach;
@@ -9,6 +15,7 @@ mod activation_paths;
 mod annexb_accessors;
 mod annexb_known_accessor;
 mod annexb_method_value;
+mod annexb_own_accessor;
 mod args_beside_rest;
 mod arguments_object;
 mod arr_floor;
@@ -23,9 +30,16 @@ mod array_named_keys;
 mod array_numeric;
 mod array_record;
 mod array_reps;
+mod at_rest;
+mod computed_delete_absent;
+mod slice_call_array_like;
+mod fill_births;
+mod rest_elems;
+mod rest_fields;
+mod zero_sign;
+mod const_arrays;
 mod array_search;
 mod assign_to_object;
-mod at_rest;
 mod binding_write_gap;
 mod birth_elements;
 mod birth_site;
@@ -35,17 +49,30 @@ mod body_packets;
 mod booleans;
 mod bound_class;
 mod bound_in_summary;
+mod bound_call_memo;
 mod box_chain;
+mod boxed_primitive_methods;
 pub(crate) mod box_computed_read;
-mod bufeq_pointsto;
-mod buffer_view_reads;
+mod for_in_key_read_enumerable;
+mod json_positions;
+mod string_prefix_keys;
+mod uuid_infix_keys;
+mod regex_capture_suffix;
+mod regex_track_build;
+mod track_key;
+mod builtin_fn_absent_member;
+mod sloppy_this_wrapper;
+mod computed_method_key;
+mod rest_instances;
+mod rest_positions;
+mod rest_shift;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;
 mod builtin_program_fields;
 mod builtin_proto_value;
 mod builtin_spread;
-mod call_kinds;
+mod forin_key_string;
 mod call_shadow;
 mod callable_contract;
 mod callback_origin;
@@ -58,10 +85,18 @@ mod closed_world;
 mod closure_context;
 pub(crate) mod computed_key_members;
 mod computed_table_fn;
-mod const_arrays;
 mod const_key_read;
 mod const_key_set_store;
 mod const_numbers;
+mod key_strings;
+mod map_values;
+mod map_entry_pairs;
+mod promise_all_positions;
+mod promise_all_result_instance;
+mod value_run_context;
+mod realm_chain_members;
+mod prim_absent_member;
+mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;
 mod dce_reach;
@@ -69,7 +104,13 @@ mod dead_dynamic_import;
 mod declared_effects;
 mod declared_getter_results;
 mod default_params;
+mod data_define_named;
+mod r6defprop;
+mod define_through_unknown;
+mod realm_accessor_call;
+mod iter_realm_value;
 pub(crate) mod delivery_boundaries;
+pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;
 mod diagnostics;
 mod dynamic_code;
@@ -82,18 +123,31 @@ mod escaped_beside_top;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
+mod dead_fn;
 mod export_star;
 mod family_reach;
 mod field_array_push;
-mod fill_births;
 mod first_store_order;
 mod fn_inst_default_proto;
 mod fn_intrinsic_proto;
 mod folded_call_own;
+mod for_in_enumerable_keys;
 mod for_in_keys;
+mod for_in_runs_per_key;
+mod called_param_runs;
+mod field_truthy_filter;
+mod bool_field_guard;
+mod field_test_narrowing;
+mod own_data_stops_chain;
+mod switch_param_runs;
+mod switch_mask_union;
+mod switch_const_runs;
+mod for_in_key_store;
+mod predicate_operands;
 mod for_of_next_argument;
 mod for_of_yield;
 mod fresh_static_blocks;
+mod function_call_value;
 mod function_ctor_without_interp;
 mod function_values;
 mod gen_members;
@@ -113,16 +167,14 @@ mod indexed_callees;
 mod indexed_owner;
 mod indirect_eval_call;
 mod inherited_layout;
-mod instance_nodes;
+mod instanceof_buffer_false;
 mod instanceof_class_has_instance;
-mod int32_reads;
 mod int_demand;
 mod int_ranges;
 mod interp_from_facts;
 mod iter_close;
 mod json_callbacks;
 mod key_signs;
-mod key_strings;
 mod layout_key;
 mod ledger;
 mod list_caps;
@@ -131,10 +183,29 @@ mod literal_strings;
 mod locked_builtins;
 mod locked_delete;
 mod locked_store;
+mod locked_top_store;
+mod written_prim_method_receiver;
+mod escaped_active;
+mod escape_roots;
+mod arguments_instances;
+mod escaped_fn_own_return;
+mod locked_top_define;
+mod internal_slot_no_property;
+mod registry_prefix_runs;
+mod cache_key_runs;
+mod promise_adopts_thenable;
 mod logical_and;
 mod map_identity_ops;
-mod map_values;
 mod member_heritage;
+mod static_call_value;
+mod builtin_member_call;
+mod fetch_headers;
+mod json_protocol;
+mod response_body;
+mod error_to_string;
+mod regexp_chain_methods;
+mod json_object_proto_members;
+mod namespace_own_static;
 mod memo_context;
 mod method_sites;
 mod name_folds;
@@ -155,7 +226,6 @@ mod native_target_accessor;
 mod native_user_code;
 mod num_key;
 mod objproto_protocol;
-mod option_name_merge;
 mod own_guarded_read;
 mod own_helper_guard;
 mod own_key_shadow;
@@ -170,14 +240,12 @@ mod private_field;
 mod private_method_flow;
 mod private_method_read;
 mod process_argv;
-mod promise_adopts_thenable;
 mod proof_receivers;
 mod proto_lock_keys;
 mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
-mod quiet_sites;
-mod quiet_strings;
+mod protocol_touch_births;
 mod range_tightening;
 mod reach_accessor;
 mod reach_proto_members;
@@ -192,15 +260,15 @@ mod regexp_exec;
 mod relinked_parent;
 mod rest_element;
 mod rest_elements;
-mod rest_elems;
-mod rest_fields;
 mod run_once_closed;
 mod runtime_errors;
 mod runtime_helpers;
+mod set_proto_result;
 mod specialized_prototype;
 mod spread_arguments;
-mod spread_callbacks;
+mod spread_compose_elems;
 mod spread_elements;
+mod spread_enumerable;
 mod spread_iterable_args;
 mod step_done;
 mod summary;
@@ -212,8 +280,32 @@ mod tdz_seed;
 mod top_element_key;
 mod type_export;
 mod typed_array_exact;
+mod typed_array_element_store;
+mod typed_elem;
+mod typed_array_key_bigint;
+mod typed_array_length;
+mod typed_array_names;
+mod typed_array_symbol_absent;
+mod wrapper_realm_chain;
+mod realm_chain_computed_key;
+mod typed_array_numeric_key;
+mod typed_array_this_throws;
+mod class_call_throws;
+mod builtin_ctor_call;
+mod opaque_models;
+mod realm_present;
+mod null_proto_box_key;
+mod error_proto_data_keys;
+mod namespace_own_members;
+mod numeric_key_names;
+mod index_key_read;
+mod proto_key_read;
+mod spread_root;
+mod builtin_value_call;
+mod typed_array_key_read;
 mod unheld_key;
 mod unit_alias;
+mod root4162;
 mod unit_cjs;
 mod unit_ctor;
 mod unit_effects;
@@ -225,7 +317,6 @@ mod unit_this;
 mod unknown_accessor_key;
 mod unrun_param_call;
 mod work_bound_widen;
-mod zero_sign;
 
 use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 
@@ -1525,11 +1616,13 @@ fn a_parameter_node_holds_its_argument_marker() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1539,6 +1632,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
     let a = m.tok(TokKind::ModNs(7));
@@ -1597,11 +1691,13 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1611,6 +1707,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let mk = m.param_marker_tok(0, 0);
     let v = m.node_l("v");
@@ -1658,11 +1755,13 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1672,6 +1771,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     let mk = m.param_marker_tok(0, 0);
     // `r2` is a member of `r1` (an instance parameter passed on); `mk`
@@ -1681,7 +1781,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
     let r1 = m.arg_marker(n1);
     let r2 = m.arg_marker(n2);
     m.link_marker(r2, r1);
-    m.cons(src, Cons::Arith { dst });
+    m.cons(src, Cons::Arith { dst, other: crate::model::NO_NODE });
     m.add_tok(src, r1);
     m.solve();
     assert_eq!(m.nodes[dst as usize].prim, 0, "beside: no kinds of its own");
@@ -1713,11 +1813,13 @@ fn marker_model() -> crate::model::Model {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
         no_summary: true,
+        foreign_params: true,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -1727,6 +1829,7 @@ fn marker_model() -> crate::model::Model {
         parent: NO_FN,
         captures: Vec::new(),
         forwarded: false,
+        ret_param: None,
     });
     m
 }
@@ -1936,6 +2039,7 @@ mod async_result;
 mod builtin_ctor_statics;
 mod collection_entries;
 mod concat_elements;
+mod console_output_arguments;
 mod console_protocol;
 mod keycall1;
 mod constructor_values;
@@ -1973,10 +2077,13 @@ mod receiver_param_call;
 mod regexp_results;
 mod signatures;
 mod static_native_parent;
+mod string_iter_lock;
 mod string_methods;
 mod string_results;
 mod string_this;
+mod top_store_handed_builtins;
 mod typed_array_methods;
+mod typed_locale_args;
 mod web_timer_methods;
 
 /// Export the exact facts fixtures for an independent runtime/Node oracle.
@@ -2053,7 +2160,90 @@ mod number_bigint_ns;
 mod realm_object_proto_member;
 
 mod accessor_from_census;
+mod getter_result_decls;
 mod given_proto_census;
 mod navigator_decl;
 mod navigator_store;
+mod object_prototype_method_calls;
 mod spread_from_census;
+mod optimistic_json_key;
+mod peelk18;
+mod skinfa1;
+mod skinfa3;
+mod skinforin1;
+mod skinroot6;
+mod skinroot11;
+mod skinroot9;
+mod peelk19;
+mod peelk20;
+mod peelk21;
+mod skinroot10;
+mod skinroot14;
+mod skinroot17;
+mod skinroot19;
+mod skinroot24;
+mod peelk22;
+mod peelk23;
+mod fn_number_key;
+mod builtin_ctor_number_key;
+mod given_proto_members;
+mod sound1;
+mod scope_a;
+mod new_verdicts;
+mod lit_fact;
+mod arr_absent;
+mod prim_recv;
+mod not_unit;
+mod proto_recv;
+mod bns_recv;
+mod key_inherit;
+mod multi_run;
+mod held_realm_verdicts;
+mod held_realm_flow;
+mod forin1;
+mod key2;
+mod r9key1;
+mod r9key2;
+mod r9sites1;
+mod r9sites3;
+mod r9sites5;
+mod r9sites6;
+mod r9sites7;
+mod nocall1;
+mod skinfa8;
+mod local_versions;
+mod skinroot31;
+mod whyhold1;
+mod skinroot32;
+mod skinroot39;
+mod skinroot35;
+mod r6next;
+mod birthdef1;
+mod r9birth2;
+mod r9birth3;
+mod r9birth4;
+mod r9birth5;
+mod r9birth6;
+mod r9birth7;
+mod r9birth8;
+mod r9read1;
+mod r9store1;
+mod r9read2;
+mod r9store2;
+mod r9store3;
+mod r9read3;
+mod r9read4;
+mod r9store4;
+mod r9read5;
+mod r9read6;
+mod r9read7;
+mod onchange1;
+mod thisbind1;
+mod r9birth1;
+mod accsite1;
+mod d1;
+mod refold1;
+mod elems1;
+mod raybox2;
+mod raybox15;
+mod rb8;

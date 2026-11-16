@@ -31,6 +31,26 @@
 //! clips: what an `if` implies, `&&`, `||`, `?:`, a `while` and an early
 //! exit imply alike, and a write in the guarded code joins the written
 //! value back (the end node). `PERRY_FACTS_GUARD_PRESENCE=0` turns it off.
+//! Rule G2: a truthy test of a
+//! local's property (`x.f`, `!x.f` false) leaves its values but
+//! `null`/`undefined` and the objects whose read of `f` holds only
+//! `undefined`/`null` (`Cons::FieldTruthy`, solved per token). Rule
+//! G2-false: a falsy test of it (`x.f` false, `!x.f` true, in every form
+//! G2 takes: the `else` arm, `?:`, `&&`/`||`, an early exit) leaves its
+//! values but `null`/`undefined` and the objects whose read of `f` cannot
+//! be falsy (ECMA-262 7.1.2 ToBoolean: `guard::FALSY`; an object is never
+//! falsy); a non-nullish primitive stays (its wrapper's read is not judged).
+//! Rule G3: where `x.f === lit` is true (a String, Number, `null` or
+//! `undefined` literal), and in a `switch (x.f)` clause that only `case`
+//! tests of such literals of one type select (`Gen::case_narrow`), `x`
+//! holds only the values whose read of `f` may yield a value of the
+//! literal's type (ECMA-262 7.2.16 step 1, 14.12.2 CaseClauseIsSelected).
+//! Rule G4: where `typeof x.f === s` is true (`!==` false), `s` the String
+//! "number", "string" or "undefined", `x` holds only the values whose read
+//! of `f` may yield a value of that type: the G3 test of a literal of the
+//! type (ECMA-262 13.5.3 typeof table, 7.2.15 IsStrictlyEqual of Strings).
+//! The other `typeof` results have no exact test; the false side implies
+//! nothing.
 //!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
@@ -83,6 +103,9 @@ pub(crate) struct Narrow {
     /// The test implies `local < a.length` for this local `a`
     /// (`gen/in_bounds.rs`).
     below_length: Option<u32>,
+    /// Pushed by an assignment (`Gen::narrow_assigned`), not by a test:
+    /// it implies no interval or presence of the local.
+    assigned: bool,
 }
 
 impl Narrow {
@@ -93,7 +116,7 @@ impl Narrow {
 
     /// The local still holds the value the test saw.
     pub(crate) fn unwritten(&self) -> bool {
-        !self.written
+        !self.written && !self.assigned
     }
 
     pub(crate) fn below_length_of(&self) -> Option<u32> {
@@ -220,6 +243,7 @@ impl<'a> Gen<'a> {
             jumps: self.jumps,
             tries: self.tries,
             below_length: below,
+            assigned: false,
         });
         true
     }
@@ -274,6 +298,17 @@ impl<'a> Gen<'a> {
             .collect();
         for e in ends {
             self.m.edge(vn, e);
+        }
+        // Rule DA: the write reaches the collector of every `if`/`switch`
+        // being walked that writes the local on each normal completion.
+        let cs: Vec<NodeId> = self
+            .def_collect
+            .iter()
+            .filter(|c| c.0 == mi && c.1 == id && c.2 == f)
+            .map(|c| c.3)
+            .collect();
+        for c in cs {
+            self.m.edge(vn, c);
         }
     }
 
@@ -504,6 +539,15 @@ impl<'a> Gen<'a> {
         let mut own = Vec::new();
         let scope = (self.int_ranges || self.guard_presence).then(|| {
             let mut ls = scope_locals(params, body);
+            // `this` of a body with its own binding (not an arrow's, which
+            // is its enclosing body's).
+            // PERRY_WPF_NO_THIS_HOST: diagnostic switch (default off) that
+            // leaves `this` out of the narrowing hosts.
+            if !self.m.funcs[f as usize].lexical_this
+                && std::env::var_os("PERRY_WPF_NO_THIS_HOST").is_none()
+            {
+                ls.insert(THIS_LOCAL);
+            }
             ls.extend(
                 captures
                     .iter()
@@ -720,7 +764,7 @@ pub(crate) enum Implied {
 }
 
 /// The values a guard proves a local is not.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Presence {
     /// Neither `null` nor `undefined` (`Cons::NotNullish`): a truthy value,
     /// or one that is not `== null`.
@@ -728,6 +772,21 @@ pub(crate) enum Presence {
     /// Not `undefined` (`Cons::NotUndefined`): one that is not
     /// `=== undefined`.
     NotUndefined,
+    /// Not `null` (`Cons::NotNull`, rule T1): one that is not `=== null`.
+    NotNull,
+    /// Rule T6 (`Cons::TypeIs`): only the primitives of the mask, the one
+    /// type whose `typeof` the guard compared with.
+    TypeIs(u16),
+    /// `local.key` decided by a test of the read (`Cons::FieldTruthy`):
+    /// rule G2 `guard::TRUTHY` (truthy), rule G1 `guard::IS_FALSE`/
+    /// `NOT_FALSE`/`IS_TRUE`/`NOT_TRUE` (`=== false`/`true` decided). Neither
+    /// `null`/`undefined` (the read would throw) nor an object whose read
+    /// of `key` cannot pass the test.
+    FieldTruthy(String, u8),
+    /// `local instanceof ArrayBuffer` (`true`: `SharedArrayBuffer`) failed,
+    /// the bare global name (`Cons::NotBuffer`): no built-in buffer object
+    /// of that kind, while the global holds the intrinsic constructor.
+    NotBuffer(bool),
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -753,7 +812,9 @@ fn implied<'p>(
             left,
             right,
         } if positive => {
-            implied(left, true, subst, pred, depth, out);
+            let mut l = Vec::new();
+            implied(left, true, subst, pred, depth, &mut l);
+            out.extend(l.into_iter().filter(|f| holds_past(f, right)));
             implied(right, true, subst, pred, depth, out);
         }
         Expr::Logical {
@@ -761,7 +822,9 @@ fn implied<'p>(
             left,
             right,
         } if !positive => {
-            implied(left, false, subst, pred, depth, out);
+            let mut l = Vec::new();
+            implied(left, false, subst, pred, depth, &mut l);
+            out.extend(l.into_iter().filter(|f| holds_past(f, right)));
             implied(right, false, subst, pred, depth, out);
         }
         Expr::Unary {
@@ -792,15 +855,209 @@ fn implied<'p>(
             // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
         }
+        // Rule G2: a truthy `local.key` (module docs, "Guards"); rule
+        // G2-false: a falsy one, through the same forms negated.
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            let test = match positive {
+                true => crate::model::guard::TRUTHY,
+                false => crate::model::guard::FALSY,
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
+        // Rule G1: `local.key === b` (`!==`) with `b` a Boolean constant,
+        // decided (ECMA-262 7.2.16 IsStrictlyEqual: only `b` is `b`).
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if matches!(
+            (left.as_ref(), right.as_ref()),
+            (Expr::Bool(_), Expr::PropertyGet { .. }) | (Expr::PropertyGet { .. }, Expr::Bool(_))
+        ) =>
+        {
+            use crate::model::guard;
+            let ((Expr::Bool(b), Expr::PropertyGet { object, property, .. })
+            | (Expr::PropertyGet { object, property, .. }, Expr::Bool(b))) =
+                (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            // The read is `b` where `===` is true.
+            let is = matches!(op, CompareOp::Eq) == positive;
+            let test = match (is, *b) {
+                (true, false) => guard::IS_FALSE,
+                (false, false) => guard::NOT_FALSE,
+                (true, true) => guard::IS_TRUE,
+                (false, true) => guard::NOT_TRUE,
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
+        // A failed `local instanceof ArrayBuffer` (`SharedArrayBuffer`),
+        // the right-hand side the global name's live binding: the runtime
+        // answers the intrinsic by the buffer brand, so no built-in buffer
+        // of that kind is the local. A local, a program class or any other
+        // right-hand side decides nothing here.
+        Expr::InstanceOf {
+            expr,
+            ty_expr: Some(rhs),
+            ..
+        } if !positive => {
+            let shared = match rhs.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if matches!(object.as_ref(), Expr::GlobalGet(0)) => match property.as_str() {
+                    "ArrayBuffer" => Some(false),
+                    "SharedArrayBuffer" => Some(true),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let (Some(shared), Some(Bound::Local(id))) = (shared, bound_of(expr, subst)) {
+                out.push(Implied::Present(id, Presence::NotBuffer(shared)));
+            }
+        }
         // A truthy local is neither `null` nor `undefined`.
         Expr::LocalGet(_) if positive => {
             if let Some(Bound::Local(id)) = bound_of(c, subst) {
                 out.push(Implied::Present(id, Presence::NotNullish));
             }
         }
+        // Rule G3: `local.key === lit` true (`!==` false), `lit` a String,
+        // Number, `null` or `undefined` literal: the read is of its type.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive)
+            && match (left.as_ref(), right.as_ref()) {
+                (Expr::PropertyGet { .. }, l) | (l, Expr::PropertyGet { .. }) => {
+                    literal_type_test(l).is_some()
+                }
+                _ => false,
+            } =>
+        {
+            let ((Expr::PropertyGet { object, property, .. }, l)
+            | (l, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            if let (Some(test), Some(id)) = (literal_type_test(l), host_of(object, subst, depth)) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
+        // Rule T5: `typeof NAME !== "undefined"` true (`=== "undefined"`
+        // false), NAME an identifier with no binding in any enclosing scope
+        // or module and no host global the HIR knows (HIR lowers the operand
+        // to `js_global_get_optional("NAME")`, `lower_expr/arm_unary.rs`).
+        // 13.5.3 step 2: an unresolvable reference gives "undefined"; else
+        // the reference is the global environment's, whose object record
+        // reads `[[Get]](globalThis, NAME)` (9.1.1.4, 9.1.1.2.6), and
+        // `typeof v` is "undefined" iff `v` is `undefined` (13.5.3 table;
+        // the runtime has no [[IsHTMLDDA]] object). So the test narrows the
+        // global object (rule T2's host form, `GLOBAL_LOCAL`): it passes
+        // only if its read of NAME may give a value other than `undefined`,
+        // and that read is the solver's own load of the key (the realm's
+        // declarations of `%Global%` and `Object.prototype`, every store
+        // into either object under NAME or an unknown key, and ⊤ once
+        // unknown code holds them, `builtins::loads::tok_load`).
+        // CLOSED-WORLD PREMISE (owner 2026-11-14): no dynamic code creates
+        // the global.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if typeof_unbound_global(left, right).is_some() => {
+            use crate::model::guard;
+            let Some(name) = typeof_unbound_global(left, right) else {
+                return;
+            };
+            let test = match matches!(op, CompareOp::Eq) == positive {
+                true => guard::UNDEF,
+                false => guard::NOT_UNDEF,
+            };
+            out.push(Implied::Present(GLOBAL_LOCAL, Presence::FieldTruthy(name.clone(), test)));
+        }
+        // Rule G4: `typeof local.key === s` true (`!==` false), `s` a String
+        // whose type has a G3 test: the read is of that type.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive)
+            && typeof_member_test(left, right).is_some() =>
+        {
+            let Some((object, property, test)) = typeof_member_test(left, right) else {
+                return;
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
+        // Rule T6: `typeof local === s` true (`!==` false), `s` "string",
+        // "number", "boolean" or "undefined": the local holds a value of
+        // that one type (13.5.3 typeof table; 7.2.15 IsStrictlyEqual of
+        // Strings), through `&&` (13.13: the right operand runs only when
+        // the left is true) like every guard here. The local's binding is
+        // the narrowing's (`narrowed_read`), as for rule T1.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive) && typeof_local_mask(left, right).is_some() => {
+            let Some((x, mask)) = typeof_local_mask(left, right) else {
+                return;
+            };
+            if let Some(Bound::Local(id)) = bound_of(x, subst) {
+                out.push(Implied::Present(id, Presence::TypeIs(mask)));
+            }
+        }
+        // Rule T2: `host.key !== null` true (`=== null` false), `!==
+        // undefined`, `!= null` (`undefined`) true (`==` false): the host
+        // holds only the values whose read of `key` may yield a value the
+        // comparison passes (ECMA-262 7.2.16 step 1; 7.2.15 steps 2-3: `==
+        // null` holds for `null` and `undefined` only, an object is never
+        // loosely equal to them, no conversion runs). It narrows the host
+        // (an object whose read of `key` never passes never runs the
+        // guarded code), not the value a later read gives: a store, call or
+        // getter between the test and a later `host.key` read changes
+        // nothing here, that read takes every value of the key.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Ne | CompareOp::LooseNe) == positive)
+            && matches!(
+                (left.as_ref(), right.as_ref()),
+                (Expr::PropertyGet { .. }, Expr::Null | Expr::Undefined)
+                    | (Expr::Null | Expr::Undefined, Expr::PropertyGet { .. })
+            ) =>
+        {
+            use crate::model::guard;
+            let ((Expr::PropertyGet { object, property, .. }, nil)
+            | (nil, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            let test = match (op, nil) {
+                (CompareOp::LooseEq | CompareOp::LooseNe, _) => guard::NOT_NULLISH,
+                (_, Expr::Null) => guard::NOT_NULL,
+                _ => guard::NOT_UNDEF,
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
         // `local == null` (`undefined`) false, `local != null` true: not
         // nullish. `local === undefined` false, `!==` true: not
-        // `undefined`. (`=== null` decides no presence a filter keeps.)
+        // `undefined`. Rule T1: `local === null` false, `!==` true: not
+        // `null` (7.2.16: only `null` is strictly equal to `null`;
+        // `undefined` passes). `!= null` excludes both (7.2.15 steps 2-3).
         Expr::Compare { op, left, right }
             if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
                 || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
@@ -818,6 +1075,7 @@ fn implied<'p>(
                 {
                     Some(Presence::NotUndefined)
                 }
+                (CompareOp::Eq, false) | (CompareOp::Ne, true) => Some(Presence::NotNull),
                 _ => None,
             };
             if let (Some(p), Some(Bound::Local(id))) = (presence, bound_of(x, subst)) {
@@ -832,6 +1090,9 @@ fn implied<'p>(
                     (CompareOp::Le, true) | (CompareOp::Gt, false) => CLIP_LE,
                     (CompareOp::Gt, true) | (CompareOp::Le, false) => CLIP_GT,
                     (CompareOp::Ge, true) | (CompareOp::Lt, false) => CLIP_GE,
+                    (CompareOp::Ne | CompareOp::LooseNe, true) | (CompareOp::Eq | CompareOp::LooseEq, false) => {
+                        crate::model::range::CLIP_NE
+                    }
                     _ => return None,
                 })
             };
@@ -843,16 +1104,17 @@ fn implied<'p>(
                 o => o.clone(),
             };
             let (l, r) = (bound_of(left, subst), bound_of(right, subst));
+            let ne_char = |kind: u8, b: &Bound| kind == crate::model::range::CLIP_NE && matches!(b, Bound::Char(_));
             if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
                 if !b.reads(*id) {
-                    if let Some(kind) = k(op, positive) {
+                    if let Some(kind) = k(op, positive).filter(|&kd| !ne_char(kd, b)) {
                         out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
             if let (Some(Bound::Local(id)), Some(b)) = (&r, &l) {
                 if !b.reads(*id) {
-                    if let Some(kind) = k(&mirror(op), positive) {
+                    if let Some(kind) = k(&mirror(op), positive).filter(|&kd| !ne_char(kd, b)) {
                         out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
@@ -864,6 +1126,146 @@ fn implied<'p>(
 
 /// `e` as a bound: a literal, a local (through `subst` inside a
 /// predicate's body), or a local's `length`.
+/// The narrowing id of `this` (`Gen::narrow_enter_body` puts it in scope
+/// for a body with its own `this` binding; no local has this id).
+pub(crate) const THIS_LOCAL: u32 = u32::MAX - 1;
+/// The narrowing id of the global object (rule T5): a read of an unbound
+/// identifier (`js_global_get_or_throw_unresolved`,
+/// `js_global_get_optional`) reads off its narrowed node. The binding
+/// never changes (the global object is one object for the whole run), so
+/// it is in scope in every body, the module's top level included.
+pub(crate) const GLOBAL_LOCAL: u32 = u32::MAX - 2;
+
+/// `this` is a narrowing host of rule G1 only (`this.f === b`), not of
+/// rule G2 (`if (this.f)`); `PERRY_WPF_THIS_HOST=all` makes it a host of
+/// both.
+fn this_host_bool() -> bool {
+    !std::env::var("PERRY_WPF_THIS_HOST").is_ok_and(|v| v == "all")
+}
+
+/// The host of a field test `host.key`: a local, or `this` of the body the
+/// guard is in (`depth` 0: a predicate's `this` is its own call's). `this`
+/// is one value in one invocation of a function with its own `this` binding
+/// (ECMA-262 9.4.4 ResolveThisBinding; nothing assigns it).
+/// Rule G3: the guard test `=== e` true implies of the other operand: the
+/// type of the literal `e` (ECMA-262 7.2.16 step 1).
+pub(crate) fn literal_type_test(e: &Expr) -> Option<u8> {
+    use crate::model::guard;
+    match e {
+        Expr::String(_) => Some(guard::IS_STR),
+        Expr::Number(_) | Expr::Integer(_) => Some(guard::IS_NUM),
+        Expr::Null => Some(guard::IS_NULL),
+        Expr::Undefined => Some(guard::UNDEF),
+        _ => None,
+    }
+}
+
+/// Rule T5: `typeof NAME` (HIR: `typeof js_global_get_optional("NAME")`,
+/// a name with no binding) compared with the String "undefined" (either
+/// order): NAME.
+fn typeof_unbound_global<'e>(a: &'e Expr, b: &'e Expr) -> Option<&'e String> {
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    if s != "undefined" {
+        return None;
+    }
+    let Expr::Call { callee, args, .. } = o.as_ref() else {
+        return None;
+    };
+    let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+        return None;
+    };
+    match (name.as_str(), args.as_slice()) {
+        ("js_global_get_optional", [Expr::String(n)]) => Some(n),
+        _ => None,
+    }
+}
+
+/// Rule G4: `typeof host.key` compared with the String "number", "string"
+/// or "undefined" (either order): the host, the key and the G3 test of that
+/// type (ECMA-262 13.5.3: "number" iff a Number, "string" iff a String,
+/// "undefined" iff `undefined`). "object", "function", "boolean", "bigint"
+/// and "symbol" have no test that admits exactly their values: `None`.
+fn typeof_member_test<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, &'e String, u8)> {
+    use crate::model::guard;
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = o.as_ref()
+    else {
+        return None;
+    };
+    let test = match s.as_str() {
+        "number" => guard::IS_NUM,
+        "string" => guard::IS_STR,
+        "undefined" => guard::UNDEF,
+        _ => return None,
+    };
+    Some((object.as_ref(), property, test))
+}
+
+/// R9READ6: a fact the left operand of `&&` (`||` false) implies still
+/// holds after the right operand ran (13.13: the right runs between the
+/// test and the code it guards): the right writes not the local (an
+/// assignment or update in it; a predicate body has none), and for a
+/// clip, whose bound may name other locals, writes no local at all.
+fn holds_past(f: &Implied, right: &Expr) -> bool {
+    match f {
+        Implied::Present(id, _) => !expr_has(right, &mut |e| writes(e, *id)),
+        _ => !expr_has(right, &mut |e| matches!(e, Expr::LocalSet(..) | Expr::Update { .. })),
+    }
+}
+
+/// Rule T6: `typeof x` (x a local read) compared with "string", "number",
+/// "boolean" or "undefined" (either order): `x` and the primitive mask of
+/// that type (13.5.3). "object", "function", "bigint", "symbol": `None`.
+fn typeof_local_mask<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, u16)> {
+    use crate::model::prim;
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    if !matches!(o.as_ref(), Expr::LocalGet(_)) {
+        return None;
+    }
+    let mask = match s.as_str() {
+        "string" => prim::STR,
+        "number" => prim::NUM,
+        "boolean" => prim::BOOL,
+        "undefined" => prim::UNDEF,
+        _ => return None,
+    };
+    Some((o.as_ref(), mask))
+}
+
+/// A clause body that never completes normally into the next clause: its
+/// last statement leaves (the rule M1 test, `Stmt::Switch` in `walk`).
+fn case_leaves(c: &perry_hir::SwitchCase) -> bool {
+    matches!(
+        c.body.last(),
+        Some(
+            Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::Return(_)
+                | Stmt::Throw(_)
+        )
+    )
+}
+
+fn host_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>, depth: u8) -> Option<u32> {
+    match e {
+        Expr::This if depth == 0 => Some(THIS_LOCAL),
+        _ => match bound_of(e, subst)? {
+            Bound::Local(id) => Some(id),
+            _ => None,
+        },
+    }
+}
+
 fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
     use crate::model::RangeOp;
     use perry_hir::BinaryOp;
@@ -990,9 +1392,7 @@ impl<'a> Gen<'a> {
         }
         // The body being walked (`stmts` runs outside `stmt`'s `cur_fn`).
         let f = fx.f;
-        if !self.narrow_scope.as_ref().is_some_and(|(sf, _)| *sf == f) {
-            return 0;
-        }
+        let local_scope = self.narrow_scope.as_ref().is_some_and(|(sf, _)| *sf == f);
         let mut facts = Vec::new();
         let module: &'a perry_hir::Module = self.modules[fx.module as usize].1;
         let pred = |fid: u32| -> Option<Predicate<'a>> {
@@ -1013,9 +1413,13 @@ impl<'a> Gen<'a> {
         // Without guard ranges (`FactsConfig::no_guard_ranges`) no clip;
         // without guard presence (`FactsConfig::no_guard_presence`) no
         // presence.
+        // The global object (rule T5) is a host in every body, whole-program
+        // only (a unit does not see the other units' stores into it).
+        let unit_mode = self.m.unit_mode;
         facts.retain(|x| match x {
-            Implied::Clip(..) => self.guard_ranges,
-            Implied::Present(..) => self.guard_presence,
+            Implied::Clip(..) => self.guard_ranges && local_scope,
+            Implied::Present(GLOBAL_LOCAL, _) => self.guard_presence && !unit_mode,
+            Implied::Present(..) => self.guard_presence && local_scope,
         });
         if facts.is_empty() {
             return 0;
@@ -1035,16 +1439,32 @@ impl<'a> Gen<'a> {
             let id = match &fact {
                 Implied::Clip(id, ..) | Implied::Present(id, _) => *id,
             };
-            if !self
-                .narrow_scope
-                .as_ref()
-                .is_some_and(|(_, ls)| ls.contains(&id))
+            if id != GLOBAL_LOCAL
+                && !self
+                    .narrow_scope
+                    .as_ref()
+                    .is_some_and(|(_, ls)| ls.contains(&id))
             {
                 continue;
             }
-            let src = self
-                .narrowed_read(mi, id)
-                .unwrap_or_else(|| self.local(mi, id));
+            // `this` is a host of rule G1 (`this.f === b`) only, not of
+            // rule G2 (`if (this.f)`), unless `PERRY_WPF_THIS_HOST=all`.
+            if id == THIS_LOCAL
+                && matches!(&fact, Implied::Present(_, Presence::FieldTruthy(_, test))
+                    if matches!(*test, crate::model::guard::TRUTHY | crate::model::guard::FALSY))
+                && this_host_bool()
+            {
+                continue;
+            }
+            let src = match self.narrowed_read(mi, id) {
+                Some(n) => n,
+                None if id == THIS_LOCAL => fx.this,
+                None if id == GLOBAL_LOCAL => {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    self.tok_node(t)
+                }
+                None => self.local(mi, id),
+            };
             let start = self.tmp("guard");
             self.zs_carrier(start);
             let mut below = None;
@@ -1068,6 +1488,42 @@ impl<'a> Gen<'a> {
                 Implied::Present(_, Presence::NotUndefined) => {
                     self.m.cons(src, Cons::NotUndefined { dst: start })
                 }
+                Implied::Present(_, Presence::NotNull) => {
+                    self.m.cons(src, Cons::NotNull { dst: start })
+                }
+                Implied::Present(_, Presence::TypeIs(mask)) => {
+                    self.m.cons(src, Cons::TypeIs { mask, dst: start })
+                }
+                Implied::Present(_, Presence::NotBuffer(shared)) => {
+                    self.m.cons(src, Cons::NotBuffer { shared, dst: start });
+                    // The global's value (`globalThis.ArrayBuffer`, the
+                    // read the right-hand side makes): any value but the
+                    // intrinsic constructor lets every value through.
+                    let name = match shared {
+                        true => "SharedArrayBuffer",
+                        false => "ArrayBuffer",
+                    };
+                    let global = self.expr(fx, &Expr::GlobalGet(0));
+                    let ctor = self.tmp("instanceof-ctor");
+                    let key = Key::Named(self.m.atom(name));
+                    self.m.cons(global, Cons::Load { key, dst: ctor });
+                    let test = match shared {
+                        true => crate::model::guard::NOT_SHARED_BUFFER_CTOR,
+                        false => crate::model::guard::NOT_BUFFER_CTOR,
+                    };
+                    self.m.cons(
+                        ctor,
+                        Cons::Guard {
+                            test,
+                            from: src,
+                            dst: start,
+                        },
+                    );
+                }
+                Implied::Present(_, Presence::FieldTruthy(property, test)) => {
+                    let key = Key::Named(self.m.atom(&property));
+                    self.m.cons(src, Cons::FieldTruthy { key, test, dst: start })
+                }
             }
             let end = self.tmp("guard-end");
             self.zs_carrier(end);
@@ -1087,15 +1543,306 @@ impl<'a> Gen<'a> {
                 jumps: self.jumps,
                 tries: self.tries,
                 below_length: below,
+                assigned: false,
             });
             pushed += 1;
         }
         pushed
     }
 
+    /// Rule G3 for clause `i` of `switch (disc)`, `disc` a property read:
+    /// the clauses `j..=i` whose bodies before `i` are empty, entered only
+    /// by their tests (`j` first, or clause `j - 1` leaves), all `case`
+    /// literals of one type (no `default`: 14.12.4 enters it when no test
+    /// is equal), narrow as `disc === test_i` true; any other clause none.
+    pub(crate) fn case_narrow(
+        &mut self,
+        fx: &Fx,
+        disc: &Expr,
+        cases: &[perry_hir::SwitchCase],
+        i: usize,
+    ) -> usize {
+        if !matches!(disc, Expr::PropertyGet { .. }) {
+            return 0;
+        }
+        let mut j = i;
+        while j > 0 && cases[j - 1].body.is_empty() {
+            j -= 1;
+        }
+        if j > 0 && !case_leaves(&cases[j - 1]) {
+            return 0;
+        }
+        let mut test = None;
+        for c in &cases[j..=i] {
+            let Some(k) = c.test.as_ref().and_then(literal_type_test) else {
+                return 0;
+            };
+            if test.is_some_and(|t| t != k) {
+                return 0;
+            }
+            test = Some(k);
+        }
+        let Some(lit) = cases[i].test.as_ref() else {
+            return 0;
+        };
+        let cond = Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(disc.clone()),
+            right: Box::new(lit.clone()),
+        };
+        self.narrow_guard(fx, &cond, true)
+    }
+
+    /// After statement `s` of a statement list is walked: when `s` is a
+    /// direct write of a local of the body being walked that no other code
+    /// can write (`scope_locals`), `x = e;` or `let x = e;`, the statements
+    /// after it in the same list are reached only by falling through `s`
+    /// (ECMA-262 14.2.2 StatementList evaluation: a jump lands at a loop's
+    /// next iteration, past a statement, or in a `catch`/`finally`, never
+    /// in the middle of a list). So until the next write of `x` on the way
+    /// (`narrowed_write`, `narrow_enter_loop`) a read of `x` there sees the
+    /// value `e` produced: the narrowing's start is that value's node. A
+    /// write in a nested statement reaches the end node, and later reads in
+    /// the list see the end (the start joined with every such write), as
+    /// for a test's narrowing; the list's end pops it. The local's own node
+    /// stays the join of all its writes for every other read. Whether it
+    /// pushed one.
+    pub(crate) fn narrow_assigned(&mut self, fx: &Fx, s: &Stmt) -> usize {
+        let Some((mi, id, vn, guard)) = self.last_local_set.take() else {
+            return 0;
+        };
+        let direct = match s {
+            Stmt::Expr(Expr::LocalSet(l, _)) => *l == id,
+            Stmt::Let { id: l, init: Some(_), .. } => *l == id,
+            _ => false,
+        };
+        if !direct
+            || mi != fx.module
+            || !self
+                .narrow_scope
+                .as_ref()
+                .is_some_and(|(f, ls)| *f == fx.f && ls.contains(&id))
+        {
+            return 0;
+        }
+        // In an `if` branch the write reaches the local only when the test
+        // can select the branch (`Fx::guard`): the start holds what the
+        // write gives the local, through the same test. The version nodes
+        // are the body's own, as the nodes of its statements are
+        // (`Gen::stmt`): this runs between two statements, where
+        // `Model::cur_fn` is the caller's, so each summary run copies them
+        // like the local's node and one run's version holds only that run's
+        // value.
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let start = self.tmp("assigned");
+        self.zs_carrier(start);
+        match guard {
+            None => self.m.edge(vn, start),
+            Some((t, test)) => self.m.cons(t, Cons::Guard { test, from: vn, dst: start }),
+        }
+        let end = self.tmp("assigned-end");
+        self.zs_carrier(end);
+        self.m.edge(start, end);
+        // U8: a local holding a ToPropertyKey result holds its key
+        // (`Gen::prop_key_of`).
+        if let Some(&k) = self.prop_key_of.get(&vn) {
+            self.prop_key_of.insert(start, k);
+            self.prop_key_of.insert(end, k);
+        }
+        self.m.cur_fn = prev;
+        self.narrow.push(Narrow {
+            mi,
+            id,
+            f: fx.f,
+            start,
+            end,
+            written: false,
+            in_update: false,
+            jumps: self.jumps,
+            tries: self.tries,
+            below_length: None,
+            assigned: true,
+        });
+        1
+    }
+
     pub(crate) fn narrow_pop(&mut self, k: usize) {
         for _ in 0..k {
             self.narrow.pop();
         }
+    }
+}
+
+/// How a statement leaves for a local `x` (rule DA, `Gen::def_assign_begin`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Da {
+    /// Every way out of it that lands at the statement after it has written
+    /// `x`, and it may land there.
+    Assigns,
+    /// It never lands at the statement after it: `return`, `throw`, an
+    /// unlabeled `continue`, or (outside the `switch` being judged) an
+    /// unlabeled `break`; they land past the statement list.
+    Exits,
+    /// It may complete normally without writing `x`.
+    Through,
+    /// It may land after the judged statement without writing `x` (a
+    /// `break` of the judged `switch`, any labeled jump).
+    Escape,
+}
+
+/// `ss` in order: the first statement that does not complete normally
+/// without writing `x` decides. `sw`: inside a clause of the judged
+/// `switch`, where an unlabeled `break` lands after it.
+fn da_list(ss: &[Stmt], x: u32, sw: bool) -> Da {
+    for s in ss {
+        match da_stmt(s, x, sw) {
+            Da::Through => {}
+            d => return d,
+        }
+    }
+    Da::Through
+}
+
+fn da_stmt(s: &Stmt, x: u32, sw: bool) -> Da {
+    match s {
+        Stmt::Expr(Expr::LocalSet(l, _)) if *l == x => Da::Assigns,
+        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
+        Stmt::Break if sw => Da::Escape,
+        Stmt::Break => Da::Exits,
+        Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => Da::Escape,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let a = da_list(then_branch, x, sw);
+            let b = else_branch.as_deref().map_or(Da::Through, |e| da_list(e, x, sw));
+            match (a, b) {
+                (Da::Escape, _) | (_, Da::Escape) => Da::Escape,
+                (Da::Exits, Da::Exits) => Da::Exits,
+                (Da::Assigns | Da::Exits, Da::Assigns | Da::Exits) => Da::Assigns,
+                _ => Da::Through,
+            }
+        }
+        Stmt::Switch { cases, .. } => da_switch(cases, x),
+        // Any other statement is not followed inside: it may complete
+        // without writing `x`, and it escapes when a jump in it may land
+        // after the judged statement.
+        _ => {
+            let one = std::slice::from_ref(s);
+            if !jumps_leave(one) || (sw && breaks_out(one)) {
+                Da::Escape
+            } else {
+                Da::Through
+            }
+        }
+    }
+}
+
+/// A `switch` (ECMA-262 14.12.4): with a `default` clause every run enters
+/// some clause and runs the clauses from it on until a `break` (which lands
+/// after the `switch`) or an abrupt completion. Each entry decides like a
+/// statement list over the bodies from its clause on.
+fn da_switch(cases: &[perry_hir::SwitchCase], x: u32) -> Da {
+    if !cases.iter().all(|c| jumps_leave(&c.body)) {
+        return Da::Escape;
+    }
+    if !cases.iter().any(|c| c.test.is_none()) {
+        return Da::Through;
+    }
+    let mut all_exit = true;
+    for i in 0..cases.len() {
+        let mut d = Da::Through;
+        for s in cases[i..].iter().flat_map(|c| c.body.iter()) {
+            d = da_stmt(s, x, true);
+            if d != Da::Through {
+                break;
+            }
+        }
+        match d {
+            Da::Assigns => all_exit = false,
+            Da::Exits => {}
+            // A `break` of this switch, or falling off its end.
+            _ => return Da::Through,
+        }
+    }
+    if all_exit {
+        Da::Exits
+    } else {
+        Da::Assigns
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// Rule DA (definite assignment). ECMA-262 14.2.2: the statement after
+    /// `s` in a statement list runs only when `s` completes normally (14.6
+    /// `if`, 14.12 `switch`); an arm that completes abruptly (14.14 `throw`,
+    /// `return`, a `break`/`continue` that lands past the list) never
+    /// reaches it. When every normal completion of the `if`/`switch` `s`
+    /// has run a write `x = e` of a local of the body being walked that no
+    /// other code can write (`scope_locals`), a read of `x` after `s`, until
+    /// the next write, holds a value one of the writes in `s` produced, and
+    /// never the value `x` held before `s` (a `let x;` declaration's
+    /// `undefined`, 14.3.1). Before `s` is walked: one collector node per
+    /// such local, which every write of it in `s` reaches
+    /// (`narrowed_write`); `def_assign_end` makes it the version after `s`.
+    /// Whether the local's own node holds the earlier values is unchanged.
+    pub(crate) fn def_assign_begin(&mut self, fx: &Fx, s: &Stmt) -> usize {
+        if !matches!(s, Stmt::If { .. } | Stmt::Switch { .. }) {
+            return 0;
+        }
+        let Some((f, scope)) = self.narrow_scope.as_ref() else {
+            return 0;
+        };
+        if *f != fx.f {
+            return 0;
+        }
+        let mut ids: Vec<u32> = Vec::new();
+        stmt_has(s, &mut |e| {
+            if let Expr::LocalSet(l, _) = e {
+                if scope.contains(l) && !ids.contains(l) {
+                    ids.push(*l);
+                }
+            }
+            false
+        });
+        ids.retain(|&x| da_stmt(s, x, false) == Da::Assigns);
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        for &x in &ids {
+            let c = self.tmp("defassign");
+            self.zs_carrier(c);
+            self.def_collect.push((fx.module, x, fx.f, c));
+        }
+        self.m.cur_fn = prev;
+        ids.len()
+    }
+
+    /// After `s` (`def_assign_begin` pushed `k`): each collector becomes
+    /// the start of a version of its local for the rest of the list, as an
+    /// assignment's (`narrow_assigned`). How many it pushed.
+    pub(crate) fn def_assign_end(&mut self, fx: &Fx, k: usize) -> usize {
+        let at = self.def_collect.len() - k;
+        let done: Vec<_> = self.def_collect.drain(at..).collect();
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        for &(mi, id, f, start) in &done {
+            let end = self.tmp("defassign-end");
+            self.zs_carrier(end);
+            self.m.edge(start, end);
+            self.narrow.push(Narrow {
+                mi,
+                id,
+                f,
+                start,
+                end,
+                written: false,
+                in_update: false,
+                jumps: self.jumps,
+                tries: self.tries,
+                below_length: None,
+                assigned: true,
+            });
+        }
+        self.m.cur_fn = prev;
+        done.len()
     }
 }

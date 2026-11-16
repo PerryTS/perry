@@ -1349,7 +1349,9 @@ pub(crate) fn lower_module_decl(
                     }
                 }
                 ast::Decl::Class(class_decl) => {
-                    let class = lower_class_decl(ctx, class_decl, true)?;
+                    let mut class = lower_class_decl(ctx, class_decl, true)?;
+                    // R9BIRTH6: the init index its evaluation starts at.
+                    class.decl_stmt = (!class.is_nested).then_some(module.init.len() as u32);
                     let class_name = class.name.clone();
                     // Issue #711: dynamic parent-class registration at the
                     // source position (see non-export class arm below for

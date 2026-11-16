@@ -1062,17 +1062,23 @@ pub(super) fn emit_guarded_direct_method_call(
     // above. Their arm enters the fast arm when the family holds the birth
     // pair's instance (`family_holds_birth_layout`), else it calls the
     // ordinary body, preserving any argument-only direct-call ABI.
-    let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
-        family_method_word(
-            ctx,
-            receiver_class_name,
-            expected_class_id,
-            property,
-            direct_fn,
-        )
-    } else {
-        None
-    };
+    // A late slot of `property` (a data method's own slot): the family arm
+    // also needs the slot to hold the hole ([`emit_late_slot_holds_hole`]).
+    let (family_arm, late_hole) =
+        if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
+            match super::direct_method_guard::family_method_word_holed(
+                ctx,
+                expected_class_id,
+                property,
+                direct_fn,
+                true,
+            ) {
+                Some((id, hole)) => (Some(id), hole),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
     // A family that holds the birth pair's instance enters the fast arm
     // itself (`family_holds_birth_layout`); the typed-f64 receiver arm keeps
     // its pair-only field proof.
@@ -1090,11 +1096,29 @@ pub(super) fn emit_guarded_direct_method_call(
             let idx = ctx.new_block("method_direct.family_call");
             (idx, ctx.block_label(idx))
         });
-    let family_guard = family_arm.as_deref().zip(if family_enters_fast {
-        Some(fast_label.as_str())
+    let family_target: Option<String> = if family_enters_fast {
+        Some(fast_label.clone())
     } else {
-        family_label.as_ref().map(|(_, l)| l.as_str())
+        family_label.as_ref().map(|(_, l)| l.clone())
+    };
+    // The hole compare sits between the family word and the family arm: a
+    // present own value takes the generic arm, which calls it.
+    let hole_block = late_hole.zip(family_target.clone()).map(|(slot, target)| {
+        let idx = ctx.new_block("method_direct.late_hole");
+        (idx, ctx.block_label(idx), slot, target)
     });
+    let family_guard_target = match &hole_block {
+        Some((_, label, _, _)) => Some(label.clone()),
+        None => family_target,
+    };
+    let family_guard = family_arm.as_deref().zip(family_guard_target.as_deref());
+    if let Some((idx, _, slot, target)) = &hole_block {
+        let resume = ctx.current_block;
+        ctx.current_block = *idx;
+        let hole = super::direct_method_guard::emit_late_slot_holds_hole(ctx, recv_box, *slot);
+        ctx.block().cond_br(&hole, target, &fallback_label);
+        ctx.current_block = resume;
+    }
     if inline_single_arm && certificate.is_none() {
         emit_inline_direct_method_shape_guard(
             ctx,

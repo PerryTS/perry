@@ -94,6 +94,7 @@ fn census_reports_every_verdict() {
     facts.classes.insert(
         1,
         FactsClass {
+            absent: Vec::new(),
             display: "P".into(),
             fixed_layout: true,
             fields: vec![field("x", 0), field("y", 1)],
@@ -174,6 +175,7 @@ fn codegen_proof_reads_are_facts_read() {
     facts.classes.insert(
         1,
         FactsClass {
+            absent: Vec::new(),
             display: "P".into(),
             fixed_layout: true,
             fields: vec![field("x", 0)],
@@ -366,6 +368,7 @@ fn census_reports_receiving_sides() {
     facts.classes.insert(
         box_id,
         FactsClass {
+            absent: Vec::new(),
             display: "Box".into(),
             fixed_layout: true,
             fields: vec![field("v", 0)],
@@ -374,6 +377,7 @@ fn census_reports_receiving_sides() {
     facts.classes.insert(
         sbox_id,
         FactsClass {
+            absent: Vec::new(),
             display: "SBox".into(),
             fixed_layout: true,
             fields: vec![field("_y", 0)],
@@ -388,6 +392,7 @@ fn census_reports_receiving_sides() {
     facts.classes.insert(
         m_id,
         FactsClass {
+            absent: Vec::new(),
             display: "M".into(),
             fixed_layout: true,
             fields: vec![field("k", 0), runf],
@@ -509,6 +514,7 @@ fn codegen_proof_stores_are_facts_store() {
     facts.classes.insert(
         1,
         FactsClass {
+            absent: Vec::new(),
             display: "P".into(),
             fixed_layout: true,
             fields: vec![field("x", 0)],
@@ -599,6 +605,7 @@ fn census_tells_unreached_and_escaped_from_no_facts() {
     facts.classes.insert(
         1,
         FactsClass {
+            absent: Vec::new(),
             display: "P".into(),
             fixed_layout: true,
             fields: vec![field("x", 0), field("y", 1)],

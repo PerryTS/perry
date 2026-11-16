@@ -11,7 +11,7 @@ fn verdict(src: &str) -> Verdict {
     sites[0].verdict.clone()
 }
 
-fn check(src: &str, proven: bool) {
+pub(super) fn check(src: &str, proven: bool) {
     let v = verdict(src);
     assert_eq!(!matches!(v, Verdict::No(_)), proven, "{v:?}");
     assert!(
@@ -201,7 +201,7 @@ fn class_setter_store_leaves_the_holder_known() {
 }
 
 /// `debug_cache` with `stmt` in place of the `Debug.assertNode(1, ..)` call.
-fn debug_cache_with(getter: &str, stmt: &str) -> String {
+pub(super) fn debug_cache_with(getter: &str, stmt: &str) -> String {
     let call = format!("Debug.assertNode(1, {getter});");
     let src = debug_cache("class Marker {}", getter);
     assert_eq!(src.matches(&call).count(), 1);

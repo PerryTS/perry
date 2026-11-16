@@ -1018,6 +1018,19 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         _ => {}
     }
+    // CLS D2: a guard-free facts read whose kind mask holds only Number,
+    // Boolean, null and undefined (`facts_number::prim_read`) is not a BigInt.
+    // So `-` `*` `/` with such an operand is a Number or a throw, and its
+    // lowering (`facts_number::try_lower_arith`, or the guarded diamond whose
+    // cold helper returns a plain double for a Number) is a canonical double.
+    if crate::expr::facts_number::prim_read(ctx, e) {
+        return true;
+    }
+    // The same for an element read the facts prove a Number or `undefined`
+    // (`facts_number::element_read`, `facts_canonical::of`).
+    if crate::expr::facts_number::element_read(ctx, e) {
+        return true;
+    }
     // Already-proven primitives: a real Number/Int32, a Boolean, or a String
     // are all definitionally non-BigInt.
     if is_numeric_expr(ctx, e) || is_bool_expr(ctx, e) || string_value_is_runtime_guaranteed(ctx, e)

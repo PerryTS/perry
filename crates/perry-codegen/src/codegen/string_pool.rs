@@ -735,6 +735,18 @@ pub(super) fn emit_string_pool(
     // native parent. Definition identity also avoids repeating the same edge
     // through self-binding aliases.
     for class in module_classes {
+        // Case 2c (E2a): a family class's parent edge is its family's parent:
+        // the whole program's resolution of its heritage
+        // (`layout_families::parents`), which every module's birth decision
+        // reads. The edge and the family layout have one source, so the
+        // runtime parent of a family class is its family parent from the
+        // init prelude on: no birth compares them.
+        if let Some(family) = layouts.families.get(&class.id) {
+            if family.parent_class_id != 0 {
+                parent_pairs.push((class.id, family.parent_class_id));
+            }
+            continue;
+        }
         if let Some(parent_name) = &class.extends_name {
             if let Some(&parent_cid) = class_ids.get(parent_name) {
                 if parent_cid != 0 {

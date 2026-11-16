@@ -53,7 +53,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         | TokKind::Builtin(_)
         | TokKind::BuiltinFn(_)
         | TokKind::ModNs(_)
-        | TokKind::NativeProto(_) => {
+        | TokKind::NativeProto(..) => {
             // E20: stored where the runtime / unmodeled code reads it.
             if m.explain && !m.shared_replay {
                 let kn = match _key {
@@ -160,8 +160,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         return;
     }
     let Key::Named(a) = key else {
-        // A computed key may name any method of the chain.
-        return prim_method_generic(m, call);
+        return prim_method_computed(m, prim, key, call);
     };
     let name = m.atoms[a as usize].clone();
     // A key a store into ⊤ may have written onto the chain: the call runs
@@ -178,8 +177,18 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     match members::prim_member(prim, &name) {
         // `Object.prototype`'s methods on a primitive (no own chain here).
         Some(Mem::Fn) if name == "valueOf" => ret_prim(m, call, prim),
-        Some(Mem::Fn) if name == "toString" || name == "toLocaleString" => {
+        Some(Mem::Fn) if name == "toString" => {
             implicit_args(m, call, "ToString radix", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::STR);
+        }
+        // A Number or BigInt receiver runs its ECMA-402 toLocaleString
+        // (locales and options read by the NumberFormat rule); every other
+        // primitive kind runs Object.prototype.toLocaleString (20.1.3.5),
+        // which Invokes `toString` with no argument: no operand is read.
+        Some(Mem::Fn) if name == "toLocaleString" => {
+            if prim & (prim::NUM | prim::BIGINT) != 0 {
+                string_methods::number_locale_args(m, call);
+            }
             ret_prim(m, call, prim::STR);
         }
         Some(Mem::Fn)
@@ -195,14 +204,69 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // program runs.
         Some(Mem::Fn) if name == "__defineGetter__" || name == "__defineSetter__" => {}
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
-            annexb_lookup(m, None, call, name == "__lookupSetter__");
+            annexb_lookup_prim(m, prim, call, name == "__lookupSetter__");
+        }
+        // 20.4.3.5 Symbol.prototype[@@toPrimitive](hint): thisSymbolValue;
+        // the hint is not read.
+        Some(Mem::Fn) if name.strip_prefix(collections::WK_PREFIX) == Some("toPrimitive") => {
+            ret_prim(m, call, prim::SYMBOL)
+        }
+        // `String.prototype[@@iterator]` (ECMA-262 22.1.3.36):
+        // RequireObjectCoercible(this), ToString(this), then a String
+        // Iterator over its code points (22.1.5.1 CreateIteratorFromClosure);
+        // it reads no argument. No other primitive kind has `@@iterator` on
+        // its chain: the call throws a TypeError there (`x is not a
+        // function`), the arguments evaluated and never read.
+        Some(Mem::Fn) if name == WK_ITERATOR => {
+            // The string kind runs the String rule: an exact String Iterator
+            // (%StringIteratorPrototype%) over the code point strings.
+            if prim & prim::STR != 0 {
+                string_methods::string_method(m, call, &name);
+            }
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
+        // `constructor` called as a method: String (22.1.1.1), Number
+        // (21.1.1.1), Symbol (20.4.1.1) and BigInt (21.2.1.1) coerce their
+        // argument (ToPrimitive), Boolean (20.3.1.1) reads nothing; the
+        // result is a primitive (`Symbol()` and `BigInt()` called, not
+        // constructed).
+        Some(Mem::Ctor) => {
+            string_methods::coerce_operands(m, call, "argument of a primitive constructor");
+            ret_prim(
+                m,
+                call,
+                prim::NUM | prim::STR | prim::BOOL | prim::BIGINT | prim::SYMBOL,
+            );
+        }
         // A data member is no function: TypeError.
         Some(_) => {}
         // Absent: a TypeError, unless written (above).
         None => {}
+    }
+}
+
+/// A computed key on a primitive names one member of its chain, or none (a
+/// TypeError): the call of each member the key may spell by its name, by
+/// its named arm (the written-key check of `STAR_KEY` included), as for a
+/// function value (`function_method`). An undescribed chain keeps the
+/// generic arm.
+fn prim_method_computed(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    let mut names: Vec<&'static str> = vec![crate::STAR_KEY];
+    for fam in members::prim_families(prim) {
+        match members::chain_names(fam) {
+            Some(ns) => names.extend(ns),
+            None => return prim_method_generic(m, call),
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    for n in names {
+        if n != crate::STAR_KEY && !m.key_may_name_str(key, n) {
+            continue;
+        }
+        let a = m.atom(n);
+        prim_method(m, prim, Key::Named(a), call);
     }
 }
 
@@ -215,6 +279,9 @@ pub(super) fn prim_method_generic(m: &mut Model, call: CallId) {
     let pb = site_tmpl(m, call, "primbox");
     ret_tok(m, call, pb);
 }
+
+/// The primitive kinds a wrapper object may box.
+const WRAPPED: u16 = prim::STR | prim::NUM | prim::BOOL | prim::SYMBOL | prim::BIGINT;
 
 /// `name` called on `t`, a builtin object of family `fam`, where the model
 /// describes no such method: a member of the family's own intrinsic
@@ -232,7 +299,16 @@ pub(super) fn undescribed_method(
     why: &str,
 ) {
     match members::own(fam, name) {
-        Some(Mem::Fn) if fam == Family::Wrapper => prim_method_generic(m, call),
+        // A wrapper object (`Object(p)`, `new String(s)`, ...) of a primitive
+        // kind the token does not name: the member is that primitive's
+        // prototype member, run on the wrapper (thisStringValue,
+        // thisNumberValue, ... or ToString(this)): its operands and result
+        // are the primitive member's model (`prim_method`, the written-key
+        // check included).
+        Some(Mem::Fn) if fam == Family::Wrapper => {
+            let a = m.atom(name);
+            prim_method(m, WRAPPED, Key::Named(a), call)
+        }
         Some(Mem::Fn) => unknown_method(m, call, why),
         Some(_) => {}
         None if members::member(Family::Object, name).is_some() => {}
@@ -318,6 +394,56 @@ pub(super) fn realm_born_method(
     }
 }
 
+/// The wrapper kind a `new Number(x)` / `new String(x)` / `new Boolean(x)`
+/// token, or the ToObject wrapper of a symbol / bigint (7.1.18), names:
+/// its realm prototype and the primitive kind in its [[NumberData]] /
+/// [[StringData]] / [[BooleanData]] / [[SymbolData]] / [[BigIntData]] slot.
+pub(super) fn wrapper_kind(what: &str) -> Option<(&'static str, u16)> {
+    match what {
+        "BoxedNumber" => Some(("Number.prototype", prim::NUM)),
+        "BoxedString" => Some(("String.prototype", prim::STR)),
+        "BoxedBoolean" => Some(("Boolean.prototype", prim::BOOL)),
+        "BoxedSymbol" => Some(("Symbol.prototype", prim::SYMBOL)),
+        "BoxedBigInt" => Some(("BigInt.prototype", prim::BIGINT)),
+        _ => None,
+    }
+}
+
+/// `name` called on `t`, a primitive wrapper object of kind `what`
+/// (ECMA-262 7.1.18 ToObject; 21.1.4, 22.1.4, 20.3.4 instances own no
+/// methods): [[Get]] walks its realm prototype to Object.prototype
+/// (10.1.8.1 OrdinaryGet). A member of the kind's own prototype is the
+/// primitive kind's method and runs that method's own rule (`prim_method`,
+/// the written-key check included): its receiver is read through
+/// thisNumberValue / thisBooleanValue (21.1.3, 20.3.3), or, for String,
+/// thisStringValue or ToString(RequireObjectCoercible(this)) (22.1.3), the
+/// ToPrimitive of the wrapper itself (7.1.1: its own or chained
+/// `@@toPrimitive` / `toString` / `valueOf`, run by their rules). A member
+/// found on Object.prototype, or no member at all (undefined: the call
+/// throws, 13.3.6.2 EvaluateCall / 7.3.14 Call step 2, its arguments
+/// handed to nothing), is the realm chain's (`realm_born_method`: a written
+/// key runs what was written).
+pub(super) fn wrapper_method(m: &mut Model, t: Tok, what: &str, name: &str, call: CallId) {
+    let (p, k) = wrapper_kind(what).expect("wrapper kind");
+    let born = members::realm_entry(p)
+        .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)
+        .expect("realm wrapper prototype");
+    match members::realm_chain_find(born, name) {
+        members::RealmFind::Own(_, holder)
+            if holder.name == p && members::prim_member(k, name).is_some() =>
+        {
+            if k == prim::STR && name != "toString" && name != "valueOf" {
+                let recv = m.node_l("String wrapper this");
+                m.add_tok(recv, t);
+                string_methods::to_prim(m, recv, "String method this (ToString)");
+            }
+            let a = m.atom(name);
+            prim_method(m, k, Key::Named(a), call)
+        }
+        _ => realm_born_method(m, t, born, name, call, &format!("argument of {p}.{name}")),
+    }
+}
+
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
     crate::family_reach::tok(m, t, key);
@@ -386,7 +512,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // written onto its chain runs what was stored, beside the description,
     // unless the read is final (DEC 250).
     if let (true, Some(n), Key::Named(a)) = (described, name.as_deref(), key) {
-        if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+        let holder = super::chain_holder(m, t);
+        if !locked_chain_read(m, t, a)
+            && !super::intrinsic_miss_on(m, holder, a, NativeMiss::Call(t, call))
+        {
             unknown_method(m, call, &format!("argument of a written method {n}"));
         }
     }
@@ -451,7 +580,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 }
             }
         },
-        TokKind::NativeProto(_) => {}
+        TokKind::NativeProto(..) => {}
         // `Object.prototype`'s own members are its methods: called on it
         // they run with it as the receiver (the chain walk starts past it,
         // at its null prototype, and finds none of them).
@@ -491,34 +620,68 @@ pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) 
 
 /// A call of `BuiltinNs::ObjectProtoMethod`: any method of
 /// `Object.prototype`. On a receiver it is each method's call on it
-/// (`proto_method`). Without one, `hasOwnProperty` / `propertyIsEnumerable`
-/// convert their key before they throw, `isPrototypeOf` of a primitive is
-/// `false`, `toString` is `"[object Undefined]"`; the others throw
-/// (ToObject of `undefined`).
+/// (`proto_method`); a receiver node's values each run them on their own
+/// (`Cons::NativeThis`, `object_proto_method_prims` for its primitives).
+/// None of the methods hands `this` or an argument to unknown code.
 pub(super) fn object_proto_method_call(m: &mut Model, call: CallId) {
     match (m.cur_this, m.calls[call as usize].this.clone()) {
-        (Some(o), _) => {
+        (Some(o), _) | (None, ThisArg::Tok(o)) => {
             let op = m.tok(TokKind::ObjectProto);
             for name in OBJECT_PROTO_METHODS {
                 let a = m.atom(name);
                 proto_method(m, op, o, Key::Named(a), call);
             }
         }
-        (None, ThisArg::Undef) => {
-            if let Some(k) = arg(m, call, 0) {
-                let reason = m.reason("ToPropertyKey");
-                m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-            }
-            ret_prim(m, call, prim::STR | prim::BOOL);
+        (None, ThisArg::Undef) => object_proto_method_nullish(m, call),
+        (None, ThisArg::Node(n)) => {
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+            m.cons(n, Cons::NativeThis { call, f });
         }
-        // A receiver node no token stands for: its values are unknown here.
-        (None, _) => unknown_method(m, call, "call of an Object.prototype method"),
+    }
+}
+
+/// `Object.prototype`'s methods on `undefined` / `null`: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key before they throw,
+/// `isPrototypeOf` of a primitive is `false`, `toString` is
+/// `"[object Undefined]"`; the others throw (ToObject of `undefined`).
+fn object_proto_method_nullish(m: &mut Model, call: CallId) {
+    if let Some(k) = arg(m, call, 0) {
+        let reason = m.reason("ToPropertyKey");
+        m.cons(
+            k,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    ret_prim(m, call, prim::STR | prim::BOOL);
+}
+
+/// The primitive receivers `prim` of a call of `ObjectProtoMethod`:
+/// `undefined` / `null` as without a receiver; another primitive runs each
+/// method as its call by name on the primitive does (`prim_method`), except
+/// `valueOf`, whose result is the primitive's wrapper (ToObject), as a
+/// method of the chain the model does not describe one by one gives it.
+pub fn object_proto_method_prims(m: &mut Model, prim: u16, call: CallId) {
+    if prim & (prim::UNDEF | prim::NULL) != 0 {
+        object_proto_method_nullish(m, call);
+    }
+    let p = prim & !(prim::UNDEF | prim::NULL);
+    if p == 0 {
+        return;
+    }
+    for name in OBJECT_PROTO_METHODS {
+        if name == "valueOf" {
+            // 20.1.3.7: ToObject(this value); it reads no argument (they
+            // go to no one). The result keeps the generic arm shape.
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
+        } else {
+            let a = m.atom(name);
+            prim_method(m, p, Key::Named(a), call);
+        }
     }
 }
 
@@ -574,7 +737,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                     let recv = m.node_l("isprototypeof-recv");
                     m.add_tok(recv, origin);
                     m.identity(recv, IdentityRoute::IsPrototypeOf);
-                    if let Some(&a) = m.calls[call as usize].args.first() {
+                    if let Some(&a) = m.calls[call as usize].arg(0) {
                         m.identity(a, IdentityRoute::IsPrototypeOf);
                     }
                 }
@@ -613,7 +776,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             }
             _ => {}
         },
-        TokKind::NativeProto(name_of) => native_method(m, p, &name_of, origin, &name, call),
+        TokKind::NativeProto(name_of, ..) => native_method(m, p, &name_of, origin, &name, call),
         _ => {}
     }
 }
@@ -625,7 +788,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     if c.args.len() < 2 && c.spread.is_empty() {
         return;
     }
-    if let Some(&k) = c.args.first() {
+    if let Some(&k) = c.arg(0) {
         let reason = m.reason("ToPropertyKey");
         m.cons(
             k,
@@ -641,13 +804,30 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         .then(|| m.call_lit.get(&call).copied())
         .flatten()
         .unwrap_or_else(|| m.atom(crate::STAR_KEY));
+    // B.2.2.2 / B.2.2.3: O = ToObject(this), DefinePropertyOrThrow(O, key,
+    // accessor): the accessor is an own property of the receiver itself.
     // Object.prototype is a modeled holder: the define records the accessor
     // there as defineProperty does (an accessor on it is E23), under a
-    // computed key too (the AccessorInstall any-key branch).
-    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto)
-    {
+    // computed key too (the AccessorInstall any-key branch). Any other
+    // object that is not a builtin prototype (⊤ may be one; a receiver
+    // marker stands for other units' objects) gets an own accessor on that
+    // one object: a receiver whose keys have no modeled holder group (a
+    // builtin function or namespace under a key it declares or a computed
+    // one, `Object.prototype`'s method stand-in) as the any-key accessor
+    // (every read of it may run the getter); no prototype is redefined.
+    let objproto = matches!(m.toks[origin as usize], TokKind::ObjectProto);
+    let modeled = accessor_receiver(m, origin, key) || objproto;
+    let own = !modeled && origin != TOP && !m.is_marker(origin) && !m.is_chain_proto(origin);
+    if modeled || own {
+        let key = if own { m.atom(crate::STAR_KEY) } else { key };
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
+        if own {
+            // The getter / setter runs with `this` = the receiver.
+            for &f in c.args_from(1).iter().take(1).chain(&c.spread) {
+                m.cons(f, Cons::ThisFrom { recv: holder });
+            }
+        }
         // Spread positions are not retained in CallSite: any direct or
         // spread value may be argument 1, and its key is not known here.
         let direct = if c.spread.is_empty() {
@@ -689,7 +869,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         }
         m.escape(origin, r);
         let r = m.reason("E5 __defineGetter__ argument");
-        for &f in c.args.iter().skip(1).take(1).chain(&c.spread) {
+        for &f in c.args_from(1).iter().take(1).chain(&c.spread) {
             m.sink_node(f, r);
         }
     }

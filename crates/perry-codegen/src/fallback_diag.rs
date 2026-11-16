@@ -571,6 +571,7 @@ fn generic_helper(helper: &str) -> bool {
         || helper == "js_global_get_field_slow"
         || helper.contains("object_set_field_ic")
         || helper.starts_with("perry_probe_")
+        || helper == "perry_store_or_put"
         || helper.starts_with("js_dyn_index_")
         || helper.starts_with("js_object_get_index_")
         || helper.starts_with("js_object_set_index_")

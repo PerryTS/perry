@@ -1063,6 +1063,7 @@ impl LoweringContext {
             // Synthetic anon-shape class; no static fields, so static-init
             // timing is irrelevant.
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint,
             specialized_from: None,
         });
@@ -1138,6 +1139,7 @@ impl LoweringContext {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         });

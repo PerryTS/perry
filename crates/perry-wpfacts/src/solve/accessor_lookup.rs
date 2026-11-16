@@ -37,7 +37,9 @@ impl Model {
             let any = self.any_key_node(holder);
             let reason = self.reason("accessor descriptor of a changed holder");
             self.cons(any, Cons::TopIfTop { dst, reason });
-            self.with_b(|m| builtins::lookup_native_descriptor(m, origin, holder, key, dst));
+            self.with_b(|m| {
+                builtins::lookup_native_descriptor(m, origin, holder, key, dst, setter)
+            });
         }
         if let Some(a) = self.shadow_key(holder, key) {
             self.note_shadowed(holder, a, act, false);
@@ -52,6 +54,29 @@ impl Model {
             return;
         }
         self.chain_from(origin, holder, key, act);
+    }
+
+    /// SKINDESC1: the accessor functions an OWN property descriptor of `t`
+    /// holds (ECMA-262 10.1.5 [[GetOwnProperty]], 6.2.6.4
+    /// FromPropertyDescriptor): `lookup_holder` at `t` alone, no
+    /// prototype walk. `undefined` for a data property or an absent key;
+    /// an object whose own accessors the model does not name (a marker, an
+    /// escaped holder, an unrepresented native accessor) gives ⊤ with the
+    /// walk's own reasons.
+    pub(crate) fn own_accessor_lookup(&mut self, t: Tok, key: Key, dst: NodeId, setter: bool) {
+        self.add_prim(dst, prim::UNDEF);
+        if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
+            self.add_top(dst, |_| "accessor descriptor of an unknown object".into());
+            return;
+        }
+        let act = ChainAct::Lookup { dst, setter };
+        if self.visits.entry(t).or_default().insert((t, key, act)) {
+            let any = self.any_key_node(t);
+            let reason = self.reason("accessor descriptor of a changed holder");
+            self.cons(any, Cons::TopIfTop { dst, reason });
+            self.with_b(|m| builtins::lookup_native_descriptor(m, t, t, key, dst, setter));
+        }
+        self.accessor_hit(t, t, key, act);
     }
 
     /// Return the canonical installed function tokens, including wildcard

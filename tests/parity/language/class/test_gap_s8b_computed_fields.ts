@@ -1,6 +1,6 @@
 // S8B: class fields with computed keys naming string constants join families.
 import { TypeId, OtherId, SymId } from "../../../fixtures/programs/_helpers/s8b_computed_fields/ids.ts";
-import * as Ids from "./_helpers/s8b_computed_fields/ids.ts";
+import * as Ids from "../../../fixtures/programs/_helpers/s8b_computed_fields/ids.ts";
 const LocalId = "~s8b/Local";
 const AliasId = Ids.OtherId;
 const NumKey = "7";

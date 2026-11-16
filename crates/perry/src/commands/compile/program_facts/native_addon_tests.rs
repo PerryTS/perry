@@ -34,7 +34,7 @@ fn verdict(pf: &ProgramFacts, key: &str, proven: bool) {
     let sites: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == key && !s.is_call)
+        .filter(|s| s.key == key && !s.is_call && !s.access.is_store())
         .collect();
     assert_eq!(sites.len(), 1, "{key}: {}", pf.dump_text());
     assert_eq!(

@@ -828,7 +828,7 @@ pub(super) fn arg_contract_of(
                         model::TokKind::ClassObj(_) => "class-constructor-argument",
                         model::TokKind::Proto(_)
                         | model::TokKind::ObjectProto
-                        | model::TokKind::NativeProto(_) => "prototype-argument",
+                        | model::TokKind::NativeProto(..) => "prototype-argument",
                         model::TokKind::Builtin(_) => "builtin-argument",
                         model::TokKind::ModNs(_) => "module-namespace-argument",
                         model::TokKind::Func(..) | model::TokKind::Obj(..) => "argument-value",

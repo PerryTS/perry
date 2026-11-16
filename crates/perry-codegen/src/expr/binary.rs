@@ -593,13 +593,20 @@ fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     else {
         return true;
     };
+    // A left `+` converts SILENTLY when every leaf of it is a Number, a
+    // primitive-kind read, or the result of `-` `*` `/` `%` `**` over such
+    // operands (`facts_number::add_tree_converts_silently`): ToPrimitive of a
+    // primitive returns it (7.1.1) and ToNumeric of Number, Boolean, null and
+    // undefined is a Number (7.1.3), so its conversions run no user code and
+    // cannot throw (no String, no BigInt, no Symbol, no object). Reading a
+    // late leaf before them is then invisible, whatever that leaf is.
     let left_converts = matches!(
         left.as_ref(),
         Expr::Binary {
             op: BinaryOp::Add,
             ..
         }
-    );
+    ) && !super::facts_number::add_tree_converts_silently(ctx, left);
     if left_converts {
         let mut late = Vec::new();
         add_tree_leaves(right, &mut late);
@@ -999,6 +1006,13 @@ fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced:
             // `lower_guarded_numeric_add`. Proven raw-f64 tiers answer
             // false here, so asking about every expression keeps them exempt.
             || numeric_proof_is_declared_only(ctx, expr))
+        // A value the facts prove a Number (`facts_number::operand`) is
+        // lowered to a canonical double already: an element or field read
+        // proven a plain double, or a `+` / `-` `*` `/` over such operands
+        // whose lowering converts each one (`try_lower_add`,
+        // `try_lower_arith`). Coercing it again is a call that returns its
+        // argument.
+        && super::facts_number::operand(ctx, expr) != Some(super::facts_number::Operand::Number)
 }
 
 /// Lower an operand in number context: route through
@@ -1552,6 +1566,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_prim =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bool_expr(ctx, right);
                 if !(l_prim && r_prim) {
+                    // CLS D2: Numbers and primitive-kind reads the facts
+                    // prove: converted inline, no dynamic helper.
+                    if let Some(value) =
+                        super::facts_number::try_lower_arith(ctx, *op, left, right)?
+                    {
+                        return Ok(value);
+                    }
                     // Non-BigInt inline fast path (the bcryptjs `_encipher`
                     // Feistel lever): for the six BITWISE ops, when BOTH
                     // operands are provably-not-BigInt we skip the dynamic
@@ -1648,10 +1669,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
             let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
-                if super::facts_number::operand(ctx, left)
-                    == Some(super::facts_number::Operand::Prim)
+                if let Some(k @ (super::facts_number::Operand::Prim
+                | super::facts_number::Operand::NumOrUndef)) =
+                    super::facts_number::operand(ctx, left)
                 {
-                    super::facts_number::emit_prim_to_number(ctx, &l_raw)
+                    super::facts_number::arith_to_number(ctx, left, k, &l_raw)?
                 } else {
                     ctx.block()
                         .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
@@ -1660,10 +1682,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 l_raw
             };
             let r = if r_needs_coerce {
-                if super::facts_number::operand(ctx, right)
-                    == Some(super::facts_number::Operand::Prim)
+                if let Some(k @ (super::facts_number::Operand::Prim
+                | super::facts_number::Operand::NumOrUndef)) =
+                    super::facts_number::operand(ctx, right)
                 {
-                    super::facts_number::emit_prim_to_number(ctx, &r_raw)
+                    super::facts_number::arith_to_number(ctx, right, k, &r_raw)?
                 } else {
                     ctx.block()
                         .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])

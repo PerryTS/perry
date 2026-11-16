@@ -93,6 +93,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

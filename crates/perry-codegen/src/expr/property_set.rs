@@ -161,6 +161,34 @@ fn with_class_store_operands<'f, R>(
     })
 }
 
+/// ACCBUILD2 P3 (13.15.2, 10.1.9.2 step 3): a named store the facts prove
+/// calls one setter is that setter's direct call with the receiver as
+/// `this`; the expression's value is the stored value, not the setter's
+/// return.
+pub(crate) fn try_lower_proven_setter(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    offset: u32,
+) -> Result<Option<String>> {
+    let Some(fn_name) =
+        super::wpfacts_access::proven_accessor_fn(ctx, object, property, offset, true)
+    else {
+        return Ok(None);
+    };
+    with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
+        super::store_census::bump(ctx, super::store_census::CFIELD_SETTER);
+        let _ = ctx.block().call(
+            DOUBLE,
+            &fn_name,
+            &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
+        );
+        Ok(val_double)
+    })
+    .map(Some)
+}
+
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -455,8 +483,46 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
             object,
             property,
             value,
+            byte_offset,
             ..
         } => {
+            // ACCBUILD2 P4: a compound `o.k op= v` (13.15.3) whose PutValue
+            // the facts prove calls one setter: the base is the HIR's temp,
+            // evaluated once; GetValue is the value's read of the same key on
+            // it, at the site's offset (a proven getter is called directly,
+            // else the read is the ordinary one); then the setter, once.
+            if *byte_offset != 0 {
+                if let Expr::Binary { op, left, right } = value.as_ref() {
+                    if let Expr::PropertyGet {
+                        object: read_object,
+                        property: read_property,
+                        byte_offset: 0,
+                        byte_end,
+                    } = left.as_ref()
+                    {
+                        if read_property == property
+                            && matches!((object.as_ref(), read_object.as_ref()),
+                                (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
+                        {
+                            let value = Expr::Binary {
+                                op: *op,
+                                left: Box::new(Expr::PropertyGet {
+                                    object: read_object.clone(),
+                                    property: read_property.clone(),
+                                    byte_offset: *byte_offset,
+                                    byte_end: *byte_end,
+                                }),
+                                right: right.clone(),
+                            };
+                            if let Some(v) =
+                                try_lower_proven_setter(ctx, object, property, &value, *byte_offset)?
+                            {
+                                return Ok(v);
+                            }
+                        }
+                    }
+                }
+            }
             // A receiver the wpfacts lowering proves takes the elided read
             // and store below instead of the compound site.
             // #11791: an instance private field write is a shape compare and

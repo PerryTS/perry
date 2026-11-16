@@ -113,6 +113,7 @@ fn class(id: u32, name: &str, extends_name: Option<&str>, ctor_tail: Vec<Stmt>) 
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
