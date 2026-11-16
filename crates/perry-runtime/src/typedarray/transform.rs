@@ -370,6 +370,11 @@ pub extern "C" fn js_typed_array_with(
     });
     unsafe {
         let kind = crate::typedarray::element_kind(ta);
+        // 23.2.3.36 steps 6-9: the value's ToNumber / ToBigInt runs (program code)
+        // BEFORE the range check: an out-of-range index still calls `valueOf`.
+        let replacement =
+            scope.root_nanbox_f64(bigint::coerce_for_kind(kind, value.get_nanbox_f64()));
+        let ta = source.get_raw_const_ptr();
         let len = crate::typedarray::element_length(ta) as usize;
         // ECMA ToIntegerOrInfinity: NaN -> 0, reject non-finite / out-of-range
         // with RangeError("Invalid typed array index") (Node parity, #2792).
@@ -382,8 +387,6 @@ pub extern "C" fn js_typed_array_with(
             throw_range_error(b"Invalid typed array index");
         }
         let idx = resolved as i64;
-        let replacement =
-            scope.root_nanbox_f64(bigint::coerce_for_kind(kind, value.get_nanbox_f64()));
         let (output, _pin) = crate::buffer::bytes::new_typed_bytes(kind, len as u32);
         let out = crate::value::JSValue::from_bits(output.to_bits())
             .as_pointer::<TypedArrayHeader>()
