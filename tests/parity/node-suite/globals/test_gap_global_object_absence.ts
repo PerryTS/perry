@@ -1,6 +1,9 @@
 // globalThis is an ordinary object whose keys are atoms: a read of a name it
 // does not own proves absence and continues to %Object.prototype%, while every
 // way a program adds, deletes or replaces a global is seen by the next read.
+// DEC 250: Object.prototype takes no new key in a compiled program, so the inherited global is refused and the walk to Object.prototype finds nothing.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 const g: any = globalThis;
 const out: string[] = [];
 function absent(name: string): string {
@@ -12,9 +15,9 @@ out.push(typeof notAGlobalAnywhere);
 out.push(typeof g.notAGlobalEither);
 for (let i = 0; i < 3; i++) out.push(absent("nx" + "pa" + i));
 // a miss on globalThis continues the walk to Object.prototype
-(Object.prototype as any).nxpaInherited = 7;
+locked(() => { (Object.prototype as any).nxpaInherited = 7; });
 out.push(String(g.nxpaInherited) + "," + Object.prototype.hasOwnProperty.call(g, "nxpaInherited"));
-delete (Object.prototype as any).nxpaInherited;
+locked(() => { delete (Object.prototype as any).nxpaInherited; });
 out.push(String(g.nxpaInherited));
 // a global added by a computed key whose text is built at run time
 const dyn = ["nx", "pa", "Dyn"].join("");

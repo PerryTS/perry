@@ -1,7 +1,10 @@
+// DEC 250: Function.prototype.call is locked in a compiled program, so the patch is refused and every borrowed call runs the builtin.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 const savedCall = Function.prototype.call;
 const capturedSlice = Array.prototype.slice;
 const source = process.argv[2] || "Function.prototype.call = function () { return 701; }";
-new Function(source)();
+locked(() => new Function(source)());
 const iife = (function () { return 1; }).call(null);
 const captured = capturedSlice.call([1, 2]);
 const arrow = (() => 2).call(null);
@@ -11,5 +14,5 @@ const promise = Promise.resolve.call(Promise, 1);
 const own = Object.prototype.hasOwnProperty.call({ x: 1 }, "x");
 const tag = Object.prototype.toString.call({});
 const restore = process.argv[3] || "target.call = value";
-new Function("target", "value", restore)(Function.prototype, savedCall);
+locked(() => new Function("target", "value", restore)(Function.prototype, savedCall));
 console.log(iife, captured, arrow, array, math, promise, own, tag);
