@@ -3318,6 +3318,7 @@ pub const SUPER_BIT: Tok = 1 << 31;
 mod key_shape;
 #[path = "model/operations.rs"]
 mod operations;
+pub(crate) use operations::why_act;
 pub use key_shape::KeyShape;
 
 /// A property key as one whitespace-free token for the dump and the

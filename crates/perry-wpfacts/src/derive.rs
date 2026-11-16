@@ -2700,7 +2700,107 @@ fn judge_store(
         None if throws > 0 => Verdict::Throws,
         None => Verdict::AddsKey,
     };
+    // R9STORE1: a store the rules above leave undecided (an add, or a key
+    // that is no definite birth field) onto ONE object literal allocation,
+    // whose effect `literal_store` decides exactly. A slot store stays one.
+    let verdict = match (verdict, toks, prim) {
+        (Verdict::AddsKey | Verdict::No(_), [t], 0) if literal_store(m, *t, key, s.key).is_ok() => {
+            Verdict::KnownObjectStore
+        }
+        (v, _, _) => v,
+    };
     (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// R9STORE1: may a named store of `key` (atom `a`) onto `t`, one object
+/// literal allocation site (`TmplKind::Lit` or a literal-shape class),
+/// be decided exactly as "adds or overwrites an own data property of the
+/// object" (ECMA-262 13.15.2 PutValue, 10.1.9.2 OrdinarySet, 10.1.9.2
+/// step 3.e CreateDataProperty / step 2.c the value of a writable own data
+/// property)? The literal is born by OrdinaryObjectCreate(%Object.prototype%)
+/// (13.2.5.5) with writable data properties (CreateDataPropertyOrThrow),
+/// and its own accessors only from `get` / `set` entries. Own: no accessor
+/// of the key and no accessor definition under it, no computed store onto
+/// it (a computed `__proto__` [[Set]] relinks it, B.3.1), never HARD (no
+/// freeze / seal / preventExtensions, defineProperty, delete, relink or
+/// Proxy target: E5-E9), not escaped (no unknown code holds it) and no
+/// marker. Chain: exactly %Object.prototype% (a `__proto__: x` entry sets
+/// another), which lacks the key (`__proto__` included: refused) and which
+/// no program write or definition reaches under it. Each run of the site
+/// is one object; the verdict holds for every run, under any branch.
+fn literal_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), String> {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return Err("not an object literal".into());
+    };
+    let literal = match &m.tmpls[tm as usize].kind {
+        TmplKind::Lit { enum_image, .. } => !enum_image,
+        TmplKind::Class { literal_shape, .. } => *literal_shape,
+        _ => false,
+    };
+    if !literal || m.is_marker(t) || m.closed_marker(t) {
+        return Err("not an object literal".into());
+    }
+    if m.is_private_atom(a) {
+        return Err("a private name".into());
+    }
+    if m.is_escaped(t) {
+        return Err("a known object unknown code may hold".into());
+    }
+    if m.hard.contains_key(&t) || m.super_relink.contains(&t) {
+        return Err("a known object with a hard operation".into());
+    }
+    if m.accessors.contains_key(&(t, a)) || m.accessor_keys.get(&t).is_some_and(|k| k.contains(&a)) {
+        return Err("an accessor of the key on the known object".into());
+    }
+    if m.field_any.get(&t).is_some_and(|&n| {
+        let nd = &m.nodes[n as usize];
+        nd.dropped || !nd.pts.is_empty() || nd.prim != 0
+    }) {
+        return Err("a computed store onto the object".into());
+    }
+    // The chain: %Object.prototype%, directly (a `Lit`) or through the
+    // literal-shape class's own prototype object, the lowering's stand-in
+    // for the literal's [[Prototype]] link: one the program never writes,
+    // defines on, relinks or hands to unknown code.
+    let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
+        return Err("no %Object.prototype%".into());
+    };
+    let protos = |h: Tok| {
+        m.proto_node.get(&h).and_then(|&pn| {
+            let nd = &m.nodes[pn as usize];
+            (nd.prim == 0 && !nd.dropped).then(|| nd.pts.to_sorted())
+        })
+    };
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let chain_ok = match protos(t).as_deref() {
+        Some([p]) if *p == op => true,
+        Some([p]) => {
+            m.toks[*p as usize] == TokKind::Proto(tm)
+                && !m.is_marker(*p)
+                && !m.is_escaped(*p)
+                && !m.hard.contains_key(p)
+                && !m.super_relink.contains(p)
+                && empty(m.fields.get(&(*p, a)))
+                && empty(m.field_any.get(p))
+                && !m.accessors.contains_key(&(*p, a))
+                && m.accessor_keys.get(p).is_none_or(|k| !k.contains(&a))
+                && protos(*p).as_deref() == Some(&[op][..])
+        }
+        _ => false,
+    };
+    if !chain_ok {
+        return Err("a prototype other than %Object.prototype%".into());
+    }
+    if !crate::builtins::object_proto_lacks(key) {
+        return Err("the key is a builtin prototype member".into());
+    }
+    builtin_protos_unwritten(m, None, a)?;
+    Ok(())
 }
 
 /// R9BIRTH4: may a named store of `key` (atom `a`) onto `t`, a class's

@@ -360,6 +360,15 @@ impl Model {
             return;
         };
         self.activate(f, "call");
+        if let Some(pat) = crate::model::why_act() {
+            if self.funcs[f as usize].name.contains(pat.as_str()) {
+                let c = &self.calls[call as usize];
+                eprintln!(
+                    "perry: wpfacts: call {call} (result n{}, region n{}) binds {}",
+                    c.ret, c.region, self.funcs[f as usize].name
+                );
+            }
+        }
         if self.diagnostic.is_some() {
             let kind = if self.ctor_calls.contains(&call) {
                 "new"
