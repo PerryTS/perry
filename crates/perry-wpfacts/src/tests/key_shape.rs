@@ -191,7 +191,8 @@ fn a_variable_key_ending_in_a_literal_writes_no_other_name() {
 fn shape_matching_is_exact() {
     use crate::model::KeyShape;
     let s = |p: &[&str]| KeyShape {
-        globs: vec![p.iter().map(|s| s.to_string()).collect()], free: Vec::new()
+        globs: vec![p.iter().map(|s| s.to_string()).collect()],
+        free: Vec::new(),
     };
     assert!(s(&["", "s"]).admits("meshes"));
     assert!(!s(&["", "s"]).admits("constructor"));

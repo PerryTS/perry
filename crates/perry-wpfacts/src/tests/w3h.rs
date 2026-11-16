@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn verdicts(pf: &crate::ProgramFacts, key: &str, store: bool) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -35,7 +39,9 @@ fn verdicts(pf: &crate::ProgramFacts, key: &str, store: bool) -> Vec<String> {
 
 fn all_proven(pf: &crate::ProgramFacts, key: &str) -> bool {
     let v = verdicts(pf, key, false);
-    !v.is_empty() && v.iter().all(|x| x.starts_with("T0") && x.ends_with("top=false"))
+    !v.is_empty()
+        && v.iter()
+            .all(|x| x.starts_with("T0") && x.ends_with("top=false"))
 }
 
 const CORE: &str = "\"use strict\";\n\
@@ -65,7 +71,12 @@ fn w3h_k1_listener_data_stays_unknown() {
          w.onmessage = (e: any) => {{ (globalThis as any).last = e.data; console.log(String((globalThis as any).last.q)); }};\n{TAIL}"
     ));
     let q = verdicts(&pf, "q", false);
-    assert!(!q.is_empty() && q.iter().all(|x| !x.starts_with("T0") || x.ends_with("top=true")), "e.data.q is unknown");
+    assert!(
+        !q.is_empty()
+            && q.iter()
+                .all(|x| !x.starts_with("T0") || x.ends_with("top=true")),
+        "e.data.q is unknown"
+    );
 }
 
 // K2 (KEEP): an options getter runs at construction ([[Get]] of the option):
@@ -78,7 +89,10 @@ fn w3h_k2_options_getter_runs() {
          if (hh.fn !== null) console.log(hh.fn());\n{TAIL}"
     ));
     let v = verdicts(&pf, "fn", false);
-    assert!(!v.is_empty() && v.iter().all(|x| !x.starts_with("Dead")), "the getter's store reaches hh.fn");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| !x.starts_with("Dead")),
+        "the getter's store reaches hh.fn"
+    );
 }
 
 // K3 (KEEP): a closure handed to perry/thread spawn that captures an object
@@ -96,4 +110,3 @@ fn w3h_k3_spawn_capture_mutated_after() {
     assert!(!z.is_empty(), "the spawned read exists");
     assert!(all_proven(&pf, "v"), "the core stays proven beside spawn");
 }
-

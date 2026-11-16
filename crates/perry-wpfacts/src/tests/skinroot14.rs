@@ -23,7 +23,11 @@ fn m_calls(src: &str) -> Vec<String> {
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
     let pf = crate::compute(&[(path, &hir)], &FactsConfig::default());
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m" && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("SKINROOT14 {src:?}: {v:?}");
@@ -37,7 +41,8 @@ fn mono(v: &[String]) -> bool {
 
 /// Proven: one callee (`T0Mono`) or a proven set of callees (`T0Set`).
 fn proven(v: &[String]) -> bool {
-    v.iter().all(|x| x.starts_with("T0Mono") || x.starts_with("T0Set"))
+    v.iter()
+        .all(|x| x.starts_with("T0Mono") || x.starts_with("T0Set"))
 }
 
 /// A second object whose `m` the program-written function puts on `t`.
@@ -59,7 +64,10 @@ fn red_skinroot14_buffer_method_on_typed_array_only_throws() {
         "SharedArrayBuffer.prototype.grow",
     ] {
         let v = m_calls(&view_call("new Int8Array(4)", f));
-        assert!(proven(&v), "{f} on a typed array only throws: v does not escape: {v:?}");
+        assert!(
+            proven(&v),
+            "{f} on a typed array only throws: v does not escape: {v:?}"
+        );
     }
 }
 
@@ -70,7 +78,10 @@ fn red_skinroot14_buffer_method_on_typed_array_only_throws() {
 #[test]
 #[ignore = "open: DataView named read of a program key adds every primitive"]
 fn red_skinroot14_buffer_method_on_data_view_only_throws() {
-    let v = m_calls(&view_call("new DataView(new ArrayBuffer(8))", "ArrayBuffer.prototype.resize"));
+    let v = m_calls(&view_call(
+        "new DataView(new ArrayBuffer(8))",
+        "ArrayBuffer.prototype.resize",
+    ));
     assert!(mono(&v), "resize on a DataView only throws: {v:?}");
 }
 
@@ -81,7 +92,10 @@ fn red_skinroot14_buffer_method_on_data_view_only_throws() {
 fn keep_skinroot14_maybe_buffer_subclass_receiver() {
     let src = format!("{OBJ}class B extends ArrayBuffer {{ k: any = o; }}\nconst v: any = Math.random() > 0.5 ? new B(8) : new Int8Array(4);\nv.k = o;\nv.r = ArrayBuffer.prototype.resize;\ntry {{ v.r(1); }} catch (e) {{}}\nconst r = v.k.m();\n");
     let v = m_calls(&src);
-    assert!(!mono(&v), "an ArrayBuffer subclass instance may carry the slot: {v:?}");
+    assert!(
+        !mono(&v),
+        "an ArrayBuffer subclass instance may carry the slot: {v:?}"
+    );
 }
 
 /// (a) the GLTFLoader shape: what a same-object for-in read finds on a
@@ -112,7 +126,10 @@ fn keep_skinroot14_forin_over_buffer_reads_program_member() {
             "{OBJ2}{}",
             forin(s, "b.push = function (this: any) { this.k = o2; };\n")
         ));
-        assert!(!mono(&v), "the program-written own member of {s} is read and runs on t: {v:?}");
+        assert!(
+            !mono(&v),
+            "the program-written own member of {s} is read and runs on t: {v:?}"
+        );
     }
 }
 
@@ -131,7 +148,8 @@ fn keep_skinroot14_forin_over_buffer_reads_program_prototype_member() {
         let pre = format!("({p} as any).push = function (this: any) {{ this.k = o2; }};\n");
         let v = m_calls(&format!("{OBJ2}{}", forin("new ArrayBuffer(8)", &pre)));
         assert!(
-            v.iter().any(|x| x.contains("receiver is a builtin/function value")),
+            v.iter()
+                .any(|x| x.contains("receiver is a builtin/function value")),
             "the program-written member of {p} is read: the function reaches t.k: {v:?}"
         );
     }

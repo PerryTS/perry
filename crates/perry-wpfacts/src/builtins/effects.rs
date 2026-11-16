@@ -293,10 +293,9 @@ pub(super) fn declared_setter(proto: &str, key: &str) -> Option<&'static RealmEn
                     && src.steps.is_empty()
                     && dst.root == RealmSlotRoot::This
                     && !dst.steps.is_empty()
-                    && dst
-                        .steps
-                        .iter()
-                        .all(|st| matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)))
+                    && dst.steps.iter().all(|st| {
+                        matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_))
+                    })
             }
             RealmEffect::Returns(RealmOperand::Prim(_)) => true,
             _ => false,
@@ -1059,7 +1058,7 @@ fn run(
         *runs += 1;
         sites.insert(site);
     }
-        let _c = &m.calls[call as usize];
+    let _c = &m.calls[call as usize];
     let mut run = Run {
         name: entry.name,
         t,

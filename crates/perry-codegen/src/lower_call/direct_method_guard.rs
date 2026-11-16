@@ -191,7 +191,11 @@ pub(crate) fn emit_late_slot_word(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32
     let bits = blk.bitcast_double_to_i64(recv_box);
     let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let obj = blk.inttoptr(I64, &handle);
-    let ptr = blk.gep(I8, &obj, &[(I64, &(header + 8 * i64::from(slot)).to_string())]);
+    let ptr = blk.gep(
+        I8,
+        &obj,
+        &[(I64, &(header + 8 * i64::from(slot)).to_string())],
+    );
     blk.load(I64, &ptr)
 }
 

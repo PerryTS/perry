@@ -263,8 +263,12 @@ fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
 /// store wrote onto the chain is `intrinsic_miss`'s).
 fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
     what == Some("RegExp")
-        && members::regexp_inherited(name)
-            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+        && members::regexp_inherited(name).is_some_and(|p| {
+            matches!(
+                members::realm_chain_find(p, name),
+                members::RealmFind::Absent
+            )
+        })
 }
 
 /// The primitive kind of `name` on the chain of a realm-born object
@@ -441,8 +445,12 @@ pub(super) fn realm_chain_start(
 /// `BYTES_PER_ELEMENT`), so its chain stands for every kind's. A key a
 /// store wrote onto the chain is `intrinsic_miss`'s.
 pub(super) fn view_member_absent(what: Option<&str>, name: &str) -> bool {
-    view_chain(what)
-        .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+    view_chain(what).is_some_and(|p| {
+        matches!(
+            members::realm_chain_find(p, name),
+            members::RealmFind::Absent
+        )
+    })
 }
 
 /// The realm prototype a typed array's or a Buffer's chain starts at
@@ -804,7 +812,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     // others `NATIVE_READ_GLOBALS` lists) is the live global.
     if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Module(_)))
         && match key {
-            Key::Named(a) => super::native_protocol::NATIVE_READ_GLOBALS.contains(&m.atoms[a as usize].as_str()),
+            Key::Named(a) => {
+                super::native_protocol::NATIVE_READ_GLOBALS.contains(&m.atoms[a as usize].as_str())
+            }
             Key::Any(_) => true,
         }
     {
@@ -979,8 +989,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // runtime's value has that type; a write of the
                 // key (a program store, `Object.defineProperty`, unknown code),
                 // now or later in the solve, makes the read opaque.
-                Some(n) if !m.unit_mode && m.native_property(t, n).and_then(|p| p.prim).is_some() => {
-                    let p = m.native_property(t, n).and_then(|p| p.prim).expect("guarded");
+                Some(n)
+                    if !m.unit_mode && m.native_property(t, n).and_then(|p| p.prim).is_some() =>
+                {
+                    let p = m
+                        .native_property(t, n)
+                        .and_then(|p| p.prim)
+                        .expect("guarded");
                     let Key::Named(a) = key else { unreachable!() };
                     if opaque_written(m, t, a, NativeMiss::Load(dst)) {
                         return opaque_member(m, dst);
@@ -1306,10 +1321,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (_, None) if ordinary_box(m, t) => {
                         // A host object of strings holds Strings only; an
                         // absent key is `undefined` or the chain's.
-                        m.add_prim(dst, match what {
-                            "stringrecord" => prim::STR | prim::UNDEF,
-                            _ => prim::ALL,
-                        });
+                        m.add_prim(
+                            dst,
+                            match what {
+                                "stringrecord" => prim::STR | prim::UNDEF,
+                                _ => prim::ALL,
+                            },
+                        );
                         family_any(m, Some(t), Family::Object, None, key, dst);
                     }
                     // A computed key on a null-prototype object a builtin makes

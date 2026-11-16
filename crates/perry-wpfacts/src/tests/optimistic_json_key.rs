@@ -17,7 +17,11 @@ fn run(src: &str, on: bool) -> ProgramFacts {
 }
 
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call).collect();
+    let s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call)
+        .collect();
     assert!(!s.is_empty(), "no call .{key}\n{}", pf.dump_text());
     s.iter().all(|s| s.verdict == Verdict::T0Mono)
 }

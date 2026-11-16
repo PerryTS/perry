@@ -11,10 +11,18 @@ use super::*;
 fn runs(src: &str, name: &str) -> bool {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let cfg = FactsConfig { max_work: Some(50_000_000), ..FactsConfig::default() };
+    let cfg = FactsConfig {
+        max_work: Some(50_000_000),
+        ..FactsConfig::default()
+    };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(pf.body_reach.complete, "activated");
-    let id = hir.functions.iter().find(|f| f.name == name).expect(name).id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .expect(name)
+        .id;
     pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
 }
 
@@ -52,7 +60,10 @@ fn r9store2_c2_pct_j_reaches() {
 // C3 KEEP: an unknown first argument may hold `%j`: reached.
 #[test]
 fn r9store2_c3_unknown_first_reaches() {
-    let on = runs(&format!("{CLS}console.log( String( process.argv[2] ), a );\n"), "hit");
+    let on = runs(
+        &format!("{CLS}console.log( String( process.argv[2] ), a );\n"),
+        "hit",
+    );
     assert!(on, "C3 unknown format string: toJSON not reached");
 }
 
@@ -242,7 +253,10 @@ fn r9store2_c5_three_loggers_why() {
 // reads it: before, the spread elements counted as a possible first.
 #[test]
 fn r9store2_c6_later_unknown_string_is_no_format() {
-    let on = runs(&logger("log( \x27x\x27, a, String( process.argv[2] ) );"), "hit");
+    let on = runs(
+        &logger("log( \x27x\x27, a, String( process.argv[2] ) );"),
+        "hit",
+    );
     eprintln!("R9STORE2 C6 hit runs={on}");
     assert!(!on, "C6 toJSON body active");
 }

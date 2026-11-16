@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts of the `.cb` call sites of a.ts, in source order.
 fn cb_calls(pf: &crate::ProgramFacts) -> Vec<crate::Verdict> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let mut v: Vec<_> = pf
         .sites
         .iter()
@@ -73,7 +77,10 @@ console.log(n);"
     );
     let v = cb_calls(&facts(&src));
     eprintln!("OC1 u2 {v:?}");
-    assert!(proven(&v[0]) && !proven(&v[1]), "fire by rule A; ping generic: {v:?}");
+    assert!(
+        proven(&v[0]) && !proven(&v[1]),
+        "fire by rule A; ping generic: {v:?}"
+    );
 }
 
 /// U3 KEEP: a computed-key store that may name `cb` reaches `p`.
@@ -89,7 +96,10 @@ console.log(n);"
     );
     let v = cb_calls(&facts(&src));
     eprintln!("OC1 u3 {v:?}");
-    assert!(proven(&v[0]) && !proven(&v[1]), "fire by rule A; ping generic: {v:?}");
+    assert!(
+        proven(&v[0]) && !proven(&v[1]),
+        "fire by rule A; ping generic: {v:?}"
+    );
 }
 
 // ONCHANGE3 rule A (born-with): the allocating body stores `cb` on the fresh
@@ -126,7 +136,10 @@ fn onchange3_a1_born_with_only_is_proven() {
 /// A2: a later `on(other)` on the same object: the union, still own slot.
 #[test]
 fn onchange3_a2_later_store_is_the_union() {
-    let v = born(BORN, "if (String(Math.random()) === \"x\") h.e.on(() => { n += 7; });");
+    let v = born(
+        BORN,
+        "if (String(Math.random()) === \"x\") h.e.on(() => { n += 7; });",
+    );
     eprintln!("OC3 a2 {v:?}");
     assert!(proven(&v[0]), "{v:?}");
 }
@@ -134,7 +147,10 @@ fn onchange3_a2_later_store_is_the_union() {
 /// K1 KEEP: an `E` created elsewhere without `on` reaches the site (mixed).
 #[test]
 fn onchange3_k1_mixed_keeps() {
-    let v = born(BORN, "const p = new E(); if (String(Math.random()) === \"x\") p.fire();");
+    let v = born(
+        BORN,
+        "const p = new E(); if (String(Math.random()) === \"x\") p.fire();",
+    );
     eprintln!("OC3 k1 {v:?}");
     assert!(!proven(&v[0]), "{v:?}");
 }
@@ -150,7 +166,10 @@ fn onchange3_k2_on_after_escape_keeps() {
 /// K3 KEEP: `delete` of the key in the program.
 #[test]
 fn onchange3_k3_delete_keeps() {
-    let v = born(BORN, "if (String(Math.random()) === \"x\") delete (h.e as any).cb;");
+    let v = born(
+        BORN,
+        "if (String(Math.random()) === \"x\") delete (h.e as any).cb;",
+    );
     eprintln!("OC3 k3 {v:?}");
     assert!(!proven(&v[0]), "{v:?}");
 }

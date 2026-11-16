@@ -18,7 +18,9 @@
 use super::*;
 
 fn solved(src: &str) -> crate::gen::Gen<'static> {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -68,7 +70,12 @@ fn hit_runs(src: &str) -> bool {
         ..FactsConfig::default()
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
-    let id = hir.functions.iter().find(|f| f.name == "hit").expect("hit").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "hit")
+        .expect("hit")
+        .id;
     pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
 }
 
@@ -110,7 +117,11 @@ const TAIL: &str = r#"console.log(JSON.stringify(result.userData), result.asset.
 "#;
 
 fn prog(add: &str, copy: bool, pre: &str, post: &str) -> String {
-    let call = if copy { "assignExtras(result, json);\n" } else { "" };
+    let call = if copy {
+        "assignExtras(result, json);\n"
+    } else {
+        ""
+    };
     format!("{pre}{HEAD}{add}{ASSIGN}{call}{post}{TAIL}")
 }
 
@@ -119,7 +130,10 @@ fn prog(add: &str, copy: bool, pre: &str, post: &str) -> String {
 fn an4_red_fxi_no_hold() {
     let src = prog(ADD_I, true, "", "");
     assert!(!held(&src), "fxi: realm held");
-    assert_eq!(proven_sites(&src), proven_sites(&prog(ADD_I, false, "", "")));
+    assert_eq!(
+        proven_sites(&src),
+        proven_sites(&prog(ADD_I, false, "", ""))
+    );
 }
 
 #[test]
@@ -127,7 +141,10 @@ fn an4_red_fxi_no_hold() {
 fn an4_red_fxj_no_hold() {
     let src = prog(ADD_J, true, "", "");
     assert!(!held(&src), "fxj: realm held");
-    assert_eq!(proven_sites(&src), proven_sites(&prog(ADD_J, false, "", "")));
+    assert_eq!(
+        proven_sites(&src),
+        proven_sites(&prog(ADD_J, false, "", ""))
+    );
 }
 
 const HIT: &str = "let n = 0;\nfunction hit(): string { n++; return \"h\"; }\n";
@@ -170,7 +187,10 @@ fn an4_keep_to_primitive_on_object_proto() {
 fn an4_keep_own_tostring_on_json() {
     let post = format!("if (process.argv[3] === \"o\") json.extras.toString = hit;\n{TOUCH}");
     let src = format!("{HIT}{}", prog(ADD_I, true, "", &post));
-    let src = src.replace("console.log(\"\" + result", "console.log(\"\" + json.extras, \"\" + result");
+    let src = src.replace(
+        "console.log(\"\" + result",
+        "console.log(\"\" + json.extras, \"\" + result",
+    );
     assert!(hit_runs(&src));
 }
 
@@ -204,5 +224,11 @@ fn an4_keep_array_subclass_species() {
 fn an4_keep_number_wrapper_receiver_not_a_throw() {
     let src = "const w: any = Object(Number(process.argv[2] ?? 5));\nconst s: any = w.toFixed(2);\nconsole.log(s.length, s.charAt(0));\n";
     assert!(!held(src), "wrapper: realm held");
-    assert!(proven_sites(src).iter().any(|(k, c, _)| k == "charAt" && *c), "{:?}", proven_sites(src));
+    assert!(
+        proven_sites(src)
+            .iter()
+            .any(|(k, c, _)| k == "charAt" && *c),
+        "{:?}",
+        proven_sites(src)
+    );
 }

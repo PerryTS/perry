@@ -94,7 +94,14 @@ impl<'a> Gen<'a> {
                 // target's chain runs with this = receiver (10.1.8.1 step 7):
                 // the lookup starts at target itself, each token of the
                 // receiver its `this` (the `super.x` form, `Cons::SuperFrom`).
-                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Load(out) });
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Load(out),
+                    },
+                );
                 if self.m.is_proto_key(key) {
                     self.m.cons(rv, Cons::ProtoOf { dst: out });
                 }
@@ -126,7 +133,14 @@ impl<'a> Gen<'a> {
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
                 // 28.1.12: target.[[Set]](key, v, receiver); a setter found on
                 // target's chain runs with this = receiver (10.1.9.2 step 7).
-                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Store(v) });
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Store(v),
+                    },
+                );
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectDelete { target, key } => {

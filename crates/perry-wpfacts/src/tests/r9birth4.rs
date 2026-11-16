@@ -28,7 +28,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) and receivers of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<(String, Vec<String>)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -51,7 +55,8 @@ const CLASSES: &str = "class A { constructor(v: any) { this.v = v; } get2() { re
 class B extends A { constructor(v: any) { super(v); this.w = 1; } }
 ";
 
-const USE: &str = "const a = new A(process.argv[2] ?? \"1\"); const b = new B(String(Math.random()));
+const USE: &str =
+    "const a = new A(process.argv[2] ?? \"1\"); const b = new B(String(Math.random()));
 console.log(a.get2(), b.get2(), (a as any).k, (b as any).k, (A as any).K, (B as any).K);
 ";
 
@@ -63,7 +68,10 @@ fn src(mid: &str) -> String {
 #[test]
 fn r9birth4_p1_base_prototype() {
     let pf = facts(&src("(A.prototype as any).k = 'a';\n"));
-    assert!(known(&pf, "k", true), "P1 A.prototype.k not a known-object store");
+    assert!(
+        known(&pf, "k", true),
+        "P1 A.prototype.k not a known-object store"
+    );
 }
 
 // P2: a subclass's prototype object: `B.prototype` reads B's own
@@ -73,8 +81,14 @@ fn r9birth4_p1_base_prototype() {
 fn r9birth4_p2_subclass_prototype() {
     let pf = facts(&src("(B.prototype as any).k = 'b';\n"));
     let s = stores(&pf, "k");
-    assert!(s.iter().all(|(_, r)| r.len() == 1), "P2 receivers not one object: {s:?}");
-    assert!(known(&pf, "k", true), "P2 B.prototype.k not a known-object store");
+    assert!(
+        s.iter().all(|(_, r)| r.len() == 1),
+        "P2 receivers not one object: {s:?}"
+    );
+    assert!(
+        known(&pf, "k", true),
+        "P2 B.prototype.k not a known-object store"
+    );
 }
 
 // S1: a class static store `A.K = v`.
@@ -103,7 +117,10 @@ class B extends A { constructor(v: any) { super(v); this.w = 1; } }
     .to_string()
         + USE;
     let pf = facts(&s);
-    assert!(known(&pf, "K", false), "k1 store through a static setter proven");
+    assert!(
+        known(&pf, "K", false),
+        "k1 store through a static setter proven"
+    );
 }
 
 // KEEP k2: a prototype setter `k` on the parent class.
@@ -117,7 +134,10 @@ class B extends A { constructor(v: any) { super(v); this.w = 1; } }
     .to_string()
         + USE;
     let pf = facts(&s);
-    assert!(known(&pf, "k", false), "k2 store through a prototype setter proven");
+    assert!(
+        known(&pf, "k", false),
+        "k2 store through a prototype setter proven"
+    );
 }
 
 // KEEP k3: `Object.freeze(A.prototype)` anywhere in the program.
@@ -126,7 +146,10 @@ fn r9birth4_k3_frozen_prototype() {
     let pf = facts(&src(
         "if (process.argv[3] === \"f\") Object.freeze(A.prototype);\n(A.prototype as any).k = 'a';\n",
     ));
-    assert!(known(&pf, "k", false), "k3 store onto a freezable prototype proven");
+    assert!(
+        known(&pf, "k", false),
+        "k3 store onto a freezable prototype proven"
+    );
 }
 
 // KEEP k4: the receiver is one of two classes, chosen by argv.
@@ -135,7 +158,10 @@ fn r9birth4_k4_two_receivers() {
     let pf = facts(&src(
         "class C { constructor() {} }\nconst X: any = process.argv[2] === \"c\" ? C : A;\nX.prototype.k = 'x';\nconsole.log((new C() as any).k);\n",
     ));
-    assert!(known(&pf, "k", false), "k4 store onto one of two prototypes proven");
+    assert!(
+        known(&pf, "k", false),
+        "k4 store onto one of two prototypes proven"
+    );
 }
 
 // KEEP k5: `name` of a class constructor is a non-writable own data
@@ -143,7 +169,10 @@ fn r9birth4_k4_two_receivers() {
 #[test]
 fn r9birth4_k5_constructor_name() {
     let pf = facts(&src("(A as any).name = 'z';\nconsole.log(A.name);\n"));
-    assert!(known(&pf, "name", false), "k5 store of a class's `name` proven");
+    assert!(
+        known(&pf, "name", false),
+        "k5 store of a class's `name` proven"
+    );
 }
 
 // KEEP k6: a non-writable data property defined on the prototype.
@@ -152,7 +181,10 @@ fn r9birth4_k6_defined_non_writable() {
     let pf = facts(&src(
         "Object.defineProperty(A.prototype, \"k\", { value: 1, writable: false });\n(A.prototype as any).k = 'a';\n",
     ));
-    assert!(known(&pf, "k", false), "k6 store onto a non-writable key proven");
+    assert!(
+        known(&pf, "k", false),
+        "k6 store onto a non-writable key proven"
+    );
 }
 
 // Rule K for literals (R9BIRTH4 item 2): `A`'s constructor stores an
@@ -169,7 +201,8 @@ console.log(k.sum(), (k as any).stats.x.total);
     )
 }
 
-const K_STATS: &str = "this.stats = { x: { get total() { return scope.a; }, get inUse() { return 1; } }, y: 0 };";
+const K_STATS: &str =
+    "this.stats = { x: { get total() { return scope.a; }, get inUse() { return 1; } }, y: 0 };";
 
 /// Every store of `key` is a slot store (T0) / none is.
 fn slot_stores(pf: &crate::ProgramFacts, key: &str, want: bool) -> bool {
@@ -181,8 +214,14 @@ fn slot_stores(pf: &crate::ProgramFacts, key: &str, want: bool) -> bool {
 #[test]
 fn r9birth4_kl1_accessor_literal_store() {
     let pf = facts(&k_src(K_STATS, ""));
-    assert!(slot_stores(&pf, "stats", true), "KL1 this.stats not a slot store");
-    assert!(slot_stores(&pf, "b", true), "KL1 this.b after the literal not a slot store");
+    assert!(
+        slot_stores(&pf, "stats", true),
+        "KL1 this.stats not a slot store"
+    );
+    assert!(
+        slot_stores(&pf, "b", true),
+        "KL1 this.b after the literal not a slot store"
+    );
 }
 
 // KEEP kl2: the literal is handed to other code before the store.
@@ -192,12 +231,18 @@ fn r9birth4_kl2_literal_passed_out_first() {
         "const s = { get total() { return scope.a; } }; reg(s); this.stats = { x: s };",
         "",
     ));
-    assert!(slot_stores(&pf, "b", false), "kl2 this.b proven after the literal ran");
+    assert!(
+        slot_stores(&pf, "b", false),
+        "kl2 this.b proven after the literal ran"
+    );
 }
 
 // KEEP kl3: the constructor reads `this.stats` (its getter sees `this`).
 #[test]
 fn r9birth4_kl3_stats_read_in_ctor() {
     let pf = facts(&k_src(K_STATS, "console.log(this.stats.x.total);"));
-    assert!(slot_stores(&pf, "b", false), "kl3 this.b proven after this.stats was read");
+    assert!(
+        slot_stores(&pf, "b", false),
+        "kl3 this.b proven after this.stats was read"
+    );
 }

@@ -1052,7 +1052,14 @@ mod tests {
         assert!(admitted(&graph));
         graph.nodes[0].names.push("unrelated_initializer".into());
         assert!(!admitted(&graph));
-        for sec in [".text$unlikely", ".text", ".rdata$zzz", ".xdata$x", ".rdata#12", ".text$mn#7"] {
+        for sec in [
+            ".text$unlikely",
+            ".text",
+            ".rdata$zzz",
+            ".xdata$x",
+            ".rdata#12",
+            ".text$mn#7",
+        ] {
             graph.nodes[0].names = vec!["audited_initializer".into(), sec.into()];
             assert!(admitted(&graph));
             assert!(temp_label(sec));

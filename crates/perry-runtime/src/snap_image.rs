@@ -228,7 +228,11 @@ impl Where {
             }
         }
         let within = |r: (usize, usize)| a >= r.0 && a < r.1;
-        let regions = [format::REGION_STRINGS, format::REGION_LAYOUTS, format::REGION_ATOMS];
+        let regions = [
+            format::REGION_STRINGS,
+            format::REGION_LAYOUTS,
+            format::REGION_ATOMS,
+        ];
         for (&region, s) in regions.iter().zip(&self.sections) {
             if within(*s) {
                 return Ok(Val::Ext {
@@ -395,7 +399,16 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 }
             });
         }
-        cell_forms(&w, &headers, i, h, t, &mut bytes, &mut slots, &mut img.stops);
+        cell_forms(
+            &w,
+            &headers,
+            i,
+            h,
+            t,
+            &mut bytes,
+            &mut slots,
+            &mut img.stops,
+        );
         slots.sort_by_key(|s| s.0);
         img.cells.push(Cell {
             obj_type: t,
@@ -471,7 +484,11 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             );
             img.mint = crate::object::shapes::snap_image_mint_collect(&b.shapes);
             let mint_stop = mint_stop(&delta, &img.mint);
-            let (pending, stops) = completeness(delta, b.token, crate::object::field_get_set::snap_image_next_token());
+            let (pending, stops) = completeness(
+                delta,
+                b.token,
+                crate::object::field_get_set::snap_image_next_token(),
+            );
             img.pending = pending;
             img.stops.extend(stops);
             img.stops.extend(mint_stop);
@@ -545,19 +562,24 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
     roots(&mut |bits| found.push(bits));
     loop {
         for bits in found.drain(..) {
-            if let Some((i, m)) = cell_of(&headers, bits).and_then(|i| Some((i, marked.get_mut(i)?))) {
+            if let Some((i, m)) =
+                cell_of(&headers, bits).and_then(|i| Some((i, marked.get_mut(i)?)))
+            {
                 if !*m {
                     *m = true;
                     work.push(i);
                 }
             }
         }
-        let Some(&h) = work.pop().and_then(|i| headers.get(i)) else { break };
+        let Some(&h) = work.pop().and_then(|i| headers.get(i)) else {
+            break;
+        };
         // SAFETY: a cell the allocators hold; the slots are read in place.
         unsafe {
-            crate::gc::image_cells::visit_cell_slots_raw(h as *mut GcHeader, &mut |_slot, bits, _own| {
-                found.push(bits)
-            });
+            crate::gc::image_cells::visit_cell_slots_raw(
+                h as *mut GcHeader,
+                &mut |_slot, bits, _own| found.push(bits),
+            );
         }
     }
     headers
@@ -570,18 +592,29 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
 /// The mint record of the shape records minted since the baseline is written (as the file
 /// holds it) and a table rebuilt from it is compared with the live one: the stop that
 /// reports its size, or the first record whose rebuilt form differs.
-fn mint_stop(delta: &crate::object::shapes::SnapShapeDelta, recs: &[format::MintRec]) -> Option<Stop> {
+fn mint_stop(
+    delta: &crate::object::shapes::SnapShapeDelta,
+    recs: &[format::MintRec],
+) -> Option<Stop> {
     if recs.is_empty() && crate::object::shapes::snap_image_delta_minted_total(delta) == 0 {
         return None;
     }
     let blob = format::mint_blob(recs);
-    let back = format::parse_mint_blob(&blob).map(|b| b.0).unwrap_or_default();
+    let back = format::parse_mint_blob(&blob)
+        .map(|b| b.0)
+        .unwrap_or_default();
     let bad = if back.len() == recs.len() {
         crate::object::shapes::snap_image_mint_check(&back)
     } else {
         Some((back.len().min(recs.len()), format::MINT_BAD_FIELDS))
     };
-    let mut stop = Stop { cell: 0, obj_type: 0, kind: format::STOP_MINT_RECORD, off: 0, value: 0 };
+    let mut stop = Stop {
+        cell: 0,
+        obj_type: 0,
+        kind: format::STOP_MINT_RECORD,
+        off: 0,
+        value: 0,
+    };
     if let Some((i, why)) = bad {
         stop.kind = format::STOP_MINT_MISMATCH;
         stop.cell = i as u32;
@@ -601,11 +634,21 @@ fn mint_stop(delta: &crate::object::shapes::SnapShapeDelta, recs: &[format::Mint
 /// Which forms the image still lacks, and why it stops: a shape minted between the
 /// baseline and the cut (the shape slab has no form), more than the primary's
 /// class-template token. The atom table has no run-time counter: its bit stays set.
-fn completeness(shapes: crate::object::shapes::SnapShapeDelta, tok0: u64, tok1: u64) -> (u32, Vec<Stop>) {
+fn completeness(
+    shapes: crate::object::shapes::SnapShapeDelta,
+    tok0: u64,
+    tok1: u64,
+) -> (u32, Vec<Stop>) {
     let mut pending = format::PENDING_ATOMS;
     let mut stops = Vec::new();
     let mut stop = |kind: u8, cell: u32, off: u32, value: u64| {
-        stops.push(Stop { cell, obj_type: 0, kind, off, value });
+        stops.push(Stop {
+            cell,
+            obj_type: 0,
+            kind,
+            off,
+            value,
+        });
     };
     if crate::object::shapes::snap_image_delta_any(&shapes) {
         pending |= format::PENDING_SHAPES;
@@ -623,7 +666,12 @@ fn completeness(shapes: crate::object::shapes::SnapShapeDelta, tok0: u64, tok1: 
         );
     }
     if shapes.drawn != 0 || shapes.generations != 0 {
-        stop(format::STOP_SHAPE_COUNTERS, 0, 0, u64::from(shapes.drawn) | u64::from(shapes.generations) << 32);
+        stop(
+            format::STOP_SHAPE_COUNTERS,
+            0,
+            0,
+            u64::from(shapes.drawn) | u64::from(shapes.generations) << 32,
+        );
     }
     if tok1 > 2.max(tok0) {
         pending |= format::PENDING_TOKENS;
@@ -652,17 +700,29 @@ fn cell_forms(
             .map_or(0, |s| u64::from_le_bytes(s.try_into().unwrap_or([0; 8])))
     };
     let stop = |stops: &mut Vec<Stop>, kind: u8, off: usize, value: u64| {
-        stops.push(Stop { cell: i as u32, obj_type: t, kind, off: off as u32, value });
+        stops.push(Stop {
+            cell: i as u32,
+            obj_type: t,
+            kind,
+            off: off as u32,
+            value,
+        });
     };
     let f = crate::map::image_form();
     let mut derived: Vec<(usize, u8)> = Vec::new();
     let user = h + GC_HEADER_SIZE;
     if t == GC_TYPE_MAP {
-        let (eo, so) = (GC_HEADER_SIZE + f.header_entries, GC_HEADER_SIZE + f.header_store);
-        let store_user = slots.iter().find(|s| s.0 as usize == so).and_then(|s| match s.1 {
-            Val::Cell { index, .. } => headers.get(index as usize).map(|h| h + GC_HEADER_SIZE),
-            _ => None,
-        });
+        let (eo, so) = (
+            GC_HEADER_SIZE + f.header_entries,
+            GC_HEADER_SIZE + f.header_store,
+        );
+        let store_user = slots
+            .iter()
+            .find(|s| s.0 as usize == so)
+            .and_then(|s| match s.1 {
+                Val::Cell { index, .. } => headers.get(index as usize).map(|h| h + GC_HEADER_SIZE),
+                _ => None,
+            });
         let alias = le(bytes, eo);
         if store_user.is_some_and(|u| alias == (u + f.inline) as u64) {
             derived.push((eo, format::DERIVED_MAP_ENTRIES));
@@ -697,7 +757,12 @@ fn cell_forms(
     use crate::gc::*;
     let data = matches!(
         t,
-        GC_TYPE_STRING | GC_TYPE_BIGINT | GC_TYPE_BUFFER | GC_TYPE_BUFFER_ARRAY_BUFFER | GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER | GC_TYPE_TYPED_ARRAY
+        GC_TYPE_STRING
+            | GC_TYPE_BIGINT
+            | GC_TYPE_BUFFER
+            | GC_TYPE_BUFFER_ARRAY_BUFFER
+            | GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
+            | GC_TYPE_TYPED_ARRAY
     );
     if data || no_form(t) {
         return;
@@ -724,7 +789,13 @@ fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
     let mut out = Vec::new();
     for (key, init, status, exports, factory) in crate::module_require::snap_image_registry() {
         let mut bad = |value: u64| {
-            stops.push(Stop { cell: out.len() as u32, obj_type: 0, kind: format::STOP_REGISTRY, off: 0, value });
+            stops.push(Stop {
+                cell: out.len() as u32,
+                obj_type: 0,
+                kind: format::STOP_REGISTRY,
+                off: 0,
+                value,
+            });
         };
         let val = |bits: Option<u64>| -> Result<Option<Val>, u64> {
             match bits.map(|b| w.val(b)) {
@@ -737,13 +808,22 @@ fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
         let init_off = init
             .filter(|a| *a >= w.exe.0 && *a < w.exe.1)
             .map(|a| (a - w.exe.0) as u64);
-        let (Some(init_off), true, Ok(exports), Ok(factory)) =
-            (init_off, status == 0 || status == 2, val(exports), val(factory))
-        else {
+        let (Some(init_off), true, Ok(exports), Ok(factory)) = (
+            init_off,
+            status == 0 || status == 2,
+            val(exports),
+            val(factory),
+        ) else {
             bad(u64::from(status));
             continue;
         };
-        out.push(format::RegRec { key: key.into_bytes(), init_off, status, exports, factory });
+        out.push(format::RegRec {
+            key: key.into_bytes(),
+            init_off,
+            status,
+            exports,
+            factory,
+        });
     }
     out
 }

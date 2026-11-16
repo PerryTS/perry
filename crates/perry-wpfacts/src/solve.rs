@@ -482,7 +482,8 @@ impl Model {
                     .get(n as usize)
                     .cloned()
                     .unwrap_or_else(|| format!("{}#{n}", self.labels[n as usize]));
-                *at.entry(format!("{} {name}", if st { "S" } else { "L" })).or_default() += 1;
+                *at.entry(format!("{} {name}", if st { "S" } else { "L" }))
+                    .or_default() += 1;
             }
             let mut at: Vec<_> = at.into_iter().collect();
             at.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));

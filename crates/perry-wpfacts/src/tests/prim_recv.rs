@@ -24,11 +24,20 @@ fn one(src: &str) -> ProgramFacts {
 
 /// Verdicts of the sites of `key` (calls when `call`), in source order.
 fn at(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
-    let v: Vec<String> = s.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    let v: Vec<String> = s
+        .iter()
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
     eprintln!("LITFACT {key} call={call}: {v:?}");
-    v.into_iter().map(|v| v.split(' ').next().unwrap_or("").to_string()).collect()
+    v.into_iter()
+        .map(|v| v.split(' ').next().unwrap_or("").to_string())
+        .collect()
 }
 
 fn all(v: &[String], k: &str) -> bool {
@@ -42,13 +51,17 @@ const C: &str = "const c = Math.random() > 0.5;\nconst d = Math.random() > 0.5;\
 
 #[test]
 fn s1_string_only_member_call_is_native() {
-    let pf = one(&format!("{C}const s: any = c ? \"ab\" : \"cd\";\nconsole.log(s.replace(\"a\", \"b\"));\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"ab\" : \"cd\";\nconsole.log(s.replace(\"a\", \"b\"));\n"
+    ));
     assert!(all(&at(&pf, "replace", true), "NativeMember"));
 }
 
 #[test]
 fn s2_string_only_length_is_own_length() {
-    let pf = one(&format!("{C}const s: any = c ? \"ab\" : \"cde\";\nconsole.log(s.length);\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"ab\" : \"cde\";\nconsole.log(s.length);\n"
+    ));
     assert!(all(&at(&pf, "length", false), "OwnLength"));
 }
 
@@ -63,13 +76,17 @@ fn n2_string_or_undefined_member_call() {
 
 #[test]
 fn n2_string_or_null_length() {
-    let pf = one(&format!("{C}const s: any = c ? \"ab\" : null;\nconsole.log(s.length);\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"ab\" : null;\nconsole.log(s.length);\n"
+    ));
     assert!(all(&at(&pf, "length", false), "OwnLength"));
 }
 
 #[test]
 fn n2_number_or_undefined_member_call() {
-    let pf = one(&format!("{C}const n: any = c ? 1.5 : undefined;\nconsole.log(n.toFixed(1));\n"));
+    let pf = one(&format!(
+        "{C}const n: any = c ? 1.5 : undefined;\nconsole.log(n.toFixed(1));\n"
+    ));
     assert!(all(&at(&pf, "toFixed", true), "NativeMember"));
 }
 
@@ -119,7 +136,10 @@ fn absent_key_on_string_or_undefined_read_claimed_call_open() {
     // arm; the call stays open (Throws is before any property lookup).
     assert!(all(&at(&pf, "isColor", false), "OwnDataOrAbsent"));
     let k = at(&pf, "getHex", true);
-    assert!(none(&k, "NativeMember") && none(&k, "Throws") && none(&k, "OwnDataOrAbsent"), "{k:?}");
+    assert!(
+        none(&k, "NativeMember") && none(&k, "Throws") && none(&k, "OwnDataOrAbsent"),
+        "{k:?}"
+    );
 }
 
 #[test]
@@ -155,12 +175,16 @@ fn control_unknown_receiver_does_not_throw() {
 
 #[test]
 fn control_optional_chain_does_not_throw() {
-    let pf = one(&format!("{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"));
+    let pf = one(&format!(
+        "{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"
+    ));
     let r = at(&pf, "view", false);
     let k = at(&pf, "go", true);
-    assert!(r.iter().chain(k.iter()).all(|v| v != "Throws"), "{r:?} {k:?}");
+    assert!(
+        r.iter().chain(k.iter()).all(|v| v != "Throws"),
+        "{r:?} {k:?}"
+    );
 }
-
 
 /// PRIMRECV2 step 2: an undeclared global reads `undefined` (rule G) only
 /// while no unknown code holds the realm; held, unknown code may define the
@@ -179,7 +203,10 @@ fn undeclared_global_under_held_realm_does_not_throw() {
 /// && g.m()`; the verdict is printed (LITFACT line), not asserted.
 #[test]
 fn typeof_guarded_undeclared_global_verdict() {
-    for hold in ["", "declare function hostTake(x: any): void;\nhostTake(0);\n"] {
+    for hold in [
+        "",
+        "declare function hostTake(x: any): void;\nhostTake(0);\n",
+    ] {
         let pf = one(&format!(
             "{C}declare const g: any;\n{hold}if (typeof g !== 'undefined') g.m();\n"
         ));
@@ -246,7 +273,9 @@ const HOLD: &str = "declare function hostTake(x: any): void;\nhostTake(0);\n";
 /// indices and `length` only, 10.4.3), so OrdinaryGet gives `undefined`.
 #[test]
 fn a_absent_key_on_strings() {
-    let pf = one(&format!("{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
+    ));
     assert!(all(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
 }
 
@@ -261,7 +290,9 @@ fn a_absent_key_across_three_families() {
 /// Nullish beside the primitives: the TypeError arm is named.
 #[test]
 fn a_absent_key_beside_nullish_names_the_type_error_arm() {
-    let pf = one(&format!("{C}const s: any = c ? \"a\" : undefined;\nconsole.log(s.isStackTrace);\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"a\" : undefined;\nconsole.log(s.isStackTrace);\n"
+    ));
     assert!(all(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
     assert!(pf
         .sites
@@ -274,25 +305,37 @@ fn a_absent_key_beside_nullish_names_the_type_error_arm() {
 /// properties), and neither prototype nor `%Object.prototype%` has one.
 #[test]
 fn a_length_of_a_number_or_boolean_is_absent() {
-    let pf = one(&format!("{C}const n: number = c ? 1 : 2;\nconsole.log((n as any).length);\n"));
+    let pf = one(&format!(
+        "{C}const n: number = c ? 1 : 2;\nconsole.log((n as any).length);\n"
+    ));
     assert!(all(&at(&pf, "length", false), "OwnDataOrAbsent"));
-    let pf = one(&format!("{C}const x: any = c ? 1 : true;\nconsole.log(x.length);\n"));
+    let pf = one(&format!(
+        "{C}const x: any = c ? 1 : true;\nconsole.log(x.length);\n"
+    ));
     assert!(all(&at(&pf, "length", false), "OwnDataOrAbsent"));
 }
 
 #[test]
 fn control_absent_key_held_realm() {
-    let pf = one(&format!("{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"));
+    let pf = one(&format!(
+        "{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
+    ));
     assert!(none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
 }
 
 #[test]
 fn control_absent_key_written_on_a_prototype() {
-    for w in ["(String.prototype as any).isStackTrace = 1;", "(Object.prototype as any).isStackTrace = 1;"] {
+    for w in [
+        "(String.prototype as any).isStackTrace = 1;",
+        "(Object.prototype as any).isStackTrace = 1;",
+    ] {
         let pf = one(&format!(
             "{C}{w}\nconst s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
         ));
-        assert!(none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"), "{w}");
+        assert!(
+            none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"),
+            "{w}"
+        );
     }
 }
 
@@ -310,6 +353,8 @@ fn control_absent_shape_needs_an_absent_key() {
 /// before any property lookup; this one is after the arguments).
 #[test]
 fn a_call_of_an_absent_member_verdict() {
-    let pf = one(&format!("{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.getLocation(1));\n"));
+    let pf = one(&format!(
+        "{C}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.getLocation(1));\n"
+    ));
     assert!(none(&at(&pf, "getLocation", true), "Throws"));
 }

@@ -65,18 +65,40 @@ fn method_calls_on_one_receiver() {
         const p = new P();
         Promise.resolve(0).then(() => Promise.all([p.dep(mkS()), p.dep(mkA())]))"#,
     );
-    eprintln!("OVMB57 method S escapes={} A escapes={}", escapes(&pf, "S"), escapes(&pf, "A"));
+    eprintln!(
+        "OVMB57 method S escapes={} A escapes={}",
+        escapes(&pf, "S"),
+        escapes(&pf, "A")
+    );
 }
 
 #[test]
 fn ovmb57_probe_variants() {
     for (name, calls) in [
-        ("k0", r#"Promise.all([dep(mkS()), dep(mkA())]).then((d: any) => { const s = d[0][0]; unknown.take(d[1]); console.log(s.f); }); Promise.resolve(0)"#),
-        ("noTake", r#"Promise.all([dep(mkS()), dep(mkA())]).then((d: any) => { const s = d[0][k]; console.log(s.f); }); Promise.resolve(0)"#),
-        ("direct", r#"Promise.all([Promise.all(mkS()), Promise.all(mkA())])"#),
+        (
+            "k0",
+            r#"Promise.all([dep(mkS()), dep(mkA())]).then((d: any) => { const s = d[0][0]; unknown.take(d[1]); console.log(s.f); }); Promise.resolve(0)"#,
+        ),
+        (
+            "noTake",
+            r#"Promise.all([dep(mkS()), dep(mkA())]).then((d: any) => { const s = d[0][k]; console.log(s.f); }); Promise.resolve(0)"#,
+        ),
+        (
+            "direct",
+            r#"Promise.all([Promise.all(mkS()), Promise.all(mkA())])"#,
+        ),
     ] {
         let pf = run(calls);
-        let f = pf.sites.iter().filter(|s| s.key == "f").map(|s| format!("{:?}", s.verdict)).collect::<Vec<_>>();
-        eprintln!("OVMB57 {name} S={} A={} f={f:?}", escapes(&pf, "S"), escapes(&pf, "A"));
+        let f = pf
+            .sites
+            .iter()
+            .filter(|s| s.key == "f")
+            .map(|s| format!("{:?}", s.verdict))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "OVMB57 {name} S={} A={} f={f:?}",
+            escapes(&pf, "S"),
+            escapes(&pf, "A")
+        );
     }
 }

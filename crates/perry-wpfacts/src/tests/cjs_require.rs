@@ -21,7 +21,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-
 // The target's side of the wrapper: its record binding, assigned by the
 // factory before the body.
 fn target(class: &str, value: &str) -> String {

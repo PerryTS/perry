@@ -92,4 +92,3 @@ fn a_data_descriptor_or_an_unknown_key_stays_hard() {
         assert!(t.hard.is_some(), "{define}\n{}", pf.dump_text());
     }
 }
-

@@ -136,10 +136,6 @@ fn a_literal_in_unknown_code_beside_such_writes_runs_the_body_with_every_key() {
     );
 }
 
-
-
-
-
 #[test]
 fn a_computed_key_runs_the_body_with_every_key() {
     let pf = facts(&export_src(
@@ -210,4 +206,3 @@ fn a_keyed_store_writes_the_one_key_of_each_run() {
         .any(|s| s.receivers.iter().any(|r| r.ends_with(":B")));
     assert!(!b_in_a, "out.a holds only an A\n{}", pf.dump_text());
 }
-

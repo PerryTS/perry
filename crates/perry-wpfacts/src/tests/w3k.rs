@@ -34,7 +34,9 @@ fn verdict(src: &str, key: &str, marker: &str) -> (Verdict, String) {
 /// The reasons of the unknown values the solve created (explain on) and
 /// whether unknown code holds the realm.
 fn top_origins(src: &str) -> (Vec<String>, bool) {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, true);
     g.m.max_work = 50_000_000;
@@ -60,7 +62,11 @@ fn w3k_1_r1_process_string_keys_are_strings() {
     );
     assert!(!held, "realm not held");
     let (v, dump) = verdict(src, "lastIndexOf", "e.lastIndexOf");
-    assert_eq!(v, Verdict::NativeMember, "String.prototype.lastIndexOf\n{dump}");
+    assert_eq!(
+        v,
+        Verdict::NativeMember,
+        "String.prototype.lastIndexOf\n{dump}"
+    );
 }
 
 // 1-K0 (KEEP: the bare `process.pid` lowers to its own HIR read): pid / ppid
@@ -76,8 +82,15 @@ fn w3k_1_k0_process_pid_is_a_number() {
     assert!(!held, "realm not held");
     let (v, dump) = verdict(src, "toFixed", "p.toFixed");
     // A Number receiver (no unknown value): the primitive-receiver verdict.
-    assert_eq!(format!("{v:?}"), "No(\"primitive receiver\")", "a Number\n{dump}");
-    assert!(dump.contains(".toFixed call=1 fixed=1 recv={} top=0"), "{dump}");
+    assert_eq!(
+        format!("{v:?}"),
+        "No(\"primitive receiver\")",
+        "a Number\n{dump}"
+    );
+    assert!(
+        dump.contains(".toFixed call=1 fixed=1 recv={} top=0"),
+        "{dump}"
+    );
 }
 
 const OBJ: &str = "class O { v = 1; }\nconst o: any = new O();\n";
@@ -90,7 +103,11 @@ fn w3k_1_k1_program_store_then_read() {
          const r: any = process.execPath;\nconsole.log(r.v);\n"
     );
     let (v, dump) = verdict(&src, "v", "r.v");
-    assert_ne!(v, Verdict::NativeMember, "the stored object may be read\n{dump}");
+    assert_ne!(
+        v,
+        Verdict::NativeMember,
+        "the stored object may be read\n{dump}"
+    );
     assert_ne!(v, Verdict::Dead, "the read runs\n{dump}");
     let (tops, _) = top_origins(&src);
     assert!(!tops.is_empty() || dump.contains("O"), "{tops:?}\n{dump}");
@@ -105,7 +122,11 @@ fn w3k_1_k2_define_property_pid() {
          const r: any = process.pid;\nconsole.log(r.v);\n"
     );
     let (v, dump) = verdict(&src, "v", "r.v");
-    assert_ne!(v, Verdict::NativeMember, "the getter's object may be read\n{dump}");
+    assert_ne!(
+        v,
+        Verdict::NativeMember,
+        "the getter's object may be read\n{dump}"
+    );
     assert_ne!(v, Verdict::Dead, "the read runs\n{dump}");
 }
 
@@ -117,6 +138,10 @@ fn w3k_1_k3_unknown_key_store() {
          const r: any = process.title;\nconsole.log(r.v);\n"
     );
     let (v, dump) = verdict(&src, "v", "r.v");
-    assert_ne!(v, Verdict::NativeMember, "the stored object may be read\n{dump}");
+    assert_ne!(
+        v,
+        Verdict::NativeMember,
+        "the stored object may be read\n{dump}"
+    );
     assert_ne!(v, Verdict::Dead, "the read runs\n{dump}");
 }

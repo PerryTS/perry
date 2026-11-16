@@ -17,7 +17,11 @@ fn one(src: &str) -> ProgramFacts {
 
 /// Verdicts of the reads of `key`, in source order.
 fn reads(pf: &ProgramFacts, key: &str) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("LITFACT {key}: {v:?}");

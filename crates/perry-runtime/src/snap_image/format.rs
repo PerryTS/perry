@@ -382,7 +382,12 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
     let n = le32(take(4)?) as usize;
     let mut v = Vec::new();
     for _ in 0..n {
-        let mut r = MintRec { id: le32(take(4)?), word: le32(take(4)?), keys: le64(take(8)?), ..MintRec::default() };
+        let mut r = MintRec {
+            id: le32(take(4)?),
+            word: le32(take(4)?),
+            keys: le64(take(8)?),
+            ..MintRec::default()
+        };
         r.logical = le32(take(4)?);
         r.live = le32(take(4)?);
         r.holes = le32(take(4)?);

@@ -113,9 +113,9 @@ pub(crate) use shapes_slot_list::{
 pub(crate) use shapes_store::ConstFnSlotInfo;
 pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
-    IdList, ShapeRecord, ShapeSlab, DYNAMIC_BASE_ROWS, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
-    RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
-    RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
+    IdList, ShapeRecord, ShapeSlab, DYNAMIC_BASE_ROWS, RECORD_FLAG_BIRTH_OWNER,
+    RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER,
+    RECORD_FLAG_FACTS_INDEXED, RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
 pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
 
@@ -7217,7 +7217,13 @@ fn snap_image_id_steps(old: u32, new: u32) -> u32 {
 }
 
 pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
-    let mut d = SnapShapeDelta { minted: [0; 4], changed: 0, retired: 0, drawn: 0, generations: 0 };
+    let mut d = SnapShapeDelta {
+        minted: [0; 4],
+        changed: 0,
+        retired: 0,
+        drawn: 0,
+        generations: 0,
+    };
     let (mut i, mut j) = (0, 0);
     while i < a.records.len() || j < b.records.len() {
         let ka = a.records.get(i).map(|r| r.0);
@@ -7257,7 +7263,9 @@ pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> 
 
 /// The records minted since `a`, in mint order: dynamic rows by row (rows only grow, so row
 /// order is mint order), then static records by id.
-pub(crate) fn snap_image_mint_collect(a: &SnapShapeState) -> Vec<crate::snap_image::format::MintRec> {
+pub(crate) fn snap_image_mint_collect(
+    a: &SnapShapeState,
+) -> Vec<crate::snap_image::format::MintRec> {
     let mut v = Vec::new();
     crate::state::state().shapes.slab().for_each(|id, p| {
         if a.records.binary_search_by_key(&id.0, |r| r.0).is_err() {
@@ -7270,7 +7278,8 @@ pub(crate) fn snap_image_mint_collect(a: &SnapShapeState) -> Vec<crate::snap_ima
         keys.push((m.id, LayoutWord(m.word).row().0));
     }
     let order = snap_image_mint_order(&keys);
-    let mut slots: Vec<Option<crate::snap_image::format::MintRec>> = v.into_iter().map(Some).collect();
+    let mut slots: Vec<Option<crate::snap_image::format::MintRec>> =
+        v.into_iter().map(Some).collect();
     let mut out = Vec::with_capacity(order.len());
     for i in order {
         if let Some(m) = slots[i].take() {
@@ -7282,7 +7291,8 @@ pub(crate) fn snap_image_mint_collect(a: &SnapShapeState) -> Vec<crate::snap_ima
 
 /// The counter family of a non-static id: the ordinary kinds, then the exotic kinds.
 fn snap_image_mint_family(id: u32) -> usize {
-    (id & SHAPE_ID_KIND_MASK) as usize >> SHAPE_ID_KIND_SHIFT | usize::from(snap_image_id_band(id) == 3) << 2
+    (id & SHAPE_ID_KIND_MASK) as usize >> SHAPE_ID_KIND_SHIFT
+        | usize::from(snap_image_id_band(id) == 3) << 2
 }
 
 /// Mint order of records given as (id, row). A record whose row comes from the dynamic
@@ -7362,7 +7372,9 @@ fn snap_image_mint_sequence_bad(seq: &[(u32, u32, bool)]) -> Option<(usize, u32)
 /// differs and why (`format::MINT_BAD_*`), or `None`. A record is rebuilt through the
 /// runtime's own identity lookup (the probe half of the mint: its facts reach the recorded
 /// word) and its recorded state is read against the live record's.
-pub(crate) fn snap_image_mint_check(recs: &[crate::snap_image::format::MintRec]) -> Option<(usize, u32)> {
+pub(crate) fn snap_image_mint_check(
+    recs: &[crate::snap_image::format::MintRec],
+) -> Option<(usize, u32)> {
     use crate::snap_image::format as f;
     let slab = crate::state::state().shapes.slab();
     let mut seq: Vec<(u32, u32, bool)> = Vec::with_capacity(recs.len());
@@ -7399,7 +7411,8 @@ pub(crate) fn snap_image_mint_check(recs: &[crate::snap_image::format::MintRec])
             return Some((i, f::MINT_BAD_FIELDS));
         }
         let row = LayoutWord(r.word).row().0;
-        let named = row >= DYNAMIC_BASE_ROWS || super::layout_desc::snap_image_static_row_names_word(r.word);
+        let named = row >= DYNAMIC_BASE_ROWS
+            || super::layout_desc::snap_image_static_row_names_word(r.word);
         seq.push((r.id, row, named));
     }
     snap_image_mint_sequence_bad(&seq)
@@ -7418,29 +7431,47 @@ mod snap_image_delta_tests {
         let keys = [(ORD0 + 0x61, DYN0 + 1), (ORD0 + 3, DYN0), (ORD0 + 0x60, 12)];
         assert_eq!(snap_image_mint_order(&keys), vec![1, 2, 0]);
         // A lazy row above every dynamic id of its family goes last; another family does not move it.
-        let keys = [(ORD0 + 3, DYN0), (0x8020_0009, DYN0 + 1), (ORD0 + 0x60, 12), (0x0000_0005, 7)];
+        let keys = [
+            (ORD0 + 3, DYN0),
+            (0x8020_0009, DYN0 + 1),
+            (ORD0 + 0x60, 12),
+            (0x0000_0005, 7),
+        ];
         assert_eq!(snap_image_mint_order(&keys), vec![0, 1, 2, 3]);
     }
 
     #[test]
     fn snap_image_mint_check_exempts_lazy_rows_from_row_order() {
-        let seq = [(ORD0 + 3, DYN0, true), (ORD0 + 0x60, 12, true), (ORD0 + 0x61, DYN0 + 1, true)];
+        let seq = [
+            (ORD0 + 3, DYN0, true),
+            (ORD0 + 0x60, 12, true),
+            (ORD0 + 0x61, DYN0 + 1, true),
+        ];
         assert_eq!(snap_image_mint_sequence_bad(&seq), None);
     }
 
     #[test]
     fn snap_image_mint_check_names_a_lazy_row_out_of_draw_order() {
         let seq = [(ORD0 + 0xa4, 20, true), (ORD0 + 2, DYN0, true)];
-        assert_eq!(snap_image_mint_sequence_bad(&seq), Some((1, crate::snap_image::format::MINT_BAD_ORDER)));
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
         // Dynamic rows still must grow.
         let seq = [(ORD0 + 2, DYN0 + 1, true), (ORD0 + 3, DYN0, true)];
-        assert_eq!(snap_image_mint_sequence_bad(&seq), Some((1, crate::snap_image::format::MINT_BAD_ORDER)));
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
     }
 
     #[test]
     fn snap_image_mint_check_names_a_lazy_row_with_a_foreign_word() {
         let seq = [(ORD0 + 2, DYN0, true), (ORD0 + 0x60, 12, false)];
-        assert_eq!(snap_image_mint_sequence_bad(&seq), Some((1, crate::snap_image::format::MINT_BAD_LAZY_ROW)));
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_LAZY_ROW))
+        );
         // No descriptor at all names no word.
         assert!(!super::super::layout_desc::snap_image_static_row_names_word(0x7fff_ffff));
     }
@@ -7461,7 +7492,15 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_counts_records_per_band() {
         let a = st(&[(S, 0)]);
-        let b = st(&[(S, 0), (S + 1, 0), (O, 0), (O + 1, 0), (O + 2, 0), (D, 0), (X, 0)]);
+        let b = st(&[
+            (S, 0),
+            (S + 1, 0),
+            (O, 0),
+            (O + 1, 0),
+            (O + 2, 0),
+            (D, 0),
+            (X, 0),
+        ]);
         let d = snap_image_shape_delta(&a, &b);
         assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
         assert_eq!(snap_image_delta_minted_total(&d), 6);
@@ -7472,14 +7511,20 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_sees_a_changed_pre_existing_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 1, 0));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 1, 0)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
     #[test]
     fn snap_image_delta_sees_a_retired_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 0, 1));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 0, 1)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
@@ -7526,7 +7571,12 @@ mod snap_image_delta_tests {
         let before = snap_image_shape_state();
         crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
-        assert!(snap_image_delta_any(&d) && snap_image_delta_minted_total(&d) >= 1 && snap_image_delta_minted_total(&d) < 8, "{d:?}");
+        assert!(
+            snap_image_delta_any(&d)
+                && snap_image_delta_minted_total(&d) >= 1
+                && snap_image_delta_minted_total(&d) < 8,
+            "{d:?}"
+        );
         assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
     }
 
@@ -7552,7 +7602,9 @@ mod snap_image_delta_tests {
         (before, recs)
     }
 
-    fn through_the_file(recs: &[crate::snap_image::format::MintRec]) -> Vec<crate::snap_image::format::MintRec> {
+    fn through_the_file(
+        recs: &[crate::snap_image::format::MintRec],
+    ) -> Vec<crate::snap_image::format::MintRec> {
         let blob = crate::snap_image::format::mint_blob(recs);
         let (back, used) = crate::snap_image::format::parse_mint_blob(&blob).expect("parses");
         assert_eq!(used, blob.len());
@@ -7563,7 +7615,9 @@ mod snap_image_delta_tests {
     fn snap_image_mint_record_holds_only_the_new_records_and_rebuilds_equal() {
         let (before, recs) = live_mints("snapmintrec");
         assert!(recs.len() >= 2, "{}", recs.len());
-        assert!(recs.iter().all(|r| before.records.binary_search_by_key(&r.id, |x| x.0).is_err()));
+        assert!(recs
+            .iter()
+            .all(|r| before.records.binary_search_by_key(&r.id, |x| x.0).is_err()));
         let back = through_the_file(&recs);
         assert_eq!(back, recs);
         assert_eq!(snap_image_mint_check(&back), None);
@@ -7572,7 +7626,10 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_mint_record_carries_the_attached_state_of_a_record() {
         let (_, recs) = live_mints("snapmintext");
-        assert!(recs.iter().any(|r| r.handles.iter().any(|&h| h != 0)), "{recs:?}");
+        assert!(
+            recs.iter().any(|r| r.handles.iter().any(|&h| h != 0)),
+            "{recs:?}"
+        );
         assert!(recs.iter().any(|r| !r.edges.is_empty()), "{recs:?}");
         // The state read back from the file is what the live record holds.
         assert_eq!(snap_image_mint_check(&through_the_file(&recs)), None);
@@ -7583,7 +7640,10 @@ mod snap_image_delta_tests {
         use crate::snap_image::format::*;
         let (_, recs) = live_mints("snapmintfld");
         let mut back = through_the_file(&recs);
-        let i = back.iter().position(|r| r.handles.iter().any(|&h| h != 0)).expect("a record with a handle");
+        let i = back
+            .iter()
+            .position(|r| r.handles.iter().any(|&h| h != 0))
+            .expect("a record with a handle");
         let h = back[i].handles.iter().position(|&h| h != 0).unwrap_or(0);
         back[i].handles[h] ^= 1 << 8;
         assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_FIELDS)));

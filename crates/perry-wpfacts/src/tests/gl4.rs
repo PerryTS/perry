@@ -76,7 +76,10 @@ fn gl4_url_search_params_and_serializers() {
     // receiver: no fact unit, as for any builtin object), never unknown.
     let (v, dump) = verdict(&src, "get", "/*A*/");
     let d = format!("{v:?}");
-    assert!(d.contains("builtin URLSearchParams") && !d.contains("TOP"), "sp is the URLSearchParams: {d}\n{dump}");
+    assert!(
+        d.contains("builtin URLSearchParams") && !d.contains("TOP"),
+        "sp is the URLSearchParams: {d}\n{dump}"
+    );
     let (v, dump) = verdict(&src, "endsWith", "/*B*/");
     assert!(proven(&v), "toString().endsWith proven, got {v:?}\n{dump}");
     let (v, dump) = verdict(&src, "endsWith", "/*C*/");
@@ -95,7 +98,10 @@ fn gl4_keep_href_getter_replaced() {
     );
     let (v, dump) = verdict(&src, "v", "/*A*/");
     let d = format!("{v:?}");
-    assert!(!d.contains("Dead") && !d.contains("NativeMember"), "h.v must see N: {d}\n{dump}");
+    assert!(
+        !d.contains("Dead") && !d.contains("NativeMember"),
+        "h.v must see N: {d}\n{dump}"
+    );
 }
 
 /// KEEP: a subclass of URL: its own member is the program's; `href` still

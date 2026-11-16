@@ -184,7 +184,12 @@ pub(crate) fn try_lower_proven_method_call(
                 ctx.method_param_counts.get(&key).copied().unwrap_or(0),
             )
         }
-        None => (abi.rest, abi.synthetic_arguments, abi.user_rest, abi.params as usize),
+        None => (
+            abi.rest,
+            abi.synthetic_arguments,
+            abi.user_rest,
+            abi.params as usize,
+        ),
     };
     crate::facts_consumed::used();
     let mut roots = crate::rooting::open_rooted_group(1 + args.len());
@@ -194,12 +199,18 @@ pub(crate) fn try_lower_proven_method_call(
     if nullable {
         let recv_box = roots.reread(ctx, recv_idx)?;
         crate::expr::wpfacts_access::emit_nullish_throw_test(
-            ctx, object, &recv_box, property, *byte_offset, None,
+            ctx,
+            object,
+            &recv_box,
+            property,
+            *byte_offset,
+            None,
         );
     }
     let mut arg_idxs = Vec::with_capacity(args.len());
     for (i, a) in args.iter().enumerate() {
-        let collects = bundles || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        let collects =
+            bundles || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
         arg_idxs.push(roots.lower(ctx, a, collects)?);
     }
     let recv_box = roots.reread(ctx, recv_idx)?;
@@ -229,7 +240,10 @@ pub(crate) fn try_lower_proven_method_call(
     super::super::method_override::publish_constructive_method_truthy(ctx, &fname, &value);
     roots.release(ctx);
     if std::env::var_os("PERRY_FACTS_REPORT").is_some() {
-        eprintln!("# proven_method_call offset={offset} callee={fname} nullable={}", nullable as u8);
+        eprintln!(
+            "# proven_method_call offset={offset} callee={fname} nullable={}",
+            nullable as u8
+        );
     }
     Ok(Some(value))
 }

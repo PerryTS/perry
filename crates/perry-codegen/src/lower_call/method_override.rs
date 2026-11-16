@@ -2104,7 +2104,9 @@ fn fallback_args_buffer(ctx: &mut FnCtx<'_>, args: &[String]) -> (String, String
     let n = args.len();
     let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
     for (i, a_val) in args.iter().enumerate() {
-        let slot = ctx.block().gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+        let slot = ctx
+            .block()
+            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
         ctx.block().store(DOUBLE, a_val, &slot);
     }
     let ptr_reg = ctx.block().next_reg();

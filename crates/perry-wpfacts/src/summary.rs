@@ -459,7 +459,10 @@ impl Model {
     pub(crate) fn ns_pair_of(&self, call: CallId) -> Option<(BuiltinNs, Atom)> {
         self.ns_pair_calls
             .get(&call)
-            .or_else(|| self.origin_of(call).and_then(|o| self.ns_pair_calls.get(&o)))
+            .or_else(|| {
+                self.origin_of(call)
+                    .and_then(|o| self.ns_pair_calls.get(&o))
+            })
             .copied()
     }
 
@@ -524,7 +527,14 @@ impl Model {
             }
         };
         let undef = matches!(cs.this, crate::model::ThisArg::Undef);
-        let k = (root, loc, disc, cs.args.len() as u32, cs.spread.len() as u32, undef);
+        let k = (
+            root,
+            loc,
+            disc,
+            cs.args.len() as u32,
+            cs.spread.len() as u32,
+            undef,
+        );
         let (c, tg, made) = match self.chain_calls.get(&k) {
             Some(&(c, tg)) => (c, tg, false),
             None => {
@@ -534,16 +544,32 @@ impl Model {
                     m.nodes[n as usize].frame = frame;
                     n
                 };
-                let this = if undef { crate::model::ThisArg::Undef } else { crate::model::ThisArg::Node(fresh(self, "native-call-this")) };
-                let args = (0..cs.args.len()).map(|_| fresh(self, "native-call-arg")).collect::<Vec<_>>();
-                let spread = (0..cs.spread.len()).map(|_| fresh(self, "native-call-spread")).collect::<Vec<_>>();
+                let this = if undef {
+                    crate::model::ThisArg::Undef
+                } else {
+                    crate::model::ThisArg::Node(fresh(self, "native-call-this"))
+                };
+                let args = (0..cs.args.len())
+                    .map(|_| fresh(self, "native-call-arg"))
+                    .collect::<Vec<_>>();
+                let spread = (0..cs.spread.len())
+                    .map(|_| fresh(self, "native-call-spread"))
+                    .collect::<Vec<_>>();
                 let ret = fresh(self, "native-call-ret");
                 let tg = fresh(self, "native-call-target");
                 let id = self.calls.len() as CallId;
                 let site = if cs.site == id { id } else { cs.site };
                 self.solver_call_raw(
                     by,
-                    CallSite { first_arg_fixed: cs.first_arg_fixed, this, args, spread, ret, site, region: cs.region },
+                    CallSite {
+                        first_arg_fixed: cs.first_arg_fixed,
+                        this,
+                        args,
+                        spread,
+                        ret,
+                        site,
+                        region: cs.region,
+                    },
                 );
                 self.chain_calls.insert(k, (id, tg));
                 if root == TOUCH_ROOT {
@@ -621,10 +647,16 @@ impl Model {
             return false;
         };
         match self.tmpls[tm as usize].kind {
-            crate::model::TmplKind::BObj { module: u32::MAX, site, .. }
-            | crate::model::TmplKind::Arr { module: u32::MAX, site, .. } => {
-                site as usize == 0 || site as usize >= self.sum.n_prog
+            crate::model::TmplKind::BObj {
+                module: u32::MAX,
+                site,
+                ..
             }
+            | crate::model::TmplKind::Arr {
+                module: u32::MAX,
+                site,
+                ..
+            } => site as usize == 0 || site as usize >= self.sum.n_prog,
             _ => false,
         }
     }
@@ -675,7 +707,14 @@ impl Model {
         cs: CallSite,
     ) -> Option<CallId> {
         let root = self.made_root.get(&by).copied().unwrap_or(by);
-        let k = (root, key.0, key.1, key.2, cs.args.len() as u32, cs.spread.len() as u32);
+        let k = (
+            root,
+            key.0,
+            key.1,
+            key.2,
+            cs.args.len() as u32,
+            cs.spread.len() as u32,
+        );
         if let Some(&(m, tgt)) = self.solver_keyed.get(&k) {
             let mc = self.calls[m as usize].clone();
             for (&a, &b) in cs.args.iter().zip(mc.args.iter()) {
@@ -684,7 +723,9 @@ impl Model {
             for (&a, &b) in cs.spread.iter().zip(mc.spread.iter()) {
                 self.edge(a, b);
             }
-            if let (crate::model::ThisArg::Node(a), crate::model::ThisArg::Node(b)) = (&cs.this, &mc.this) {
+            if let (crate::model::ThisArg::Node(a), crate::model::ThisArg::Node(b)) =
+                (&cs.this, &mc.this)
+            {
                 self.edge(*a, *b);
             }
             if mc.ret != cs.ret {
@@ -1142,7 +1183,13 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&(key.0, key.1, key.2, NO_VAL)) => {
+            0 | 1 | 7
+                if self.widened
+                    && !self
+                        .sum
+                        .inst_key
+                        .contains_key(&(key.0, key.1, key.2, NO_VAL)) =>
+            {
                 (1, LAY_NONE, ft)
             }
             _ => key,
@@ -1294,7 +1341,10 @@ impl Model {
         let n = &self.nodes[a as usize];
         // Rule M1: exactly one string constant, nothing else.
         if s.called.is_none() {
-            if n.prim != crate::model::prim::STR || n.pts.len() != 0 || n.strs < crate::model::STRS_SET0 {
+            if n.prim != crate::model::prim::STR
+                || n.pts.len() != 0
+                || n.strs < crate::model::STRS_SET0
+            {
                 return NO_VAL;
             }
             return match self.str_atoms(n.strs) {
@@ -1304,7 +1354,10 @@ impl Model {
                     && self.atom_suffix(x).is_none()
                     && (self.atom_excl(x).is_none() || self.atom_pfx_excl(x).is_some())
                     && (self.atom_prefix(x).is_none()
-                    || s.switch.as_ref().is_some_and(|w| w.1.is_empty())) => x,
+                        || s.switch.as_ref().is_some_and(|w| w.1.is_empty())) =>
+                {
+                    x
+                }
                 _ => NO_VAL,
             };
         }
@@ -1331,7 +1384,11 @@ impl Model {
         let Some(s) = self.sum.of.get(&f) else {
             return Vec::new();
         };
-        let Some(j) = s.switch.as_ref().filter(|w| s.called.is_none() && !w.1.is_empty()).map(|w| w.0)
+        let Some(j) = s
+            .switch
+            .as_ref()
+            .filter(|w| s.called.is_none() && !w.1.is_empty())
+            .map(|w| w.0)
         else {
             return Vec::new();
         };
@@ -1368,7 +1425,11 @@ impl Model {
         if call == NO_NODE {
             return false;
         }
-        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called.or(s.switch.as_ref().map(|w| w.0)))
+        let Some(j) = self
+            .sum
+            .of
+            .get(&f)
+            .and_then(|s| s.called.or(s.switch.as_ref().map(|w| w.0)))
         else {
             return false;
         };
@@ -1412,7 +1473,9 @@ impl Model {
                 } else {
                     // Rule M1: a constant the argument holds since runs too
                     // (the bind records every constant again).
-                    keep.retain(|q: &(CallId, Tok, Option<Tok>, u16, u32)| (q.0, q.1, q.2, q.3) != k);
+                    keep.retain(|q: &(CallId, Tok, Option<Tok>, u16, u32)| {
+                        (q.0, q.1, q.2, q.3) != k
+                    });
                     rebound.insert(k);
                     self.bind_layout_run(call, ft, x, prim, true);
                     more = true;
@@ -1619,7 +1682,14 @@ impl Model {
     /// nodes are those terms for every instance of that key, both ways:
     /// what the closure writes into a captured local reaches the instance
     /// that made it.
-    pub(crate) fn closure_tok(&mut self, g: FnIdx, key: u32, lay: u32, vc: u32, nodes: &[NodeId]) -> Tok {
+    pub(crate) fn closure_tok(
+        &mut self,
+        g: FnIdx,
+        key: u32,
+        lay: u32,
+        vc: u32,
+        nodes: &[NodeId],
+    ) -> Tok {
         let ctx = match self.sum.ctx_of.get(&(g, key, vc)) {
             Some(&c) => c,
             None => {
@@ -1709,7 +1779,9 @@ impl Model {
             NO_VAL => usize::MAX,
             _ => {
                 let s = &self.sum.of[&f];
-                s.called.or(s.switch.as_ref().map(|w| w.0)).map_or(usize::MAX, |j| j as usize)
+                s.called
+                    .or(s.switch.as_ref().map(|w| w.0))
+                    .map_or(usize::MAX, |j| j as usize)
             }
         };
         let by_str = self.sum.of[&f].called.is_none();
@@ -1717,7 +1789,12 @@ impl Model {
             if i == vj && terms[i] != NO_NODE {
                 if by_str && is_prim_val(val) {
                     // Rule M1: the parameter is one of those primitives.
-                    self.add_s(terms[i], &Vec::new(), (val & !VAL_PRIM) as u16, crate::model::STRS_NONE);
+                    self.add_s(
+                        terms[i],
+                        &Vec::new(),
+                        (val & !VAL_PRIM) as u16,
+                        crate::model::STRS_NONE,
+                    );
                 } else if by_str {
                     // Rule M1: the parameter is that string constant.
                     // The run is keyed by the text: a caller may pass a
@@ -1763,7 +1840,9 @@ impl Model {
         let exact = self.calls[c].spread.is_empty() && !has_arguments;
         let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
         let first = if has_arguments { 0 } else { terms.len() };
-        let merged = (rest != NO_NODE).then(|| self.rest_template_any(f)).flatten();
+        let merged = (rest != NO_NODE)
+            .then(|| self.rest_template_any(f))
+            .flatten();
         // DEADFN15: the template's front gets this call's first rest
         // argument (any argument where positions are not known).
         let merged_front = match merged {
@@ -2244,9 +2323,9 @@ impl Model {
                 Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
-                Deferred::Native(r, key, call) => {
-                    self.with_native(call, |m, call| crate::builtins::native_method_at(m, r, key, call))
-                }
+                Deferred::Native(r, key, call) => self.with_native(call, |m, call| {
+                    crate::builtins::native_method_at(m, r, key, call)
+                }),
             }
         }
         // A `this` with values from generation (static blocks, field
@@ -2280,4 +2359,3 @@ impl Model {
 mod compose;
 pub use body::compress;
 use compose::compose;
-

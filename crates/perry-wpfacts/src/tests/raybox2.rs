@@ -30,12 +30,23 @@ fn src(statics: &str, after: &str, read: &str) -> String {
 
 fn only_true(s: &str) {
     let (p, o, pf) = boxv(s);
-    assert!(p == prim::TRUE && !o, "prims {}\n{}", prim::name(p), pf.dump_text());
+    assert!(
+        p == prim::TRUE && !o,
+        "prims {}\n{}",
+        prim::name(p),
+        pf.dump_text()
+    );
 }
 
 fn has(s: &str, bits: u16) {
     let (p, _, pf) = boxv(s);
-    assert!(p & bits == bits, "prims {} lacks {}\n{}", prim::name(p), prim::name(bits), pf.dump_text());
+    assert!(
+        p & bits == bits,
+        "prims {} lacks {}\n{}",
+        prim::name(p),
+        prim::name(bits),
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -45,38 +56,60 @@ fn r3_static_block_store_is_the_read() {
 
 #[test]
 fn r3_after_literal_statics() {
-    only_true(&src("static z = 3; static { (this.prototype as any).L = 1; }", "", "c.K"));
+    only_true(&src(
+        "static z = 3; static { (this.prototype as any).L = 1; }",
+        "",
+        "c.K",
+    ));
 }
 
 #[test]
 fn r3_keep_instance_made_before_the_store() {
-    has(&src("static early: any = 0; static { C.early = new C(); }", "", "C.early.K"), prim::UNDEF);
-}
-
-#[test]
-fn r3_keep_static_call_constructs() {
     has(
-        &src("static m: any = mk();", "", "C.m.K"),
+        &src(
+            "static early: any = 0; static { C.early = new C(); }",
+            "",
+            "C.early.K",
+        ),
         prim::UNDEF,
     );
 }
 
 #[test]
+fn r3_keep_static_call_constructs() {
+    has(&src("static m: any = mk();", "", "C.m.K"), prim::UNDEF);
+}
+
+#[test]
 fn r3_keep_second_store() {
     has(
-        &src("", "function f() { (C.prototype as any).K = 0; } if (process.argv[2]) f();", "c.K"),
+        &src(
+            "",
+            "function f() { (C.prototype as any).K = 0; } if (process.argv[2]) f();",
+            "c.K",
+        ),
         prim::NUM | prim::TRUE,
     );
 }
 
 #[test]
 fn r3_keep_delete() {
-    has(&src("", "if (process.argv[2]) delete (C.prototype as any).K;", "c.K"), prim::UNDEF | prim::TRUE);
+    has(
+        &src(
+            "",
+            "if (process.argv[2]) delete (C.prototype as any).K;",
+            "c.K",
+        ),
+        prim::UNDEF | prim::TRUE,
+    );
 }
 
 #[test]
 fn r3_keep_instance_store() {
-    has(&src("", "", "(process.argv[2] ? (c.K = 5, c) : c).K"), prim::NUM | prim::TRUE);
+    has(
+        &src("", "", "(process.argv[2] ? (c.K = 5, c) : c).K"),
+        prim::NUM | prim::TRUE,
+    );
 }
 
 #[test]
@@ -119,7 +152,12 @@ fn g2_obj(s: &str) -> bool {
 fn g2f_else_arm_has_no_flagged_instance() {
     let s = g2("static { (V.prototype as any).isV = true; }", "");
     let (p, o, pf) = boxv(&s);
-    assert!(!o && p & !(prim::NUM | prim::UNDEF) == 0, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+    assert!(
+        !o && p & !(prim::NUM | prim::UNDEF) == 0,
+        "prims {} obj {o}\n{}",
+        prim::name(p),
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -130,7 +168,10 @@ fn g2f_keep_flag_from_argv() {
 
 #[test]
 fn g2f_keep_literal_with_false_flag() {
-    let s = g2("static { (V.prototype as any).isV = true; }", "look({ isV: false, x: 1 });");
+    let s = g2(
+        "static { (V.prototype as any).isV = true; }",
+        "look({ isV: false, x: 1 });",
+    );
     assert!(g2_obj(&s), "the literal takes the else arm");
 }
 
@@ -142,10 +183,17 @@ fn g2f_keep_getter_flag() {
 
 #[test]
 fn g2f_not_form_true_side() {
-    let s = g2("static { (V.prototype as any).isV = true; }", "")
-        .replace("if (x.isV) t.copy(x); else t.set(x);", "if (!x.isV) { t.set(x); return; } t.copy(x);");
+    let s = g2("static { (V.prototype as any).isV = true; }", "").replace(
+        "if (x.isV) t.copy(x); else t.set(x);",
+        "if (!x.isV) { t.set(x); return; } t.copy(x);",
+    );
     let (p, o, pf) = boxv(&s);
-    assert!(!o && p & !(prim::NUM | prim::UNDEF) == 0, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+    assert!(
+        !o && p & !(prim::NUM | prim::UNDEF) == 0,
+        "prims {} obj {o}\n{}",
+        prim::name(p),
+        pf.dump_text()
+    );
 }
 
 /// RAYBOX3, the derive side of rule 3 (`constant_proto_members`): a read
@@ -196,12 +244,20 @@ fn d3_prototype_read_is_proven() {
 
 #[test]
 fn d3_keep_second_writer() {
-    not_proven(&src("", "function f() { (C.prototype as any).K = 0; } if (process.argv[2]) f();", "c.K"));
+    not_proven(&src(
+        "",
+        "function f() { (C.prototype as any).K = 0; } if (process.argv[2]) f();",
+        "c.K",
+    ));
 }
 
 #[test]
 fn d3_keep_delete() {
-    not_proven(&src("", "if (process.argv[2]) delete (C.prototype as any).K;", "c.K"));
+    not_proven(&src(
+        "",
+        "if (process.argv[2]) delete (C.prototype as any).K;",
+        "c.K",
+    ));
 }
 
 #[test]
@@ -220,7 +276,11 @@ fn d3_keep_accessor() {
 
 #[test]
 fn d3_keep_set_prototype_of() {
-    not_proven(&src("", "", "(process.argv[2] ? Object.setPrototypeOf(c, { K: 2 }) : c).K"));
+    not_proven(&src(
+        "",
+        "",
+        "(process.argv[2] ? Object.setPrototypeOf(c, { K: 2 }) : c).K",
+    ));
 }
 
 /// A subclass's static block stores its own `K`: the site's value set is
@@ -261,25 +321,52 @@ const ISV: &str = "static { (V.prototype as any).isV = true; }";
 fn g2t_number_leaves_true_side() {
     let s = g2t("isV", ISV, "", "Number(process.argv[2])");
     let (p, o, pf) = boxv(&s);
-    assert!(!o && p == prim::NUM, "prims {} obj {o}\n{}", prim::name(p), pf.dump_text());
+    assert!(
+        !o && p == prim::NUM,
+        "prims {} obj {o}\n{}",
+        prim::name(p),
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn g2t_keep_builtin_member() {
-    has(&g2t("toFixed", ISV, "", "Number(process.argv[2])"), prim::UNDEF);
+    has(
+        &g2t("toFixed", ISV, "", "Number(process.argv[2])"),
+        prim::UNDEF,
+    );
 }
 
 #[test]
 fn g2t_keep_number_prototype_store() {
-    has(&g2t("isV", ISV, "(Number.prototype as any).isV = true;", "Number(process.argv[2])"), prim::UNDEF);
+    has(
+        &g2t(
+            "isV",
+            ISV,
+            "(Number.prototype as any).isV = true;",
+            "Number(process.argv[2])",
+        ),
+        prim::UNDEF,
+    );
 }
 
 #[test]
 fn g2t_keep_object_prototype_computed_store() {
-    has(&g2t("isV", ISV, "(Object.prototype as any)[process.argv[2]] = 1;", "Number(process.argv[2])"), prim::UNDEF);
+    has(
+        &g2t(
+            "isV",
+            ISV,
+            "(Object.prototype as any)[process.argv[2]] = 1;",
+            "Number(process.argv[2])",
+        ),
+        prim::UNDEF,
+    );
 }
 
 #[test]
 fn g2t_keep_string_length() {
-    has(&g2t("length", ISV, "", "String(Math.random())"), prim::UNDEF);
+    has(
+        &g2t("length", ISV, "", "String(Math.random())"),
+        prim::UNDEF,
+    );
 }

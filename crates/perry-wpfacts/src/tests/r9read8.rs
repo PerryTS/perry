@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()

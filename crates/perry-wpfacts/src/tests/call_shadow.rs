@@ -66,10 +66,6 @@ pub(super) fn whole(src: &str) -> (bool, bool) {
     (call, proven(&site(&pf, "flags").verdict))
 }
 
-
-
-
-
 /// A computed delete on the literal (through a parameter of a function
 /// called after the call) may remove `createIdentifier`.
 #[test]
@@ -120,7 +116,6 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
     );
     // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: `createIdentifier` is no key of it.
 }
-
 
 /// Without a write through ⊤ the call is proven, with the shadow or
 /// without (the fixture is not red for another reason).

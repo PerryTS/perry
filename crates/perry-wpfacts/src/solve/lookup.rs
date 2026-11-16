@@ -158,7 +158,10 @@ impl Model {
                 TokKind::Obj(tm, _) | TokKind::Proto(tm) => matches!(
                     self.tmpls[*tm as usize].kind,
                     TmplKind::Lit { .. }
-                        | TmplKind::Class { literal_shape: true, .. }
+                        | TmplKind::Class {
+                            literal_shape: true,
+                            ..
+                        }
                         | TmplKind::Arr { .. }
                         | TmplKind::BObj { what: "json", .. }
                 ),
@@ -581,7 +584,11 @@ impl Model {
     /// a builtin prototype (`reshaped_keys`). Links below the holder may
     /// hold `a` too: their values join through the chain.
     pub(crate) fn proto_first_holds(&self, t: Tok, a: Atom) -> bool {
-        if t == TOP || self.is_marker(t) || self.is_proto_key(Key::Named(a)) || self.is_private_atom(a) {
+        if t == TOP
+            || self.is_marker(t)
+            || self.is_proto_key(Key::Named(a))
+            || self.is_private_atom(a)
+        {
             return false;
         }
         // R9READ4: a read on the prototype object itself (`X.prototype.m`)
@@ -594,11 +601,19 @@ impl Model {
         // reshape it, and a stored `undefined` ends the rule as below.
         if let TokKind::Proto(c) = self.toks[t as usize] {
             let tp = &self.tmpls[c as usize];
-            let undef = |n: Option<&NodeId>| n.is_some_and(|&n| self.nodes[n as usize].prim & prim::UNDEF != 0);
+            let undef = |n: Option<&NodeId>| {
+                n.is_some_and(|&n| self.nodes[n as usize].prim & prim::UNDEF != 0)
+            };
             return !self.reshaped_any
                 && !self.reshaped_keys.contains(&a)
                 && !tp.per_evaluation
-                && matches!(tp.kind, TmplKind::Class { literal_shape: false, .. })
+                && matches!(
+                    tp.kind,
+                    TmplKind::Class {
+                        literal_shape: false,
+                        ..
+                    }
+                )
                 && !self.inst_escaped.contains(&c)
                 && !tp.accessor_keys.contains(&a)
                 && tp.proto_members.contains(&a)
@@ -627,7 +642,13 @@ impl Model {
         loop {
             let tp = &self.tmpls[c as usize];
             if tp.per_evaluation
-                || !matches!(tp.kind, TmplKind::Class { literal_shape: false, .. })
+                || !matches!(
+                    tp.kind,
+                    TmplKind::Class {
+                        literal_shape: false,
+                        ..
+                    }
+                )
                 || self.inst_escaped.contains(&c)
                 || tp.accessor_keys.contains(&a)
             {
@@ -671,7 +692,9 @@ impl Model {
             if self.proto_first_keys.contains(&(c, a)) {
                 return self.proto_writers.get(&(c, a)).is_none_or(|w| {
                     w.ctor.is_empty()
-                        && w.post.iter().all(|&s| self.stores[s as usize].proto_first == Some(c))
+                        && w.post
+                            .iter()
+                            .all(|&s| self.stores[s as usize].proto_first == Some(c))
                 });
             }
             match (tp.parent, &tp.native_parent) {
@@ -721,7 +744,9 @@ impl Model {
     pub(crate) fn inert_sure(&self, tm: TmplId, a: Atom) -> bool {
         let t = &self.tmpls[tm as usize];
         t.inert_definite.contains(&a)
-            && t.inert_reads.iter().all(|&k| !self.needs_accessor_walk(Key::Named(k)))
+            && t.inert_reads
+                .iter()
+                .all(|&k| !self.needs_accessor_walk(Key::Named(k)))
     }
 
     /// Rule I: the birth value `v` of reservation `a` of class `tm` holds
@@ -872,7 +897,9 @@ impl Model {
             // never an identifier-named method. A marker's fields are its
             // reach markers, and another value (the global object, a
             // namespace, a function) keeps the computed read.
-            if origin == t && matches!(self.toks[t as usize], TokKind::Obj(..)) && !self.is_marker(t)
+            if origin == t
+                && matches!(self.toks[t as usize], TokKind::Obj(..))
+                && !self.is_marker(t)
             {
                 self.builtin_field_use(t, key, ChainAct::Load(dst));
                 let f = self.num_fields(t);
@@ -1030,7 +1057,11 @@ impl Model {
         // holder, which holds it: no link's absence and no chain end gives
         // `undefined` (a stored `undefined` ends the rule:
         // `proto_first_holds`).
-        let chain = if defined || first { self.defined_into(dst) } else { dst };
+        let chain = if defined || first {
+            self.defined_into(dst)
+        } else {
+            dst
+        };
         // DECISIONS 234: a key every object `t` denotes holds as an own data
         // property never reaches the builtin prototypes, nor the builtin
         // members of `t`'s own kind.
@@ -1889,7 +1920,9 @@ impl Model {
             let star = self.atom(crate::STAR_KEY);
             let names = self.accessor_keys.get(&holder).cloned().unwrap_or_default();
             for a in names {
-                if (a == star || self.key_may_name(key, a)) && self.accessors.contains_key(&(holder, a)) {
+                if (a == star || self.key_may_name(key, a))
+                    && self.accessors.contains_key(&(holder, a))
+                {
                     let k = Key::Named(a);
                     self.acc_group(holder, k);
                     self.group_hit(origin, holder, k, act);

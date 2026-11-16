@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -58,7 +62,10 @@ fn r9store1_l2_overwrite_under_if() {
     let pf = facts(&format!(
         "function f(v: string) {{ const o: any = {{ k: 1, meta: {{ t: v }} }}; if (v.length > 1) {{ o.k = v; o.m = 2; }} if (v.length > 3) o.k = 3; return o; }}\n{TAIL}"
     ));
-    assert!(stores(&pf, "k").iter().all(|v| !v.starts_with("No")), "L2 o.k unproven");
+    assert!(
+        stores(&pf, "k").iter().all(|v| !v.starts_with("No")),
+        "L2 o.k unproven"
+    );
     assert!(known(&pf, "m", true), "L2 o.m not a known-object store");
 }
 
@@ -96,7 +103,10 @@ fn r9store1_k4_proto() {
         "const p: any = {{ q: 0 }};\nfunction f(v: string) {{ const o: any = {{ __proto__: p }}; o.k = v; const z: any = {{}}; z.__proto__ = p; return [o, z]; }}\n{TAIL}"
     ));
     assert!(known(&pf, "k", false), "K4 __proto__ literal judged known");
-    assert!(known(&pf, "__proto__", false), "K4 __proto__ store judged known");
+    assert!(
+        known(&pf, "__proto__", false),
+        "K4 __proto__ store judged known"
+    );
 }
 
 // K5: a computed store from `process.argv[2]` onto the literal: SOME key
@@ -106,7 +116,10 @@ fn r9store1_k5_computed_key() {
     let pf = facts(&format!(
         "function f(v: string) {{ const o: any = {{}}; o[v] = 1; o.k = v; return o; }}\n{TAIL}"
     ));
-    assert!(known(&pf, "k", false), "K5 literal with a computed store judged known");
+    assert!(
+        known(&pf, "k", false),
+        "K5 literal with a computed store judged known"
+    );
 }
 
 // K6: the literal has a setter for the key: the store calls it.

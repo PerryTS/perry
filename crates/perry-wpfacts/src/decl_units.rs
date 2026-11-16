@@ -133,10 +133,6 @@ struct Refs {
     writes: Vec<u32>,
 }
 
-
-
-
-
 /// Expressions that name a class by its name.
 fn class_name_refs(e: &Expr, r: &mut Refs) {
     match e {
@@ -197,15 +193,6 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
     }
 }
 
-
-
-
-
-
-
-
-
-
 /// The lowering of an object literal in source order (`((__perry_obj_iife)
 /// => { …; return __perry_obj_iife })({})`): an expression, whose defines
 /// are the literal's birth (`Gen::call_expr`), not a body that runs once.
@@ -214,7 +201,6 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
 pub(crate) fn obj_literal_iife(params: &[perry_hir::Param]) -> bool {
     params.len() == 1 && params[0].name == "__perry_obj_iife"
 }
-
 
 /// Decision 23: every `let` an item declares inside its functions (any
 /// depth, closure bodies included; class members not: their locals stay
@@ -244,8 +230,6 @@ fn local_lets(module: &Module, it: Item, out: &mut Vec<(u32, Option<(String, u32
         Item::Class(_) => {}
     }
 }
-
-
 
 /// The closed bindings of `module` (decision 13, every export counting)
 /// whose every reference is the callee of a direct call or a TDZ check:
@@ -597,6 +581,3 @@ fn closed(
     }
     (cand, out, published, passed)
 }
-
-
-

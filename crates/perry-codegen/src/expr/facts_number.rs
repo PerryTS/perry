@@ -66,9 +66,10 @@ fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
         Num::Number => Operand::Number,
         Num::NumberOrUndefined => Operand::NumOrUndef,
     };
-    crate::verify_facts::consumed(crate::verify_facts::Fact::CanonicalNumber, || {
-        serde_json::json!({ "arith": "element operand" })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "arith": "element operand" }),
+    );
     crate::facts_consumed::used();
     Some(k)
 }
@@ -270,11 +271,17 @@ fn nan_tree_node<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<(BinaryOp, &'e Expr
     let Expr::Binary { op, left, right } = e else {
         return None;
     };
-    if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div) {
+    if !matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+    ) {
         return None;
     }
-    (operand(ctx, left).is_some() && operand(ctx, right).is_some())
-        .then_some((*op, left.as_ref(), right.as_ref()))
+    (operand(ctx, left).is_some() && operand(ctx, right).is_some()).then_some((
+        *op,
+        left.as_ref(),
+        right.as_ref(),
+    ))
 }
 
 /// The leaf `e` converts with the Number-or-undefined select of
@@ -282,9 +289,7 @@ fn nan_tree_node<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<(BinaryOp, &'e Expr
 fn nan_leaf(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match operand(ctx, e) {
         Some(Operand::NumOrUndef) => true,
-        Some(Operand::Prim) => {
-            prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0)
-        }
+        Some(Operand::Prim) => prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0),
         _ => false,
     }
 }
@@ -336,7 +341,9 @@ fn lower_nan_tree_root(
     }
     let is_num = crate::stmt::emit_js_value_is_number(ctx, &v);
     let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
-    Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, &v, &nan))
+    Ok(ctx
+        .block()
+        .select(crate::types::I1, &is_num, DOUBLE, &v, &nan))
 }
 
 /// `ToNumber` of the operand `e` classified `k` (`operand`), whose lowered
@@ -366,7 +373,9 @@ pub(crate) fn arith_to_number(
         witness(ctx, raw, Num::NumberOrUndefined, "arith operand")?;
         let is_num = crate::stmt::emit_js_value_is_number(ctx, raw);
         let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
-        return Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
+        return Ok(ctx
+            .block()
+            .select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
     }
     Ok(emit_prim_to_number(ctx, raw))
 }

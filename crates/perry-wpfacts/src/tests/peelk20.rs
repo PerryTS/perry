@@ -34,7 +34,12 @@ fn blob_slice_coerces_only() {
              console.log(s.size);
          });",
     );
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
     assert_eq!(escape_with_field(&pf, "ctmark"), None, "{}", pf.dump_text());
 }
 
@@ -47,7 +52,12 @@ fn blob_slice_result_is_blob() {
              console.log(t.byteLength);
          });",
     );
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -59,7 +69,12 @@ fn blob_text_and_stream() {
              console.log(b.stream().locked);
          });",
     );
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -69,5 +84,9 @@ fn control_unknown_call_escapes() {
          const f: any = new Function(process.argv[2]);
          new Blob([\"abc\"]).slice(0, 1).text().then(function (s: any) { f(kept); });",
     );
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

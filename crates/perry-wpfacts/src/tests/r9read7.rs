@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -97,7 +101,10 @@ fn r9read7_g2_array_typed_instance_length() {
 // typed array: indexed_length refuses the token alone, so does PerKind.
 #[test]
 fn r9read7_a2_typed_own_length() {
-    not_proven(&s("Object.defineProperty(ta, \"length\", { value: 7 });"), "length");
+    not_proven(
+        &s("Object.defineProperty(ta, \"length\", { value: 7 });"),
+        "length",
+    );
 }
 
 // KEEP a3 (native arm): %TypedArray.prototype% gets a new `length` getter.
@@ -113,7 +120,10 @@ fn r9read7_a3_typed_proto_written() {
 // instance may give it `slice`: instance_absent refuses.
 #[test]
 fn r9read7_b1_instance_computed_store() {
-    not_proven(&s("v[process.argv[2] ?? \"q\"] = function () { return 0; };"), "slice");
+    not_proven(
+        &s("v[process.argv[2] ?? \"q\"] = function () { return 0; };"),
+        "slice",
+    );
 }
 
 // KEEP b2 (instance TypeError arm): a named store of `slice` after birth.
@@ -122,10 +132,14 @@ fn r9read7_b1_instance_computed_store() {
 // claim codegen uses (T0Mono / T0Set / NativeMember).
 #[test]
 fn r9read7_b2_instance_named_store() {
-    let pf = facts(&s("if (Math.random() < 0.5) v.slice = function () { return 0; };"));
+    let pf = facts(&s(
+        "if (Math.random() < 0.5) v.slice = function () { return 0; };",
+    ));
     let v = reads(&pf, "slice");
     assert!(
-        !v.is_empty() && v.iter().all(|x| x.starts_with("No(") || x.starts_with("PerKind")),
+        !v.is_empty()
+            && v.iter()
+                .all(|x| x.starts_with("No(") || x.starts_with("PerKind")),
         "{v:?}"
     );
 }

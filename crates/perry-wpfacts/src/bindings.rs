@@ -134,7 +134,10 @@ pub(crate) fn bodies_of(m: &Model, n: NodeId) -> Vec<BodyRef> {
 /// ONCHG2: functions `fs` as bodies, when every one is a compiled closure or
 /// function declaration with a HIR id (no method, no function only another
 /// unit or the runtime has). Empty otherwise.
-pub(crate) fn bodies_of_fns(m: &Model, fs: impl Iterator<Item = crate::model::FnIdx>) -> Vec<BodyRef> {
+pub(crate) fn bodies_of_fns(
+    m: &Model,
+    fs: impl Iterator<Item = crate::model::FnIdx>,
+) -> Vec<BodyRef> {
     let mut out: Vec<BodyRef> = Vec::new();
     for f in fs {
         let fi = &m.funcs[f as usize];
@@ -477,10 +480,12 @@ pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
                         .all(|v| v != TOP && m.beside_values(v))
             })
     };
-    if m.any_writers
-        .get(&tm)
-        .is_some_and(|w| w.ctor.iter().chain(w.post.iter().map(|(s, _)| s)).any(|s| !numeric_key(s)))
-    {
+    if m.any_writers.get(&tm).is_some_and(|w| {
+        w.ctor
+            .iter()
+            .chain(w.post.iter().map(|(s, _)| s))
+            .any(|s| !numeric_key(s))
+    }) {
         return true;
     }
     m.writers.keys().any(|(owner, key)| {
@@ -1088,7 +1093,10 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
                         m.tok_name(t),
                         node.prim,
                         pts.len(),
-                        pts.iter().take(4).map(|&p| m.tok_name(p)).collect::<Vec<_>>()
+                        pts.iter()
+                            .take(4)
+                            .map(|&p| m.tok_name(p))
+                            .collect::<Vec<_>>()
                     );
                 }
                 ElemRep::Boxed

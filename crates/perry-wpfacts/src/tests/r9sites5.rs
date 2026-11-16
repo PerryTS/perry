@@ -59,7 +59,10 @@ fn r9sites5_rp2_keep_reassigned_param() {
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP2 tj recv={r:?}");
-    assert!(r.contains(&"A".to_string()), "RP2 lost the shared return: {r:?}");
+    assert!(
+        r.contains(&"A".to_string()),
+        "RP2 lost the shared return: {r:?}"
+    );
 }
 
 // RP3 KEEP: a helper that uses `arguments` (10.4.4: a mapped object aliases
@@ -71,7 +74,10 @@ fn r9sites5_rp3_keep_arguments_object() {
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP3 tj recv={r:?}");
-    assert!(r.contains(&"A".to_string()), "RP3 lost the shared return: {r:?}");
+    assert!(
+        r.contains(&"A".to_string()),
+        "RP3 lost the shared return: {r:?}"
+    );
 }
 
 const BC: &str = "class B { tj: any; constructor() { this.tj = 1; } }
@@ -104,7 +110,11 @@ console.log( ( r2 ?? c ).tj, r1 === b );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP5 tj recv={r:?}");
-    assert_eq!(r, vec!["C".to_string()], "RP5: the result holds another call's argument");
+    assert_eq!(
+        r,
+        vec!["C".to_string()],
+        "RP5: the result holds another call's argument"
+    );
 }
 
 // RP6 KEEP: a `finally` that returns another value: out (its completion
@@ -118,7 +128,10 @@ console.log( g( c ).tj );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP6 tj recv={r:?}");
-    assert!(r.contains(&"B".to_string()) && r.contains(&"C".to_string()), "RP6: {r:?}");
+    assert!(
+        r.contains(&"B".to_string()) && r.contains(&"C".to_string()),
+        "RP6: {r:?}"
+    );
 }
 
 // RP7 KEEP: async and generator functions return their promise / generator,
@@ -135,10 +148,17 @@ console.log( x.tj, y.tj, z.tj );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP7 tj recv={r:?}");
-    assert!(!r.contains(&"B".to_string()), "RP7 async result is the parameter: {r:?}");
+    assert!(
+        !r.contains(&"B".to_string()),
+        "RP7 async result is the parameter: {r:?}"
+    );
     // The generator object reads as its return value in the model whether or
     // not the function is RP-shaped (`h2` returns a local): RP adds nothing.
-    assert_eq!(r.contains(&"C".to_string()), r.contains(&"A".to_string()), "RP7 generator: {r:?}");
+    assert_eq!(
+        r.contains(&"C".to_string()),
+        r.contains(&"A".to_string()),
+        "RP7 generator: {r:?}"
+    );
 }
 
 // RP8 KEEP: a callee set of two functions: each binding gives its own result.
@@ -154,7 +174,10 @@ console.log( f( b ).tj );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP8 tj recv={r:?}");
-    assert!(r.contains(&"B".to_string()) && r.contains(&"C".to_string()), "RP8: {r:?}");
+    assert!(
+        r.contains(&"B".to_string()) && r.contains(&"C".to_string()),
+        "RP8: {r:?}"
+    );
 }
 
 // RP9 KEEP: `new` of such a function: the result is the new object, the
@@ -169,7 +192,10 @@ console.log( o.tj );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP9 tj recv={r:?}");
-    assert!(r.contains(&"B".to_string()), "RP9 lost the returned object: {r:?}");
+    assert!(
+        r.contains(&"B".to_string()),
+        "RP9 lost the returned object: {r:?}"
+    );
 }
 
 // RP10 KEEP: the parameter written by a closure of the function: out.
@@ -182,7 +208,10 @@ console.log( g( b ).tj );
     ));
     let r = recv(&pf, "tj");
     eprintln!("R9SITES5 RP10 tj recv={r:?}");
-    assert!(r.contains(&"B".to_string()) && r.contains(&"C".to_string()), "RP10: {r:?}");
+    assert!(
+        r.contains(&"B".to_string()) && r.contains(&"C".to_string()),
+        "RP10: {r:?}"
+    );
 }
 
 // RP11 RED, the summarized shape: loggers with a hook branch and a

@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -55,7 +59,10 @@ fn r9store5_s1_builtin_fn() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); g(p); g(Math.max); g(Number); return [p.flag, (Math.max as any).flag, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "flag", "KnownObjectStore"), "S1 flag not a known-object store");
+    assert!(
+        all(&pf, "flag", "KnownObjectStore"),
+        "S1 flag not a known-object store"
+    );
 }
 
 // S2 (RED): an Array beside a class instance.
@@ -64,7 +71,10 @@ fn r9store5_s2_array() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); const a = [1, 2]; g(p); g(a); return [p.flag, (a as any).flag, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "flag", "KnownObjectStore"), "S2 flag not a known-object store");
+    assert!(
+        all(&pf, "flag", "KnownObjectStore"),
+        "S2 flag not a known-object store"
+    );
 }
 
 // S3 (RED): number, boolean and undefined beside the instance: TypeError arms.
@@ -73,7 +83,10 @@ fn r9store5_s3_primitives_beside() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); g(p); for (const x of [v.length, v.length > 1, undefined]) {{ try {{ g(x); }} catch (e) {{}} }} return [p.flag, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "flag", "KnownObjectStore"), "S3 flag not a known-object store");
+    assert!(
+        all(&pf, "flag", "KnownObjectStore"),
+        "S3 flag not a known-object store"
+    );
 }
 
 // S4 (RED): only primitives: every run throws.
@@ -100,7 +113,10 @@ fn r9store5_k1_objproto_setter() {
     let pf = facts(&format!(
         "{P}Object.defineProperty(Object.prototype, \"flag\", {{ set(x: any) {{ console.log(\"set\"); }}, configurable: true }});\nfunction f(v: string) {{ const p = new P(1); g(p); g(Math.max); return [v]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "flag"), "K1 flag proven with a setter on Object.prototype");
+    assert!(
+        refused(&pf, "flag"),
+        "K1 flag proven with a setter on Object.prototype"
+    );
 }
 
 // K2 (KEEP): the builtin function is frozen.
@@ -127,7 +143,10 @@ fn r9store5_k4_number_proto_setter() {
     let pf = facts(&format!(
         "{P}Object.defineProperty(Number.prototype, \"flag\", {{ set(x: any) {{ console.log(\"set\"); }} }});\nfunction f(v: string) {{ const p = new P(1); g(p); g(v.length); return [v]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "flag"), "K4 flag proven with a setter on Number.prototype");
+    assert!(
+        refused(&pf, "flag"),
+        "K4 flag proven with a setter on Number.prototype"
+    );
 }
 
 // K5 (KEEP): `__proto__` onto a number runs the Object.prototype setter.
@@ -137,7 +156,11 @@ fn r9store5_k5_proto_key() {
         "{P}function s(o: any) {{ o.__proto__ = null; }}\nfunction f(v: string) {{ const p = new P(1); s(p); s(v.length); return [v]; }}\n{TAIL}"
     ));
     let v = stores(&pf, "__proto__");
-    assert!(v.iter().all(|x| !x.starts_with("KnownObjectStore") && !x.starts_with("Throws")), "K5 __proto__ proven");
+    assert!(
+        v.iter()
+            .all(|x| !x.starts_with("KnownObjectStore") && !x.starts_with("Throws")),
+        "K5 __proto__ proven"
+    );
 }
 
 // K6 (KEEP): an Array's `length` is no plain key (ArraySetLength).

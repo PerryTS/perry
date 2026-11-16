@@ -75,7 +75,7 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> Built {
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll)
         .env("PERRY_FACTS_DUMP", &dump);
-        let out = cmd
+    let out = cmd
         .arg("compile")
         .arg(dir.join(files[0].0))
         .arg("-o")

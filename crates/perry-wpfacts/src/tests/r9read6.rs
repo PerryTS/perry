@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -111,19 +115,31 @@ fn m4_call_array_native_and_instance() {
 // reads it.
 #[test]
 fn k1_array_proto_written() {
-    not_proven(&m("(Array.prototype as any).isV = process.argv[2];", ""), "isV");
+    not_proven(
+        &m("(Array.prototype as any).isV = process.argv[2];", ""),
+        "isV",
+    );
 }
 
 // KEEP k2: Number.prototype gains `isV`: the Number arm reads it.
 #[test]
 fn k2_number_proto_written() {
-    not_proven(&m("(Number.prototype as any).isV = process.argv[2];", "rd(n),"), "isV");
+    not_proven(
+        &m("(Number.prototype as any).isV = process.argv[2];", "rd(n),"),
+        "isV",
+    );
 }
 
 // KEEP k3: Object.prototype gains `clone`: the Array arm finds it.
 #[test]
 fn k3_object_proto_clone_written() {
-    not_proven(&m("(Object.prototype as any).clone = function () { return 1; };", ""), "clone");
+    not_proven(
+        &m(
+            "(Object.prototype as any).clone = function () { return 1; };",
+            "",
+        ),
+        "clone",
+    );
 }
 
 // KEEP k4: an unknown computed store onto W.prototype may add `isV`.
@@ -153,7 +169,10 @@ fn t(decl: &str, body: &str) -> String {
 #[test]
 fn t1_typeof_const_narrows() {
     proven(
-        &t("const message = params[0];", "if (typeof message === 'string' && message.startsWith('T')) return 1;"),
+        &t(
+            "const message = params[0];",
+            "if (typeof message === 'string' && message.startsWith('T')) return 1;",
+        ),
         "startsWith",
     );
 }
@@ -162,7 +181,10 @@ fn t1_typeof_const_narrows() {
 #[test]
 fn t2_or_does_not_narrow() {
     not_proven(
-        &t("const message = params[0];", "if (typeof message === 'string' || message.startsWith('T')) return 1;"),
+        &t(
+            "const message = params[0];",
+            "if (typeof message === 'string' || message.startsWith('T')) return 1;",
+        ),
         "startsWith",
     );
 }
@@ -171,7 +193,10 @@ fn t2_or_does_not_narrow() {
 #[test]
 fn t3_not_equal_does_not_narrow() {
     not_proven(
-        &t("const message = params[0];", "if (typeof message !== 'string' && message.startsWith('T')) return 1;"),
+        &t(
+            "const message = params[0];",
+            "if (typeof message !== 'string' && message.startsWith('T')) return 1;",
+        ),
         "startsWith",
     );
 }
@@ -217,14 +242,23 @@ fn c1_array_constructor() {
 // KEEP c2: the program writes `constructor` onto Array.prototype.
 #[test]
 fn c2_array_constructor_written() {
-    not_proven(&C.replace("/*EXTRA*/", "(Array.prototype as any).constructor = process.argv[2];"), "constructor");
+    not_proven(
+        &C.replace(
+            "/*EXTRA*/",
+            "(Array.prototype as any).constructor = process.argv[2];",
+        ),
+        "constructor",
+    );
 }
 
 // KEEP c3: an own `constructor` stored on one of the Arrays.
 #[test]
 fn c3_own_constructor() {
     not_proven(
-        &C.replace("/*EXTRA*/", "const z: any = [1]; z.constructor = process.argv[2]; console.log(k(z));"),
+        &C.replace(
+            "/*EXTRA*/",
+            "const z: any = [1]; z.constructor = process.argv[2]; console.log(k(z));",
+        ),
         "constructor",
     );
 }
@@ -232,5 +266,11 @@ fn c3_own_constructor() {
 // KEEP m5: a stored `slice` on one class instance: the TypeError arm is gone.
 #[test]
 fn m5_instance_gains_slice() {
-    not_proven(&m("const v9: any = new V(9); v9.slice = () => 1; console.log(sl(v9));", ""), "slice");
+    not_proven(
+        &m(
+            "const v9: any = new V(9); v9.slice = () => 1; console.log(sl(v9));",
+            "",
+        ),
+        "slice",
+    );
 }

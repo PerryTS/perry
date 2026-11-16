@@ -255,7 +255,3 @@ fn a_number_key_reads_no_named_key_a_store_into_top_wrote() {
         assert!(!element_callee_escapes(&w), "{w}");
     }
 }
-
-
-
-

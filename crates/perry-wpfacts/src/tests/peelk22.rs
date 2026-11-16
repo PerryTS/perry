@@ -36,23 +36,42 @@ fn src(recv: &str) -> String {
 #[test]
 fn object_proto_method_receiver_runs_map_generically() {
     let pf = whole(&src("({} as any)[process.argv[2]]"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn builtin_function_receiver_runs_map_generically() {
     let pf = whole(&src("Object.prototype.hasOwnProperty"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn program_function_receiver_runs_map_generically() {
     let pf = whole(&src("function () { return 1; }"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn unknown_code_receiver_stays_unknown() {
     let pf = whole(&src("new Function(process.argv[2])()"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

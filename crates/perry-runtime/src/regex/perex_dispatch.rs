@@ -352,8 +352,12 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
     if let Some(re) = super::instance::builtin(receiver) {
         crate::object::regex_read_sites::count_exec_proof(true);
         // SAFETY: admitted just now; nothing collected since.
-        let (data, last_index) =
-            unsafe { (super::instance::builtin_data(re), super::instance::builtin_last_index(re)) };
+        let (data, last_index) = unsafe {
+            (
+                super::instance::builtin_data(re),
+                super::instance::builtin_last_index(re),
+            )
+        };
         return test_builtin(re, data, input, last_index);
     }
     // Any other layout keeps the keyed brand read and the ordinary Get.

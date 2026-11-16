@@ -245,8 +245,12 @@ impl Model {
                 reason,
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
-            Cons::StoreKeyed { o, src, site, subj } => format!("storekeyed {n} {o} {src} {site} {subj}"),
-            Cons::EnumKeyStore { o, src, from, .. } => format!("enumkeystore {n} {o} {src} {from:?}"),
+            Cons::StoreKeyed { o, src, site, subj } => {
+                format!("storekeyed {n} {o} {src} {site} {subj}")
+            }
+            Cons::EnumKeyStore { o, src, from, .. } => {
+                format!("enumkeystore {n} {o} {src} {from:?}")
+            }
             Cons::EnumKeyAny { o, src, .. } => format!("enumkeyany {n} {o} {src}"),
             Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
@@ -259,7 +263,9 @@ impl Model {
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site, .. } => format!("spreadfrom {n} {src} {site}"),
             Cons::OwnComputedKey { key, val } => format!("owncomputedkey {n} {key} {val}"),
-            Cons::ProtoKeySet { target, val, site } => format!("protokeyset {n} {target} {val} {site}"),
+            Cons::ProtoKeySet { target, val, site } => {
+                format!("protokeyset {n} {target} {val} {site}")
+            }
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
             Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),

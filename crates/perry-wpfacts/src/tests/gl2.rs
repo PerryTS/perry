@@ -30,7 +30,9 @@ fn verdict(src: &str, key: &str, marker: &str) -> (Verdict, String) {
 
 /// Does unknown code hold the realm after the solve (`Model::realm_held`)?
 fn held(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -93,7 +95,10 @@ fn gl2_g1_devtools_shape() {
         const e: any = o.hook();
         console.log(/*A*/ o.v, e);";
     let (v, dump) = verdict(src, "v", "/*B*/");
-    assert!(proven(&v) && !format!("{v:?}").contains("Dead"), "this.detail is o, got {v:?}\n{dump}");
+    assert!(
+        proven(&v) && !format!("{v:?}").contains("Dead"),
+        "this.detail is o, got {v:?}\n{dump}"
+    );
     let (v, dump) = verdict(src, "v", "/*A*/");
     assert!(proven(&v), "o.v proven, got {v:?}\n{dump}");
     assert!(!held(src), "realm not held\n{dump}");
@@ -110,7 +115,10 @@ fn gl2_g1_native_read_names_keep_sink() {
         "g[\"Blob\"] = class B {};",
         "g[\"ReadableStream\"] = class R {};",
     ] {
-        assert!(held(&program(store)), "{store}: a native reads it by name: sink, realm held");
+        assert!(
+            held(&program(store)),
+            "{store}: a native reads it by name: sink, realm held"
+        );
     }
 }
 
@@ -128,7 +136,11 @@ fn gl2_keep() {
     ] {
         assert!(held(&program(store)), "{store}: still a sink, realm held");
     }
-    for store in ["g[\"undefined\"] = 1;", "g[\"globalThis\"] = { a: 1 };", "delete (globalThis as any).fetch;"] {
+    for store in [
+        "g[\"undefined\"] = 1;",
+        "g[\"globalThis\"] = { a: 1 };",
+        "delete (globalThis as any).fetch;",
+    ] {
         let _ = verdict(&program(store), "v", "/*A*/");
         let _ = held(&program(store));
     }

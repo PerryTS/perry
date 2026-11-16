@@ -164,7 +164,8 @@ fn own_method_bodies(class: &ast::Class) -> std::collections::HashMap<String, &[
         if m.is_static {
             continue;
         }
-        let plain = m.kind == ast::MethodKind::Method && !m.function.is_async && !m.function.is_generator;
+        let plain =
+            m.kind == ast::MethodKind::Method && !m.function.is_async && !m.function.is_generator;
         match (&m.function.body, plain) {
             (Some(b), true) if !dup.contains(&name) => {
                 if out.insert(name.clone(), b.stmts.as_slice()).is_some() {
@@ -246,7 +247,9 @@ fn statement_store_keys(
         }
         ast::Stmt::Block(b) => store_keys_in(&b.stmts, out, exits, cx),
         ast::Stmt::If(s) => {
-            let mut arm = |arm: &ast::Stmt, exits: Option<&mut Vec<String>>, cx: &mut StoreKeysCx<'_>| match exits {
+            let mut arm = |arm: &ast::Stmt,
+                           exits: Option<&mut Vec<String>>,
+                           cx: &mut StoreKeysCx<'_>| match exits {
                 Some(e) if leaves_constructor(arm) => statement_store_keys(arm, e, None, cx),
                 exits => statement_store_keys(arm, out, exits, cx),
             };

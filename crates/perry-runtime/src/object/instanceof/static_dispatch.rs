@@ -734,8 +734,7 @@ fn native_instanceof(
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, constructor)
                 } else {
                     let scope = crate::gc::RuntimeHandleScope::new();
-                    let object = scope
-                        .root_nanbox_f64(crate::object::builtin_value_core("Object"));
+                    let object = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, &object)
                 };
                 return if matches { true_val } else { false_val };

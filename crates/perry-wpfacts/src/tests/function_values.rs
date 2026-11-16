@@ -12,9 +12,6 @@ fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
     v[0]
 }
 
-
-
-
 const FIELDS: &str = r#"
     function fa(x: number) { return x + 1; }
     function fb(x: number) { return x * 2; }
@@ -25,7 +22,6 @@ const FIELDS: &str = r#"
     for (let i = 0; i < 10; i++) s += run(i % 2 ? p : q, i);
     console.log(s);
 "#;
-
 
 #[test]
 fn a_builtin_function_value_in_the_set_is_not_proven() {
@@ -59,7 +55,6 @@ fn a_builtin_function_value_in_the_set_is_not_proven() {
     }
 }
 
-
 #[test]
 fn a_receiver_without_the_method_is_not_proven() {
     // `B` has no `m`: its read is `undefined`, the call would throw.
@@ -78,7 +73,6 @@ fn a_receiver_without_the_method_is_not_proven() {
         pf.dump_text()
     );
 }
-
 
 #[test]
 fn a_value_that_may_be_no_function_is_not_proven() {
@@ -202,6 +196,3 @@ fn bindings_and_fields_carry_their_bodies_for_codegen() {
     assert_eq!(f.fns.len(), 2, "{f:?}");
     assert!(f.fns.iter().all(|b| b.plain && !b.closure), "{f:?}");
 }
-
-
-

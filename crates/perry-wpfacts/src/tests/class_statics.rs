@@ -15,7 +15,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
-
 /// The class `Pk` is reached through a value (`k`), so its member reads and
 /// calls are sites on the class object.
 const PK: &str = r#"
@@ -23,7 +22,6 @@ const PK: &str = r#"
     function useIt(k: any) { return k.of(2) + k.x; }
     console.log(useIt(Pk));
 "#;
-
 
 #[test]
 fn a_nested_class_static_is_defined_where_the_class_is_evaluated() {

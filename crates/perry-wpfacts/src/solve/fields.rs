@@ -38,7 +38,10 @@ impl Model {
             && !self.is_escaped(t)
             && !self.hard.contains_key(&t)
             && !self.reshaped_any
-            && !self.atom_index.get("length").is_some_and(|a| self.reshaped_keys.contains(a))
+            && !self
+                .atom_index
+                .get("length")
+                .is_some_and(|a| self.reshaped_keys.contains(a))
             && !self.ta_len_gates.get(&t).is_some_and(|g| g.1)
     }
 
@@ -110,7 +113,10 @@ impl Model {
         if !self.nodes[n as usize].enum_key {
             self.nodes[n as usize].enum_key = true;
             if super::own_read::enum_diag()
-                && matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(..))
+                && matches!(
+                    self.toks[t as usize],
+                    TokKind::ObjectProto | TokKind::NativeProto(..)
+                )
             {
                 static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 if SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 6 {
@@ -350,7 +356,14 @@ impl Model {
             if !e.contains(&(d, site)) {
                 e.push((d, site));
                 for (k, v) in self.own_computed.get(&s).cloned().unwrap_or_default() {
-                    self.cons(k, Cons::ProtoKeySet { target: d, val: v, site });
+                    self.cons(
+                        k,
+                        Cons::ProtoKeySet {
+                            target: d,
+                            val: v,
+                            site,
+                        },
+                    );
                 }
             }
         }
@@ -1082,8 +1095,14 @@ impl Model {
             return;
         }
         if rest_front_diag() {
-            let f = self.rest_owner_of(t).and_then(|f| self.funcs.get(f as usize)).map(|fi| fi.name.clone());
-            eprintln!("restfrontdiag widen t{t} fn={f:?} at={}", std::panic::Location::caller());
+            let f = self
+                .rest_owner_of(t)
+                .and_then(|f| self.funcs.get(f as usize))
+                .map(|fi| fi.name.clone());
+            eprintln!(
+                "restfrontdiag widen t{t} fn={f:?} at={}",
+                std::panic::Location::caller()
+            );
         }
         let fa = self.field_any(t);
         for r in self.rest_front_reads.get(&t).cloned().unwrap_or_default() {
@@ -1160,7 +1179,8 @@ impl Model {
     pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);
-        (self.labels[key as usize] == "NUMLIT" && lo == hi && (0..=u32::MAX as i64).contains(&lo)).then_some(lo as u32)
+        (self.labels[key as usize] == "NUMLIT" && lo == hi && (0..=u32::MAX as i64).contains(&lo))
+            .then_some(lo as u32)
     }
 
     pub(super) fn is_num_atom(&self, a: Atom) -> bool {

@@ -111,7 +111,8 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
     let rest = rest.get(mint_used..).ok_or("bad registry record")?;
     let (registry, used) = parse_registry_blob(rest).ok_or("bad registry record")?;
     img.registry = registry;
-    img.claims = parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
+    img.claims =
+        parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
     Ok(img)
 }
 
@@ -154,7 +155,11 @@ pub fn dump(img: &Image) -> String {
     s += &format!("mint-records={}\n", img.mint.len());
     s += &format!("registry={}\n", img.registry.len());
     for r in &img.registry {
-        s += &format!("registry-entry key={} status={}\n", String::from_utf8_lossy(&r.key).escape_debug(), r.status);
+        s += &format!(
+            "registry-entry key={} status={}\n",
+            String::from_utf8_lossy(&r.key).escape_debug(),
+            r.status
+        );
     }
     for t in &img.stops {
         s += &format!(
@@ -188,7 +193,13 @@ pub fn parse_registry_blob(b: &[u8]) -> Option<(Vec<RegRec>, usize)> {
         };
         let exports = opt(&mut r)?;
         let factory = opt(&mut r)?;
-        v.push(RegRec { key, init_off, status, exports, factory });
+        v.push(RegRec {
+            key,
+            init_off,
+            status,
+            exports,
+            factory,
+        });
     }
     Some((v, r.1))
 }

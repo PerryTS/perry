@@ -66,7 +66,9 @@ fn composed_calls_read_only_their_own_rest_argument() {
 /// `s` with its own arguments, so `p[0]` is unknown and `C` escapes.
 #[test]
 fn a_function_handed_to_unknown_code_takes_unknown_rest_elements() {
-    let pf = whole(&format!("{HEAD}\n unknown(s); console.log(new A().a, new B().b);"));
+    let pf = whole(&format!(
+        "{HEAD}\n unknown(s); console.log(new A().a, new B().b);"
+    ));
     assert!(escape_of(&pf, "c").is_some(), "{}", pf.dump_text());
 }
 

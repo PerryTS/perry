@@ -25,8 +25,8 @@ const NAMESPACE: &str = "object: GlobalGet(0), property: \"Number\"";
 
 fn lowered(src: &str) -> String {
     let mut cache = SourceCache::new();
-    let parsed = parse_typescript_with_cache(src, "callee_flag_leak.ts", &mut cache)
-        .expect("parse");
+    let parsed =
+        parse_typescript_with_cache(src, "callee_flag_leak.ts", &mut cache).expect("parse");
     let module = lower_module(&parsed.module, "test", "callee_flag_leak.ts").expect("lower");
     format!("{module:?}")
 }
@@ -50,7 +50,10 @@ fn control_direct_member_calls_keep_the_direct_callee_forms() {
     // The flag still reaches a member callee: `console.log` takes the
     // reroute-undo form, `Number.isInteger(w)` the intrinsic.
     let hir = lowered(&format!("{PRELUDE}console.log(Number.isInteger(w));"));
-    assert!(hir.contains("object: GlobalGet(0), property: \"log\""), "{hir}");
+    assert!(
+        hir.contains("object: GlobalGet(0), property: \"log\""),
+        "{hir}"
+    );
     assert!(hir.contains("NumberIsInteger(LocalGet("), "{hir}");
     assert!(!hir.contains(NAMESPACE), "{hir}");
 }
@@ -62,17 +65,23 @@ fn call_in_callee_position() {
 
 #[test]
 fn nested_call_in_callee_position() {
-    assert_value_form(&format!("{PRELUDE}console.log(pick(pick)(Number.isInteger)(w));"));
+    assert_value_form(&format!(
+        "{PRELUDE}console.log(pick(pick)(Number.isInteger)(w));"
+    ));
 }
 
 #[test]
 fn spread_argument_of_call_in_callee_position() {
-    assert_value_form(&format!("{PRELUDE}console.log(pick(...[Number.isInteger])(w));"));
+    assert_value_form(&format!(
+        "{PRELUDE}console.log(pick(...[Number.isInteger])(w));"
+    ));
 }
 
 #[test]
 fn optional_call_in_callee_position() {
-    assert_value_form(&format!("{PRELUDE}const p: any = pick;\nconsole.log(p?.(Number.isInteger)(w));"));
+    assert_value_form(&format!(
+        "{PRELUDE}const p: any = pick;\nconsole.log(p?.(Number.isInteger)(w));"
+    ));
 }
 
 #[test]
@@ -98,12 +107,16 @@ fn await_in_callee_position() {
 
 #[test]
 fn conditional_and_sequence_in_callee_position() {
-    assert_value_form(&format!("{PRELUDE}console.log((w ? Number.isInteger : pick)(w));"));
+    assert_value_form(&format!(
+        "{PRELUDE}console.log((w ? Number.isInteger : pick)(w));"
+    ));
     assert_value_form(&format!("{PRELUDE}console.log((0, Number.isInteger)(w));"));
 }
 
 #[test]
 fn member_of_literal_in_callee_position() {
     assert_value_form(&format!("{PRELUDE}console.log([Number.isInteger][0](w));"));
-    assert_value_form(&format!("{PRELUDE}console.log(({{ f: Number.isInteger }}).f(w));"));
+    assert_value_form(&format!(
+        "{PRELUDE}console.log(({{ f: Number.isInteger }}).f(w));"
+    ));
 }
