@@ -1674,4 +1674,113 @@ mod tests {
             outer_prototype.to_bits(),
         );
     }
+
+    // S0 of DESIGN-RB6N29-VM-LAZY (§4): each vm context is its own realm, born
+    // lazily through the one birth point, and never writes the main realm's
+    // [[Intrinsics]] record. Expected values are node's (v26.8.1).
+
+    fn main_builtin(name: &str) -> f64 {
+        crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+    }
+
+    fn fresh_context() -> ContextState {
+        let sandbox = object_value(crate::object::js_object_alloc(0, 0));
+        new_context_state(sandbox, false, ContextOptions::default())
+    }
+
+    fn main_prototype_if_bound(name: &str) -> usize {
+        crate::array::intrinsic_prototype_addr_if_bound(
+            crate::object::BuiltinConstructorIdentity::for_name(name).unwrap(),
+        ) as usize
+    }
+
+    /// node: `vm.runInNewContext("Array") !== Array`.
+    #[test]
+    fn vm_realm_array_is_its_own() {
+        let _ = crate::object::js_get_global_this();
+        let state = fresh_context();
+        let vm_array = execute_in_state("Array", &state);
+        assert!(JSValue::from_bits(vm_array.to_bits()).is_pointer(), "vm Array is a function");
+        assert_ne!(vm_array.to_bits(), main_builtin("Array").to_bits());
+    }
+
+    /// node: `vm.runInNewContext("[] instanceof MainArray", { MainArray: Array })` is
+    /// false, `MainArray.isArray([])` is true, and the vm array's [[Prototype]] is
+    /// not the main `Array.prototype`.
+    #[test]
+    fn vm_realm_instanceof_crosses_false() {
+        let _ = crate::object::js_get_global_this();
+        let sandbox = crate::object::js_object_alloc(0, 0);
+        set_field(sandbox, "MainArray", main_builtin("Array"));
+        let state = new_context_state(object_value(sandbox), false, ContextOptions::default());
+        assert_eq!(
+            execute_in_state("[] instanceof MainArray", &state).to_bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(execute_in_state("MainArray.isArray([])", &state).to_bits(), crate::value::TAG_TRUE);
+        assert_eq!(
+            execute_in_state("Object.getPrototypeOf([]) === MainArray.prototype", &state).to_bits(),
+            crate::value::TAG_FALSE
+        );
+    }
+
+    /// A vm context births a family on its first observation inside the vm, and
+    /// that birth leaves the main realm's family unborn. (The vm record's own
+    /// entry is checked from S2 on, when the record exists.)
+    #[test]
+    fn vm_realm_birth_is_lazy() {
+        let _ = crate::object::js_get_global_this();
+        assert_eq!(main_prototype_if_bound("Date"), 0, "main Date is unborn after setup");
+        let state = fresh_context();
+        assert_eq!(main_prototype_if_bound("Date"), 0, "createContext births no main Date");
+        let proto = execute_in_state("Date.prototype", &state);
+        assert!(JSValue::from_bits(proto.to_bits()).is_pointer(), "vm Date.prototype is an object");
+        assert_eq!(main_prototype_if_bound("Date"), 0, "a vm Date birth leaves main Date unborn");
+    }
+
+    /// node: `vm.runInNewContext("Array") !== vm.runInNewContext("Array")`.
+    #[test]
+    fn two_vm_realms_are_distinct() {
+        let _ = crate::object::js_get_global_this();
+        let first = fresh_context();
+        let second = fresh_context();
+        let a = execute_in_state("Array", &first);
+        let b = execute_in_state("Array", &second);
+        assert_ne!(a.to_bits(), b.to_bits(), "two contexts, two Array constructors");
+        let pa = execute_in_state("Array.prototype", &first);
+        let pb = execute_in_state("Array.prototype", &second);
+        assert_ne!(pa.to_bits(), pb.to_bits(), "two contexts, two Array.prototype objects");
+    }
+
+    /// node: after `vm.createContext({})` and a vm `new TypeError`, the main
+    /// `TypeError.prototype` is the main realm's (`!==` the vm one) and main
+    /// `instanceof` reads that same prototype.
+    #[test]
+    fn vm_realm_does_not_write_thread_intrinsics() {
+        let _ = crate::object::js_get_global_this();
+        let state = fresh_context();
+        let vm_proto = execute_in_state("new TypeError('boom'); TypeError.prototype", &state);
+        let main_ctor = crate::value::js_nanbox_get_pointer(main_builtin("TypeError")) as *mut ObjectHeader;
+        let main_proto = get_field(main_ctor, "prototype");
+        assert!(JSValue::from_bits(main_proto.to_bits()).is_pointer(), "main TypeError.prototype is an object");
+        assert_ne!(main_proto.to_bits(), vm_proto.to_bits(), "main TypeError.prototype is not the vm's");
+        assert_eq!(
+            crate::object::builtin_prototype_value("TypeError").to_bits(),
+            main_proto.to_bits(),
+            "the main record's %TypeError.prototype% is main TypeError.prototype"
+        );
+    }
+
+    /// node: `vm.runInNewContext("Object.getPrototypeOf(TypeError.prototype) === Error.prototype")`
+    /// is true.
+    #[test]
+    fn vm_error_chain_is_its_realm() {
+        let _ = crate::object::js_get_global_this();
+        let state = fresh_context();
+        assert_eq!(
+            execute_in_state("Object.getPrototypeOf(TypeError.prototype) === Error.prototype", &state)
+                .to_bits(),
+            crate::value::TAG_TRUE
+        );
+    }
 }
