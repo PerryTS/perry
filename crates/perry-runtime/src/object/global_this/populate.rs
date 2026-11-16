@@ -751,11 +751,7 @@ fn birth_family(
     // The constructor is described from its bag now that its family is
     // born (an unborn one is FunctionDictionary, `unborn_constructor`).
     unsafe { crate::closure::shape::closure_describe_born_constructor(closure_ptr as usize) };
-    // #11193: `C[Symbol.species]` getter returning `this`.
-    if matches!(
-        name,
-        "Array" | "Map" | "Set" | "Promise" | "RegExp" | "ArrayBuffer" | "SharedArrayBuffer"
-    ) {
+    if declaration.species {
         install_builtin_species_accessor(closure_ptr);
     }
     let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);

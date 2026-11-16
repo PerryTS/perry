@@ -60,6 +60,8 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 // as the [[Prototype]] (`class C extends P`): a birth fact, as
                 // `lazy`; the realm declaration states the same edge.
                 "extends" | "extends_prototype" => continue,
+                // The `[Symbol.species]` accessor its birth defines (#11193).
+                "species" => continue,
                 other => return Err(format!("unknown constructor family field {other}")),
             };
             let value = if field == "prototype_callable" {
