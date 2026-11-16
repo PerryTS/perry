@@ -114,14 +114,14 @@ fn w3g_new_global_class() {
 }
 
 /// KEEP: stores on builtin prototypes, under an unknown key on the global
-/// object, and on a constructor global stay sinks (today).
+/// object under a Symbol-able key, and on a constructor global stay sinks.
+/// (An unknown String key on the global object is GLOBK G2: tests/gk.rs.)
 #[test]
 fn w3g_keep_sinks() {
     for store in [
         "(Array.prototype as any).zz = (x: any) => x;",
         "(Object.prototype as any).zz = (x: any) => x;",
         "(Function.prototype as any).zz = (x: any) => x;",
-        "g[process.argv[2]] = (x: any) => x;",
         "g[\"Promise\"] = class P { constructor(f: any) { f(() => 0, () => 0); } };",
         // `Error` is read by name by natives (assert, child_process).
         "g[\"Error\"] = class E { constructor(m: any) { console.log(m); } };",
