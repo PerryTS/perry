@@ -623,7 +623,10 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
                 // An interval only loses a point at an end: `k` there.
                 CLIP_NE if r.lo == r.hi && !r.big() && (l.lo == r.lo || l.hi == r.lo) => {
                     let k = r.lo;
-                    let (lo, hi) = (if l.lo == k { k + 1 } else { l.lo }, if l.hi == k { k - 1 } else { l.hi });
+                    let (lo, hi) = (
+                        if l.lo == k { k + 1 } else { l.lo },
+                        if l.hi == k { k - 1 } else { l.hi },
+                    );
                     let mut out = Iv::int(lo, hi);
                     // `-0 !== 0` is false: past a `0` clip no `-0` either.
                     out.nz = l.nz && k != 0 && !out.is_empty() && lo <= 0 && 0 <= hi;

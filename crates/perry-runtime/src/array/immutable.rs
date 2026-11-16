@@ -248,9 +248,10 @@ pub extern "C" fn js_array_to_spliced(
         // 23.1.3.35 steps 5-8: ToIntegerOrInfinity( start ), then of
         // `skipCount`, in that order; an object operand's `valueOf` runs here
         // with the receiver and the items rooted.
-        let (start, _) = source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(start));
-        let (delete_count, _) =
-            source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(delete_count));
+        let (start, _) =
+            source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(start));
+        let (delete_count, _) = source
+            .across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(delete_count));
         let arr = source.get_raw_const_ptr::<ArrayHeader>();
         let len = (*arr).length as isize;
 

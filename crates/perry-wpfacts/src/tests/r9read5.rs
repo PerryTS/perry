@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// Verdicts of the read / call sites `<recv>.<key>`.
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -92,9 +96,15 @@ fn r9read5_b1_inert_construction_keeps_window() {
 #[test]
 fn r9read5_b2_parent_class_kept() {
     let src = S
-        .replace("/*PRE*/", "class B { constructor() { console.log(String(Math.random())); } }")
+        .replace(
+            "/*PRE*/",
+            "class B { constructor() { console.log(String(Math.random())); } }",
+        )
         .replace("class V {", "class V extends B {")
-        .replace("constructor(x = 0, y = 0, z = 0) {", "constructor(x = 0, y = 0, z = 0) {\n    super();");
+        .replace(
+            "constructor(x = 0, y = 0, z = 0) {",
+            "constructor(x = 0, y = 0, z = 0) {\n    super();",
+        );
     not_proven(&src, "DEFAULT_M");
 }
 

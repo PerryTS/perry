@@ -146,7 +146,8 @@ fn own_or_absent_control_getter_defined() {
 /// stored value's, not proven absent.
 #[test]
 fn own_or_absent_control_input_key_object_value() {
-    let src = "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
+    let src =
+        "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
 
@@ -175,8 +176,7 @@ fn units(mods: &[(&str, &str)]) -> ProgramFacts {
 // value `m` passes comes through the caller contract and sits beside it, so
 // neither the read `o.files` nor the call `o.get()` is Dead, in either mode.
 const XA: &str = "export function f(o: any) { return o.get() + o.files; }\n";
-const XM: &str =
-    "import { f } from \"./a\";\nconsole.log(f({ files: 1, get() { return 2; } }));\n";
+const XM: &str = "import { f } from \"./a\";\nconsole.log(f({ files: 1, get() { return 2; } }));\n";
 
 #[test]
 fn dead_control_value_from_another_unit() {
@@ -286,6 +286,10 @@ fn ns_export_control_receiver_may_be_object() {
 #[test]
 fn ns_export_control_star_reexport() {
     let main = "import * as ns from \"./a\";\nconst y = ns.u;";
-    let pf = modules(&[("b", "export const u = 4;"), ("a", "export * from \"./b\";"), ("main", main)]);
+    let pf = modules(&[
+        ("b", "export const u = 4;"),
+        ("a", "export * from \"./b\";"),
+        ("main", main),
+    ]);
     none_pf(&pf, main, "u", false, "NsExport");
 }

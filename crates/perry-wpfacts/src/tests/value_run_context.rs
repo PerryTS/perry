@@ -70,7 +70,12 @@ fn check(pre: &str, ret: &str, read: &str, k1: &str, k2: &str, want: &[&str]) {
     let w: Vec<String> = want.iter().map(|x| x.to_string()).collect();
     assert!(!got.is_empty(), "no .p read: {s}");
     for r in &got {
-        assert_eq!(r, &w, "receivers {got:?} (all .p reads; {})", recv(&pf).join(","));
+        assert_eq!(
+            r,
+            &w,
+            "receivers {got:?} (all .p reads; {})",
+            recv(&pf).join(",")
+        );
     }
 }
 
@@ -109,8 +114,22 @@ fn keyed_run_closure_is_per_value() {
 
 #[test]
 fn unknown_string_runs_one_merged_context() {
-    check(SW, OBJ.0, OBJ.1, "process.argv[2]", "process.argv[3]", &["A", "B"]);
-    check(KEYED, CLO.0, CLO.1, "process.argv[2]", "process.argv[3]", &["A", "B"]);
+    check(
+        SW,
+        OBJ.0,
+        OBJ.1,
+        "process.argv[2]",
+        "process.argv[3]",
+        &["A", "B"],
+    );
+    check(
+        KEYED,
+        CLO.0,
+        CLO.1,
+        "process.argv[2]",
+        "process.argv[3]",
+        &["A", "B"],
+    );
 }
 
 #[test]

@@ -40,7 +40,11 @@ fn only(s: &str, want: u16) {
 
 fn has(s: &str, want: u16) {
     let (objs, prims, _) = result(s);
-    assert!(objs || prims & want == want, "objs {objs} prims {}", prim::name(prims));
+    assert!(
+        objs || prims & want == want,
+        "objs {objs} prims {}",
+        prim::name(prims)
+    );
 }
 
 const CACHE: &str = "const Cache: any = { enabled: false, files: {},
@@ -120,13 +124,19 @@ fn an_object_given_to_unknown_code_reads_the_chain() {
 
 #[test]
 fn an_own_accessor_reads_the_getter() {
-    has(&src("const o: any = { get k() { return 'g'; } };", "o.k"), prim::STR);
+    has(
+        &src("const o: any = { get k() { return 'g'; } };", "o.k"),
+        prim::STR,
+    );
 }
 
 #[test]
 fn a_computed_key_reads_the_chain() {
     has(
-        &src(&format!("{R} const r: any = new R();"), "r[process.argv[3]]"),
+        &src(
+            &format!("{R} const r: any = new R();"),
+            "r[process.argv[3]]",
+        ),
         prim::NUM | prim::STR,
     );
 }
@@ -140,7 +150,10 @@ const REDEF: &str = "const w: any = (globalThis as any)[process.argv[2]];
 #[test]
 fn literal_own_key_hides_a_top_redefinition() {
     only(
-        &src(&format!("{REDEF} const c: any = {{ enabled: false }};"), "c.enabled"),
+        &src(
+            &format!("{REDEF} const c: any = {{ enabled: false }};"),
+            "c.enabled",
+        ),
         prim::FALSE,
     );
 }
@@ -149,5 +162,8 @@ fn literal_own_key_hides_a_top_redefinition() {
 /// may intercept it, so the read keeps the chain.
 #[test]
 fn a_constructor_key_under_a_top_redefinition_reads_the_chain() {
-    has(&src(&format!("{KIND} {REDEF}"), "new P().kind"), prim::STR | prim::NUM);
+    has(
+        &src(&format!("{KIND} {REDEF}"), "new P().kind"),
+        prim::STR | prim::NUM,
+    );
 }

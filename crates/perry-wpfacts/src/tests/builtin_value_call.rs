@@ -102,13 +102,32 @@ fn skin_shape_field_with_method_and_create() {
 #[test]
 fn valcall_probe_object_statics() {
     for n in [
-        "assign", "create", "defineProperties", "defineProperty", "entries", "freeze",
-        "fromEntries", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors",
-        "getOwnPropertyNames", "getOwnPropertySymbols", "getPrototypeOf", "groupBy", "hasOwn",
-        "is", "isExtensible", "isFrozen", "isSealed", "keys", "preventExtensions", "seal",
-        "setPrototypeOf", "values",
+        "assign",
+        "create",
+        "defineProperties",
+        "defineProperty",
+        "entries",
+        "freeze",
+        "fromEntries",
+        "getOwnPropertyDescriptor",
+        "getOwnPropertyDescriptors",
+        "getOwnPropertyNames",
+        "getOwnPropertySymbols",
+        "getPrototypeOf",
+        "groupBy",
+        "hasOwn",
+        "is",
+        "isExtensible",
+        "isFrozen",
+        "isSealed",
+        "keys",
+        "preventExtensions",
+        "seal",
+        "setPrototypeOf",
+        "values",
     ] {
-        let b = format!("const f: any = pick((Object as any).{n}); try {{ f(o, o); }} catch (e) {{}}");
+        let b =
+            format!("const f: any = pick((Object as any).{n}); try {{ f(o, o); }} catch (e) {{}}");
         eprintln!("VALCALL {n} (held,escapes)={:?}", run(&b));
     }
     eprintln!(
@@ -164,8 +183,12 @@ fn controls_keep_todays_answer() {
     );
     let top = "const tp: any = JSON.parse(process.argv[4] ?? 'null');";
     assert_eq!(
-        run(&format!("{top} const c: any = Object.create(tp); console.log(c.zz);")),
-        run(&format!("{top} const f: any = pick(Object.create); const c: any = f(tp); console.log(c.zz);"))
+        run(&format!(
+            "{top} const c: any = Object.create(tp); console.log(c.zz);"
+        )),
+        run(&format!(
+            "{top} const f: any = pick(Object.create); const c: any = f(tp); console.log(c.zz);"
+        ))
     );
 }
 

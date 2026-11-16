@@ -100,7 +100,11 @@ fn or_test_keeps_both() {
 
 #[test]
 fn accessor_flag_passes() {
-    let pf = facts(&src("get isColor(): any { return process.argv.length; }", TEST, ""));
+    let pf = facts(&src(
+        "get isColor(): any { return process.argv.length; }",
+        TEST,
+        "",
+    ));
     let (r, _) = set_call(&pf);
     assert!(r.contains(&"Attr".to_string()), "{r:?}");
 }
@@ -112,7 +116,11 @@ fn null_flag_store_is_filtered_and_object_store_passes() {
     assert!(only_color(&pf), "{:?}", set_call(&pf));
     // A number (truthiness unknown to the solver) passes.
     let pf = facts(&src("isColor: any = 0;", TEST, ""));
-    assert!(set_call(&pf).0.contains(&"Attr".to_string()), "{:?}", set_call(&pf));
+    assert!(
+        set_call(&pf).0.contains(&"Attr".to_string()),
+        "{:?}",
+        set_call(&pf)
+    );
 }
 
 /// `Object.prototype.isColor = true` is an add to an add-locked prototype:
@@ -155,7 +163,11 @@ fn intermediate_prototype_flag_passes() {
 #[test]
 fn relinked_prototype_flag_passes() {
     // A program object linked under Attr.prototype, or under the instance.
-    passes(&src("", TEST, "Object.setPrototypeOf(Attr.prototype, { isColor: true });"));
+    passes(&src(
+        "",
+        TEST,
+        "Object.setPrototypeOf(Attr.prototype, { isColor: true });",
+    ));
     passes(&src("", TEST, "Object.setPrototypeOf(a, { isColor: 1 });"));
     // Array.prototype takes named adds (DEC 250: not add-locked).
     passes(&src(
@@ -173,7 +185,11 @@ fn token_handed_to_unknown_code_passes() {
 
 #[test]
 fn unknown_key_store_on_the_prototype_passes() {
-    passes(&src("", TEST, "(Attr.prototype as any)[process.argv[2]] = 1;"));
+    passes(&src(
+        "",
+        TEST,
+        "(Attr.prototype as any)[process.argv[2]] = 1;",
+    ));
 }
 
 #[test]

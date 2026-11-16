@@ -247,9 +247,18 @@ fn a_spread_of_error_or_a_host_namespace_stays_unproven() {
 /// of one copies only what the program stored on it, here nothing.
 #[test]
 fn a_copy_of_a_realm_function_or_object_copies_no_unknown_value() {
-    for src in ["[].map", "Array.prototype.sort", "Object.keys", "/a/g", "Promise.resolve(1)"] {
+    for src in [
+        "[].map",
+        "Array.prototype.sort",
+        "Object.keys",
+        "/a/g",
+        "Promise.resolve(1)",
+    ] {
         assert!(verdicts(src, "{ a: obj, ...src }").1, "spread of {src}");
-        assert!(verdicts(src, "Object.assign({ a: obj }, src)").1, "assign of {src}");
+        assert!(
+            verdicts(src, "Object.assign({ a: obj }, src)").1,
+            "assign of {src}"
+        );
     }
 }
 
@@ -277,7 +286,13 @@ fn a_realm_function_handed_to_unknown_code_stays_unproven() {
     for src in ["[].map", "/a/g"] {
         let source =
             format!("((x: any) => {{ new Function(process.argv[2])(x); return x; }})({src})");
-        assert!(!verdicts(&source, "{ a: obj, ...src }").1, "spread of {src}");
-        assert!(!verdicts(&source, "Object.assign({ a: obj }, src)").1, "assign of {src}");
+        assert!(
+            !verdicts(&source, "{ a: obj, ...src }").1,
+            "spread of {src}"
+        );
+        assert!(
+            !verdicts(&source, "Object.assign({ a: obj }, src)").1,
+            "assign of {src}"
+        );
     }
 }

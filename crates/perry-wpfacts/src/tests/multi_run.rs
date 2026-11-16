@@ -68,13 +68,17 @@ fn throws_needs_every_run_nullish() {
 /// Dead: the key itself holds a String in every run.
 #[test]
 fn dead_needs_every_run_empty_read() {
-    let pf = one(&format!("{O}for (const p in o) {{ console.log(p.length); }}\n"));
+    let pf = one(&format!(
+        "{O}for (const p in o) {{ console.log(p.length); }}\n"
+    ));
     no_claim(&pf, "length", false, &["Dead", "Throws"]);
 }
 
 #[test]
 fn dead_needs_every_run_empty_call() {
-    let pf = one(&format!("{O}for (const p in o) {{ console.log(p.charAt(0)); }}\n"));
+    let pf = one(&format!(
+        "{O}for (const p in o) {{ console.log(p.charAt(0)); }}\n"
+    ));
     no_claim(&pf, "charAt", true, &["Dead", "Throws"]);
 }
 
@@ -87,7 +91,12 @@ fn nullish_arm_needs_every_run() {
          const o2: any = {{ a: {{ toUpperCase() {{ return 1; }} }}, b: 0 }};\n\
          for (const p in o) {{ const v = o2[p] || s; console.log(v.toUpperCase()); }}\n"
     ));
-    no_claim(&pf, "toUpperCase", true, &["NativeMember", "Throws", "Dead"]);
+    no_claim(
+        &pf,
+        "toUpperCase",
+        true,
+        &["NativeMember", "Throws", "Dead"],
+    );
 }
 
 /// NativeMember: a String beside, in a run, an object.
@@ -97,7 +106,12 @@ fn native_member_needs_every_run() {
         "{O}const o2: any = {{ a: {{ toUpperCase() {{ return 1; }} }}, b: 0 }};\n\
          for (const p in o) {{ const v = o2[p] || \"q\"; console.log(v.toUpperCase()); }}\n"
     ));
-    no_claim(&pf, "toUpperCase", true, &["NativeMember", "Throws", "Dead"]);
+    no_claim(
+        &pf,
+        "toUpperCase",
+        true,
+        &["NativeMember", "Throws", "Dead"],
+    );
 }
 
 /// OwnLength: a String beside, in a run, an object with a `length` field.
@@ -186,7 +200,12 @@ fn namespace_arm_needs_every_run() {
         "{O}const o2: any = {{ a: {{ max() {{ return 0; }} }}, b: 0 }};\n\
          for (const p in o) {{ const v: any = o2[p] || Math; console.log(v.max(1, 2)); }}\n"
     ));
-    no_claim(&pf, "max", true, &["NativeMember", "T0Mono", "Throws", "Dead"]);
+    no_claim(
+        &pf,
+        "max",
+        true,
+        &["NativeMember", "T0Mono", "Throws", "Dead"],
+    );
 }
 
 /// NsExport: a module namespace beside, in a run, an ordinary object.
@@ -204,9 +223,7 @@ fn ns_export_needs_every_run() {
 /// object it births is born per instance) still give the site a receiver.
 #[test]
 fn instance_birth_site_has_receivers() {
-    let pf = one(
-        "function f(k: any) { const q = { x: k }; return q.x; }\n\
-         console.log(f(1), f(\"s\"));\n",
-    );
+    let pf = one("function f(k: any) { const q = { x: k }; return q.x; }\n\
+         console.log(f(1), f(\"s\"));\n");
     no_claim(&pf, "x", false, &["Throws", "Dead"]);
 }

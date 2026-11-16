@@ -20,7 +20,12 @@ fn kept(pf: &ProgramFacts) -> crate::derive::KindFact {
         .filter(|t| t.display.starts_with("t.ts"))
         .find(|t| t.fields.iter().any(|f| f.key == "keptv"))
         .unwrap_or_else(|| panic!("no keptv\n{}", pf.dump_text()));
-    t.fields.iter().find(|f| f.key == "keptv").unwrap().kind.clone()
+    t.fields
+        .iter()
+        .find(|f| f.key == "keptv")
+        .unwrap()
+        .kind
+        .clone()
 }
 
 /// `src` (JSON) inherits `other` = { f: g, c: P }: `src[name]` finds g and
@@ -100,8 +105,10 @@ fn keep_skinroot9_enumerable_proto_named_member() {
 /// "__proto__": g may become dst's prototype.
 #[test]
 fn keep_skinroot11_key_rewritten_between() {
-    let pf = whole(&prog("const v = src[name]; name = k2; dst[name] = v;", "")
-        .replace("for (const name in src)", "for (let name in src)"));
+    let pf = whole(
+        &prog("const v = src[name]; name = k2; dst[name] = v;", "")
+            .replace("for (const name in src)", "for (let name in src)"),
+    );
     let k = kept(&pf);
     assert!(k.top || k.funcs >= 1, "{k:?}\n{}", pf.dump_text());
 }
@@ -122,7 +129,10 @@ fn keep_skinroot11_object_key_stays_wide() {
 /// value is not only `src[name]`.
 #[test]
 fn keep_skinroot11_value_two_versions() {
-    let pf = whole(&prog("let v = src[name]; if (k2) v = g; dst[name] = v;", ""));
+    let pf = whole(&prog(
+        "let v = src[name]; if (k2) v = g; dst[name] = v;",
+        "",
+    ));
     let k = kept(&pf);
     assert!(k.top || k.funcs >= 1, "{k:?}\n{}", pf.dump_text());
 }

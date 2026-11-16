@@ -41,7 +41,7 @@
 
 use crate::bindings::ModuleBindings;
 use crate::gen::Gen;
-use crate::model::{Model, NodeId, Tok, TokKind, TmplKind, TOP};
+use crate::model::{Model, NodeId, TmplKind, Tok, TokKind, TOP};
 use crate::pts::{FxHashMap, FxHashSet};
 
 const UNDEF: u16 = crate::model::prim::UNDEF;
@@ -68,8 +68,7 @@ fn no_own(m: &Model, t: Tok, keys: &[Option<u32>]) -> bool {
         && !m.hard.contains_key(&t)
         && !m.field_any.get(&t).is_some_and(|&n| holds(n))
         && keys.iter().flatten().all(|&a| {
-            !m.fields.get(&(t, a)).is_some_and(|&n| holds(n))
-                && !m.accessors.contains_key(&(t, a))
+            !m.fields.get(&(t, a)).is_some_and(|&n| holds(n)) && !m.accessors.contains_key(&(t, a))
         })
 }
 
@@ -170,7 +169,11 @@ pub(crate) fn collect(
         return;
     }
     let keys: Vec<Option<u32>> = KEYS.iter().map(|k| m.atom_index.get(*k).copied()).collect();
-    let op = m.tok_index.get(&TokKind::ObjectProto).copied().unwrap_or(TOP);
+    let op = m
+        .tok_index
+        .get(&TokKind::ObjectProto)
+        .copied()
+        .unwrap_or(TOP);
     // Every object with an own field (that holds a value) or accessor.
     let mut owned: FxHashSet<Tok> = FxHashSet::default();
     for (&(t, _), &n) in &m.fields {
@@ -184,7 +187,9 @@ pub(crate) fn collect(
     owned.extend(m.accessors.keys().map(|&(t, _)| t));
     let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
     for inst in 0..m.sum.insts.len() as u32 {
-        m.inst_copies(inst, |orig, copy| copies.entry(orig).or_default().push(copy));
+        m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
     }
     for (mi, mb) in bindings.iter_mut().enumerate().take(g.mods.len()) {
         for (id, b) in mb.locals.iter_mut() {

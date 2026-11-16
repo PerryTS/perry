@@ -23,7 +23,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts of the plain reads of `key` in a.ts, in source order.
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<crate::Verdict> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let mut v: Vec<_> = pf
         .sites
         .iter()
@@ -132,7 +136,10 @@ console.log(x[k]());"
     let pf = facts(&src);
     let (a, b) = (reads(&pf, "a"), reads(&pf, "b"));
     eprintln!("TB1 t5 a={a:?} b={b:?}");
-    assert!(proven(&a[0]) && proven(&a[1]), "A.m / A.n see only A: {a:?}");
+    assert!(
+        proven(&a[0]) && proven(&a[1]),
+        "A.m / A.n see only A: {a:?}"
+    );
     assert!(proven(&b[0]), "B.m sees only B: {b:?}");
 }
 

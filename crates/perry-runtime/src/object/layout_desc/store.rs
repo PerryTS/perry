@@ -256,10 +256,10 @@ pub(crate) unsafe fn family_own_data_slot(
     let d = evaluation_layout_desc(record.family_desc_index_plus_one())?;
     match desc_own_key(d, bytes, None)? {
         None => Some(None),
-        Some((pos, slot)) => ((*d.keys.add(pos as usize)).attrs
-            & super::super::key_attrs::ENTRY_ACCESSOR_MASK
-            == 0)
-            .then_some(Some(slot)),
+        Some((pos, slot)) => {
+            ((*d.keys.add(pos as usize)).attrs & super::super::key_attrs::ENTRY_ACCESSOR_MASK == 0)
+                .then_some(Some(slot))
+        }
     }
 }
 

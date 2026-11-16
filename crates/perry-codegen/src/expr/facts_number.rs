@@ -66,9 +66,10 @@ fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
         Num::Number => Operand::Number,
         Num::NumberOrUndefined => Operand::NumOrUndef,
     };
-    crate::verify_facts::consumed(crate::verify_facts::Fact::CanonicalNumber, || {
-        serde_json::json!({ "arith": "element operand" })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "arith": "element operand" }),
+    );
     crate::facts_consumed::used();
     Some(k)
 }
@@ -262,7 +263,9 @@ pub(crate) fn arith_to_number(
         witness(ctx, raw, Num::NumberOrUndefined, "arith operand")?;
         let is_num = crate::stmt::emit_js_value_is_number(ctx, raw);
         let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
-        return Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
+        return Ok(ctx
+            .block()
+            .select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
     }
     Ok(emit_prim_to_number(ctx, raw))
 }

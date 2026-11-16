@@ -27,7 +27,11 @@ fn recv(pf: &ProgramFacts, key: &str) -> Vec<Vec<String>> {
         .iter()
         .filter(|s| s.key == key && !s.is_call)
         .map(|s| {
-            let mut r: Vec<String> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+            let mut r: Vec<String> = s
+                .receivers
+                .iter()
+                .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+                .collect();
             r.sort();
             r.dedup();
             r
@@ -44,7 +48,10 @@ fn has_b(v: &[Vec<String>]) -> bool {
 const SW: &str = "switch (t) { case 'a': STMT; break; case 'b': break; }";
 
 fn get(before: &str, stmt: &str, after: &str) -> String {
-    format!("get(t: string, v: any) {{ let r: any = null; {before} {} {after} return r; }}", SW.replace("STMT", stmt))
+    format!(
+        "get(t: string, v: any) {{ let r: any = null; {before} {} {after} return r; }}",
+        SW.replace("STMT", stmt)
+    )
 }
 
 #[test]
@@ -95,5 +102,9 @@ fn clause_only_store_stays_out_of_other_runs() {
     // Control: the store only in case 'a'; the 'b' run returns null.
     let pf = facts(&src(&get("", "r = v", "")));
     let v = recv(&pf, "p");
-    assert!(v.iter().all(|r| !r.contains(&"B".to_string()) || r.len() == 1), "{v:?}");
+    assert!(
+        v.iter()
+            .all(|r| !r.contains(&"B".to_string()) || r.len() == 1),
+        "{v:?}"
+    );
 }

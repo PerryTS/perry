@@ -17,15 +17,15 @@ pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
-pub(crate) mod settled;
 mod own_guard;
 mod own_store;
-pub(crate) mod ret_param;
 mod param_key;
+pub(crate) mod ret_param;
+pub(crate) mod settled;
 pub(crate) use own_guard::Region;
 mod primitives;
-mod proto_first;
 mod private_methods;
+mod proto_first;
 mod shared_closures;
 mod view;
 mod walk;
@@ -902,7 +902,8 @@ impl<'a> Gen<'a> {
                 ));
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 let suspends = f.is_async || f.is_generator || f.was_plain_async;
-                self.m.funcs[fx as usize].ret_param = ret_param::ret_param(&f.params, &f.body, suspends);
+                self.m.funcs[fx as usize].ret_param =
+                    ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1805,12 +1806,7 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for ((cm, named), method_key) in c
-            .computed_members
-            .iter()
-            .zip(named)
-            .zip(method_named)
-        {
+        for ((cm, named), method_key) in c.computed_members.iter().zip(named).zip(method_named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,

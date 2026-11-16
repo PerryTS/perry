@@ -55,12 +55,16 @@ pub(crate) fn settled_proto_stores(module: &Module) -> Vec<(String, String, Win,
         }
         let mut globals = Win::default();
         let inert = match &module.init[i] {
-            Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| inert_value(module, e, i, &mut globals)),
+            Stmt::Let { init, .. } => init
+                .as_ref()
+                .is_none_or(|e| inert_value(module, e, i, &mut globals)),
             // A class method under a known Symbol key (15.7.14 step 27:
             // ClassElementEvaluation): ToPropertyKey of a Symbol is the
             // Symbol (7.1.19), and DefineMethodProperty (10.2.8) defines a
             // data property: no code runs.
-            Stmt::Expr(Expr::RegisterClassComputedMethod { key_expr, .. }) => known_symbol_key(key_expr),
+            Stmt::Expr(Expr::RegisterClassComputedMethod { key_expr, .. }) => {
+                known_symbol_key(key_expr)
+            }
             Stmt::Expr(Expr::PutValueSet {
                 target,
                 key,
@@ -101,8 +105,16 @@ fn same_target(t: &Expr, r: &Expr) -> bool {
     match (t, r) {
         (Expr::ClassRef(a), Expr::ClassRef(b)) => a == b,
         (
-            Expr::PropertyGet { object: a, property: pa, .. },
-            Expr::PropertyGet { object: b, property: pb, .. },
+            Expr::PropertyGet {
+                object: a,
+                property: pa,
+                ..
+            },
+            Expr::PropertyGet {
+                object: b,
+                property: pb,
+                ..
+            },
         ) => pa == pb && same_target(a, b),
         _ => false,
     }
@@ -112,18 +124,26 @@ fn same_target(t: &Expr, r: &Expr) -> bool {
 /// chain is in this module and declares no accessor of `k`, with `k` no key
 /// whose [[Set]] runs code or fails on a class.
 fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
-    if matches!(k, "__proto__" | "prototype" | "name" | "length" | "caller" | "arguments") {
+    if matches!(
+        k,
+        "__proto__" | "prototype" | "name" | "length" | "caller" | "arguments"
+    ) {
         return None;
     }
     let (x, proto) = match t {
         Expr::ClassRef(x) => (x, false),
-        Expr::PropertyGet { object, property, .. } if property == "prototype" => match object.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "prototype" => match object.as_ref() {
             Expr::ClassRef(x) => (x, true),
             _ => return None,
         },
         _ => return None,
     };
-    let mut c: &Class = module.classes.iter().find(|c| &c.name == x && !c.is_nested)?;
+    let mut c: &Class = module
+        .classes
+        .iter()
+        .find(|c| &c.name == x && !c.is_nested)?;
     loop {
         if c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k) {
             return None;
@@ -173,7 +193,9 @@ fn inert_value(module: &Module, e: &Expr, at: usize, globals: &mut Win) -> bool 
         | Expr::ClassRef(_)
         | Expr::LocalGet(_)
         | Expr::Closure { .. } => true,
-        Expr::PropertyGet { object, property, .. } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
             globals.globals.push(property.clone());
             true
         }
@@ -191,8 +213,14 @@ fn inert_value(module: &Module, e: &Expr, at: usize, globals: &mut Win) -> bool 
         // and runs no code. An inert store in the window (`store_target`:
         // no accessor of the key on the chain) keeps `m` a data property;
         // every other statement closes the window.
-        Expr::PropertyGet { object, property, .. } => match object.as_ref() {
-            Expr::PropertyGet { object: y, property: pp, .. } if pp == "prototype" => match y.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } => match object.as_ref() {
+            Expr::PropertyGet {
+                object: y,
+                property: pp,
+                ..
+            } if pp == "prototype" => match y.as_ref() {
                 Expr::ClassRef(x) => module.classes.iter().any(|c| {
                     &c.name == x
                         && !c.is_nested
@@ -208,10 +236,16 @@ fn inert_value(module: &Module, e: &Expr, at: usize, globals: &mut Win) -> bool 
         // An object literal's layout class: its construction stores the
         // values as own data keys (13.2.5.5), no constructor code of the
         // program runs.
-        Expr::New { class_name, args, .. } => {
+        Expr::New {
+            class_name, args, ..
+        } => {
             (module.classes.iter().any(|c| {
-                &c.name == class_name && c.name.starts_with("__AnonShape_") && c.methods.is_empty()
-                    && c.getters.is_empty() && c.setters.is_empty() && c.extends.is_none()
+                &c.name == class_name
+                    && c.name.starts_with("__AnonShape_")
+                    && c.methods.is_empty()
+                    && c.getters.is_empty()
+                    && c.setters.is_empty()
+                    && c.extends.is_none()
                     && c.extends_name.is_none()
             }) || inert_construct(module, class_name, at, globals))
                 && args.iter().all(|a| inert_value(module, a, at, globals))
@@ -270,20 +304,24 @@ fn inert_construct(module: &Module, y: &str, at: usize, w: &mut Win) -> bool {
         || c.extends_expr.is_some()
         || c.native_extends.is_some()
         || c.computed_members.iter().any(|m| m.is_evaluated())
-        || !c.fields.iter().all(|f| f.key_expr.is_none() && f.init.as_ref().is_none_or(prim_literal))
+        || !c
+            .fields
+            .iter()
+            .all(|f| f.key_expr.is_none() && f.init.as_ref().is_none_or(prim_literal))
     {
         return false;
     }
     let mut keys = Vec::new();
     if let Some(ctor) = &c.constructor {
-        if !ctor
-            .params
-            .iter()
-            .all(|p| !p.is_rest && p.decorators.is_empty() && p.default.as_ref().is_none_or(prim_literal))
-        {
+        if !ctor.params.iter().all(|p| {
+            !p.is_rest && p.decorators.is_empty() && p.default.as_ref().is_none_or(prim_literal)
+        }) {
             return false;
         }
-        let param = |e: &Expr| prim_literal(e) || matches!(e, Expr::LocalGet(id) if ctor.params.iter().any(|p| p.id == *id));
+        let param = |e: &Expr| {
+            prim_literal(e)
+                || matches!(e, Expr::LocalGet(id) if ctor.params.iter().any(|p| p.id == *id))
+        };
         let settable = |k: &str| {
             k != "__proto__"
                 && !crate::builtins::members::object_proto_has(k)
@@ -297,14 +335,24 @@ fn inert_construct(module: &Module, y: &str, at: usize, w: &mut Win) -> bool {
                 // a comparison with `undefined` runs no code (7.2.14 / 7.2.15:
                 // no ToPrimitive against Undefined).
                 Stmt::If {
-                    condition: Expr::Compare { op: CompareOp::Eq, left, right },
+                    condition:
+                        Expr::Compare {
+                            op: CompareOp::Eq,
+                            left,
+                            right,
+                        },
                     then_branch,
                     else_branch: None,
                 } => {
                     matches!((left.as_ref(), right.as_ref()), (Expr::LocalGet(id), Expr::Undefined) if is_param(id))
                         && matches!(then_branch.as_slice(), [Stmt::Expr(Expr::LocalSet(id, v))] if is_param(id) && prim_literal(v))
                 }
-                Stmt::Expr(Expr::PropertySet { object, property, value, .. }) => {
+                Stmt::Expr(Expr::PropertySet {
+                    object,
+                    property,
+                    value,
+                    ..
+                }) => {
                     matches!(object.as_ref(), Expr::This) && settable(property) && param(value) && {
                         keys.push(property.clone());
                         true
@@ -350,6 +398,11 @@ fn inert_construct(module: &Module, y: &str, at: usize, w: &mut Win) -> bool {
 fn prim_literal(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) | Expr::String(_)
+        Expr::Undefined
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
     )
 }

@@ -450,10 +450,12 @@ pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
                         .all(|v| v != TOP && m.beside_values(v))
             })
     };
-    if m.any_writers
-        .get(&tm)
-        .is_some_and(|w| w.ctor.iter().chain(w.post.iter().map(|(s, _)| s)).any(|s| !numeric_key(s)))
-    {
+    if m.any_writers.get(&tm).is_some_and(|w| {
+        w.ctor
+            .iter()
+            .chain(w.post.iter().map(|(s, _)| s))
+            .any(|s| !numeric_key(s))
+    }) {
         return true;
     }
     m.writers.keys().any(|(owner, key)| {
@@ -1060,7 +1062,10 @@ pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep
                         m.tok_name(t),
                         node.prim,
                         pts.len(),
-                        pts.iter().take(4).map(|&p| m.tok_name(p)).collect::<Vec<_>>()
+                        pts.iter()
+                            .take(4)
+                            .map(|&p| m.tok_name(p))
+                            .collect::<Vec<_>>()
                     );
                 }
                 ElemRep::Boxed

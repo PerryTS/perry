@@ -22,7 +22,11 @@ fn verdicts(src: &str, key: &str, call: bool) -> Vec<crate::Verdict> {
         ..Default::default()
     };
     let pf = crate::compute(&list, &cfg);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -55,7 +59,11 @@ fn keeps_null(src: &str, key: &str) {
         ..Default::default()
     };
     let pf = crate::compute(&list, &cfg);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let r: Vec<_> = pf
         .sites
         .iter()
@@ -63,13 +71,18 @@ fn keeps_null(src: &str, key: &str) {
         .map(|s| (s.verdict.clone(), s.receivers.clone()))
         .collect();
     assert!(
-        !r.is_empty() && r.iter().all(|(_, rs)| rs.iter().any(|x| x.starts_with("primitive:null"))),
+        !r.is_empty()
+            && r.iter()
+                .all(|(_, rs)| rs.iter().any(|x| x.starts_with("primitive:null"))),
         ".{key} must keep null: {r:?}"
     );
 }
 fn some_unproven(src: &str, key: &str, call: bool) {
     let v = verdicts(src, key, call);
-    assert!(v.iter().any(|v| !proven(v)), ".{key} must stay unproven: {v:?}");
+    assert!(
+        v.iter().any(|v| !proven(v)),
+        ".{key} must stay unproven: {v:?}"
+    );
 }
 
 // ---- group T: Throws (receiver holds only null/undefined) ----
@@ -207,7 +220,9 @@ console.log(1);";
 #[test]
 fn r6next_t5_typeof_guarded_global_is_dead() {
     all_proven(T5, "ping", true);
-    assert!(verdicts(T5, "ping", true).iter().all(|v| matches!(v, crate::Verdict::Dead)));
+    assert!(verdicts(T5, "ping", true)
+        .iter()
+        .all(|v| matches!(v, crate::Verdict::Dead)));
 }
 // The three.js form: the guard in a constructor, `this` passed.
 const T5C: &str = "class A { constructor() { this.k = 1;
@@ -219,7 +234,8 @@ fn r6next_t5_typeof_guard_in_constructor_is_dead() {
     assert!(v.iter().all(|v| matches!(v, crate::Verdict::Dead)), "{v:?}");
 }
 // `typeof NAME === "undefined"` false: the else branch is the dead one.
-const T5E: &str = "if (typeof __DEVT__ === \"undefined\") { console.log(0); } else { __DEVT__.ping(1); }";
+const T5E: &str =
+    "if (typeof __DEVT__ === \"undefined\") { console.log(0); } else { __DEVT__.ping(1); }";
 #[test]
 fn r6next_t5_typeof_eq_undefined_else_is_dead() {
     let v = verdicts(T5E, "ping", true);
@@ -235,18 +251,36 @@ fn r6next_t5_other_module_var_is_not_a_global() {
     let mut h = hirs(T5);
     let bp = "b.ts".to_string();
     let bm = perry_parser::parse_typescript(b, &bp).expect("parses");
-    h.push((bp.clone(), perry_hir::lower_module(&bm, "b", &bp).expect("lowers")));
+    h.push((
+        bp.clone(),
+        perry_hir::lower_module(&bm, "b", &bp).expect("lowers"),
+    ));
     let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
-    let cfg = FactsConfig { unit_io: true, ..Default::default() };
+    let cfg = FactsConfig {
+        unit_io: true,
+        ..Default::default()
+    };
     let pf = crate::compute(&list, &cfg);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.module == mi && s.key == "ping" && s.is_call).map(|s| s.verdict.clone()).collect();
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == mi && s.key == "ping" && s.is_call)
+        .map(|s| s.verdict.clone())
+        .collect();
     assert!(v.iter().all(|v| matches!(v, crate::Verdict::Dead)), "{v:?}");
 }
 /// The guarded call keeps a site that is not Dead (rule T5 must not fire).
 fn live(src: &str, key: &str) {
     let v = verdicts(src, key, true);
-    assert!(v.iter().any(|v| !matches!(v, crate::Verdict::Dead)), ".{key} must stay live: {v:?}");
+    assert!(
+        v.iter().any(|v| !matches!(v, crate::Verdict::Dead)),
+        ".{key} must stay live: {v:?}"
+    );
 }
 const T5G: &str = "if (typeof __DEVT__ !== \"undefined\") { __DEVT__.ping(1); }";
 // keep: `globalThis.NAME = v` elsewhere.
@@ -278,10 +312,16 @@ fn r6next_t5_keep_undeclared_assignment() {
 // keep: a host global (`typeof console`, `typeof process`) stays live.
 #[test]
 fn r6next_t5_keep_host_global() {
-    live("if (typeof console !== \"undefined\") { console.log(1); }", "log");
+    live(
+        "if (typeof console !== \"undefined\") { console.log(1); }",
+        "log",
+    );
     let p = "if (typeof process !== \"undefined\") { const e = process.env; console.log(e.HOME); }";
     let v = verdicts(p, "HOME", false);
-    assert!(v.iter().any(|v| !matches!(v, crate::Verdict::Dead)), ".HOME must stay live: {v:?}");
+    assert!(
+        v.iter().any(|v| !matches!(v, crate::Verdict::Dead)),
+        ".HOME must stay live: {v:?}"
+    );
 }
 // keep: a declared `let` in its TDZ: `typeof` throws (13.5.3 step 2 with a
 // resolvable reference: GetValue throws ReferenceError), not this rule.
@@ -336,21 +376,24 @@ fn r6next_b2_store_after_throwing_branch_is_birth_field() {
 
 // B3 (Vector2.clone `new this.constructor(this.x, this.y)`): the class prototype's own
 // `constructor` (15.7.14 ClassDefinitionEvaluation, 10.2.5 MakeConstructor).
-const B3: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const B3: &str =
+    "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
 const v = new V(1); console.log(v.clone().x);";
 #[test]
 fn r6next_b3_prototype_constructor_read() {
     all_proven(B3, "constructor", false);
 }
 // keep: an instance that may get an own `constructor` by a named store.
-const B3N: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const B3N: &str =
+    "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
 const v = new V(1); const w = new V(2); w.constructor = V; console.log(v.clone().x + w.clone().x);";
 #[test]
 fn r6next_b3_keep_named_own_constructor_store() {
     some_unproven(B3N, "constructor", false);
 }
 // keep: an unknown-key store on an instance may name `constructor`.
-const B3C: &str = "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
+const B3C: &str =
+    "class V { constructor(x) { this.x = x; } clone() { return new this.constructor(this.x); } }
 const v = new V(1); const k = String(Math.random()); v[k] = V; console.log(v.clone().x);";
 #[test]
 fn r6next_b3_keep_computed_own_store() {
@@ -366,7 +409,8 @@ fn r6next_b3_keep_computed_proto_store() {
 
 // B4 keep (Quaternion._onChangeCallback: a proto method for some instances, an own key
 // stored after birth by `_onChange(cb)` on others): two outcomes, stays unproven.
-const B4K: &str = "class Q { constructor() { this.x = 0; } _onChange(cb) { this._cb = cb; return this; } _cb() {}
+const B4K: &str =
+    "class Q { constructor() { this.x = 0; } _onChange(cb) { this._cb = cb; return this; } _cb() {}
   set(x) { this.x = x; this._cb(); return this; } }
 const q1 = new Q(); const q2 = new Q()._onChange(() => console.log(1)); q1.set(1); q2.set(2);";
 #[test]

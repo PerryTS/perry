@@ -150,12 +150,11 @@ pub(in crate::units) fn merge_unit(
 /// adds nothing to that union: the other units' records decide the site.
 /// A site only dead records name stays one dead fact.
 pub(in crate::units) fn join_site_records(pf: &mut ProgramFacts) {
-    let dead =
-        |s: &SiteFacts| match &s.verdict {
-            crate::Verdict::Dead => true,
-            crate::Verdict::No(r) => r.starts_with("dead site"),
-            _ => false,
-        };
+    let dead = |s: &SiteFacts| match &s.verdict {
+        crate::Verdict::Dead => true,
+        crate::Verdict::No(r) => r.starts_with("dead site"),
+        _ => false,
+    };
     let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call, s.access);
     type K = (u32, u32, String, bool, crate::derive::Access);
     let live: FxHashSet<K> = pf.sites.iter().filter(|s| !dead(s)).map(key).collect();

@@ -428,7 +428,10 @@ mod tests {
         // The raw loader stays private, with exactly its two callers here.
         let source = include_str!("agent_ptr.rs");
         let raw = ["fn emit_intrinsic", "_proto("].concat();
-        assert!(source.contains(&format!("\n{raw}")), "the raw loader is not private");
+        assert!(
+            source.contains(&format!("\n{raw}")),
+            "the raw loader is not private"
+        );
         let calls = ["= emit_intrinsic", "_proto(ctx, family)"].concat();
         let tail = ["    emit_intrinsic", "_proto(ctx, family)\n}"].concat();
         assert_eq!(

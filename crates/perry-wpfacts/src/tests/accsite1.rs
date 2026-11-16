@@ -28,11 +28,22 @@ fn facts(src: &str) -> crate::ProgramFacts {
 type S = (u32, bool, crate::Verdict, Vec<String>);
 
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<S> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .filter(|s| s.module == mi && s.key == key)
-        .map(|s| (s.byte_offset, s.is_call, s.verdict.clone(), s.receivers.clone()))
+        .map(|s| {
+            (
+                s.byte_offset,
+                s.is_call,
+                s.verdict.clone(),
+                s.receivers.clone(),
+            )
+        })
         .collect()
 }
 
@@ -40,7 +51,10 @@ fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<S> {
 fn at(pf: &crate::ProgramFacts, src: &str, key: &str, pat: &str) -> Vec<S> {
     let p = src.find(pat).unwrap_or_else(|| panic!("pattern {pat}")) as u32;
     let e = p + pat.len() as u32;
-    sites(pf, key).into_iter().filter(|s| s.0 >= p && s.0 < e).collect()
+    sites(pf, key)
+        .into_iter()
+        .filter(|s| s.0 >= p && s.0 < e)
+        .collect()
 }
 
 fn proven(v: &crate::Verdict) -> bool {
@@ -50,8 +64,14 @@ fn proven(v: &crate::Verdict) -> bool {
 fn show(tag: &str, src: &str, pf: &crate::ProgramFacts, keys: &[&str]) {
     for k in keys {
         for s in sites(pf, k) {
-            let ctx: String = src.get(s.0 as usize..(s.0 as usize + 14).min(src.len())).unwrap_or("?").into();
-            eprintln!("AS1 {tag} site .{k} @{} {:?} call={} verdict={:?} recv={:?}", s.0, ctx, s.1, s.2, s.3);
+            let ctx: String = src
+                .get(s.0 as usize..(s.0 as usize + 14).min(src.len()))
+                .unwrap_or("?")
+                .into();
+            eprintln!(
+                "AS1 {tag} site .{k} @{} {:?} call={} verdict={:?} recv={:?}",
+                s.0, ctx, s.1, s.2, s.3
+            );
         }
     }
 }
@@ -65,7 +85,14 @@ fn show_hir(tag: &str, src: &str, key: &str) {
     for (i, l) in lines.iter().enumerate() {
         if l.contains(&pat) {
             let lo = i.saturating_sub(4);
-            eprintln!("AS1 {tag} HIR {}", lines[lo..=i].iter().map(|x| x.trim()).collect::<Vec<_>>().join(" "));
+            eprintln!(
+                "AS1 {tag} HIR {}",
+                lines[lo..=i]
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
         }
     }
 }
@@ -81,7 +108,10 @@ fn accsite1_s1_data_store_mono() {
     show("S1", S1, &pf, &["x"]);
     show_hir("S1", S1, "x");
     let st = at(&pf, S1, "x", "v.x = ");
-    assert!(st.len() == 1 && matches!(st[0].2, crate::Verdict::T0Mono), "S1 store v.x: {st:?}");
+    assert!(
+        st.len() == 1 && matches!(st[0].2, crate::Verdict::T0Mono),
+        "S1 store v.x: {st:?}"
+    );
 }
 
 // S2: setter store, plain and compound; S3: getter read.
@@ -102,7 +132,10 @@ fn accsite1_s2_setter_store_exact() {
     let c = at(&pf, S2, "y", "e.y += ");
     assert!(a.len() == 1 && proven(&a[0].2), "S2 e.y = : {a:?}");
     // compound: the getter read and the setter store, both proven
-    assert!(c.len() == 2 && c.iter().all(|s| proven(&s.2)), "S2 e.y += : {c:?}");
+    assert!(
+        c.len() == 2 && c.iter().all(|s| proven(&s.2)),
+        "S2 e.y += : {c:?}"
+    );
 }
 
 const S3: &str = "class G { g = 1; }
@@ -130,7 +163,10 @@ fn accsite1_s4_data_store_set() {
     let pf = facts(S4);
     show("S4", S4, &pf, &["x"]);
     let st = at(&pf, S4, "x", "o.x = ");
-    assert!(st.len() == 1 && matches!(st[0].2, crate::Verdict::T0Set), "S4 store o.x: {st:?}");
+    assert!(
+        st.len() == 1 && matches!(st[0].2, crate::Verdict::T0Set),
+        "S4 store o.x: {st:?}"
+    );
 }
 
 // S5: inherited setter (accessor on the base, receiver a subclass instance).
@@ -148,7 +184,10 @@ fn accsite1_s5_inherited_setter() {
     let st = at(&pf, S5, "y", "d.y = ");
     let rd = at(&pf, S5, "y", "d.y);");
     assert!(st.len() == 1 && proven(&st[0].2), "S5 store d.y: {st:?}");
-    assert!(rd.len() == 1 && proven(&rd[0].2), "S5 read d.y (getter): {rd:?}");
+    assert!(
+        rd.len() == 1 && proven(&rd[0].2),
+        "S5 read d.y (getter): {rd:?}"
+    );
 }
 
 // S6: an own data property shadows the prototype accessor on ONE instance.
@@ -182,7 +221,10 @@ fn accsite1_k1_keep_json_receiver() {
     let pf = facts(K1);
     show("K1", K1, &pf, &["y"]);
     let st = at(&pf, K1, "y", "o.y = ");
-    assert!(st.len() == 1 && !proven(&st[0].2), "K1 store must be a site, unproven: {st:?}");
+    assert!(
+        st.len() == 1 && !proven(&st[0].2),
+        "K1 store must be a site, unproven: {st:?}"
+    );
 }
 
 // K2 KEEP: store to a getter-only accessor (10.1.9.2 step 7: [[Set]] returns
@@ -217,7 +259,10 @@ fn accsite1_k2_keep_getter_only_throws() {
         let pf = facts(src);
         show(tag, src, &pf, &["y"]);
         let st = at(&pf, src, "y", "e.y = ");
-        assert!(st.len() == 1 && matches!(st[0].2, crate::Verdict::Throws), "{tag} strict store: {st:?}");
+        assert!(
+            st.len() == 1 && matches!(st[0].2, crate::Verdict::Throws),
+            "{tag} strict store: {st:?}"
+        );
     }
 }
 
@@ -234,7 +279,10 @@ fn accsite1_k3_keep_replaced_setter() {
     let pf = facts(K3);
     show("K3", K3, &pf, &["y", "q", "_y"]);
     let st = at(&pf, K3, "y", "e.y = ");
-    assert!(st.len() == 1 && !proven(&st[0].2), "K3 store must be a site, not exact: {st:?}");
+    assert!(
+        st.len() == 1 && !proven(&st[0].2),
+        "K3 store must be a site, not exact: {st:?}"
+    );
 }
 
 // K4 KEEP: a store of a key absent at birth adds a key: not a slot store.
@@ -266,7 +314,10 @@ fn accsite1_p1_setter_effect_modelled() {
     let pf = facts(P1);
     show("P1", P1, &pf, &["w", "_y", "y"]);
     let w = sites(&pf, "w");
-    assert!(w.iter().any(|s| s.3.iter().any(|r| r.contains('W'))), "P1 setter effect missing: {w:?}");
+    assert!(
+        w.iter().any(|s| s.3.iter().any(|r| r.contains('W'))),
+        "P1 setter effect missing: {w:?}"
+    );
 }
 
 // P2 probe: the getter's result flows to the read (`e.y.g` receiver G), and
@@ -284,5 +335,8 @@ fn accsite1_p2_getter_effect_modelled() {
     let pf = facts(P2);
     show("P2", P2, &pf, &["g", "y", "_s", "length"]);
     let g = sites(&pf, "g");
-    assert!(g.iter().any(|s| s.3.iter().any(|r| r.contains('G'))), "P2 getter result missing: {g:?}");
+    assert!(
+        g.iter().any(|s| s.3.iter().any(|r| r.contains('G'))),
+        "P2 getter result missing: {g:?}"
+    );
 }

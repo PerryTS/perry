@@ -30,7 +30,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) and receivers of the read/call sites of `key`.
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<(String, Vec<String>)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -82,8 +86,14 @@ fn r9birth5_b1_other_keys_added() {
 // b2 (KEEP): a method stores `this._a`: own or prototype: unproven.
 #[test]
 fn r9birth5_b2_own_store_of_the_key() {
-    let pf = facts(&src("  reset() { (this as any)._a = () => 3; }", "new P(1).reset();"));
-    assert!(none_proven(&pf, "_a"), "b2 this._a proven although stored on the instance");
+    let pf = facts(&src(
+        "  reset() { (this as any)._a = () => 3; }",
+        "new P(1).reset();",
+    ));
+    assert!(
+        none_proven(&pf, "_a"),
+        "b2 this._a proven although stored on the instance"
+    );
 }
 
 // b3 (KEEP): a computed-key store with an unknown key may name `_a`.
@@ -93,7 +103,10 @@ fn r9birth5_b3_computed_store() {
         "  put(k: any) { (this as any)[k] = 5; }",
         "new P(1).put(process.argv[2]);",
     ));
-    assert!(none_proven(&pf, "_a"), "b3 this._a proven beside an unknown computed store");
+    assert!(
+        none_proven(&pf, "_a"),
+        "b3 this._a proven beside an unknown computed store"
+    );
 }
 
 // b4 (KEEP): `Object.assign(this, o)` with an unknown `o` may add `_a`.
@@ -103,7 +116,10 @@ fn r9birth5_b4_object_assign() {
         "  merge(o: any) { Object.assign(this, o); }",
         "new P(1).merge(JSON.parse(process.argv[2] ?? \"{}\"));",
     ));
-    assert!(none_proven(&pf, "_a"), "b4 this._a proven beside Object.assign of unknown");
+    assert!(
+        none_proven(&pf, "_a"),
+        "b4 this._a proven beside Object.assign of unknown"
+    );
 }
 
 // b5 (KEEP): `Object.defineProperty(this, '_a', ..)` adds an own `_a`.
@@ -113,7 +129,10 @@ fn r9birth5_b5_define_property() {
         "  def() { Object.defineProperty(this, '_a', { value: 7 }); }",
         "new P(1).def();",
     ));
-    assert!(none_proven(&pf, "_a"), "b5 this._a proven beside defineProperty");
+    assert!(
+        none_proven(&pf, "_a"),
+        "b5 this._a proven beside defineProperty"
+    );
 }
 
 // B6: a subclass prototype defines `_a` too; both classes reach the site:
@@ -177,5 +196,8 @@ fn r9birth5_c2_constructor_stored() {
     ));
     let r = reads(&pf, "constructor");
     let src_reads: Vec<_> = r.iter().filter(|(v, _)| !v.starts_with("No")).collect();
-    assert!(src_reads.is_empty(), "c2 this.constructor proven although stored: {r:?}");
+    assert!(
+        src_reads.is_empty(),
+        "c2 this.constructor proven although stored: {r:?}"
+    );
 }

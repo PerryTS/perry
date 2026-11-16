@@ -10,7 +10,11 @@ fn one(src: &str) -> ProgramFacts {
 
 /// The verdict names of the sites of key `key`, in source order.
 fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
     s.iter().map(|s| format!("{:?}", s.verdict)).collect()
 }
@@ -18,11 +22,18 @@ fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
 /// Probe: every `*.ts` under $AUDIT_DIR, sites printed (and the dump when $AUDIT_DUMP is set).
 #[test]
 fn audit2_probe() {
-    let Ok(dir) = std::env::var("AUDIT_DIR") else { return };
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let Ok(dir) = std::env::var("AUDIT_DIR") else {
+        return;
+    };
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     files.sort();
     for f in files {
-        if f.extension().and_then(|e| e.to_str()) != Some("ts") { continue; }
+        if f.extension().and_then(|e| e.to_str()) != Some("ts") {
+            continue;
+        }
         let src = std::fs::read_to_string(&f).unwrap();
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let r = std::panic::catch_unwind(|| {
@@ -30,11 +41,18 @@ fn audit2_probe() {
             let mut s: Vec<_> = pf.sites.iter().collect();
             s.sort_by_key(|s| s.byte_offset);
             for x in s {
-                eprintln!("AUD {name} @{} key={} call={} {:?}", x.byte_offset, x.key, x.is_call, x.verdict);
+                eprintln!(
+                    "AUD {name} @{} key={} call={} {:?}",
+                    x.byte_offset, x.key, x.is_call, x.verdict
+                );
             }
-            if std::env::var("AUDIT_DUMP").is_ok() { eprintln!("{}", pf.dump_text()); }
+            if std::env::var("AUDIT_DUMP").is_ok() {
+                eprintln!("{}", pf.dump_text());
+            }
         });
-        if r.is_err() { eprintln!("AUD {name} PANIC"); }
+        if r.is_err() {
+            eprintln!("AUD {name} PANIC");
+        }
     }
 }
 
@@ -47,16 +65,26 @@ fn audit2_trivial() {
 /// Probe: the numeric binding facts of every `*.ts` under $AUDIT_BIND.
 #[test]
 fn audit2_bind() {
-    let Ok(dir) = std::env::var("AUDIT_BIND") else { return };
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let Ok(dir) = std::env::var("AUDIT_BIND") else {
+        return;
+    };
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     files.sort();
     for f in files {
-        if f.extension().and_then(|e| e.to_str()) != Some("ts") { continue; }
+        if f.extension().and_then(|e| e.to_str()) != Some("ts") {
+            continue;
+        }
         let src = std::fs::read_to_string(&f).unwrap();
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let r = std::panic::catch_unwind(|| {
             let pf = one(&src);
-            let Some(mb) = pf.bindings_for("t.ts") else { eprintln!("BND {name} none"); return };
+            let Some(mb) = pf.bindings_for("t.ts") else {
+                eprintln!("BND {name} none");
+                return;
+            };
             for (id, b) in &mb.locals {
                 eprintln!(
                     "BND {name} L{id} prims={:#x} other={} cls={:?} range={:?} ztol={} clen={:?} imm={} celems={:?} slen={}",
@@ -65,10 +93,18 @@ fn audit2_bind() {
                 );
             }
             eprintln!("BND {name} element_reads={:?}", mb.element_reads);
-            eprintln!("BND {name} num_reads={:?} i32_reads={:?} floors={:?}", mb.number_element_reads, mb.int32_element_reads, mb.element_floors);
-            eprintln!("BND {name} const_numbers={:?} inbounds={:?} key_signs={:?}", mb.const_numbers, mb.inbounds_stores, mb.key_signs);
+            eprintln!(
+                "BND {name} num_reads={:?} i32_reads={:?} floors={:?}",
+                mb.number_element_reads, mb.int32_element_reads, mb.element_floors
+            );
+            eprintln!(
+                "BND {name} const_numbers={:?} inbounds={:?} key_signs={:?}",
+                mb.const_numbers, mb.inbounds_stores, mb.key_signs
+            );
         });
-        if r.is_err() { eprintln!("BND {name} PANIC"); }
+        if r.is_err() {
+            eprintln!("BND {name} PANIC");
+        }
     }
 }
 
@@ -82,7 +118,8 @@ fn v(src: &str, key: &str, call: bool) -> Vec<String> {
     v
 }
 fn has(v: &[String], want: &str) -> bool {
-    v.iter().any(|x| x == want || x.starts_with(&format!("{want}(")))
+    v.iter()
+        .any(|x| x == want || x.starts_with(&format!("{want}(")))
 }
 /// `f.a()` after `src`: JavaScript has run `f.a = g` (through `cb` or a conversion of `o`), so
 /// the call may reach g: T0Mono (one callee, the literal method) is wrong.
@@ -143,24 +180,39 @@ fn audit2_u1f_spread_late_position() {
 fn audit2_u1_control_direct() {
     assert!(reaches_g("[1].forEach(cb);"));
     assert!(reaches_g("Object.assign(f, ...[{ a: g }]);"));
-    assert!(!reaches_g("[1].includes(o);"), "SameValueZero converts nothing");
+    assert!(
+        !reaches_g("[1].includes(o);"),
+        "SameValueZero converts nothing"
+    );
 }
 
 /// A2: `delete ob[o]` runs ToPropertyKey(o) (13.5.1.2 step 5.b, 7.1.19): `o.toString()` is called.
 #[test]
 fn audit2_u2_delete_key_to_property_key() {
-    assert!(reaches_g("const ob: any = {}; delete ob[o];"), "toString runs in JS");
+    assert!(
+        reaches_g("const ob: any = {}; delete ob[o];"),
+        "toString runs in JS"
+    );
 }
 /// A2: `Object.fromEntries` creates each property under ToPropertyKey(key) (20.1.2.7, 7.3.6).
 #[test]
 fn audit2_u2b_from_entries_key_to_property_key() {
-    assert!(reaches_g("Object.fromEntries([[o, 1]]);"), "toString runs in JS");
+    assert!(
+        reaches_g("Object.fromEntries([[o, 1]]);"),
+        "toString runs in JS"
+    );
 }
 /// A2: the index arguments of these Array methods are ToIntegerOrInfinity (23.1.3.31 splice,
 /// 23.1.3.20 lastIndexOf, 23.1.3.4 copyWithin, 23.1.3.39 with, 23.1.3.35 toSpliced): `valueOf` runs.
 #[test]
 fn audit2_u2c_array_index_argument_to_number() {
-    let bad = missed(&["[1].splice(o);", "[1].lastIndexOf(1, o);", "[1].copyWithin(o, 0);", "[1].with(o, 2);", "[1].toSpliced(o);"]);
+    let bad = missed(&[
+        "[1].splice(o);",
+        "[1].lastIndexOf(1, o);",
+        "[1].copyWithin(o, 0);",
+        "[1].with(o, 2);",
+        "[1].toSpliced(o);",
+    ]);
     assert!(bad.is_empty(), "valueOf runs in JS: {bad:?}");
 }
 /// A2 control: the fromIndex of `indexOf` and a computed read key are converted (green).
@@ -184,12 +236,17 @@ fn audit2_u3_for_in_literal_proto_keys() {
 #[test]
 fn audit2_u3b_for_in_literal_proto_throws() {
     let r = v("const src: any = { __proto__: { a: 1 } }; const h: any = {}; for (const k in src) h[k] = { zz: 1 }; h.a.zz;\n", "zz", false);
-    assert!(!has(&r, "Throws") && !has(&r, "Dead"), "h.a is an object in JS: {r:?}");
+    assert!(
+        !has(&r, "Throws") && !has(&r, "Dead"),
+        "h.a is an object in JS: {r:?}"
+    );
 }
 /// A3 control: the same chain made by `Object.create` is enumerated (green).
 #[test]
 fn audit2_u3_control_object_create() {
-    assert!(reaches_g("const src: any = Object.create({ a: 1 }); for (const k in src) f[k] = g;"));
+    assert!(reaches_g(
+        "const src: any = Object.create({ a: 1 }); for (const k in src) f[k] = g;"
+    ));
 }
 
 /// A4: unknown code that holds a promise reads its fulfilment value (27.2.5.4 then): the value
@@ -207,7 +264,9 @@ fn audit2_u4_promise_value_escapes_with_promise() {
 /// A4 control: `Promise.resolve(f)` escapes f (green).
 #[test]
 fn audit2_u4_control_promise_resolve() {
-    assert!(reaches_g("declare function ext(x: any): any;\next(Promise.resolve(f));"));
+    assert!(reaches_g(
+        "declare function ext(x: any): any;\next(Promise.resolve(f));"
+    ));
 }
 
 /// A5: `a.__proto__ = null` gives `a` no prototype (B.2.2.1.2, 10.1.2.1): `a.m` is undefined and
@@ -229,7 +288,11 @@ fn audit2_u5_null_proto_store() {
 /// A5 control: a relink to an object without `m` is refused (green).
 #[test]
 fn audit2_u5_control_relink_object() {
-    let r = v("class A { m() { return 1; } }\nconst a: any = new A(); a.__proto__ = { n: 1 }; a.m();\n", "m", true);
+    let r = v(
+        "class A { m() { return 1; } }\nconst a: any = new A(); a.__proto__ = { n: 1 }; a.m();\n",
+        "m",
+        true,
+    );
     assert!(has(&r, "No"), "{r:?}");
 }
 
@@ -237,7 +300,11 @@ fn audit2_u5_control_relink_object() {
 /// RegExpAlloc): `.value` is 0 and `(0).zz` is undefined, no throw.
 #[test]
 fn audit2_u6_regexp_last_index_descriptor() {
-    let r = v("const d: any = Object.getOwnPropertyDescriptor(/a/g, \"lastIndex\")!.value; d.zz;\n", "zz", false);
+    let r = v(
+        "const d: any = Object.getOwnPropertyDescriptor(/a/g, \"lastIndex\")!.value; d.zz;\n",
+        "zz",
+        false,
+    );
     assert!(!has(&r, "Throws") && !has(&r, "Dead"), "{r:?}");
 }
 
@@ -255,12 +322,22 @@ fn audit2_u1d_spread_into_builtin_super_and_bound_apply() {
 /// callback passed directly the site exists (the control half, green).
 #[test]
 fn audit2_u1e_spread_callback_body_has_no_site() {
-    let direct = one(&format!("{P}[{{ zz: 1 }}].forEach((x: any) => {{ x.zz; }});\n"));
-    assert!(!names(&direct, "zz", false).is_empty(), "control: direct callback has its site");
-    let spread = one(&format!("{P}[{{ zz: 1 }}].forEach(...[(x: any) => {{ x.zz; }}]);\n"));
+    let direct = one(&format!(
+        "{P}[{{ zz: 1 }}].forEach((x: any) => {{ x.zz; }});\n"
+    ));
+    assert!(
+        !names(&direct, "zz", false).is_empty(),
+        "control: direct callback has its site"
+    );
+    let spread = one(&format!(
+        "{P}[{{ zz: 1 }}].forEach(...[(x: any) => {{ x.zz; }}]);\n"
+    ));
     let r = names(&spread, "zz", false);
     eprintln!("AUDIT2 zz spread: {r:?}");
-    assert!(!r.is_empty() && !has(&r, "Dead"), "x.zz is reached in JS; the solver has no live site: {r:?}");
+    assert!(
+        !r.is_empty() && !has(&r, "Dead"),
+        "x.zz is reached in JS; the solver has no live site: {r:?}"
+    );
 }
 /// A2: more index arguments that are ToIntegerOrInfinity (23.1.3.28 slice, 23.1.3.1 at,
 /// 23.1.3.13 flat depth, splice deleteCount, copyWithin start / end, toSpliced skipCount).
@@ -315,7 +392,13 @@ fn audit2_i1_symbol_key_store() {
 /// member of the chain.
 #[test]
 fn audit2_i1b_symbol_key_read() {
-    assert!(proven("const sy = Symbol(); const x: any = {}; x[sy] = f; x[sy].a();\n", "a"), "x[sy] is f");
+    assert!(
+        proven(
+            "const sy = Symbol(); const x: any = {}; x[sy] = f; x[sy].a();\n",
+            "a"
+        ),
+        "x[sy] is f"
+    );
 }
 /// J2: a computed store whose key shape cannot spell `m` (a known prefix, a Number: 7.1.19,
 /// 6.1.6.1.20 Number::toString) leaves the prototype method call proven.
@@ -338,25 +421,44 @@ fn audit2_i2_control_constant_key() {
 /// array is never an element of the result.
 #[test]
 fn audit2_i3_concat_array_argument() {
-    assert!(proven("const xs: any[] = [f]; xs.concat([])[0].a();\n", "a"), "elements are f only");
+    assert!(
+        proven("const xs: any[] = [f]; xs.concat([])[0].a();\n", "a"),
+        "elements are f only"
+    );
 }
 /// J4: `flat` flattens Array elements only (23.1.3.13.1 FlattenIntoArray step 3.c.v IsArray):
 /// an object element stays itself, its fields are no elements.
 #[test]
 fn audit2_i4_flat_object_element() {
-    let r = v("const xs: any[] = [{ a() { return 1; }, 0: { a: g } }]; xs.flat()[0].a();\n", "a", true);
-    assert!(r.iter().all(|x| x == "T0Mono"), "the one element is the object, its field 0 is no element: {r:?}");
+    let r = v(
+        "const xs: any[] = [{ a() { return 1; }, 0: { a: g } }]; xs.flat()[0].a();\n",
+        "a",
+        true,
+    );
+    assert!(
+        r.iter().all(|x| x == "T0Mono"),
+        "the one element is the object, its field 0 is no element: {r:?}"
+    );
 }
 /// J5: `delete x[k]` removes one own property (10.1.10.1); a prototype method of a class
 /// instance is untouched.
 #[test]
 fn audit2_i5_delete_on_instance() {
-    assert!(proven("class A { m() { return 1; } }\nconst x: any = new A(); x.q = 1; delete x.q; x.m();\n", "m"), "m is on the prototype");
+    assert!(
+        proven(
+            "class A { m() { return 1; } }\nconst x: any = new A(); x.q = 1; delete x.q; x.m();\n",
+            "m"
+        ),
+        "m is on the prototype"
+    );
 }
 /// J6: a catch binding holds what its try block throws (14.15.3); `throw f` alone gives f.
 #[test]
 fn audit2_i6_catch_binding() {
-    assert!(proven("try { throw f; } catch (e: any) { e.a(); }\n", "a"), "e is f");
+    assert!(
+        proven("try { throw f; } catch (e: any) { e.a(); }\n", "a"),
+        "e is f"
+    );
 }
 
 /// The `a` call verdicts of `src` (two receivers h1, h2 born as `{ a() { return 1; } }`).

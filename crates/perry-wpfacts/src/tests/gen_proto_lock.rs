@@ -107,7 +107,10 @@ fn a_computed_store_of_an_unknown_value_leaves_for_of_open() {
         r#"Math.random() > 0.5 ? Symbol.iterator : "z""#,
         "f(process.argv[5])",
     );
-    let pf = facts_of_store(&store, "for (const s of gen()) { console.log(g(s)); break; }");
+    let pf = facts_of_store(
+        &store,
+        "for (const s of gen()) { console.log(g(s)); break; }",
+    );
     let s = site(&pf, "size");
     assert!(!proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
 }
@@ -116,8 +119,14 @@ fn a_computed_store_of_an_unknown_value_leaves_for_of_open() {
 /// iterator method; the iterator it returns comes from unknown code.
 #[test]
 fn a_stored_iterator_method_returning_an_unknown_value_leaves_for_of_open() {
-    let store = top_store_of("Symbol.iterator", "function () { return f(process.argv[5]); }");
-    let pf = facts_of_store(&store, "for (const s of gen()) { console.log(g(s)); break; }");
+    let store = top_store_of(
+        "Symbol.iterator",
+        "function () { return f(process.argv[5]); }",
+    );
+    let pf = facts_of_store(
+        &store,
+        "for (const s of gen()) { console.log(g(s)); break; }",
+    );
     let s = site(&pf, "size");
     assert!(!proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
 }

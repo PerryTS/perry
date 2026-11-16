@@ -10,7 +10,11 @@ fn one(src: &str) -> ProgramFacts {
 
 /// The verdict names of the sites of key `key`, in source order.
 fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
     s.iter().map(|s| format!("{:?}", s.verdict)).collect()
 }
@@ -19,11 +23,18 @@ fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
 /// $AUDIT_DUMP is set).
 #[test]
 fn audit1_probe() {
-    let Ok(dir) = std::env::var("AUDIT_DIR") else { return };
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let Ok(dir) = std::env::var("AUDIT_DIR") else {
+        return;
+    };
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     files.sort();
     for f in files {
-        if f.extension().and_then(|e| e.to_str()) != Some("ts") { continue; }
+        if f.extension().and_then(|e| e.to_str()) != Some("ts") {
+            continue;
+        }
         let src = std::fs::read_to_string(&f).unwrap();
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let r = std::panic::catch_unwind(|| {
@@ -31,11 +42,18 @@ fn audit1_probe() {
             let mut s: Vec<_> = pf.sites.iter().collect();
             s.sort_by_key(|s| s.byte_offset);
             for x in s {
-                eprintln!("AUD {name} @{} key={} call={} {:?}", x.byte_offset, x.key, x.is_call, x.verdict);
+                eprintln!(
+                    "AUD {name} @{} key={} call={} {:?}",
+                    x.byte_offset, x.key, x.is_call, x.verdict
+                );
             }
-            if std::env::var("AUDIT_DUMP").is_ok() { eprintln!("{}", pf.dump_text()); }
+            if std::env::var("AUDIT_DUMP").is_ok() {
+                eprintln!("{}", pf.dump_text());
+            }
         });
-        if r.is_err() { eprintln!("AUD {name} PANIC"); }
+        if r.is_err() {
+            eprintln!("AUD {name} PANIC");
+        }
     }
 }
 
@@ -55,7 +73,8 @@ fn v(src: &str, key: &str, call: bool) -> Vec<String> {
     v
 }
 fn has(v: &[String], want: &str) -> bool {
-    v.iter().any(|x| x == want || x.starts_with(&format!("{want}(")))
+    v.iter()
+        .any(|x| x == want || x.starts_with(&format!("{want}(")))
 }
 fn last_is(v: &[String], want: &str) -> bool {
     has(&v[v.len() - 1..], want)
@@ -79,14 +98,25 @@ fn audit1_u1_control_charat() {
 /// U1b: `c.zz` runs (c is \"a\"): not Dead.
 #[test]
 fn audit1_u1b_string_index_dead() {
-    let r = v("function f(s: string, i: number) { const c: any = s[i]; return c.zz; }\nf(\"abc\", 1);\n", "zz", false);
+    let r = v(
+        "function f(s: string, i: number) { const c: any = s[i]; return c.zz; }\nf(\"abc\", 1);\n",
+        "zz",
+        false,
+    );
     assert!(!has(&r, "Dead"), "c.zz is reached in JS: {r:?}");
 }
 /// U1c: a Number receiver under a computed key reads Number.prototype (7.3.2 GetV): `h` is toFixed.
 #[test]
 fn audit1_u1c_number_computed_key_dead() {
-    let r = v("const u: any = 5;\nconst j: string = [\"toFixed\"][0];\nconst h = u[j];\nh.zz;\n", "zz", false);
-    assert!(!has(&r, "Dead"), "h is Number.prototype.toFixed in JS: {r:?}");
+    let r = v(
+        "const u: any = 5;\nconst j: string = [\"toFixed\"][0];\nconst h = u[j];\nh.zz;\n",
+        "zz",
+        false,
+    );
+    assert!(
+        !has(&r, "Dead"),
+        "h is Number.prototype.toFixed in JS: {r:?}"
+    );
 }
 /// U1 KEEP: a character of a String is no function and stores nothing: `f.a()` keeps its one callee.
 #[test]
@@ -98,12 +128,19 @@ fn audit1_u1_keep_string_index_read() {
 #[test]
 fn audit1_u1_keep_array_by_char_key() {
     let r = v("const o = { m() { return 1; } };\nconst xs: any = { a: o };\nconst s: string = \"ab\";\nxs[s[0]].m();\no.m();\n", "m", true);
-    assert!(last_is(&r, "T0Mono"), "o.m() calls its own method only: {r:?}");
+    assert!(
+        last_is(&r, "T0Mono"),
+        "o.m() calls its own method only: {r:?}"
+    );
 }
 /// U2: a `__proto__` store on a class instance relinks it (B.2.2.1.2): `a.m()` calls g.
 #[test]
 fn audit1_u2_proto_store_class_instance() {
-    let r = v("class A { m() { return 1; } }\nconst a: any = new A();\na.__proto__ = { m: g };\na.m();\n", "m", true);
+    let r = v(
+        "class A { m() { return 1; } }\nconst a: any = new A();\na.__proto__ = { m: g };\na.m();\n",
+        "m",
+        true,
+    );
     assert!(!has(&r, "T0Mono"), "a.m() calls g in JS: {r:?}");
 }
 /// U2b: the same on a class prototype: `new B().m()` calls g.
@@ -137,16 +174,34 @@ fn audit1_u5_builtin_accessor_descriptor() {
     let src = "class A { m() { return 1; } }\nconst a = new A();\nconst set = (Object.getOwnPropertyDescriptor(Object.prototype, \"__proto__\") as any).set;\nset.call(a, { m: g });\na.m();\n";
     let c = v(src, "call", true);
     let m = v(src, "m", true);
-    assert!(!has(&c, "Throws") && !has(&m, "T0Mono"), "set is a function, a.m() calls g: {c:?} {m:?}");
+    assert!(
+        !has(&c, "Throws") && !has(&m, "T0Mono"),
+        "set is a function, a.m() calls g: {c:?} {m:?}"
+    );
 }
 /// U5b: own data members of a function and of a namespace have data descriptors with their value
 /// (20.2.4.2 name, 21.3.1.6 Math.PI): `.value.zz` is `undefined`, no TypeError.
 #[test]
 fn audit1_u5b_intrinsic_data_descriptor() {
-    let a = v("const X: any = (Object.getOwnPropertyDescriptor(g, \"name\") as any).value;\nX.zz;\n", "zz", false);
-    let b = v("const X: any = (Object.getOwnPropertyDescriptor(Math, \"PI\") as any).value;\nX.zz;\n", "zz", false);
-    let c = v("const X: any = (Object.getOwnPropertyDescriptor(g, \"prototype\") as any).value;\nX.zz;\n", "zz", false);
-    assert!(!has(&a, "Throws") && !has(&b, "Throws") && !has(&c, "Throws"), "{a:?} {b:?} {c:?}");
+    let a = v(
+        "const X: any = (Object.getOwnPropertyDescriptor(g, \"name\") as any).value;\nX.zz;\n",
+        "zz",
+        false,
+    );
+    let b = v(
+        "const X: any = (Object.getOwnPropertyDescriptor(Math, \"PI\") as any).value;\nX.zz;\n",
+        "zz",
+        false,
+    );
+    let c = v(
+        "const X: any = (Object.getOwnPropertyDescriptor(g, \"prototype\") as any).value;\nX.zz;\n",
+        "zz",
+        false,
+    );
+    assert!(
+        !has(&a, "Throws") && !has(&b, "Throws") && !has(&c, "Throws"),
+        "{a:?} {b:?} {c:?}"
+    );
 }
 /// U6: a String source has own enumerable index keys (10.4.3): `Object.assign({}, \"ab\")[0]` is \"a\".
 #[test]
@@ -154,7 +209,10 @@ fn audit1_u6_string_source_index_keys() {
     let a = v("const f = { a() { return 1; } };\nconst t: any = Object.assign({}, \"ab\");\n(f as any)[t[0]] = g;\nf.a();\n", "a", true);
     let b = v("const f = { a() { return 1; } };\nconst t: any = { ...(\"ab\" as any) };\n(f as any)[t[0]] = g;\nf.a();\n", "a", true);
     let c = v("const f = { a() { return 1; } };\nconst t: any = new String(\"ab\");\n(f as any)[t[0]] = g;\nf.a();\n", "a", true);
-    assert!(!has(&a, "T0Mono") && !has(&b, "T0Mono") && !has(&c, "T0Mono"), "f.a() calls g: {a:?} {b:?} {c:?}");
+    assert!(
+        !has(&a, "T0Mono") && !has(&b, "T0Mono") && !has(&c, "T0Mono"),
+        "f.a() calls g: {a:?} {b:?} {c:?}"
+    );
 }
 /// U6 KEEP: an object source copies its own keys only: `t.a` is the method, `f.a()` keeps its callee.
 #[test]
@@ -165,7 +223,11 @@ fn audit1_u6_keep_object_source() {
 /// U7: `Object.fromEntries([[\"a\", {q:1}]]).a` is the object (20.1.2.7): `.zz` is `undefined`, no TypeError.
 #[test]
 fn audit1_u7_from_entries_named_read() {
-    let r = v("const X: any = Object.fromEntries([[\"a\", { q: 1 }]]);\nX.a.zz;\n", "zz", false);
+    let r = v(
+        "const X: any = Object.fromEntries([[\"a\", { q: 1 }]]);\nX.a.zz;\n",
+        "zz",
+        false,
+    );
     assert!(!has(&r, "Throws"), "X.a is {{q:1}} in JS: {r:?}");
 }
 
@@ -174,13 +236,19 @@ fn audit1_u7_from_entries_named_read() {
 fn audit1_u7_from_entries_sources() {
     let a = v("const m = new Map<any, any>([[\"a\", { q: 1 }]]);\nconst X: any = Object.fromEntries(m);\nX.a.zz;\n", "zz", false);
     let b = v("const o = { a: { q: 1 } };\nconst X: any = Object.fromEntries(Object.entries(o));\nX.a.zz;\n", "zz", false);
-    assert!(!has(&a, "Throws") && !has(&b, "Throws"), "X.a is {{q:1}} in JS: {a:?} {b:?}");
+    assert!(
+        !has(&a, "Throws") && !has(&b, "Throws"),
+        "X.a is {{q:1}} in JS: {a:?} {b:?}"
+    );
 }
 /// U7 KEEP (I8): a key is no value of the result: the entry key `o` stays unescaped, `o.m()` keeps its callee.
 #[test]
 fn audit1_u7_keep_key_is_no_value() {
     let r = v("const o = { m() { return 1; } };\nconst X: any = Object.fromEntries([[o, 1]]);\nconst y = X.b;\no.m();\n", "m", true);
-    assert!(last_is(&r, "T0Mono"), "o.m() calls its own method only: {r:?}");
+    assert!(
+        last_is(&r, "T0Mono"),
+        "o.m() calls its own method only: {r:?}"
+    );
 }
 
 // ---- IMPRECISE: red = a wide answer where the exact one is narrow.
@@ -188,13 +256,24 @@ fn audit1_u7_keep_key_is_no_value() {
 /// I1: iterating a Set yields its values only (24.2.5.2): `e` is the literal.
 #[test]
 fn audit1_i1_set_for_of() {
-    let r = v("const s = new Set<any>([{ zz: 1 }]);\nfor (const e of s) { e.zz; }\n", "zz", false);
-    assert!(last_is(&r, "T0Mono") || last_is(&r, "T0Set"), "e is only the literal: {r:?}");
+    let r = v(
+        "const s = new Set<any>([{ zz: 1 }]);\nfor (const e of s) { e.zz; }\n",
+        "zz",
+        false,
+    );
+    assert!(
+        last_is(&r, "T0Mono") || last_is(&r, "T0Set"),
+        "e is only the literal: {r:?}"
+    );
 }
 /// I2: `Object.freeze` changes no value and no [[Prototype]] (20.1.2.6, 7.3.16).
 #[test]
 fn audit1_i2_freeze_keeps_method() {
-    let r = v("const o = { m() { return 1; } };\nObject.freeze(o);\no.m();\n", "m", true);
+    let r = v(
+        "const o = { m() { return 1; } };\nObject.freeze(o);\no.m();\n",
+        "m",
+        true,
+    );
     assert!(has(&r, "T0Mono"), "{r:?}");
 }
 /// I3: a constant-key data descriptor defineProperty on another key is one store (10.1.6.3).
@@ -218,12 +297,19 @@ fn audit1_u8_object_assign_proto_key_relinks_class() {
     let src = "class A { x: any = { zz: 1 }; }\nclass C {}\nclass B extends A {}\nclass D extends B {}\nconst go = () => { const b: any = new D(); b.x.zz; };\nObject.assign(B, { [\"__proto__\"]: C });\ngo();\n";
     let x = v(src, "x", false);
     let z = v(src, "zz", false);
-    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "b.x is undefined in JS (C constructs): {x:?} {z:?}");
+    assert!(
+        !has(&x, "T0Mono") && !has(&z, "T0Mono"),
+        "b.x is undefined in JS (C constructs): {x:?} {z:?}"
+    );
 }
 /// U8 keep: a source without a key that may be `__proto__` relinks nothing: B keeps A as parent.
 #[test]
 fn audit1_u8_keep_plain_and_other_computed_key() {
-    for a in ["Object.assign(B, { a: 1 });", "const k = g() ? \"a\" : \"b\";\nObject.assign(B, { [k]: C });", "const q: any = { ...{ [\"__proto__\"]: C } };\nq;"] {
+    for a in [
+        "Object.assign(B, { a: 1 });",
+        "const k = g() ? \"a\" : \"b\";\nObject.assign(B, { [k]: C });",
+        "const q: any = { ...{ [\"__proto__\"]: C } };\nq;",
+    ] {
         let src = format!("class A {{ x: any = {{ zz: 1 }}; }}\nclass C {{}}\nclass B extends A {{}}\nclass D extends B {{}}\nconst go = () => {{ const b: any = new D(); b.x.zz; }};\n{a}\ngo();\n");
         let x = v(&src, "x", false);
         assert!(has(&x, "T0Mono"), "{a}: {x:?}");
@@ -241,7 +327,10 @@ fn audit1_u8_control_set_prototype_of() {
 #[test]
 fn audit1_i5_subclass_proto_store_widens_parent() {
     let r = v("class A { m(): any { return 1; } }\nclass B extends A {}\nclass C extends A {}\n(B.prototype as any).m = g;\nconst a: any = new A(); const b: any = new B(); const c: any = new C();\na.m(); b.m(); c.m();\n", "m", true);
-    assert!(r.iter().all(|x| x == "T0Mono"), "a.m() and c.m() call A::m only, b.m() g only: {r:?}");
+    assert!(
+        r.iter().all(|x| x == "T0Mono"),
+        "a.m() and c.m() call A::m only, b.m() g only: {r:?}"
+    );
 }
 
 // ---- AUDFIX2 KEEP cases: neighbouring shapes that stay proven.
@@ -249,7 +338,11 @@ fn audit1_i5_subclass_proto_store_widens_parent() {
 /// U2 keep: a store of another key on the instance does not relink it: `a.m()` is A::m alone.
 #[test]
 fn audit1_u2_keep_other_key_store() {
-    let r = v("class A { m() { return 1; } }\nconst a: any = new A();\na.zz = { m: g };\na.m();\n", "m", true);
+    let r = v(
+        "class A { m() { return 1; } }\nconst a: any = new A();\na.zz = { m: g };\na.m();\n",
+        "m",
+        true,
+    );
     assert!(has(&r, "T0Mono"), "a.m() calls A::m alone: {r:?}");
 }
 /// U2 keep: a `__proto__` store on one class's instance leaves an unrelated class's calls proven.
@@ -282,8 +375,15 @@ fn audit1_u4_keep_receiver_is_target() {
 #[test]
 fn audit1_u5_keep_user_data_descriptor() {
     let r = v("const o = { a: { m() { return 1; } } };\nconst X: any = (Object.getOwnPropertyDescriptor(o, \"a\") as any).value;\nX.m();\n", "m", true);
-    let w = v("const o = { a: { m() { return 1; } } };\nconst X: any = g() ? o.a : undefined;\nX.m();\n", "m", true);
-    assert!(r == w && !has(&r, "Throws"), "X is o.a or undefined: {r:?} {w:?}");
+    let w = v(
+        "const o = { a: { m() { return 1; } } };\nconst X: any = g() ? o.a : undefined;\nX.m();\n",
+        "m",
+        true,
+    );
+    assert!(
+        r == w && !has(&r, "Throws"),
+        "X is o.a or undefined: {r:?} {w:?}"
+    );
 }
 /// U8 gaps: `Object.assign(B, src)` does Set(B, key, v) for each own enumerable key of `src`
 /// (20.1.2.1); a key that may be `"__proto__"` runs the setter (B.2.2.1.2) and relinks class B:
@@ -296,17 +396,26 @@ fn u8_gap(maker: &str) -> (Vec<String>, Vec<String>) {
 #[test]
 fn audit1_u8_json() {
     let (x, z) = u8_gap("Object.assign(B, JSON.parse(k));");
-    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to a JSON object: {x:?} {z:?}");
+    assert!(
+        !has(&x, "T0Mono") && !has(&z, "T0Mono"),
+        "B may be relinked to a JSON object: {x:?} {z:?}"
+    );
 }
 /// (b) `Object.fromEntries` (20.1.2.7) CreateDataPropertyOrThrow under the entry key.
 #[test]
 fn audit1_u8_from_entries() {
     let (x, z) = u8_gap("Object.assign(B, Object.fromEntries([[k, C]]));");
-    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to C: {x:?} {z:?}");
+    assert!(
+        !has(&x, "T0Mono") && !has(&z, "T0Mono"),
+        "B may be relinked to C: {x:?} {z:?}"
+    );
 }
 /// (c) `Object.defineProperty(s, k, { value })` (20.1.2.4) defines an own key `k`.
 #[test]
 fn audit1_u8_define_property() {
     let (x, z) = u8_gap("const s: any = {};\nObject.defineProperty(s, k, { value: C, enumerable: true });\nObject.assign(B, s);");
-    assert!(!has(&x, "T0Mono") && !has(&z, "T0Mono"), "B may be relinked to C: {x:?} {z:?}");
+    assert!(
+        !has(&x, "T0Mono") && !has(&z, "T0Mono"),
+        "B may be relinked to C: {x:?} {z:?}"
+    );
 }

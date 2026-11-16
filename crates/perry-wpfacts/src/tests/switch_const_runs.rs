@@ -41,7 +41,11 @@ fn recv(pf: &ProgramFacts, key: &str) -> Vec<String> {
         .sites
         .iter()
         .filter(|s| s.key == key && !s.is_call)
-        .flat_map(|s| s.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()))
+        .flat_map(|s| {
+            s.receivers
+                .iter()
+                .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+        })
         .collect();
     v.sort();
     v.dedup();
@@ -58,7 +62,12 @@ fn late_constants_run_their_clauses_only() {
     let pf = facts(&src(LIT, &["'number'", "'q'"], ""));
     let c = recv(&pf, "p");
     let l = recv(&pf, "length");
-    assert!(!c.contains(&"B".to_string()) && c.contains(&"A".to_string()) && c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        !c.contains(&"B".to_string())
+            && c.contains(&"A".to_string())
+            && c.contains(&"D".to_string()),
+        "{c:?}"
+    );
     assert!(!has_array(&l), "{l:?}");
 }
 
@@ -68,7 +77,12 @@ fn late_constants_with_typed_array_construct() {
     let pf = facts(&src(TA, &["'number'", "'quaternion'", "'vector'"], ""));
     let c = recv(&pf, "p");
     let l = recv(&pf, "length");
-    assert!(!c.contains(&"B".to_string()) && c.contains(&"A".to_string()) && c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        !c.contains(&"B".to_string())
+            && c.contains(&"A".to_string())
+            && c.contains(&"D".to_string()),
+        "{c:?}"
+    );
     assert!(!has_array(&l), "{l:?}");
 }
 
@@ -78,7 +92,12 @@ fn constant_of_the_array_clause_runs_it() {
     let pf = facts(&src(TA, &["'number'", "'string'"], ""));
     let c = recv(&pf, "p");
     let l = recv(&pf, "length");
-    assert!(c.contains(&"B".to_string()) && c.contains(&"D".to_string()) && !c.contains(&"A".to_string()), "{c:?}");
+    assert!(
+        c.contains(&"B".to_string())
+            && c.contains(&"D".to_string())
+            && !c.contains(&"A".to_string()),
+        "{c:?}"
+    );
     assert!(has_array(&l), "{l:?}");
 }
 
@@ -87,7 +106,10 @@ fn constant_of_the_array_clause_runs_it() {
 fn unknown_string_runs_every_clause() {
     let pf = facts(&src(TA, &["process.argv[2]", "'quaternion'"], ""));
     let c = recv(&pf, "p");
-    assert!(["A", "B", "D"].iter().all(|k| c.contains(&k.to_string())), "{c:?}");
+    assert!(
+        ["A", "B", "D"].iter().all(|k| c.contains(&k.to_string())),
+        "{c:?}"
+    );
     assert!(has_array(&recv(&pf, "length")));
 }
 
@@ -97,11 +119,21 @@ fn fallthrough_from_s_runs_b() {
     let pf = facts(&src(FALL, &["'s'", "'q'"], ""));
     let c = recv(&pf, "p");
     // c is A ('q') or B ('s' falls into 'b'); e is D only from 's'.
-    assert!(c.contains(&"A".to_string()) && c.contains(&"B".to_string()) && c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        c.contains(&"A".to_string())
+            && c.contains(&"B".to_string())
+            && c.contains(&"D".to_string()),
+        "{c:?}"
+    );
     let pf = facts(&src(FALL, &["'b'", "'q'"], ""));
     let c = recv(&pf, "p");
     // No 's': e is never stored, c never D (default unreached).
-    assert!(c.contains(&"A".to_string()) && c.contains(&"B".to_string()) && !c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        c.contains(&"A".to_string())
+            && c.contains(&"B".to_string())
+            && !c.contains(&"D".to_string()),
+        "{c:?}"
+    );
 }
 
 // Control 4: a second call path passes an unknown string later: the
@@ -148,7 +180,12 @@ fn prototype_assigned_names_run_their_clauses_only() {
     let pf = facts(&src_proto(TA, &["'number'", "'quaternion'", "'vector'"]));
     let c = recv(&pf, "p");
     let l = recv(&pf, "length");
-    assert!(!c.contains(&"B".to_string()) && c.contains(&"A".to_string()) && c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        !c.contains(&"B".to_string())
+            && c.contains(&"A".to_string())
+            && c.contains(&"D".to_string()),
+        "{c:?}"
+    );
     assert!(!has_array(&l), "{l:?}");
 }
 
@@ -157,7 +194,12 @@ fn prototype_assigned_names_run_their_clauses_only() {
 fn undefined_runs_the_default_only() {
     let pf = facts(&src(LIT, &["undefined", "'q'"], ""));
     let c = recv(&pf, "p");
-    assert!(!c.contains(&"B".to_string()) && c.contains(&"A".to_string()) && c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        !c.contains(&"B".to_string())
+            && c.contains(&"A".to_string())
+            && c.contains(&"D".to_string()),
+        "{c:?}"
+    );
     assert!(!has_array(&recv(&pf, "length")));
 }
 
@@ -166,7 +208,12 @@ fn undefined_runs_the_default_only() {
 fn undefined_and_the_array_constant() {
     let pf = facts(&src(LIT, &["undefined", "'s'"], ""));
     let c = recv(&pf, "p");
-    assert!(c.contains(&"B".to_string()) && c.contains(&"D".to_string()) && !c.contains(&"A".to_string()), "{c:?}");
+    assert!(
+        c.contains(&"B".to_string())
+            && c.contains(&"D".to_string())
+            && !c.contains(&"A".to_string()),
+        "{c:?}"
+    );
 }
 
 // (d) Control: a case test that is no string literal (`case undefined:`):
@@ -176,7 +223,10 @@ fn non_literal_case_runs_every_clause() {
     let body = "switch (t) { case 'q': this.b = { k: 1 }; this.c = new A(); break; case undefined: this.b = { k: 2 }; this.c = new D(); break; case 's': this.b = [n]; this.c = new B(); break; }";
     let pf = facts(&src(body, &["undefined", "'q'"], ""));
     let c = recv(&pf, "p");
-    assert!(["A", "B", "D"].iter().all(|k| c.contains(&k.to_string())), "{c:?}");
+    assert!(
+        ["A", "B", "D"].iter().all(|k| c.contains(&k.to_string())),
+        "{c:?}"
+    );
 }
 
 // (e) Control: the default in the middle falls through into the next
@@ -188,5 +238,10 @@ fn undefined_falls_from_middle_default() {
     let c = recv(&pf, "p");
     // c: A ('q') or B (only through the default falling into 's': no
     // argument is 's'); never D ('b' unreached; e is never stored).
-    assert!(c.contains(&"A".to_string()) && c.contains(&"B".to_string()) && !c.contains(&"D".to_string()), "{c:?}");
+    assert!(
+        c.contains(&"A".to_string())
+            && c.contains(&"B".to_string())
+            && !c.contains(&"D".to_string()),
+        "{c:?}"
+    );
 }

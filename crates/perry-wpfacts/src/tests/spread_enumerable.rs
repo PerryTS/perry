@@ -32,7 +32,9 @@ fn a_class_prototype_members_not_copied() {
         "const t: any = { ...Qz.prototype };",
     ] {
         for key in ["m", "constructor"] {
-            let k = v(&format!("{R}{copy}\nconst r = new R(t.{key});\nconsole.log(r.v);\n"));
+            let k = v(&format!(
+                "{R}{copy}\nconst r = new R(t.{key});\nconsole.log(r.v);\n"
+            ));
             eprintln!("a {copy} {key} {k:?}");
             assert!(no_qz(&k), "{copy} t.{key}: {k:?}");
         }
@@ -45,12 +47,20 @@ fn a_class_prototype_members_not_copied() {
 #[test]
 fn b_array_length_and_function_prototype_not_copied() {
     let k = v(&format!("{R}const t: any = {{}}; Object.assign(t, []);\nconst r = new R(t.length);\nconsole.log(r.v, t[0]);\n"));
-    let c = v(&format!("{R}const t: any = {{}};\nconst r = new R(t.length);\nconsole.log(r.v, t[0]);\n"));
+    let c = v(&format!(
+        "{R}const t: any = {{}};\nconst r = new R(t.length);\nconsole.log(r.v, t[0]);\n"
+    ));
     eprintln!("b length {k:?} control {c:?}");
-    assert!(!k.top && k.prims == c.prims && k.objs.is_empty(), "t.length {k:?} vs {c:?}");
+    assert!(
+        !k.top && k.prims == c.prims && k.objs.is_empty(),
+        "t.length {k:?} vs {c:?}"
+    );
     let k = v(&format!("{R}function fq(this: any) {{ this.x = 1; }}\nconst t: any = {{}}; Object.assign(t, fq);\nconst r = new R(t.prototype);\nconsole.log(r.v, new (fq as any)());\n"));
     eprintln!("b prototype {k:?}");
-    assert!(!k.top && k.objs.is_empty() && k.funcs == 0, "t.prototype {k:?}");
+    assert!(
+        !k.top && k.objs.is_empty() && k.funcs == 0,
+        "t.prototype {k:?}"
+    );
 }
 
 /// (c) keys made by assignment or by a literal are enumerable: copied.
@@ -62,7 +72,9 @@ fn c_assigned_and_literal_keys_copied() {
         "const s: any = {}; s.k = new K(); const t: any = { ...s };",
         "const s: any = { k: new K() }; const t: any = { ...s };",
     ] {
-        let k = v(&format!("{R}{copy}\nconst r = new R(t.k);\nconsole.log(r.v);\n"));
+        let k = v(&format!(
+            "{R}{copy}\nconst r = new R(t.k);\nconsole.log(r.v);\n"
+        ));
         eprintln!("c {copy} {k:?}");
         assert!(just_k(&k), "{copy}: {k:?}");
     }
@@ -72,10 +84,7 @@ fn c_assigned_and_literal_keys_copied() {
 /// flags are unknown: copied (conservative).
 #[test]
 fn d_defined_enumerable_or_unknown_copied() {
-    for desc in [
-        "{ value: new K(), enumerable: true }",
-        "mk()",
-    ] {
+    for desc in ["{ value: new K(), enumerable: true }", "mk()"] {
         let k = v(&format!("{R}function mk(): any {{ const d: any = {{}}; d.value = new K(); if (Math.random() > 2) d.enumerable = true; return d; }}\nconst s: any = {{}}; Object.defineProperty(s, \"h\", {desc}); const t: any = {{}}; Object.assign(t, s);\nconst r = new R(t.h);\nconsole.log(r.v);\n"));
         eprintln!("d {desc} {k:?}");
         assert!(just_k(&k), "{desc}: {k:?}");

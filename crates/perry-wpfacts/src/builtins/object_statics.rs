@@ -44,7 +44,13 @@ pub(crate) fn descriptor_reads(
     for name in DESCRIPTOR_KEYS {
         let a = m.atom(name);
         let v = node(m);
-        m.cons(desc, Cons::Load { key: Key::Named(a), dst: v });
+        m.cons(
+            desc,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: v,
+            },
+        );
         match name {
             "value" => used[0] = v,
             "get" => used[1] = v,
@@ -137,7 +143,13 @@ pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
 /// model of `t`); a key is no value of `t`.
 pub(crate) fn from_entries(m: &mut Model, it: NodeId, inner: NodeId, t: Tok) {
     let one = Key::Named(m.atom("1"));
-    m.cons(it, Cons::Load { key: one, dst: inner });
+    m.cons(
+        it,
+        Cons::Load {
+            key: one,
+            dst: inner,
+        },
+    );
     let fa = m.field_any(t);
     m.edge(inner, fa);
     // U8: the entry key Get(entry, "0") is an own key of `t` (it may be
@@ -246,7 +258,14 @@ fn define_computed(m: &mut Model, call: CallId, o: NodeId, desc: NodeId, r: u32)
     );
     let [v, dget, dset] = descriptor_reads(m, desc, |m| node(m, call, "b-desc"));
     let site = m.anon_post_site("defineProperty (value call)");
-    m.cons(o, Cons::Store { key: Key::any(), src: v, site });
+    m.cons(
+        o,
+        Cons::Store {
+            key: Key::any(),
+            src: v,
+            site,
+        },
+    );
     for (f, setter) in [(dget, false), (dset, true)] {
         m.cons(
             f,
@@ -282,12 +301,20 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             m.edge(obj, ret);
             if let Some(props) = arg(m, call, 1) {
                 let descs = node(m, call, "b-load");
-                m.cons(props, Cons::Load { key: Key::any(), dst: descs });
+                m.cons(
+                    props,
+                    Cons::Load {
+                        key: Key::any(),
+                        dst: descs,
+                    },
+                );
                 define_computed(m, call, obj, descs, r);
             }
         }
         (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => {
-            let Some(o) = arg(m, call, 0) else { return true };
+            let Some(o) = arg(m, call, 0) else {
+                return true;
+            };
             let p = arg_or_undef(m, call, 1);
             let r = m.reason("E6 Object.setPrototypeOf");
             set_prototype_of(m, o, p, r);
@@ -325,7 +352,9 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             m.edge(o, ret);
         }
         (BuiltinNs::Object, "getOwnPropertyDescriptor") => {
-            let Some(o) = arg(m, call, 0) else { return true };
+            let Some(o) = arg(m, call, 0) else {
+                return true;
+            };
             let k = arg_or_undef(m, call, 1);
             let r = m.reason("ToPropertyKey");
             m.cons(
@@ -343,7 +372,9 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Object, "getOwnPropertyDescriptors") => {
-            let Some(o) = arg(m, call, 0) else { return true };
+            let Some(o) = arg(m, call, 0) else {
+                return true;
+            };
             let td = site_tmpl(m, call, "descriptor");
             let vals = node(m, call, "b-load");
             own_descriptor(m, o, vals, td);
@@ -353,7 +384,9 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             ret_tok(m, call, t);
         }
         (BuiltinNs::Object, "fromEntries") => {
-            let Some(x) = arg(m, call, 0) else { return true };
+            let Some(x) = arg(m, call, 0) else {
+                return true;
+            };
             let it = iterate(m, call, x);
             let inner = node(m, call, "b-load");
             let t = site_tmpl(m, call, "fromEntries");
@@ -361,7 +394,9 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             ret_tok(m, call, t);
         }
         (BuiltinNs::Object, "groupBy") => {
-            let Some(x) = arg(m, call, 0) else { return true };
+            let Some(x) = arg(m, call, 0) else {
+                return true;
+            };
             let f = arg_or_undef(m, call, 1);
             let it = iterate(m, call, x);
             let num = node(m, call, "b-index");

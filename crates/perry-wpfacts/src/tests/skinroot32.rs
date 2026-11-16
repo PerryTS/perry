@@ -13,11 +13,19 @@ use super::*;
 
 /// Receivers (class names) and verdicts of every non-call `.q` / `.r` read.
 fn reads(pf: &ProgramFacts) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| (s.key == "q" || s.key == "r") && !s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| (s.key == "q" || s.key == "r") && !s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     s.iter()
         .map(|s| {
-            let mut r: Vec<String> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+            let mut r: Vec<String> = s
+                .receivers
+                .iter()
+                .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+                .collect();
             r.sort();
             r.dedup();
             format!("{}:{r:?}:{:?}:top={}", s.key, s.verdict, s.top)
@@ -82,7 +90,10 @@ fn r1_dash_uuid_dot_name_is_own_data() {
 /// in the constructor; `add`'s parameter), `toLowerCase` inside.
 #[test]
 fn r2_field_param_lowercase_uuid_is_own_data() {
-    same_as_exact("root.uuid", "(root.name ? root.name : root.uuid) + '.' + 'position'");
+    same_as_exact(
+        "root.uuid",
+        "(root.name ? root.name : root.uuid) + '.' + 'position'",
+    );
 }
 
 /// k1: keys from JSON content alone: any string, may be `__proto__` or
@@ -107,9 +118,17 @@ fn k2_chain_member_with_dot_is_seen() {
                const f: any = o[k];
                console.log(f.q);";
     let pf = facts(src);
-    let v: Vec<String> = pf.sites.iter().filter(|s| s.key == "q" && !s.is_call).flat_map(|s| s.receivers.clone()).collect();
+    let v: Vec<String> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "q" && !s.is_call)
+        .flat_map(|s| s.receivers.clone())
+        .collect();
     eprintln!("SKINROOT32 k2={v:?}");
-    assert!(v.iter().any(|r| r.contains("x.q") || r.contains("P")), "{v:?}");
+    assert!(
+        v.iter().any(|r| r.contains("x.q") || r.contains("P")),
+        "{v:?}"
+    );
 }
 
 /// k3: the store key is the literal "__proto__": the prototype store is

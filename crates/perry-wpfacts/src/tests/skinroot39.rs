@@ -9,11 +9,19 @@ use super::*;
 
 /// Receiver classes of every non-call `.q` read, in program order.
 fn reads(pf: &ProgramFacts) -> Vec<Vec<String>> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "q" && !s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "q" && !s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     s.iter()
         .map(|s| {
-            let mut r: Vec<String> = s.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+            let mut r: Vec<String> = s
+                .receivers
+                .iter()
+                .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+                .collect();
             // Flow-insensitive: a read of a key may also see the object
             // before its store (absent: undefined); that is not the merge.
             r.retain(|c| !c.starts_with("undefined"));
@@ -240,7 +248,10 @@ fn k1_json_key_reads_everything() {
          const g: any = c.get(JSON.parse(process.argv[3]).k);
          console.log(g.q);",
     );
-    assert!(got[0].contains(&"S".to_string()) && got[0].contains(&"N".to_string()), "{got:?}");
+    assert!(
+        got[0].contains(&"S".to_string()) && got[0].contains(&"N".to_string()),
+        "{got:?}"
+    );
 }
 
 /// k2 KEEP: a store under any string may be read under 'a'.
@@ -255,5 +266,8 @@ fn k2_any_store_reaches_constant_read() {
          const g: any = c.get('a');
          console.log(g.q);",
     );
-    assert!(got[0].contains(&"S".to_string()) && got[0].contains(&"Z".to_string()), "{got:?}");
+    assert!(
+        got[0].contains(&"S".to_string()) && got[0].contains(&"Z".to_string()),
+        "{got:?}"
+    );
 }

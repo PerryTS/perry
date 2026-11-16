@@ -67,7 +67,9 @@ fn b_unknown_index_store_falls_back() {
 /// (c) A reordering, a second shift site, a shift in a loop.
 #[test]
 fn c_reverse_falls_back() {
-    any_element("function f(...p: any[]) { p.reverse(); use(p.shift()); } f(\x27lit\x27, new A());");
+    any_element(
+        "function f(...p: any[]) { p.reverse(); use(p.shift()); } f(\x27lit\x27, new A());",
+    );
 }
 #[test]
 fn c_sort_falls_back() {
@@ -85,7 +87,9 @@ fn c_shift_in_loop_falls_back() {
 /// (d) The array reached a heap field or unknown code first.
 #[test]
 fn d_heap_field_falls_back() {
-    any_element("function f(...p: any[]) { holder.x = p; use(p.shift()); } f(\x27lit\x27, new A());");
+    any_element(
+        "function f(...p: any[]) { holder.x = p; use(p.shift()); } f(\x27lit\x27, new A());",
+    );
 }
 #[test]
 fn d_unknown_code_falls_back() {
@@ -107,7 +111,9 @@ fn f_index_zero_store_is_returned() {
 /// (g) Through an identity function and back: still the own array.
 #[test]
 fn g_identity_round_trip_is_exact() {
-    exact("function f(...p: any[]) { p = id(p); use(p.shift()); return p; } f(\x27lit\x27, new A());");
+    exact(
+        "function f(...p: any[]) { p = id(p); use(p.shift()); return p; } f(\x27lit\x27, new A());",
+    );
 }
 
 /// (h) The binding reassigned with another activation\x27s array: that array

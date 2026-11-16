@@ -81,8 +81,14 @@ fn dataview_get_set_results() {
     ]);
     check(&[
         ("new DataView(new ArrayBuffer(8)).getUint8(w);".into(), true),
-        ("new DataView(new ArrayBuffer(8)).setFloat32(0, w);".into(), true),
-        ("(globalThis as any).hostTake(new DataView(new ArrayBuffer(8)).setUint8(0, 1));".into(), false),
+        (
+            "new DataView(new ArrayBuffer(8)).setFloat32(0, w);".into(),
+            true,
+        ),
+        (
+            "(globalThis as any).hostTake(new DataView(new ArrayBuffer(8)).setUint8(0, 1));".into(),
+            false,
+        ),
     ]);
 }
 
@@ -94,7 +100,10 @@ fn array_buffer_is_view() {
     check(&[
         ("ArrayBuffer.isView(o);".into(), false),
         ("pick(ArrayBuffer.isView)(o);".into(), false),
-        ("const r: any = pick(ArrayBuffer.isView)(1); try { r.foo(o); } catch (e) {}".into(), false),
+        (
+            "const r: any = pick(ArrayBuffer.isView)(1); try { r.foo(o); } catch (e) {}".into(),
+            false,
+        ),
         ("ArrayBuffer.isView(w);".into(), false),
     ]);
 }
@@ -151,12 +160,24 @@ fn number_and_string_statics() {
         ("String.fromCharCode(65)", "toFixed", false),
     ]);
     check(&[
-        ("const r: any = pick(Number.isInteger)(1); try { r.foo(o); } catch (e) {}".into(), false),
-        ("pick(Number.isInteger)(w); pick(Number.isSafeInteger)(w);".into(), false),
-        ("pick(Number.isFinite)(w); pick(Number.isNaN)(w);".into(), false),
+        (
+            "const r: any = pick(Number.isInteger)(1); try { r.foo(o); } catch (e) {}".into(),
+            false,
+        ),
+        (
+            "pick(Number.isInteger)(w); pick(Number.isSafeInteger)(w);".into(),
+            false,
+        ),
+        (
+            "pick(Number.isFinite)(w); pick(Number.isNaN)(w);".into(),
+            false,
+        ),
         ("pick(Number.parseFloat)(w);".into(), true),
         ("String.fromCharCode(w);".into(), true),
-        ("String.raw({ raw: [\"a\", \"b\"] } as any, w);".into(), true),
+        (
+            "String.raw({ raw: [\"a\", \"b\"] } as any, w);".into(),
+            true,
+        ),
     ]);
 }
 
@@ -189,7 +210,12 @@ fn realm_objects_without_enumerable_own_props() {
     ];
     let mut cases = Vec::new();
     for k in kinds {
-        cases.push((format!("const x: any = {k}; const c: any = {{ ...x }}; try {{ c.foo(o); }} catch (e) {{}}"), false));
+        cases.push((
+            format!(
+                "const x: any = {k}; const c: any = {{ ...x }}; try {{ c.foo(o); }} catch (e) {{}}"
+            ),
+            false,
+        ));
         cases.push((format!("const x: any = {k}; const c: any = Object.assign({{}}, x); try {{ c.foo(o); }} catch (e) {{}}"), false));
         cases.push((format!("const x: any = {k}; x.foo = (y: any) => (globalThis as any).hostTake(y); const c: any = {{ ...x }}; c.foo(o);"), true));
     }

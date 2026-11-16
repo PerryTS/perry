@@ -90,7 +90,8 @@ impl KeyShape {
         if let Expr::SymbolFor(name) = e {
             return match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(KeyShape {
-                    globs: vec![vec![s.clone()]], free: Vec::new()
+                    globs: vec![vec![s.clone()]],
+                    free: Vec::new(),
                 }),
                 _ => None,
             };
@@ -118,7 +119,8 @@ impl KeyShape {
             }
         }
         lit.then_some(KeyShape {
-            globs: vec![pieces], free: Vec::new()
+            globs: vec![pieces],
+            free: Vec::new(),
         })
     }
 
@@ -145,7 +147,10 @@ impl KeyShape {
         });
         globs.sort();
         globs.dedup();
-        ok.then_some(KeyShape { globs, free: Vec::new() })
+        ok.then_some(KeyShape {
+            globs,
+            free: Vec::new(),
+        })
     }
 
     /// Does a glob of the union match `name`?
@@ -162,7 +167,10 @@ impl KeyShape {
         // A free form may meet anything (no pairwise test is kept for it).
         !self.free.is_empty()
             || !o.free.is_empty()
-            || self.globs.iter().any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
+            || self
+                .globs
+                .iter()
+                .any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
     }
 
     /// May a string of this shape be a Number key (`numeric_key`)?
@@ -170,7 +178,10 @@ impl KeyShape {
         // A free form `X + s`: a Number key when `s` holds only characters
         // a Number's text may hold (`X` may be the rest of that text).
         self.globs.iter().any(|g| glob_may_be_numeric(g))
-            || self.free.iter().any(|(_, s)| s.chars().all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c)))
+            || self.free.iter().any(|(_, s)| {
+                s.chars()
+                    .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+            })
     }
 }
 
@@ -286,7 +297,10 @@ impl Model {
             self.key_shape_census[2] += 1;
         }
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+            });
         }
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -302,9 +316,15 @@ impl Model {
     /// and numeric keys beside the names it admits).
     pub fn glob_shape(&mut self, glob: Vec<String>) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+            });
         }
-        let s = KeyShape { globs: vec![glob], free: Vec::new() };
+        let s = KeyShape {
+            globs: vec![glob],
+            free: Vec::new(),
+        };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
         }
@@ -318,9 +338,15 @@ impl Model {
     /// as `glob_shape` is: also when it may spell a Number key.
     pub fn free_shape(&mut self, e: u128, s: &str) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+            });
         }
-        let k = KeyShape { globs: Vec::new(), free: vec![(e, s.to_string())] };
+        let k = KeyShape {
+            globs: Vec::new(),
+            free: vec![(e, s.to_string())],
+        };
         if let Some(&id) = self.key_shape_ids.get(&k) {
             return id;
         }
@@ -334,10 +360,14 @@ impl Model {
     /// every name, a Number key among them, but no symbol.
     pub fn any_string_shape(&mut self) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+            });
         }
         let s = KeyShape {
-            globs: vec![vec![String::new(), String::new()]], free: Vec::new()
+            globs: vec![vec![String::new(), String::new()]],
+            free: Vec::new(),
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -354,10 +384,14 @@ impl Model {
     /// member name.
     pub fn infix_shape(&mut self, c: char) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+            });
         }
         let s = KeyShape {
-            globs: vec![vec![String::new(), c.to_string(), String::new()]], free: Vec::new()
+            globs: vec![vec![String::new(), c.to_string(), String::new()]],
+            free: Vec::new(),
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;

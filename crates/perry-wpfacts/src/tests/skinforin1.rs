@@ -49,21 +49,32 @@ fn src(pre: &str, lp: &str) -> String {
 }
 
 const SAME_LOCAL: &str = "for (const name in e) { dst[name] = e[name]; }";
-const SAME_PATH: &str = "function add(def: any) { for (const name in def.ext) { dst[name] = def.ext[name]; } } add(j);";
+const SAME_PATH: &str =
+    "function add(def: any) { for (const name in def.ext) { dst[name] = def.ext[name]; } } add(j);";
 
 /// RED today: the EnumChain link `Object.prototype.valueOf` (a BuiltinFn,
 /// not `enum_link`) is read in full (`load_from`, loads.rs family_any).
 #[test]
 fn skinforin1_builtin_fn_link_local() {
     let pf = whole(&src("", SAME_LOCAL));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// RED today, the GLTFLoader shape (subject path re-read, Rule R).
 #[test]
 fn skinforin1_builtin_fn_link_path() {
     let pf = whole(&src("", SAME_PATH));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Stays: the read names ANOTHER object; `other` may lack an own key `e`
@@ -74,7 +85,11 @@ fn keep_skinforin1_other_object_wide() {
         "Object.setPrototypeOf(other, Object.prototype.valueOf);",
         "for (const name in e) { dst[name] = other[name]; }",
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Stays: the program made an ENUMERABLE member on Object.prototype; the
@@ -85,12 +100,20 @@ fn keep_skinforin1_program_enumerable_proto_member() {
         "(Object.prototype as any).foo = Function.prototype.call;",
         SAME_LOCAL,
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control (stays): unknown key, no for-in: any member.
 #[test]
 fn keep_skinforin1_unknown_key_wide() {
     let pf = whole(&src("", "dst.foo = e[process.argv[4]];"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

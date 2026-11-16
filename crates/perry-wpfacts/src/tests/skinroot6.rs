@@ -44,7 +44,11 @@ fn src_of(link: &str, pre: &str, set: bool) -> String {
 }
 
 fn src_base(link: &str, pre: &str, set: bool, base: &str, v0: &str) -> String {
-    let sp = if set { "Object.setPrototypeOf(e, ab);" } else { "" };
+    let sp = if set {
+        "Object.setPrototypeOf(e, ab);"
+    } else {
+        ""
+    };
     format!(
         "const unknown: any = (globalThis as any)[process.argv[2]];
          const j: any = JSON.parse(process.argv[3]);
@@ -68,7 +72,12 @@ fn src(pre: &str) -> String {
 
 fn green(link: &str) {
     let pf = whole(&src_of(link, "", true));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{link}\n{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{link}\n{}",
+        pf.dump_text()
+    );
     let (_, k) = field(&pf, "keptv");
     assert!(!k.top && k.funcs == 0, "{link}: {k:?}\n{}", pf.dump_text());
 }
@@ -78,7 +87,12 @@ fn green(link: &str) {
 #[test]
 fn control_skinroot6_no_set_prototype() {
     let pf = whole(&src_of("new ArrayBuffer(8)", "", false));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// The EnumChain link, an `ArrayBuffer` instance: its program-written
@@ -86,7 +100,12 @@ fn control_skinroot6_no_set_prototype() {
 #[test]
 fn green_skinroot6_arraybuffer_link() {
     let pf = whole(&src(""));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Buffer family: ArrayBuffer, SharedArrayBuffer, DataView.
@@ -107,15 +126,27 @@ fn green_skinroot7_typed_array_link_elements() {
     let base = "{ s: \"x\" }";
     let pf = whole(&src_base("new Uint8Array(2)", "", true, base, "\"i\""));
     let (esc, k) = field(&pf, "keptv");
-    assert!(k.prims & crate::model::prim::NUM != 0 && !k.top && k.funcs == 0, "{k:?}\n{}", pf.dump_text());
+    assert!(
+        k.prims & crate::model::prim::NUM != 0 && !k.top && k.funcs == 0,
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
     assert_eq!(esc, None);
     let pf = whole(&src_base("new BigInt64Array(1)", "", true, base, "\"i\""));
     let (esc, k) = field(&pf, "keptv");
-    assert!(k.prims & crate::model::prim::BIGINT != 0 && !k.top && k.funcs == 0, "{k:?}\n{}", pf.dump_text());
+    assert!(
+        k.prims & crate::model::prim::BIGINT != 0 && !k.top && k.funcs == 0,
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
     assert_eq!(esc, None);
     // Control: without the link no Number reaches.
     let pf = whole(&src_base("new Uint8Array(2)", "", false, base, "\"i\""));
-    assert!(field(&pf, "keptv").1.prims & crate::model::prim::NUM == 0, "{}", pf.dump_text());
+    assert!(
+        field(&pf, "keptv").1.prims & crate::model::prim::NUM == 0,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Collection family: Map, Set, WeakMap, WeakSet, Promise.
@@ -131,7 +162,9 @@ fn green_skinroot7_collection_links() {
 /// read: its function runs with this = dst and leaks it.
 #[test]
 fn keep_skinroot6_program_field_on_buffer_link() {
-    let pf = whole(&src("ab.foo = function (this: any) { (globalThis as any).leak = this; };"));
+    let pf = whole(&src(
+        "ab.foo = function (this: any) { (globalThis as any).leak = this; };",
+    ));
     let k = field(&pf, "foo").1;
     assert!(k.funcs >= 1 || k.top, "{k:?}\n{}", pf.dump_text());
 }

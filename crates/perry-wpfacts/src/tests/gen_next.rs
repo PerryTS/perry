@@ -107,7 +107,11 @@ fn gen_next_u1_own_next_on_the_generator_object() {
     ));
     let (r, v) = at_site(&pf);
     assert!(r.iter().any(|r| r.contains("Alt")), "{r:?} {v:?}");
-    assert!(called(&pf), "user next not seen as called\n{}", pf.dump_text());
+    assert!(
+        called(&pf),
+        "user next not seen as called\n{}",
+        pf.dump_text()
+    );
 }
 
 /// U1b. The own `next` stored through an unknown key.
@@ -120,7 +124,11 @@ fn gen_next_u1b_own_next_under_an_unknown_key() {
     ));
     let (r, v) = at_site(&pf);
     assert!(r.iter().any(|r| r.contains("Alt")), "{r:?} {v:?}");
-    assert!(called(&pf), "user next not seen as called\n{}", pf.dump_text());
+    assert!(
+        called(&pf),
+        "user next not seen as called\n{}",
+        pf.dump_text()
+    );
 }
 
 /// U2. node: prints `4`. `G.prototype.next`.
@@ -132,7 +140,11 @@ fn gen_next_u2_next_on_the_function_prototype() {
     ));
     let (r, v) = at_site(&pf);
     assert!(r.iter().any(|r| r.contains("Alt")), "{r:?} {v:?}");
-    assert!(called(&pf), "user next not seen as called\n{}", pf.dump_text());
+    assert!(
+        called(&pf),
+        "user next not seen as called\n{}",
+        pf.dump_text()
+    );
 }
 
 /// U3. %GeneratorPrototype%.next reached through
@@ -160,7 +172,11 @@ fn gen_next_u4_own_symbol_iterator() {
     ));
     let (r, v) = at_site(&pf);
     assert!(r.iter().any(|r| r.contains("Alt")), "{r:?} {v:?}");
-    assert!(called(&pf), "user next not seen as called\n{}", pf.dump_text());
+    assert!(
+        called(&pf),
+        "user next not seen as called\n{}",
+        pf.dump_text()
+    );
 }
 
 /// U5. The iterable is a generator object or an array.
@@ -271,7 +287,10 @@ fn gen_next_fact_u7_async_generator() {
         "async function* ag() { yield new Svc(); } async function run() { for await (const s of ag()) { console.log(g(s)); } } run();",
     );
     let mb = pf.bindings_for("t.ts").expect("module bindings");
-    assert!(mb.locals.iter().all(|(_, b)| !b.generator_source), "{sources:?}");
+    assert!(
+        mb.locals.iter().all(|(_, b)| !b.generator_source),
+        "{sources:?}"
+    );
 }
 
 #[test]
@@ -314,7 +333,9 @@ fn gen_next_fact_p4_top_store_of_next() {
 /// the direct resume reads the record.
 #[test]
 fn gen_next_fact_u8_own_other_key() {
-    excluded("const it: any = gen(); it.tag = 1; for (const s of it) { console.log(g(s), it.tag); }");
+    excluded(
+        "const it: any = gen(); it.tag = 1; for (const s of it) { console.log(g(s), it.tag); }",
+    );
 }
 
 /// Reading an absent own key stores nothing.

@@ -14,10 +14,18 @@ use super::*;
 fn runs(src: &str, name: &str) -> bool {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let cfg = FactsConfig { max_work: Some(50_000_000), ..FactsConfig::default() };
+    let cfg = FactsConfig {
+        max_work: Some(50_000_000),
+        ..FactsConfig::default()
+    };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(pf.body_reach.complete, "activated");
-    let id = hir.functions.iter().find(|f| f.name == name).expect(name).id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .expect(name)
+        .id;
     pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
 }
 
@@ -69,7 +77,10 @@ fn r9sites6_s2_keep_unknown_format() {
 #[test]
 fn r9sites6_s3_keep_reassigned_helper() {
     let on = runs(
-        &program("'x'", "function enh( params: any ) { if ( ! params ) params = [ a ]; return params; }"),
+        &program(
+            "'x'",
+            "function enh( params: any ) { if ( ! params ) params = [ a ]; return params; }",
+        ),
         "hit",
     );
     eprintln!("R9SITES6 S3 hit runs={on}");

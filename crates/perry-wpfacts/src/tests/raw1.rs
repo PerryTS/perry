@@ -12,7 +12,11 @@ fn one(src: &str) -> ProgramFacts {
 
 fn calls(src: &str, key: &str) -> Vec<String> {
     let pf = one(src);
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("HD1 {key} {src:?}: {v:?}");

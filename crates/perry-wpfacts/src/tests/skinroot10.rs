@@ -124,7 +124,10 @@ fn red_skinroot10_string_and_template_forms_keep_infix() {
     // k5: `String(x)` / template / `+=` forms are concatenations too.
     assert_eq!(gltf("String(type) + ':' + String(index)"), vec!["A"]);
     assert_eq!(gltf("`${type}:${index}`"), vec!["A"]);
-    assert_eq!(gltf("(function () { let k = type + ''; k += ':'; k += index; return k; })()"), vec!["A"]);
+    assert_eq!(
+        gltf("(function () { let k = type + ''; k += ':'; k += index; return k; })()"),
+        vec!["A"]
+    );
 }
 
 /// The registry read of GLTFParser::getDependency on skin: `type` one of

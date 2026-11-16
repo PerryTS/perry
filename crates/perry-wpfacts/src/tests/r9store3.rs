@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -42,7 +46,9 @@ fn proven(pf: &crate::ProgramFacts, key: &str) -> bool {
 /// (rule A: the store adds or sets an own data property, exact for any
 /// layout; with rule N beside it) is no slot claim, so it counts here.
 fn unproven(pf: &crate::ProgramFacts, key: &str) -> bool {
-    stores(pf, key).iter().any(|v| v.starts_with("No") || v == "KnownObjectStore")
+    stores(pf, key)
+        .iter()
+        .any(|v| v.starts_with("No") || v == "KnownObjectStore")
 }
 
 const TAIL: &str = "console.log(JSON.stringify(f(process.argv[2] ?? \"x\")));\n";
@@ -66,7 +72,10 @@ fn r9store3_s2_setter_overridden() {
     let pf = facts(&format!(
         "{TEX}class D extends T {{ constructor(n: number) {{ super(); this.image = {{ n }}; this.wrapR = n; }} }}\nclass E extends D {{ set image(v: any) {{ (globalThis as any).g = this; }} }}\nfunction f(v: string) {{ const d = v.length > 1 ? new D(1) : new E(2); return [d.wrapR]; }}\n{TAIL}"
     ));
-    assert!(unproven(&pf, "wrapR"), "S2 wrapR proven although E's setter leaks this");
+    assert!(
+        unproven(&pf, "wrapR"),
+        "S2 wrapR proven although E's setter leaks this"
+    );
 }
 
 // S3 (KEEP): the setter itself stores `this` into a global.
@@ -75,7 +84,10 @@ fn r9store3_s3_setter_leaks_this() {
     let pf = facts(&format!(
         "class T {{ set image(v: any) {{ (globalThis as any).g = this; }} }}\nclass D extends T {{ constructor(n: number) {{ super(); this.image = n; this.wrapR = n; }} }}\nfunction f(v: string) {{ const d = new D(v.length); return [d.wrapR]; }}\n{TAIL}"
     ));
-    assert!(unproven(&pf, "wrapR"), "S3 wrapR proven although the setter leaks this");
+    assert!(
+        unproven(&pf, "wrapR"),
+        "S3 wrapR proven although the setter leaks this"
+    );
 }
 
 // I1 (RED): the KeyframeTrack form: a constructor store whose value reads a
@@ -94,7 +106,10 @@ fn r9store3_i2_getter_on_subclass() {
     let pf = facts(&format!(
         "function conv(a: any, T: any) {{ return new T(a); }}\nclass K {{ constructor(n: string, t: any) {{ this.name = n; this.times = conv(t, this.TB); }} }}\n(K.prototype as any).TB = Float32Array;\nclass K2 extends K {{ get TB() {{ (globalThis as any).g = this; return Array; }} }}\nfunction f(v: string) {{ const k = v.length > 1 ? new K(v, [1]) : new K2(v, [2]); return [k.name, k.times.length]; }}\n{TAIL}"
     ));
-    assert!(unproven(&pf, "times"), "I2 times proven although K2's getter observes this");
+    assert!(
+        unproven(&pf, "times"),
+        "I2 times proven although K2's getter observes this"
+    );
 }
 
 const SPH: &str = "class S { constructor() { this.r = 0; this.c = 1; } }\n";

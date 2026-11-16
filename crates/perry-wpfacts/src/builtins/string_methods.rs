@@ -189,10 +189,15 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             site: call,
             region: m.thrown,
         },
-        move |m, tg, call| m.cons(tg, Cons::MCall {
-            key: Key::Named(a),
-            call,
-        }),
+        move |m, tg, call| {
+            m.cons(
+                tg,
+                Cons::MCall {
+                    key: Key::Named(a),
+                    call,
+                },
+            )
+        },
     );
     ret
 }
@@ -357,7 +362,9 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         {
             coerce_operands(m, call, "string method operand");
             m.zs_absorbing = true;
-            let ThisArg::Node(recv) = c.this else { unreachable!() };
+            let ThisArg::Node(recv) = c.this else {
+                unreachable!()
+            };
             let a0 = c.args.first().copied().unwrap_or(NO_NODE);
             let a1 = c.args.get(1).copied().unwrap_or(NO_NODE);
             let k = match name {
@@ -383,8 +390,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         }
         // Every operand is ToString'd or ToIntegerOrInfinity'd.
         "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
-        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf"
-        | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
+        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf" | "lastIndexOf"
+        | "toFixed" | "toPrecision" | "toExponential" => {
             coerce_operands(m, call, "string method operand");
             // −0 tolerance (`Model::with_native`): ToString and
             // ToIntegerOrInfinity give `-0` and `0` the same result.
@@ -625,7 +632,16 @@ fn exec_captures(m: &mut Model, t: Tok, rec: Tok, input: Option<NodeId>) {
 /// match state (22.2.6.11 steps 5-8 `flags`, 22.2.7.1 RegExpExec `exec`;
 /// 22.2.6.4 the `flags` getter reads the flag accessors).
 pub(crate) const REGEXP_REPLACE_READS: [&str; 10] = [
-    "exec", "flags", "global", "hasIndices", "ignoreCase", "multiline", "dotAll", "unicode", "unicodeSets", "sticky",
+    "exec",
+    "flags",
+    "global",
+    "hasIndices",
+    "ignoreCase",
+    "multiline",
+    "dotAll",
+    "unicode",
+    "unicodeSets",
+    "sticky",
 ];
 
 pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
@@ -657,7 +673,11 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
                     replace_value(m, call, rv);
                     // Rule M9 (`Model::class_replace_strs`): every value the
                     // result depends on runs it again.
-                    let k = Cons::ClassReplace { dst: c.ret, tok: t, repl: rv };
+                    let k = Cons::ClassReplace {
+                        dst: c.ret,
+                        tok: t,
+                        repl: rv,
+                    };
                     let mut on = vec![rv];
                     if let Some(&(p, f)) = m.regexp_ctor_args.get(&t) {
                         on.extend([p, f]);

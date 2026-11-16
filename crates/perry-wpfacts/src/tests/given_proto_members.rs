@@ -30,7 +30,12 @@ fn runs(src: &str, name: &str) -> (bool, ProgramFacts) {
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(pf.body_reach.complete, "activated");
-    let id = hir.functions.iter().find(|f| f.name == name).expect("fn").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .expect("fn")
+        .id;
     let hit = pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id);
     (hit, pf)
 }

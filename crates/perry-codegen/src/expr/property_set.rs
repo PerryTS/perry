@@ -514,9 +514,13 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
                                 }),
                                 right: right.clone(),
                             };
-                            if let Some(v) =
-                                try_lower_proven_setter(ctx, object, property, &value, *byte_offset)?
-                            {
+                            if let Some(v) = try_lower_proven_setter(
+                                ctx,
+                                object,
+                                property,
+                                &value,
+                                *byte_offset,
+                            )? {
                                 return Ok(v);
                             }
                         }

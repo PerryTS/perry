@@ -27,7 +27,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -72,7 +76,10 @@ console.log(ta.length, ta.byteLength, ta.BYTES_PER_ELEMENT);
     );
     assert!(all(&pf, "length", "NativeMember"), "R2 length");
     assert!(all(&pf, "byteLength", "NativeMember"), "R2 byteLength");
-    assert!(all(&pf, "BYTES_PER_ELEMENT", "NativeMember"), "R2 BYTES_PER_ELEMENT");
+    assert!(
+        all(&pf, "BYTES_PER_ELEMENT", "NativeMember"),
+        "R2 BYTES_PER_ELEMENT"
+    );
 }
 
 // R3 (RED at rb6): an Array or a typed array: each one's builtin `length`.

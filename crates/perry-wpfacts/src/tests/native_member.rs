@@ -361,7 +361,10 @@ fn an_object_prototype_accessor_is_no_native_member() {
     for units in [false, true] {
         for (define, kill) in [
             ("", false),
-            (r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#, true),
+            (
+                r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#,
+                true,
+            ),
             (
                 r#"Object.defineProperty(Object.prototype, "constructor", { get() { return 1; } });"#,
                 true,

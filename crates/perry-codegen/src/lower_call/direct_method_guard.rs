@@ -192,7 +192,11 @@ pub(crate) fn emit_late_slot_holds_hole(ctx: &mut FnCtx<'_>, recv_box: &str, slo
     let bits = blk.bitcast_double_to_i64(recv_box);
     let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let obj = blk.inttoptr(I64, &handle);
-    let ptr = blk.gep(I8, &obj, &[(I64, &(header + 8 * i64::from(slot)).to_string())]);
+    let ptr = blk.gep(
+        I8,
+        &obj,
+        &[(I64, &(header + 8 * i64::from(slot)).to_string())],
+    );
     let value = blk.load(I64, &ptr);
     blk.icmp_eq(I64, &value, crate::nanbox::TAG_HOLE_I64)
 }

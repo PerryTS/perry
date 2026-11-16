@@ -56,7 +56,9 @@ impl<'a> Gen<'a> {
             site: id,
             region: self.region(),
         });
-        self.m.call_place.insert(id, (self.m.cur_fn, self.loop_depth));
+        self.m
+            .call_place
+            .insert(id, (self.m.cur_fn, self.loop_depth));
         if let Some((f, m)) = self.m.clause {
             if self.m.cur_fn == f {
                 self.m.call_reach.insert(id, m);
@@ -799,7 +801,13 @@ impl<'a> Gen<'a> {
                     perry_hir::UpdateOp::Decrement => -1,
                 };
                 self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
-                self.m.cons(l, Cons::Arith { dst: out, other: crate::model::NO_NODE });
+                self.m.cons(
+                    l,
+                    Cons::Arith {
+                        dst: out,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 self.narrowed_write(mi, *id, out);
@@ -919,7 +927,13 @@ impl<'a> Gen<'a> {
                         _ => crate::model::RangeOp::BitNot,
                     };
                     self.range_rule(rop, v, None, out);
-                    self.m.cons(v, Cons::Arith { dst: out, other: crate::model::NO_NODE });
+                    self.m.cons(
+                        v,
+                        Cons::Arith {
+                            dst: out,
+                            other: crate::model::NO_NODE,
+                        },
+                    );
                     out
                 }
             },
@@ -1140,7 +1154,10 @@ impl<'a> Gen<'a> {
                     && matches!(value.as_ref(), Expr::Binary { left, .. }
                         if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
                 if compound {
-                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false }] {
+                    for access in [
+                        crate::derive::Access::UpdateGet,
+                        crate::derive::Access::Set { strict: false },
+                    ] {
                         self.store_sites.push(ReadSite {
                             module: mi,
                             byte_offset: *byte_offset,
@@ -1193,8 +1210,14 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, receiver);
                 // ACCSITE1 P1: a named store `o.k = v` (13.15.2 PutValue,
                 // 10.1.9 [[Set]]) is a site at the member's offset.
-                if let (Expr::String(s), Expr::PutValueSet { element_offset, strict, .. }) =
-                    (key.as_ref(), e)
+                if let (
+                    Expr::String(s),
+                    Expr::PutValueSet {
+                        element_offset,
+                        strict,
+                        ..
+                    },
+                ) = (key.as_ref(), e)
                 {
                     if *element_offset != 0 && !s.starts_with('#') {
                         let a = self.m.atom(s);
@@ -1219,14 +1242,35 @@ impl<'a> Gen<'a> {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
                         if let Some(nm) = named {
                             self.m.stores[site as usize].proto_named = true;
-                            let ps = self.store_site(fx.module, fx.f, format!("{what}-proto"), owner, false);
+                            let ps = self.store_site(
+                                fx.module,
+                                fx.f,
+                                format!("{what}-proto"),
+                                owner,
+                                false,
+                            );
                             self.m.stores[ps as usize].proto_of = Some(site);
                             self.mark_fn_phase(fx, e, target, ps);
                             let key = Key::Named(self.m.atom("__proto__"));
-                            self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                            self.m.cons(
+                                o,
+                                Cons::Store {
+                                    key,
+                                    src: nm,
+                                    site: ps,
+                                },
+                            );
                         }
                         self.mark_fn_phase(fx, e, target, site);
-                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
+                        self.m.cons(
+                            kp,
+                            Cons::StoreKeyed {
+                                o,
+                                src: v,
+                                site,
+                                subj,
+                            },
+                        );
                     }
                 } else if let Some(ks) = self.const_key_set(fx.module, key) {
                     // One of a few constant keys: a named store under each.
@@ -1292,7 +1336,10 @@ impl<'a> Gen<'a> {
                 v
             }
             Expr::PropertyUpdate {
-                object, property, op, ..
+                object,
+                property,
+                op,
+                ..
             } => {
                 let o = self.expr(fx, object);
                 let a = self.member_atom(object, property);
@@ -1307,10 +1354,20 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv2, other: crate::model::NO_NODE });
+                self.m.cons(
+                    cur,
+                    Cons::Arith {
+                        dst: nv2,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
                 // the hull of the old and the new value (prefix or postfix).
-                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                let step = if *op == perry_hir::BinaryOp::Sub {
+                    -1
+                } else {
+                    1
+                };
                 self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv2);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
@@ -1467,10 +1524,25 @@ impl<'a> Gen<'a> {
                         self.m.stores[ps as usize].proto_of = Some(site);
                         self.mark_rooted(e, ps);
                         let key = Key::Named(self.m.atom("__proto__"));
-                        self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                        self.m.cons(
+                            o,
+                            Cons::Store {
+                                key,
+                                src: nm,
+                                site: ps,
+                            },
+                        );
                     }
                     let subj = self.enum_key_subject(fx, index);
-                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
+                    self.m.cons(
+                        kp,
+                        Cons::StoreKeyed {
+                            o,
+                            src: v,
+                            site,
+                            subj,
+                        },
+                    );
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
                     // One of a few constant keys: a named store under each.
                     for s in ks {
@@ -1495,7 +1567,9 @@ impl<'a> Gen<'a> {
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
-            Expr::IndexUpdate { object, index, op, .. } => {
+            Expr::IndexUpdate {
+                object, index, op, ..
+            } => {
                 let o = self.expr(fx, object);
                 let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
@@ -1513,10 +1587,20 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv, other: crate::model::NO_NODE });
+                self.m.cons(
+                    cur,
+                    Cons::Arith {
+                        dst: nv,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
                 // the hull of the old and the new value (prefix or postfix).
-                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                let step = if *op == perry_hir::BinaryOp::Sub {
+                    -1
+                } else {
+                    1
+                };
                 self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv);
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
@@ -1769,7 +1853,8 @@ impl<'a> Gen<'a> {
                 let (c0, spreads) = (self.m.calls.len(), s.clone());
                 // The call is fixed when it is made (`new_call`): a builtin
                 // model run for it then (the console formatter) reads it.
-                let prev = std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
+                let prev =
+                    std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
                 let ret = self.call_with(fx, callee, a, s, (0, 0));
                 self.fixed_spreads = prev;
                 if !lead {

@@ -7552,7 +7552,13 @@ fn snap_image_id_steps(old: u32, new: u32) -> u32 {
 }
 
 pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
-    let mut d = SnapShapeDelta { minted: [0; 4], changed: 0, retired: 0, drawn: 0, generations: 0 };
+    let mut d = SnapShapeDelta {
+        minted: [0; 4],
+        changed: 0,
+        retired: 0,
+        drawn: 0,
+        generations: 0,
+    };
     let (mut i, mut j) = (0, 0);
     while i < a.records.len() || j < b.records.len() {
         let ka = a.records.get(i).map(|r| r.0);
@@ -7610,7 +7616,15 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_counts_records_per_band() {
         let a = st(&[(S, 0)]);
-        let b = st(&[(S, 0), (S + 1, 0), (O, 0), (O + 1, 0), (O + 2, 0), (D, 0), (X, 0)]);
+        let b = st(&[
+            (S, 0),
+            (S + 1, 0),
+            (O, 0),
+            (O + 1, 0),
+            (O + 2, 0),
+            (D, 0),
+            (X, 0),
+        ]);
         let d = snap_image_shape_delta(&a, &b);
         assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
         assert_eq!(snap_image_delta_minted_total(&d), 6);
@@ -7621,14 +7635,20 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_sees_a_changed_pre_existing_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 1, 0));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 1, 0)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
     #[test]
     fn snap_image_delta_sees_a_retired_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 0, 1));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 0, 1)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
@@ -7675,7 +7695,12 @@ mod snap_image_delta_tests {
         let before = snap_image_shape_state();
         crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
-        assert!(snap_image_delta_any(&d) && snap_image_delta_minted_total(&d) >= 1 && snap_image_delta_minted_total(&d) < 8, "{d:?}");
+        assert!(
+            snap_image_delta_any(&d)
+                && snap_image_delta_minted_total(&d) >= 1
+                && snap_image_delta_minted_total(&d) < 8,
+            "{d:?}"
+        );
         assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
     }
 

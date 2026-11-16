@@ -865,7 +865,10 @@ fn implied<'p>(
                 false => crate::model::guard::FALSY,
             };
             if let Some(id) = host_of(object, subst, depth) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), test),
+                ));
             }
         }
         // Rule G1: `local.key === b` (`!==`) with `b` a Boolean constant,
@@ -880,9 +883,18 @@ fn implied<'p>(
         ) =>
         {
             use crate::model::guard;
-            let ((Expr::Bool(b), Expr::PropertyGet { object, property, .. })
-            | (Expr::PropertyGet { object, property, .. }, Expr::Bool(b))) =
-                (left.as_ref(), right.as_ref())
+            let ((
+                Expr::Bool(b),
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+            )
+            | (
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+                Expr::Bool(b),
+            )) = (left.as_ref(), right.as_ref())
             else {
                 return;
             };
@@ -895,7 +907,10 @@ fn implied<'p>(
                 (false, true) => guard::NOT_TRUE,
             };
             if let Some(id) = host_of(object, subst, depth) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), test),
+                ));
             }
         }
         // A failed `local instanceof ArrayBuffer` (`SharedArrayBuffer`),
@@ -942,13 +957,26 @@ fn implied<'p>(
                 _ => false,
             } =>
         {
-            let ((Expr::PropertyGet { object, property, .. }, l)
-            | (l, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            let ((
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+                l,
+            )
+            | (
+                l,
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+            )) = (left.as_ref(), right.as_ref())
             else {
                 return;
             };
             if let (Some(test), Some(id)) = (literal_type_test(l), host_of(object, subst, depth)) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), test),
+                ));
             }
         }
         // Rule T5: `typeof NAME !== "undefined"` true (`=== "undefined"`
@@ -981,7 +1009,10 @@ fn implied<'p>(
                 true => guard::UNDEF,
                 false => guard::NOT_UNDEF,
             };
-            out.push(Implied::Present(GLOBAL_LOCAL, Presence::FieldTruthy(name.clone(), test)));
+            out.push(Implied::Present(
+                GLOBAL_LOCAL,
+                Presence::FieldTruthy(name.clone(), test),
+            ));
         }
         // Rule G4: `typeof local.key === s` true (`!==` false), `s` a String
         // whose type has a G3 test: the read is of that type.
@@ -996,7 +1027,10 @@ fn implied<'p>(
                 return;
             };
             if let Some(id) = host_of(object, subst, depth) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), test),
+                ));
             }
         }
         // Rule T6: `typeof local === s` true (`!==` false), `s` "string",
@@ -1009,7 +1043,9 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
-        } if (matches!(op, CompareOp::Eq) == positive) && typeof_local_mask(left, right).is_some() => {
+        } if (matches!(op, CompareOp::Eq) == positive)
+            && typeof_local_mask(left, right).is_some() =>
+        {
             let Some((x, mask)) = typeof_local_mask(left, right) else {
                 return;
             };
@@ -1039,8 +1075,18 @@ fn implied<'p>(
             ) =>
         {
             use crate::model::guard;
-            let ((Expr::PropertyGet { object, property, .. }, nil)
-            | (nil, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            let ((
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+                nil,
+            )
+            | (
+                nil,
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+            )) = (left.as_ref(), right.as_ref())
             else {
                 return;
             };
@@ -1050,7 +1096,10 @@ fn implied<'p>(
                 _ => guard::NOT_UNDEF,
             };
             if let Some(id) = host_of(object, subst, depth) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), test),
+                ));
             }
         }
         // `local == null` (`undefined`) false, `local != null` true: not
@@ -1090,9 +1139,8 @@ fn implied<'p>(
                     (CompareOp::Le, true) | (CompareOp::Gt, false) => CLIP_LE,
                     (CompareOp::Gt, true) | (CompareOp::Le, false) => CLIP_GT,
                     (CompareOp::Ge, true) | (CompareOp::Lt, false) => CLIP_GE,
-                    (CompareOp::Ne | CompareOp::LooseNe, true) | (CompareOp::Eq | CompareOp::LooseEq, false) => {
-                        crate::model::range::CLIP_NE
-                    }
+                    (CompareOp::Ne | CompareOp::LooseNe, true)
+                    | (CompareOp::Eq | CompareOp::LooseEq, false) => crate::model::range::CLIP_NE,
                     _ => return None,
                 })
             };
@@ -1104,7 +1152,9 @@ fn implied<'p>(
                 o => o.clone(),
             };
             let (l, r) = (bound_of(left, subst), bound_of(right, subst));
-            let ne_char = |kind: u8, b: &Bound| kind == crate::model::range::CLIP_NE && matches!(b, Bound::Char(_));
+            let ne_char = |kind: u8, b: &Bound| {
+                kind == crate::model::range::CLIP_NE && matches!(b, Bound::Char(_))
+            };
             if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
                 if !b.reads(*id) {
                     if let Some(kind) = k(op, positive).filter(|&kd| !ne_char(kd, b)) {
@@ -1215,7 +1265,9 @@ fn typeof_member_test<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, &'e Str
 fn holds_past(f: &Implied, right: &Expr) -> bool {
     match f {
         Implied::Present(id, _) => !expr_has(right, &mut |e| writes(e, *id)),
-        _ => !expr_has(right, &mut |e| matches!(e, Expr::LocalSet(..) | Expr::Update { .. })),
+        _ => !expr_has(right, &mut |e| {
+            matches!(e, Expr::LocalSet(..) | Expr::Update { .. })
+        }),
     }
 }
 
@@ -1522,7 +1574,14 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::FieldTruthy(property, test)) => {
                     let key = Key::Named(self.m.atom(&property));
-                    self.m.cons(src, Cons::FieldTruthy { key, test, dst: start })
+                    self.m.cons(
+                        src,
+                        Cons::FieldTruthy {
+                            key,
+                            test,
+                            dst: start,
+                        },
+                    )
                 }
             }
             let end = self.tmp("guard-end");
@@ -1613,7 +1672,11 @@ impl<'a> Gen<'a> {
         };
         let direct = match s {
             Stmt::Expr(Expr::LocalSet(l, _)) => *l == id,
-            Stmt::Let { id: l, init: Some(_), .. } => *l == id,
+            Stmt::Let {
+                id: l,
+                init: Some(_),
+                ..
+            } => *l == id,
             _ => false,
         };
         if !direct
@@ -1638,7 +1701,14 @@ impl<'a> Gen<'a> {
         self.zs_carrier(start);
         match guard {
             None => self.m.edge(vn, start),
-            Some((t, test)) => self.m.cons(t, Cons::Guard { test, from: vn, dst: start }),
+            Some((t, test)) => self.m.cons(
+                t,
+                Cons::Guard {
+                    test,
+                    from: vn,
+                    dst: start,
+                },
+            ),
         }
         let end = self.tmp("assigned-end");
         self.zs_carrier(end);
@@ -1716,7 +1786,9 @@ fn da_stmt(s: &Stmt, x: u32, sw: bool) -> Da {
             ..
         } => {
             let a = da_list(then_branch, x, sw);
-            let b = else_branch.as_deref().map_or(Da::Through, |e| da_list(e, x, sw));
+            let b = else_branch
+                .as_deref()
+                .map_or(Da::Through, |e| da_list(e, x, sw));
             match (a, b) {
                 (Da::Escape, _) | (_, Da::Escape) => Da::Escape,
                 (Da::Exits, Da::Exits) => Da::Exits,

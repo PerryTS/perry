@@ -26,7 +26,9 @@ use super::key2::{recv, v, PARSE_BIND, TRACK_RE};
 use super::*;
 
 fn held_unsummarized(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -46,7 +48,10 @@ fn held_unsummarized(src: &str) -> bool {
 /// PropertyBinding: constructor :53140, bind :53489-53627,
 /// `_getValue_direct` :53334), on an object whose fields hold a String.
 fn tracks(names: &[&str]) -> String {
-    let news: Vec<String> = names.iter().map(|n| format!("new Binding( '{n}' )")).collect();
+    let news: Vec<String> = names
+        .iter()
+        .map(|n| format!("new Binding( '{n}' )"))
+        .collect();
     format!(
         r#"class V {{ x = 1; y = 1; }}
 class U {{ x = 2; y = 2; }}
@@ -88,7 +93,10 @@ fn r9key1_f1b_three_tracks_read_named_members() {
     let pf = facts(&tracks(&R9));
     let y = recv(&pf, "y");
     eprintln!("R9KEY1 F1b y={y:?}");
-    assert_eq!(y, v(&["U", "V", "W", "null (TypeError)", "undefined (TypeError)"]));
+    assert_eq!(
+        y,
+        v(&["U", "V", "W", "null (TypeError)", "undefined (TypeError)"])
+    );
 }
 
 fn is_const(want: &str, e: &str) -> Vec<String> {
@@ -119,7 +127,10 @@ fn r9key1_f2_string_operand_fold() {
         ("a", "'abc'.substring( 1, '-0' )"),
         ("abc", "'abc'.substring( '1_0', '3' )"),
         ("c", "'abc'.substring( '' + 2 )"),
-        ("c", "'abc'.substring( ( Math.random() < 0.5 ? '' : 0 ) + 2 )"),
+        (
+            "c",
+            "'abc'.substring( ( Math.random() < 0.5 ? '' : 0 ) + 2 )",
+        ),
         ("ab", "'abc'.substring( 0, 2 + '' )"),
     ] {
         let r = is_const(want, e);
@@ -134,14 +145,26 @@ fn r9key1_f2_string_operand_fold() {
 // K1 KEEP: an unknown String operand stays any String.
 #[test]
 fn r9key1_k1_unknown_string_operand_stays_any() {
-    for e in ["'abc'.substring( String( process.argv[ 2 ] ) )", "'abc'.substring( 0, String( Math.random() ) )"] {
+    for e in [
+        "'abc'.substring( String( process.argv[ 2 ] ) )",
+        "'abc'.substring( 0, String( Math.random() ) )",
+    ] {
         let r = is_const("ab", e);
-        assert!(r.contains(&"A".to_string()) && r.contains(&"B".to_string()), "K1 {e}: {r:?}");
+        assert!(
+            r.contains(&"A".to_string()) && r.contains(&"B".to_string()),
+            "K1 {e}: {r:?}"
+        );
     }
-    let pf = facts(&tracks(&["obj.position", "PLACEHOLDER"]).replace("'PLACEHOLDER'", "String( process.argv[ 2 ] )"));
+    let pf = facts(
+        &tracks(&["obj.position", "PLACEHOLDER"])
+            .replace("'PLACEHOLDER'", "String( process.argv[ 2 ] )"),
+    );
     let y = recv(&pf, "y");
     eprintln!("R9KEY1 K1 argv track y={y:?}");
-    assert!(y.len() > 3 || pf.sites.iter().any(|s| s.key == "y" && s.top), "K1 argv track: {y:?}");
+    assert!(
+        y.len() > 3 || pf.sites.iter().any(|s| s.key == "y" && s.top),
+        "K1 argv track: {y:?}"
+    );
 }
 
 // K2 KEEP: two constant keys, one absent on the receiver: the read is

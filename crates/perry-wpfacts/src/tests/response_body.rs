@@ -43,8 +43,7 @@ fn src(body: &str) -> String {
 /// FileLoader's progress stream: the stream and its source stay home.
 #[test]
 fn a_readable_stream_body_hands_nothing_to_unknown_code() {
-    let pf = whole(&src(
-        "const reader = response.body.getReader();
+    let pf = whole(&src("const reader = response.body.getReader();
          const source = { srcmark: 1, start(controller: any) {
            function readData() {
              reader.read().then(({ done, value }: any) => {
@@ -55,9 +54,13 @@ fn a_readable_stream_body_hands_nothing_to_unknown_code() {
            console.log(a.a);
          } };
          const stream = new ReadableStream(source as any);
-         return new Response(stream);",
-    ));
-    assert_eq!(escape_with_field(&pf, "srcmark"), None, "{}", pf.dump_text());
+         return new Response(stream);"));
+    assert_eq!(
+        escape_with_field(&pf, "srcmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
     assert_eq!(escape_with_field(&pf, "a"), None, "{}", pf.dump_text());
 }
 
@@ -69,32 +72,37 @@ fn a_plain_body_hands_nothing_to_unknown_code() {
          new Response(\x27x\x27);
          return new Response(b as any);",
     ));
-    assert_eq!(escape_with_field(&pf, "plainmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "plainmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// An async iterable body whose methods keep to themselves hands nothing out.
 #[test]
 fn an_async_iterable_body_hands_nothing_to_unknown_code() {
-    let pf = whole(&src(
-        "const b = { itmark: 1, [Symbol.asyncIterator]() {
+    let pf = whole(&src("const b = { itmark: 1, [Symbol.asyncIterator]() {
            return { next() { return Promise.resolve({ done: true, value: undefined }); } };
          } };
-         return new Response(b as any);",
-    ));
+         return new Response(b as any);"));
     assert_eq!(escape_with_field(&pf, "itmark"), None, "{}", pf.dump_text());
 }
 
 /// Control: the body's `[Symbol.asyncIterator]` runs with `this` = the body.
 #[test]
 fn an_async_iterable_body_runs_its_iterator_method_on_the_body() {
-    let pf = whole(&src(
-        "const b = { selfmark: 1, [Symbol.asyncIterator]() {
+    let pf = whole(&src("const b = { selfmark: 1, [Symbol.asyncIterator]() {
            unknown.keep(this);
            return { next() { return Promise.resolve({ done: true, value: undefined }); } };
          } };
-         return new Response(b as any);",
-    ));
-    assert!(escape_with_field(&pf, "selfmark").is_some(), "{}", pf.dump_text());
+         return new Response(b as any);"));
+    assert!(
+        escape_with_field(&pf, "selfmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: `next` runs on what `[Symbol.asyncIterator]` returned, and the
@@ -108,8 +116,16 @@ fn an_async_iterable_body_steps_its_iterator_and_reads_its_chunks() {
          } };
          return new Response(b as any);",
     ));
-    assert!(escape_with_field(&pf, "itermark").is_some(), "{}", pf.dump_text());
-    assert!(escape_with_field(&pf, "chunkmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "itermark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        escape_with_field(&pf, "chunkmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: an object body's `toString` runs with `this` = the body.
@@ -119,16 +135,22 @@ fn a_plain_body_runs_its_to_string_on_the_body() {
         "const b = { strmark: 1, toString() { unknown.keep(this); return \x27x\x27; } };
          return new Response(b as any);",
     ));
-    assert!(escape_with_field(&pf, "strmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "strmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a body handed to unknown code still escapes.
 #[test]
 fn a_body_handed_to_unknown_code_escapes() {
-    let pf = whole(&src(
-        "const b = { keptmark: 1 };
+    let pf = whole(&src("const b = { keptmark: 1 };
          unknown.keep(b);
-         return new Response(b as any);",
-    ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+         return new Response(b as any);"));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

@@ -282,10 +282,15 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-                move |m, tg, nested| m.cons(tg, Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                }),
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    )
+                },
             );
             to_prim(m, r, "typed-array locale element ToString");
             ret_prim(m, call, prim::STR);
@@ -307,10 +312,15 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     site: nested,
                     region: m.thrown,
                 },
-                move |m, tg, nested| m.cons(tg, Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                }),
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    )
+                },
             );
             ret_prim(m, call, prim::STR);
         }

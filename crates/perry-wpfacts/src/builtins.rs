@@ -49,10 +49,11 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
-    native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
-    native_nonplain_written, native_parent_value, native_proto, native_written, native_written_by, native_writers_why, note_global_in_top,
-    note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
-    require_parts, settle_native_given,
+    native_accessor_written, native_nonplain_written, native_parent_ctor, native_parent_keys,
+    native_parent_summarized, native_parent_value, native_proto, native_writers_why,
+    native_written, native_written_by, note_global_in_top, note_handed_to_unknown,
+    note_native_accessor, note_native_data_write, note_native_write, note_realm_held,
+    require_parts, settle_native_given, WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
@@ -358,7 +359,13 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
     if !m.realm_held {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
         if m.keysnap.is_some() {
-            m.keysnap_at(true, &format!("unknown method (unknown_method_at: {why})"), Some(call), r, None);
+            m.keysnap_at(
+                true,
+                &format!("unknown method (unknown_method_at: {why})"),
+                Some(call),
+                r,
+                None,
+            );
         }
         m.hold_realm(r);
     }
@@ -671,7 +678,10 @@ fn site_template(
 /// `method_on_prim` names them).
 pub(crate) fn to_object(m: &mut Model, v: NodeId, call: CallId) -> NodeId {
     let mut ws = [(0 as Tok, 0 as NodeId); 4];
-    for (i, what) in ["BoxedNumber", "BoxedString", "BoxedBoolean", "Object(prim)"].into_iter().enumerate() {
+    for (i, what) in ["BoxedNumber", "BoxedString", "BoxedBoolean", "Object(prim)"]
+        .into_iter()
+        .enumerate()
+    {
         let t = site_tmpl(m, call, what);
         let w = m.node_l("to-object-wrapper");
         m.add_tok(w, t);
@@ -694,11 +704,23 @@ pub(crate) fn to_object_into(m: &mut Model, v: NodeId, wrappers: [(Tok, NodeId);
     let chars = m.num_fields(wrappers[1].0);
     m.add_prim(chars, prim::STR);
     m.cons(v, Cons::Objects { dst: to });
-    for (test, (_, from)) in [guard::BOXED_NUM, guard::BOXED_STR, guard::BOXED_BOOL, guard::BOXED_OTHER]
-        .into_iter()
-        .zip(wrappers)
+    for (test, (_, from)) in [
+        guard::BOXED_NUM,
+        guard::BOXED_STR,
+        guard::BOXED_BOOL,
+        guard::BOXED_OTHER,
+    ]
+    .into_iter()
+    .zip(wrappers)
     {
-        m.cons(v, Cons::Guard { test, from, dst: to });
+        m.cons(
+            v,
+            Cons::Guard {
+                test,
+                from,
+                dst: to,
+            },
+        );
     }
 }
 /// A synthetic resolve function of the promise whose settled value is
@@ -897,10 +919,15 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             site: call,
             region: m.thrown,
         },
-        move |m, tg, call| m.cons(tg, Cons::MCall {
-            key: Key::Named(then),
-            call,
-        }),
+        move |m, tg, call| {
+            m.cons(
+                tg,
+                Cons::MCall {
+                    key: Key::Named(then),
+                    call,
+                },
+            )
+        },
     );
 }
 
@@ -1634,10 +1661,13 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
     // `shared_array_buffer_slice_thunk`). Only AllocateArrayBuffer and
     // AllocateSharedArrayBuffer make the slot: the solver's
     // BObj{ArrayBuffer | SharedArrayBuffer} (an Opaque kind, kept open below).
-    let buffer =
-        fam == Family::Opaque && matches!(what, Some("ArrayBuffer" | "SharedArrayBuffer"));
+    let buffer = fam == Family::Opaque && matches!(what, Some("ArrayBuffer" | "SharedArrayBuffer"));
     let slot = typed || buffer;
-    if !(slot || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
+    if !(slot
+        || matches!(
+            fam,
+            Family::Num | Family::Bool | Family::Sym | Family::BigInt
+        ))
         || m.is_marker(r)
     {
         return false;
@@ -1654,10 +1684,12 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
             // DataView) holds [[ViewedArrayBuffer]], never [[ArrayBufferData]]
             // or [[ArrayBufferMaxByteLength]] (ECMA-262 10.4.5, 23.2.5.1.1
             // AllocateTypedArray, 25.3.2.1): a buffer method on it throws.
-            TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. } if buffer => true,
+            TmplKind::BObj {
+                what: "TypedArray" | "Buffer" | "DataView",
+                ..
+            } if buffer => true,
             TmplKind::BObj { what: w, .. } => {
-                slot
-                    && !matches!(*w, "TypedArray" | "Buffer")
+                slot && !matches!(*w, "TypedArray" | "Buffer")
                     && match members::bobj_family(w) {
                         Family::Opaque => false,
                         Family::Box => members::box_chain(w) != members::BoxChain::Unknown,
@@ -2274,10 +2306,10 @@ pub(crate) fn enum_free_link_obj(m: &Model, t: Tok) -> bool {
     !m.is_marker(t)
         && (enum_free_instance(m, t)
             || matches!(m.toks[t as usize], TokKind::Obj(tm, _)
-                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
-                    what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView" | "TypedArray",
-                    ..
-                })))
+            if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
+                what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView" | "TypedArray",
+                ..
+            })))
 }
 
 /// SKINROOT14: a for-in subject (`for (k in b) b[k]`) that is an
@@ -2290,10 +2322,10 @@ pub(crate) fn enum_free_link_obj(m: &Model, t: Tok) -> bool {
 pub(crate) fn enum_free_buffer(m: &Model, t: Tok) -> bool {
     !m.is_marker(t)
         && matches!(m.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
-                what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView",
-                ..
-            }))
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
+            what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView",
+            ..
+        }))
 }
 
 fn is_site_builtin(m: &Model, t: Tok) -> bool {
@@ -2424,7 +2456,8 @@ mod accessor_lookup;
 mod methods;
 pub(crate) mod object_statics;
 pub(crate) use accessor_lookup::{
-    annexb_lookup, annexb_lookup_prim, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
+    annexb_lookup, annexb_lookup_prim, is_realm_accessor, lookup_native_descriptor,
+    realm_accessor_call,
 };
 pub use methods::*;
 pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
@@ -2438,7 +2471,12 @@ pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// Without a reviver the primitives are strings, numbers, booleans and
 /// null (25.5.1 ParseJSON: JSON text has no other value); a reviver's
 /// results are any value (25.5.1.1 InternalizeJSONProperty).
-pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool, reviver: bool) -> (Tok, Tok) {
+pub(crate) fn json_value(
+    m: &mut Model,
+    call: CallId,
+    positions: bool,
+    reviver: bool,
+) -> (Tok, Tok) {
     let j = site_tmpl(m, call, "json");
     let ja = site_tmpl(m, call, "Array");
     if positions {
@@ -2658,7 +2696,9 @@ pub(crate) fn native_namespace_call(
     {
         m.diagnostic_callee(call, t);
         let prev = std::mem::replace(&mut m.cur_this, this_tok);
-        m.with_native(call, |m, call| ns_method_inner(m, ns, Some(name), call, true));
+        m.with_native(call, |m, call| {
+            ns_method_inner(m, ns, Some(name), call, true)
+        });
         m.cur_this = prev;
     }
     true
@@ -2811,11 +2851,21 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
     if !matches!(name, "log" | "info" | "debug" | "error" | "warn" | "trace") {
         for (i, &a) in c.args.iter().enumerate() {
             let first = i == 0 && c.spread.is_empty();
-            let proto = if first { Protocol::InspectShown } else { Protocol::Inspect };
+            let proto = if first {
+                Protocol::InspectShown
+            } else {
+                Protocol::Inspect
+            };
             m.cons(a, Cons::Implicit { reason: r, proto });
         }
         for &d in &elems {
-            m.cons(d, Cons::Implicit { reason: r, proto: Protocol::Inspect });
+            m.cons(
+                d,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::Inspect,
+                },
+            );
         }
         ret_prim(m, call, prim::UNDEF);
         return;
@@ -2825,7 +2875,9 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
     // come from a spread (the call, its site and the function holding it).
     if !fixed && crate::solve::implsrc_on() {
         let f = m.call_place.get(&c.site).map(|&(f, _)| f);
-        let fname = f.and_then(|f| m.funcs.get(f as usize)).map(|fi| fi.name.clone());
+        let fname = f
+            .and_then(|f| m.funcs.get(f as usize))
+            .map(|fi| fi.name.clone());
         eprintln!(
             "perry: wpfacts console-unfixed: call={call} site={} name={name} args={} spread={} fn={fname:?} site_call=({}, args={}, spread={}, ret={})",
             c.site,
@@ -2854,7 +2906,13 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         later.push(d);
     }
     for &a in c.args.iter().chain(&elems) {
-        m.cons(a, Cons::Implicit { reason: r, proto: Protocol::InspectShown });
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::InspectShown,
+            },
+        );
     }
     if !later.is_empty() {
         let agg = m.node_l("console-consumable");
@@ -2929,7 +2987,9 @@ fn ns_method_inner(
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
         {
-            host_call(m, BuiltinNs::Console, n, n, call, |m| console_args(m, call, n))
+            host_call(m, BuiltinNs::Console, n, n, call, |m| {
+                console_args(m, call, n)
+            })
         }
         // A stream method: the runtime's own, which hands its receiver to no
         // one; a listener it registers is called by the runtime (escaped).
@@ -3186,22 +3246,21 @@ fn ns_method_inner(
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
                 let call2 = m.calls.len() as CallId;
-                if m
-                    .solver_call_keyed(
-                        call,
-                        (crate::summary::MK_FROM_MAP, 0, 0),
-                        Some(f),
-                        CallSite {
-                            first_arg_fixed: false,
-                            this: ThisArg::Undef,
-                            args: vec![fa, num],
-                            spread: vec![],
-                            ret,
-                            site: call2,
-                            region: m.thrown,
-                        },
-                    )
-                    .is_some()
+                if m.solver_call_keyed(
+                    call,
+                    (crate::summary::MK_FROM_MAP, 0, 0),
+                    Some(f),
+                    CallSite {
+                        first_arg_fixed: false,
+                        this: ThisArg::Undef,
+                        args: vec![fa, num],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                        region: m.thrown,
+                    },
+                )
+                .is_some()
                 {
                     m.cons(f, Cons::Call { call: call2 });
                 }
@@ -3349,7 +3408,13 @@ fn ns_method_inner(
             for &s in &c.spread {
                 m.cons(s, Cons::Load { key: ek, dst: subs });
                 if c.args.is_empty() {
-                    m.cons(s, Cons::Load { key: ek, dst: cooked });
+                    m.cons(
+                        s,
+                        Cons::Load {
+                            key: ek,
+                            dst: cooked,
+                        },
+                    );
                 }
             }
             string_methods::string_raw(m, cooked, subs);
@@ -3400,7 +3465,11 @@ fn ns_method_inner(
             // fresh, only the iteration holds it and %ArrayIteratorPrototype%
             // is locked, so item `i` is `ei`; its resolve element function
             // writes index `i` of the result only (27.2.4.1.2 step 8, 27.2.4.1.3).
-            let lit = match (name, m.calls[call as usize].spread.is_empty(), arg(m, call, 0)) {
+            let lit = match (
+                name,
+                m.calls[call as usize].spread.is_empty(),
+                arg(m, call, 0),
+            ) {
                 ("all", true, Some(a)) if promise_all_index() => m.lit_elems_at(call, a),
                 _ => None,
             };

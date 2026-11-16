@@ -89,7 +89,9 @@ fn spread_of_a_given_parameter_stays_unproven() {
 /// injection keeps the target node as its cause, which is not top.
 #[test]
 fn spread_of_an_opaque_builtin_stays_an_origin() {
-    let src = format!("{K}const a: any = {{ k: new K(), ...new Error(\"e\") }};\nconsole.log(a.k.m());\n");
+    let src = format!(
+        "{K}const a: any = {{ k: new K(), ...new Error(\"e\") }};\nconsole.log(a.k.m());\n"
+    );
     let pf = census(&src);
     for s in spread_sources(&pf) {
         assert!(!node_is_top(&pf, &s), "source {s} is top");
@@ -102,6 +104,8 @@ fn spread_of_an_opaque_builtin_stays_an_origin() {
 fn spread_of_an_object_born_without_own_props_injects_nothing() {
     let src = format!("{K}const a: any = {{ k: new K(), ...new Map() }};\nconsole.log(a.k.m());\n");
     let pf = census(&src);
-    assert!(!lines(&pf).iter().any(|l| l.starts_with("{\"record\":\"birth-injection\"")
-        && l.contains("\"why\":\"spread of an unmodeled object\"")));
+    assert!(!lines(&pf)
+        .iter()
+        .any(|l| l.starts_with("{\"record\":\"birth-injection\"")
+            && l.contains("\"why\":\"spread of an unmodeled object\"")));
 }

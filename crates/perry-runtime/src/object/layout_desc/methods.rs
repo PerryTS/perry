@@ -189,13 +189,14 @@ pub(crate) unsafe fn call_by_id(
             let value = super::store::family_slot_word(obj, slot);
             if value != crate::value::TAG_HOLE {
                 let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-                if (*d.keys.add(pos as usize)).attrs
-                    & super::super::key_attrs::ENTRY_ACCESSOR_MASK
+                if (*d.keys.add(pos as usize)).attrs & super::super::key_attrs::ENTRY_ACCESSOR_MASK
                     != 0
                     || crate::gc_type_is_not_object!((*h).obj_type)
                     || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                     || value & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
-                    || !crate::closure::is_closure_ptr((value & crate::value::POINTER_MASK) as usize)
+                    || !crate::closure::is_closure_ptr(
+                        (value & crate::value::POINTER_MASK) as usize,
+                    )
                 {
                     return None;
                 }

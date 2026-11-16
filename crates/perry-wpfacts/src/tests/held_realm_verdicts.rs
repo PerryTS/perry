@@ -33,7 +33,8 @@ fn verdicts(src: &str, key: &str, call: bool) -> Vec<String> {
 }
 
 fn claimed(v: &[String], kind: &str) -> bool {
-    v.iter().any(|x| x == kind || x.starts_with(&format!("{kind}(")))
+    v.iter()
+        .any(|x| x == kind || x.starts_with(&format!("{kind}(")))
 }
 
 fn both(body: &str, key: &str, call: bool) -> (Vec<String>, Vec<String>) {

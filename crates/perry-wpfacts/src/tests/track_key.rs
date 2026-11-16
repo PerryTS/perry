@@ -87,7 +87,13 @@ const READ: &str = "const x: any = h[ p.propertyName ]; console.log( x.p );";
 /// track lookup may miss (`undefined`), and a read on it throws (ECMA-262
 /// 6.2.5.5 via 7.1.18 ToObject).
 fn four() -> Vec<String> {
-    vec!["A".into(), "Q".into(), "S".into(), "W".into(), "undefined (TypeError)".into()]
+    vec![
+        "A".into(),
+        "Q".into(),
+        "S".into(),
+        "W".into(),
+        "undefined (TypeError)".into(),
+    ]
 }
 
 #[test]
@@ -98,7 +104,15 @@ fn property_name_is_one_of_the_four_paths() {
 
 #[test]
 fn object_name_is_undefined() {
-    let v = recv(&prog(SAN, TAB, "", "const y: any = h[ p.objectName ]; console.log( y.q );"), "q");
+    let v = recv(
+        &prog(
+            SAN,
+            TAB,
+            "",
+            "const y: any = h[ p.objectName ]; console.log( y.q );",
+        ),
+        "q",
+    );
     assert!(v.is_empty(), "{v:?}");
 }
 
@@ -106,7 +120,12 @@ fn object_name_is_undefined() {
 // call of `H.prototype.m` alone.
 #[test]
 fn store_under_property_name_keeps_the_method() {
-    let pf = prog(SAN, TAB, "", "h[ p.propertyName ] = 1; console.log( h.m() );");
+    let pf = prog(
+        SAN,
+        TAB,
+        "",
+        "h[ p.propertyName ] = 1; console.log( h.m() );",
+    );
     let s = site(&pf, "m");
     assert!(!matches!(s.verdict, Verdict::No(_)), "{:?}", s.verdict);
 }
@@ -117,7 +136,15 @@ fn store_under_property_name_keeps_the_method() {
 // the last `.` (the `[native code] }` form has no way: exec is null).
 #[test]
 fn raw_node_part_is_any_key() {
-    let v = recv(&prog("String( n )", TAB, "", "const y: any = h[ p.objectName ]; console.log( y.q );"), "q");
+    let v = recv(
+        &prog(
+            "String( n )",
+            TAB,
+            "",
+            "const y: any = h[ p.objectName ]; console.log( y.q );",
+        ),
+        "q",
+    );
     assert!(v.iter().any(|x| x == "B"), "{v:?}");
     let v = recv(&prog("String( n )", TAB, "", READ), "p");
     assert_eq!(v, four(), "{v:?}");
@@ -151,14 +178,30 @@ fn constant_property_name_is_exact() {
 
 #[test]
 fn constant_property_object_name_is_undefined() {
-    let v = recv(&prog(SAN, "'position'", "", "const y: any = h[ p.objectName ]; console.log( y.q );"), "q");
+    let v = recv(
+        &prog(
+            SAN,
+            "'position'",
+            "",
+            "const y: any = h[ p.objectName ]; console.log( y.q );",
+        ),
+        "q",
+    );
     assert!(v.is_empty(), "{v:?}");
 }
 
 // Control: a raw node part may hold `.`: `objectName` may be any word.
 #[test]
 fn constant_property_raw_node_object_name_is_any() {
-    let v = recv(&prog("String( n )", "'position'", "", "const y: any = h[ p.objectName ]; console.log( y.q );"), "q");
+    let v = recv(
+        &prog(
+            "String( n )",
+            "'position'",
+            "",
+            "const y: any = h[ p.objectName ]; console.log( y.q );",
+        ),
+        "q",
+    );
     assert!(v.iter().any(|x| x == "B"), "{v:?}");
 }
 
@@ -281,7 +324,8 @@ fn node_name_raw_write_is_any() {
 
 // Controls: the text of a possibly fractional Number, and of a host
 // Number, may hold `.`: the key `_1.5` may be read.
-const DOT_KEYS: &str = "const g: any = {{}}; g[ \x27_1.5\x27 ] = new A(); g[ \x27_x\x27 ] = new S();";
+const DOT_KEYS: &str =
+    "const g: any = {{}}; g[ \x27_1.5\x27 ] = new A(); g[ \x27_x\x27 ] = new S();";
 #[test]
 fn fractional_number_text_may_hold_dot() {
     let pre = DOT_KEYS.replace("{{}}", "{}");
@@ -320,7 +364,15 @@ fn host_number_text_has_no_bracket() {
 // toLowerCase keeps the exclusion entry (ECMA-262 22.1.3.28).
 #[test]
 fn lower_case_keeps_exclusion() {
-    let v = recv(&prog("sanitize( String( n ) ).toLowerCase()", "\x27position\x27", "", OBJ_READ), "q");
+    let v = recv(
+        &prog(
+            "sanitize( String( n ) ).toLowerCase()",
+            "\x27position\x27",
+            "",
+            OBJ_READ,
+        ),
+        "q",
+    );
     assert!(v.is_empty(), "{v:?}");
 }
 
@@ -328,8 +380,10 @@ fn lower_case_keeps_exclusion() {
 // so its text may hold `.`: the key `_1.5` may be read.
 #[test]
 fn step_of_fraction_may_hold_dot() {
-    let pre = DOT_KEYS.replace("{{}}", "{}") + " let w: any = String( t ) === \x27a\x27 ? 0.5 : Object;";
-    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ w ) ]; console.log( z.p );";
+    let pre =
+        DOT_KEYS.replace("{{}}", "{}") + " let w: any = String( t ) === \x27a\x27 ? 0.5 : Object;";
+    let tail =
+        "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ w ) ]; console.log( z.p );";
     let v = recv(&prog(SAN, TAB, &pre, tail), "p");
     assert!(v.iter().any(|x| x == "A"), "{v:?}");
 }
@@ -361,7 +415,11 @@ const d1: any = Math.random() * 255 | 0;",
     );
     let tail = "const z: any = g[ _lut[ d0 & 0xff ] + _lut[ d1 & 0xff ] ]; console.log( z.p );";
     let v = recv(&prog(SAN, TAB, &pre, tail), "p");
-    assert_eq!(v, vec!["S".to_string(), "undefined (TypeError)".to_string()], "{v:?}");
+    assert_eq!(
+        v,
+        vec!["S".to_string(), "undefined (TypeError)".to_string()],
+        "{v:?}"
+    );
 }
 
 // Control (Step rule, member `++`): a field also written with 0.5 may be

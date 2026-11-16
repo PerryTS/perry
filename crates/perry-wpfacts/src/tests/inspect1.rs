@@ -18,7 +18,11 @@ fn one(src: &str) -> ProgramFacts {
 
 fn calls(src: &str, key: &str) -> Vec<String> {
     let pf = one(src);
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("INSPECT1 {key} {src:?}: {v:?}");
@@ -101,7 +105,8 @@ fn inspect1_keep_nested_own_getter_runs() {
 /// KEEP: a function-valued own data property is printed, not called.
 #[test]
 fn inspect1_function_property_not_called() {
-    let src = format!("{HOLD}const o = {{ f() {{ h.f = new C(); }} }};\nconsole.log(o);\nh.f.m();\n");
+    let src =
+        format!("{HOLD}const o = {{ f() {{ h.f = new C(); }} }};\nconsole.log(o);\nh.f.m();\n");
     let v = calls(&src, "m");
     assert!(mono(&v), "o.f never runs: {v:?}");
 }
@@ -126,7 +131,10 @@ fn inspect2_class_later_console_arg_through_rest_helper() {
 /// INSPECT2 RED: the same with the class passed directly after a `%s` message.
 #[test]
 fn inspect2_class_after_pct_message() {
-    let v = calls(&format!("{CLS}declare const s: string;\nconsole.error(s, E);\nb.m();\n"), "m");
+    let v = calls(
+        &format!("{CLS}declare const s: string;\nconsole.error(s, E);\nb.m();\n"),
+        "m",
+    );
     assert!(mono(&v), "b.m() stays M::m: {v:?}");
 }
 

@@ -35,7 +35,10 @@ fn uses() -> Vec<&'static str> {
 #[test]
 fn an_error_prototype_name_or_message_reads_a_string() {
     let bad: Vec<&str> = uses().into_iter().filter(|b| !proven(b)).collect();
-    assert!(bad.is_empty(), "escaped through an Error prototype data key: {bad:#?}");
+    assert!(
+        bad.is_empty(),
+        "escaped through an Error prototype data key: {bad:#?}"
+    );
 }
 
 /// Control (the fixture can fail): the properties are writable; a value

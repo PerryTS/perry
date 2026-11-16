@@ -37,17 +37,33 @@ fn src(recv: &str) -> String {
 #[test]
 fn string_iterator_reads_no_argument() {
     let pf = whole(&src("process.argv.length > 99 ? \"ab\" : \"cd\""));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn mixed_primitive_iterator_reads_no_argument() {
-    let pf = whole(&src("process.argv.length > 99 ? \"ab\" : process.argv.length > 98 ? 3 : true"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "process.argv.length > 99 ? \"ab\" : process.argv.length > 98 ? 3 : true",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn unknown_code_receiver_stays_unknown() {
     let pf = whole(&src("new Function(process.argv[2])()"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

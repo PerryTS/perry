@@ -83,19 +83,15 @@ fn rest_fewer_arguments_read_nothing() {
 
 #[test]
 fn rest_method_call_is_exact() {
-    let pf = run(
-        "class L { log(...p: any[]) { enhance(p); } }
-         new L().log('TSL: m', new S(), new A());",
-    );
+    let pf = run("class L { log(...p: any[]) { enhance(p); } }
+         new L().log('TSL: m', new S(), new A());");
     assert_eq!(escape_of(&pf, "a"), None, "{}", pf.dump_text());
 }
 
 #[test]
 fn rest_construct_is_exact() {
-    let pf = run(
-        "class K { constructor(...p: any[]) { enhance(p); } }
-         new K('TSL: m', new S(), new A());",
-    );
+    let pf = run("class K { constructor(...p: any[]) { enhance(p); } }
+         new K('TSL: m', new S(), new A());");
     assert_eq!(escape_of(&pf, "a"), None, "{}", pf.dump_text());
 }
 
@@ -118,13 +114,17 @@ const TWO: &str = "function two(...p: any[]) {
 
 #[test]
 fn rest_summary_runs_are_exact() {
-    let pf = run(&format!("{TWO}\n unknown[3] = two(1, new S()); console.log(two(new A(), 2).a);"));
+    let pf = run(&format!(
+        "{TWO}\n unknown[3] = two(1, new S()); console.log(two(new A(), 2).a);"
+    ));
     assert_eq!(escape_of(&pf, "a"), None, "{}", pf.dump_text());
 }
 
 #[test]
 fn control_rest_summary_run_holds_its_argument() {
-    let pf = run(&format!("{TWO}\n unknown[3] = two(new A(), 2); two(1, new S());"));
+    let pf = run(&format!(
+        "{TWO}\n unknown[3] = two(new A(), 2); two(1, new S());"
+    ));
     assert!(escape_of(&pf, "a").is_some(), "{}", pf.dump_text());
 }
 
@@ -144,10 +144,8 @@ fn control_rest_index_holds_its_argument() {
 
 #[test]
 fn control_spread_forward_merges_positions() {
-    let pf = run(
-        "function warn(...p: any[]) { error(...p); }
-         warn('TSL: m', 1, new A());",
-    );
+    let pf = run("function warn(...p: any[]) { error(...p); }
+         warn('TSL: m', 1, new A());");
     assert!(escape_of(&pf, "a").is_some(), "{}", pf.dump_text());
 }
 

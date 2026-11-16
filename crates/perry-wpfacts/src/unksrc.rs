@@ -6,8 +6,8 @@
 //! of the solve, sorted by the clock. Off: one cached flag read per
 //! producer; never read by facts.
 
-use std::sync::Mutex;
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
 struct Ev {
     seq: u32,
@@ -47,7 +47,13 @@ pub(crate) fn note(kind: &'static str, reason: &str, call: u32, func: u32) {
         if s.seen.insert((kind, reason.to_string(), call)) {
             let seq = s.seq;
             s.seq += 1;
-            s.evs.push(Ev { seq, kind, reason: reason.to_string(), call, func });
+            s.evs.push(Ev {
+                seq,
+                kind,
+                reason: reason.to_string(),
+                call,
+                func,
+            });
         }
     });
 }

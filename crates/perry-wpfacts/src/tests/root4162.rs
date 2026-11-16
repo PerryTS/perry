@@ -62,10 +62,15 @@ fn elem_mono(ty: &str) -> bool {
 }
 
 fn elem_mono_with(extra: &str, ty: &str) -> bool {
-    let decls = &format!("{extra} class Other {{ zz = 2; }} const nums: any = [1, 2]; nums.s = svc;
-        function h(o: any) {{ return o.zz; }}");
+    let decls = &format!(
+        "{extra} class Other {{ zz = 2; }} const nums: any = [1, 2]; nums.s = svc;
+        function h(o: any) {{ return o.zz; }}"
+    );
     let after = "const x: any = r[0]; console.log(h(x.s), h(new Other()));";
-    matches!(verdict(false, decls, ty, "nums", after, "zz"), Verdict::T0Mono)
+    matches!(
+        verdict(false, decls, ty, "nums", after, "zz"),
+        Verdict::T0Mono
+    )
 }
 
 /// The skin hop: `type` holds Float32Array and Array; only Float32Array has a
@@ -83,7 +88,12 @@ fn typeof_member_guard_skips_builtin_array_ctor() {
 fn typeof_member_guard_skips_program_class() {
     let decls = "class Typed { static BYTES_PER_ELEMENT = 4; constructor(a: any) {} }
         class Plain { constructor(a: any) { ext(svc); } }";
-    assert!(!escapes(decls, "Math.random() < 2 ? Typed : Plain", "[1]", ""));
+    assert!(!escapes(
+        decls,
+        "Math.random() < 2 ? Typed : Plain",
+        "[1]",
+        ""
+    ));
 }
 
 /// Control: a class whose static IS a Number passes the test; its
@@ -171,7 +181,8 @@ fn g4_function_prototype_store_is_refused() {
 /// `Sub` passes the test.
 #[test]
 fn g4_static_stored_on_parent_is_admitted() {
-    let decls = "class Base {} class Sub extends Base { constructor(a: any) { super(); ext(svc); } }
+    let decls =
+        "class Base {} class Sub extends Base { constructor(a: any) { super(); ext(svc); } }
         (Base as any).BYTES_PER_ELEMENT = 4;";
     assert!(escapes(decls, "Sub", "[1]", ""));
 }
@@ -179,7 +190,8 @@ fn g4_static_stored_on_parent_is_admitted() {
 /// (a) A static whose value is unknown (host) passes the test.
 #[test]
 fn g4_unknown_static_is_admitted() {
-    let decls = "class H { constructor(a: any) { ext(svc); } } (H as any).BYTES_PER_ELEMENT = Host.n;";
+    let decls =
+        "class H { constructor(a: any) { ext(svc); } } (H as any).BYTES_PER_ELEMENT = Host.n;";
     assert!(escapes(decls, "H", "[1]", ""));
 }
 
@@ -187,8 +199,13 @@ fn g4_unknown_static_is_admitted() {
 #[test]
 fn g4_reversed_operands_narrow() {
     let decls = &format!("{TYPED} {PLAIN}");
-    let body = r#"if ("number" === typeof type.BYTES_PER_ELEMENT) return new type(array); return array;"#;
-    assert!(!conv_escapes(decls, body, "Math.random() < 2 ? Typed : Plain"));
+    let body =
+        r#"if ("number" === typeof type.BYTES_PER_ELEMENT) return new type(array); return array;"#;
+    assert!(!conv_escapes(
+        decls,
+        body,
+        "Math.random() < 2 ? Typed : Plain"
+    ));
 }
 
 /// "undefined": a value whose read of the static is `undefined` (absent)
@@ -197,19 +214,28 @@ fn g4_reversed_operands_narrow() {
 fn g4_undefined_keeps_only_absent() {
     let body = r#"if (typeof type.BYTES_PER_ELEMENT === "undefined") return new type(array); return array;"#;
     let decls2 = &format!("{TYPED} {PLAIN}");
-    assert!(conv_escapes(decls2, body, "Math.random() < 2 ? Typed : Plain"));
+    assert!(conv_escapes(
+        decls2,
+        body,
+        "Math.random() < 2 ? Typed : Plain"
+    ));
 }
 
 /// "string": a String static passes, a Number static and an absent one do
 /// not.
 #[test]
 fn g4_string_keeps_string_static() {
-    let body = r#"if (typeof type.BYTES_PER_ELEMENT === "string") return new type(array); return array;"#;
+    let body =
+        r#"if (typeof type.BYTES_PER_ELEMENT === "string") return new type(array); return array;"#;
     let decls = "class S { static BYTES_PER_ELEMENT = \"4\"; constructor(a: any) { ext(svc); } }
         class Q { constructor(a: any) {} }";
     assert!(conv_escapes(decls, body, "Math.random() < 2 ? S : Q"));
     let decls2 = &format!("{TYPED} {PLAIN}");
-    assert!(!conv_escapes(decls2, body, "Math.random() < 2 ? Typed : Plain"));
+    assert!(!conv_escapes(
+        decls2,
+        body,
+        "Math.random() < 2 ? Typed : Plain"
+    ));
 }
 
 /// (b) A write to `type` between the guard and the use: the new value is
@@ -226,7 +252,11 @@ fn g4_write_between_guard_and_use_keeps_new_value() {
 fn g4_member_host_narrows_nothing() {
     let decls = &format!("{TYPED} {PLAIN}");
     let body = r#"const o: any = { t: type }; if (typeof o.t.BYTES_PER_ELEMENT === "number") return new o.t(array); return array;"#;
-    assert!(conv_escapes(decls, body, "Math.random() < 2 ? Typed : Plain"));
+    assert!(conv_escapes(
+        decls,
+        body,
+        "Math.random() < 2 ? Typed : Plain"
+    ));
 }
 
 /// (c) The false side narrows nothing: `!==` true keeps `Plain`, whose
@@ -234,8 +264,13 @@ fn g4_member_host_narrows_nothing() {
 #[test]
 fn g4_false_side_keeps_plain() {
     let decls = &format!("{TYPED} {PLAIN}");
-    let body = r#"if (typeof type.BYTES_PER_ELEMENT !== "number") return new type(array); return array;"#;
-    assert!(conv_escapes(decls, body, "Math.random() < 2 ? Typed : Plain"));
+    let body =
+        r#"if (typeof type.BYTES_PER_ELEMENT !== "number") return new type(array); return array;"#;
+    assert!(conv_escapes(
+        decls,
+        body,
+        "Math.random() < 2 ? Typed : Plain"
+    ));
 }
 
 /// (d) "object" is no G4 test: a `null` static (`typeof null` is
@@ -243,6 +278,7 @@ fn g4_false_side_keeps_plain() {
 #[test]
 fn g4_object_result_narrows_nothing() {
     let decls = "class N { static BYTES_PER_ELEMENT = null; constructor(a: any) { ext(svc); } }";
-    let body = r#"if (typeof type.BYTES_PER_ELEMENT === "object") return new type(array); return array;"#;
+    let body =
+        r#"if (typeof type.BYTES_PER_ELEMENT === "object") return new type(array); return array;"#;
     assert!(conv_escapes(decls, body, "N"));
 }

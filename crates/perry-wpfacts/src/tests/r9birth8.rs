@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -89,4 +93,3 @@ fn r9birth8_tk3_view_to_unknown() {
     let pf = ta("const b = ta.buffer; const u: any = (globalThis as any)[String(Math.random())]; if (u) u(ta); console.log(b.byteLength);");
     assert!(none(&pf, "length", "NativeMember"), "TK3");
 }
-

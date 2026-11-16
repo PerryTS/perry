@@ -52,8 +52,14 @@ fn string_key_reads_named_field() {
 
 #[test]
 fn number_key_reads_numeric_field() {
-    assert!(spot(&src("const g: any = Object; g[0] = new Spot();", "g[i]")));
-    assert!(spot(&src("const g: any = Array; g[i] = new Spot();", "g[i]")));
+    assert!(spot(&src(
+        "const g: any = Object; g[0] = new Spot();",
+        "g[i]"
+    )));
+    assert!(spot(&src(
+        "const g: any = Array; g[i] = new Spot();",
+        "g[i]"
+    )));
 }
 
 #[test]

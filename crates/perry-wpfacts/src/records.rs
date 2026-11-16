@@ -425,7 +425,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
             op("[index]".into())
         }
-        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
+        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => {
+            Use::Reject(R6Store("hole".into()))
+        }
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }
             if m.stores

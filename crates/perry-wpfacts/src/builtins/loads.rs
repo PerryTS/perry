@@ -262,8 +262,12 @@ fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
 /// store wrote onto the chain is `intrinsic_miss`'s).
 fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
     what == Some("RegExp")
-        && members::regexp_inherited(name)
-            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+        && members::regexp_inherited(name).is_some_and(|p| {
+            matches!(
+                members::realm_chain_find(p, name),
+                members::RealmFind::Absent
+            )
+        })
 }
 
 /// The primitive kind of `name` on the chain of a realm-born object
@@ -440,8 +444,12 @@ pub(super) fn realm_chain_start(
 /// `BYTES_PER_ELEMENT`), so its chain stands for every kind's. A key a
 /// store wrote onto the chain is `intrinsic_miss`'s.
 pub(super) fn view_member_absent(what: Option<&str>, name: &str) -> bool {
-    view_chain(what)
-        .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+    view_chain(what).is_some_and(|p| {
+        matches!(
+            members::realm_chain_find(p, name),
+            members::RealmFind::Absent
+        )
+    })
 }
 
 /// The realm prototype a typed array's or a Buffer's chain starts at

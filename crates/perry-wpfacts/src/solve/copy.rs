@@ -257,7 +257,8 @@ impl Model {
             // `rel_generic_fn_arrival` for an adopted set (no `add_tokens_s`).
             if let Some(&bf) = self.tok_index.get(&TokKind::BuiltinFn(Native::Any)) {
                 if pts.contains_tok(bf) && !self.nodes[dst as usize].pts.contains_tok(bf) {
-                    let line = format!("A addbf {dst} {bf} src={src} @solve/copy.rs:adopt_delivery");
+                    let line =
+                        format!("A addbf {dst} {bf} src={src} @solve/copy.rs:adopt_delivery");
                     if let Some(r) = self.relations.as_mut() {
                         r.push(line);
                     }

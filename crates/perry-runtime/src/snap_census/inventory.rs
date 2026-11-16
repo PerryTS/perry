@@ -74,8 +74,11 @@ struct Trans {
     v: Vec<(usize, u32)>,
     reliable: bool,
 }
-static TRANS: std::sync::Mutex<Trans> =
-    std::sync::Mutex::new(Trans { owner: None, v: Vec::new(), reliable: true });
+static TRANS: std::sync::Mutex<Trans> = std::sync::Mutex::new(Trans {
+    owner: None,
+    v: Vec::new(),
+    reliable: true,
+});
 
 /// The runner's top init changed (a frame was pushed or popped).
 pub(super) fn frame_changed(top: u32) {
@@ -101,7 +104,10 @@ pub(super) fn frame_changed(top: u32) {
 
 fn copy(lo: usize, hi: usize) -> (usize, Vec<u8>) {
     // SAFETY: `[lo, hi)` is mapped writable data of this process.
-    (lo, unsafe { std::slice::from_raw_parts(lo as *const u8, hi - lo) }.to_vec())
+    (
+        lo,
+        unsafe { std::slice::from_raw_parts(lo as *const u8, hi - lo) }.to_vec(),
+    )
 }
 
 /// The census started: remember the words the report compares against.
@@ -139,9 +145,15 @@ fn form(obj_type: u8) -> &'static str {
         return "none";
     }
     match obj_type {
-        GC_TYPE_NATIVE_ARENA_OWNER | GC_TYPE_NATIVE_TYPED_VIEW | GC_TYPE_NATIVE_HANDLE
-        | GC_TYPE_NATIVE_POD_VIEW | GC_TYPE_TEMPORAL | GC_TYPE_REGEX_PROGRAM
-        | GC_TYPE_REGEX_CACHE | GC_TYPE_INTERP_FUNCTION | GC_TYPE_BUFFER_SECRET_KEY
+        GC_TYPE_NATIVE_ARENA_OWNER
+        | GC_TYPE_NATIVE_TYPED_VIEW
+        | GC_TYPE_NATIVE_HANDLE
+        | GC_TYPE_NATIVE_POD_VIEW
+        | GC_TYPE_TEMPORAL
+        | GC_TYPE_REGEX_PROGRAM
+        | GC_TYPE_REGEX_CACHE
+        | GC_TYPE_INTERP_FUNCTION
+        | GC_TYPE_BUFFER_SECRET_KEY
         | GC_TYPE_BUFFER_CRYPTO_KEY => "native",
         _ => "cell",
     }
@@ -155,7 +167,11 @@ struct Ctx {
 }
 
 fn class(v: u64, c: &Ctx) -> &'static str {
-    let a = if (v >> 48) >= 0x7ff8 { v & 0xffff_ffff_ffff } else { v } as usize;
+    let a = if (v >> 48) >= 0x7ff8 {
+        v & 0xffff_ffff_ffff
+    } else {
+        v
+    } as usize;
     let within = |r: (usize, usize)| a >= r.0 && a < r.1;
     if within(c.tls) {
         return "tls";
@@ -197,7 +213,11 @@ pub(super) fn at_init(id: u32, out: &str, holds: bool, birth: &dyn Fn(usize) -> 
     let _ = writeln!(
         f,
         "#inventory\tbefore_init={id}\tholds={}",
-        if holds { "collected" } else { "not-collected(no-hold)" }
+        if holds {
+            "collected"
+        } else {
+            "not-collected(no-hold)"
+        }
     );
     // Cells: the arena walk and the malloc-tracked objects, minus free slots.
     let free: HashSet<usize> = crate::gc::ARENA_FREE_LIST
@@ -206,8 +226,11 @@ pub(super) fn at_init(id: u32, out: &str, holds: bool, birth: &dyn Fn(usize) -> 
     crate::arena::arena_walk_objects(|h| headers.push(h));
     let malloc: Vec<*mut crate::gc::GcHeader> =
         crate::gc::MALLOC_STATE.with(|s| s.borrow().objects.clone());
-    let malloc_index: HashMap<usize, usize> =
-        malloc.iter().enumerate().map(|(i, &h)| (h as usize, i)).collect();
+    let malloc_index: HashMap<usize, usize> = malloc
+        .iter()
+        .enumerate()
+        .map(|(i, &h)| (h as usize, i))
+        .collect();
     headers.extend(malloc.into_iter().map(|h| h as *mut u8));
     let mut live_cells: Vec<LiveCell> = Vec::new();
     let mut cells: Vec<(usize, usize, u32)> = Vec::new();
@@ -244,8 +267,18 @@ pub(super) fn at_init(id: u32, out: &str, holds: bool, birth: &dyn Fn(usize) -> 
     let mut by_type: BTreeMap<u8, [u64; 2]> = BTreeMap::new();
     for ((t, init), r) in &rows {
         let name = crate::gc::gc_type_info(*t).map_or("?", |i| i.name);
-        let init = if *init < 0 { "-".to_owned() } else { init.to_string() };
-        let _ = writeln!(f, "cell\t{t}\t{name}\t{}\t{init}\t{}\t{}", form(*t), r[0], r[1]);
+        let init = if *init < 0 {
+            "-".to_owned()
+        } else {
+            init.to_string()
+        };
+        let _ = writeln!(
+            f,
+            "cell\t{t}\t{name}\t{}\t{init}\t{}\t{}",
+            form(*t),
+            r[0],
+            r[1]
+        );
         let s = by_type.entry(*t).or_insert([0; 2]);
         s[0] += r[0];
         s[1] += r[1];
@@ -440,7 +473,9 @@ fn live_report(
                     }
                     Target::Image => "image",
                     Target::Handle => {
-                        *handle_holders.entry((cells[i].t, cells[i].birth)).or_insert(0) += 1;
+                        *handle_holders
+                            .entry((cells[i].t, cells[i].birth))
+                            .or_insert(0) += 1;
                         "handle_id"
                     }
                     Target::Untracked => "untracked_malloc",
@@ -491,9 +526,20 @@ fn live_report(
             *special.entry((c.t, is_live, c.birth, ht, hb)).or_insert(0) += 1;
         }
     }
-    let _ = writeln!(f, "#live_birth\tmalloc_births={}", if reliable { "tracked" } else { "unreliable" });
+    let _ = writeln!(
+        f,
+        "#live_birth\tmalloc_births={}",
+        if reliable { "tracked" } else { "unreliable" }
+    );
     for ((t, init), r) in &live {
-        let _ = writeln!(f, "live\t{t}\t{}\t{}\t{init}\t{}\t{}", name(*t), form(*t), r[0], r[1]);
+        let _ = writeln!(
+            f,
+            "live\t{t}\t{}\t{}\t{init}\t{}\t{}",
+            name(*t),
+            form(*t),
+            r[0],
+            r[1]
+        );
     }
     for (t, r) in &garbage {
         let _ = writeln!(f, "garbage\t{t}\t{}\t{}\t{}", name(*t), r[0], r[1]);

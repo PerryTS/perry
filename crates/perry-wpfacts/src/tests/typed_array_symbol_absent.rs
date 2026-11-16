@@ -11,7 +11,11 @@
 //! symbols the chain does hold (`@@iterator`) keep their members.
 use super::*;
 
-const KINDS: [&str; 3] = ["new Float64Array(2)", "new Uint8Array(2)", "new Int32Array(2)"];
+const KINDS: [&str; 3] = [
+    "new Float64Array(2)",
+    "new Uint8Array(2)",
+    "new Int32Array(2)",
+];
 
 /// `R` reaches no unknown code: no escape reason.
 fn kept(pf: &crate::ProgramFacts) -> bool {

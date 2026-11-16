@@ -43,7 +43,10 @@ fn plain_calls(k: &str) -> Vec<String> {
 /// (i) A class as the callee of a plain or protocol call: nothing escapes.
 #[test]
 fn a_class_called_without_new_throws() {
-    let bad: Vec<String> = plain_calls("C").into_iter().filter(|b| !proven(b)).collect();
+    let bad: Vec<String> = plain_calls("C")
+        .into_iter()
+        .filter(|b| !proven(b))
+        .collect();
     assert!(bad.is_empty(), "escaped through a class [[Call]]: {bad:#?}");
 }
 
@@ -51,8 +54,11 @@ fn a_class_called_without_new_throws() {
 /// is called by (the value called is the class, not its static).
 #[test]
 fn a_derived_class_or_one_with_a_static_called_without_new_throws() {
-    let bad: Vec<String> =
-        plain_calls("D").into_iter().chain(plain_calls("S")).filter(|b| !proven(b)).collect();
+    let bad: Vec<String> = plain_calls("D")
+        .into_iter()
+        .chain(plain_calls("S"))
+        .filter(|b| !proven(b))
+        .collect();
     assert!(bad.is_empty(), "escaped through a class [[Call]]: {bad:#?}");
 }
 

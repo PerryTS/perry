@@ -129,7 +129,13 @@ fn slice(
     let mut d = Vec::new();
     let mut work: Vec<NodeId> = through.to_vec();
     let this = (!fi.lexical_this).then_some(fi.this);
-    for &p in fi.params.iter().chain(this.iter()).chain(fi.rest.iter()).chain(roots) {
+    for &p in fi
+        .params
+        .iter()
+        .chain(this.iter())
+        .chain(fi.rest.iter())
+        .chain(roots)
+    {
         if ok(p) && seen.insert(p) {
             d.push(p);
             work.push(p);
@@ -306,7 +312,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             let cs = &m.nodes[n as usize].cons;
             let binds = rest
                 && cs.iter().any(|c| bound(n, c))
-                && cs.iter().all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+                && cs
+                    .iter()
+                    .all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
             binds || cs.iter().all(|c| cache(n, c))
         };
         let mut ok = own.iter().all(|&n| own_cons(n));
@@ -616,7 +624,10 @@ fn plan(
     for (x, nd) in m.nodes.iter().enumerate() {
         for (i, c) in nd.cons.iter().enumerate() {
             if let Cons::StoreIndexed { o, .. } = *c {
-                indexed_into.entry(o).or_default().push((x as NodeId, i as u32));
+                indexed_into
+                    .entry(o)
+                    .or_default()
+                    .push((x as NodeId, i as u32));
             }
         }
     }
@@ -679,13 +690,15 @@ fn plan(
                     // on the run's copy of the object from the run's own key
                     // (`Cons::StoreIndexed` in `solve/apply.rs`).
                     Ok(true)
-                        if matches!(c, Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept)
-                            && indexed_into.get(&h).is_some_and(|v| {
-                                v.iter().any(|&(x, j)| {
-                                    let sc = &m.nodes[x as usize].cons[j as usize];
-                                    disposition(m, lex, &dof, &oset, f, x, sc) == Ok(true)
-                                })
-                            }) => {}
+                        if matches!(
+                            c,
+                            Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept
+                        ) && indexed_into.get(&h).is_some_and(|v| {
+                            v.iter().any(|&(x, j)| {
+                                let sc = &m.nodes[x as usize].cons[j as usize];
+                                disposition(m, lex, &dof, &oset, f, x, sc) == Ok(true)
+                            })
+                        }) => {}
                     Ok(true) => {
                         if !gen_kind(c) {
                             *bad = true;
@@ -948,7 +961,11 @@ pub(super) fn build_summaries(m: &mut Model) {
     let (ncomposed, nsccs) = compose(m, &obs_of);
     // The parameter bindings of every function: an edge into one is a call
     // passing an argument (rule M3, `keyed_param`).
-    let param_nodes: FxHashSet<NodeId> = m.funcs.iter().flat_map(|g| g.params.iter().copied()).collect();
+    let param_nodes: FxHashSet<NodeId> = m
+        .funcs
+        .iter()
+        .flat_map(|g| g.params.iter().copied())
+        .collect();
     for (f, s) in m.sum.of.iter_mut() {
         let s = Rc::make_mut(s);
         bind_written_params(s);
@@ -1066,10 +1083,17 @@ fn bind_written_params(s: &mut Summary) {
 /// (`Model::switch_runs`) when the parameter is a slot nothing of the body
 /// writes (`rel`) and no other interface term, and the body has no called
 /// parameter (one value per run).
-fn switch_param(s: &Summary, w: Option<&(u32, Vec<Option<crate::model::Atom>>)>) -> Option<(u32, Vec<Option<crate::model::Atom>>)> {
+fn switch_param(
+    s: &Summary,
+    w: Option<&(u32, Vec<Option<crate::model::Atom>>)>,
+) -> Option<(u32, Vec<Option<crate::model::Atom>>)> {
     let (j, labels) = w?;
     let p = *s.params.get(*j as usize)?;
-    let alone = s.params.iter().enumerate().all(|(i, &q)| i == *j as usize || q != p);
+    let alone = s
+        .params
+        .iter()
+        .enumerate()
+        .all(|(i, &q)| i == *j as usize || q != p);
     (s.called.is_none()
         && is_slot(p)
         && s.rel.get(*j as usize).is_some_and(|&r| r)
@@ -1184,9 +1208,14 @@ fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
         // `switch_vals`), finite (the entries are the program's literals
         // and the shapes made from them), and an argument that gains an
         // entry binds that entry's run as well (`settle_val_runs`).
-        keyed || s.calls.iter().any(|(_, cs)| cs.args.iter().any(|x| k.contains(x)))
+        keyed
+            || s.calls
+                .iter()
+                .any(|(_, cs)| cs.args.iter().any(|x| k.contains(x)))
     };
-    (0..s.params.len()).find(|&j| only_keyed(j)).map(|j| j as u32)
+    (0..s.params.len())
+        .find(|&j| only_keyed(j))
+        .map(|j| j as u32)
 }
 
 fn called_param(s: &Summary) -> Option<u32> {
@@ -1198,7 +1227,9 @@ fn called_param(s: &Summary) -> Option<u32> {
         if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p)
             || s.edges.iter().any(|&(a, b)| a == p || b == p)
             || s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
-            || s.closures.iter().any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
+            || s.closures
+                .iter()
+                .any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
             || s.births.iter().any(|&(sl, _)| SLOT | sl == p)
         {
             return false;
@@ -1228,7 +1259,9 @@ fn called_param(s: &Summary) -> Option<u32> {
         }
         called
     };
-    (0..s.params.len()).find(|&j| only_called(j)).map(|j| j as u32)
+    (0..s.params.len())
+        .find(|&j| only_called(j))
+        .map(|j| j as u32)
 }
 
 fn relative_params(s: &Summary) -> Vec<bool> {
@@ -1312,7 +1345,8 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
         s.calls
             .push((k, BodyCall::capture(&m.calls[k as usize], enc)));
         if sw {
-            s.call_reach.push(m.call_reach.get(&k).copied().unwrap_or(REACH_ALL));
+            s.call_reach
+                .push(m.call_reach.get(&k).copied().unwrap_or(REACH_ALL));
         }
     }
     let kenc = |k: CallId| match callix.get(&k) {
@@ -1398,7 +1432,9 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
             .to_sorted()
             .into_iter()
             .filter(|t| !strip.contains(t))
-            .filter(|&t| !matches!(m.toks[t as usize], TokKind::Obj(_, c) if callix.contains_key(&c)))
+            .filter(
+                |&t| !matches!(m.toks[t as usize], TokKind::Obj(_, c) if callix.contains_key(&c)),
+            )
             .collect();
         if !toks.is_empty() || node.prim != 0 || node.own_refuted {
             s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
@@ -1431,7 +1467,8 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
         let c = &m.nodes[h as usize].cons[i as usize];
         s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
         if sw {
-            s.cons_reach.push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));
+            s.cons_reach
+                .push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));
         }
     }
     s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();

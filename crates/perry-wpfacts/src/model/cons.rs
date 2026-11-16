@@ -809,7 +809,11 @@ pub enum Cons {
     /// Buffer `slice`): the source view's buffer. Otherwise a constructor
     /// argument: an ArrayBuffer is the buffer (23.2.5.1.3, 25.3.2.1), any
     /// other value makes `fresh` (`None`: the birth throws).
-    ViewedBuffer { view: Tok, fresh: Option<Tok>, share: bool },
+    ViewedBuffer {
+        view: Tok,
+        fresh: Option<Tok>,
+        share: bool,
+    },
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
@@ -848,7 +852,11 @@ pub enum Cons {
     /// "__proto__", v, true) runs the Object.prototype setter (20.1.2.1
     /// step 3.a.iii.2.b, B.2.2.1.2): `val`'s objects (or null) become
     /// prototypes of `target`, as a `__proto__` store gives them.
-    ProtoKeySet { target: Tok, val: NodeId, site: SiteId },
+    ProtoKeySet {
+        target: Tok,
+        val: NodeId,
+        site: SiteId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).

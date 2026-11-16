@@ -35,14 +35,32 @@ fn escapes(body: &str) -> bool {
 }
 
 const NEW_ONLY: &[&str] = &[
-    "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
-    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
-    "ArrayBuffer", "SharedArrayBuffer", "DataView", "Map", "Set", "WeakMap", "WeakSet", "Promise",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+    "ArrayBuffer",
+    "SharedArrayBuffer",
+    "DataView",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Promise",
 ];
 
 fn plain_calls(k: &str) -> Vec<String> {
     vec![
-        format!("const w: any = {{ v: o }}; const f: any = pick({k}); try {{ f(w); }} catch (e) {{}}"),
+        format!(
+            "const w: any = {{ v: o }}; const f: any = pick({k}); try {{ f(w); }} catch (e) {{}}"
+        ),
         format!("const f: any = pick({k}); try {{ f(o); }} catch (e) {{}}"),
         format!("const h: any = {{ k: pick({k}) }}; try {{ h.k(o); }} catch (e) {{}}"),
         format!("const f: any = pick({k}); try {{ f.call(o, o); }} catch (e) {{}}"),
@@ -58,7 +76,10 @@ fn a_new_only_constructor_called_without_new_uses_no_argument() {
         .flat_map(|k| plain_calls(k))
         .filter(|b| escapes(b))
         .collect();
-    assert!(bad.is_empty(), "escaped through a builtin constructor [[Call]]: {bad:#?}");
+    assert!(
+        bad.is_empty(),
+        "escaped through a builtin constructor [[Call]]: {bad:#?}"
+    );
 }
 
 fn thenables(k: &str) -> Vec<String> {
@@ -76,12 +97,23 @@ fn thenables(k: &str) -> Vec<String> {
 /// value: the thenable job's call throws, nothing escapes.
 #[test]
 fn a_new_only_constructor_as_then_rejects_and_uses_nothing() {
-    let bad: Vec<String> = ["Int8Array", "Float32Array", "ArrayBuffer", "DataView", "Map", "WeakSet", "Promise"]
-        .iter()
-        .flat_map(|k| thenables(k))
-        .filter(|b| escapes(b))
-        .collect();
-    assert!(bad.is_empty(), "escaped through a builtin constructor as then: {bad:#?}");
+    let bad: Vec<String> = [
+        "Int8Array",
+        "Float32Array",
+        "ArrayBuffer",
+        "DataView",
+        "Map",
+        "WeakSet",
+        "Promise",
+    ]
+    .iter()
+    .flat_map(|k| thenables(k))
+    .filter(|b| escapes(b))
+    .collect();
+    assert!(
+        bad.is_empty(),
+        "escaped through a builtin constructor as then: {bad:#?}"
+    );
 }
 
 /// (iii) Control: `new` of the same value constructs as before (an
@@ -111,7 +143,10 @@ fn a_program_or_host_then_is_still_called() {
 /// (v) Control: an unknown value beside the constructor keeps the unknown call.
 #[test]
 fn an_unknown_value_beside_the_constructor_keeps_the_unknown_call() {
-    for b in plain_calls("(Math.random() < 2 ? Int8Array : (globalThis as any).hostGet())").iter().skip(1) {
+    for b in plain_calls("(Math.random() < 2 ? Int8Array : (globalThis as any).hostGet())")
+        .iter()
+        .skip(1)
+    {
         assert!(escapes(b), "{b}");
     }
 }

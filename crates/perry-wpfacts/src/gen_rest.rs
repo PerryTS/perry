@@ -866,7 +866,7 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::BOOL)
             }
-                        // The predicates that convert nothing: `Array.isArray` reads only
+            // The predicates that convert nothing: `Array.isArray` reads only
             // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
             // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
             // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`

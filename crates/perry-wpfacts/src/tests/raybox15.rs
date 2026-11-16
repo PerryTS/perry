@@ -27,13 +27,20 @@ fn absent(pf: &crate::ProgramFacts, class: &str, key: &str) -> Option<bool> {
         .find(|t| t.display.ends_with(&format!(":{class}")))
         .expect("template");
     let r = t.fields.iter().find(|f| f.key == key).map(|f| f.absent);
-    for st in pf.sites.iter().filter(|st| st.key == key && !st.access.is_store()) {
+    for st in pf
+        .sites
+        .iter()
+        .filter(|st| st.key == key && !st.access.is_store())
+    {
         eprintln!("RB15 site .{key} verdict={:?}", st.verdict);
     }
     if let Some(f) = t.fields.iter().find(|f| f.key == key) {
         eprintln!("RB15 row {f:?}");
     }
-    eprintln!("RB15 {class}.{key} absent={r:?} fixed_layout={}", t.fixed_layout);
+    eprintln!(
+        "RB15 {class}.{key} absent={r:?} fixed_layout={}",
+        t.fixed_layout
+    );
     r
 }
 
@@ -74,7 +81,9 @@ fn rb15_keep_birth_field_is_not_absent() {
 
 #[test]
 fn rb15_keep_store_after_birth_refuses() {
-    let pf = facts(&src("if (process.argv[2] === \"y\") (xs[1] as any).bs = 3;"));
+    let pf = facts(&src(
+        "if (process.argv[2] === \"y\") (xs[1] as any).bs = 3;",
+    ));
     assert_ne!(absent(&pf, "Leaf", "bs"), Some(true));
 }
 
@@ -90,7 +99,9 @@ fn rb15_keep_computed_key_store_refuses() {
 /// lock goes, both refuse together.
 #[test]
 fn rb15_object_prototype_store_agrees_with_the_read_verdict() {
-    let pf = facts(&src("if (process.argv[2] === \"y\") (Object.prototype as any).bs = 3;"));
+    let pf = facts(&src(
+        "if (process.argv[2] === \"y\") (Object.prototype as any).bs = 3;",
+    ));
     let read_absent = pf
         .sites
         .iter()
@@ -101,7 +112,9 @@ fn rb15_object_prototype_store_agrees_with_the_read_verdict() {
 
 #[test]
 fn rb15_keep_class_prototype_store_refuses() {
-    let pf = facts(&src("if (process.argv[2] === \"y\") (Base.prototype as any).bs = 3;"));
+    let pf = facts(&src(
+        "if (process.argv[2] === \"y\") (Base.prototype as any).bs = 3;",
+    ));
     assert_ne!(absent(&pf, "Leaf", "bs"), Some(true));
 }
 
@@ -115,7 +128,9 @@ fn rb15_keep_define_property_getter_refuses() {
 
 #[test]
 fn rb15_keep_set_prototype_of_refuses() {
-    let pf = facts(&src("if (process.argv[2] === \"y\") Object.setPrototypeOf(xs[1], { bs: 7 });"));
+    let pf = facts(&src(
+        "if (process.argv[2] === \"y\") Object.setPrototypeOf(xs[1], { bs: 7 });",
+    ));
     assert_ne!(absent(&pf, "Leaf", "bs"), Some(true));
 }
 

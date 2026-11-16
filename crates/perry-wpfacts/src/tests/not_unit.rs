@@ -20,11 +20,20 @@ fn one(src: &str) -> ProgramFacts {
 }
 
 fn at(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
-    let v: Vec<String> = s.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    let v: Vec<String> = s
+        .iter()
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
     eprintln!("NOTUNIT {key} call={call}: {v:?}");
-    v.into_iter().map(|v| v.split(' ').next().unwrap_or("").to_string()).collect()
+    v.into_iter()
+        .map(|v| v.split(' ').next().unwrap_or("").to_string())
+        .collect()
 }
 
 fn all(v: &[String], k: &str) -> bool {
@@ -39,7 +48,9 @@ const HOLD: &str = "declare function hostTake(x: any): void;\nhostTake(0);\n";
 
 #[test]
 fn u5_root_of_a_parse_absent_key() {
-    let pf = one(&format!("{C}const o: any = JSON.parse(s);\nconsole.log(o.ior);\n"));
+    let pf = one(&format!(
+        "{C}const o: any = JSON.parse(s);\nconsole.log(o.ior);\n"
+    ));
     assert!(all(&at(&pf, "ior", false), "OwnDataOrAbsent"));
 }
 
@@ -213,7 +224,8 @@ fn mixed_array_or_undefined_absent_key() {
 // any other primitive does nothing. ParseJSON made `__proto__` an own data
 // key (25.5.1, CreateDataPropertyOrThrow), so the source of the store is
 // that own value.
-const RL: &str = "const j: any = JSON.parse(s);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\n";
+const RL: &str =
+    "const j: any = JSON.parse(s);\nconst t: any = j.a;\nfor (const k in j.b) t[k] = j.b[k];\n";
 
 fn null_arm(pf: &ProgramFacts, key: &str) -> bool {
     pf.sites
@@ -223,14 +235,34 @@ fn null_arm(pf: &ProgramFacts, key: &str) -> bool {
 }
 
 fn granted(pf: &ProgramFacts, key: &str) -> bool {
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
-    eprintln!("NOTUNIT4 {key}: {:?}", v.iter().map(|s| (&s.verdict, &s.receivers)).collect::<Vec<_>>());
-    !v.is_empty() && v.iter().all(|s| matches!(s.verdict, Verdict::OwnDataOrAbsent))
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .collect();
+    eprintln!(
+        "NOTUNIT4 {key}: {:?}",
+        v.iter()
+            .map(|s| (&s.verdict, &s.receivers))
+            .collect::<Vec<_>>()
+    );
+    !v.is_empty()
+        && v.iter()
+            .all(|s| matches!(s.verdict, Verdict::OwnDataOrAbsent))
 }
 
 fn refused(pf: &ProgramFacts, key: &str) -> bool {
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
-    eprintln!("NOTUNIT4 {key}: {:?}", v.iter().map(|s| (&s.verdict, &s.receivers)).collect::<Vec<_>>());
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .collect();
+    eprintln!(
+        "NOTUNIT4 {key}: {:?}",
+        v.iter()
+            .map(|s| (&s.verdict, &s.receivers))
+            .collect::<Vec<_>>()
+    );
     !v.is_empty() && v.iter().all(|s| matches!(s.verdict, Verdict::No(_)))
 }
 
@@ -260,7 +292,9 @@ fn control_relink_array_prototype_member_refused() {
 /// Control (iii): the program writes `x` onto `%Array.prototype%`: refused.
 #[test]
 fn control_relink_array_prototype_written_refused() {
-    let pf = one(&format!("{C}(Array.prototype as any).x = 1;\n{RL}console.log(t.x);\n"));
+    let pf = one(&format!(
+        "{C}(Array.prototype as any).x = 1;\n{RL}console.log(t.x);\n"
+    ));
     assert!(refused(&pf, "x"));
 }
 
@@ -282,10 +316,14 @@ fn control_relink_to_a_program_object() {
 fn control_relink_to_an_array_reads_its_length() {
     let pf = one(&format!("{C}{RL}console.log(t.length);\n"));
     assert!(refused(&pf, "length"));
-    assert!(pf.sites.iter().filter(|s| s.key == "length" && !s.is_call).all(|s| matches!(
-        &s.verdict,
-        Verdict::No(r) if r.contains("primitive beside an object")
-    )));
+    assert!(pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "length" && !s.is_call)
+        .all(|s| matches!(
+            &s.verdict,
+            Verdict::No(r) if r.contains("primitive beside an object")
+        )));
 }
 
 /// A call on the relinked object: the JSON call claim refuses (a call).

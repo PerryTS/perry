@@ -24,11 +24,20 @@ fn kept(pf: &ProgramFacts) -> crate::derive::KindFact {
         .filter(|t| t.display.starts_with("t.ts"))
         .find(|t| t.fields.iter().any(|f| f.key == "keptv"))
         .unwrap_or_else(|| panic!("no keptv\n{}", pf.dump_text()));
-    t.fields.iter().find(|f| f.key == "keptv").unwrap().kind.clone()
+    t.fields
+        .iter()
+        .find(|f| f.key == "keptv")
+        .unwrap()
+        .kind
+        .clone()
 }
 
 fn m_mono(pf: &ProgramFacts) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m" && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     assert!(!v.is_empty(), "no call site of m");
@@ -61,7 +70,10 @@ fn skinroot19_typed_array_enum_proto_not_accessor() {
     eprintln!("SKINROOT19 keptv {k:?}");
     // Without the rule `d` gets `%TypedArray%.prototype` and, through its
     // members, ⊤ under `d.subarray`.
-    assert!(!k.top, "RED: d.subarray reaches ⊤ through %TypedArray%.prototype: {k:?}");
+    assert!(
+        !k.top,
+        "RED: d.subarray reaches ⊤ through %TypedArray%.prototype: {k:?}"
+    );
     let v = m_mono(&pf);
     assert!(
         v.iter().any(|x| x == "T0Mono" || x.starts_with("T0Mono(")),

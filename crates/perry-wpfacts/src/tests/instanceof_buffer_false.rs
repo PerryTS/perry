@@ -77,7 +77,11 @@ console.log(f(new ArrayBuffer(4)).m(), f(new T()).m());
 #[test]
 fn controls_keep_the_set() {
     // A typed array is no ArrayBuffer.
-    let pf = facts(&parse_with("", "d instanceof ArrayBuffer", "parse(new Uint8Array(4)).m();"));
+    let pf = facts(&parse_with(
+        "",
+        "d instanceof ArrayBuffer",
+        "parse(new Uint8Array(4)).m();",
+    ));
     assert!(!mono_m(&pf), "typed array {}", pf.dump_text());
     // Unknown code: ⊤ passes.
     let pf = facts(&parse_with(

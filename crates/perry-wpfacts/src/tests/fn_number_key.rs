@@ -51,7 +51,10 @@ fn number_key_reads_numeric_field() {
         "const g: any = Object.prototype.hasOwnProperty; g[0] = new Spot();",
         "g[i]"
     )));
-    assert!(spot(&src("function f() {} const g: any = f; g[0] = new Spot();", "g[i]")));
+    assert!(spot(&src(
+        "function f() {} const g: any = f; g[0] = new Spot();",
+        "g[i]"
+    )));
 }
 
 #[test]

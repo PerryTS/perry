@@ -22,7 +22,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// Verdicts of the call sites `<recv>.<key>(...)`.
 fn calls(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -78,13 +82,25 @@ fn r9read4_a1_proto_method_read_present() {
 // KEEP a2: a `delete` of the method may leave it absent.
 #[test]
 fn r9read4_a2_deleted_method_keeps_undefined() {
-    not_proven(&A.replace("/*EXTRA*/", "if (process.argv[4]) delete (P.prototype as any).a;"), "g");
+    not_proven(
+        &A.replace(
+            "/*EXTRA*/",
+            "if (process.argv[4]) delete (P.prototype as any).a;",
+        ),
+        "g",
+    );
 }
 
 // KEEP a3: a stored `undefined` reaches the read.
 #[test]
 fn r9read4_a3_stored_undefined_kept() {
-    not_proven(&A.replace("/*EXTRA*/", "if (process.argv[4]) (P.prototype as any).a = undefined;"), "g");
+    not_proven(
+        &A.replace(
+            "/*EXTRA*/",
+            "if (process.argv[4]) (P.prototype as any).a = undefined;",
+        ),
+        "g",
+    );
 }
 
 // KEEP a4: an index past the end reads `undefined`.

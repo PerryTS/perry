@@ -292,9 +292,10 @@ impl Model {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::BObj { what: "Buffer", .. } => prim::NUM,
                 _ => match self.ta_elem.get(&tm).copied() {
-                    Some(perry_hir::TYPED_ARRAY_KIND_BIGINT64 | perry_hir::TYPED_ARRAY_KIND_BIGUINT64) => {
-                        prim::BIGINT
-                    }
+                    Some(
+                        perry_hir::TYPED_ARRAY_KIND_BIGINT64
+                        | perry_hir::TYPED_ARRAY_KIND_BIGUINT64,
+                    ) => prim::BIGINT,
                     Some(_) => prim::NUM,
                     None => prim::NUM | prim::BIGINT,
                 },
@@ -311,7 +312,11 @@ impl Model {
         let p = self.typed_array_elem_prim(t);
         self.add_prim(f, p);
         if self.ta_store_done.insert((src, site)) {
-            builtins::string_methods::to_prim(self, src, "typed array element store's ToNumber / ToBigInt");
+            builtins::string_methods::to_prim(
+                self,
+                src,
+                "typed array element store's ToNumber / ToBigInt",
+            );
         }
     }
 
@@ -377,7 +382,8 @@ impl Model {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             if let Some(&attrs) = self.birth_attrs.get(&(c, a)) {
-                let fixed = perry_abi::LAYOUT_KEY_NON_WRITABLE | perry_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+                let fixed =
+                    perry_abi::LAYOUT_KEY_NON_WRITABLE | perry_abi::LAYOUT_KEY_NON_CONFIGURABLE;
                 return attrs & fixed == fixed;
             }
             cur = self.tmpls[c as usize].parent;
@@ -391,7 +397,10 @@ impl Model {
         // (its key is the copy's key: B.2.2.1.2 applies under that key only).
         if let Some(copy) = self.stores.get(site as usize).and_then(|s| s.proto_of) {
             if !self.proto_copy_hit.contains(&(copy, t)) {
-                self.proto_copy_wait.entry((copy, t)).or_default().push((src, site));
+                self.proto_copy_wait
+                    .entry((copy, t))
+                    .or_default()
+                    .push((src, site));
                 return;
             }
         }
@@ -620,7 +629,10 @@ impl Model {
             self.super_relink.insert(t);
             // SKINROOT11: a same-key copy's `__proto__` case is its own
             // named store `D["__proto__"] = S["__proto__"]` (gen).
-            let named_copy = self.stores.get(site as usize).is_some_and(|s| s.proto_named);
+            let named_copy = self
+                .stores
+                .get(site as usize)
+                .is_some_and(|s| s.proto_named);
             if named_copy && self.proto_copy_hit.insert((site, t)) {
                 let pk = Key::Named(self.atom("__proto__"));
                 for (s, ps) in self.proto_copy_wait.remove(&(site, t)).unwrap_or_default() {
@@ -871,9 +883,10 @@ impl Model {
             // A store under one fixed index of a rest array writes that
             // index only (`index_slot`) and moves no other element.
             let fixed = match key {
-                Key::Named(a) if self.is_rest_arr(t) => {
-                    self.atoms[a as usize].parse::<u32>().ok().filter(|i| i.to_string() == self.atoms[a as usize])
-                }
+                Key::Named(a) if self.is_rest_arr(t) => self.atoms[a as usize]
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|i| i.to_string() == self.atoms[a as usize]),
                 _ => None,
             };
             if let Some(i) = fixed {
@@ -886,7 +899,10 @@ impl Model {
             if self.is_rest_arr(t) {
                 if self.is_array_length(t, key) {
                     self.rest_front_widen(t);
-                } else if matches!((slot, fixed, key), (Some(0), _, _) | (_, Some(0), _) | (None, None, Key::Any(_))) {
+                } else if matches!(
+                    (slot, fixed, key),
+                    (Some(0), _, _) | (_, Some(0), _) | (None, None, Key::Any(_))
+                ) {
                     let n = self.rest_front(t);
                     self.edge(src, n);
                 }
@@ -936,9 +952,11 @@ impl Model {
             Key::Named(a) => {
                 // A BD-A define of a non-enumerable key makes no for-in key
                 // (`field_r`, as a method definition).
-                let hidden = self.stores.get(site as usize).and_then(|s| s.define_attrs).is_some_and(
-                    |attrs| attrs & perry_abi::LAYOUT_KEY_NON_ENUMERABLE != 0,
-                );
+                let hidden = self
+                    .stores
+                    .get(site as usize)
+                    .and_then(|s| s.define_attrs)
+                    .is_some_and(|attrs| attrs & perry_abi::LAYOUT_KEY_NON_ENUMERABLE != 0);
                 let f = match slot {
                     Some(i) => self.index_slot(t, i),
                     None if hidden => self.field_r(t, a),
@@ -973,7 +991,11 @@ impl Model {
                     // the first instance on, so it adds no key to a layout.
                     let first = matches!(self.toks[t as usize], TokKind::Proto(_))
                         && self.stores[site as usize].proto_first == Some(tm);
-                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect && !first {
+                    if !self.tmpls[tm as usize].birth_keys.contains(&a)
+                        && !ctor
+                        && !effect
+                        && !first
+                    {
                         *self.adds_keys.entry(tm).or_default() += 1;
                         *self.adds_named.entry((tm, a)).or_default() += 1;
                     }
@@ -993,7 +1015,10 @@ impl Model {
                 };
                 // Relations: a store under a key not known here writes the
                 // object's any-key (or numeric) field node.
-                let (sf, sm) = (self.stores[site as usize].func, self.stores[site as usize].module);
+                let (sf, sm) = (
+                    self.stores[site as usize].func,
+                    self.stores[site as usize].module,
+                );
                 self.rel(|| format!("anystore {t} {src} {f} site={site} fn={sf} m={sm}"));
                 self.edge(src, f);
                 if let Some(tm) = tm {

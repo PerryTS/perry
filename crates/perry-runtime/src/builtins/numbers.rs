@@ -44,7 +44,6 @@ pub extern "C" fn js_parse_int_value(value: f64, radix: f64) -> f64 {
 /// steps 2-16; step 1, ToString, is the caller's).
 fn parse_int_bytes(bytes: &[u8], radix: f64) -> f64 {
     {
-
         // Perry stores lone UTF-16 surrogates as WTF-8. `parseInt` only
         // inspects the leading digit run, so an invalid UTF-8 sequence after
         // that run is a terminator, not a reason to reject the whole string.
@@ -1023,7 +1022,10 @@ mod parse_int_value_tests {
         for text in texts {
             for radix in radices {
                 let expected = js_parse_int(js_string_coerce(heap(text)), radix);
-                assert!(same(js_parse_int_value(heap(text), radix), expected), "heap {text:?} {radix}");
+                assert!(
+                    same(js_parse_int_value(heap(text), radix), expected),
+                    "heap {text:?} {radix}"
+                );
                 if JSValue::try_short_string(text.as_bytes()).is_some() {
                     assert!(
                         same(js_parse_int_value(short(text), radix), expected),
@@ -1034,7 +1036,10 @@ mod parse_int_value_tests {
         }
         for value in [12.75, -3.5, f64::NAN, 1e21] {
             let expected = js_parse_int(js_string_coerce(value), 10.0);
-            assert!(same(js_parse_int_value(value, 10.0), expected), "number {value}");
+            assert!(
+                same(js_parse_int_value(value, 10.0), expected),
+                "number {value}"
+            );
         }
     }
 }

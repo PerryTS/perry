@@ -95,10 +95,8 @@ pub(crate) fn fact(ctx: &FnCtx<'_>, object: &Expr, e: &Expr) -> Option<RepRead> 
         .key_signs
         .get(element_offset)
         .is_some_and(|&(lo, hi)| lo >= 0 && hi < i64::from(read.rep.floor));
-    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed).then_some(RepRead {
-        in_floor,
-        ..read
-    })
+    (!read.rep.at_rest && read.rep.elem != FactsElemRep::Boxed)
+        .then_some(RepRead { in_floor, ..read })
 }
 
 /// `PERRY_STORE_ARM_DIAG=1`: one stderr line per rep-keyed store.

@@ -111,8 +111,7 @@ mod tests {
             object.get_nanbox_f64()
         ));
 
-        let constructor =
-            scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
+        let constructor = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
         let callable = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             constructor.get_nanbox_f64(),
             handler.get_nanbox_f64(),

@@ -87,7 +87,9 @@ fn a_constructor_value_read_out_still_runs() {
 /// node: `Map.prototype.set.call` stores the value as `m.set` does.
 #[test]
 fn a_set_through_call_stores_the_value() {
-    let v = verdict("const m = new Map<any, any>(); Map.prototype.set.call(m, \"k\", take); m.get(\"k\")(s);");
+    let v = verdict(
+        "const m = new Map<any, any>(); Map.prototype.set.call(m, \"k\", take); m.get(\"k\")(s);",
+    );
     assert!(!proven(&v), "{v:?}");
 }
 
@@ -105,7 +107,8 @@ fn an_escaped_map_gets_unknown_values() {
 /// node: `values()` iterates the values only (24.1.3.11).
 #[test]
 fn values_iterates_the_values_only() {
-    let v = verdict("const m = new Map<any, any>(); m.set(s, 1); for (const x of m.values()) take(x);");
+    let v =
+        verdict("const m = new Map<any, any>(); m.set(s, 1); for (const x of m.values()) take(x);");
     assert!(proven(&v), "{v:?}");
 }
 
@@ -120,10 +123,11 @@ fn foreach_passes_the_value_first() {
 /// node: the key argument of forEach is the key.
 #[test]
 fn foreach_passes_the_key_second() {
-    let v = verdict("const m = new Map<any, any>(); m.set(s, 1); m.forEach((x: any, k: any) => take(k));");
+    let v = verdict(
+        "const m = new Map<any, any>(); m.set(s, 1); m.forEach((x: any, k: any) => take(k));",
+    );
     assert!(!proven(&v), "{v:?}");
 }
-
 
 /// node: a for-of over a Map yields `[key, value]` arrays only (24.1.3.12
 /// Map.prototype[@@iterator] is entries, 24.1.5.1): `e` is never the key

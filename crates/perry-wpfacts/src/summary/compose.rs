@@ -138,8 +138,7 @@ pub(super) fn compose(
                     // after the parameters.
                     let has_arguments = m.funcs[g as usize].has_arguments;
                     let first = if has_arguments { 0 } else { sg.params.len() };
-                    let rest_store =
-                        (sg.rest != NO_NODE).then(|| (m.anon_store_site(), first));
+                    let rest_store = (sg.rest != NO_NODE).then(|| (m.anon_store_site(), first));
                     // With no spread argument, argument `i` is the rest
                     // array's index `i - n` (`Model::rest_elem_node`).
                     let call = &s.calls[*ci].1;
@@ -156,7 +155,17 @@ pub(super) fn compose(
                         .ret_param
                         .filter(|_| !m.funcs[g as usize].no_summary)
                         .map(|i| i as usize);
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem, &slot_keys, rp);
+                    expand(
+                        &mut s,
+                        *ci,
+                        &sg,
+                        &obs_of(g, m),
+                        &caps,
+                        rest_store,
+                        elem,
+                        &slot_keys,
+                        rp,
+                    );
                     any = true;
                     n += 1;
                 }
@@ -279,15 +288,35 @@ pub(super) fn expand(
         for i in first..call.args.len() {
             if call.args[i] != NO_NODE {
                 let key = slot_keys.get(i - first).copied().unwrap_or(key);
-                s.cons.push((r, Cons::Store { key, src: call.args[i], site }));
+                s.cons.push((
+                    r,
+                    Cons::Store {
+                        key,
+                        src: call.args[i],
+                        site,
+                    },
+                ));
             }
         }
     }
     for &sp in &call.spread {
         let elems = fresh(s);
-        s.cons.push((sp, Cons::Load { key: elem, dst: elems }));
+        s.cons.push((
+            sp,
+            Cons::Load {
+                key: elem,
+                dst: elems,
+            },
+        ));
         if let Some((r, key, site, _)) = rest {
-            s.cons.push((r, Cons::Store { key, src: elems, site }));
+            s.cons.push((
+                r,
+                Cons::Store {
+                    key,
+                    src: elems,
+                    site,
+                },
+            ));
         }
         for (i, ds) in dsts.iter().enumerate() {
             if caps.get(i).copied().flatten().is_some() {
@@ -324,8 +353,8 @@ pub(super) fn expand(
         }
     }
     let r = tr(g.ret);
-    let rp = ret_param
-        .filter(|&i| call.spread.is_empty() && caps.get(i).copied().flatten().is_none());
+    let rp =
+        ret_param.filter(|&i| call.spread.is_empty() && caps.get(i).copied().flatten().is_none());
     if call.ret != NO_NODE {
         match rp {
             Some(i) if i < call.args.len() => {

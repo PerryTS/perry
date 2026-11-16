@@ -450,24 +450,54 @@ fn linker_ordered_records_have_a_sentinel_and_reject_broken_order() {
 #[test]
 fn realm_natives_and_accessors_carry_static_names_without_owner_state() {
     let key = |name: &[u8]| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let closure_of = |bits: u64| crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *const crate::closure::ClosureHeader;
+    let closure_of = |bits: u64| {
+        crate::value::js_nanbox_get_pointer(f64::from_bits(bits))
+            as *const crate::closure::ClosureHeader
+    };
     let global = crate::object::js_get_global_this();
-    let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
+    let global_ptr =
+        crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
     let native = crate::object::js_object_get_field_by_name(global_ptr, key(b"parseInt"));
     let native = crate::closure::closure_info(closure_of(native.bits())).expect("parseInt info");
-    assert!(Record::for_info(native).is_some(), "parseInt must be an owned record");
-    assert!(!test_owner_has_state(native), "parseInt owner has state after populate");
-    assert_eq!(crate::builtins::fn_metadata::registered_name_string(native).as_deref(), Some("parseInt"));
-    assert!(!test_owner_has_state(native), "reading the name must not create state");
+    assert!(
+        Record::for_info(native).is_some(),
+        "parseInt must be an owned record"
+    );
+    assert!(
+        !test_owner_has_state(native),
+        "parseInt owner has state after populate"
+    );
+    assert_eq!(
+        crate::builtins::fn_metadata::registered_name_string(native).as_deref(),
+        Some("parseInt")
+    );
+    assert!(
+        !test_owner_has_state(native),
+        "reading the name must not create state"
+    );
     let regexp = crate::object::js_object_get_field_by_name(global_ptr, key(b"RegExp"));
-    let proto = crate::closure::closure_get_dynamic_prop(closure_of(regexp.bits()) as usize, "prototype");
+    let proto =
+        crate::closure::closure_get_dynamic_prop(closure_of(regexp.bits()) as usize, "prototype");
     let proto = crate::value::js_nanbox_get_pointer(proto) as usize;
-    let accessor = crate::object::get_accessor_descriptor(proto, "global").expect("RegExp.prototype.global accessor");
+    let accessor = crate::object::get_accessor_descriptor(proto, "global")
+        .expect("RegExp.prototype.global accessor");
     let getter = crate::closure::closure_info(closure_of(accessor.get)).expect("getter info");
-    assert!(Record::for_info(getter).is_some(), "getter must be an owned record");
-    assert!(!test_owner_has_state(getter), "getter owner has state after populate");
-    assert_eq!(crate::builtins::fn_metadata::registered_name_string(getter).as_deref(), Some("get global"));
-    assert!(!test_owner_has_state(getter), "reading the name must not create state");
+    assert!(
+        Record::for_info(getter).is_some(),
+        "getter must be an owned record"
+    );
+    assert!(
+        !test_owner_has_state(getter),
+        "getter owner has state after populate"
+    );
+    assert_eq!(
+        crate::builtins::fn_metadata::registered_name_string(getter).as_deref(),
+        Some("get global")
+    );
+    assert!(
+        !test_owner_has_state(getter),
+        "reading the name must not create state"
+    );
 }
 
 /// Every Temporal getter has its own named static record (the body is shared,
@@ -476,20 +506,45 @@ fn realm_natives_and_accessors_carry_static_names_without_owner_state() {
 #[test]
 fn temporal_getters_carry_their_own_static_name_without_owner_state() {
     let key = |name: &[u8]| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let closure_of = |bits: u64| crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *const crate::closure::ClosureHeader;
+    let closure_of = |bits: u64| {
+        crate::value::js_nanbox_get_pointer(f64::from_bits(bits))
+            as *const crate::closure::ClosureHeader
+    };
     let global = crate::object::js_get_global_this();
-    let global_ptr = crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
+    let global_ptr =
+        crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
     let temporal = crate::object::js_object_get_field_by_name(global_ptr, key(b"Temporal"));
-    let temporal_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(temporal.bits())) as *const crate::object::ObjectHeader;
-    for (ty, prop) in [("Duration", "years"), ("Duration", "sign"), ("PlainDate", "year"), ("PlainTime", "hour"), ("PlainDateTime", "year"), ("ZonedDateTime", "year"), ("ZonedDateTime", "offset")] {
+    let temporal_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(temporal.bits()))
+        as *const crate::object::ObjectHeader;
+    for (ty, prop) in [
+        ("Duration", "years"),
+        ("Duration", "sign"),
+        ("PlainDate", "year"),
+        ("PlainTime", "hour"),
+        ("PlainDateTime", "year"),
+        ("ZonedDateTime", "year"),
+        ("ZonedDateTime", "offset"),
+    ] {
         let ctor = crate::object::js_object_get_field_by_name(temporal_ptr, key(ty.as_bytes()));
-        let proto = crate::closure::closure_get_dynamic_prop(closure_of(ctor.bits()) as usize, "prototype");
+        let proto =
+            crate::closure::closure_get_dynamic_prop(closure_of(ctor.bits()) as usize, "prototype");
         let proto = crate::value::js_nanbox_get_pointer(proto) as usize;
-        let accessor = crate::object::get_accessor_descriptor(proto, prop).unwrap_or_else(|| panic!("{ty}.prototype.{prop} accessor"));
+        let accessor = crate::object::get_accessor_descriptor(proto, prop)
+            .unwrap_or_else(|| panic!("{ty}.prototype.{prop} accessor"));
         let getter = crate::closure::closure_info(closure_of(accessor.get)).expect("getter info");
-        assert!(!test_owner_has_state(getter), "{ty}.{prop} getter owner has state after populate");
+        assert!(
+            !test_owner_has_state(getter),
+            "{ty}.{prop} getter owner has state after populate"
+        );
         let expected = format!("get {prop}");
-        assert_eq!(crate::builtins::fn_metadata::registered_name_string(getter).as_deref(), Some(expected.as_str()), "{ty}.{prop}");
-        assert!(!test_owner_has_state(getter), "reading the name must not create state");
+        assert_eq!(
+            crate::builtins::fn_metadata::registered_name_string(getter).as_deref(),
+            Some(expected.as_str()),
+            "{ty}.{prop}"
+        );
+        assert!(
+            !test_owner_has_state(getter),
+            "reading the name must not create state"
+        );
     }
 }

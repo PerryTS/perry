@@ -20,7 +20,11 @@ fn one(src: &str) -> ProgramFacts {
 /// The verdicts of the call sites of `go`, in source order.
 fn go_calls(src: &str) -> Vec<String> {
     let pf = one(src);
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "go" && s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "go" && s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     let v: Vec<String> = s.iter().map(|s| format!("{:?}", s.verdict)).collect();
     eprintln!("SKINROOT1 {v:?}");
@@ -111,7 +115,10 @@ fn skinroot3_versions_are_per_run_nodes() {
         let versions: Vec<usize> = (0..g.m.labels.len())
             .filter(|&n| matches!(g.m.labels[n], "assigned" | "assigned-end"))
             .collect();
-        let unowned = versions.iter().filter(|&&n| g.m.node_fn[n] == crate::model::NO_FN).count();
+        let unowned = versions
+            .iter()
+            .filter(|&&n| g.m.node_fn[n] == crate::model::NO_FN)
+            .count();
         g.m.summarize_and_replay();
         g.m.solve();
         let runs = |name: &str| {
@@ -127,15 +134,20 @@ fn skinroot3_versions_are_per_run_nodes() {
             versions.len(),
             g.m.sum.insts.len()
         );
-        assert!(!versions.is_empty(), "k={k}: `let handleAlpha` makes a version");
-        assert_eq!(unowned, 0, "k={k}: every version node is a node of its body");
+        assert!(
+            !versions.is_empty(),
+            "k={k}: `let handleAlpha` makes a version"
+        );
+        assert_eq!(
+            unowned, 0,
+            "k={k}: every version node is a node of its body"
+        );
         assert!(
             inner <= outer.max(1),
             "k={k}: one handleAlpha run per setStyle run: {inner} > {outer}"
         );
     }
 }
-
 
 /// SKINROOT4 hole: `var b` redeclared with an initializer in a nested
 /// block writes the same local (one binding per function, ECMA-262
@@ -144,5 +156,8 @@ fn skinroot3_versions_are_per_run_nodes() {
 #[test]
 fn red_skinroot4_nested_var_redeclaration_reaches_the_read() {
     let v = go_calls(&format!("{CLASSES}function h() {{ var b: any = new N(); if (json.z) {{ var b: any = new M(); }} b.go(); }}\nh();\n"));
-    assert!(!mono(&v[0]), "the nested `var b = new M()` reaches b.go(): {v:?}");
+    assert!(
+        !mono(&v[0]),
+        "the nested `var b = new M()` reaches b.go(): {v:?}"
+    );
 }

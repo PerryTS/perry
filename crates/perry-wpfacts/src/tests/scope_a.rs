@@ -90,7 +90,8 @@ fn c_number_to_fixed_proven() {
 /// store throws a TypeError and writes nothing), so the read stays final.
 #[test]
 fn c_number_proto_store_refused_still_proven() {
-    let src = format!("(Number.prototype as any).toFixed = function () {{ return \"x\"; }};\n{NUM}");
+    let src =
+        format!("(Number.prototype as any).toFixed = function () {{ return \"x\"; }};\n{NUM}");
     all(&src, "toFixed", true, N);
 }
 

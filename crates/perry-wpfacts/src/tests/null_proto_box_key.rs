@@ -36,7 +36,10 @@ fn uses() -> Vec<&'static str> {
 #[test]
 fn a_null_prototype_groups_key_reads_no_builtin_member() {
     let bad: Vec<&str> = uses().into_iter().filter(|b| !proven(b)).collect();
-    assert!(bad.is_empty(), "escaped through a groups computed key: {bad:#?}");
+    assert!(
+        bad.is_empty(),
+        "escaped through a groups computed key: {bad:#?}"
+    );
 }
 
 /// Control (the fixture can fail): a value the program stored on the

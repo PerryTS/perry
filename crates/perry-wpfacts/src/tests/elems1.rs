@@ -99,7 +99,12 @@ fn elems1_e2b_set_numbers() {
 
 #[test]
 fn elems1_e3_from_array_loop() {
-    let s = src("", "", &[FROM], "const z = new M().fromArray([1, 2, 3, 4]); x.mul(x, z);");
+    let s = src(
+        "",
+        "",
+        &[FROM],
+        "const z = new M().fromArray([1, 2, 3, 4]); x.mul(x, z);",
+    );
     expect(&s, F4);
 }
 
@@ -116,7 +121,10 @@ fn elems1_e5_clone_from_own_elements() {
 
 #[test]
 fn elems1_e6_to_array() {
-    expect(&src("", "", &[TOARR], "console.log(x.toArray().length);"), F4);
+    expect(
+        &src("", "", &[TOARR], "console.log(x.toArray().length);"),
+        F4,
+    );
 }
 
 #[test]
@@ -140,7 +148,10 @@ fn elems1_k1_string_store_is_boxed() {
 #[test]
 fn elems1_k2_push_not_fixed() {
     let (got, p) = rep(&src("", "", &[], "x.elements.push(1);"));
-    assert!(got.starts_with("arr<f64,4,dense") && !got.contains("fixed"), "{got} {p:#?}");
+    assert!(
+        got.starts_with("arr<f64,4,dense") && !got.contains("fixed"),
+        "{got} {p:#?}"
+    );
 }
 
 #[test]
@@ -152,13 +163,19 @@ fn elems1_k3_store_past_end_not_fixed() {
 
 #[test]
 fn elems1_k4_unknown_index_not_fixed() {
-    let (got, p) = rep(&src("", "", &[], "x.elements[Number(process.argv[2])] = 1;"));
+    let (got, p) = rep(&src(
+        "",
+        "",
+        &[],
+        "x.elements[Number(process.argv[2])] = 1;",
+    ));
     assert!(!got.contains("fixed"), "{got} {p:#?}");
     // exact: an index store never shrinks: floor 4 stays (rule today: ⊤ -> 0)
     assert_eq!(got, "arr<f64,4,dense>", "{p:#?}");
 }
 
-const PIVOT: &str = "pivot(p) { const te = this.elements; te[3] += p.x - te[0] * p.x; return this; }";
+const PIVOT: &str =
+    "pivot(p) { const te = this.elements; te[3] += p.x - te[0] * p.x; return this; }";
 
 #[test]
 fn elems1_e8_compound_literal_index_store() {
@@ -207,7 +224,11 @@ fn elems1_e10_console_shown_owner() {
 /// The rep's element kind: `arr<KIND,...`.
 fn elem_kind(s: &str) -> String {
     let (got, _) = rep(s);
-    got.trim_start_matches("arr<").split(',').next().unwrap_or_default().to_string()
+    got.trim_start_matches("arr<")
+        .split(',')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 const PUT: &str = "function put(m, v) { if (v !== undefined) { m.elements[0] = v; } }";
@@ -228,14 +249,24 @@ fn elems1_g1_guarded_branch_runs_with_args() {
 #[test]
 fn elems1_g2_guard_narrows_number_or_undefined() {
     // R2 + narrowing: the branch runs with the narrowed value (a Number).
-    let s = src("", "", &[], &format!("{PUT}\nput(y, Math.random() < 0.5 ? 1 : undefined);"));
+    let s = src(
+        "",
+        "",
+        &[],
+        &format!("{PUT}\nput(y, Math.random() < 0.5 ? 1 : undefined);"),
+    );
     expect(&s, F4);
 }
 
 #[test]
 fn elems1_g2b_guard_narrows_string_or_undefined() {
     // KEEP: the narrowed value is a String: the store applies.
-    let s = src("", "", &[], &format!("{PUT}\nput(y, Math.random() < 0.5 ? \"s\" : undefined);"));
+    let s = src(
+        "",
+        "",
+        &[],
+        &format!("{PUT}\nput(y, Math.random() < 0.5 ? \"s\" : undefined);"),
+    );
     assert_eq!(elem_kind(&s), "boxed");
 }
 
@@ -272,7 +303,12 @@ fn elems1_g4b_own_to_string_on_array_runs() {
 fn elems1_e5d_from_array_of_a_field() {
     // e5's UNDEF without `clone` or the default `offset`: the loop read
     // `array[i]` (i in [0, 3]) of an `M.elements` array (RED, open).
-    let s = src("", "", &[FROM], "const z = new M().fromArray(x.elements); x.mul(x, z);");
+    let s = src(
+        "",
+        "",
+        &[FROM],
+        "const z = new M().fromArray(x.elements); x.mul(x, z);",
+    );
     expect(&s, F4);
 }
 
@@ -296,7 +332,12 @@ fn elems1_i1_loop_read_store_in_bounds() {
 fn elems1_i2_from_array_of_another_instance() {
     // three.js Matrix4.fromArray(m.elements) with the default offset, both
     // ways between two instances: each Array is read and stored under `i`.
-    let s = src("", "", &[FROM], "const w = new M(); w.fromArray(x.elements); x.fromArray(w.elements); x.mul(x, w);");
+    let s = src(
+        "",
+        "",
+        &[FROM],
+        "const w = new M(); w.fromArray(x.elements); x.fromArray(w.elements); x.mul(x, w);",
+    );
     expect(&s, F4);
 }
 
@@ -315,7 +356,12 @@ fn elems1_i3_keep_unknown_offset() {
 #[test]
 fn elems1_i4_keep_one_past_the_end() {
     // KEEP: `i <= 4` reads index 4 of a length-4 Array: `undefined`.
-    let s = src("", "", &[], "for (let i = 0; i <= 4; i++) { x.elements[0] = y.elements[i]; }");
+    let s = src(
+        "",
+        "",
+        &[],
+        "for (let i = 0; i <= 4; i++) { x.elements[0] = y.elements[i]; }",
+    );
     assert_eq!(elem_kind(&s), "boxed");
 }
 
@@ -366,7 +412,8 @@ fn elems1_u1_let_assigned_in_every_arm_but_a_throwing_else() {
 
 #[test]
 fn elems1_u2_let_assigned_in_every_arm() {
-    let s = ortho("if (k === 1) { c = 1; } else if (k === 2) { c = 2; } else { c = 3; } te[0] = c;");
+    let s =
+        ortho("if (k === 1) { c = 1; } else if (k === 2) { c = 2; } else { c = 3; } te[0] = c;");
     expect(&s, F4);
 }
 
@@ -381,14 +428,16 @@ fn elems1_u3_keep_no_final_else() {
 fn elems1_u4_keep_closure_reads_before_the_assignment() {
     // KEEP: the closure runs before the `if` assigns `c`: it returns
     // `undefined`.
-    let s = ortho("const f = () => c; te[1] = f(); if (k === 1) { c = 1; } else { c = 2; } te[0] = c;");
+    let s =
+        ortho("const f = () => c; te[1] = f(); if (k === 1) { c = 1; } else { c = 2; } te[0] = c;");
     assert_eq!(elem_kind(&s), "boxed");
 }
 
 #[test]
 fn elems1_u5_keep_loop_read_before_the_first_assignment() {
     // KEEP: the first iteration reads `c` before the `if` assigns it.
-    let s = ortho("for (let i = 0; i < k; i++) { te[0] = c; if (k === 1) { c = 1; } else { c = 2; } }");
+    let s =
+        ortho("for (let i = 0; i < k; i++) { te[0] = c; if (k === 1) { c = 1; } else { c = 2; } }");
     assert_eq!(elem_kind(&s), "boxed");
 }
 

@@ -21,7 +21,11 @@ fn one(src: &str) -> ProgramFacts {
 /// The `m` call site: receivers, targets, top.
 fn m_site(src: &str) -> (Vec<String>, Vec<String>, bool) {
     let pf = one(&format!("{OBJ}{src}"));
-    let s = pf.sites.iter().find(|s| s.key == "m" && s.is_call).expect("a call site of m");
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "m" && s.is_call)
+        .expect("a call site of m");
     (s.receivers.clone(), s.targets.clone(), s.top)
 }
 
@@ -30,14 +34,20 @@ fn m_site(src: &str) -> (Vec<String>, Vec<String>, bool) {
 fn only_o(body: &str) {
     let (r, t, top) = m_site(body);
     let bad: Vec<_> = r.iter().filter(|x| x.starts_with("builtin")).collect();
-    assert!(!top && bad.is_empty() && r.iter().any(|x| x.contains("AnonShape")), "{body}: builtin receivers {bad:?} (recv={r:?} targets={t:?} top={top})");
+    assert!(
+        !top && bad.is_empty() && r.iter().any(|x| x.contains("AnonShape")),
+        "{body}: builtin receivers {bad:?} (recv={r:?} targets={t:?} top={top})"
+    );
 }
 
 /// KEEP: the receiver stays the program object (no ⊤); the verdict oracle
 /// refuses these shapes for unrelated reasons, so this guards regressions.
 fn reaches(body: &str) {
     let (r, t, top) = m_site(body);
-    assert!(!top && !r.is_empty(), "{body}: recv={r:?} targets={t:?} top={top}");
+    assert!(
+        !top && !r.is_empty(),
+        "{body}: recv={r:?} targets={t:?} top={top}"
+    );
 }
 
 #[test]

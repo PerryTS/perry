@@ -48,7 +48,10 @@ fn spread_of_typed_array_keeps_target_modeled() {
 /// argument: [x], 23.1.1.1): its elements are known.
 #[test]
 fn assign_from_builtin_array_keeps_target_modeled() {
-    assert!(!escapes("new Array(Math.random() < 2 ? { a: 1 } : 0)", ASSIGN));
+    assert!(!escapes(
+        "new Array(Math.random() < 2 ? { a: 1 } : 0)",
+        ASSIGN
+    ));
 }
 
 /// Control: a plain literal source is modeled today.

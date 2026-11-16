@@ -25,8 +25,15 @@ fn predicate_operands_convert_nothing() {
         "Array.isArray(mat), Object.is(mat, 1), Boolean(mat), Number.isNaN(mat), \
          Number.isFinite(mat), Number.isInteger(mat), Number.isSafeInteger(mat)",
     );
-    assert_eq!(tmpl(&pf, "Mat").escape, None, "a non-converting predicate called valueOf");
+    assert_eq!(
+        tmpl(&pf, "Mat").escape,
+        None,
+        "a non-converting predicate called valueOf"
+    );
     // Control: isNaN ToNumbers its operand: valueOf is called on mat.
     let pf = prog("isNaN(mat)");
-    assert!(tmpl(&pf, "Mat").escape.is_some(), "isNaN must call the unknown valueOf");
+    assert!(
+        tmpl(&pf, "Mat").escape.is_some(),
+        "isNaN must call the unknown valueOf"
+    );
 }

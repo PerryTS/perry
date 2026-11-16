@@ -43,47 +43,70 @@ fn src(tail: &str) -> String {
 /// FileLoader's HttpError, ToString'd: neither it nor its response escapes.
 #[test]
 fn an_error_subclass_instance_tostring_hands_nothing_out() {
-    let pf = whole(&src("console.log(`${e}`); console.log(String(e), e.response.respmark);"));
-    assert_eq!(escape_with_field(&pf, "response"), None, "{}", pf.dump_text());
-    assert_eq!(escape_with_field(&pf, "respmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "console.log(`${e}`); console.log(String(e), e.response.respmark);",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "response"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
+    assert_eq!(
+        escape_with_field(&pf, "respmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Called directly on an ordinary object: generic over `this`.
 #[test]
 fn error_tostring_on_a_plain_object_hands_nothing_out() {
-    let pf = whole(&src(
-        "const o = { plainmark: 1, name: 'N', message: 'M' };
-         console.log(Error.prototype.toString.call(o), e);",
-    ));
-    assert_eq!(escape_with_field(&pf, "plainmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src("const o = { plainmark: 1, name: 'N', message: 'M' };
+         console.log(Error.prototype.toString.call(o), e);"));
+    assert_eq!(
+        escape_with_field(&pf, "plainmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: `name` and `message` are ToString'd, so a message object's own
 /// `toString` runs, and what it hands to unknown code escapes.
 #[test]
 fn error_tostring_runs_the_message_tostring() {
-    let pf = whole(&src(
-        "const kept = { keptmark: 1 };
+    let pf = whole(&src("const kept = { keptmark: 1 };
          const o = { name: 'N', message: { toString() { unknown.keep(kept); return 'm'; } } };
-         console.log(Error.prototype.toString.call(o), e);",
-    ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+         console.log(Error.prototype.toString.call(o), e);"));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a `name` getter runs with `this` = the receiver.
 #[test]
 fn error_tostring_runs_a_name_getter() {
-    let pf = whole(&src(
-        "const g = { getmark: 1 };
+    let pf = whole(&src("const g = { getmark: 1 };
          const o = { get name() { unknown.keep(g); return 'N'; }, message: 'M' };
-         console.log(Error.prototype.toString.call(o), e);",
-    ));
-    assert!(escape_with_field(&pf, "getmark").is_some(), "{}", pf.dump_text());
+         console.log(Error.prototype.toString.call(o), e);"));
+    assert!(
+        escape_with_field(&pf, "getmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the instance really handed to unknown code escapes.
 #[test]
 fn an_error_instance_given_to_unknown_code_escapes() {
     let pf = whole(&src("new Function(process.argv[5])()(e);"));
-    assert!(escape_with_field(&pf, "response").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "response").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

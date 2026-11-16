@@ -161,7 +161,11 @@ pub(crate) fn is_builtin_stream_method(value: f64, name: &str) -> bool {
     // the identity first.
     super::readwrite::readable_methods()
         .into_iter()
-        .chain(super::readwrite::writable_methods().into_iter().skip(WRITABLE_OWN_ROWS))
+        .chain(
+            super::readwrite::writable_methods()
+                .into_iter()
+                .skip(WRITABLE_OWN_ROWS),
+        )
         .any(|(key, intrinsic)| std::ptr::eq(intrinsic, info) && key == name)
 }
 
@@ -1322,7 +1326,11 @@ mod stream_method_rows_tests {
         use super::super::readwrite::{emitter_methods, readable_methods, writable_methods};
         let scanned: Vec<_> = readable_methods()
             .into_iter()
-            .chain(writable_methods().into_iter().skip(super::WRITABLE_OWN_ROWS))
+            .chain(
+                writable_methods()
+                    .into_iter()
+                    .skip(super::WRITABLE_OWN_ROWS),
+            )
             .collect();
         for row in readable_methods()
             .into_iter()

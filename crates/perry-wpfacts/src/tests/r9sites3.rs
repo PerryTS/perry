@@ -18,11 +18,22 @@ fn recv_p(pf: &ProgramFacts, key: &str) -> Vec<String> {
         .flat_map(|s| s.receivers.iter())
         .map(|r| {
             let last = r.rsplit(':').next().unwrap_or(r).to_string();
-            if r.starts_with("proto:") { format!("proto:{last}") } else { last }
+            if r.starts_with("proto:") {
+                format!("proto:{last}")
+            } else {
+                last
+            }
         })
         .collect();
-    for s in pf.sites.iter().filter(|s| s.key == key && !s.access.is_store()) {
-        eprintln!("R9SITES3 site {} call={} verdict={:?} recv={:?}", s.byte_offset, s.is_call, s.verdict, s.receivers);
+    for s in pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.access.is_store())
+    {
+        eprintln!(
+            "R9SITES3 site {} call={} verdict={:?} recv={:?}",
+            s.byte_offset, s.is_call, s.verdict, s.receivers
+        );
     }
     r.sort();
     r.dedup();
@@ -127,7 +138,9 @@ fn r9sites4_fk6_keep_template_input_string() {
 // the formatter consumes no later argument and toJSON never runs.
 #[test]
 fn r9sites4_fk7_template_number_no_pct() {
-    let pf = facts(&format!("{TJ}const n = Number( process.argv[2] );\nconsole.warn( `T.${{ n }}`, a );\n"));
+    let pf = facts(&format!(
+        "{TJ}const n = Number( process.argv[2] );\nconsole.warn( `T.${{ n }}`, a );\n"
+    ));
     let r = recv_p(&pf, "tj");
     eprintln!("R9SITES4 FK7 tj recv={r:?}");
     assert!(r.is_empty(), "FK7 toJSON runs: {r:?}");

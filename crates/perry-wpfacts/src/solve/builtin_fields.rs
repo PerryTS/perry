@@ -281,7 +281,13 @@ impl Model {
             }
         }
         if self.keysnap.is_some() && !self.realm_held {
-            self.keysnap_at(true, "interpreted code (builtin_fields_interp)", None, u32::MAX, None);
+            self.keysnap_at(
+                true,
+                "interpreted code (builtin_fields_interp)",
+                None,
+                u32::MAX,
+                None,
+            );
         }
         if !self.realm_held && self.prov.is_some() {
             self.why_hold("interp", u32::MAX, None);

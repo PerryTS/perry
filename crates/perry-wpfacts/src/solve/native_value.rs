@@ -337,7 +337,9 @@ impl Model {
                     if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
                         self.diagnostic_callee(call, f);
                         if lookup {
-                            self.with_native(call, |m, call| builtins::annexb_lookup_prim(m, k, call, setter));
+                            self.with_native(call, |m, call| {
+                                builtins::annexb_lookup_prim(m, k, call, setter)
+                            });
                         }
                     }
                 }
@@ -371,7 +373,9 @@ impl Model {
                 let k = b & b.wrapping_neg();
                 b &= !k;
                 if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
-                    self.with_native(call, |m, call| builtins::method_on_prim(m, fam, k, key, call));
+                    self.with_native(call, |m, call| {
+                        builtins::method_on_prim(m, fam, k, key, call)
+                    });
                 }
             }
             // `Object.prototype.toLocaleString` is Invoke(this, "toString")
@@ -383,7 +387,9 @@ impl Model {
                 local = foreign & !boxed & builtins::ARRAY_BOXED_PRIMS;
                 if local != 0 && self.bind_done.insert((call, f, u32::MAX - 6)) {
                     let ts = self.atom("toString");
-                    self.with_native(call, |m, call| builtins::prim_method(m, local, Key::Named(ts), call));
+                    self.with_native(call, |m, call| {
+                        builtins::prim_method(m, local, Key::Named(ts), call)
+                    });
                 }
             }
             if foreign & !boxed & !local != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {

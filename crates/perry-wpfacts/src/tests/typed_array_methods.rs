@@ -161,7 +161,10 @@ fn typed_absent_method_written_by_unknown_code_escapes() {
 /// the buffer is no key of the view.
 #[test]
 fn view_buffer_is_not_the_view() {
-    check("const u: any = new Uint8Array(8); u.buffer.q = o; u.q.leak();", true);
+    check(
+        "const u: any = new Uint8Array(8); u.buffer.q = o; u.q.leak();",
+        true,
+    );
     check(
         "const fs = require(\"fs\"); const b: any = fs.readFileSync(process.argv[1]); \
          b.buffer.q = o; b.q.leak();",
@@ -192,7 +195,12 @@ fn view_over_array_buffer_returns_it() {
 /// another ArrayBuffer.
 #[test]
 fn view_without_buffer_argument_has_its_own() {
-    for v in ["new Uint8Array(4)", "new Uint8Array([1, 2])", "new Uint8Array(ab).slice(0)", "Buffer.alloc(4)"] {
+    for v in [
+        "new Uint8Array(4)",
+        "new Uint8Array([1, 2])",
+        "new Uint8Array(ab).slice(0)",
+        "Buffer.alloc(4)",
+    ] {
         check(
             &format!("const ab: any = new ArrayBuffer(8); ab.q = o; const v: any = {v}; v.buffer.q.leak();"),
             true,
@@ -245,7 +253,10 @@ fn absent_key_on_a_buffer_chain_is_undefined() {
         "new Uint8Array(2)",
         "new Float64Array(2)",
     ] {
-        check(&format!("const v: any = {v}; const e: any = v.extras; if (e) e.q(o); v.extras2(o);"), true);
+        check(
+            &format!("const v: any = {v}; const e: any = v.extras; if (e) e.q(o); v.extras2(o);"),
+            true,
+        );
     }
 }
 /// Control: a program store onto `Buffer.prototype` is what the read finds.

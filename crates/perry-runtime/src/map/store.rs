@@ -413,7 +413,10 @@ pub(crate) struct ImageForm {
 pub(crate) const fn image_form() -> ImageForm {
     ImageForm {
         entries: std::mem::offset_of!(MapStore, entries),
-        index: (std::mem::offset_of!(MapStore, numeric), std::mem::size_of::<MapStore>()),
+        index: (
+            std::mem::offset_of!(MapStore, numeric),
+            std::mem::size_of::<MapStore>(),
+        ),
         inline: std::mem::size_of::<MapStore>(),
         header_entries: std::mem::offset_of!(super::MapHeader, entries),
         header_store: std::mem::offset_of!(super::MapHeader, store),

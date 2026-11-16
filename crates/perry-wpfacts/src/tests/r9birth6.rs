@@ -25,7 +25,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn reads(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -56,7 +60,10 @@ try { r = p.run(); } catch (e) { r = 'threw'; }
 console.log(r, p.run());
 ",
     );
-    assert!(none_mono(&pf, "m"), "P1 this.m() proven although it runs before the store");
+    assert!(
+        none_mono(&pf, "m"),
+        "P1 this.m() proven although it runs before the store"
+    );
 }
 
 // P2 (RED at rb5): the read form.
@@ -70,18 +77,30 @@ const a = p.get();
 console.log(a, p.get());
 ",
     );
-    assert!(none_mono(&pf, "k"), "P2 this.k proven although read before the store");
+    assert!(
+        none_mono(&pf, "k"),
+        "P2 this.k proven although read before the store"
+    );
 }
 
 /// The holder class the facts name for the call sites of `key` (codegen's
 /// direct-call input on the ONCHANGE line).
 fn verdict_and_holder(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
         .filter(|s| s.module == mi && s.key == key && s.is_call)
-        .map(|s| format!("{:?} targets={:?} recv={:?} off={}", s.verdict, s.target_fns, s.receivers, s.byte_offset))
+        .map(|s| {
+            format!(
+                "{:?} targets={:?} recv={:?} off={}",
+                s.verdict, s.target_fns, s.receivers, s.byte_offset
+            )
+        })
         .collect();
     for x in &v {
         eprintln!("RB6 call .{key} {x}");
@@ -107,15 +126,24 @@ console.log(r, b.run(), new A().m());
 ",
     );
     let _ = verdict_and_holder(&pf, "m");
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let bad = pf
         .sites
         .iter()
         .filter(|s| s.module == mi && s.key == "m" && s.is_call)
-        .any(|s| format!("{:?}", s.verdict).starts_with("T0") && s.receivers.iter().any(|r| r.contains('B')));
-    assert!(!bad, "P3 b.run()'s this.m() proven although it runs before the store");
+        .any(|s| {
+            format!("{:?}", s.verdict).starts_with("T0")
+                && s.receivers.iter().any(|r| r.contains('B'))
+        });
+    assert!(
+        !bad,
+        "P3 b.run()'s this.m() proven although it runs before the store"
+    );
 }
-
 
 fn src_k(between: &str, tail: &str) -> String {
     format!(
@@ -136,38 +164,65 @@ console.log(k.f() === Float32Array, k.g(), process.argv[2]);
 fn r9birth6_g1_store_right_after_class() {
     let pf = facts(&src_k("", ""));
     let t = reads(&pf, "T");
-    assert!(!t.is_empty() && t.iter().all(|v| v == "T0Mono"), "G1 this.T not T0Mono");
+    assert!(
+        !t.is_empty() && t.iter().all(|v| v == "T0Mono"),
+        "G1 this.T not T0Mono"
+    );
     let v = reads(&pf, "V");
-    assert!(!v.is_empty() && v.iter().all(|v| v == "T0Mono"), "G1 this.V not T0Mono");
+    assert!(
+        !v.is_empty() && v.iter().all(|v| v == "T0Mono"),
+        "G1 this.V not T0Mono"
+    );
 }
 
 // k1 (KEEP): an unknown call between the class and the store.
 #[test]
 fn r9birth6_k1_unknown_call_between() {
-    let pf = facts(&src_k("const fns: any[] = [String(Math.random())]; console.log(fns[0]);", ""));
-    assert!(none_mono(&pf, "T"), "k1 proven although code runs between class and store");
+    let pf = facts(&src_k(
+        "const fns: any[] = [String(Math.random())]; console.log(fns[0]);",
+        "",
+    ));
+    assert!(
+        none_mono(&pf, "T"),
+        "k1 proven although code runs between class and store"
+    );
 }
 
 // k2 (KEEP): `new K()` at top level before the store.
 #[test]
 fn r9birth6_k2_new_before_store() {
     let pf = facts(&src_k("const early = new K(); console.log(early.f());", ""));
-    assert!(none_mono(&pf, "T"), "k2 proven although an instance reads before the store");
+    assert!(
+        none_mono(&pf, "T"),
+        "k2 proven although an instance reads before the store"
+    );
 }
 
 // k3 (KEEP): `delete` of the stored key later.
 #[test]
 fn r9birth6_k3_delete() {
-    let pf = facts(&src_k("", "if (process.argv[2] === 'x') delete (K.prototype as any).T;"));
-    assert!(none_mono(&pf, "T"), "k3 proven although the key may be deleted");
+    let pf = facts(&src_k(
+        "",
+        "if (process.argv[2] === 'x') delete (K.prototype as any).T;",
+    ));
+    assert!(
+        none_mono(&pf, "T"),
+        "k3 proven although the key may be deleted"
+    );
 }
 
 // k4 (KEEP): a second store, anywhere: the holder stays the one settled
 // prototype slot (T0Mono names the holder; its field holds both values).
 #[test]
 fn r9birth6_k4_second_store() {
-    let pf = facts(&src_k("", "if (process.argv[2] === 'x') (K.prototype as any).T = Float64Array;"));
-    assert!(reads(&pf, "T").iter().all(|v| v == "T0Mono"), "k4 holder lost by a later store");
+    let pf = facts(&src_k(
+        "",
+        "if (process.argv[2] === 'x') (K.prototype as any).T = Float64Array;",
+    ));
+    assert!(
+        reads(&pf, "T").iter().all(|v| v == "T0Mono"),
+        "k4 holder lost by a later store"
+    );
 }
 
 // k5 (KEEP): a subclass's own store after an instance of it read: the
@@ -178,5 +233,8 @@ fn r9birth6_k5_subclass_store_late() {
         "",
         "class S extends K {}\nconst s0 = new S(); console.log(s0.f());\n(S.prototype as any).T = Float64Array;\nconsole.log(new S().f());",
     ));
-    assert!(reads(&pf, "T").iter().all(|v| v != "T0Mono"), "k5 subclass read proven one value");
+    assert!(
+        reads(&pf, "T").iter().all(|v| v != "T0Mono"),
+        "k5 subclass read proven one value"
+    );
 }

@@ -132,10 +132,7 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str) {
         return;
     }
     unsafe {
-        let closure = crate::closure::js_closure_alloc(
-            getter_info(name),
-            0,
-        );
+        let closure = crate::closure::js_closure_alloc(getter_info(name), 0);
         if closure.is_null() {
             return;
         }

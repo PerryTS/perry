@@ -47,7 +47,9 @@ fn control_escaped_object_reveals_proto_methods() {
 /// stored on an object the host holds.
 #[test]
 fn control_store_on_host_held_object() {
-    assert!(v_escapes("const h: any = {}; h.pivot = new V(); (globalThis as any).hostTake(h);"));
+    assert!(v_escapes(
+        "const h: any = {}; h.pivot = new V(); (globalThis as any).hostTake(h);"
+    ));
 }
 
 /// SOUND1 probe (diagnostic, not a gate): which hosted value makes V escape.
@@ -80,9 +82,19 @@ fn sound1_probe_records() {
         (globalThis as any).hostTake({ a: 1 });
         console.log(new V().probe());
         "#;
-    let pf = facts_with(src, FactsConfig { diagnostics: true, ..Default::default() });
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
     for l in pf.diagnostics.iter().flat_map(|d| d.1.iter()) {
-        if l.contains("escape-first") || [2,3,27,28,37,47,48].iter().any(|i| l.contains(&format!("\"record\":\"token\",\"id\":{i},"))) {
+        if l.contains("escape-first")
+            || [2, 3, 27, 28, 37, 47, 48]
+                .iter()
+                .any(|i| l.contains(&format!("\"record\":\"token\",\"id\":{i},")))
+        {
             eprintln!("SOUND1REC {}", &l[..l.len().min(400)]);
         }
     }
@@ -122,7 +134,9 @@ fn red_sound1_plain_object_chain_members_held() {
 /// RED: Object.prototype itself handed to unknown code.
 #[test]
 fn red_sound1_object_prototype_members_held() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake(Object.prototype);"));
+    assert!(v_escapes_argv(
+        "(globalThis as any).hostTake(Object.prototype);"
+    ));
 }
 
 /// RED: a program function handed to unknown code; its chain is
@@ -136,7 +150,9 @@ fn red_sound1_function_chain_members_held() {
 /// guarded store is modeled; only the reach from its holder is missing.
 #[test]
 fn control_sound1_member_handed() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake(Object.prototype.toString);"));
+    assert!(v_escapes_argv(
+        "(globalThis as any).hostTake(Object.prototype.toString);"
+    ));
 }
 
 /// Control (green): no unknown code holds anything: V stays proven.
@@ -212,13 +228,19 @@ fn red_heldmem_global_object_members_held() {
 /// HELDMEM 3(c): a Map instance: `Object.getPrototypeOf(m).get.userData = ...`.
 #[test]
 fn red_heldmem_map_proto_members_held() {
-    assert!(v_escapes_from("(globalThis as any).hostTake(new Map());", "Map.prototype as any"));
+    assert!(v_escapes_from(
+        "(globalThis as any).hostTake(new Map());",
+        "Map.prototype as any"
+    ));
 }
 
 /// HELDMEM 3(c): a Set instance.
 #[test]
 fn red_heldmem_set_proto_members_held() {
-    assert!(v_escapes_from("(globalThis as any).hostTake(new Set());", "Set.prototype as any"));
+    assert!(v_escapes_from(
+        "(globalThis as any).hostTake(new Set());",
+        "Set.prototype as any"
+    ));
 }
 
 /// HELDMEM 3(c): a Promise instance.
@@ -233,7 +255,10 @@ fn red_heldmem_promise_proto_members_held() {
 /// Control 3(c): Map.prototype members with no unknown code.
 #[test]
 fn control_heldmem_map_no_unknown_code() {
-    assert!(!v_escapes_from("console.log(new Map().size);", "Map.prototype as any"));
+    assert!(!v_escapes_from(
+        "console.log(new Map().size);",
+        "Map.prototype as any"
+    ));
 }
 
 /// Precision (4): unknown code is called with a primitive only. Recorded,
@@ -241,7 +266,10 @@ fn control_heldmem_map_no_unknown_code() {
 /// (runtime-owned objects) says unknown code holds every intrinsic.
 #[test]
 fn probe_heldmem_primitive_only() {
-    eprintln!("SOUND1 primitive_only v_escapes={}", v_escapes_argv("(globalThis as any).hostTake(1);"));
+    eprintln!(
+        "SOUND1 primitive_only v_escapes={}",
+        v_escapes_argv("(globalThis as any).hostTake(1);")
+    );
 }
 
 /// Precision (4): an object escapes, another program object W never reaches

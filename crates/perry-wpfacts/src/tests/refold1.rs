@@ -13,7 +13,12 @@ fn rows(pf: &ProgramFacts, key: &str) -> Vec<String> {
     pf.sites
         .iter()
         .filter(|s| s.key == key && !s.is_call)
-        .map(|s| format!("@{} top={} recv={:?} verdict={:?}", s.byte_offset, s.top, s.receivers, s.verdict))
+        .map(|s| {
+            format!(
+                "@{} top={} recv={:?} verdict={:?}",
+                s.byte_offset, s.top, s.receivers, s.verdict
+            )
+        })
         .collect()
 }
 
@@ -154,7 +159,12 @@ fn refold1_f2_three_shape_key_is_named() {
     let v = recv(&pf, "x");
     // `targetObject` is born `null` (an honest TypeError arm of the
     // flow-insensitive solve); the key must name `position` only.
-    assert_eq!(v, vec!["V".to_string(), "undefined (TypeError)".to_string()], "F2 x rows: {:?}", rows(&pf, "x"));
+    assert_eq!(
+        v,
+        vec!["V".to_string(), "undefined (TypeError)".to_string()],
+        "F2 x rows: {:?}",
+        rows(&pf, "x")
+    );
 }
 
 // F3 KEEP: an unknown subject: the key may name `other` (a method) or an
@@ -176,7 +186,11 @@ fn refold1_f4_two_constants_two_loads() {
     let v = recv(&pf, "x");
     assert_eq!(
         v,
-        vec!["U".to_string(), "V".to_string(), "undefined (TypeError)".to_string()],
+        vec![
+            "U".to_string(),
+            "V".to_string(),
+            "undefined (TypeError)".to_string()
+        ],
         "F4 x rows: {:?}",
         rows(&pf, "x")
     );
@@ -188,12 +202,20 @@ fn refold1_f4_two_constants_two_loads() {
 fn refold1_probe_hops() {
     for (tag, name, pfield) in [
         ("P0 field+getter", "track.name", "propertyName: any = null;"),
-        ("P1 direct const", "'obj.position'", "propertyName: any = null;"),
+        (
+            "P1 direct const",
+            "'obj.position'",
+            "propertyName: any = null;",
+        ),
         ("P2 no null init", "track.name", "propertyName: any;"),
         ("P3 const+no init", "'obj.position'", "propertyName: any;"),
     ] {
         let pf = f2v("new Track( 'obj.position', [ 0, 1 ] )", name, pfield);
-        eprintln!("REFOLD1 {tag}: y={:?} x={:?}", recv(&pf, "y"), recv(&pf, "x"));
+        eprintln!(
+            "REFOLD1 {tag}: y={:?} x={:?}",
+            recv(&pf, "y"),
+            recv(&pf, "x")
+        );
     }
 }
 
@@ -253,10 +275,22 @@ fn refold1_probe_pieces() {
     for (tag, want, e) in [
         ("R0 const", "ab", "'a' + 'b'"),
         ("R1 wordChar", r"[^\\[\\]\\.:\\/]", "_wordChar"),
-        ("R2 replace", r"\\[\\]:\\/", "_RESERVED_CHARS_RE.replace( '\\\\.', '' )"),
+        (
+            "R2 replace",
+            r"\\[\\]:\\/",
+            "_RESERVED_CHARS_RE.replace( '\\\\.', '' )",
+        ),
         ("R3 source", "(WC)", "/(WC)/.source"),
-        ("R4 source.replace", "(x)", "/(WC)/.source.replace( 'WC', 'x' )"),
-        ("R5 propertyRe", r"\\.([^\\[\\]\\.:\\/]+)(?:\\[(.+)\\])?", "_propertyRe"),
+        (
+            "R4 source.replace",
+            "(x)",
+            "/(WC)/.source.replace( 'WC', 'x' )",
+        ),
+        (
+            "R5 propertyRe",
+            r"\\.([^\\[\\]\\.:\\/]+)(?:\\[(.+)\\])?",
+            "_propertyRe",
+        ),
         ("R6 trackRe.source", "x", "_trackRe.source"),
     ] {
         eprintln!("REFOLD1 {tag}: p={:?}", r(want, e));
@@ -272,13 +306,20 @@ const PLAIN_RE: &str = r#"const _trackRe = new RegExp( '^()(\\w+)()()\\.(\\w+)()
 fn refold1_probe_plain_pipeline() {
     for (tag, tracks) in [
         ("S1 one", "new Track( 'obj.position', [ 0, 1 ] )"),
-        ("S2 two", "new Track( 'obj.position', [ 0, 1 ] ), new Track( 'obj.scale', [ 0, 1 ] )"),
+        (
+            "S2 two",
+            "new Track( 'obj.position', [ 0, 1 ] ), new Track( 'obj.scale', [ 0, 1 ] )",
+        ),
     ] {
         let pf = f2r(PLAIN_RE, tracks, "track.name", "propertyName: any = null;");
-        eprintln!("REFOLD1 {tag}: y={:?} x={:?} xrows={:?}", recv(&pf, "y"), recv(&pf, "x"), rows(&pf, "x"));
+        eprintln!(
+            "REFOLD1 {tag}: y={:?} x={:?} xrows={:?}",
+            recv(&pf, "y"),
+            recv(&pf, "x"),
+            rows(&pf, "x")
+        );
     }
 }
-
 
 /// F1's program with pattern `pat` (a string constant), subject `subject`
 /// and the capture index `g` as the key.
@@ -305,7 +346,10 @@ fn foldfix1_optional_group_unmatched_is_undefined() {
     let v = recv(&pf, "x");
     // `m[ 1 ]` is exactly `undefined`: `v` is only `undefined` and `v.x` throws.
     let r = rows(&pf, "x");
-    assert!(v.is_empty() && r.iter().all(|x| x.ends_with("verdict=Throws")) && !r.is_empty(), "{r:?}");
+    assert!(
+        v.is_empty() && r.iter().all(|x| x.ends_with("verdict=Throws")) && !r.is_empty(),
+        "{r:?}"
+    );
 }
 
 // FOLDFIX1 KEEP: a constant subject the pattern cannot match: `exec` is

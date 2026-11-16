@@ -15,7 +15,11 @@ use super::*;
 
 fn witness(src: &str, key: &str) -> Verdict {
     let pf = facts(src);
-    let sites: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
+    let sites: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call)
+        .collect();
     assert!(!sites.is_empty(), "missing {key} site");
     assert_eq!(sites.len(), 1, "{sites:?}");
     sites[0].verdict.clone()
@@ -63,14 +67,20 @@ fn r6defprop_keep_defined_key_not_plain() {
 /// Keep: a computed key may name any key of the object (any of its slots).
 #[test]
 fn r6defprop_keep_computed_key_hard() {
-    let v = witness(&prog("Object.defineProperty(this, process.argv[2], { value: 1 })"), "witness");
+    let v = witness(
+        &prog("Object.defineProperty(this, process.argv[2], { value: 1 })"),
+        "witness",
+    );
     assert!(matches!(v, Verdict::No(_)), "{v:?}");
 }
 
 /// Keep: redefining a birth key changes the attributes of its slot.
 #[test]
 fn r6defprop_keep_birth_key_redefine_hard() {
-    let v = witness(&prog("this.witness = 0; Object.defineProperty(this, 'witness', { value: 2 })"), "witness");
+    let v = witness(
+        &prog("this.witness = 0; Object.defineProperty(this, 'witness', { value: 2 })"),
+        "witness",
+    );
     assert!(matches!(v, Verdict::No(_)), "{v:?}");
 }
 
@@ -97,7 +107,11 @@ fn r6defprop_enumeration_does_not_list_defined_key() {
          const c: any = { ...o };
          console.log(c.id);";
     let pf = facts(src);
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "id" && !s.is_call).collect();
+    let s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "id" && !s.is_call)
+        .collect();
     assert_eq!(s.len(), 1, "{s:?}");
     assert!(
         !matches!(s[0].verdict, Verdict::T0Mono | Verdict::T0Set),
@@ -106,7 +120,9 @@ fn r6defprop_enumeration_does_not_list_defined_key() {
     );
     // for-in over the class instance: the defined key is no exact key.
     let n = all_no(
-        &prog(&format!("{ID}; for (const k in this) {{ (this as any)['x' + k] = 1; }}")),
+        &prog(&format!(
+            "{ID}; for (const k in this) {{ (this as any)['x' + k] = 1; }}"
+        )),
         "id",
     );
     assert_eq!(n, 1);
@@ -119,10 +135,7 @@ fn r6defprop_enumeration_does_not_list_defined_key() {
 /// unproven); the delete keeps the object HARD (E7) as before.
 #[test]
 fn r6defprop_store_and_delete_of_defined_key_stay_unproven() {
-    let src = prog(ID).replace(
-        "console.log(",
-        "(b as any).id = 5; console.log(",
-    );
+    let src = prog(ID).replace("console.log(", "(b as any).id = 5; console.log(");
     assert_eq!(all_no(&src, "id"), 1);
     let src = prog(ID).replace("console.log(", "delete (b as any).id; console.log(");
     let v = witness(&src, "witness");
@@ -140,7 +153,11 @@ fn r6defprop_defined_key_not_an_accessor_key() {
         "this.witness = 1; const q: number = this.witness; console.log(q); }",
     );
     let pf = facts(&src);
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "witness" && !s.is_call).collect();
+    let s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "witness" && !s.is_call)
+        .collect();
     assert_eq!(s.len(), 2, "{s:?}");
     for x in s {
         assert!(!matches!(x.verdict, Verdict::No(_)), "{x:?}");
@@ -151,7 +168,10 @@ fn r6defprop_defined_key_not_an_accessor_key() {
 /// instance: the subclass's own key keeps its fact.
 #[test]
 fn r6defprop_subclass_keys_kept() {
-    let src = prog(ID).replace("const w: number = b.witness;", "const w: number = b.isBone ? 1 : 0;");
+    let src = prog(ID).replace(
+        "const w: number = b.witness;",
+        "const w: number = b.isBone ? 1 : 0;",
+    );
     let v = witness(&src, "isBone");
     assert!(!matches!(v, Verdict::No(_)), "{v:?}");
 }

@@ -39,7 +39,9 @@ fn proto_store<'e>(s: &'e Stmt, class: &str) -> Option<&'e str> {
             receiver,
             ..
         } => match key.as_ref() {
-            Expr::String(k) if prototype_of(receiver, class) => (target.as_ref(), k.as_str(), value.as_ref()),
+            Expr::String(k) if prototype_of(receiver, class) => {
+                (target.as_ref(), k.as_str(), value.as_ref())
+            }
             _ => return None,
         },
         _ => return None,
@@ -135,7 +137,9 @@ impl<'a> Gen<'a> {
         };
         for (b, i, _) in scan(c) {
             if let (true, Some(s)) = (b == f.id, f.body.get(i)) {
-                self.m.proto_first_stmts.insert(s as *const Stmt as usize, tm);
+                self.m
+                    .proto_first_stmts
+                    .insert(s as *const Stmt as usize, tm);
             }
         }
     }

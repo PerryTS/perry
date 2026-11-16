@@ -1669,9 +1669,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
             let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
-                if let Some(k @ (super::facts_number::Operand::Prim
-                | super::facts_number::Operand::NumOrUndef)) =
-                    super::facts_number::operand(ctx, left)
+                if let Some(
+                    k @ (super::facts_number::Operand::Prim
+                    | super::facts_number::Operand::NumOrUndef),
+                ) = super::facts_number::operand(ctx, left)
                 {
                     super::facts_number::arith_to_number(ctx, left, k, &l_raw)?
                 } else {
@@ -1682,9 +1683,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 l_raw
             };
             let r = if r_needs_coerce {
-                if let Some(k @ (super::facts_number::Operand::Prim
-                | super::facts_number::Operand::NumOrUndef)) =
-                    super::facts_number::operand(ctx, right)
+                if let Some(
+                    k @ (super::facts_number::Operand::Prim
+                    | super::facts_number::Operand::NumOrUndef),
+                ) = super::facts_number::operand(ctx, right)
                 {
                     super::facts_number::arith_to_number(ctx, right, k, &r_raw)?
                 } else {

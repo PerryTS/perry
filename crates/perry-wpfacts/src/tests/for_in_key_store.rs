@@ -22,13 +22,17 @@ fn mat(lp: &str, subject: &str, pre: &str) -> ProgramFacts {
     ))
 }
 
-const LOOP: &str = "for (const k in v) { const nv = v[k]; if (nv === undefined) continue; this[k] = nv; }";
+const LOOP: &str =
+    "for (const k in v) { const nv = v[k]; if (nv === undefined) continue; this[k] = nv; }";
 
 #[test]
 fn for_in_key_store_over_a_literal_names_only_its_keys() {
     let pf = mat(LOOP, "{ color: new Function(process.argv[3])() }", "");
     let m = tmpl(&pf, "Mat");
-    assert_eq!(m.escape, None, "a for-in key store wrote a builtin into valueOf/toString");
+    assert_eq!(
+        m.escape, None,
+        "a for-in key store wrote a builtin into valueOf/toString"
+    );
     let name = field(m, "name").kind.clone();
     assert!(!name.top, "mat.name {name:?}");
     // The key alone decides: the stored value need not be `v[k]`.
@@ -43,7 +47,11 @@ fn for_in_key_store_over_a_literal_names_only_its_keys() {
 #[test]
 fn for_in_key_store_keys_unknown_stay_any() {
     // A JSON.parse object: any key, `valueOf` among them.
-    let pf = mat(LOOP, "{ color: new Function(process.argv[3])(), ...JSON.parse(process.argv[2]) }", "");
+    let pf = mat(
+        LOOP,
+        "{ color: new Function(process.argv[3])(), ...JSON.parse(process.argv[2]) }",
+        "",
+    );
     let e1 = tmpl(&pf, "Mat").escape.clone();
     // Unknown code's object.
     let pf = mat(LOOP, "new Function(process.argv[2])()", "");
@@ -122,7 +130,10 @@ fn for_in_key_store_skips_class_methods_and_accessors() {
         "s",
         "const s: any = { color: 1 }; s.valueOf = () => 1; s.toString = () => \"s\";",
     );
-    assert!(tmpl(&pf, "Mat").escape.is_some(), "written valueOf/toString must be stored");
+    assert!(
+        tmpl(&pf, "Mat").escape.is_some(),
+        "written valueOf/toString must be stored"
+    );
 }
 
 #[test]
@@ -130,11 +141,21 @@ fn for_in_key_store_any_store_covers_named_stores() {
     // Two calls: a literal subject and an object from unknown code. The any-String
     // store of the unknown subject still decides (valueOf may be written),
     // and the named store of the literal still lands in `name`.
-    let pf = mat(LOOP, "{ name: 5 }); mat.setValues(new Function(process.argv[2])()", "");
+    let pf = mat(
+        LOOP,
+        "{ name: 5 }); mat.setValues(new Function(process.argv[2])()",
+        "",
+    );
     let m = tmpl(&pf, "Mat");
-    assert!(m.escape.is_some(), "the any-String store of an unknown subject must decide");
+    assert!(
+        m.escape.is_some(),
+        "the any-String store of an unknown subject must decide"
+    );
     let name = &field(m, "name").kind;
-    assert!(name.top || name.prims & crate::model::prim::NUM != 0, "mat.name {name:?}");
+    assert!(
+        name.top || name.prims & crate::model::prim::NUM != 0,
+        "mat.name {name:?}"
+    );
 }
 
 #[test]
@@ -146,10 +167,18 @@ fn for_in_key_store_skips_names_read_through_a_builtin_chain() {
     let ta = "const p: any = process.argv.length; console.log(p.valueOf(), p.toString(), `${p}`, p.byteLength);";
     let st = "for (const k in v) { this[k] = new Function(process.argv[3])(); }";
     let pf = mat(st, "{ color: 1 }", ta);
-    assert_eq!(tmpl(&pf, "Mat").escape, None, "a name only read on a builtin chain was stored");
+    assert_eq!(
+        tmpl(&pf, "Mat").escape,
+        None,
+        "a name only read on a builtin chain was stored"
+    );
     // Control: a program store onto Object.prototype is an enumerable key
     // of every literal's chain (unknown code writing there is DEC 250's).
-    let c1 = mat(st, "{ color: 1 }", &format!("{ta} (Object.prototype as any).valueOf = () => 1;"));
+    let c1 = mat(
+        st,
+        "{ color: 1 }",
+        &format!("{ta} (Object.prototype as any).valueOf = () => 1;"),
+    );
     let e1 = tmpl(&c1, "Mat").escape.clone();
     eprintln!("controls {e1:?}");
     assert!(e1.is_some());

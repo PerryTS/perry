@@ -78,10 +78,18 @@ fn called_parameter_with_an_argument_runs_per_function_value() {
 fn argument_of_two_function_values_keeps_the_shared_run() {
     let pf = facts(&src(
         "inv(f: any) { return f(this); }",
-        ["process.argv[2] ? (() => new A()) : (() => new B())", "() => new B()", "() => new C()"],
+        [
+            "process.argv[2] ? (() => new A()) : (() => new B())",
+            "() => new B()",
+            "() => new C()",
+        ],
     ));
     let v = per_read(&pf);
-    assert!(v.iter().any(|r| r.contains(&"A".to_string()) && r.contains(&"B".to_string())), "{v:?}");
+    assert!(
+        v.iter()
+            .any(|r| r.contains(&"A".to_string()) && r.contains(&"B".to_string())),
+        "{v:?}"
+    );
 }
 
 #[test]
@@ -101,10 +109,7 @@ fn reassigned_parameter_keeps_the_shared_run() {
 
 #[test]
 fn passed_on_parameter_keeps_the_shared_run() {
-    let pf = facts(&src(
-        "inv(f: any) { return call(f); }",
-        ARGS,
-    ));
+    let pf = facts(&src("inv(f: any) { return call(f); }", ARGS));
     // `call`'s own parameter is only called: one level of value runs is
     // the rule's reach; `inv` passes `f` on, so its runs are shared.
     let v = per_read(&pf);

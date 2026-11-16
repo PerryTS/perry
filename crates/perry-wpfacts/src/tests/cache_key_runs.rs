@@ -63,20 +63,28 @@ fn passed_key_runs_per_prefix() {
 
 #[test]
 fn passed_key_runs_per_concatenated_prefix() {
-    let v = reads("Cache.add('b:' + u, new B()); const x: any = Cache.get('image:' + u); console.log(x.p);");
+    let v = reads(
+        "Cache.add('b:' + u, new B()); const x: any = Cache.get('image:' + u); console.log(x.p);",
+    );
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
 #[test]
 fn control_argv_key_reads_every_entry() {
     let v = reads("const x: any = Cache.get(process.argv[2]); console.log(x.p);");
-    assert!(v.contains(&"A".into()) && v.contains(&"B".into()) && v.len() > 2, "{v:?}");
+    assert!(
+        v.contains(&"A".into()) && v.contains(&"B".into()) && v.len() > 2,
+        "{v:?}"
+    );
 }
 
 #[test]
 fn control_json_key_may_name_a_member() {
     let v = reads("const k: any = JSON.parse(process.argv[2]); const x: any = Cache.get(k.uri); console.log(x.p);");
-    assert!(v.contains(&"B".into()) && v.len() > 2, "control: a JSON string may be constructor: {v:?}");
+    assert!(
+        v.contains(&"B".into()) && v.len() > 2,
+        "control: a JSON string may be constructor: {v:?}"
+    );
 }
 
 #[test]
@@ -84,12 +92,19 @@ fn control_unknown_code_writes_the_cache() {
     let v = reads(
         "const f: any = new Function(process.argv[2]); f(Cache); const x: any = Cache.get(`image:${u}`); console.log(x.p);",
     );
-    assert_ne!(v, vec!["A".to_string()], "control: unknown code may store anything: {v:?}");
+    assert_ne!(
+        v,
+        vec!["A".to_string()],
+        "control: unknown code may store anything: {v:?}"
+    );
 }
 
 #[test]
 fn key_used_only_as_key_runs_per_prefix() {
-    let v = recv(&facts(&prog("const x: any = Cache.get(`image:${u}`); console.log(x.p);").replace("if (isBlob(key)) return; ", "")));
+    let v = recv(&facts(
+        &prog("const x: any = Cache.get(`image:${u}`); console.log(x.p);")
+            .replace("if (isBlob(key)) return; ", ""),
+    ));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
@@ -99,8 +114,10 @@ fn receiver_use_keeps_per_key_runs() {
     // `key.length` and `key.startsWith('x')` read through the String and
     // change nothing of it, so each run still holds one key value.
     let v = recv(&facts(
-        &prog("const x: any = Cache.get(`image:${u}`); console.log(x.p);")
-            .replace("if (isBlob(key)) return; ", "if (key.length === 0 || key.startsWith('x')) return; "),
+        &prog("const x: any = Cache.get(`image:${u}`); console.log(x.p);").replace(
+            "if (isBlob(key)) return; ",
+            "if (key.length === 0 || key.startsWith('x')) return; ",
+        ),
     ));
     assert_eq!(v, vec!["A"], "{v:?}");
 }

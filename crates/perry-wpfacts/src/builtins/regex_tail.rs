@@ -36,7 +36,10 @@ use crate::model::*;
 enum Item {
     Lit(u16),
     Class(Class),
-    Group { cap: Option<u32>, alts: Vec<Vec<Quant>> },
+    Group {
+        cap: Option<u32>,
+        alts: Vec<Vec<Quant>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -184,7 +187,8 @@ impl Parser {
                 break;
             }
             let a = atom(self)?;
-            let dash = self.peek() == Some(b'-' as u16) && self.s.get(self.i + 1) != Some(&(b']' as u16));
+            let dash =
+                self.peek() == Some(b'-' as u16) && self.s.get(self.i + 1) != Some(&(b']' as u16));
             match (a, dash) {
                 (A::C(lo), true) => {
                     self.i += 1;
@@ -231,7 +235,11 @@ impl Parser {
                             }
                             while !self.eat(b'>') {
                                 let n = self.peek()?;
-                                if !(n < 0x80 && ((n as u8).is_ascii_alphanumeric() || n == b'_' as u16 || n == b'$' as u16)) {
+                                if !(n < 0x80
+                                    && ((n as u8).is_ascii_alphanumeric()
+                                        || n == b'_' as u16
+                                        || n == b'$' as u16))
+                                {
                                     return None;
                                 }
                                 self.i += 1;
@@ -252,7 +260,9 @@ impl Parser {
                     Item::Group { cap, alts }
                 }
                 0x5B => Item::Class(self.class()?),
-                0x2E => Item::Class(Class::norm(vec![(0x0A, 0x0A), (0x0D, 0x0D), (0x2028, 0x2029)]).not()),
+                0x2E => Item::Class(
+                    Class::norm(vec![(0x0A, 0x0A), (0x0D, 0x0D), (0x2028, 0x2029)]).not(),
+                ),
                 0x5C => {
                     let e = self.peek()?;
                     match (e <= 0x7F).then(|| class_escape(e as u8)).flatten() {
@@ -283,7 +293,11 @@ impl Parser {
                 };
                 let lo = num(self)?;
                 let hi = if self.eat(b',') {
-                    if self.peek() == Some(b'}' as u16) { None } else { Some(num(self)?) }
+                    if self.peek() == Some(b'}' as u16) {
+                        None
+                    } else {
+                        Some(num(self)?)
+                    }
                 } else {
                     Some(lo)
                 };
@@ -295,7 +309,12 @@ impl Parser {
                 (1, Some(1))
             };
             let greedy = self.i == n0 || !self.eat(b'?');
-            out.push(Quant { item, min, max, greedy });
+            out.push(Quant {
+                item,
+                min,
+                max,
+                greedy,
+            });
         }
         Some(out)
     }
@@ -420,11 +439,13 @@ impl Model {
             }
             None => {}
         }
-        let pat = one.and_then(|a| analyse(&self.atoms[a as usize].clone(), "")).map(|tail| {
-            let i = self.regexp_tails.len() as u32;
-            self.regexp_tails.push(tail);
-            i
-        });
+        let pat = one
+            .and_then(|a| analyse(&self.atoms[a as usize].clone(), ""))
+            .map(|tail| {
+                let i = self.regexp_tails.len() as u32;
+                self.regexp_tails.push(tail);
+                i
+            });
         self.regexp_ctor_pat.insert(t, (one, pat));
         for (rec, s) in self.regexp_pending.remove(&t).unwrap_or_default() {
             self.exec_attach(t, rec, pat, s);
@@ -457,7 +478,11 @@ pub(crate) fn global_class(src: &str, flags: &str) -> Option<u128> {
         Item::Lit(c) => Class(vec![(*c, *c)]),
         Item::Group { .. } => return None,
     };
-    Some((0u16..128).filter(|&c| k.has(c)).fold(0, |m, c| m | 1u128 << c))
+    Some(
+        (0u16..128)
+            .filter(|&c| k.has(c))
+            .fold(0, |m, c| m | 1u128 << c),
+    )
 }
 
 pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
@@ -476,7 +501,9 @@ pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
     }
     for i in (1..seq.len()).rev() {
         let g = &seq[i];
-        let Item::Group { cap: Some(k), alts } = &g.item else { continue };
+        let Item::Group { cap: Some(k), alts } = &g.item else {
+            continue;
+        };
         if (g.min, g.max) != (1, Some(1)) || alts.len() != 1 || alts[0].len() != 1 {
             continue;
         }
@@ -495,7 +522,12 @@ pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
         // empty only at the input's start (`^`).
         let (last, nullable) = last_set(&seq[..i]);
         let last = Class::norm(last);
-        if (nullable && !anchored) || last.0.iter().any(|&(a, b)| c.0.iter().any(|&(x, y)| a <= y && x <= b)) {
+        if (nullable && !anchored)
+            || last
+                .0
+                .iter()
+                .any(|&(a, b)| c.0.iter().any(|&(x, y)| a <= y && x <= b))
+        {
             continue;
         }
         let mut tail_groups = Vec::new();
@@ -532,7 +564,11 @@ enum Pos {
 }
 
 fn kp(p: usize) -> Pos {
-    if p == 0 { Pos::X(0) } else { Pos::K(p) }
+    if p == 0 {
+        Pos::X(0)
+    } else {
+        Pos::K(p)
+    }
 }
 
 /// What the input's head (the part before its known suffix) may be.
@@ -570,7 +606,13 @@ impl Full<'_> {
         }
     }
 
-    fn seq(&self, seq: &[Quant], e: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+    fn seq(
+        &self,
+        seq: &[Quant],
+        e: Pos,
+        caps: FCaps,
+        out: &mut Vec<(Pos, FCaps)>,
+    ) -> Result<(), Escape> {
         let Some((last, rest)) = seq.split_last() else {
             out.push((e, caps));
             return Ok(());
@@ -583,7 +625,13 @@ impl Full<'_> {
         Ok(())
     }
 
-    fn quant(&self, q: &Quant, e: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+    fn quant(
+        &self,
+        q: &Quant,
+        e: Pos,
+        caps: FCaps,
+        out: &mut Vec<(Pos, FCaps)>,
+    ) -> Result<(), Escape> {
         if q.min == 0 {
             out.push((e, caps.clone()));
         }
@@ -614,7 +662,13 @@ impl Full<'_> {
         Ok(())
     }
 
-    fn item(&self, it: &Item, p: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+    fn item(
+        &self,
+        it: &Item,
+        p: Pos,
+        caps: FCaps,
+        out: &mut Vec<(Pos, FCaps)>,
+    ) -> Result<(), Escape> {
         match it {
             Item::Lit(_) | Item::Class(_) => match p {
                 Pos::K(p) => {
@@ -668,11 +722,21 @@ impl Tail {
     /// that takes none is "".
     pub(crate) fn captures(&self, entries: &[(Head, Vec<u16>)]) -> Derived {
         let groups = self.derived();
-        let mut acc: Derived = groups.iter().map(|&g| (g, Some(Vec::new()), false)).collect();
+        let mut acc: Derived = groups
+            .iter()
+            .map(|&g| (g, Some(Vec::new()), false))
+            .collect();
         for (h, sigma) in entries {
             let f = Full { s: sigma, h: *h };
             let mut ws = Vec::new();
-            if f.seq(&self.full, kp(sigma.len()), vec![None; self.groups as usize + 1], &mut ws).is_err() {
+            if f.seq(
+                &self.full,
+                kp(sigma.len()),
+                vec![None; self.groups as usize + 1],
+                &mut ws,
+            )
+            .is_err()
+            {
                 return groups.iter().map(|&g| (g, None, true)).collect();
             }
             for (st, caps) in ws {
@@ -722,7 +786,12 @@ impl Model {
     pub(crate) fn capture_strs(&mut self, n: NodeId, pat: u32) -> Vec<(u32, u16, StrSet)> {
         let tail = self.regexp_tails[pat as usize].clone();
         let node = &self.nodes[n as usize];
-        let any = |t: &Tail| t.derived().into_iter().map(|g| (g, prim::STR | prim::UNDEF, STRS_TOP)).collect();
+        let any = |t: &Tail| {
+            t.derived()
+                .into_iter()
+                .map(|g| (g, prim::STR | prim::UNDEF, STRS_TOP))
+                .collect()
+        };
         if node.prim == 0 && node.pts.is_empty() {
             return Vec::new();
         }
@@ -795,7 +864,13 @@ mod unit {
     fn track_re() {
         let src = r"^((?:[^\[\]\.:\/]+[\/:])*)([^\[\]:\/]+)?(?:\.([^\[\]\.:\/]+)(?:\[(.+)\])?)?\.([^\[\]\.:\/]+)(?:\[(.+)\])?$";
         let d = caps(src, ".quaternion");
-        assert_eq!(d, vec![(5, Some(vec!["quaternion".to_string()]), false), (6, Some(vec![]), true)]);
+        assert_eq!(
+            d,
+            vec![
+                (5, Some(vec!["quaternion".to_string()]), false),
+                (6, Some(vec![]), true)
+            ]
+        );
     }
 
     #[test]
@@ -813,6 +888,9 @@ mod unit {
         assert!(analyse(r"^(.)\.([^.]+)\1$", "").is_none());
         assert!(analyse(r"^\.([^.]+)$", "i").is_none());
         // The C-run reaches the start of the known suffix: any string.
-        assert_eq!(caps(r"^(?:([^.]*)\.)?([^.]+)$", "position"), vec![(2, None, false)]);
+        assert_eq!(
+            caps(r"^(?:([^.]*)\.)?([^.]+)$", "position"),
+            vec![(2, None, false)]
+        );
     }
 }

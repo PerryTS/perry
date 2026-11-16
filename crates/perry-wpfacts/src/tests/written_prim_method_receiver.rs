@@ -14,11 +14,17 @@
 use super::*;
 
 fn sites(pf: &ProgramFacts, key: &str) -> Vec<Verdict> {
-    pf.sites.iter().filter(|s| s.key == key && s.is_call).map(|s| s.verdict.clone()).collect()
+    pf.sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call)
+        .map(|s| s.verdict.clone())
+        .collect()
 }
 
 fn proven(v: &[Verdict]) -> bool {
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 fn program(call: &str) -> String {
@@ -64,7 +70,9 @@ fn control_method_written_by_unknown_code_on_a_string() {
 /// one.
 #[test]
 fn receiver_parsed_from_the_command_line_calls_no_function() {
-    let pf = facts(&program("JSON.parse(process.argv[2]).decodePrimitive(pp, 0);"));
+    let pf = facts(&program(
+        "JSON.parse(process.argv[2]).decodePrimitive(pp, 0);",
+    ));
     assert!(proven(&sites(&pf, "go")), "{:?}", sites(&pf, "go"));
 }
 
@@ -72,7 +80,8 @@ fn receiver_parsed_from_the_command_line_calls_no_function() {
 /// (isolates the writer of the red test above).
 #[test]
 fn without_the_top_store_the_argument_stays() {
-    let src = program("ext[K.D].decodePrimitive(pp, 0);").replace("u[process.argv[3]] = process.argv[4];", "");
+    let src = program("ext[K.D].decodePrimitive(pp, 0);")
+        .replace("u[process.argv[3]] = process.argv[4];", "");
     let pf = facts(&src);
     assert!(proven(&sites(&pf, "go")), "{:?}", sites(&pf, "go"));
 }
@@ -81,18 +90,24 @@ fn without_the_top_store_the_argument_stays() {
 /// with `pp` as its argument (its own call of `fly` on it is proven).
 #[test]
 fn a_stored_function_is_called_with_the_argument() {
-    let src = program(
-        "const r = (process.argv[2] as any).decodePrimitive(pp, 0); console.log(r.fly());",
-    )
-    .replace(
-        "u[process.argv[3]] = process.argv[4];",
-        "u[process.argv[3]] = function (x: any, y: any) { x.fly(); return x; };",
-    )
-    .replace("go(): number { return 1; }", "go(): number { return 1; } fly(): number { return 2; }");
+    let src =
+        program("const r = (process.argv[2] as any).decodePrimitive(pp, 0); console.log(r.fly());")
+            .replace(
+                "u[process.argv[3]] = process.argv[4];",
+                "u[process.argv[3]] = function (x: any, y: any) { x.fly(); return x; };",
+            )
+            .replace(
+                "go(): number { return 1; }",
+                "go(): number { return 1; } fly(): number { return 2; }",
+            );
     let pf = facts(&src);
     let go = sites(&pf, "go");
     let fly = sites(&pf, "fly");
-    assert!(proven(&go) && proven(&fly), "{go:?} {fly:?}\n{}", pf.dump_text());
+    assert!(
+        proven(&go) && proven(&fly),
+        "{go:?} {fly:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// The ⊤ store stored what unknown code made: the call runs unknown code.
@@ -120,8 +135,18 @@ fn control_getter_defined_through_top() {
 /// throws, nothing escapes.
 #[test]
 fn a_delete_through_top_hands_no_argument() {
-    let src = program("ext[K.D].decodePrimitive(pp, 0); (process.argv[2] as any).decodePrimitive(pp, 0);")
-        .replace("u[process.argv[3]] = process.argv[4];", "delete u.decodePrimitive;");
+    let src = program(
+        "ext[K.D].decodePrimitive(pp, 0); (process.argv[2] as any).decodePrimitive(pp, 0);",
+    )
+    .replace(
+        "u[process.argv[3]] = process.argv[4];",
+        "delete u.decodePrimitive;",
+    );
     let pf = facts(&src);
-    assert!(proven(&sites(&pf, "go")), "{:?}\n{}", sites(&pf, "go"), pf.dump_text());
+    assert!(
+        proven(&sites(&pf, "go")),
+        "{:?}\n{}",
+        sites(&pf, "go"),
+        pf.dump_text()
+    );
 }

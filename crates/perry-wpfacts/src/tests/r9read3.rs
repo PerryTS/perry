@@ -23,7 +23,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 /// Verdicts of the instance reads `this.<key>` (receiver a class instance,
 /// not the prototype store sites).
 fn verdicts(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -86,8 +90,14 @@ fn r9read3_bk1_call_before_the_store() {
 #[test]
 fn r9read3_bk2_element_is_an_accessor() {
     let src = B
-        .replace("  b(x: number) { return x * 2; }", "  get b(): any { return (P.prototype as any).T; }")
-        .replace("[P.prototype.a, P.prototype.b]", "[P.prototype.a, (P.prototype as any).b]");
+        .replace(
+            "  b(x: number) { return x * 2; }",
+            "  get b(): any { return (P.prototype as any).T; }",
+        )
+        .replace(
+            "[P.prototype.a, P.prototype.b]",
+            "[P.prototype.a, (P.prototype as any).b]",
+        );
     not_proven(&src, "T");
 }
 
