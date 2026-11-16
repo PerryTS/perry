@@ -24,25 +24,6 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
         .clone()
 }
 
-/// `init` is the first `array`; two chained copies, then `tail` runs.
-fn src(init: &str, tail: &str) -> String {
-    format!(
-        "const unknown: any = (globalThis as any)[process.argv[2]];
-         const kept = {{ keptmark: 1 }};
-         function copy(dst: any, source: any) {{ dst.array = new source.array.constructor(source.array); }}
-         const a: any = {{ array: {init} }};
-         const b: any = {{ array: null }};
-         const c: any = {{ array: null }};
-         copy(b, a);
-         copy(c, b);
-         {tail}
-         console.log(c.array.length);"
-    )
-}
-
-/// The copied value's `constructor` constructs `kept`.
-const USE: &str = "try { const r: any = new c.array.constructor(kept); console.log(r.length); } catch (e) { console.log(\"t\"); }";
-
 #[test]
 fn blob_slice_coerces_only() {
     let pf = whole(

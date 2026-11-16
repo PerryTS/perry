@@ -716,7 +716,7 @@ impl<'a> Gen<'a> {
     /// R9BIRTH1 rule C: a derived class's construction phase again, with
     /// the keys its parent chain's constructors definitely leave as own data
     /// properties (`CtorPhase::definite`) present after `super()`: storing
-    /// one is no add (`ctor_phase::analyze_in_present`). Parents first. Only
+    /// one is no add (`ctor_phase::analyze_in_present_m`). Parents first. Only
     /// for a chain of this program's classes that never leaks `this` before
     /// its keys are stored (no observer could delete one) and whose
     /// constructors return no value (`super()` binds `this` to the object

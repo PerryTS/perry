@@ -173,7 +173,7 @@ struct W<'a> {
     /// is not tracked.
     order: Option<BTreeMap<String, usize>>,
     /// R9BIRTH1 rule C: the keys the parent chain's construction makes own
-    /// data properties on every run (`analyze_in_present`): present once
+    /// data properties on every run (`analyze_in_present_m`): present once
     /// `super()` has returned.
     present: &'a BTreeSet<String>,
     /// R9BIRTH2 rule L: `const` locals initialised with `this`
@@ -251,10 +251,6 @@ pub(crate) fn has_return(ss: &[Stmt]) -> bool {
     })
 }
 
-pub fn analyze(c: &Class) -> CtorPhase {
-    analyze_in(c, &BTreeMap::new())
-}
-
 /// The field keys of each plain-literal class of `classes`: an object
 /// literal lowers to `new __AnonShape_*(values...)` with its keys as the
 /// class's fields, in order. Only one of named public fields, no method,
@@ -277,25 +273,13 @@ pub fn plain_shapes(classes: &[Class]) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-pub fn analyze_in(c: &Class, shapes: &BTreeMap<String, Vec<String>>) -> CtorPhase {
-    analyze_in_present(c, shapes, &BTreeSet::new())
-}
-
-/// [`analyze_in`] of a derived class whose parent chain's construction
+/// The analysis of a derived class whose parent chain's construction
 /// leaves the keys `present` as own data properties on every run, before
 /// anyone can observe the instance (R9BIRTH1 rule C, ECMA-262 10.1.9.2
 /// OrdinarySetWithOwnDescriptor: a store of an own data key changes its
-/// value and creates no key, so it is no add at any layout position).
-pub fn analyze_in_present(
-    c: &Class,
-    shapes: &BTreeMap<String, Vec<String>>,
-    present: &BTreeSet<String>,
-) -> CtorPhase {
-    analyze_in_present_m(c, shapes, present, true)
-}
-
-/// [`analyze_in_present`] with rule M on or off (`rule_m`: off, every
-/// `this.m()` call is a leak, as before R9BIRTH3).
+/// value and creates no key, so it is no add at any layout position),
+/// with rule M on or off (`rule_m`: off, every `this.m()` call is a leak,
+/// as before R9BIRTH3).
 pub fn analyze_in_present_m(
     c: &Class,
     shapes: &BTreeMap<String, Vec<String>>,

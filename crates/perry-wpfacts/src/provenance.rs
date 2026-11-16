@@ -495,6 +495,7 @@ impl std::fmt::Display for WhyHop {
 }
 
 /// The chain the last hold of this process printed (tests).
+#[cfg(test)]
 pub fn take_chain() -> Vec<WhyHop> {
     std::mem::take(&mut *LAST.lock().unwrap_or_else(|e| e.into_inner()))
 }
