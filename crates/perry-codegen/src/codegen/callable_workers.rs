@@ -16,6 +16,12 @@ struct State {
     creates: crate::layout_desc::create_families::CallableState,
     globals: std::collections::HashSet<u32>,
     executable: bool,
+    // Read while a body is lowered; a worker that lacks either lowers that
+    // body differently from the serial loop (dead-body traps, constructor
+    // layout stores), and whether a module lowers in parallel depends on the
+    // budget at that moment.
+    bodies: crate::verify_facts::CallableState,
+    plans: crate::layout_desc::function_families::CallableState,
 }
 impl State {
     fn capture() -> Self {
@@ -30,6 +36,8 @@ impl State {
             creates: crate::layout_desc::create_families::callable_state(),
             globals: crate::stmt::region_loop::callable_const_globals(),
             executable: crate::expr::agent_ptr::output_is_executable(),
+            bodies: crate::verify_facts::callable_state(),
+            plans: crate::layout_desc::function_families::callable_state(),
         }
     }
     fn install(&self) {
@@ -43,6 +51,8 @@ impl State {
         self.creates.install();
         crate::stmt::region_loop::install_callable_const_globals(self.globals.clone());
         crate::expr::agent_ptr::set_output_is_executable(self.executable);
+        self.bodies.install();
+        self.plans.install();
         crate::ext_registry::begin_module_capture();
     }
 }
