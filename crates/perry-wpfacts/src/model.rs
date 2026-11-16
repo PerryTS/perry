@@ -2792,9 +2792,10 @@ pub struct Model {
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
     /// The keys of `process` the realm declares as host arrays of strings
-    /// (`argv`, `execArgv`): per key, what the property holds (the one array
-    /// the runtime makes before the program runs, an "arraybox", or what the
-    /// program stores there) and that array.
+    /// (`argv`, `execArgv`) or a host object of strings (`env`): per key,
+    /// what the property holds (the one array / object the runtime makes,
+    /// an "arraybox" / "stringrecord", or what the program stores there) and
+    /// that object.
     pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,

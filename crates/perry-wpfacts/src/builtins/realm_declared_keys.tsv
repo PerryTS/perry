@@ -12359,6 +12359,8 @@ proto	Object.prototype	propertyIsEnumerable
 proto	Object.prototype	toLocaleString
 proto	Object.prototype	toString
 proto	Object.prototype	valueOf
+record	node:process	env	process.env
+record	process	env	process.env
 strings	node:process	argv	process.argv
 strings	node:process	execArgv	process.execArgv
 strings	process	argv	process.argv
