@@ -114,6 +114,7 @@ impl ShapeRecord {
             brands: self.brands().to_vec(),
             constfn: self.constfn_infos().iter().map(|i| (i.slot, i.info)).collect(),
             handles: self.owned_handles().map(|w| w.0),
+            family_desc: self.family_desc_index_plus_one,
             edges,
         }
     }

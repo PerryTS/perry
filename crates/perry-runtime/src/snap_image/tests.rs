@@ -577,6 +577,7 @@ fn full_mint_rec(n: u32) -> MintRec {
         brands: vec![11, 12],
         constfn: vec![(1, 0x21), (2, 0x22)],
         handles: [1, 2, 3, 4, 5, 6],
+        family_desc: 13,
         edges: vec![9, 10, 11],
     }
 }

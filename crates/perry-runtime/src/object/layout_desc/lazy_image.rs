@@ -29,6 +29,11 @@ fn descriptor(word: u32) -> Option<*const PerryLayoutDesc> {
     (unsafe { (*desc).layout_id } == LayoutWord(word).unshadowed().0).then_some(desc)
 }
 
+/// Whether the lazy static row of `word` selects a descriptor that carries `word`.
+pub(super) fn row_names_word(word: u32) -> bool {
+    descriptor(word).is_some()
+}
+
 /// Whether `desc` is the descriptor value selected by its static row.
 #[inline]
 pub(super) unsafe fn contains(desc: *const PerryLayoutDesc) -> bool {
