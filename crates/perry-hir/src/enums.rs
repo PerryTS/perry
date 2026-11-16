@@ -118,6 +118,7 @@ pub(crate) fn fix_imported_enums_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 fix_imported_enums_in_stmts(body, enums);
                 if let Some(catch_clause) = catch {

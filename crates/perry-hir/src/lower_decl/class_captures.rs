@@ -118,6 +118,7 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body
                 .iter()
@@ -237,6 +238,7 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body
                 .iter()
@@ -1204,6 +1206,7 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_have_direct_super_call(body)
                 || catch
@@ -1278,6 +1281,7 @@ fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
                 body: tb,
                 catch,
                 finally,
+                ..
             } => {
                 insert_stashes_before_returns(tb, stashes);
                 if let Some(c) = catch {
@@ -1423,6 +1427,7 @@ pub(crate) fn append_new_args_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 append_new_args_stmt(s, class_name, cap_args, skip_if_present);
@@ -1557,6 +1562,7 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 stamp_self_new_stmt(s, class_name, eval_id);

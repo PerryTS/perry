@@ -68,6 +68,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n);

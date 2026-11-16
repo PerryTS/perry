@@ -348,6 +348,7 @@ fn pin_reason(s: &Stmt, facts: &ModuleFacts) -> Option<&'static str> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 any(body, loops, switches, labels)
                     || catch
@@ -1306,6 +1307,7 @@ fn split_list(
                 body,
                 catch,
                 finally,
+                ..
             } if weight > target => {
                 if sh.cost.body(body) > target {
                     split_list(body, ctx, sh, &dom, proofs);
@@ -1778,6 +1780,7 @@ fn split_closures_in(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 split_closures_in(body, names, facts, sh);
                 if let Some(c) = catch {

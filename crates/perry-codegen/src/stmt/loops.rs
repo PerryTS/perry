@@ -7680,6 +7680,7 @@ fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_stmt_exprs(body, out);
                 if let Some(c) = catch {
@@ -9027,6 +9028,7 @@ fn collect_guarded_array_aliases_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
                 | catch.as_ref().is_some_and(|catch| {
@@ -9655,6 +9657,7 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_mutate_local(body, local_id)
                 || catch
@@ -9857,6 +9860,7 @@ fn stmt_array_length_effect(
             body,
             catch,
             finally,
+            ..
         } => first_blocking_loop_effect(
             body.iter()
                 .map(|stmt| {
@@ -10304,6 +10308,7 @@ pub(crate) fn stmt_preserves_array_length(
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().all(|s| {
                 stmt_preserves_array_length(

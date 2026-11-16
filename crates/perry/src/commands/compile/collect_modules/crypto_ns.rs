@@ -92,6 +92,7 @@ fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_use_global_crypto_namespace(body)
                 || catch

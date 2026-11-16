@@ -246,6 +246,7 @@ fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_iter_result_returns_in_async_step_done(body);
                 if let Some(c) = catch {
@@ -1231,7 +1232,7 @@ pub fn transform_generator_function_with_extra_captures(
             done_id,
             Box::new(Expr::Bool(true)),
         ))];
-        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, true, &hoisted_ids));
         return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,

@@ -343,6 +343,7 @@ fn count_stmt(stmt: &Stmt, c: &mut Counter) {
             body,
             catch,
             finally,
+            ..
         } => {
             count_stmts(body, c);
             if let Some(catch) = catch {

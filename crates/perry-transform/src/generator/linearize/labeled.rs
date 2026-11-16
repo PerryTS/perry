@@ -87,6 +87,7 @@ pub(super) fn rewrite_labeled_bc_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_labeled_bc_in_stmts(body, label, next_local_id);
                 if let Some(c) = catch.as_mut() {
@@ -132,6 +133,7 @@ pub(super) fn stmts_have_labeled_break_for(stmts: &[Stmt], label: &str) -> bool 
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_have_labeled_break_for(body, label)
                 || catch
@@ -175,6 +177,7 @@ pub(super) fn rewrite_labeled_continue_in_stmts(stmts: &mut [Stmt], label: &str)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_labeled_continue_in_stmts(body, label);
                 if let Some(c) = catch.as_mut() {

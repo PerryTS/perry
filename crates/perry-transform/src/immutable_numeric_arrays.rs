@@ -373,6 +373,7 @@ fn scan_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body, arrays, writes, ranges, allowed);
                 if let Some(catch) = catch {

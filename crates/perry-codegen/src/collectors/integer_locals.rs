@@ -231,6 +231,7 @@ fn for_each_child_stmt(stmt: &perry_hir::Stmt, f: &mut dyn FnMut(&perry_hir::Stm
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(&mut *f);
             if let Some(c) = catch {
@@ -841,6 +842,7 @@ impl ProvenanceJudge<'_> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.walk_stmts(body);
                     if let Some(c) = catch {
@@ -1172,6 +1174,7 @@ pub fn collect_extra_integer_let_ids(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_extra_integer_let_ids(
                     body,
@@ -1272,6 +1275,7 @@ pub fn collect_flat_row_aliases(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_flat_row_aliases(body, flat_const_ids, out);
                 if let Some(catch) = catch {

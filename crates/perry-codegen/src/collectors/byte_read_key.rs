@@ -106,6 +106,7 @@ pub(crate) fn collect_numeric_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out);
                     if let Some(c) = catch {

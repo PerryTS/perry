@@ -79,6 +79,7 @@ impl OutUsageAnalyzer {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     self.visit_stmt(s);

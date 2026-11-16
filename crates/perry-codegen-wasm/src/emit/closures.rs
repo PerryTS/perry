@@ -61,6 +61,7 @@ pub(super) fn collect_closures_from_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_closures_from_stmts(body, out);
                 if let Some(c) = catch {

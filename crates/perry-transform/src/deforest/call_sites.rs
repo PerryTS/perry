@@ -126,6 +126,7 @@ pub fn rewrite_call_sites_in_stmts_with_local_pass(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_call_sites_in_stmts_with_local_pass(
                     body,
@@ -571,6 +572,7 @@ fn scan_fuse_sites(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_fuse_sites(body, producers, fused);
                 if let Some(c) = catch {

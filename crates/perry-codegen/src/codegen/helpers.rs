@@ -797,6 +797,7 @@ pub(super) fn collect_return_class(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_return_class(body, produced, disqualified, func_returns_class);
                 if let Some(cc) = catch {

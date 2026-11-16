@@ -37,6 +37,7 @@ pub fn rewrite_returns_as_done(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_returns_as_done(body);
                 if let Some(c) = catch {
@@ -93,6 +94,7 @@ pub fn prepend_done_before_returns(stmts: &mut Vec<Stmt>, done_id: u32) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 prepend_done_before_returns(body, done_id);
                 if let Some(c) = catch {
@@ -156,6 +158,7 @@ pub fn body_contains_return(stmts: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if body_contains_return(body) {
                     return true;
@@ -244,6 +247,7 @@ pub fn rewrite_catch_returns_to_iter_result_in_stmt(stmt: &mut Stmt) {
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_catch_returns_to_iter_result(body);
             if let Some(c) = catch.as_mut() {
@@ -336,6 +340,7 @@ pub fn rewrite_returns_to_labeled_break_in_stmt(stmt: &mut Stmt, label: &str) {
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_returns_to_labeled_break(body, label);
             if let Some(c) = catch.as_mut() {

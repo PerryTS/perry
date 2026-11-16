@@ -314,6 +314,7 @@ fn lets(s: &Stmt, out: &mut std::collections::HashSet<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|x| lets(x, out));
             if let Some(c) = catch {

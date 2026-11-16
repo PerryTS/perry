@@ -123,6 +123,7 @@ pub fn rewrite_stmt(stmt: &mut Stmt) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body.iter_mut() {
                 rewrite_stmt(s);

@@ -165,6 +165,7 @@ pub(super) fn collect_locals(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_locals(body, map, count, offset);
                 if let Some(catch) = catch {

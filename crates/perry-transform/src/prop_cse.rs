@@ -375,6 +375,7 @@ fn nested_stmt_lists(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {
@@ -497,6 +498,7 @@ fn scan_stmt(s: &Stmt, found: &mut bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 scan_stmt(st, found);

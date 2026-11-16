@@ -345,6 +345,7 @@ impl W {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 let b = self.branch(st, body);
                 let mut open = st.open && b.open;
@@ -538,6 +539,7 @@ fn jumps(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             jumps(body)
                 || catch.as_ref().is_some_and(|c| jumps(&c.body))

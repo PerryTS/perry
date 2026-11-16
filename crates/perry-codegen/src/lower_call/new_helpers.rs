@@ -496,6 +496,7 @@ fn stmt_any(
             body,
             catch,
             finally,
+            ..
         } => {
             ctor_body_any(body, expr_pred, stmt_pred)
                 || catch
@@ -875,6 +876,7 @@ pub(super) fn collect_decl_local_ids(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_decl_local_ids(body, out);
                 if let Some(c) = catch {

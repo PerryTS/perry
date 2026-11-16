@@ -1698,6 +1698,7 @@ fn enders_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 enders_in_stmt(st, is_inert, is_trusted_operation, out);

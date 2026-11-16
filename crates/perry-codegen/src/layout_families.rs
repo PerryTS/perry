@@ -406,6 +406,7 @@ fn visit_stmt<'a>(
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, on_stmt, on_expr);
             if let Some(c) = catch {
@@ -1097,6 +1098,7 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
             body,
             catch,
             finally,
+            ..
         } => {
             all(body, out);
             if let Some(c) = catch {

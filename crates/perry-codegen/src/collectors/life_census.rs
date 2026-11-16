@@ -1094,6 +1094,7 @@ impl Census<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(c) = catch {
