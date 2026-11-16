@@ -1050,6 +1050,15 @@ impl Model {
             return None;
         }
         let v = self.str_atoms(x.strs).to_vec();
+        // Rule M5b's bound: a set a rule made (`STRS_RUN`) folds only as one
+        // constant (rule M5's argument: sets only grow, so a node holds one
+        // constant alone during one stretch); a set of several constants
+        // folds only when each is a copy of a program literal (finitely
+        // many). A value that depends on itself through `+` (`s = s + 1`)
+        // holds its own earlier result, a set a rule made, so it ends.
+        if x.strs & STRS_RUN != 0 && v.len() > 1 {
+            return None;
+        }
         (!v.iter().any(|&a| self.atom_is_mark(a))).then_some(v)
     }
 
