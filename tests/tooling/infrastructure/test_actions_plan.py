@@ -187,7 +187,6 @@ class CategoryRoutingTests(unittest.TestCase):
         import yaml
         workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
         jobs = workflow["jobs"]
-        steps = []
         for name in WASI_JOBS:
             job = jobs[name]
             self.assertIn(name, jobs["gate"]["needs"])
@@ -196,17 +195,21 @@ class CategoryRoutingTests(unittest.TestCase):
             self.assertNotIn("continue-on-error", job)
             for step in job["steps"]:
                 self.assertNotIn("continue-on-error", step)
-            steps += job["steps"]
-        commands = "\n".join(step.get("run", "") for step in steps)
+        def commands(name):
+            return "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        self.assertIn("wasm_eh", commands("wasi-native"))
+        self.assertIn("--features target-wasi", commands("wasi-native"))
         for suite in ["smoke", "acceptance", "gap"]:
-            self.assertIn("--suite " + suite, commands)
-        self.assertIn("wasi_build_runtime.py", commands)
-        self.assertIn("--features target-wasi", commands)
-        self.assertIn("wasm_eh", commands)
-        self.assertIn("component_check.sh", commands)
+            self.assertIn("--suite " + suite, commands("wasi-execution"))
+        self.assertIn("wasi_build_runtime.py", commands("wasi-execution"))
+        self.assertIn("--features target-wasi", commands("wasi-execution"))
+        self.assertIn("component_check.sh", commands("wasi-components"))
+        keys = {name: next(step["with"]["shared-key"] for step in jobs[name]["steps"]
+                           if "rust-cache" in step.get("uses", "")) for name in WASI_JOBS}
+        self.assertEqual(len(set(keys.values())), len(WASI_JOBS), keys)
         self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in jobs["wasi-execution"]["steps"]))
 
-    def test_actual_pr_gate_rejects_one_failed_planned_wasi_job(self):
+    def test_actual_pr_gate_rejects_one_skipped_planned_wasi_job(self):
         import os
         from pathlib import Path
         import subprocess
