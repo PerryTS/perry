@@ -85,6 +85,24 @@ pub struct BirthShape {
 }
 
 impl BirthShape {
+    /// The facts of the declared empty ordinary layout (native row
+    /// `EMPTY_ORDINARY_LAYOUT_ROW`, seeded by the runtime at agent creation):
+    /// a literal with no key, no live slot, no typed lane, no rep, no
+    /// ConstFn/private/brand/attribute fact. A literal whose late keys are
+    /// holes of its family names those keys and is not this content.
+    pub fn is_empty_ordinary(&self) -> bool {
+        self.keys.is_empty()
+            && self.key_count == 0
+            && self.live == 0
+            && matches!(self.proto, BirthProto::Literal)
+            && self.typed.is_none()
+            && self.rep == 0
+            && self.constfn.is_empty()
+            && self.private.is_empty()
+            && self.brands.is_empty()
+            && self.attrs.is_empty()
+    }
+
     /// A completed (final) content: ConstFn lanes or private facts. Never an
     /// allocation's birth.
     pub fn is_completed(&self) -> bool {

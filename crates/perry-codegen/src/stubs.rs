@@ -383,6 +383,10 @@ pub fn static_shape_seed_ll_with_plan(
     // tied to it (`realm_image::ArrayCell::owner`).
     let mark = llmod.global_mark();
     for (i, (id, shape)) in seeds.iter().enumerate() {
+        if plan.empty_ordinary.contains(id) {
+            // The declared empty ordinary layout is seeded by the runtime.
+            continue;
+        }
         let word = plan
             .identity_word(*id)
             .expect("seed identity in image plan");

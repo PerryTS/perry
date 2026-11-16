@@ -303,6 +303,19 @@ pub const ASYNC_FUNCTION_LAYOUT_WORD: u32 = 0xa400_0001;
 pub const FUNCTION_DICTIONARY_LAYOUT_WORD: u32 = 0xa000_0004;
 pub const WEAKMAP_BIRTH_LAYOUT_WORD: u32 = 0x8000_0009;
 pub const WEAKSET_BIRTH_LAYOUT_WORD: u32 = 0x8000_000a;
+/// The declared layout of an ordinary object whose `[[Prototype]]` is
+/// `Object.prototype` and whose layout names no key (`{}` and the keyless
+/// ordinary births), seeded at agent creation like the weak collections
+/// (`object::shapes::EMPTY_ORDINARY_BIRTH_LAYOUT`): the ordinary intern of
+/// those facts finds it, so it is one word in every image and agent.
+pub const EMPTY_ORDINARY_BIRTH_LAYOUT_WORD: u32 = LAYOUT_TAG | EMPTY_ORDINARY_LAYOUT_ROW;
+/// [`EMPTY_ORDINARY_BIRTH_LAYOUT_WORD`] with its table installed (the shadow
+/// bit): every own named key of an object on this word is in its table.
+/// An exotic read mark, a native alias, a `[[Prototype]]` change or an
+/// integrity level moves the object to another record, so a layout word
+/// equal to it proves "ordinary, Object.prototype, keys in the table" in
+/// one compare (the probe's table arm).
+pub const EMPTY_ORDINARY_TABLE_WORD: u32 = EMPTY_ORDINARY_BIRTH_LAYOUT_WORD | LAYOUT_SHADOW_BIT;
 pub const fn intrinsic_function_layout_word(index: u32) -> u32 {
     assert!(index < 9);
     if index == 4 {
@@ -438,7 +451,10 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "WRITABLE_STATE",
     "WRITABLE_STATE_PROTO",
 ];
-pub const NATIVE_LAYOUT_ROWS: u32 = 11 + NATIVE_LAYOUT_DESCRIPTORS.len() as u32;
+/// The row of [`EMPTY_ORDINARY_BIRTH_LAYOUT_WORD`]: the last native row, after
+/// the descriptors, so no descriptor row moves.
+pub const EMPTY_ORDINARY_LAYOUT_ROW: u32 = 11 + NATIVE_LAYOUT_DESCRIPTORS.len() as u32;
+pub const NATIVE_LAYOUT_ROWS: u32 = EMPTY_ORDINARY_LAYOUT_ROW + 1;
 /// Const lookup used only by native declaration initializers / compiler planning.
 pub const fn native_layout_row(name: &str) -> LayoutRow {
     let mut i = 0;
@@ -572,7 +588,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 127);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 128);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);
