@@ -1381,7 +1381,41 @@ impl Model {
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
         self.apply_tokens(n, c, Tokens::Slice(toks), prim);
     }
+    /// R9READ11: a builtin's prototype object taken as a value
+    /// (`builtins::builtin_proto_value`: a `NativeProto` token) is also the
+    /// collapsed builtin prototype (`ObjectProto` stands for each of them)
+    /// for every operation but a read of a key: a store, a definition, a
+    /// delete, a reshape, an escape, a flow or a call through the value is
+    /// the operation on `ObjectProto` too, as when the value held that
+    /// token. A read (`Load`, `MCall`) reads the builtin's members only:
+    /// the family read a receiver of the builtin's kind makes, which sees
+    /// every write of a builtin prototype (`intrinsic_miss`).
+    fn native_proto_alias(&mut self, c: &Cons, toks: Tokens<'_>) -> Option<Vec<Tok>> {
+        if matches!(c, Cons::Load { .. } | Cons::MCall { .. }) {
+            return None;
+        }
+        let mut native = false;
+        for t in toks.iter() {
+            match self.toks[*t as usize] {
+                TokKind::ObjectProto => return None,
+                TokKind::NativeProto(..) => native = true,
+                _ => {}
+            }
+        }
+        if !native {
+            return None;
+        }
+        let mut v: Vec<Tok> = toks.iter().copied().collect();
+        v.push(self.tok(TokKind::ObjectProto));
+        Some(v)
+    }
     fn apply_tokens(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if let Some(v) = self.native_proto_alias(c, toks) {
+            return self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
+        }
+        self.apply_tokens_on(n, c, toks, prim);
+    }
+    fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if let Some(d) = self.diagnostic.as_mut() {
             let saved = (d.cur_call.take(), d.cause_node.replace(n));
             self.apply_tokens_in(n, c, toks, prim);

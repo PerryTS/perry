@@ -2485,6 +2485,47 @@ fn judge(
                 receivers.push(m.tok_name(t));
                 native_arms += 1;
             }
+            // R9READ11: a call of a `Function.prototype` method (`F.call(
+            // x )`) on a builtin method value: the realm's method of
+            // %Function.prototype% (10.3.4: its [[Prototype]]; 20.2.3.3
+            // `call`), no own key, no write of the key onto a builtin
+            // prototype (where the model's builtin prototypes collapse) or
+            // through ⊤. The callee is that builtin; the site stays generic.
+            TokKind::BuiltinFn(_)
+                if s.is_call
+                    && crate::builtins::builtin_fn_proto_method(m, t, s.key)
+                    && object_proto_unwritten(m, s.key)
+                    && builtin_protos_unwritten(m, None, s.key).is_ok() =>
+            {
+                receivers.push(m.tok_name(t));
+                native_arms += 1;
+            }
+            // R9READ11: a read of a member of `Array.prototype` taken as a
+            // value (`Array.prototype.slice`: `builtins::builtin_proto_value`
+            // gives its `NativeProto` token): %Array.prototype% is an Array
+            // exotic object (23.1.3) holding the realm's Array methods as own
+            // data; the member is the described one when no receiver holds
+            // a program-made own key (`native_own_free`) and no builtin
+            // prototype is written under the key (`builtin_protos_unwritten`,
+            // where a write through the value lands: `native_proto_alias`).
+            // A read only: the site stays generic (PerKind, no claim).
+            TokKind::NativeProto(_, Some(crate::model::BuiltinNs::Array))
+                if !s.is_call
+                    && !m.unit_mode
+                    && !m.realm_held
+                    && crate::builtins::native_described(
+                        m,
+                        crate::builtins::NativeFamily::Array,
+                        &m.atoms[s.key as usize],
+                        false,
+                    )
+                    && native_own_free(m, crate::builtins::NativeFamily::Array, t, s.key)
+                    && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), s.key)
+                        .is_ok() =>
+            {
+                receivers.push(m.tok_name(t));
+                native_arms += 1;
+            }
             // R9READ9: a read of a key a builtin function value and its
             // chain lack (`builtins::builtin_value_absent`), with no write of
             // the key onto `Object.prototype` (where the model's builtin
