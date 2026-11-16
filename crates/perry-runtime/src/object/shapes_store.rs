@@ -989,6 +989,14 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
     Box::into_raw(extras) as usize as u64
 }
 
+/// Image run: the object kind a mint record's kind code names, decoded by the record's own
+/// decoder.
+pub(in crate::object) fn snap_image_kind_of_code(code: u8) -> ShapeObjectKind {
+    let mut r = ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0);
+    r.flags_and_kind = r.flags_and_kind & !RECORD_KIND_MASK | u32::from(code) << RECORD_KIND_SHIFT;
+    r.object_kind()
+}
+
 /// Brand-list identity. Nearly every shape has none, and slice equality calls
 /// `memcmp` even for two empty lists, which the shape intern's hit path paid
 /// on every lookup (#11791).
