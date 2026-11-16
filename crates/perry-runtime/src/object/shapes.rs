@@ -7600,7 +7600,10 @@ pub(crate) fn snap_image_mint_collect(a: &SnapShapeState) -> Vec<crate::snap_ima
             v.push(unsafe { &*p }.snap_image_mint());
         }
     });
-    let keys: Vec<(u32, u32)> = v.iter().map(|m| (m.id, LayoutWord(m.word).row().0)).collect();
+    let mut keys: Vec<(u32, u32)> = Vec::new();
+    for m in &v {
+        keys.push((m.id, LayoutWord(m.word).row().0));
+    }
     let order = snap_image_mint_order(&keys);
     let mut slots: Vec<Option<crate::snap_image::format::MintRec>> = v.into_iter().map(Some).collect();
     let mut out = Vec::with_capacity(order.len());
