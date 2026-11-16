@@ -15,6 +15,24 @@ use crate::codegen_abi::LayoutWord;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{JSValue, POINTER_TAG};
 
+/// Rebuild a closure in the destination thread. Built-ins use their one
+/// constructor birth path; ordinary closures retain the serialized header.
+pub(super) fn allocate_thread_closure(
+    info: usize,
+    capture_count: u32,
+) -> *mut crate::closure::ClosureHeader {
+    match crate::object::BuiltinConstructorIdentity::from_header(capture_count) {
+        Some(identity) => {
+            assert_eq!(info, identity.declaration().info as *const _ as usize);
+            assert_eq!(crate::closure::real_capture_count(capture_count), 2);
+            crate::object::alloc_builtin_constructor(identity, crate::array::thread_realm())
+        }
+        None => crate::closure::js_closure_alloc(
+            info as *const crate::closure::JsFunctionInfo, capture_count,
+        ),
+    }
+}
+
 /// Deserialize a SerializedValue into a NaN-boxed JSValue.
 ///
 /// Allocates any needed objects in the **current thread's** arena: the
@@ -488,23 +506,17 @@ impl<'s, 'm> Reader<'s, 'm> {
         capture_count: u32,
         captures: &'m [SerializedValue],
     ) -> u64 {
-        let closure = match crate::object::BuiltinConstructorIdentity::from_header(capture_count) {
-            Some(identity) => {
-                assert_eq!(info, identity.declaration().info as *const _ as usize);
-                assert_eq!(crate::closure::real_capture_count(capture_count), 1);
-                crate::object::alloc_builtin_constructor(identity)
-            }
-            None => crate::closure::js_closure_alloc(
-                info as *const crate::closure::JsFunctionInfo,
-                capture_count,
-            ),
-        };
+        let closure = allocate_thread_closure(info, capture_count);
         self.fill(
             slot,
             JSValue::pointer(closure as *const u8).bits(),
             Made::Value,
         );
         for (i, capture) in captures.iter().enumerate() {
+            // The constructor's realm capture is permanent birth data.
+            if super::is_builtin_realm_capture(capture_count, i) {
+                continue;
+            }
             // Reading a capture allocates; the store does not.
             let bits = self.value(capture);
             crate::closure::js_closure_set_capture_f64(

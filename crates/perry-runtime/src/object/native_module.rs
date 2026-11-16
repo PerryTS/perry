@@ -360,7 +360,7 @@ pub(crate) fn publish_worker_messaging_constructor(
     value: f64,
 ) {
     if !is_worker_messaging_constructor(property)
-        || !super::global_this::fetch_globals::is_thread_realm_global(global)
+        || !crate::array::is_thread_realm(unsafe { super::global_this::realm_of(global) })
     {
         return;
     }

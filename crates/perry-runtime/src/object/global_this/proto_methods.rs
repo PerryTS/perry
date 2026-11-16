@@ -394,7 +394,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
 
 // Size optimization stops at installation; prototype method bodies stay hot.
 #[optimize(size)]
-#[rustfmt::skip] pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+#[rustfmt::skip] pub(crate) fn populate_builtin_prototype_methods(realm: &crate::array::RealmIntrinsics, builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
@@ -1226,8 +1226,10 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             unsafe { install_web_builtin_to_string_tag(proto(), "URL") };
             // Record %URL.prototype% for the native constructor (#11585): it
             // must not re-read `globalThis.URL`, which user code can replace.
-            crate::object::URL_INTRINSIC_PROTO_PTR
-                .store(proto() as i64, std::sync::atomic::Ordering::Release);
+            if crate::array::is_thread_realm(realm) {
+                crate::object::URL_INTRINSIC_PROTO_PTR
+                    .store(proto() as i64, std::sync::atomic::Ordering::Release);
+            }
             // Install order is Node's own key order: `toString`, then the
             // WebIDL component accessors, then `toJSON`.
             install_proto_method(

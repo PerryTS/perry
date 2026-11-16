@@ -188,12 +188,6 @@ pub(crate) fn is_thread_realm(realm: &RealmIntrinsics) -> bool {
     std::ptr::eq(realm, thread_realm())
 }
 
-/// This realm's function intrinsic `which` if born, else 0.
-#[inline]
-pub(crate) fn realm_function_intrinsic_if_bound(which: RealmFunctionIntrinsic) -> usize {
-    realm_function_intrinsic_if_bound_in(thread_realm(), which)
-}
-
 /// `realm`'s function intrinsic `which` if born, else 0.
 #[inline(always)]
 pub(crate) fn realm_function_intrinsic_if_bound_in(
@@ -205,11 +199,6 @@ pub(crate) fn realm_function_intrinsic_if_bound_in(
         0 => 0,
         addr => heal_prototype_addr(cell, addr),
     }
-}
-
-/// Record the birth of the function intrinsic `which` (first birth wins).
-pub(crate) fn note_realm_function_intrinsic(which: RealmFunctionIntrinsic, addr: usize) {
-    note_realm_function_intrinsic_in(thread_realm(), which, addr)
 }
 
 /// Record in `realm` the birth of its function intrinsic `which` (first birth wins).

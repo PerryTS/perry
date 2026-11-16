@@ -39,7 +39,7 @@ fn prototype_class_publication_uses_the_record_even_after_relabeling() {
                 name,
                 ..*declaration
             };
-            finish_builtin_prototype(&relabeled, proto);
+            finish_builtin_prototype(crate::array::thread_realm(), &relabeled, proto);
             assert_eq!(
                 crate::object::shapes::identity_prototype_word(identity),
                 crate::value::js_nanbox_pointer(proto as i64).to_bits(),

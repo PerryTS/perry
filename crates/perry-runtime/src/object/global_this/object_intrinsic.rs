@@ -63,7 +63,7 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     // %Object% and %Object.prototype% are the realm's, whichever init first
     // reads them (SNAP census, design §2.10.20).
     let _realm = crate::snap_census::realm_build();
-    let built = build_object_intrinsics();
+    let built = build_object_intrinsics(crate::array::thread_realm());
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
@@ -130,15 +130,24 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
     proto
 }
 
-/// The `%Object%` / `%Object.prototype%` pair for the realm whose global is
-/// `global`: this thread's own pair (see [`ensure_object_intrinsics`]) when
-/// `global` is the thread's realm global, a fresh pair for any other realm
-/// (a `vm` context or an eval realm), whose intrinsics are its own.
-pub(crate) fn object_intrinsics_for_realm(global: *mut ObjectHeader) -> ObjectPair {
-    if is_thread_realm_global(global) {
+/// The `%Object%` / `%Object.prototype%` pair in `realm`. Only the thread
+/// record uses the Object TLS roots; a vm realm holds its pair in its record.
+pub(crate) fn object_intrinsics_for_realm(realm: &crate::array::RealmIntrinsics) -> ObjectPair {
+    if crate::array::is_thread_realm(realm) {
         return ensure_object_intrinsics();
     }
-    build_object_intrinsics().unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()))
+    let identity = crate::object::BuiltinConstructorIdentity::Object;
+    let ctor = crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity);
+    let proto = crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity);
+    if ctor != 0 && proto != 0 {
+        return (ctor as *mut _, proto as *mut _);
+    }
+    let built = build_object_intrinsics(realm);
+    if let Some((ctor, proto)) = built {
+        crate::array::note_realm_intrinsic_in(realm, identity, proto as usize, ctor as usize);
+        unsafe { crate::object::builtin_proto::seal_born_family(realm, "Object", identity) };
+    }
+    built.unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()))
 }
 
 /// `%Object.prototype%` as NaN-boxed pointer bits, built on first use.
@@ -147,7 +156,7 @@ pub(crate) fn object_prototype_intrinsic_bits() -> Option<u64> {
     (!proto.is_null()).then(|| crate::value::js_nanbox_pointer(proto as i64).to_bits())
 }
 
-fn build_object_intrinsics() -> Option<ObjectPair> {
+fn build_object_intrinsics(realm: &crate::array::RealmIntrinsics) -> Option<ObjectPair> {
     // The same no-move window and immortal-layout scope as the realm
     // bootstrap (see `populate_global_this_builtins`): the constructor and
     // prototype are held as raw pointers across every allocating install
@@ -155,6 +164,7 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let closure_ptr = super::super::global_this_tables::alloc_builtin_constructor(
         super::super::global_this_tables::BuiltinConstructorIdentity::Object,
+        realm,
     );
     if closure_ptr.is_null() {
         return None;
@@ -187,7 +197,7 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
         "constructor".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
-    populate_builtin_prototype_methods("Object", proto_obj);
+    populate_builtin_prototype_methods(realm, "Object", proto_obj);
     Some((closure_ptr, proto_obj))
 }
 

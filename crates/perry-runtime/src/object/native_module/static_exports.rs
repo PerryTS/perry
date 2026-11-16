@@ -383,6 +383,7 @@ mod messaging_constructor_ownership_tests {
 
     #[test]
     fn messaging_constructor_ownership_excludes_foreign_realm_publication() {
+        crate::object::js_nm_install_vm();
         crate::gc::gc_init();
         let scope = RuntimeHandleScope::new();
         let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
@@ -390,7 +391,10 @@ mod messaging_constructor_ownership_tests {
             worker_messaging_constructor_value("worker_threads", "MessageChannel").unwrap(),
         );
         assert!(!JSValue::from_bits(canonical.get_nanbox_u64()).is_undefined());
-        let foreign = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let foreign = scope.root_raw_mut_ptr(
+            (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK)
+                as *mut crate::object::ObjectHeader,
+        );
         let other = scope.root_nanbox_f64(
             worker_messaging_constructor_value("worker_threads", "MessagePort").unwrap(),
         );

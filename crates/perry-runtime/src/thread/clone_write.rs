@@ -1249,7 +1249,13 @@ impl Writer<'_> {
         let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const u64;
         let mut captures = Vec::with_capacity(count);
         for i in 0..count {
-            captures.push(self.capture(*base.add(i)));
+            // A cloned built-in belongs to the destination thread's main
+            // realm. Its source realm graph does not cross the thread boundary.
+            captures.push(if super::is_builtin_realm_capture(capture_count, i) {
+                SerializedValue::Inline(TAG_UNDEFINED)
+            } else {
+                self.capture(*base.add(i))
+            });
         }
         SerializedValue::Closure {
             info: (*closure).info as usize,

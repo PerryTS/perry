@@ -5,9 +5,9 @@ fn builtin_constructor_header_fact_survives_real_evacuation() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     for declaration in crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
-        let closure = crate::object::alloc_builtin_constructor(declaration.identity);
+        let closure = crate::object::alloc_builtin_constructor(declaration.identity, crate::array::thread_realm());
         let before = unsafe { (*closure).capture_count };
-        assert_eq!(crate::closure::real_capture_count(before), 1);
+        assert_eq!(crate::closure::real_capture_count(before), 2);
         js_shadow_slot_set(0, ptr_bits(closure as usize));
 
         let trace = collect_minor_trace(GcTriggerKind::Direct);

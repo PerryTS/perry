@@ -601,3 +601,38 @@ fn typed_array_parent_is_one_lazy_family_born_by_its_first_observation() {
     }
     assert_eq!(crate::array::intrinsic_constructor_addr_if_bound(parent), parent_ctor, "one %TypedArray%");
 }
+
+#[test]
+fn builtin_constructor_realm_slots_are_permanent_birth_data() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::object::js_nm_install_vm();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let main = crate::array::thread_realm();
+    let global = crate::object::js_new_realm_global();
+    let global_ptr = (global.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let vm = unsafe { super::realm_of(global_ptr) };
+    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
+        for (realm, expected) in [(main, crate::value::TAG_UNDEFINED), (vm, global.to_bits())] {
+            let ctor = super::super::global_this_tables::alloc_builtin_constructor(declaration.identity, realm);
+            assert_eq!(crate::closure::js_closure_get_capture_bits(ctor, 1), expected);
+            assert!(std::ptr::eq(unsafe { super::super::global_this_tables::builtin_constructor_realm(ctor) }, realm));
+        }
+    }
+}
+
+#[test]
+fn typed_array_parent_direct_construction_throws_its_declared_error() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    let child = crate::object::BuiltinConstructorIdentity::Int8Array;
+    let parent = super::super::js_object_get_prototype_of(constructor(child.declaration()));
+    let thrown = crate::exception::catch_js_throw(|| unsafe {
+        super::super::js_new_function_construct(parent, std::ptr::null(), 0)
+    }).expect_err("%TypedArray% is abstract");
+    let key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+    let message = super::super::js_object_get_field_by_name(
+        (thrown.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader, key,
+    );
+    let message = super::super::property_ops::set::key_to_rust_string(f64::from_bits(message.bits())).unwrap();
+    assert_eq!(message, "Abstract class TypedArray not directly constructable");
+}

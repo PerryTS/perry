@@ -887,7 +887,7 @@ fn fresh_intrinsic_global() -> f64 {
         return f64::from_bits(cached);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let intrinsics = crate::object::js_object_alloc(0, 0);
+    let intrinsics = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
     let intrinsics = scope.root_raw_mut_ptr(intrinsics);
     intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
         crate::object::populate_global_this_builtins(intrinsics)

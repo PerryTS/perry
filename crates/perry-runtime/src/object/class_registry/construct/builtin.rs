@@ -7,6 +7,9 @@ pub(super) unsafe fn construct(
     func_value: f64,
     args: &[f64],
 ) -> Option<f64> {
+    if let Some(message) = name.declaration().construct_error {
+        crate::object::object_ops::throw_object_type_error(message);
+    }
     let args_ptr = args.as_ptr();
     let args_len = args.len();
     match name {

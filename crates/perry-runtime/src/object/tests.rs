@@ -74,7 +74,7 @@ fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
 }
 
 unsafe fn installed_builtin_method(ctor_name: &str, method_name: &str) -> f64 {
-    let global_ptr = js_object_alloc(0, 0);
+    let global_ptr = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
     super::global_this::populate_global_this_builtins(global_ptr);
     let ctor_key = crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
     let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
@@ -438,7 +438,7 @@ fn closure_name_can_be_redefined_with_define_property() {
 #[test]
 fn builtin_constructor_name_and_length_are_own_runtime_properties() {
     let _global = crate::gc::global_side_table_test_lock();
-    let global_ptr = js_object_alloc(0, 0);
+    let global_ptr = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
     super::global_this::populate_global_this_builtins(global_ptr);
 
     for (ctor_name, key_name, expected_value) in [("Map", "name", "Map"), ("Object", "length", "1")]
@@ -955,7 +955,7 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
     // side-table lock across the populate-then-construct.
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let global_ptr = js_object_alloc(0, 0);
+        let global_ptr = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
         super::global_this::populate_global_this_builtins(global_ptr);
         assert!(!global_ptr.is_null());
 

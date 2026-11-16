@@ -675,12 +675,12 @@ pub(crate) fn install_builtin_constructor_statics(
             // observed first.
             s.data(
                 "parseFloat",
-                super::populate::realm_parse_function(crate::array::RealmFunctionIntrinsic::ParseFloat),
+                super::populate::realm_parse_function(unsafe { super::super::global_this_tables::builtin_constructor_realm(ctor) }, crate::array::RealmFunctionIntrinsic::ParseFloat),
                 STATIC_METHOD_ATTRS,
             );
             s.data(
                 "parseInt",
-                super::populate::realm_parse_function(crate::array::RealmFunctionIntrinsic::ParseInt),
+                super::populate::realm_parse_function(unsafe { super::super::global_this_tables::builtin_constructor_realm(ctor) }, crate::array::RealmFunctionIntrinsic::ParseInt),
                 STATIC_METHOD_ATTRS,
             );
             for (name, value) in NUMBER_STATIC_DATA {

@@ -477,7 +477,8 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
-        let thread_realm = super::global_this::is_thread_realm_global(global);
+        let realm = super::global_this::realm_of(global);
+        let thread_realm = crate::array::is_thread_realm(realm);
         for (family, name) in BuiltinProto::ALL {
             // The thread realm seals what is born; an unborn family seals
             // its prototype in its own birth (`seal_born_family`).
@@ -487,7 +488,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
             } else {
                 intrinsic_prototype_addr(family, global, name)
             };
-            seal_family_prototype(family, proto, true);
+            seal_family_prototype(family, proto, thread_realm);
         }
         super::builtin_namespace::seal_namespaces(global);
     });
@@ -510,10 +511,12 @@ pub(crate) unsafe fn seal_born_family(
             crate::array::is_thread_realm(realm),
         );
     }
-    super::builtin_namespace::seal_born_namespace(
-        name,
-        crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity),
-    );
+    if crate::array::is_thread_realm(realm) {
+        super::builtin_namespace::seal_born_namespace(
+            name,
+            crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity),
+        );
+    }
 }
 
 /// Seal one family's intrinsic prototype `proto` (0: none).
@@ -555,7 +558,7 @@ unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize, thread: bool
                     (*arr).capacity = 0;
                     let bag = crate::array::array_property_bag_ensure(arr);
                     seal_object(bag, family);
-                    if !bag.is_null() {
+                    if thread && !bag.is_null() {
                         trace_seal(family, (*bag).parent_class_id);
                         crate::agent_ptrs::publish_intrinsic_proto(family as usize, bag);
                     }

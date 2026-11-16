@@ -455,6 +455,13 @@ unsafe impl Sync for SerializedValue {}
 // Serialization: JSValue (NaN-boxed, arena pointers) → SerializedValue
 // ============================================================================
 //
+/// A built-in's realm capture is permanent birth data in the destination
+/// thread. All transfer paths use this predicate before reading or writing it.
+#[inline]
+fn is_builtin_realm_capture(header: u32, index: usize) -> bool {
+    index == 1 && crate::object::BuiltinConstructorIdentity::from_header(header).is_some()
+}
+
 // The writer is `thread/clone_write.rs`, the reader `thread/clone_read.rs`.
 
 mod clone_read;
@@ -462,6 +469,7 @@ mod clone_read;
 mod clone_timing;
 mod clone_write;
 mod transfer_list;
+use clone_read::allocate_thread_closure;
 pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
 pub use clone_write::{
@@ -771,7 +779,12 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
+                let bits = if is_builtin_realm_capture(cc, i) {
+                    TAG_UNDEFINED
+                } else {
+                    (*base.add(i)).to_bits()
+                };
+                caps.push(serialize_capture_for_thread(bits));
             }
             guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
             Some((fp, cc, caps))
@@ -857,9 +870,12 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c =
-                        closure::js_closure_alloc(fp as *const crate::closure::JsFunctionInfo, cc);
+                        allocate_thread_closure(fp, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
+                        if is_builtin_realm_capture(cc, i) {
+                            continue;
+                        }
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
                             h.get_raw_mut_ptr::<ClosureHeader>(),
@@ -1067,7 +1083,12 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
         let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
         let mut caps = Vec::with_capacity(actual);
         for i in 0..actual {
-            caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
+            let bits = if is_builtin_realm_capture(cc, i) {
+                    TAG_UNDEFINED
+                } else {
+                    (*base.add(i)).to_bits()
+                };
+                caps.push(serialize_capture_for_thread(bits));
         }
         guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
         Some((fp, cc, caps))
@@ -1138,9 +1159,12 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c =
-                        closure::js_closure_alloc(fp as *const crate::closure::JsFunctionInfo, cc);
+                        allocate_thread_closure(fp, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
+                        if is_builtin_realm_capture(cc, i) {
+                            continue;
+                        }
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
                             h.get_raw_mut_ptr::<ClosureHeader>(),
@@ -1327,7 +1351,12 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
+                let bits = if is_builtin_realm_capture(cc, i) {
+                    TAG_UNDEFINED
+                } else {
+                    (*base.add(i)).to_bits()
+                };
+                caps.push(serialize_capture_for_thread(bits));
             }
             guard_transferable(&caps);
             Some((cc, caps))
@@ -1384,9 +1413,12 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
         let gc_scope = crate::gc::RuntimeHandleScope::new();
         let closure_handle = if let Some((cc, ref cap_vals)) = serialized_captures {
             let c =
-                closure::js_closure_alloc(info_usize as *const crate::closure::JsFunctionInfo, cc);
+                allocate_thread_closure(info_usize, cc);
             let h = gc_scope.root_raw_mut_ptr(c);
             for (i, cap) in cap_vals.iter().enumerate() {
+                        if is_builtin_realm_capture(cc, i) {
+                            continue;
+                        }
                 unsafe {
                     let bits = deserialize_nanbox_on_current_thread(cap);
                     crate::closure::js_closure_set_capture_f64(
@@ -1399,10 +1431,7 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
             h
         } else {
             // No captures — create a minimal closure header
-            gc_scope.root_raw_mut_ptr(closure::js_closure_alloc(
-                info_usize as *const crate::closure::JsFunctionInfo,
-                0,
-            ))
+            gc_scope.root_raw_mut_ptr(allocate_thread_closure(info_usize, 0))
         };
 
         // Call the function. Every perry build is `panic = "abort"`: a panic in

@@ -132,6 +132,7 @@ fn shared_constructor_identity_is_birth_data_not_public_name() {
     let info = identity.declaration().info;
     let ctor = scope.root_raw_mut_ptr(super::global_this_tables::alloc_builtin_constructor(
         identity,
+        crate::array::thread_realm(),
     ));
     ctor.with_mut_ptr(|ptr| native_module::set_bound_native_closure_name(ptr, "Set"));
     let value = ctor.with_const_ptr(|ptr: *const crate::closure::ClosureHeader| {

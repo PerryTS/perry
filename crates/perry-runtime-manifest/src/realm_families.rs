@@ -49,6 +49,8 @@ pub(crate) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 // When the runtime births the family (setup or first ask),
                 // not what it declares: no manifest fact.
                 "lazy" => continue,
+                // A direct-construction error is enforced by runtime dispatch.
+                "construct_error" => continue,
                 // Who installs the members (a provider outside the runtime);
                 // the members themselves are the realm declaration's rows.
                 "external" => continue,

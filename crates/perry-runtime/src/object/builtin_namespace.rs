@@ -145,7 +145,7 @@ unsafe fn global_data_binding(global: *const ObjectHeader, name: &str) -> Option
 /// (`builtin_proto::seal_realm`, under its builtin-definition scope). A `vm`
 /// realm's namespaces are its own and are never published.
 pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
-    if !super::global_this::is_thread_realm_global(global) {
+    if !crate::array::is_thread_realm(unsafe { super::global_this::realm_of(global) }) {
         return;
     }
     // SAFETY: the populated realm global, under the caller's no-move scope.
