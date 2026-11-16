@@ -123,6 +123,12 @@ def rows(realm):
                 if (prop.get("value", {}).get("kind") == "dynamic"
                         and declarations.get(value, {}).get("elements") == "string"):
                     out.add(("strings", name, prop["key"], value))
+                # The one primitive type a runtime value is declared with
+                # (`runtime(process.pid, number)`; ECMA-262 6.1).
+                vtype = prop.get("type")
+                if (not prop.get("symbol") and vtype
+                        and (namespace_holder(name, kind) or node_module(name, kind))):
+                    out.add(("prim", name, prop["key"], vtype))
         if name == "%Global%":
             out.update(("global", name, k) for k in keys)
         if name in ("Function.prototype", "Object.prototype"):

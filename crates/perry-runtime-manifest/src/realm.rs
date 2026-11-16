@@ -57,6 +57,10 @@ pub struct RealmProperty {
     pub get: Option<String>,
     #[serde(default)]
     pub set: Option<String>,
+    /// The one primitive type a runtime-computed value always has
+    /// (`runtime(process.pid, number)`): `string`, `number` or `boolean`.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub value_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

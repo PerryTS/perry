@@ -12328,6 +12328,16 @@ object	node:zlib	constants	node:zlib.constants
 object	node:zlib	default	node:zlib.default
 object	node:zlib.default	codes	node:zlib.codes
 object	node:zlib.default	constants	node:zlib.constants
+prim	node:process	argv0	string
+prim	node:process	execPath	string
+prim	node:process	pid	number
+prim	node:process	ppid	number
+prim	node:process	title	string
+prim	process	argv0	string
+prim	process	execPath	string
+prim	process	pid	number
+prim	process	ppid	number
+prim	process	title	string
 proto	Function.prototype	apply
 proto	Function.prototype	arguments
 proto	Function.prototype	bind
