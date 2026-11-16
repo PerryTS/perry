@@ -3310,6 +3310,14 @@ function perry_ui_set_foreground(h, r, g, b, a) {
 }
 function perry_ui_set_font_size(h, size) { const el = uiGet(h); if (el) el.style.fontSize = size + "px"; }
 function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.style.fontWeight = weight; }
+// `textSetFontWeight(widget, size, weight)` sets the size and the weight together.
+// The weight is the native 0..1 scale (Apple's `systemFont(ofSize:weight:)`), mapped
+// onto CSS 100..900 and clamped, as the HarmonyOS backend maps it.
+function perry_ui_text_set_font_weight(h, size, weight) {
+  const el = uiGet(h); if (!el) return;
+  el.style.fontSize = size + "px";
+  el.style.fontWeight = String(Math.round(1 + 8 * Math.min(Math.max(weight, 0), 1)) * 100);
+}
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
   const el = uiGet(h); if (!el) return;
@@ -5063,6 +5071,7 @@ const __perryUiDispatch = {
   perry_ui_widget_add_overlay, perry_ui_widget_set_overlay_frame,
   // Styling
   perry_ui_set_background, perry_ui_set_foreground, perry_ui_set_font_size, perry_ui_set_font_weight,
+  perry_ui_text_set_font_weight,
   perry_ui_set_font_family, perry_ui_set_padding, perry_ui_set_frame, perry_ui_set_corner_radius,
   perry_ui_set_border, perry_ui_set_opacity, perry_ui_set_enabled, perry_ui_set_tooltip,
   perry_ui_set_control_size, perry_ui_set_widget_hidden, perry_ui_widget_set_background_gradient,

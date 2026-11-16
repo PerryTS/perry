@@ -1152,3 +1152,29 @@ console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k"
         "sub [] coded 7\nbare deep ranged []\ncaught true\n{\"name\":\"MyErr\"} 0"
     );
 }
+
+// `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
+// 0..1 scale, mapped onto CSS 100..900 and clamped.
+#[test]
+fn text_set_font_weight_applies_the_size_and_the_weight() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text, textSetFontWeight } from "perry/ui";
+const a = Text("A");
+textSetFontWeight(a, 28, 1.0);
+const b = Text("B");
+textSetFontWeight(b, 16, 0.5);
+const c = Text("C");
+textSetFontWeight(c, 12, 700);
+"#,
+            r#"
+for (const label of ["A", "B", "C"]) {
+  const el = [...uiHandles.values()].find(e => e.textContent === label);
+  console.log(label + " " + el.style.fontSize + " " + el.style.fontWeight);
+}
+"#
+        ),
+        "A 28px 900\nB 16px 500\nC 12px 900"
+    );
+}
