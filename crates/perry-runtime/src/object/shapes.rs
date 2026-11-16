@@ -7730,9 +7730,6 @@ pub(crate) fn snap_image_mint_check(recs: &[crate::snap_image::format::MintRec])
         if live.snap_image_mint() != *r {
             return Some((i, f::MINT_BAD_FIELDS));
         }
-        if band != 0 && live.layout_word.0 != r.word {
-            return Some((i, f::MINT_BAD_ORDER));
-        }
         let row = LayoutWord(r.word).row().0;
         let named = row >= DYNAMIC_BASE_ROWS || super::layout_desc::snap_image_static_row_names_word(r.word);
         seq.push((r.id, row, named));
