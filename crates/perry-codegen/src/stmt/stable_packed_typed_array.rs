@@ -143,6 +143,7 @@ fn collect_stmt_uses(stmt: &Stmt, uses: &mut HashMap<u32, LocalUses>) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|stmt| collect_stmt_uses(stmt, uses));
             if let Some(catch) = catch {

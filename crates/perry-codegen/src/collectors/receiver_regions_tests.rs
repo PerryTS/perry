@@ -742,6 +742,7 @@ fn throw_and_try_contribute_an_unwind_edge() {
             body: vec![Stmt::Expr(num(NUM))],
         }),
         finally: None,
+        forof_completion: None,
     }];
     assert!(
         has(&tried, RegionEnder::UnwindEdge),

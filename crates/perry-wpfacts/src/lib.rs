@@ -49,6 +49,7 @@ pub mod list_caps;
 mod literal_strings;
 mod method_sites;
 pub mod model;
+mod gen_sources;
 mod named_lengths;
 pub mod native_effects;
 pub mod pts;
@@ -1194,6 +1195,13 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("namedlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    gen_sources::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("gensrc"),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     quiet_sites::collect(

@@ -360,6 +360,7 @@ pub(super) fn collect_writes<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_writes(body, writes, candidates);
                 if let Some(c) = catch {

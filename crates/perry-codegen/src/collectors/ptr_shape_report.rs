@@ -604,6 +604,7 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_lets(body, depth, f);
                 if let Some(c) = catch {
@@ -799,6 +800,7 @@ fn scan_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body, depth, ctx, preamble, out);
                 if let Some(c) = catch {

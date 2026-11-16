@@ -1050,6 +1050,9 @@ fn elision_for(
         if !fs.is_empty() {
             out.local_bodies.insert(*id, fs);
         }
+        if b.generator_source {
+            out.generator_sources.insert(*id);
+        }
         if let Some(cid) = b.class_object.filter(|_| !interp) {
             out.local_classes.insert(*id, cid);
         }

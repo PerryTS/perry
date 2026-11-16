@@ -48,6 +48,7 @@ pub(super) fn register_exported_local_variables(ctx: &LoweringContext, module: &
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_bindings(body, bindings);
                     if let Some(catch) = catch {

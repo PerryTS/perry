@@ -1810,6 +1810,7 @@ impl<'a> Gen<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 // The try body is a throw region of its own; its catch and
                 // finally run in the enclosing one.

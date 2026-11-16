@@ -283,7 +283,10 @@ impl<'a> Gen<'a> {
                 // The iterator yields what iterating `v` yields (holes
                 // included, `Model::hole` of `v`), and nothing else.
                 let it = self.iterate_closed(v);
-                let out = self.new_dense_arr_from(mi, "iterator", &[it]);
+                let (tm, out) = self.new_dense_arr_tmpl(mi, "iterator", &[it]);
+                if matches!(e, Expr::GetIterator(_)) {
+                    self.m.get_iterator_src.insert(tm, v);
+                }
                 self.m.edge(v, out);
                 out
             }

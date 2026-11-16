@@ -217,6 +217,7 @@ fn collect_live_writes<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_live_writes(body, proofs, writes, let_bound);
                 if let Some(c) = catch {
@@ -507,6 +508,7 @@ fn iife_return_kind(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     returns(body, f);
                     if let Some(c) = catch {
@@ -668,6 +670,7 @@ fn lets_in_loops(stmts: &[Stmt]) -> HashSet<u32> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, in_loop, out);
                     if let Some(c) = catch {

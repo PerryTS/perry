@@ -178,6 +178,7 @@ fn descend(stmt: &mut Stmt, counts: &HashMap<LocalId, usize>) {
             body,
             catch,
             finally,
+            ..
         } => {
             block(body, counts);
             if let Some(catch) = catch {

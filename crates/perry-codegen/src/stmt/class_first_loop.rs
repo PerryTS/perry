@@ -253,6 +253,7 @@ fn guards_outside_loops(stmts: &[Stmt], binding: u32) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             guards_outside_loops(body, binding)
                 || catch
@@ -335,6 +336,7 @@ fn collect_guarded_lets(stmt: &Stmt, binding: u32, out: &mut Vec<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             nested(body, out);
             if let Some(c) = catch {
@@ -473,6 +475,7 @@ fn resolve_guards_in_stmt(stmt: &mut Stmt, binding: u32, is_first: bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts(body);
             if let Some(c) = catch {

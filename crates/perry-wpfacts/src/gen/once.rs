@@ -138,6 +138,7 @@ impl<'r, 'a> Walk<'r, 'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body, in_loop, reload);
                 if let Some(c) = catch {
@@ -244,6 +245,7 @@ fn collect_let<'a>(s: &'a Stmt, out: &mut FxHashMap<u32, &'a Expr>) {
             body,
             catch,
             finally,
+            ..
         } => {
             collect_lets(body, out);
             if let Some(c) = catch {

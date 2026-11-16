@@ -394,6 +394,7 @@ fn collect_keys_from_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_keys_from_stmts(body, key_to_idx, keys);
             if let Some(catch_clause) = catch {
@@ -622,6 +623,7 @@ fn replace_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
             if let Some(catch_clause) = catch {

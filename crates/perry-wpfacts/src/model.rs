@@ -2342,6 +2342,11 @@ pub struct Model {
     /// 23.1.3.36 step 3): a callee without [[Call]] is no throw there, the
     /// result is the String of Object.prototype.toString (20.1.3.6).
     pub tostring_join_calls: crate::pts::FxHashSet<CallId>,
+    /// The template a `GetIterator` site makes for the iterator object its
+    /// source's `@@iterator` may return (`[iterator#n]`), with the node of
+    /// that source (`gen_sources`: a source whose `@@iterator` returns the
+    /// source itself never makes that object).
+    pub get_iterator_src: FxHashMap<TmplId, NodeId>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.

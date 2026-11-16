@@ -546,6 +546,7 @@ fn for_each_child_stmt(stmt: &Stmt, f: &mut impl FnMut(&Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(&mut *f);
             if let Some(c) = catch {
@@ -676,6 +677,7 @@ fn for_each_stmt_list_in_stmt(s: &Stmt, f: &mut impl FnMut(&[Stmt])) {
             body,
             catch,
             finally,
+            ..
         } => {
             for_each_stmt_list(body, f);
             if let Some(c) = catch {
@@ -1302,6 +1304,7 @@ fn rewrite_in_stmt(s: &mut Stmt, fresh: &mut u32, count: &mut usize) {
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, fresh, count);
             if let Some(c) = catch {
@@ -1633,6 +1636,7 @@ fn collect_child_stmts_mut<'a>(s: &'a mut Stmt, out: &mut Vec<&'a mut Stmt>) {
             body,
             catch,
             finally,
+            ..
         } => {
             out.extend(body.iter_mut());
             if let Some(c) = catch {

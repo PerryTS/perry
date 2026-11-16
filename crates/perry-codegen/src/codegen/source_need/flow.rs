@@ -632,6 +632,7 @@ impl<'a> Build<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(cx, body);
                 if let Some(c) = catch {

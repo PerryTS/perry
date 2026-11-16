@@ -299,6 +299,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 walk_stmt_exprs(s, f);
@@ -505,6 +506,7 @@ fn nested_stmt_lists_shared(stmt: &Stmt) -> Vec<&Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {

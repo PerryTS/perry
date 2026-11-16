@@ -266,14 +266,7 @@ impl<'a> Gen<'a> {
             Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
-                let r = self.m.reason("ToPropertyKey");
-                self.m.cons(
-                    i,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
+                self.to_property_key(i);
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                 self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);

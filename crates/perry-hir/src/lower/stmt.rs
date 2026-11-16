@@ -1757,6 +1757,7 @@ fn lower_stmt_inner(
                 body,
                 catch,
                 finally,
+                forof_completion: None,
             });
         }
         ast::Stmt::Throw(throw_stmt) => {

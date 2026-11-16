@@ -280,6 +280,7 @@ pub fn collect_body_local_ids(stmts: &[Stmt]) -> Vec<LocalId> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     collect_from_stmt(s, ids);

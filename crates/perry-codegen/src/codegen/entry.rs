@@ -162,6 +162,9 @@ pub(super) fn compile_module_entry(
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
     let entry_in_init = is_entry && (llmod.program_has_worker || cross_module.program_has_tla);
+    // Image run (`PERRY_SNAP_IMAGE_RUN` set while compiling): a plain program
+    // only; one with top-level await or a worker has no image.
+    let snap_image = crate::stubs::snap_image_run() && !entry_in_init;
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -196,6 +199,15 @@ pub(super) fn compile_module_entry(
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
             llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
+        if is_entry && snap_image {
+            llmod.declare_function("js_snap_image_begin", VOID, &[PTR, PTR, PTR, PTR]);
+            llmod.declare_function("js_snap_image_cut", VOID, &[]);
+            if !std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                for anchor in crate::stubs::SNAP_TLS_ANCHORS {
+                    llmod.add_external_tls_global(anchor, "i8", "localexec");
+                }
+            }
+        }
         if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
             llmod.declare_function("js_snap_entry_body", VOID, &[]);
             llmod.declare_function("js_snap_tls_program", VOID, &[PTR, PTR, PTR, PTR]);
@@ -220,6 +232,34 @@ pub(super) fn compile_module_entry(
             let stub = llmod.define_function(&stub_name, VOID, vec![]);
             let _ = stub.create_block("entry");
             stub.block_mut(0).unwrap().ret_void();
+        }
+
+        // Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): the entry module
+        // defines the runtime's three link-time hooks (weak in the runtime),
+        // so the runtime's own readers of a phase-A intrinsic call the core
+        // entry and the full entry can complete a core-only realm, with no
+        // mode test on any call; a program compiled without the switch
+        // defines none of them and does not link the two-phase path.
+        if crate::expr::property_get::globalget::realm_two_phase() {
+            for (hook, target) in [
+                ("perry_realm_core_entry", "js_get_global_core"),
+                ("perry_realm_complete", "js_realm_complete"),
+            ] {
+                let f = llmod.define_function(hook, DOUBLE, vec![]);
+                let _ = f.create_block("entry");
+                let blk = f.block_mut(0).unwrap();
+                let value = blk.call(DOUBLE, target, &[]);
+                blk.ret(DOUBLE, &value);
+            }
+            let f = llmod.define_function(
+                "perry_realm_family_phase",
+                VOID,
+                vec![(I32, "%identity".to_string())],
+            );
+            let _ = f.create_block("entry");
+            let blk = f.block_mut(0).unwrap();
+            blk.call_void("js_realm_family_phase", &[(I32, "%identity")]);
+            blk.ret_void();
         }
 
         // For dylib output, emit `void perry_module_init()` instead of
@@ -558,6 +598,16 @@ pub(super) fn compile_module_entry(
             // Apple pointer tags the emitted key lists cannot carry statically,
             // stored before the first birth can read a list.
             crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            // Two-phase realm: tell the runtime before anything can touch a
+            // realm (an atomic store). Check mode poisons phase-B slots.
+            if crate::expr::property_get::globalget::realm_two_phase() {
+                let poison = if crate::verify_facts::enabled() {
+                    "1"
+                } else {
+                    "0"
+                };
+                blk.call_void("js_realm_two_phase", &[(I32, poison)]);
+            }
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
@@ -786,6 +836,18 @@ pub(super) fn compile_module_entry(
                     format!("ptrtoint (ptr @__perry_prepare_literals_{} to i64)", prefix);
                 blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
             }
+            // Image run: the baseline is taken after the runtime prelude and the
+            // eager literal pools (strings, function info, ordinary-object shape
+            // registrations), right before the first module body, so none of
+            // them is program state. Deferred pools prepare in their own wrapper
+            // and stay after the baseline.
+            if snap_image {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_image_begin",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
+            }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -806,6 +868,9 @@ pub(super) fn compile_module_entry(
                 && std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
             {
                 blk.call_void("js_snap_entry_body", &[]);
+            }
+            if snap_image {
+                blk.call_void("js_snap_image_cut", &[]);
             }
         }
         // Mark the boundary between init prelude and user code so

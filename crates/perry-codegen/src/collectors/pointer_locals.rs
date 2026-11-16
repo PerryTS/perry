@@ -564,6 +564,7 @@ pub fn collect_pointer_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_expr_writes_in_closure_stmts(body, writes);
                     if let Some(catch) = catch {
@@ -632,6 +633,7 @@ pub fn collect_pointer_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_direct_let_ids(body, out);
                     if let Some(catch) = catch {
@@ -785,6 +787,7 @@ pub fn collect_pointer_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_facts(body, local_types, writes);
                     if let Some(catch) = catch {
@@ -1058,6 +1061,7 @@ pub fn collect_pointer_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out, next_slot, non_pointer_locals, flat_row_alias_ids);
                     if let Some(c) = catch {

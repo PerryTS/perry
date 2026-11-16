@@ -109,6 +109,7 @@ impl Names {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.stmts(body);
                     if let Some(catch) = catch {

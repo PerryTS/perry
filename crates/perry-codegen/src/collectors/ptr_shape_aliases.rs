@@ -36,6 +36,7 @@ pub(in crate::collectors) fn collect_alias_edges(stmts: &[Stmt], out: &mut Vec<(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_alias_edges(body, out);
                 if let Some(c) = catch {

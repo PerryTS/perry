@@ -181,6 +181,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 visit_stmts(body, facts);
                 if let Some(catch) = catch {
@@ -512,6 +513,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for stmt in body {
                 collect_exact_receiver_refs_in_stmt(stmt, facts, out);

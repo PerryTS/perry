@@ -243,6 +243,7 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_are_safe(body, target, saw_target)
                     && catch
@@ -384,6 +385,7 @@ fn inline_functions_inner(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     for s in body {
                         walk_stmt_exprs(s, f);

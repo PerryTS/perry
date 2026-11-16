@@ -88,6 +88,7 @@ fn install_compiled_for_tests() {
         js_runtime_install_compiled();
         crate::object::js_nm_install_events();
         crate::object::js_nm_install_fs();
+        crate::cluster::install_default_value();
     });
 }
 

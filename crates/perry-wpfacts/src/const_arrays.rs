@@ -284,6 +284,7 @@ fn const_roots(stmts: &[Stmt], out: &mut FxHashMap<u32, Option<Vec<u32>>>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 const_roots(body, out);
                 if let Some(c) = catch {

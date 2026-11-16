@@ -531,6 +531,7 @@ pub(super) fn emit_string_pool(
         .filter(|class| class.name.starts_with("__AnonShape_"))
         .filter_map(|class| class_ids.get(&class.name).copied())
         .collect();
+    let image_run = crate::stubs::snap_image_run();
     let class_ids_by_keys_name = super::static_shape_ids::ClassIdsByKeysName::new(class_ids);
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
@@ -1306,6 +1307,9 @@ pub(super) fn emit_string_pool(
         all_class_ids.sort_unstable();
         all_class_ids.dedup();
         for cid in all_class_ids {
+            // Image run: a literal-shape class is registered with its
+            // declaration, in the prepare phase (before the baseline).
+            chunker.literals = image_run && literal_classes.contains(&cid);
             chunker.roll_if_full();
             let blk = chunker.current_block();
             blk.call_void(
@@ -1318,6 +1322,7 @@ pub(super) fn emit_string_pool(
         // collection here since the pre-computed list is what we'll emit.
         let _ = named_classes;
     }
+    chunker.literals = false;
     // Mirror class names into the runtime so the V8 bridge can surface them
     // as `metatype.name`. Strings were pre-allocated above before `init_fn`
     // borrowed `llmod`. (#1021 NestJS.)
@@ -1380,6 +1385,7 @@ pub(super) fn emit_string_pool(
     class_lengths.sort_unstable_by_key(|(cid, _)| *cid);
     class_lengths.dedup_by_key(|(cid, _)| *cid);
     for (cid, length) in class_lengths {
+        chunker.literals = image_run && literal_classes.contains(&cid);
         chunker.roll_if_full();
         chunker.current_block().call_void(
             "js_register_class_length",
@@ -1389,6 +1395,7 @@ pub(super) fn emit_string_pool(
             ],
         );
     }
+    chunker.literals = false;
 
     // Refs #486 (hono logger middleware): also register every class
     // getter in the runtime VTABLE_REGISTRY. Without this, cross-module

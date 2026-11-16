@@ -469,6 +469,7 @@ impl WasmModuleEmitter {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_strings_in_stmts(body);
                 if let Some(c) = catch {

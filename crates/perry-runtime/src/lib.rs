@@ -14,6 +14,7 @@
 // Native file reads initialize only the bytes written into final string storage.
 #![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
+#![feature(stmt_expr_attributes)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.
@@ -1468,3 +1469,5 @@ mod interp_proto_guard;
 
 mod family_never;
 pub mod snap_census;
+
+mod snap_image;

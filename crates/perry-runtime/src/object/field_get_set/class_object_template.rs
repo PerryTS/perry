@@ -1490,3 +1490,8 @@ pub(crate) unsafe fn record_instance_link(
 #[cfg(test)]
 #[path = "class_object_template_tests.rs"]
 mod tests;
+
+/// The next class-template thread token (image run).
+pub(crate) fn snap_image_next_token() -> u64 {
+    NEXT_THREAD_TOKEN.load(Ordering::Relaxed)
+}

@@ -177,6 +177,7 @@ fn stmt_lists<'s>(body: &'s [Stmt], out: &mut Vec<&'s [Stmt]>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmt_lists(body, out);
                 if let Some(c) = catch {

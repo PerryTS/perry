@@ -87,6 +87,7 @@ fn scan_stmts(stmts: &[Stmt]) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body);
                 if let Some(c) = catch {

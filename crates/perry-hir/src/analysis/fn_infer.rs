@@ -715,6 +715,7 @@ fn for_each_stmt_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 for_each_stmt_expr(s, f);
@@ -799,6 +800,7 @@ fn walk_stmts<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, on_stmt, on_expr);
                 if let Some(c) = catch {

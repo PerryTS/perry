@@ -240,6 +240,7 @@ pub(crate) fn has_return(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             has_return(body)
                 || catch.as_ref().is_some_and(|c| has_return(&c.body))
@@ -778,6 +779,7 @@ impl<'a> W<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 let b = self.branch(st, body);
                 let mut open = st.open && b.open;
@@ -1262,6 +1264,7 @@ pub(crate) fn returns_value(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             returns_value(body)
                 || catch.as_ref().is_some_and(|c| returns_value(&c.body))
@@ -1319,6 +1322,7 @@ fn jumps(ss: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             jumps(body)
                 || catch.as_ref().is_some_and(|c| jumps(&c.body))

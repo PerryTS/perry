@@ -979,6 +979,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for_each_expr_in_stmts(body, f);
             if let Some(catch) = catch {

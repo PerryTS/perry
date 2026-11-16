@@ -239,6 +239,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
                 body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -250,6 +251,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
                     body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 }),
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -258,6 +260,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
                 body: vec![],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+                forof_completion: None,
             }],
         ),
         (
@@ -488,6 +491,7 @@ fn count_raw_awaits_stmt(s: &Stmt) -> usize {
             body,
             catch,
             finally,
+            ..
         } => {
             count_raw_awaits_stmts(body)
                 + catch
@@ -572,6 +576,7 @@ fn async_generator_linearizes_every_await_position() {
                 body: vec![Stmt::Expr(await_(Expr::Integer(1))), y(Expr::Integer(2))],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -583,6 +588,7 @@ fn async_generator_linearizes_every_await_position() {
                     body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 }),
                 finally: None,
+                forof_completion: None,
             }],
         ),
         // #8715: `await` inside a `finally` of a REAL async generator
@@ -599,6 +605,7 @@ fn async_generator_linearizes_every_await_position() {
                 body: vec![y(Expr::Integer(0))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+                forof_completion: None,
             }],
         ),
         (
@@ -607,6 +614,7 @@ fn async_generator_linearizes_every_await_position() {
                 body: vec![Stmt::Expr(await_(Expr::Integer(0))), y(Expr::Integer(5))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+                forof_completion: None,
             }],
         ),
         (
@@ -618,6 +626,7 @@ fn async_generator_linearizes_every_await_position() {
                     body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 }),
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(2)))]),
+                forof_completion: None,
             }],
         ),
         (
@@ -629,6 +638,7 @@ fn async_generator_linearizes_every_await_position() {
                     y(Expr::Integer(8)),
                     Stmt::Expr(await_(Expr::Integer(9))),
                 ]),
+                forof_completion: None,
             }],
         ),
         (
@@ -644,6 +654,7 @@ fn async_generator_linearizes_every_await_position() {
                     }],
                     catch: None,
                     finally: None,
+                    forof_completion: None,
                 }],
             }],
         ),
@@ -752,6 +763,7 @@ fn async_closure_rewrite_leaves_no_residual_await() {
                 body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -763,6 +775,7 @@ fn async_closure_rewrite_leaves_no_residual_await() {
                     body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 }),
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -774,6 +787,7 @@ fn async_closure_rewrite_leaves_no_residual_await() {
                     body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 }),
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
@@ -782,6 +796,7 @@ fn async_closure_rewrite_leaves_no_residual_await() {
                 body: vec![Stmt::Expr(Expr::Integer(0))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+                forof_completion: None,
             }],
         ),
         (
@@ -796,6 +811,7 @@ fn async_closure_rewrite_leaves_no_residual_await() {
                     }],
                     catch: None,
                     finally: None,
+                    forof_completion: None,
                 }],
             }],
         ),
@@ -899,6 +915,7 @@ fn async_generator_closure_expressions_linearize_awaits() {
                 }],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             }],
         ),
         (
