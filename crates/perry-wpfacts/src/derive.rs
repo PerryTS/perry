@@ -2647,6 +2647,9 @@ fn judge_store(
     let mut slots: Vec<u32> = Vec::new();
     let mut acc: Vec<Tok> = Vec::new();
     let (mut throws, mut adds) = (0usize, 0usize);
+    // R9STORE4 rule A: receivers where the store adds or overwrites an own
+    // data property with no user code (`instance_sets`).
+    let mut sets = 0usize;
     let private = m.is_private_atom(s.key);
     // R9BIRTH4: one known object (a class's prototype or constructor) as
     // the whole receiver set.
@@ -2701,6 +2704,7 @@ fn judge_store(
                             why.get_or_insert("store: getter-only accessor in sloppy code".into());
                         }
                         Ok(AccOne::Absent) if row.is_none() && absent_key(m, t, key, s.key) => adds += 1,
+                        Ok(AccOne::Absent) if instance_sets(m, t, key, s.key) => sets += 1,
                         Ok(AccOne::Absent) => {
                             why.get_or_insert("store: key not a definite birth field".into());
                         }
@@ -2733,12 +2737,13 @@ fn judge_store(
         why.get_or_insert("store: primitive receiver".into());
     }
     let mut targets = FxHashMap::default();
-    let kinds = [!slots.is_empty(), !acc.is_empty(), throws > 0, adds > 0]
+    let kinds = [!slots.is_empty(), !acc.is_empty(), throws > 0, adds > 0, sets > 0]
         .iter()
         .filter(|&&b| b)
         .count();
     let verdict = match why {
         Some(w) => Verdict::No(w),
+        None if sets > 0 && acc.is_empty() && throws == 0 => Verdict::KnownObjectStore,
         None if kinds == 0 => Verdict::Dead,
         None if kinds > 1 => Verdict::No("store: receivers mix store kinds".into()),
         None if !slots.is_empty() => {
@@ -2757,7 +2762,7 @@ fn judge_store(
         None => Verdict::AddsKey,
     };
     let verdict = match verdict {
-        v @ (Verdict::T0Mono | Verdict::T0Set) if nullish_beside => {
+        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore) if nullish_beside => {
             use crate::model::prim::{NULL, UNDEF};
             if prim & UNDEF != 0 {
                 receivers.push("primitive:undefined (TypeError)".to_string());
@@ -2781,6 +2786,34 @@ fn judge_store(
         (v, _, _) => v,
     };
     (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// R9STORE4 rule A (CWN decision 2026-11-16): a named store of `key`
+/// (atom `a`) onto `t`, an instance of a prefix-stable program class (the
+/// caller's row: no hard operation on any instance (E5 defineProperty, E8
+/// freeze / seal / preventExtensions, E9 Proxy), no escape, no native
+/// parent, no defined key) whose chain `accessor_one` found free of an
+/// accessor or a data property under the key, adds or overwrites an own
+/// data property of `t` and runs no user code: ECMA-262 10.1.9.2
+/// OrdinarySetWithOwnDescriptor: an own `key` is a writable data property
+/// (only a definition makes one otherwise, refused above) and is set in
+/// place (step 2.c-d); else the chain, program prototypes only ending at
+/// %Object.prototype% which lacks the key and which no program write or
+/// definition reaches under it (`chain_absent`), holds no property of the
+/// key, so step 2.e CreateDataProperty creates it on the extensible `t`.
+/// Not relinked (`__proto__` store, B.2.2.1.2) and not a private name.
+/// With a nullish receiver beside it (rule N) the generic store the
+/// verdict keeps throws the TypeError of 6.2.5.6 step 3.a.
+fn instance_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(..))
+        && !m.is_marker(t)
+        && !m.is_private_atom(a)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && !m.super_relink.contains(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+        && chain_absent(m, t, key, a, false)
 }
 
 /// R9STORE1: may a named store of `key` (atom `a`) onto `t`, one object
