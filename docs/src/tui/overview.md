@@ -61,7 +61,7 @@ Widget handles key a hash-indexed registry, so looking one up is average O(1) ho
 
 ## Unix input reader lifetime
 
-On macOS and Linux, leaving `run()` cancels and joins its input reader before restoring terminal settings. Stopping does not require another keystroke, and the reader no longer holds stdin or consumes subsequent input. Pending TUI bytes are discarded at shutdown. The reader reads the input file descriptor without Rust stdin buffering or changes to its shared file-status flags; TUI owns stdin exclusively while it is active.
+On macOS and Linux, leaving `run()` cancels and joins its input reader before restoring terminal settings. Stopping does not require another keystroke, and the reader does not hold stdin or consume subsequent input. Pending TUI bytes are discarded at shutdown. The reader reads the input file descriptor without Rust stdin buffering or changes to its shared file-status flags; TUI owns stdin exclusively while it is active.
 
 Enabling input again starts a fresh reader after shutdown or EOF and saves that session's terminal settings. This guarantees the reader's lifecycle only: repeated `run()` calls still require separate reset semantics for the exit flag, hooks, focus and handlers. Windows reader cancellation and uncaught-exception/process-abort recovery are unchanged.
 
