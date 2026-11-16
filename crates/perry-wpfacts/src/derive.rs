@@ -2129,6 +2129,21 @@ fn judge(
     }
     if s.value_call {
         let top = toks.contains(&TOP);
+        // S8 (`ReadSite::global_get`): an `undefined` / `null` callee of
+        // the [[Get]] is the throw arm (ReferenceError when absent,
+        // 9.1.1.2.6; TypeError, 7.3.14): nothing is called (CWN
+        // 2026-11-16: an always-throwing arm counts as proven). The other
+        // values are the callee set.
+        let throws = s.global_get && prim & (prim::UNDEF | prim::NULL) != 0;
+        let prim = if s.global_get {
+            prim & !(prim::UNDEF | prim::NULL)
+        } else {
+            prim
+        };
+        if throws && prim == 0 && !top && toks.iter().all(|&t| m.closed_marker(t)) {
+            let arms = vec!["ReferenceError (absent global)".to_string()];
+            return (arms, false, Verdict::PerKind, true, FxHashMap::default());
+        }
         if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
             return (Vec::new(), false, Verdict::Dead, true, FxHashMap::default());
         }

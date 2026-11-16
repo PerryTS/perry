@@ -107,10 +107,11 @@ fn w3l_k3_unknown_key_store() {
 }
 
 // K4: `delete globalThis.addEventListener`, then the call: the callee is
-// the [[Get]] value (no Worker native, no sentinel replacement); the
+// the [[Get]] value (no Worker native, no sentinel replacement). The
 // delete itself is recorded as a write the model does not follow
-// (`global_value_written`), so that value is unknown: sound, not the
-// exact ReferenceError arm.
+// (`global_value_written`), so that value is unknown (⊤): SOUND BUT
+// UNKNOWN, not yet the exact ReferenceError arm (a modeled delete of a
+// program-owned global would make it exact; not built).
 #[test]
 fn w3l_k4_deleted_then_called() {
     let src = "delete (globalThis as any).addEventListener;\n\

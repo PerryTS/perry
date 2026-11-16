@@ -206,6 +206,24 @@ impl<'a> Gen<'a> {
                 }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
+                // S8: a bare call of a name the main realm declares neither
+                // on the global object nor on its chain, in a module no
+                // Worker runs (`Model::worker_side`), calls the value of
+                // [[Get]](globalThis, name) (`loads::tok_load`, rule G) with
+                // `this` undefined (ECMA-262 13.3.6.1 EvaluateCall: the
+                // reference's base is an environment record, WithBaseObject
+                // undefined; 9.1.1.4.6 GetBindingValue): this call, bound to
+                // that value. Absent: the runtime's ReferenceError, nothing
+                // is called. A module a Worker may run keeps the member call:
+                // the Worker global's native of that name may be the callee.
+                let global_get = private.is_none()
+                    && self.bare_user_global(fx.module, object, property)
+                    && !self.m.worker_side_module(fx.module);
+                let callee_v = if global_get {
+                    Some(self.load(o, Key::Named(a)))
+                } else {
+                    private
+                };
                 let (off, end) = if *pb != 0 {
                     (*pb, *pe)
                 } else {
@@ -225,17 +243,23 @@ impl<'a> Gen<'a> {
                 }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
+                        global_get,
                         access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: private.unwrap_or(o),
+                        recv: callee_v.unwrap_or(o),
                         is_call: true,
-                        value_call: private.is_some(),
+                        value_call: callee_v.is_some(),
                         func: fx.f,
                     });
                 }
-                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                let this = if global_get {
+                    ThisArg::Undef
+                } else {
+                    ThisArg::Node(o)
+                };
+                let (call, ret) = self.new_call(this, args, spread);
                 if let Some(f) = self
                     .m
                     .rest_fills
@@ -251,7 +275,7 @@ impl<'a> Gen<'a> {
                     self.m.call_lit.insert(call, a);
                 }
                 self.str_index_bound(object, property, call);
-                match private {
+                match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
                         o,
@@ -364,6 +388,7 @@ impl<'a> Gen<'a> {
                 {
                     let key = self.m.atom("()");
                     self.read_sites.push(ReadSite {
+                        global_get: false,
                         access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset,
@@ -396,6 +421,16 @@ impl<'a> Gen<'a> {
     fn native_extern(&self, mi: u32, name: &str) -> Option<crate::NativeResult> {
         let r = *self.m.native_externs.get(name)?;
         (!self.is_import(mi, name) && !self.mods[mi as usize].scope.contains_key(name)).then_some(r)
+    }
+
+    /// S8: `object.property` is a bare name on the global sentinel (the
+    /// module declares no global 0) that the main realm declares neither
+    /// on the global object nor on its chain (`global_user_key`).
+    pub(crate) fn bare_user_global(&self, mi: u32, object: &Expr, property: &str) -> bool {
+        !self.m.unit_mode
+            && matches!(object, Expr::GlobalGet(0))
+            && !self.modules[mi as usize].1.globals.iter().any(|g| g.id == 0)
+            && crate::builtins::global_user_key(&self.m, property)
     }
 
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
