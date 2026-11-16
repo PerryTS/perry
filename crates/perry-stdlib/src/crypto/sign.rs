@@ -638,16 +638,22 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_named(
     };
     let asym_type = algorithm.asym_type();
 
-    let obj = js_object_alloc(0, 2);
-    let pub_name = js_string_from_bytes(b"publicKey".as_ptr(), 9);
-    let pub_val = js_string_from_bytes(public_pem.as_ptr(), public_pem.len() as u32);
-    mark_keyobject_string(pub_val, KeyKind::Public, asym_type);
-    js_object_set_field_by_name(obj, pub_name, nanbox_str(pub_val));
-    let priv_name = js_string_from_bytes(b"privateKey".as_ptr(), 10);
-    let priv_val = js_string_from_bytes(private_pem.as_ptr(), private_pem.len() as u32);
-    mark_keyobject_string(priv_val, KeyKind::Private, asym_type);
-    js_object_set_field_by_name(obj, priv_name, nanbox_str(priv_val));
-    obj
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
+    for (field, pem, kind) in [
+        (&b"publicKey"[..], &public_pem, KeyKind::Public),
+        (&b"privateKey"[..], &private_pem, KeyKind::Private),
+    ] {
+        let key = scope.root_raw_mut_ptr(js_string_from_bytes(field.as_ptr(), field.len() as u32));
+        let value = js_string_from_bytes(pem.as_ptr(), pem.len() as u32);
+        mark_keyobject_string(value, kind, asym_type);
+        js_object_set_field_by_name(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_mut_ptr(),
+            nanbox_str(value),
+        );
+    }
+    obj.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 /// node's `ERR_CRYPTO_OPERATION_FAILED` for a key `encapsulate` /
