@@ -1221,9 +1221,9 @@ mod tests {
 
 /// The reasons an image stops, one named line per (reason, cell type).
 fn stop_summary(stops: &[format::Stop]) -> String {
-    let mut by: std::collections::BTreeMap<(u8, u8), (usize, u64, u32)> = Default::default();
+    let mut by: std::collections::BTreeMap<(u8, u8), (usize, u64, u32, u32)> = Default::default();
     for t in stops {
-        let e = by.entry((t.kind, t.obj_type)).or_insert((0, t.value, t.off));
+        let e = by.entry((t.kind, t.obj_type)).or_insert((0, t.value, t.off, t.cell));
         e.0 += 1;
     }
     let ty = |t: u8| match t {
@@ -1236,13 +1236,20 @@ fn stop_summary(stops: &[format::Stop]) -> String {
         _ => "cell",
     };
     let mut parts = Vec::new();
-    for ((kind, t), (n, value, off)) in by {
+    for ((kind, t), (n, value, off, cell)) in by {
         parts.push(match kind {
             format::STOP_NO_FORM => format!("{n} {} cell(s) (type {t}) have no image form", ty(t)),
             format::STOP_SLOT_OUTSIDE => format!("{n} slot(s) outside their cell (type {t})"),
             format::STOP_NOT_CELL_START => format!("{n} slot(s) of type {t} name an address that is not a cell start"),
             format::STOP_CLAIM_KEY => format!("{n} hot-slot claim key(s) too long or not UTF-8"),
-            format::STOP_SHAPES_MINTED => format!("{value} shape(s) were minted between the baseline and the cut and the image has no shape slab"),
+            format::STOP_SHAPES_MINTED => {
+                let band = |k: u32| (value >> (16 * k)) & 0xffff;
+                format!(
+                    "{} shape record(s) were minted between the baseline and the cut (static {}, ordinary {}, dictionary {}, exotic {}), {} record(s) present at the baseline changed, {} are gone, and the image has no shape slab",
+                    band(0) + band(1) + band(2) + band(3), band(0), band(1), band(2), band(3), off, cell
+                )
+            }
+            format::STOP_SHAPE_COUNTERS => format!("the shape counters moved between the baseline and the cut ({} id(s) drawn, {} semantic generation(s))", value & 0xffff_ffff, value >> 32),
             format::STOP_TOKENS => format!("more than the primary's class-template token was claimed (next token {value})"),
             format::STOP_RAW_HEAP_WORD => format!("{n} {} cell(s) (type {t}) hold a raw address outside the binary in an untraced word (first at offset {off}, value {value:#x})", ty(t)),
             format::STOP_MAP_KEYS => format!("{n} Map store(s) are keyed by something other than strings and numbers"),
