@@ -1663,6 +1663,18 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
             // or [[ArrayBufferMaxByteLength]] (ECMA-262 10.4.5, 23.2.5.1.1
             // AllocateTypedArray, 25.3.2.1): a buffer method on it throws.
             TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. } if buffer => true,
+            // A box whose creator makes an ordinary object, an array or a
+            // null-prototype object (`members::box_chain` known: a
+            // `JSON.parse` object, ECMA-262 25.5.1 / 10.1.12
+            // OrdinaryObjectCreate, 10.4.2.2 ArrayCreate) has no
+            // [[NumberData]], [[BooleanData]], [[SymbolData]] or
+            // [[BigIntData]] either: only the wrapper constructors and
+            // ToObject make those (21.1.1.1, 20.3.1.1, 20.4.1, 21.2.1,
+            // 7.1.18), so thisNumberValue & co. throw a TypeError on it.
+            TmplKind::BObj { what: w, .. } if !slot => {
+                members::bobj_family(w) == Family::Box
+                    && members::box_chain(w) != members::BoxChain::Unknown
+            }
             TmplKind::BObj { what: w, .. } => {
                 slot
                     && !matches!(*w, "TypedArray" | "Buffer")
@@ -1692,7 +1704,13 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // A console `%s` / ToPrimitive lookup that finds such a native on a
         // class (three.core.js `error()`, rule CONSOLE-PCT) only throws.
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
-        TokKind::Builtin(_) => slot,
+        // A built-in function object (a constructor such as `Object`, a
+        // namespace method value) is made by CreateBuiltinFunction (ECMA-262
+        // 10.3.4) with no [[NumberData]], [[BooleanData]], [[SymbolData]]
+        // or [[BigIntData]]; a typed array or buffer slot only a non-function
+        // namespace may stand for (`Number.prototype` is itself a Number
+        // object, 21.1.3: no function).
+        TokKind::Builtin(_) => slot || builtin_function(m, r),
         _ => false,
     }
 }
