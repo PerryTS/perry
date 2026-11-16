@@ -62,7 +62,6 @@ struct Effects {
     creates: std::collections::BTreeMap<String, crate::layout_desc::create_families::Site>,
     ffi: Vec<&'static str>,
     requests: std::collections::BTreeSet<u32>,
-    closed: std::collections::BTreeSet<String>,
 }
 impl Effects {
     fn take() -> Self {
@@ -72,7 +71,6 @@ impl Effects {
             creates: crate::layout_desc::create_families::take_callable_effects(),
             ffi: crate::ext_registry::take_module_capture(),
             requests: crate::layout_ordinals::take_callable_requests(),
-            closed: super::closed_targets::take_callable_notes(),
         }
     }
     fn merge(self) {
@@ -81,7 +79,6 @@ impl Effects {
         self.layouts.merge();
         crate::layout_desc::create_families::merge_callable_effects(self.creates);
         crate::ext_registry::merge_callable_capture(self.ffi);
-        super::closed_targets::merge_callable_notes(self.closed);
     }
 }
 

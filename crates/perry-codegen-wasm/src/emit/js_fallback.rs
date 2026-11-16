@@ -675,6 +675,17 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(JSON.stringify(toJsValue({})))", v)
             }
+            // The HIR lowers every `JSON.stringify` call to this form. The bridge
+            // is the one WASM code calls, so a closure replacer runs the same way.
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                let v = self.emit_js_expr(val, locals);
+                let r = self.emit_js_expr(replacer, locals);
+                let s = self.emit_js_expr(space, locals);
+                format!(
+                    "fromJsValue(__memDispatch.json_stringify(toJsValue({}), toJsValue({}), toJsValue({})))",
+                    v, r, s
+                )
+            }
             Expr::This => "__this".to_string(),
             Expr::IndexGet { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);

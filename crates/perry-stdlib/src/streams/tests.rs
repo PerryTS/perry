@@ -123,6 +123,39 @@ fn pipe_lock_ids_retire_once_via_ownership_mark() {
     assert_eq!(idalloc::test_pool_occurrences(live), 0);
 }
 
+/// #12862: a keep-alive fetch whose small body is fully queued and closed
+/// before `text()` runs. Every such body must hand its stream id back.
+#[test]
+fn whole_body_collected_after_close_retires_its_stream_id() {
+    fn no_source(_: usize) {}
+    fn byte_count(bytes: Vec<u8>, _: String) -> Result<f64, f64> {
+        Ok(bytes.len() as f64)
+    }
+    let _serial = serial_guard();
+    idalloc::test_reset_pools();
+    let mut live = Vec::new();
+    for _ in 0..64 {
+        let id = alloc_native_readable(js_promise_new(), no_source, no_source);
+        take_native_promise(id);
+        let body = js_promise_new();
+        unsafe {
+            native_enqueue(id, b"0123456789abcdef");
+            js_readable_stream_controller_close(controller_value(id));
+            collect_body(id, body, String::new(), byte_count);
+        }
+        assert_eq!(js_promise_state(body), 1, "the body promise resolves");
+        assert_eq!(js_promise_value(body), 16.0, "with the whole queued body");
+        if idalloc::test_pool_occurrences(id) == 0 {
+            live.push(id);
+        }
+    }
+    assert!(
+        live.is_empty(),
+        "{} of 64 drained stream ids never retired",
+        live.len()
+    );
+}
+
 #[test]
 fn attached_reader_dies_with_terminal_stream_but_not_before() {
     let _serial = serial_guard();

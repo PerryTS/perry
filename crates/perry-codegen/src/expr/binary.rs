@@ -464,6 +464,27 @@ fn is_numeric_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Integer(_) | Expr::Number(_))
 }
 
+/// Number::exponentiate (ECMA-262 6.1.6.1.3) of a Number `base` and the
+/// exponent `exponent` (lowered as `exp`). The literal exponent 2 is the
+/// square: IEEE 754 multiplication is correctly rounded, so `base * base` is
+/// the correctly rounded square, which is what V8 returns for `x ** 2` and
+/// `Math.pow(x, 2)` (NaN, signed zeros, infinities and overflow included).
+/// libm `pow` is not correctly rounded and differs from it. Any other
+/// exponent calls `js_math_pow`.
+pub(crate) fn lower_number_pow(ctx: &mut FnCtx<'_>, base: &str, exponent: &Expr, exp: &str) -> String {
+    let squares = match exponent {
+        Expr::Number(n) => *n == 2.0,
+        Expr::Integer(n) => *n == 2,
+        _ => false,
+    };
+    if squares {
+        ctx.block().fmul(base, base)
+    } else {
+        ctx.block()
+            .call(DOUBLE, "js_math_pow", &[(DOUBLE, base), (DOUBLE, exp)])
+    }
+}
+
 fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
     let Expr::Conditional {
         condition,
@@ -1722,10 +1743,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.fdiv(&l, &r)
                 }
                 BinaryOp::Mod => lower_checked_i32_modulo(ctx, &l, &r),
-                BinaryOp::Pow => {
-                    ctx.block()
-                        .call(DOUBLE, "js_math_pow", &[(DOUBLE, &l), (DOUBLE, &r)])
-                }
+                BinaryOp::Pow => lower_number_pow(ctx, &l, right, &r),
                 // Bitwise ops: use toint32_fast (skip NaN/Inf guard) when
                 // operands are known-finite from integer analysis.
                 //

@@ -1004,6 +1004,9 @@ fn elision_for(
             if b.booleans {
                 out.boolean_locals.insert(*id);
             }
+            if b.nullish_booleans {
+                out.nullish_boolean_locals.insert(*id);
+            }
             if b.stable_length {
                 out.stable_length_locals.insert(*id, b.stable_front);
             }
@@ -1137,6 +1140,9 @@ fn elision_for(
                 // Interpreted code can store anything.
                 if f.booleans && !interp {
                     out.boolean_fields.insert((cid, f.key.clone()));
+                }
+                if f.nullish_booleans && !interp {
+                    out.nullish_boolean_fields.insert((cid, f.key.clone()));
                 }
                 Some(FactsField {
                     classes,

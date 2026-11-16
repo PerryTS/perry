@@ -15,6 +15,7 @@ pub(crate) struct OwnedFunction {
     has_indexed_owner_region: bool,
     disable_tail_calls: bool,
     closed_target_preinline: bool,
+    closed_callees: Vec<String>,
     guarded_preinline: bool,
     pre_statepoint_inline: bool,
     preinline_after_naming: Option<PreinlineAfterNaming>,
@@ -60,6 +61,7 @@ impl LlFunction {
             has_indexed_owner_region,
             disable_tail_calls,
             closed_target_preinline,
+            closed_callees,
             guarded_preinline,
             pre_statepoint_inline,
             preinline_after_naming,
@@ -109,6 +111,7 @@ impl LlFunction {
             has_indexed_owner_region,
             disable_tail_calls,
             closed_target_preinline,
+            closed_callees,
             guarded_preinline,
             pre_statepoint_inline,
             preinline_after_naming,
@@ -156,6 +159,7 @@ impl OwnedFunction {
             has_indexed_owner_region,
             disable_tail_calls,
             closed_target_preinline,
+            closed_callees,
             guarded_preinline,
             pre_statepoint_inline,
             preinline_after_naming,
@@ -203,6 +207,7 @@ impl OwnedFunction {
             has_indexed_owner_region,
             disable_tail_calls,
             closed_target_preinline,
+            closed_callees,
             guarded_preinline,
             pre_statepoint_inline,
             preinline_after_naming,
@@ -255,6 +260,9 @@ impl LlFunction {
             r.symbol(name);
         }
         for name in &mut self.pre_return_void_calls {
+            r.symbol(name);
+        }
+        for name in &mut self.closed_callees {
             r.symbol(name);
         }
     }

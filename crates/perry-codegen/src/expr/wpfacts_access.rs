@@ -134,6 +134,10 @@ pub(crate) struct FieldProof {
     /// (`ElisionFacts::boolean_fields`): an unguarded read is `true` or
     /// `false` (`expr::booleans`).
     pub booleans: bool,
+    /// Every class's field holds only `true`, `false`, `undefined` or `null`
+    /// (`ElisionFacts::nullish_boolean_fields`): the truthiness of an
+    /// unguarded read is `word == TAG_TRUE` (`expr::booleans`).
+    pub nullish_booleans: bool,
 }
 
 impl FieldProof {
@@ -876,6 +880,14 @@ pub(crate) fn prove(
             && recv.class_ids.iter().all(|&c| {
                 ctx.wpfacts
                     .boolean_fields
+                    .contains(&(c, property.to_string()))
+            }),
+        nullish_booleans: !guarded
+            && !maybe_absent
+            && !ctx.wpfacts.nullish_boolean_fields.is_empty()
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .nullish_boolean_fields
                     .contains(&(c, property.to_string()))
             }),
     };

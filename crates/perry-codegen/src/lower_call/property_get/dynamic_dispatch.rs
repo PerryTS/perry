@@ -224,7 +224,7 @@ pub(crate) fn try_lower_proven_method_call(
     // The facts close this site over exactly one body, as they close a
     // tower arm (`closed_targets`): that body joins the early inliner when it
     // fits the budget, so the call does not become a statepoint first.
-    crate::codegen::closed_targets::note_closed_call(&fname, 1);
+    crate::codegen::closed_targets::note_closed_call(ctx.func, &fname, 1);
     let value = ctx.block().call(DOUBLE, &fname, &slices);
     super::super::method_override::publish_constructive_method_truthy(ctx, &fname, &value);
     roots.release(ctx);
@@ -752,6 +752,7 @@ fn lower_instance_method_call(
                     None => {
                         if closed_bodies.contains(&fname.as_str()) {
                             crate::codegen::closed_targets::note_closed_call(
+                                ctx.func,
                                 fname,
                                 closed_bodies.len(),
                             );

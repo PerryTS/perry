@@ -52,7 +52,7 @@ The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native value
 |-----|------|
 | `0x7FFF` | String (lower 48 bits = pointer) |
 | `0x7FFD` | Pointer/Object (lower 48 bits = pointer) |
-| `0x7FFE` | Int32 (lower 32 bits = integer) |
+| `0x7FFE` | Runtime-internal word, never a JS value (I32 slot words, route markers) |
 | `0x7FFA` | BigInt (lower 48 bits = pointer) |
 | `0x7FF9` | Inline short string |
 | `0xFFF9` | Native handle |
