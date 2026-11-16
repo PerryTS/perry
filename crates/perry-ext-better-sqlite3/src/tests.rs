@@ -511,7 +511,6 @@ fn sqlite_preparation_b1_preserves_unicode_aliases_comments_and_ascii_whitespace
             let names = row
                 .as_ref()
                 .column_names()
-                .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             assert!(rows.next().unwrap().is_none());
