@@ -1178,6 +1178,20 @@ pub fn global_user_key(m: &Model, name: &str) -> bool {
         })
 }
 
+/// A global function the realm declares (`fetch`, `setTimeout`), stored
+/// over by the program: the global object is an ordinary object (ECMA-262
+/// 9.3, 19), so the store makes the value property `name` of it, read by
+/// the program's global reads of `name` (`tok_load`: the global's field
+/// beside the realm function). No native reads a global function by name:
+/// the runtime's by-name reads (`js_get_global_this_builtin_value`) name
+/// constructors (`Error`, `URL`, `Uint8Array`, the error and stream
+/// classes) and answer intrinsics otherwise (`builtin_constructor_value`),
+/// so the value reaches no unknown code. Constructors and namespaces keep
+/// the sink.
+pub fn program_global_fn(m: &Model, name: &str) -> bool {
+    !m.unit_mode && name != crate::STAR_KEY && super::global_function(m, name) && super::ns_by_name(name).is_none()
+}
+
 /// The global object's field under program-owned key `a`.
 pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     if let Some(&(_, n)) = m.global_fields.iter().find(|(k, _)| *k == a) {

@@ -526,7 +526,8 @@ impl Model {
         // (one field per key, whichever token stored it).
         if let Key::Named(a) = key {
             if builtins::global_object(self, t)
-                && builtins::global_user_key(self, &self.atoms[a as usize])
+                && (builtins::global_user_key(self, &self.atoms[a as usize])
+                    || builtins::program_global_fn(self, &self.atoms[a as usize]))
                 && !builtins::native_written(self, t, a)
             {
                 let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
