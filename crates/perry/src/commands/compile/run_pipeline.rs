@@ -6708,6 +6708,8 @@ pub fn run_with_parse_cache(
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                     opts.program_facts = super::program_facts::view_for(&program_facts, path, &accessor_symbol);
+                    std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                        ctx.patched_builtins.namespace_pairs_by_verdict();
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6933,6 +6935,8 @@ pub fn run_with_parse_cache(
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
+                std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                    ctx.patched_builtins.namespace_pairs_by_verdict();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                 if opts.is_entry_module {
                     opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
@@ -6942,6 +6946,18 @@ pub fn run_with_parse_cache(
             .collect::<Vec<_>>()
     });
     program_step("module options", Some(options_started));
+    // MATHC1: each namespace pair of the facts lowering becomes the one arm
+    // its call site's verdict picks (`perry_hir::namespace_pairs`), applied
+    // to the owned modules below, before any module is lowered.
+    let pair_picks: Vec<(PathBuf, std::collections::BTreeSet<u32>)> =
+        if ctx.patched_builtins.namespace_pairs_by_verdict() {
+            ctx.native_modules
+                .keys()
+                .map(|p| (p.clone(), super::program_facts::namespace_pair_proven(&program_facts, p)))
+                .collect()
+        } else {
+            Vec::new()
+        };
     // `family_reach`, for the generated installer below.
     let family_live = crate::commands::stdlib_installs::family_live(program_facts.as_deref());
     // Per-module options now own the facts needed by lowering. Release the
@@ -6958,6 +6974,11 @@ pub fn run_with_parse_cache(
         object_literal_method_candidates,
     ));
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);
+    for (path, proven) in &pair_picks {
+        if let Some(module) = owned_modules.get_mut(path) {
+            perry_hir::namespace_pairs::pick_namespace_pair_arms(module, proven);
+        }
+    }
     for (path, module) in &owned_modules {
         let mut link_module = perry_hir::Module::new(module.name.clone());
         link_module.exports = module.exports.clone();

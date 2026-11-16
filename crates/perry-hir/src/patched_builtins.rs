@@ -66,6 +66,13 @@ impl PatchedBuiltins {
     /// prototype and namespace holder carries a shadow bit, and the direct
     /// sites under such reach test it — `Pristine(family)` in perry-codegen
     /// `builtin_proto`, and [`namespace_call_guarded`])?
+    /// MATHC1: the namespace pairs are the facts lowering's and no dynamic
+    /// code reaches the global scope: codegen lowers each pair as ONE arm,
+    /// the one its call site's `IntrinsicCallee` verdict picks, with no
+    /// shadow-bit test. A dynamic-code program keeps the guarded pair.
+    pub fn namespace_pairs_by_verdict(&self) -> bool {
+        self.namespace_pairs && !self.dynamic_code_reach.disables_builtin_constants()
+    }
     pub fn is_inert(&self) -> bool {
         self.entries.is_empty()
             && !self.dynamic_code_reach.disables_builtin_constants()
@@ -96,6 +103,7 @@ const BUILTIN_NAMESPACES: &[&str] = &[
 /// static (`globalThis[k] = v`, `Object.assign(globalThis, shims)`): it may
 /// rebind any namespace, so [`namespace_call_guarded`] holds (DEC 255).
 pub const GLOBAL_ANY_KEY: &str = "$global";
+
 
 /// Identifiers that name the global object.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "window", "self"];
@@ -613,9 +621,14 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
 /// (`Expr::NamespacePatched`), and takes the generic call when it is set. The
 /// runtime sets the bit from the global object's store funnel, whoever writes.
 pub fn namespace_call_guarded() -> bool {
+    namespace_call_guarded_by_scan() || with_set(|s| s.namespace_pairs).unwrap_or(false)
+}
+
+/// [`namespace_call_guarded`] without the facts lowering's pairs: what the
+/// syntactic scan alone guards.
+pub fn namespace_call_guarded_by_scan() -> bool {
     with_set(|s| {
         s.dynamic_code_reach.disables_builtin_constants()
-            || s.namespace_pairs
             || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
     })
     .unwrap_or(false)

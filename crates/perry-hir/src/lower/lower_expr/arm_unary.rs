@@ -723,7 +723,7 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
     if crate::patched_builtins::namespace_member_patched(ns, member) {
         return None;
     }
-    if !crate::patched_builtins::namespace_call_guarded() {
+    if !crate::patched_builtins::namespace_call_guarded_by_scan() {
         return Some(Expr::String("function".to_string()));
     }
     let mut live = Expr::PropertyGet {
