@@ -52,6 +52,32 @@ pub(crate) fn direct_call_offset() -> u32 {
     DIRECT_CALL.with(|s| s.get())
 }
 
+thread_local! {
+    /// ONCHG2: the facts site offset of the named method call being lowered
+    /// (`with_method_site`).
+    static METHOD_SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Lower the named method call `o.k(args)` with its facts site offset
+/// visible to the lowering below it: the member read's own offset, else the
+/// call's (wpfacts `gen_call`'s site key, as `proven_method_fn`). Nested
+/// calls in the arguments set and restore their own.
+pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
+    let off = match callee {
+        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => *byte_offset,
+        _ => direct_call_offset(),
+    };
+    let saved = METHOD_SITE.with(|s| s.replace(off));
+    let out = f();
+    METHOD_SITE.with(|s| s.set(saved));
+    out
+}
+
+/// The facts site offset of the named method call being lowered (0: none).
+pub(crate) fn method_site_offset() -> u32 {
+    METHOD_SITE.with(|s| s.get())
+}
+
 fn literal_number(e: &Expr) -> Option<f64> {
     match e {
         Expr::Number(n) => Some(*n),
