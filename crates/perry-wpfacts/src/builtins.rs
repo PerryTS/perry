@@ -966,7 +966,9 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
     };
     match mem {
         Some(Mem::Fn) => true,
-        Some(Mem::Prim(_)) => !call,
+        // R9READ6: a read of a family prototype's `constructor` is the family's
+        // intrinsic constructor (a data property, e.g. 23.1.3.4).
+        Some(Mem::Prim(_) | Mem::Ctor) => !call,
         _ => false,
     }
 }
