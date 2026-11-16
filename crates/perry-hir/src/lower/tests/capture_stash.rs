@@ -153,3 +153,90 @@ fn a_class_environment_ctor_publishes_before_super() {
         "environment publish (stmt {publish_at}) precedes super() (stmt {super_at})"
     );
 }
+
+/// A capture the constructor never changes is stashed once, at entry. A late
+/// re-stash is an ordinary `[[Set]]` after user code, and throws once the body
+/// has frozen `this` — mongodb's `HostAddress` (#11043) failed every
+/// `MongoClient` that way.
+#[test]
+fn an_unchanged_capture_is_not_restashed_after_the_body() {
+    let source = r#"
+        function exported() {
+            const errors = { E: Error };
+            class Host {
+                #p = 0;
+                constructor(s) {
+                    this.host = s;
+                    if (s === "sock") { return; }
+                    if (!s) { throw new errors.E("empty"); }
+                    Object.freeze(this);
+                }
+            }
+            return Host;
+        }
+    "#;
+    assert_eq!(capture_stash_count(source, "Host"), 1);
+}
+
+/// A capture the constructor assigns keeps its late stashes, so methods read
+/// its value after the body (the fall-through and the early `return`).
+#[test]
+fn a_capture_the_constructor_assigns_is_restashed_on_every_exit() {
+    let source = r#"
+        function exported() {
+            let made = 0;
+            class Counter {
+                #p = 0;
+                constructor(s) {
+                    if (s) { return; }
+                    made++;
+                }
+                count() { return made; }
+            }
+            return Counter;
+        }
+    "#;
+    assert_eq!(capture_stash_count(source, "Counter"), 3);
+}
+
+/// A write inside a declaration initializer counts as a change too.
+#[test]
+fn a_capture_assigned_in_a_declaration_initializer_is_restashed() {
+    let source = r#"
+        function exported() {
+            let made = 0;
+            class Counter {
+                #p = 0;
+                constructor() {
+                    const current = ++made;
+                    this.at = current;
+                }
+                count() { return made; }
+            }
+            return Counter;
+        }
+    "#;
+    assert_eq!(capture_stash_count(source, "Counter"), 2);
+}
+
+/// `this.__perry_cap_* = …` stores anywhere in `class_name`'s constructor.
+fn capture_stash_count(source: &str, class_name: &str) -> usize {
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let class = hir
+        .classes
+        .iter()
+        .find(|c| c.name == class_name)
+        .unwrap_or_else(|| panic!("fixture declares class {class_name}"));
+    let ctor = class
+        .constructor
+        .as_ref()
+        .expect("user-written constructor");
+    let compact: String = format!("{:?}", ctor.body)
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    compact
+        .matches("PropertySet{object:This,property:\"__perry_cap_")
+        .count()
+}
