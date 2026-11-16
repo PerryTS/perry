@@ -199,12 +199,14 @@ fn r9read9_m3_function_prototype_write_kept() {
     assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
 }
 
-/// KEEP m4: `length` is an own property of a builtin function (not absent).
+/// KEEP m4: `length` is an own property of a builtin function (not absent:
+/// since R9READ10 the present own member, a PerKind arm, never
+/// OwnDataOrAbsent).
 #[test]
 fn r9read9_m4_own_length_not_absent() {
     let pf = facts("const n = Number(process.argv[2] ?? \"3\");
 const x: any = n > 1 ? Math.max : Math.min;
 console.log(x.length);");
     let v = reads(&pf, "length");
-    assert!(v.iter().any(|x| x.starts_with("No(")), "{v:?}");
+    assert!(!v.is_empty() && v.iter().all(|x| !x.starts_with("OwnDataOrAbsent")), "{v:?}");
 }

@@ -2460,6 +2460,15 @@ fn judge(
                     }
                 }
             }
+            // R9READ10: the own `length` of a builtin function value, a
+            // Number no program operation reached (`builtin_fn_own_length`,
+            // 20.2.4.1): the intrinsic member of its kind; no user code runs.
+            TokKind::Builtin(_) | TokKind::BuiltinFn(_)
+                if !s.is_call && crate::builtins::builtin_fn_own_length(m, t, s.key) =>
+            {
+                receivers.push(m.tok_name(t));
+                native_arms += 1;
+            }
             // R9READ9: a read of a key a builtin function value and its
             // chain lack (`builtins::builtin_value_absent`), with no write of
             // the key onto `Object.prototype` (where the model's builtin

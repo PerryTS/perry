@@ -2772,15 +2772,58 @@ pub(crate) fn builtin_value_absent(m: &Model, t: Tok, a: Atom) -> bool {
     };
     // The solve's own value of the key on `t`: a store onto the function
     // object itself (a named store, a computed one, `__proto__`).
+    absent && m.native_property(t, name).is_none() && builtin_value_untouched(m, t, a)
+}
+
+/// R9READ10: is `a` the own `length` of the builtin function value `t` (a
+/// builtin constructor or namespace whose described chain is a function's,
+/// or a builtin method value), untouched by the program? Every builtin
+/// function has an own `length` data property, a Number (20.2.4.1, 10.2.9
+/// SetFunctionLength: { [[Writable]]: false, [[Enumerable]]: false,
+/// [[Configurable]]: true }). Being configurable, `delete` and
+/// `Object.defineProperty` may remove or replace it: either marks the token
+/// hard (E7Delete / E5DefineProperty), an accessor lands in its accessor
+/// keys. A plain store cannot change it (10.1.9.2 OrdinarySet step 2.a:
+/// non-writable: false; PutValue throws in strict code): the model still
+/// refuses any store that reaches the key on the token. Unknown code
+/// holding the realm and interpreted code refuse.
+pub(crate) fn builtin_fn_own_length(m: &Model, t: Tok, a: Atom) -> bool {
+    if m.unit_mode || m.realm_held || m.interp_runs || m.is_private_atom(a) {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    if name != "length" {
+        return false;
+    }
+    let present = match &m.toks[t as usize] {
+        TokKind::Builtin(ns) => {
+            !members::is_host(*ns)
+                && matches!(
+                    members::ns_member(*ns, name),
+                    Some(Some(Mem::Prim(p))) if p == crate::model::prim::NUM
+                )
+        }
+        TokKind::BuiltinFn(Native::Member { .. }) => matches!(
+            members::member(Family::Function, name),
+            Some(Mem::Prim(p)) if p == crate::model::prim::NUM
+        ),
+        _ => false,
+    };
+    // The realm declaration of the own `length` (`native_property`) is that
+    // same property: it does not refuse here.
+    present && builtin_value_untouched(m, t, a)
+}
+
+/// No store, accessor, `__proto__` store, escape or hard operation reaches
+/// key `a` on the builtin function value `t` in the solve.
+fn builtin_value_untouched(m: &Model, t: Tok, a: Atom) -> bool {
     let holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];
             !nd.dropped && nd.pts.is_empty() && nd.prim == 0
         })
     };
-    absent
-        && m.native_property(t, name).is_none()
-        && holds_nothing(m.fields.get(&(t, a)))
+    holds_nothing(m.fields.get(&(t, a)))
         && holds_nothing(m.field_any.get(&t))
         && !m.super_relink.contains(&t)
         && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
