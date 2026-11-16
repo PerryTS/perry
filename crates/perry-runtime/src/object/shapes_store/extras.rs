@@ -85,3 +85,64 @@ impl ShapeRecord {
             .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
 }
+
+impl ShapeRecord {
+    /// Image run: this record's shape state as bytes, for a begin-to-cut diff. The words
+    /// the collector and the lazy probes own (carrier epochs, the facts-indexed bit, the
+    /// keys word, the key probe and colour masks) and the address of a boxed extension
+    /// are left out; the extension contributes its contents.
+    pub(in crate::object) fn snap_image_state(&self) -> Vec<u8> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut r = *self;
+        r.keys = 0;
+        r.probe = 0;
+        r.colour_mask = [0; 2];
+        r.colour_store_mask = [0; 2];
+        r.flags_and_kind &= !u32::from(
+            super::RECORD_FLAG_FACTS_INDEXED
+                | super::RECORD_FLAG_OLD_CARRIER
+                | super::RECORD_FLAG_OLD_CARRIER_SEEN
+                | super::RECORD_FLAG_CARRIED_SEEN,
+        );
+        let boxed = self.has_boxed_extras();
+        if boxed {
+            r.extras = 1 << 63;
+        }
+        // SAFETY: a plain-data record read as bytes.
+        let mut out = unsafe {
+            std::slice::from_raw_parts(
+                (&r as *const ShapeRecord).cast::<u8>(),
+                std::mem::size_of::<ShapeRecord>(),
+            )
+        }
+        .to_vec();
+        if boxed {
+            // SAFETY: a boxed extension is an owned, aligned `ShapeExtras`.
+            let x = unsafe { &*(self.extras as usize as *const super::ShapeExtras) };
+            let mut put = |v: u64| out.extend_from_slice(&v.to_le_bytes());
+            put(u64::from(x.to_nopointer.load(Relaxed)));
+            put(u64::from(x.to_any.load(Relaxed)));
+            put(u64::from(x.rollback_parent.load(Relaxed)));
+            put(u64::from(x.created_birth_shape.load(Relaxed)));
+            put(u64::from(x.field_define_target));
+            for t in x.integrity_targets {
+                put(u64::from(t));
+            }
+            put(u64::from(x.integrity_flags));
+            put(x.tail_to_any.len() as u64);
+            for w in x.tail_to_any.iter() {
+                put(u64::from(w.load(Relaxed)));
+            }
+            put(x.constfn_infos.len() as u64);
+            for i in x.constfn_infos.iter() {
+                put(u64::from(i.slot));
+                put(i.info);
+            }
+            put(x.brands.len() as u64);
+            for b in x.brands.iter() {
+                put(*b);
+            }
+        }
+        out
+    }
+}

@@ -177,7 +177,7 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
         classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: 0,
         claims: Vec::new(),
-        shapes: crate::object::shapes::snap_image_shape_counts(),
+        shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
     };
     let probe = std::ptr::addr_of_mut!(PROBE);
@@ -272,7 +272,7 @@ fn probe_baseline() -> (Baseline, usize) {
         classes: crate::object::class_image::snap_image_table_sizes(),
         claims_from: 0,
         claims: Vec::new(),
-        shapes: crate::object::shapes::snap_image_shape_counts(),
+        shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
     };
     (b, tls_lo)
@@ -482,15 +482,34 @@ fn an_untraced_raw_address_stops_the_image_and_a_zero_word_does_not() {
 
 #[test]
 fn completeness_names_each_missing_form() {
-    let (p, s) = completeness(5, 5, 1, 2);
+    use crate::object::shapes::SnapShapeDelta;
+    let none = SnapShapeDelta::default();
+    let (p, s) = completeness(none, 1, 2);
     assert_eq!((p, s.len()), (PENDING_ATOMS, 0));
-    let (p, s) = completeness(5, 8, 1, 2);
+    let minted = SnapShapeDelta { minted: [1, 2, 0, 3], changed: 4, retired: 5, ..none };
+    let (p, s) = completeness(minted, 1, 2);
     assert_eq!(p, PENDING_ATOMS | PENDING_SHAPES);
-    assert_eq!(s.iter().map(|s| (s.kind, s.value)).collect::<Vec<_>>(), vec![(STOP_SHAPES_MINTED, 3)]);
-    let (p, s) = completeness(5, 5, 1, 3);
+    assert_eq!(
+        s.iter().map(|s| (s.kind, s.cell, s.off, s.value)).collect::<Vec<_>>(),
+        vec![(STOP_SHAPES_MINTED, 5, 4, 1 | 2 << 16 | 3 << 48)]
+    );
+    // A changed pre-existing record alone, a retired one alone and a counter alone each stop.
+    for d in [
+        SnapShapeDelta { changed: 1, ..none },
+        SnapShapeDelta { retired: 1, ..none },
+        SnapShapeDelta { minted: [1, 0, 0, 0], ..none },
+        SnapShapeDelta { minted: [0, 0, 0, 1], ..none },
+    ] {
+        let (p, s) = completeness(d, 1, 2);
+        assert_eq!((p & PENDING_SHAPES, s.len()), (PENDING_SHAPES, 1), "{d:?}");
+    }
+    let (p, s) = completeness(SnapShapeDelta { drawn: 7, generations: 2, ..none }, 1, 2);
+    assert_eq!(p, PENDING_ATOMS | PENDING_SHAPES);
+    assert_eq!(s.iter().map(|s| (s.kind, s.value)).collect::<Vec<_>>(), vec![(STOP_SHAPE_COUNTERS, 7 | 2 << 32)]);
+    let (p, s) = completeness(none, 1, 3);
     assert_eq!(p, PENDING_ATOMS | PENDING_TOKENS);
     assert_eq!(s.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![STOP_TOKENS]);
-    assert_eq!((completeness(5, 5, 3, 3).1.len(), completeness(5, 5, 3, 4).1.len()), (0, 1));
+    assert_eq!((completeness(none, 3, 3).1.len(), completeness(none, 3, 4).1.len()), (0, 1));
 }
 
 extern "C" fn registry_probe_init() {}
