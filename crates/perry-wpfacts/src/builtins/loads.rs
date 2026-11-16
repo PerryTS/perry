@@ -876,6 +876,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
+                    // What the program stored over it (`program_global_fn`).
+                    if super::native_protocol::program_global_fn(m, n) {
+                        let f = global_field(m, t, a);
+                        m.edge(f, dst);
+                    }
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
                 }
                 _ => {
