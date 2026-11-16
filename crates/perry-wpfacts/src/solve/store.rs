@@ -467,6 +467,14 @@ impl Model {
             self.typed_array_element_store(t, src, site);
             return;
         }
+        // A computed key that may be a String (ECMA-262 10.4.5.5 [[Set]]):
+        // when it is a CanonicalNumericIndexString (7.1.21, `"0"`, `"1.5"`,
+        // `"-0"`), the store is TypedArraySetElement (10.4.5.16:
+        // ToNumber(v) or ToBigInt(v) runs, `valueOf` / `@@toPrimitive` of an
+        // object included); any other String is an OrdinarySet (below).
+        if !elem && !digits_key && matches!(key, Key::Any(_)) && self.typed_array_elements(t) {
+            self.typed_array_element_store(t, src, site);
+        }
         // A computed store may be a runtime helper's write of a Map's
         // contents (`solve/map_vals.rs`).
         if matches!(key, Key::Any(_)) {

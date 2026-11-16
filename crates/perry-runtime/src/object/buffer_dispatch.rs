@@ -342,12 +342,12 @@ fn fixed_slice_write_encoding(method_name: &str) -> Option<i32> {
     })
 }
 
-unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
-    let raw = bits.to_bits();
-    if (raw >> 48) as u16 == 0x7FFC {
+pub(super) unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
+    let options = JSValue::from_bits(bits.to_bits());
+    if !options.is_pointer() {
         return None;
     }
-    let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    let obj = options.as_pointer::<ObjectHeader>();
     if (obj as usize) < 0x1000 {
         return None;
     }

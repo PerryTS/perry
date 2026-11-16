@@ -83,8 +83,16 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
         // Set default font (system 14pt)
         let font_cls = AnyClass::get(c"UIFont").unwrap();
-        let font: Retained<AnyObject> = msg_send![font_cls, systemFontOfSize: 14.0f64];
+        let font: Retained<AnyObject> = msg_send![font_cls, systemFontOfSize: 16.0f64];
         let _: () = msg_send![&*text_view, setFont: &*font];
+        // Inner padding so text doesn't touch a rounded, filled box.
+        let inset = objc2_ui_kit::UIEdgeInsets {
+            top: 12.0,
+            left: 10.0,
+            bottom: 12.0,
+            right: 10.0,
+        };
+        let _: () = msg_send![&*text_view, setTextContainerInset: inset];
 
         // Create delegate for text change notifications
         let delegate = PerryTextAreaDelegate::new();

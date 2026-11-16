@@ -13,6 +13,8 @@
 
 pub(crate) use perry_tls_session::{server_name, TlsClientSession};
 
+mod ca_leaf;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unix_seconds() -> u64 {
@@ -56,7 +58,7 @@ pub(crate) fn client_config() -> Option<&'static turnloop_tls::ClientConfig> {
                 // `None` = turnloop-tls's default provider, `ring`.
                 provider: None,
             };
-            turnloop_tls::ClientConfig::new(options, unix_seconds()).ok()
+            ca_leaf::client_config(options, unix_seconds()).ok()
         })
         .as_ref()
 }

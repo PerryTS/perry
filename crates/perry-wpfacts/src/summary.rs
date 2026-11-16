@@ -69,6 +69,8 @@ pub const MK_FROM_CONSTRUCT: u8 = 7;
 pub const MK_FN_CALL: u8 = 8;
 pub const MK_FN_APPLY: u8 = 9;
 pub const MK_WRITTEN_PRIM: u8 = 10;
+/// `super(...)` into a realm constructor (`Cons::SuperCtorParent`).
+pub const MK_SUPER_BUILTIN: u8 = 11;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -1641,7 +1643,10 @@ impl Model {
                     self.add_s(terms[i], &Vec::new(), (val & !VAL_PRIM) as u16, crate::model::STRS_NONE);
                 } else if by_str {
                     // Rule M1: the parameter is that string constant.
+                    // The run is keyed by the text: a caller may pass a
+                    // String born at run time (`STRS_RUN`).
                     let ss = self.str_set(&[val]);
+                    let ss = self.run_born(ss);
                     self.add_s(terms[i], &Vec::new(), crate::model::prim::STR, ss);
                 } else {
                     self.add_tok(terms[i], val);

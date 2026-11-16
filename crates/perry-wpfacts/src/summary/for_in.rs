@@ -54,6 +54,7 @@ impl Model {
                 // constant, so `'x ' + key` in the run is a constant too.
                 Some(p) if self.nodes[p as usize].frame == inst + 1 => {
                     let set = self.str_set(&[k]);
+                    let set = self.run_born(set);
                     self.add_s(p, &[], prim::STR, set);
                 }
                 _ => {
@@ -97,6 +98,7 @@ impl Model {
         v.sort_unstable();
         v.dedup();
         let set = self.str_set(&v);
+        let set = self.run_born(set);
         let before = (self.nodes[k as usize].prim, self.nodes[k as usize].strs);
         self.add_s(k, &[], prim::STR, set);
         before != (self.nodes[k as usize].prim, self.nodes[k as usize].strs)

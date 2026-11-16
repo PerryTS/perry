@@ -80,18 +80,33 @@ impl Model {
         if s < STRS_SET0 {
             return &[];
         }
-        &self.str_sets[(s - STRS_SET0) as usize]
+        &self.str_sets[((s & !STRS_RUN) - STRS_SET0) as usize]
+    }
+
+    /// `s` as the result of a solver rule (`STRS_RUN`): a finite set gains
+    /// the bit; none and any string stay.
+    pub(crate) fn run_born(&self, s: StrSet) -> StrSet {
+        if s & !STRS_RUN >= STRS_SET0 {
+            s | STRS_RUN
+        } else {
+            s
+        }
     }
 
     /// The join (union) of two sets.
     // See `str_set`: the `STRS_K` comparison is always false while the cap is off.
     #[allow(clippy::absurd_extreme_comparisons)]
+    /// The result carries `STRS_RUN` when either side does.
     pub(crate) fn strs_join(&mut self, a: StrSet, b: StrSet) -> StrSet {
         if a == b || b == STRS_NONE || a == STRS_TOP {
             return a;
         }
         if a == STRS_NONE || b == STRS_TOP {
             return b;
+        }
+        let run = (a | b) & STRS_RUN;
+        if a & !STRS_RUN == b & !STRS_RUN {
+            return a | run;
         }
         let x = self.str_atoms(a);
         let y = self.str_atoms(b);
@@ -127,7 +142,12 @@ impl Model {
                 return STRS_TOP;
             }
         }
-        self.str_set(&v)
+        let s = self.str_set(&v);
+        if s >= STRS_SET0 {
+            s | run
+        } else {
+            s
+        }
     }
 
     /// Joins `s` into `n`'s strings; true when they grew.
@@ -1030,6 +1050,15 @@ impl Model {
             return None;
         }
         let v = self.str_atoms(x.strs).to_vec();
+        // Rule M5b's bound: a set a rule made (`STRS_RUN`) folds only as one
+        // constant (rule M5's argument: sets only grow, so a node holds one
+        // constant alone during one stretch); a set of several constants
+        // folds only when each is a copy of a program literal (finitely
+        // many). A value that depends on itself through `+` (`s = s + 1`)
+        // holds its own earlier result, a set a rule made, so it ends.
+        if x.strs & STRS_RUN != 0 && v.len() > 1 {
+            return None;
+        }
         (!v.iter().any(|&a| self.atom_is_mark(a))).then_some(v)
     }
 
@@ -1300,6 +1329,7 @@ impl Model {
             }
             _ => STRS_TOP,
         };
+        let set = self.run_born(set);
         self.add_s(dst, &[], prim::STR, set);
     }
 

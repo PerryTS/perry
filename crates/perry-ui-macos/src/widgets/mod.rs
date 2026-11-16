@@ -1068,10 +1068,32 @@ pub fn match_parent_width(child_handle: i64) {
             let child_trailing: Retained<AnyObject> = msg_send![&*child, trailingAnchor];
             let parent_leading: Retained<AnyObject> = msg_send![superview_ptr, leadingAnchor];
             let parent_trailing: Retained<AnyObject> = msg_send![superview_ptr, trailingAnchor];
-            let lead_c: Retained<AnyObject> =
-                msg_send![&*child_leading, constraintEqualToAnchor: &*parent_leading];
-            let trail_c: Retained<AnyObject> =
-                msg_send![&*child_trailing, constraintEqualToAnchor: &*parent_trailing];
+            // Respect the parent stack's padding (`setPadding` = NSStackView
+            // edgeInsets), as iOS does via layoutMarginsGuide; pinning to the
+            // bare edges made every matched child ignore its container's inset.
+            let (inset_left, inset_right) = match AnyClass::get(c"NSStackView") {
+                Some(stack_cls) => {
+                    let is_stack: bool = msg_send![superview_ptr, isKindOfClass: stack_cls];
+                    if is_stack {
+                        let insets: objc2_foundation::NSEdgeInsets =
+                            msg_send![superview_ptr, edgeInsets];
+                        (insets.left, insets.right)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                }
+                None => (0.0, 0.0),
+            };
+            let lead_c: Retained<AnyObject> = msg_send![
+                &*child_leading,
+                constraintEqualToAnchor: &*parent_leading,
+                constant: inset_left
+            ];
+            let trail_c: Retained<AnyObject> = msg_send![
+                &*child_trailing,
+                constraintEqualToAnchor: &*parent_trailing,
+                constant: -inset_right
+            ];
             let _: () = msg_send![&*lead_c, setActive: true];
             let _: () = msg_send![&*trail_c, setActive: true];
         }

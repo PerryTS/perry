@@ -877,6 +877,15 @@ pub type StrSet = u32;
 pub const STRS_NONE: StrSet = 0;
 pub const STRS_TOP: StrSet = 1;
 pub const STRS_SET0: StrSet = 2;
+/// Provenance beside the atoms (rule LITSTR-RUN): a finite set with this
+/// bit may hold a String a solver rule made (a concatenation, a case
+/// mapping, a replace, a substring, a for-in key, a summary constant):
+/// at run time such a String is born then, a heap string, whatever its
+/// text. A set without it holds only copies of program string literals
+/// (`literal_strings`). A join keeps the bit of either side, a copy
+/// hands the set on with it, and none and any string never carry it.
+/// `Model::str_atoms` reads the atoms without it.
+pub const STRS_RUN: StrSet = 1 << 31;
 /// Past this many constants a node holds any string. Constant sets are
 /// exact (tsc-src holds ~200 option names in one key): interned sets keep
 /// the join cheap, priced on tsc-src and three.js (SEED2).
@@ -1378,7 +1387,8 @@ pub struct Node {
     /// The string constants the node may hold (`StrSet`): `STRS_NONE`
     /// without a string, `STRS_TOP` for any string, else an interned set of
     /// at most `STRS_K` atoms (`Model::str_sets`). Nonzero exactly when
-    /// `prim` has `prim::STR`. It only grows.
+    /// `prim` has `prim::STR`. It only grows. `STRS_RUN` marks a set that
+    /// may hold a String a rule made (no literal's own value).
     pub strs: StrSet,
     /// `strs` grew since the node was last popped.
     pub dstrs: bool,

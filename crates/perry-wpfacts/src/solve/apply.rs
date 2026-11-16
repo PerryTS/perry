@@ -704,6 +704,7 @@ impl Model {
                     if may_empty {
                         let e = self.atom("");
                         let s = self.str_set(&[e]);
+                        let s = self.run_born(s);
                         self.add_s(dst, &[], prim::STR, s);
                     }
                 }
@@ -1207,7 +1208,34 @@ impl Model {
                         }
                         TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
-                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                        // ECMA-262 13.3.7.1 SuperCall step 6: Construct(func,
+                        // argList, NewTarget): a realm constructor runs its
+                        // [[Construct]] (the Promise executor, 27.2.3.1 step
+                        // 9), never its [[Call]] (which throws for Promise,
+                        // 27.2.3.1 step 1). The object it makes has
+                        // NewTarget's prototype, which no builtin model
+                        // gives: the model's object stays apart from the
+                        // instance (the result is ⊤) and leaves, with what
+                        // the construction put into it.
+                        TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                            let c = self.calls[call as usize].clone();
+                            let made = self.node_l("super-builtin-construct");
+                            let key = (crate::summary::MK_SUPER_BUILTIN, parent, 0);
+                            if let Some(call2) = self.solver_call_keyed(
+                                call,
+                                key,
+                                None,
+                                CallSite { ret: made, ..c.clone() },
+                            ) {
+                                self.construct(call2, parent);
+                                let r = self.reason(
+                                    "the object a builtin parent constructor makes for super()",
+                                );
+                                self.sink_node(made, r);
+                            }
+                            self.add_tok(c.ret, TOP);
+                        }
+                        TokKind::Top => {
                             self.call_tok(call, parent, Some(origin));
                             let ret = self.calls[call as usize].ret;
                             self.add_tok(ret, TOP);
@@ -2479,6 +2507,7 @@ impl Model {
             }
             Cons::CaseMap { dst, upper } => {
                 let strs = self.case_map_strs(n, upper);
+                let strs = self.run_born(strs);
                 self.add_s(dst, &[], prim::STR, strs);
             }
             Cons::Plus {
@@ -2537,6 +2566,7 @@ impl Model {
                         self.realm_str_dsts.push(str);
                     }
                     if strs != STRS_NONE {
+                        let strs = self.run_born(strs);
                         self.add_s(str, &[], s, strs);
                     }
                 }
@@ -2585,6 +2615,7 @@ impl Model {
                 repl,
             } => {
                 if let Some(s) = self.replace_strs(recv, search, repl) {
+                    let s = self.run_born(s);
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
@@ -2609,6 +2640,7 @@ impl Model {
                     if s != STRS_TOP {
                         self.realm_str_dsts.push(dst);
                     }
+                    let s = self.run_born(s);
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
@@ -2618,6 +2650,7 @@ impl Model {
                 for (g, p, s) in self.capture_strs(n, pat) {
                     if p != 0 {
                         let slot = self.index_slot(rec, g);
+                        let s = self.run_born(s);
                         self.add_s(slot, &[], p, s);
                     }
                 }

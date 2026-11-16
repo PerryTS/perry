@@ -210,3 +210,54 @@ fn an_instantiated_body_keeps_the_constants_of_its_seeds() {
         probe(src)
     );
 }
+
+#[test]
+fn a_folded_string_is_no_literal_whatever_its_text() {
+    // Each String below is a constant to the solver (rules M5, M5b, the
+    // case mapping) but is made at run time: a fresh heap string, even
+    // where its text is also a literal (`"a" + z` with `z` the one String
+    // `""` is `"a"`). The provenance (`STRS_RUN`), not the text, ends the
+    // fact. A concatenation of two literals is one literal already in the
+    // HIR (`"mo" + "ve"` lowers to the literal `"move"`): that String is a
+    // literal's own value at run time, so the fact holds for it.
+    let src = r#"
+    class Box { e = "a"; two = "move"; tpl = "c"; num = "3"; up = "Q"; keep = "x"; sv = "3"; ts = "3";
+      set(k: number, z: string): void {
+        this.e = "a" + z;
+        this.two = "mo" + "ve";
+        this.tpl = `v${k}`;
+        this.num = "" + k;
+        this.up = "q".toUpperCase();
+        this.sv = String(k);
+        this.ts = k.toString();
+        this.keep = k > 2 ? "x" : "y";
+      }
+    }
+    const b = new Box(); b.set(3, "");
+    console.log(b.e, b.two, b.tpl, b.num, b.up, b.keep);
+    "#;
+    for key in ["e", "tpl", "num", "up", "sv", "ts"] {
+        assert!(!field_fact(src, "Box", key, FactsConfig::default()), "{key}");
+    }
+    // KEEP: a selection of literals, and the HIR literal `"move"`.
+    assert!(field_fact(src, "Box", "keep", FactsConfig::default()));
+    assert!(field_fact(src, "Box", "two", FactsConfig::default()));
+}
+
+#[test]
+fn a_string_field_growing_by_plus_ends() {
+    // Rule M5b on a value that depends on itself through `+`: every round
+    // would fold one new constant; the operand holds a set a rule made, so
+    // it folds no more and the solve ends (no count bound).
+    let src = r#"
+    class C { s = "a"; t = "b"; n = 0;
+      run(): void {
+        for (let i = 0; i < 9; i++) { this.s += 1; this.t = this.t + 1 + 2; this.n += 1; }
+      }
+    }
+    const c = new C(); c.run();
+    console.log(c.s, c.t, c.n);
+    "#;
+    assert!(!field_fact(src, "C", "s", FactsConfig::default()));
+    assert!(!field_fact(src, "C", "t", FactsConfig::default()));
+}

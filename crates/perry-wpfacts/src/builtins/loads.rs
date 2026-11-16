@@ -80,6 +80,7 @@ pub(super) fn family_load(
         {
             m.add_prim(dst, prim::UNDEF);
         } else if let Some(s) = regexp_literal_source(m, t, &name) {
+            let s = m.run_born(s);
             m.add_s(dst, &[], prim::STR, s);
         } else if let Some(e) = declared_accessor(m, fam, what, &name) {
             // An accessor whose getter the runtime declares (`RegExp
@@ -1321,6 +1322,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         // getter's String on any other receiver.
                         let name = m.atoms[a as usize].clone();
                         if let Some(s) = regexp_literal_source(m, t, &name) {
+                            let s = m.run_born(s);
                             m.add_s(dst, &[], prim::STR, s);
                         } else {
                             super::effects::getter_load(m, e, t, a, dst);
