@@ -151,12 +151,14 @@ const CLASSES: usize = 400;
 const UNITS: usize = 8;
 
 #[test]
-fn the_switch_is_off_unless_turned_on() {
-    assert!(!locality_enabled_from_env(None));
-    assert!(!locality_enabled_from_env(Some("0")));
-    assert!(!locality_enabled_from_env(Some("")));
+fn the_switch_is_on_unless_turned_off() {
+    assert!(locality_enabled_from_env(None));
+    assert!(locality_enabled_from_env(Some("")));
     for on in ["1", "on", "true"] {
         assert!(locality_enabled_from_env(Some(on)));
+    }
+    for off in ["0", "off", "false"] {
+        assert!(!locality_enabled_from_env(Some(off)));
     }
 }
 
