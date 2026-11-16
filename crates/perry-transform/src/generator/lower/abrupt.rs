@@ -31,7 +31,12 @@ pub(crate) fn build_throw_routing(
         done_id,
         Box::new(Expr::Bool(true)),
     ))];
-    fallback.extend(build_finally_run_stmts(finallys, state_id, false, hoisted_ids));
+    fallback.extend(build_finally_run_stmts(
+        finallys,
+        state_id,
+        false,
+        hoisted_ids,
+    ));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
     build_abrupt_routing(
         catches,
@@ -146,7 +151,12 @@ pub(crate) fn build_completion_resume_stmts(
         pending_type_id,
         Box::new(Expr::Number(0.0)),
     ))];
-    return_fallback.extend(build_finally_run_stmts(finallys, state_id, true, hoisted_ids));
+    return_fallback.extend(build_finally_run_stmts(
+        finallys,
+        state_id,
+        true,
+        hoisted_ids,
+    ));
     return_fallback.push(Stmt::Expr(Expr::LocalSet(
         done_id,
         Box::new(Expr::Bool(true)),
