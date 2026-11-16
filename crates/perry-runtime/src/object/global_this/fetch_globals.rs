@@ -415,10 +415,12 @@ pub extern "C" fn js_get_global_core() -> f64 {
     realm_core_slow()
 }
 
-/// The cold half of the core entry: this thread's first touch of the realm
-/// (phase A alone), or a realm that was populated in one pass because its
-/// first touch was the full entry: it serves both entries, and the core cell
-/// gets its own registered copy of the word here, once.
+/// The slow half of the core entry: a realm that was populated in one pass
+/// because its first touch was the full entry serves both entries, and the
+/// core cell gets its own registered copy of the word here, once. Small, and beside the
+/// entry in the hot-text order: a program that starts one-pass runs it once.
+/// The other case, this thread's first touch of the realm, is
+/// [`realm_core_first_touch`].
 #[inline(never)]
 fn realm_core_slow() -> f64 {
     let whole = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
@@ -441,7 +443,16 @@ fn realm_core_slow() -> f64 {
         });
         return f64::from_bits(whole);
     }
-    realm_setup(RealmPhases::Core, mode & REALM_MODE_POISON != 0)
+    realm_core_first_touch(mode & REALM_MODE_POISON != 0)
+}
+
+/// This thread's first touch of the realm through the core entry: phase A
+/// alone. Out of line and listed with the two-phase population at the end of
+/// the hot-text order, so the allocation and the population's driver are not
+/// in the text a program that starts one-pass maps.
+#[inline(never)]
+fn realm_core_first_touch(poison: bool) -> f64 {
+    realm_setup(RealmPhases::Core, poison)
 }
 
 /// Keepalive anchor: `js_get_global_core`, `js_realm_two_phase` and
