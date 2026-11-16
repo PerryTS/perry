@@ -228,12 +228,13 @@ impl Where {
             }
         }
         let within = |r: (usize, usize)| a >= r.0 && a < r.1;
-        for (k, s) in self.sections.iter().enumerate() {
+        let regions = [format::REGION_STRINGS, format::REGION_LAYOUTS, format::REGION_ATOMS];
+        for (&region, s) in regions.iter().zip(&self.sections) {
             if within(*s) {
                 return Ok(Val::Ext {
                     hi,
                     bare,
-                    region: k as u8,
+                    region,
                     off: (a - s.0) as u64,
                 });
             }

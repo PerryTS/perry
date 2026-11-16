@@ -578,7 +578,7 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
     let mut img = Image {
         pending: pending as u32,
         claims_from: cf as u32,
-        claims: format::parse_claims_blob(sec.get(cp..).ok_or("the claim record is outside the section")?)
+        claims: format_read::parse_claims_blob(sec.get(cp..).ok_or("the claim record is outside the section")?)
             .ok_or("the claim record is malformed")?,
         registry: format_read::parse_registry_blob(sec.get(rp..).ok_or("the registry record is outside the section")?)
             .ok_or("the registry record is malformed")?

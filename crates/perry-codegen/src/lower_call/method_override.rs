@@ -1062,7 +1062,7 @@ pub(super) fn emit_guarded_direct_method_call(
     // pair's instance (`family_holds_birth_layout`), else it calls the
     // ordinary body, preserving any argument-only direct-call ABI.
     // A late slot of `property` (a data method's own slot): the family arm
-    // also needs the slot to hold the hole ([`emit_late_slot_holds_hole`]).
+    // also needs the slot to hold the hole (`emit_late_slot_word`).
     let (family_arm, late_hole) =
         if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
             match super::direct_method_guard::family_method_word_holed(

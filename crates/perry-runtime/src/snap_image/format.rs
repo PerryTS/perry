@@ -220,33 +220,6 @@ pub fn claims_blob(claims: &[Vec<u8>]) -> Vec<u8> {
     o
 }
 
-/// The names of a claim blob (bytes after it are ignored).
-pub fn parse_claims_blob(b: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let u32_at = |o: usize| -> Option<usize> {
-        b.get(o..o + 4)
-            .map(|s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])) as usize)
-    };
-    let n = u32_at(0)?;
-    let (mut o, mut v) = (4usize, Vec::new());
-    for _ in 0..n {
-        let l = u32_at(o)?;
-        v.push(b.get(o + 4..o + 4 + l)?.to_vec());
-        o += 4 + l;
-    }
-    Some(v)
-}
-
-/// Whether `claims` (claimed since index `from` in some process) are exactly
-/// what this process has claimed since `from`, with the same indices.
-pub fn claims_replay_matches(from: u32, claims: &[Vec<u8>], now: &[(Vec<u8>, u32)]) -> bool {
-    claims.len() == now.len()
-        && claims
-            .iter()
-            .zip(now)
-            .enumerate()
-            .all(|(i, (k, (nk, ni)))| k == nk && *ni == from + i as u32)
-}
-
 /// The `entries` word of a Map header: the store's inline entry payload.
 pub const DERIVED_MAP_ENTRIES: u8 = 1;
 /// The `entries` word of a Map store: its own inline entry payload.
