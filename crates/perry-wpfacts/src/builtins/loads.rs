@@ -829,6 +829,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.load_from(g, g, key, dst);
                 } else if matches!(n, "undefined" | "NaN" | "Infinity") {
                     m.add_prim(dst, prim::NUM | prim::UNDEF);
+                } else if !m.unit_mode && global_user_key(m, n) {
+                    // S8: a name the realm declares neither on the global
+                    // object nor on its chain: the read is [[Get]](globalThis,
+                    // n) (ECMA-262 9.1.1.4.6 GetBindingValue of the global
+                    // environment's object record; absent: the runtime's
+                    // ReferenceError, 9.1.1.2.6), as the unresolved name's is
+                    // (rule G). In a module a Worker may run, generation adds
+                    // the Worker global's native (`gen_expr`, PropertyGet).
+                    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    tok_load(m, g, key, dst);
                 } else {
                     m.add_top(dst, |_| format!("global {n}"));
                     m.add_prim(dst, prim::ALL);

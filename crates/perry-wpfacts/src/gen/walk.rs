@@ -116,6 +116,7 @@ impl<'a> Gen<'a> {
         if self.m.act.is_some() {
             self.dynamic_only = self.dynamic_only_modules();
         }
+        self.m.worker_side = self.worker_side();
         if !self.dynamic_only.is_empty() {
             for mi in 0..modules.len() as u32 {
                 let f = self.synthetic_fn(mi, "<init>");
@@ -165,6 +166,74 @@ impl<'a> Gen<'a> {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Per module: may a Worker of the program run it? A Worker runs the
+    /// compiled entry module its filename names (perry-stdlib
+    /// worker_threads entry table: the driver registers each entry
+    /// `new Worker(<literal>)` / `new URL(<literal>, import.meta.url)`
+    /// names, `FactsConfig::roots`) and every module that entry loads, by
+    /// any import edge or re-export. A Worker whose filename names no entry
+    /// (`paths` empty or partial; eval mode) may run any module: then every
+    /// module is one.
+    fn worker_side(&self) -> Vec<bool> {
+        let n = self.modules.len();
+        let mut unnamed = false;
+        for (_, module) in &self.modules {
+            perry_hir::for_each_worker_new(module, &mut |e| {
+                if let perry_hir::Expr::WorkerNew {
+                    paths,
+                    partial,
+                    is_eval,
+                    ..
+                } = e
+                {
+                    unnamed |= *is_eval || *partial || paths.is_empty();
+                }
+            });
+        }
+        if unnamed || self.m.unit_mode {
+            return vec![true; n];
+        }
+        let mut side = vec![false; n];
+        let mut work: Vec<u32> = (0..n as u32)
+            .filter(|&m| self.roots.iter().any(|r| r == self.modules[m as usize].0))
+            .collect();
+        for &m in &work {
+            side[m as usize] = true;
+        }
+        while let Some(mi) = work.pop() {
+            let mut next: Vec<u32> = self
+                .imports_of(mi as usize)
+                .iter()
+                .filter(|i| !i.type_only && !i.runtime_erased)
+                .filter_map(|i| i.resolved_path.as_ref())
+                .filter_map(|r| self.path_index.get(r).copied())
+                .collect();
+            for e in &self.modules[mi as usize].1.exports {
+                let source = match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                    perry_hir::Export::Named { .. } => continue,
+                };
+                match self.reexport_target(mi, source) {
+                    Some(t) => next.push(t),
+                    // An unresolved re-export: any module may load.
+                    None if source.starts_with('.') || source.starts_with('/') => {
+                        return vec![true; n];
+                    }
+                    None => {}
+                }
+            }
+            for t in next {
+                if !side[t as usize] {
+                    side[t as usize] = true;
+                    work.push(t);
+                }
+            }
+        }
+        side
     }
 
     /// The modules that load only through `import()`: no static import or
