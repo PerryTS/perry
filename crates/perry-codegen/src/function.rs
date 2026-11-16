@@ -67,6 +67,10 @@ pub struct LlFunction {
     /// It joins the early inliner only when the facts prove a call site closed
     /// over it (`codegen/closed_targets.rs`).
     pub closed_target_preinline: bool,
+    /// The bodies the facts close this function's call sites over
+    /// (`codegen/closed_targets.rs`). It travels with the function, so a body
+    /// lowered on a callable worker reports its sites like any other.
+    pub(crate) closed_callees: Vec<String>,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -336,6 +340,7 @@ impl LlFunction {
             preinline_after_naming: None,
             guarded_preinline: false,
             closed_target_preinline: false,
+            closed_callees: Vec::new(),
             no_inline: false,
             disable_tail_calls: false,
             nanbox_operands: false,
