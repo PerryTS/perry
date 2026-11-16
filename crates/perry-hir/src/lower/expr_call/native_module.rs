@@ -243,7 +243,10 @@ fn receiver_is_node_builtin_module(ctx: &LoweringContext, recv: &ast::Expr) -> b
     match unwrap_ts_wrappers(recv) {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
-            name_is_node_builtin_namespace(ctx, name)
+            // The global `process` is node:process's module object: its
+            // fast paths (`process_module`) read `args` by position too.
+            (name == "process" && !ctx.shadows_unqualified_global("process"))
+                || name_is_node_builtin_namespace(ctx, name)
                 // #1750: `const w = path.win32; w.join(...)`.
                 || ctx
                     .lookup_subns_path_alias(name)
