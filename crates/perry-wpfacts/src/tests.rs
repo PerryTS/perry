@@ -2239,6 +2239,7 @@ mod r9read6;
 mod r9read7;
 mod r9read8;
 mod r9read9;
+mod r9read10;
 mod onchange1;
 mod thisbind1;
 mod r9birth1;
