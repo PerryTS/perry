@@ -16,7 +16,12 @@ fn kept(pf: &ProgramFacts) -> crate::derive::KindFact {
         .filter(|t| t.display.starts_with("t.ts"))
         .find(|t| t.fields.iter().any(|f| f.key == "keptv"))
         .unwrap_or_else(|| panic!("no keptv\n{}", pf.dump_text()));
-    t.fields.iter().find(|f| f.key == "keptv").unwrap().kind.clone()
+    t.fields
+        .iter()
+        .find(|f| f.key == "keptv")
+        .unwrap()
+        .kind
+        .clone()
 }
 
 /// SKINROOT11 step 1: two `__proto__`-capable stores into one JSON object

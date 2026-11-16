@@ -89,7 +89,10 @@ fn built_track_re_property_is_quaternion() {
 #[test]
 fn constructor_key_reads_the_class() {
     let v = keyed("n === 'a' ? 'constructor' : 'scale'");
-    assert!(v.iter().any(|x| x == "H") && v.iter().any(|x| x == "S"), "{v:?}");
+    assert!(
+        v.iter().any(|x| x == "H") && v.iter().any(|x| x == "S"),
+        "{v:?}"
+    );
     assert!(!v.iter().any(|x| x == "m" || x == "A"), "{v:?}");
 }
 
@@ -97,7 +100,12 @@ fn constructor_key_reads_the_class() {
 #[test]
 fn unknown_key_reads_every_member() {
     let v = keyed("String(n)");
-    assert!(["A", "S", "H", "m"].iter().all(|w| v.iter().any(|x| x == w)), "{v:?}");
+    assert!(
+        ["A", "S", "H", "m"]
+            .iter()
+            .all(|w| v.iter().any(|x| x == w)),
+        "{v:?}"
+    );
 }
 
 #[test]
@@ -111,5 +119,8 @@ fn built_track_re_property_index_is_undefined() {
 #[test]
 fn unknown_piece_is_any_key() {
     let v = track("n", 5);
-    assert!(v.iter().any(|x| x == "A") && v.iter().any(|x| x == "B"), "{v:?}");
+    assert!(
+        v.iter().any(|x| x == "A") && v.iter().any(|x| x == "B"),
+        "{v:?}"
+    );
 }

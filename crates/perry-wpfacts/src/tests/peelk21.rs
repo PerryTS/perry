@@ -39,13 +39,23 @@ const STREAM: &str = "new ReadableStream({ start(c: any) { c.error(err); } })";
 #[test]
 fn stream_body_error_is_the_stored_error() {
     let pf = whole(&src(ERR, STREAM));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn string_body_has_no_program_error() {
     let pf = whole(&src(ERR, "\"abc\""));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -55,11 +65,20 @@ fn clone_keeps_the_stored_error() {
          const err: any = {ERR};
          new Response({STREAM}).clone().arrayBuffer().catch(function (e: any) {{ e.f(lit); }});"
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn control_unknown_stored_error_escapes() {
     let pf = whole(&src("new Function(process.argv[2])()", STREAM));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

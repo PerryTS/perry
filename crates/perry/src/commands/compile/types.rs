@@ -1069,6 +1069,9 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// A process, loader or global object can reveal native modules through
+    /// computed names. Dedicated process intrinsics do not expose that object.
+    pub uses_dynamic_native_constants: bool,
     /// Whether any module names `upgradeToTLS`, perry's TLS upgrade of a
     /// `net.Socket`: such a program reaches TLS without importing `tls`
     /// ([`super::optimized_libs::reaches_tls`]).
@@ -1559,6 +1562,7 @@ impl CompilationContext {
             uses_child_process: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_dynamic_native_constants: false,
             uses_upgrade_to_tls: false,
             uses_dns: false,
             needs_thread: false,

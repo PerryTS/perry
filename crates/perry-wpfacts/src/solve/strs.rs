@@ -49,7 +49,9 @@ const ASCII_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 
 /// The ASCII characters of `s` (bit c for c).
 pub(crate) fn ascii_mask(s: &str) -> u128 {
-    s.chars().filter(|c| c.is_ascii()).fold(0, |m, c| m | 1u128 << c as u32)
+    s.chars()
+        .filter(|c| c.is_ascii())
+        .fold(0, |m, c| m | 1u128 << c as u32)
 }
 
 impl Model {
@@ -171,7 +173,9 @@ impl Model {
 
     /// The known prefix an entry stands for (`None`: a constant).
     pub(crate) fn atom_prefix(&self, a: Atom) -> Option<&str> {
-        self.atoms[a as usize].strip_prefix(PREFIX_MARK).or_else(|| self.atom_pfx_excl(a).map(|x| x.0))
+        self.atoms[a as usize]
+            .strip_prefix(PREFIX_MARK)
+            .or_else(|| self.atom_pfx_excl(a).map(|x| x.0))
     }
 
     /// Rule PREFIX-AND-FREE: the entry `p X s`, X free of `e`; with nothing
@@ -231,7 +235,9 @@ impl Model {
 
     /// The character an infix entry stands for (`None`: no infix entry).
     pub(crate) fn atom_infix(&self, a: Atom) -> Option<char> {
-        self.atoms[a as usize].strip_prefix(INFIX_MARK).and_then(|r| r.chars().next())
+        self.atoms[a as usize]
+            .strip_prefix(INFIX_MARK)
+            .and_then(|r| r.chars().next())
     }
 
     /// Node `n` holds Strings only, each a program constant (no prefix,
@@ -241,7 +247,10 @@ impl Model {
         node.prim == prim::STR
             && node.pts.is_empty()
             && node.strs >= STRS_SET0
-            && self.str_atoms(node.strs).iter().all(|&a| !self.atom_is_mark(a))
+            && self
+                .str_atoms(node.strs)
+                .iter()
+                .all(|&a| !self.atom_is_mark(a))
     }
 
     /// Is the entry a solver spelling (a prefix or an infix), not a
@@ -261,7 +270,8 @@ impl Model {
             .or_else(|| self.atom_suffix(a))
             .or_else(|| self.atom_excl(a).map(|x| x.1))
             .unwrap_or(&self.atoms[a as usize]);
-        t.chars().find(|&c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+        t.chars()
+            .find(|&c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '_' && c != '$')
     }
 
     /// Rule K7: when node `n` holds only Strings, each surely holding a
@@ -295,7 +305,13 @@ impl Model {
         let node = &self.nodes[n as usize];
         let (p, bare, s) = (node.prim, node.pts.is_empty(), node.strs);
         if p == prim::STR && bare && s >= STRS_SET0 {
-            let map = |t: &str| if upper { t.to_ascii_uppercase() } else { t.to_ascii_lowercase() };
+            let map = |t: &str| {
+                if upper {
+                    t.to_ascii_uppercase()
+                } else {
+                    t.to_ascii_lowercase()
+                }
+            };
             let mut out: Vec<Atom> = Vec::new();
             let mut exact = true;
             for a in self.str_atoms(s).to_vec() {
@@ -371,7 +387,12 @@ impl Model {
     /// prefix, infix or suffix: its unknown part is any text) may.
     pub(crate) fn may_hold_percent(&self, n: NodeId) -> bool {
         let node = &self.nodes[n as usize];
-        if node.pts.to_sorted().into_iter().any(|t| t == TOP || self.bare_marker(t)) {
+        if node
+            .pts
+            .to_sorted()
+            .into_iter()
+            .any(|t| t == TOP || self.bare_marker(t))
+        {
             return true;
         }
         if node.prim & prim::STR == 0 {
@@ -404,7 +425,13 @@ impl Model {
             .to_sorted()
             .into_iter()
             .filter(|&t| t == TOP || self.bare_marker(t))
-            .map(|t| if t == TOP { "TOP".to_string() } else { self.tok_name(t) })
+            .map(|t| {
+                if t == TOP {
+                    "TOP".to_string()
+                } else {
+                    self.tok_name(t)
+                }
+            })
             .collect();
         let strs: Vec<String> = if node.strs < STRS_SET0 {
             vec![format!("set#{}", node.strs)]
@@ -444,19 +471,30 @@ impl Model {
             return 0;
         }
         // A PREFIX-AND-FREE entry is read by its prefix (below).
-        if let Some((_, s)) = self.atom_excl(a).filter(|_| self.atom_pfx_excl(a).is_none()) {
+        if let Some((_, s)) = self
+            .atom_excl(a)
+            .filter(|_| self.atom_pfx_excl(a).is_none())
+        {
             if s.is_empty() {
                 return 0;
             }
             let glob = vec![String::new(), s.to_string()];
-            return self.key_shape(Some(KeyShape { globs: vec![glob], free: Vec::new() }));
+            return self.key_shape(Some(KeyShape {
+                globs: vec![glob],
+                free: Vec::new(),
+                except: Vec::new(),
+            }));
         }
         let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
             (Some(p), _) => vec![p.to_string(), String::new()],
             (_, Some(s)) => vec![String::new(), s.to_string()],
             _ => vec![self.atoms[a as usize].clone()],
         };
-        self.key_shape(Some(KeyShape { globs: vec![glob], free: Vec::new() }))
+        self.key_shape(Some(KeyShape {
+            globs: vec![glob],
+            free: Vec::new(),
+            except: Vec::new(),
+        }))
     }
 
     /// Rule M3 for a computed key node: when it holds Strings, each a
@@ -513,7 +551,10 @@ impl Model {
         // exactly the keys that end with `s` after a part free of E's
         // characters (and the numeric keys only when such a string may be
         // a Number key). No character excluded and no suffix: any String.
-        if let Some((e, s)) = self.atom_excl(a).filter(|&(e, s)| self.atom_pfx_excl(a).is_none() && (e != 0 || !s.is_empty())) {
+        if let Some((e, s)) = self
+            .atom_excl(a)
+            .filter(|&(e, s)| self.atom_pfx_excl(a).is_none() && (e != 0 || !s.is_empty()))
+        {
             let s = s.to_string();
             return self.free_shape(e, &s);
         }
@@ -539,7 +580,10 @@ impl Model {
         if let Some(s) = self.plus_const(l, r) {
             return (s, false);
         }
-        if let Some(s) = self.plus_const_num(l, r).or_else(|| self.plus_const_num_rev(l, r)) {
+        if let Some(s) = self
+            .plus_const_num(l, r)
+            .or_else(|| self.plus_const_num_rev(l, r))
+        {
             return (s, false);
         }
         let m3 = self.plus_strs_m3(l, r);
@@ -606,7 +650,10 @@ impl Model {
         }
         if number {
             let op = crate::builtins::native_proto(self, "Object");
-            if keys[..2].iter().any(|&a| crate::builtins::native_written(self, op, a)) {
+            if keys[..2]
+                .iter()
+                .any(|&a| crate::builtins::native_written(self, op, a))
+            {
                 return false;
             }
         }
@@ -627,7 +674,10 @@ impl Model {
             let nd = &self.nodes[x as usize];
             (nd.prim, nd.pts.to_sorted(), nd.range, nd.frac, nd.crange)
         };
-        if p & prim::NUM != 0 && frac && !rg.within(crate::model::Iv::int(-(1i64 << 53), 1i64 << 53)) {
+        if p & prim::NUM != 0
+            && frac
+            && !rg.within(crate::model::Iv::int(-(1i64 << 53), 1i64 << 53))
+        {
             return false;
         }
         if p & prim::STR != 0 && crate::model::range::chars_to_number(cr).is_top() {
@@ -663,7 +713,10 @@ impl Model {
         let ordinary = match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
-                TmplKind::Class { .. } | TmplKind::Lit { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. }
+                TmplKind::Class { .. }
+                    | TmplKind::Lit { .. }
+                    | TmplKind::FnInst { .. }
+                    | TmplKind::ObjCreate { .. }
             ),
             _ => false,
         };
@@ -676,7 +729,11 @@ impl Model {
         while i < chain.len() {
             let h = chain[i];
             i += 1;
-            if self.is_escaped(h) || self.hard.contains_key(&h) || self.super_relink.contains(&h) || self.objtag_open.contains(&h) {
+            if self.is_escaped(h)
+                || self.hard.contains_key(&h)
+                || self.super_relink.contains(&h)
+                || self.objtag_open.contains(&h)
+            {
                 return None;
             }
             let pn = *self.proto_node.get(&h)?;
@@ -696,7 +753,12 @@ impl Model {
                 }
             }
         }
-        for k in [crate::model::WK_TO_PRIMITIVE, "toString", "valueOf", crate::model::WK_TO_STRING_TAG] {
+        for k in [
+            crate::model::WK_TO_PRIMITIVE,
+            "toString",
+            "valueOf",
+            crate::model::WK_TO_STRING_TAG,
+        ] {
             let a = self.atom(k);
             if crate::builtins::native_written(self, op, a) {
                 return None;
@@ -712,9 +774,14 @@ impl Model {
             return;
         }
         let recv = self.node_l("objtag-recv");
-        for (i, k) in [crate::model::WK_TO_PRIMITIVE, "toString", "valueOf", crate::model::WK_TO_STRING_TAG]
-            .into_iter()
-            .enumerate()
+        for (i, k) in [
+            crate::model::WK_TO_PRIMITIVE,
+            "toString",
+            "valueOf",
+            crate::model::WK_TO_STRING_TAG,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let key = Key::Named(self.atom(k));
             let dst = self.node_l("objtag-read");
@@ -777,7 +844,10 @@ impl Model {
                 return None;
             }
             for &a in self.str_atoms(strs) {
-                match self.atom_excl(a).or_else(|| self.atom_suffix(a).map(|s| (0, s))) {
+                match self
+                    .atom_excl(a)
+                    .or_else(|| self.atom_suffix(a).map(|s| (0, s)))
+                {
                     Some((e, s)) => out.push(Err((e, s.to_string()))),
                     None if self.atom_is_mark(a) => return None,
                     None => out.push(Ok(self.atoms[a as usize].clone())),
@@ -799,7 +869,10 @@ impl Model {
         // (`object_tag_chain`); a builtin function its NativeFunction text.
         let (mut native, mut plain) = (false, false);
         for t in toks {
-            if let Some(chain) = self.objtag_sink.and_then(|d| self.object_tag_chain(t).map(|c| (d, c))) {
+            if let Some(chain) = self
+                .objtag_sink
+                .and_then(|d| self.object_tag_chain(t).map(|c| (d, c)))
+            {
                 let (d, chain) = chain;
                 self.objtag_probe(t);
                 for c in chain {
@@ -828,18 +901,31 @@ impl Model {
         // holds no character of E2. Dropping it keeps the
         // same set of strings (equal parts: the first stays), so rule M8
         // sees one part where the strings are one entry's.
-        let covers = |a: &Result<String, (u128, String)>, b: &Result<String, (u128, String)>| match (a, b) {
-            (Err((e, s)), Err((e2, s2))) => {
-                s2.ends_with(s.as_str()) && e2 & e == *e && ascii_mask(&s2[..s2.len() - s.len()]) & e == 0
-            }
-            (Err((e, s)), Ok(c)) => c.ends_with(s.as_str()) && ascii_mask(&c[..c.len() - s.len()]) & e == 0,
-            (Ok(c), Ok(c2)) => c == c2,
-            (Ok(_), Err(_)) => false,
-        };
+        let covers =
+            |a: &Result<String, (u128, String)>, b: &Result<String, (u128, String)>| match (a, b) {
+                (Err((e, s)), Err((e2, s2))) => {
+                    s2.ends_with(s.as_str())
+                        && e2 & e == *e
+                        && ascii_mask(&s2[..s2.len() - s.len()]) & e == 0
+                }
+                (Err((e, s)), Ok(c)) => {
+                    c.ends_with(s.as_str()) && ascii_mask(&c[..c.len() - s.len()]) & e == 0
+                }
+                (Ok(c), Ok(c2)) => c == c2,
+                (Ok(_), Err(_)) => false,
+            };
         let keep: Vec<bool> = (0..out.len())
-            .map(|i| !(0..out.len()).any(|j| j != i && covers(&out[j], &out[i]) && (j < i || !covers(&out[i], &out[j]))))
+            .map(|i| {
+                !(0..out.len()).any(|j| {
+                    j != i && covers(&out[j], &out[i]) && (j < i || !covers(&out[i], &out[j]))
+                })
+            })
             .collect();
-        let out = out.into_iter().zip(keep).filter_map(|(p, k)| k.then_some(p)).collect();
+        let out = out
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(p, k)| k.then_some(p))
+            .collect();
         Some((out, gated))
     }
 
@@ -862,7 +948,11 @@ impl Model {
             // Rule OBJECT-TO-STRING: constants beside an object's
             // "[object Object]" (`excl_parts`) are the concatenations of
             // the texts; constants alone are rule M3's (`plus_const`).
-            if !lp.iter().chain(&rp).any(|p| p.as_ref().is_ok_and(|c| c == "[object Object]")) {
+            if !lp
+                .iter()
+                .chain(&rp)
+                .any(|p| p.as_ref().is_ok_and(|c| c == "[object Object]"))
+            {
                 return None;
             }
             let mut out = Vec::new();
@@ -882,7 +972,9 @@ impl Model {
         for a in &lp {
             for b in &rp {
                 let at = match (a, b) {
-                    (Err((e, s)), Ok(t)) if s.is_empty() || alone => self.excl_atom(*e, &format!("{s}{t}")),
+                    (Err((e, s)), Ok(t)) if s.is_empty() || alone => {
+                        self.excl_atom(*e, &format!("{s}{t}"))
+                    }
                     (Err((e, s)), Ok(t)) => self.excl_atom(e & !ascii_mask(s), t),
                     (Ok(c), Err((e, s))) => self.excl_atom(e & !ascii_mask(c), s),
                     (Err((e1, s1)), Err((e2, s2))) => self.excl_atom(e1 & e2 & !ascii_mask(s1), s2),
@@ -940,7 +1032,10 @@ impl Model {
                 let (Some(pa), Some(fa)) = (self.one_str_const(p), self.one_str_const(f)) else {
                     return Some(STRS_TOP);
                 };
-                let (ps, fs) = (self.atoms[pa as usize].clone(), self.atoms[fa as usize].clone());
+                let (ps, fs) = (
+                    self.atoms[pa as usize].clone(),
+                    self.atoms[fa as usize].clone(),
+                );
                 match crate::builtins::regex_tail::global_class(&ps, &fs) {
                     Some(mk) => mk,
                     None => return Some(STRS_TOP),
@@ -956,7 +1051,10 @@ impl Model {
                 return Some(STRS_TOP);
             }
         }
-        let Some(r) = self.one_str_const(repl).map(|a| self.atoms[a as usize].clone()) else {
+        let Some(r) = self
+            .one_str_const(repl)
+            .map(|a| self.atoms[a as usize].clone())
+        else {
             return Some(STRS_TOP);
         };
         if r.contains('$') || ascii_mask(&r) & mask != 0 {
@@ -1045,7 +1143,10 @@ impl Model {
     /// primitive that is not a BigInt or a Symbol (no object).
     fn str_consts_prims(&self, n: NodeId) -> Option<Vec<Atom>> {
         let x = &self.nodes[n as usize];
-        if !x.pts.is_empty() || x.prim & prim::STR == 0 || x.strs < STRS_SET0 || x.prim & (prim::BIGINT | prim::SYMBOL) != 0
+        if !x.pts.is_empty()
+            || x.prim & prim::STR == 0
+            || x.strs < STRS_SET0
+            || x.prim & (prim::BIGINT | prim::SYMBOL) != 0
         {
             return None;
         }
@@ -1108,7 +1209,12 @@ impl Model {
     /// occurrence gives the receiver. Exact when each operand holds one
     /// ASCII constant (code units are bytes); else any string. `None` while
     /// an operand holds no value yet (its arrival runs the rule again).
-    pub(crate) fn replace_strs(&mut self, recv: NodeId, search: NodeId, repl: NodeId) -> Option<StrSet> {
+    pub(crate) fn replace_strs(
+        &mut self,
+        recv: NodeId,
+        search: NodeId,
+        repl: NodeId,
+    ) -> Option<StrSet> {
         if [recv, search, repl].iter().any(|&n| {
             let x = &self.nodes[n as usize];
             x.prim == 0 && x.pts.is_empty()
@@ -1118,16 +1224,28 @@ impl Model {
         // Step 2: a search value of RegExp objects only is their
         // @@replace's call (rule M9, `sym_call`), not this rule's.
         let sx = &self.nodes[search as usize];
-        if sx.prim == 0 && sx.pts.to_sorted().into_iter().all(|t| self.is_regexp_tok(t)) {
+        if sx.prim == 0
+            && sx
+                .pts
+                .to_sorted()
+                .into_iter()
+                .all(|t| self.is_regexp_tok(t))
+        {
             return None;
         }
         // Step 1 RequireObjectCoercible: an undefined or null receiver
         // throws, it gives no result.
         let one = |m: &Self, n: NodeId, but: u16| {
-            m.one_str_const_but(n, but).map(|a| m.atoms[a as usize].clone()).filter(|s| s.is_ascii())
+            m.one_str_const_but(n, but)
+                .map(|a| m.atoms[a as usize].clone())
+                .filter(|s| s.is_ascii())
         };
         let nullish = prim::UNDEF | prim::NULL;
-        let (Some(s), Some(q), Some(r)) = (one(self, recv, nullish), one(self, search, 0), one(self, repl, 0)) else {
+        let (Some(s), Some(q), Some(r)) = (
+            one(self, recv, nullish),
+            one(self, search, 0),
+            one(self, repl, 0),
+        ) else {
             return Some(STRS_TOP);
         };
         let out = match s.find(q.as_str()) {
@@ -1225,7 +1343,11 @@ impl Model {
                     return Some(None);
                 }
                 let k = str_to_integer(&self.atoms[a as usize]);
-                iv = iv.join(Iv { lo: k, hi: k, nz: false });
+                iv = iv.join(Iv {
+                    lo: k,
+                    hi: k,
+                    nz: false,
+                });
             }
         }
         let undef = x.prim & prim::UNDEF != 0;
@@ -1246,7 +1368,10 @@ impl Model {
     pub(crate) fn str_index(&mut self, dst: NodeId, recv: NodeId, search: NodeId, last: bool) {
         use crate::model::Iv;
         let nullish = prim::UNDEF | prim::NULL;
-        let (Some(r), Some(s)) = (self.ascii_consts_but(recv, nullish), self.ascii_consts_but(search, 0)) else {
+        let (Some(r), Some(s)) = (
+            self.ascii_consts_but(recv, nullish),
+            self.ascii_consts_but(search, 0),
+        ) else {
             return;
         };
         let iv = match (r, s) {
@@ -1254,7 +1379,11 @@ impl Model {
                 let mut iv = Iv::EMPTY;
                 for a in &r {
                     for b in &s {
-                        let k = if last { a.rfind(b.as_str()) } else { a.find(b.as_str()) };
+                        let k = if last {
+                            a.rfind(b.as_str())
+                        } else {
+                            a.find(b.as_str())
+                        };
                         let k = k.map_or(-1, |k| k as i64);
                         iv = iv.join(Iv::int(k, k));
                     }
@@ -1359,7 +1488,10 @@ impl Model {
         for &a in self.str_atoms(rs) {
             let t = match self.atom_prefix(a) {
                 Some(p) => p.to_string(),
-                None if self.atom_infix(a).is_some() || self.atom_suffix(a).is_some() || self.atom_excl(a).is_some() => {
+                None if self.atom_infix(a).is_some()
+                    || self.atom_suffix(a).is_some()
+                    || self.atom_excl(a).is_some() =>
+                {
                     String::new()
                 }
                 None => self.atoms[a as usize].clone(),
@@ -1391,8 +1523,10 @@ impl Model {
         // (`excl_plus`) a suffix grows only then, or from an empty one; the
         // (E, s) parts of a node only grow, so they are one during one
         // stretch at most and loops end.
-        let mut es: Vec<(u128, String)> =
-            left.iter().filter_map(|&a| self.atom_pfx_excl(a).map(|x| (x.1, x.2.to_string()))).collect();
+        let mut es: Vec<(u128, String)> = left
+            .iter()
+            .filter_map(|&a| self.atom_pfx_excl(a).map(|x| (x.1, x.2.to_string())))
+            .collect();
         es.sort_unstable();
         es.dedup();
         let alone = es.len() == 1;
@@ -1403,7 +1537,10 @@ impl Model {
             // (an empty `s` or one (E, s)), `p (X s) t` or `p (X s Y) s2`
             // per part as in rule M8 (past `PLUS_PREFIXES_K` products see
             // below); with r unknown the prefix `p`.
-            if let Some((p, e, s)) = self.atom_pfx_excl(a).map(|(p, e, s)| (p.to_string(), e, s.to_string())) {
+            if let Some((p, e, s)) = self
+                .atom_pfx_excl(a)
+                .map(|(p, e, s)| (p.to_string(), e, s.to_string()))
+            {
                 let Some(ps) = rparts.as_ref() else {
                     out.push(self.prefix_atom(&p));
                     continue;
@@ -1533,8 +1670,18 @@ fn str_to_integer(s: &str) -> i64 {
     let ws = |c: char| {
         matches!(
             c,
-            '\u{9}' | '\u{b}' | '\u{c}' | '\u{feff}' | '\u{a}' | '\u{d}' | '\u{2028}' | '\u{2029}'
-                | '\u{20}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
+            '\u{9}'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{feff}'
+                | '\u{a}'
+                | '\u{d}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{20}'
+                | '\u{a0}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
         )
     };
     let t = s.trim_matches(ws);

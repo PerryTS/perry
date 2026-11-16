@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// (verdict, number of target bodies) of the `.cb` call sites in `fire`.
 fn cb_calls(pf: &crate::ProgramFacts) -> Vec<(crate::Verdict, usize)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let mut v: Vec<_> = pf
         .sites
         .iter()
@@ -49,7 +53,8 @@ console.log(n);"
     let pf = facts(&src);
     let v = cb_calls(&pf);
     assert!(
-        v.iter().any(|(vd, b)| matches!(vd, crate::Verdict::T0Set) && *b == 2),
+        v.iter()
+            .any(|(vd, b)| matches!(vd, crate::Verdict::T0Set) && *b == 2),
         "{v:?}\n{}",
         pf.dump_text()
     );
@@ -67,7 +72,8 @@ console.log(n);"
     let pf = facts(&src);
     let v = cb_calls(&pf);
     assert!(
-        v.iter().any(|(vd, b)| matches!(vd, crate::Verdict::T0Mono) && *b == 1),
+        v.iter()
+            .any(|(vd, b)| matches!(vd, crate::Verdict::T0Mono) && *b == 1),
         "{v:?}\n{}",
         pf.dump_text()
     );

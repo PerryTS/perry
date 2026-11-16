@@ -26,7 +26,10 @@ fn a_for_in_key_read_of_a_json_value_reads_no_builtin_member() {
     let (ok, d) = run(SETUP_ARGV, &body(JSON_S, "name"));
     assert!(ok, "{d}");
     let (ok, _) = run(SETUP_ARGV, &body(JSON_S, "k"));
-    assert!(!ok, "control: an unknown key may name an Array.prototype method");
+    assert!(
+        !ok,
+        "control: an unknown key may name an Array.prototype method"
+    );
     let (ok, _) = run(SETUP_ARGV, &body(UNKNOWN_S, "name"));
     assert!(!ok, "control: unknown subject");
     // The program's own write onto `Array.prototype` makes an enumerable
@@ -36,5 +39,8 @@ fn a_for_in_key_read_of_a_json_value_reads_no_builtin_member() {
         "const f: any = new Function(process.argv[2])();\n(Array.prototype as any).extra = f;\n{JSON_S}"
     );
     let (ok, _) = run(SETUP_ARGV, &body(&extra, "name"));
-    assert!(!ok, "control: Array.prototype.extra = f is read by the for-in key");
+    assert!(
+        !ok,
+        "control: Array.prototype.extra = f is read by the for-in key"
+    );
 }

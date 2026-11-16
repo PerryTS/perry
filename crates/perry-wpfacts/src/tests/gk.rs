@@ -90,7 +90,10 @@ fn gk_g2_new_constructs_stored() {
         const e: any = new CustomEvent(\"x\", { detail: n });
         console.log(e.type, /*A*/ n.v);";
     let (v, dump) = verdict(src, "v", "/*B*/");
-    assert!(live(&v), "MyCE constructed by `new CustomEvent` (live, proven), got {v:?}\n{dump}");
+    assert!(
+        live(&v),
+        "MyCE constructed by `new CustomEvent` (live, proven), got {v:?}\n{dump}"
+    );
     let (v, dump) = verdict(src, "v", "/*A*/");
     assert!(proven(&v), "n.v proven, got {v:?}\n{dump}");
 }
@@ -109,7 +112,10 @@ fn gk_g2_native_reader_sees_stored() {
         const t: any = new TE(n);
         console.log(t);";
     let (v, dump) = verdict(src, "v", "/*B*/");
-    assert!(!format!("{v:?}").contains("Dead"), "U may be constructed through util.TextEncoder, got {v:?}\n{dump}");
+    assert!(
+        !format!("{v:?}").contains("Dead"),
+        "U may be constructed through util.TextEncoder, got {v:?}\n{dump}"
+    );
 }
 
 /// KEEP: the old behaviour (n escapes) where the rule does not apply.

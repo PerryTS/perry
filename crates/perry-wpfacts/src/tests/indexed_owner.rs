@@ -143,7 +143,6 @@ fn numeric_constructor_arguments_keep_owner_identity_without_inventing_an_extent
     }
 }
 
-
 #[test]
 fn numeric_element_writes_do_not_masquerade_as_metadata_writes() {
     for units in [false, true] {

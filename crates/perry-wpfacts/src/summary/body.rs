@@ -1,12 +1,12 @@
 //! Inert encoding of a sealed body input. No live solver state is available
 //! here: solved-value snapshots and global ownership choices belong to the
 //! batch adapter, not to this construction interface.
+use super::REACH_ALL;
 use super::{
     call_nodes, cons_fields, is_slot, map_call, map_cons, read_dst, Summary, CALL, CAP_OWN, SLOT,
 };
 use crate::model::{CallId, CallSite, Cons, FnIdx, Key, NodeId, TmplId, Tok, NO_NODE};
 use crate::pts::{FxHashMap, FxHashSet};
-use super::REACH_ALL;
 
 /// An environment operand addresses the supplied lexical port, not its
 /// current contents. Absolute operands retain external node identity.

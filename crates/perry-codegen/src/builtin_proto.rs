@@ -129,11 +129,11 @@ fn pair_callee<'e>(ns: &str, generic: &'e perry_hir::Expr) -> Option<&'e perry_h
         return None;
     };
     match object.as_ref() {
-        Expr::PropertyGet { object: g, property, .. }
-            if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns =>
-        {
-            Some(callee.as_ref())
-        }
+        Expr::PropertyGet {
+            object: g,
+            property,
+            ..
+        } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(callee.as_ref()),
         _ => None,
     }
 }
@@ -306,8 +306,12 @@ pub(crate) fn lower_namespace_guard(
                 return crate::expr::lower_expr(ctx, fast);
             }
             return match compact_generic(ns, generic) {
-                Some((_, member, args)) if ns == "console" => lower_console_generic_call(ctx, member, args),
-                Some((family, member, args)) => emit_namespace_generic_call(ctx, family, member, args),
+                Some((_, member, args)) if ns == "console" => {
+                    lower_console_generic_call(ctx, member, args)
+                }
+                Some((family, member, args)) => {
+                    emit_namespace_generic_call(ctx, family, member, args)
+                }
                 None => crate::expr::lower_expr(ctx, generic),
             };
         }

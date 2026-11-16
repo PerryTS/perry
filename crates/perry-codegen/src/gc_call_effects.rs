@@ -520,11 +520,8 @@ fn is_shadow_call_text(line: &str) -> bool {
     line.contains("@js_shadow_slot_bind(") || line.contains("@js_shadow_slot_set(")
 }
 
-fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
-    effects_of_ignoring(gc, function, defined, None)
-}
-
-/// [`effects_of`] with the direct calls of `ignored` not counted as edges.
+/// What `function` can do to the heap, with the direct calls of `ignored`
+/// not counted as edges.
 fn effects_of_ignoring(
     gc: &GcEffects,
     function: &LlFunction,
@@ -547,7 +544,8 @@ fn effects_of_ignoring(
                             callee.as_str(),
                             "js_shadow_slot_bind" | "js_shadow_slot_set"
                         ) => {}
-                FinalItem::Inst(LlInst::Call { callee, .. }) if Some(callee.as_str()) == ignored => {}
+                FinalItem::Inst(LlInst::Call { callee, .. })
+                    if Some(callee.as_str()) == ignored => {}
                 FinalItem::Inst(LlInst::Call { callee, .. }) => {
                     note_direct_callee(gc, &mut effects, callee, defined)
                 }
@@ -601,10 +599,7 @@ pub(crate) fn transitive_leaf_functions(
 /// stack an error records. Its stack-limit check (a RangeError at a depth
 /// ECMA-262 leaves to the implementation) stays in the inlined copy and
 /// tests the caller's frame (`inprocess/stack_checks.rs`).
-pub(crate) fn frame_silent_functions(
-    gc: &GcEffects,
-    functions: &[&LlFunction],
-) -> HashSet<String> {
+pub(crate) fn frame_silent_functions(gc: &GcEffects, functions: &[&LlFunction]) -> HashSet<String> {
     leaf_closure(gc, functions, Some("js_stack_overflow"))
 }
 
@@ -616,7 +611,12 @@ fn leaf_closure(
     let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
     let effects: HashMap<&str, FunctionEffects> = functions
         .iter()
-        .map(|f| (f.name.as_str(), effects_of_ignoring(gc, f, &defined, ignored)))
+        .map(|f| {
+            (
+                f.name.as_str(),
+                effects_of_ignoring(gc, f, &defined, ignored),
+            )
+        })
         .collect();
 
     let mut collecting: HashSet<&str> = effects
@@ -853,10 +853,16 @@ mod tests {
 
         let silent = super::frame_silent_functions(&test_effects(), &functions);
         for name in ["leaf", "guarded", "calls_guarded"] {
-            assert!(silent.contains(name), "{name} records no frame apart from its stack check");
+            assert!(
+                silent.contains(name),
+                "{name} records no frame apart from its stack check"
+            );
         }
         for name in ["throwing", "calls_throwing"] {
-            assert!(!silent.contains(name), "{name} may allocate, so may throw and record frames");
+            assert!(
+                !silent.contains(name),
+                "{name} may allocate, so may throw and record frames"
+            );
         }
         // The stack check is still an edge for the statepoint question.
         let leaves = transitive_leaf_functions(&functions);

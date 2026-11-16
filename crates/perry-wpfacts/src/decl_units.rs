@@ -15,10 +15,6 @@ use perry_hir::{Export, Expr, Import, Module, Stmt};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnitView<'a> {
     pub closure_bodies: FxHashMap<u32, &'a Expr>,
-    /// Bindings declared by this unit's source items. Literal-layout classes
-    /// copied into the view are analysis context, not owned lexical bodies.
-    pub binding_locals: FxHashSet<u32>,
-    pub binding_funcs: FxHashSet<u32>,
     pub foreign_locals: FxHashMap<u32, String>,
     pub foreign_funcs: FxHashMap<u32, String>,
     pub foreign_globals: FxHashMap<u32, String>,
@@ -34,11 +30,6 @@ pub(crate) struct UnitView<'a> {
     pub closed: FxHashMap<String, u32>,
     /// The other units' closed functions it refers to (it calls them).
     pub closed_refs: Vec<String>,
-    /// DECISIONS 157: the published classes among `closed` (exported, used
-    /// as a value, extended, with static members): every unit holding one
-    /// holds its stand-in, which forwards it as an open class's and
-    /// publishes what its constructions pass.
-    pub published: FxHashSet<String>,
     /// DECISIONS 195: its closed locals (decision 23) passed by name as a
     /// direct argument: the only ones whose value can reach another unit's
     /// code. Any other closed local is called only here.
@@ -49,18 +40,6 @@ pub(crate) struct UnitView<'a> {
     /// `n++`), by HIR id with the local name of their import: written
     /// through the binding's write effect (`Gen::local_write`), not joined.
     pub written: Vec<(u32, String)>,
-    /// The names it refers to that no unit of its module owns: its imports
-    /// (and globals). The driver orders it after the units owning them
-    /// (decision 21).
-    pub ext_names: FxHashSet<String>,
-    /// The `ext_names` that only parameter types name (§11.4): the entry guard
-    /// reads their contracts, no value of theirs is used.
-    pub type_names: FxHashSet<String>,
-    /// The units of this module only its parameter types name.
-    pub type_deps: Vec<usize>,
-    /// The member paths read off imported names (`ns.k`, `ns.a.b`): for a
-    /// namespace import, the keys whose declaring units it reads.
-    pub ns_paths: Vec<(String, Vec<String>)>,
     /// Its items, as indices into the one module it is cut from: a view
     /// borrows the module, it copies nothing of it (phase 03m, CWN3M: the
     /// per-unit module clones were 16.4 GB of tscwork's 23 GB). `classes`
@@ -106,36 +85,13 @@ pub(crate) fn module_of(p: &str) -> &str {
     }
 }
 
-/// What an item refers to: read edges (`to`) and joins (both ways: a
-/// class's state, a local two items share), and the locals it writes.
+/// The class names an item refers to: read edges and joins (a class's
+/// state).
 #[derive(Default)]
 struct Refs {
     names: Vec<String>,
-    locals: Vec<u32>,
-    funcs: Vec<u32>,
-    globals: Vec<u32>,
     join_names: Vec<String>,
-    join_locals: Vec<u32>,
-    join_globals: Vec<u32>,
-    /// The chunk functions of a literal birth it holds (a call passing
-    /// `Expr::LiteralChunkObject`): joined, they initialize its object.
-    join_funcs: Vec<u32>,
-    /// Locals the item declares (closure parameters here; `declared` adds
-    /// its functions' parameters, `let`s and catch bindings).
-    declared: Vec<u32>,
-    /// The closures inside the item.
-    closures: Vec<u32>,
-    /// The member paths read off external names (`ns.a.b`: `("ns", [a, b])`).
-    ns_paths: Vec<(String, Vec<String>)>,
-    /// The named types of its parameters (an entry guard's class, §11.4).
-    param_types: Vec<String>,
-    /// The locals it writes (also in `locals`).
-    writes: Vec<u32>,
 }
-
-
-
-
 
 /// Expressions that name a class by its name.
 fn class_name_refs(e: &Expr, r: &mut Refs) {
@@ -197,15 +153,6 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
     }
 }
 
-
-
-
-
-
-
-
-
-
 /// The lowering of an object literal in source order (`((__perry_obj_iife)
 /// => { …; return __perry_obj_iife })({})`): an expression, whose defines
 /// are the literal's birth (`Gen::call_expr`), not a body that runs once.
@@ -214,7 +161,6 @@ fn class_name_refs(e: &Expr, r: &mut Refs) {
 pub(crate) fn obj_literal_iife(params: &[perry_hir::Param]) -> bool {
     params.len() == 1 && params[0].name == "__perry_obj_iife"
 }
-
 
 /// Decision 23: every `let` an item declares inside its functions (any
 /// depth, closure bodies included; class members not: their locals stay
@@ -244,8 +190,6 @@ fn local_lets(module: &Module, it: Item, out: &mut Vec<(u32, Option<(String, u32
         Item::Class(_) => {}
     }
 }
-
-
 
 /// The closed bindings of `module` (decision 13, every export counting)
 /// whose every reference is the callee of a direct call or a TDZ check:
@@ -597,6 +541,3 @@ fn closed(
     }
     (cand, out, published, passed)
 }
-
-
-

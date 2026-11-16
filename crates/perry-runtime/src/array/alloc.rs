@@ -637,10 +637,8 @@ unsafe fn js_array_from_arraylike_with_missing(
     let length_val = crate::object::js_object_get_field_by_name_f64(obj, length_key);
     // 7.1.20 ToLength( 7.1.4 ToNumber( length ) ): an object `length` runs its
     // `@@toPrimitive` / `valueOf` / `toString` (the receiver stays rooted).
-    let (length_val, obj) = super::splice_slice::index_operand_across(
-        obj as *const ArrayHeader,
-        length_val,
-    );
+    let (length_val, obj) =
+        super::splice_slice::index_operand_across(obj as *const ArrayHeader, length_val);
     let obj = obj as *const crate::object::ObjectHeader;
     let length_bits = length_val.to_bits();
     // ToLength coercion: NaN / undefined / non-finite / negative → 0.

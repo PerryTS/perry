@@ -13,11 +13,17 @@ use super::*;
 /// as the driver resolves them (a literal names its module). Returns the
 /// unknown values' reasons, whether the realm is held, per-module worker
 /// side, and the pts sizes of function `f`'s parameters.
-fn solve(mods: &[(&str, &str)], roots: &[&str], worker_paths: &[&str]) -> (Vec<String>, bool, Vec<bool>, Vec<usize>) {
+fn solve(
+    mods: &[(&str, &str)],
+    roots: &[&str],
+    worker_paths: &[&str],
+) -> (Vec<String>, bool, Vec<bool>, Vec<usize>) {
     let mut hirs = Vec::new();
     for (name, src) in mods {
         let path = format!("{name}.ts");
-        let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, &path).unwrap()));
+        let ast = Box::leak(Box::new(
+            perry_parser::parse_typescript(src, &path).unwrap(),
+        ));
         let mut hir = perry_hir::lower_module(ast, name, &path).unwrap();
         for imp in &mut hir.imports {
             if let Some(n) = imp.source.strip_prefix("./") {
@@ -44,7 +50,10 @@ fn solve(mods: &[(&str, &str)], roots: &[&str], worker_paths: &[&str]) -> (Vec<S
                 hir.imports.push(i);
             }
         }
-        hirs.push((Box::leak(path.into_boxed_str()) as &str, &*Box::leak(Box::new(hir))));
+        hirs.push((
+            Box::leak(path.into_boxed_str()) as &str,
+            &*Box::leak(Box::new(hir)),
+        ));
     }
     let mut g = crate::gen::Gen::new(hirs, false, true);
     g.roots = roots.iter().map(|r| r.to_string()).collect();
@@ -55,13 +64,28 @@ fn solve(mods: &[(&str, &str)], roots: &[&str], worker_paths: &[&str]) -> (Vec<S
     g.feed_parent_values();
     g.m.summarize_and_replay();
     g.m.solve();
-    let f = g.m.funcs.iter().find(|f| f.name == "f" || f.name.ends_with(":f") || f.name.ends_with("::f"));
+    let f =
+        g.m.funcs
+            .iter()
+            .find(|f| f.name == "f" || f.name.ends_with(":f") || f.name.ends_with("::f"));
     if f.is_none() {
-        eprintln!("funcs: {:?}", g.m.funcs.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
+        eprintln!(
+            "funcs: {:?}",
+            g.m.funcs.iter().map(|f| f.name.clone()).collect::<Vec<_>>()
+        );
     }
-    let ps = f.map_or(Vec::new(), |f| f.params.iter().map(|&p| g.m.nodes[p as usize].pts.len()).collect());
+    let ps = f.map_or(Vec::new(), |f| {
+        f.params
+            .iter()
+            .map(|&p| g.m.nodes[p as usize].pts.len())
+            .collect()
+    });
     let mut tops: Vec<String> = g.m.top_vals.keys().cloned().collect();
-    tops.extend(g.m.escaped.values().map(|&r| g.m.reasons[r as usize].clone()));
+    tops.extend(
+        g.m.escaped
+            .values()
+            .map(|&r| g.m.reasons[r as usize].clone()),
+    );
     (tops, g.m.realm_held, g.m.worker_side.clone(), ps)
 }
 
@@ -132,7 +156,10 @@ fn w3l_k4_deleted_then_called() {
     let src = "delete (globalThis as any).addEventListener;\n\
         try { addEventListener(\"resize\", () => {}); } catch (e) { console.log(\"RE\"); }\n";
     let (tops, held, _, _) = solve(&[("main", src)], &[], &[]);
-    assert!(!unknown_ael(&tops), "no Worker native, no replaced sentinel: {tops:?}");
+    assert!(
+        !unknown_ael(&tops),
+        "no Worker native, no replaced sentinel: {tops:?}"
+    );
     let _ = held;
 }
 
@@ -161,8 +188,22 @@ fn w3l_r2_compute_path_proves_the_bare_call() {
     cfg.max_work.get_or_insert(50_000_000);
     let pf = crate::compute(&list, &cfg);
     let at = STORED.find("addEventListener(").unwrap() as u32;
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.byte_offset >= at && s.byte_offset < at + 20).map(|s| (s.key.clone(), s.verdict.clone())).collect();
-    assert!(!v.is_empty() && v.iter().all(|(_, v)| !format!("{v:?}").starts_with("No(")), "{v:?}\n{}", pf.dump_text().lines().filter(|l| l.contains("addEventListener") || l.contains("unksrc")).take(20).collect::<Vec<_>>().join("\n"));
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.byte_offset >= at && s.byte_offset < at + 20)
+        .map(|s| (s.key.clone(), s.verdict.clone()))
+        .collect();
+    assert!(
+        !v.is_empty() && v.iter().all(|(_, v)| !format!("{v:?}").starts_with("No(")),
+        "{v:?}\n{}",
+        pf.dump_text()
+            .lines()
+            .filter(|l| l.contains("addEventListener") || l.contains("unksrc"))
+            .take(20)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 // K6: `console.log` lowers to the same sentinel (`GlobalGet(0).log`): the

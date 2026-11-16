@@ -1342,7 +1342,9 @@ pub(super) fn key_of_init_addr(addr: usize) -> Option<String> {
 impl PathModuleRegistry {
     /// (key, init address, status 0 registered / 1 initializing / 2 initialized / 3 failed,
     /// exports bits, factory bits), sorted by key.
-    pub(super) fn snap_image_entries(&self) -> Vec<(String, Option<usize>, u8, Option<u64>, Option<u64>)> {
+    pub(super) fn snap_image_entries(
+        &self,
+    ) -> Vec<(String, Option<usize>, u8, Option<u64>, Option<u64>)> {
         let state = self.lock();
         let mut v: Vec<_> = state
             .entries

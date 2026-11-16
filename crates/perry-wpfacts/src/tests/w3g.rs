@@ -34,7 +34,9 @@ fn verdict(src: &str, key: &str, marker: &str) -> (Verdict, String) {
 
 /// Does unknown code hold the realm after the solve (`Model::realm_held`)?
 fn held(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -74,7 +76,10 @@ fn w3g_global_fn_store_holds_nothing() {
     ] {
         let (v, dump) = verdict(&program(store), "v", "/*A*/");
         assert!(proven(&v), "{store}: n.v proven, got {v:?}\n{dump}");
-        assert!(!held(&program(store)), "{store}: no E20 sink, realm not held\n{dump}");
+        assert!(
+            !held(&program(store)),
+            "{store}: no E20 sink, realm not held\n{dump}"
+        );
     }
 }
 

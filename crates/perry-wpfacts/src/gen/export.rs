@@ -1302,7 +1302,6 @@ impl<'a> Gen<'a> {
         n
     }
 
-
     /// A literal-shape object, a plain object literal (DECISIONS 94) or an
     /// enum's object (§18.2) of this unit no census report broke.
     fn literal_ok(&self, tm: TmplId) -> bool {

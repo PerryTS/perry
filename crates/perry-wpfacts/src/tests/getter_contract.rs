@@ -9,7 +9,6 @@
 
 use super::*;
 
-
 /// The verdicts of the reads (or, `call`, the calls) of `key` in the last
 /// module, whole program and per unit.
 fn verdicts(mods: &[(&str, &str)], key: &str, call: bool) -> (Vec<Verdict>, Vec<Verdict>) {

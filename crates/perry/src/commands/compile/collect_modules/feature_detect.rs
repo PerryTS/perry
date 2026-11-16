@@ -8,6 +8,7 @@
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
 mod global_object;
+mod native_constants;
 mod process_ipc;
 mod regex_members;
 mod usage;
@@ -579,7 +580,9 @@ fn intrinsic_view(module: &perry_hir::Module) -> Option<perry_hir::Module> {
     fn pair(expr: &perry_hir::Expr) -> bool {
         match expr {
             perry_hir::Expr::NamespacePatched(_) => return true,
-            perry_hir::Expr::Closure { body, .. } if stmts_any_expr(body, &mut pair) => return true,
+            perry_hir::Expr::Closure { body, .. } if stmts_any_expr(body, &mut pair) => {
+                return true
+            }
             _ => {}
         }
         let mut found = false;
@@ -832,6 +835,7 @@ fn detect_optional_feature_usage_with_capabilities(
         .iter()
         .any(|name| hir_debug.contains(name));
     ctx.uses_json_format |= module_uses_json_format(hir_module);
+    ctx.uses_dynamic_native_constants |= native_constants::may_escape(hir_module);
     if global_object::may_escape(hir_module) {
         ctx.uses_global_json = true;
         ctx.uses_url = true;
@@ -1927,10 +1931,77 @@ class C {
     #[test]
     fn mathc4_pair_features_equal_the_final_hir() {
         fn flags(ctx: &crate::commands::compile::CompilationContext) -> Vec<(&'static str, bool)> {
-            vec![("needs_wasm_runtime", ctx.needs_wasm_runtime), ("needs_ui", ctx.needs_ui), ("needs_plugins", ctx.needs_plugins), ("needs_stdlib", ctx.needs_stdlib), ("needs_geisterhand", ctx.needs_geisterhand), ("uses_data_url_dynamic_import", ctx.uses_data_url_dynamic_import), ("uses_dynamic_import_options", ctx.uses_dynamic_import_options), ("uses_fetch", ctx.uses_fetch), ("uses_crypto_builtins", ctx.uses_crypto_builtins), ("uses_zlib_brotli", ctx.uses_zlib_brotli), ("uses_zlib_zstd", ctx.uses_zlib_zstd), ("uses_web_compression_stream", ctx.uses_web_compression_stream), ("uses_regex", ctx.uses_regex), ("uses_temporal", ctx.uses_temporal), ("uses_event_emitter", ctx.uses_event_emitter), ("uses_url", ctx.uses_url), ("uses_string_normalize", ctx.uses_string_normalize), ("uses_intl_segmenter", ctx.uses_intl_segmenter), ("uses_intl_namespace", ctx.uses_intl_namespace), ("uses_global_math", ctx.uses_global_math), ("uses_global_json", ctx.uses_global_json), ("uses_json_format", ctx.uses_json_format), ("uses_json_engine", ctx.uses_json_engine), ("uses_computed_member_keys", ctx.uses_computed_member_keys), ("uses_date_computed_member_keys", ctx.uses_date_computed_member_keys), ("uses_file_handle_capability", ctx.uses_file_handle_capability), ("uses_bun_file_capability", ctx.uses_bun_file_capability), ("uses_turnloop", ctx.uses_turnloop), ("uses_bigint", ctx.uses_bigint), ("uses_proxy", ctx.uses_proxy), ("uses_global_reflect", ctx.uses_global_reflect), ("uses_global_atomics", ctx.uses_global_atomics), ("uses_global_url", ctx.uses_global_url), ("uses_global_text", ctx.uses_global_text), ("uses_global_websocket", ctx.uses_global_websocket), ("uses_global_webcrypto", ctx.uses_global_webcrypto), ("uses_global_webfetch", ctx.uses_global_webfetch), ("uses_proc_ipc", ctx.uses_proc_ipc), ("uses_intl_locale", ctx.uses_intl_locale), ("uses_intl_datetime", ctx.uses_intl_datetime), ("uses_diagnostics", ctx.uses_diagnostics), ("uses_dgram", ctx.uses_dgram), ("uses_child_process", ctx.uses_child_process), ("uses_node_test", ctx.uses_node_test), ("uses_get_builtin_module", ctx.uses_get_builtin_module), ("uses_upgrade_to_tls", ctx.uses_upgrade_to_tls), ("uses_dns", ctx.uses_dns), ("needs_thread", ctx.needs_thread)]
+            vec![
+                ("needs_wasm_runtime", ctx.needs_wasm_runtime),
+                ("needs_ui", ctx.needs_ui),
+                ("needs_plugins", ctx.needs_plugins),
+                ("needs_stdlib", ctx.needs_stdlib),
+                ("needs_geisterhand", ctx.needs_geisterhand),
+                (
+                    "uses_data_url_dynamic_import",
+                    ctx.uses_data_url_dynamic_import,
+                ),
+                (
+                    "uses_dynamic_import_options",
+                    ctx.uses_dynamic_import_options,
+                ),
+                ("uses_fetch", ctx.uses_fetch),
+                ("uses_crypto_builtins", ctx.uses_crypto_builtins),
+                ("uses_zlib_brotli", ctx.uses_zlib_brotli),
+                ("uses_zlib_zstd", ctx.uses_zlib_zstd),
+                (
+                    "uses_web_compression_stream",
+                    ctx.uses_web_compression_stream,
+                ),
+                ("uses_regex", ctx.uses_regex),
+                ("uses_temporal", ctx.uses_temporal),
+                ("uses_event_emitter", ctx.uses_event_emitter),
+                ("uses_url", ctx.uses_url),
+                ("uses_string_normalize", ctx.uses_string_normalize),
+                ("uses_intl_segmenter", ctx.uses_intl_segmenter),
+                ("uses_intl_namespace", ctx.uses_intl_namespace),
+                ("uses_global_math", ctx.uses_global_math),
+                ("uses_global_json", ctx.uses_global_json),
+                ("uses_json_format", ctx.uses_json_format),
+                ("uses_json_engine", ctx.uses_json_engine),
+                ("uses_computed_member_keys", ctx.uses_computed_member_keys),
+                (
+                    "uses_date_computed_member_keys",
+                    ctx.uses_date_computed_member_keys,
+                ),
+                (
+                    "uses_file_handle_capability",
+                    ctx.uses_file_handle_capability,
+                ),
+                ("uses_bun_file_capability", ctx.uses_bun_file_capability),
+                ("uses_turnloop", ctx.uses_turnloop),
+                ("uses_bigint", ctx.uses_bigint),
+                ("uses_proxy", ctx.uses_proxy),
+                ("uses_global_reflect", ctx.uses_global_reflect),
+                ("uses_global_atomics", ctx.uses_global_atomics),
+                ("uses_global_url", ctx.uses_global_url),
+                ("uses_global_text", ctx.uses_global_text),
+                ("uses_global_websocket", ctx.uses_global_websocket),
+                ("uses_global_webcrypto", ctx.uses_global_webcrypto),
+                ("uses_global_webfetch", ctx.uses_global_webfetch),
+                ("uses_proc_ipc", ctx.uses_proc_ipc),
+                ("uses_intl_locale", ctx.uses_intl_locale),
+                ("uses_intl_datetime", ctx.uses_intl_datetime),
+                ("uses_diagnostics", ctx.uses_diagnostics),
+                ("uses_dgram", ctx.uses_dgram),
+                ("uses_child_process", ctx.uses_child_process),
+                ("uses_node_test", ctx.uses_node_test),
+                ("uses_get_builtin_module", ctx.uses_get_builtin_module),
+                ("uses_upgrade_to_tls", ctx.uses_upgrade_to_tls),
+                ("uses_dns", ctx.uses_dns),
+                ("needs_thread", ctx.needs_thread),
+            ]
         }
         fn imports(ctx: &crate::commands::compile::CompilationContext) -> Vec<String> {
-            ctx.native_module_imports.iter().map(|s| s.to_string()).collect()
+            ctx.native_module_imports
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
         }
         let mut set = perry_hir::PatchedBuiltins::default();
         set.namespace_pairs = true;
@@ -1996,5 +2067,4 @@ class C {
         }
         perry_hir::set_patched_builtins(std::sync::Arc::new(perry_hir::PatchedBuiltins::default()));
     }
-
 }

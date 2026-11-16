@@ -660,11 +660,7 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" && !ctx.shadows_unqualified_global("Math") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
-                    match math_intrinsic(
-                        method_name,
-                        args,
-                        has_spread,
-                    ) {
+                    match math_intrinsic(method_name, args, has_spread) {
                         Ok(e) => return Ok(Ok(e)),
                         Err(a) if has_spread => return Ok(Err(a)),
                         // A member the intrinsic declined (a count of arguments
@@ -673,7 +669,11 @@ pub(super) fn try_module_static_methods(
                         // already evaluated in order (13.3.6.1). The bare
                         // `GlobalGet(0).<m>` receiver of the fall-through below would
                         // read `globalThis.<m>`.
-                        Err(a) if super::super::array_fold::is_known_math_static_method(method_name) => {
+                        Err(a)
+                            if super::super::array_fold::is_known_math_static_method(
+                                method_name,
+                            ) =>
+                        {
                             let math = Expr::PropertyGet {
                                 byte_end: 0,
                                 byte_offset: 0,
@@ -1490,54 +1490,34 @@ pub(crate) fn math_intrinsic(
     }
     match method_name {
         "floor" if !args.is_empty() => {
-            return Ok(Expr::MathFloor(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathFloor(Box::new(args.into_iter().next().unwrap())));
         }
         "ceil" if !args.is_empty() => {
-            return Ok(Expr::MathCeil(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathCeil(Box::new(args.into_iter().next().unwrap())));
         }
         "round" if !args.is_empty() => {
-            return Ok(Expr::MathRound(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathRound(Box::new(args.into_iter().next().unwrap())));
         }
         "trunc" if !args.is_empty() => {
-            return Ok(Expr::MathTrunc(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathTrunc(Box::new(args.into_iter().next().unwrap())));
         }
         "sign" if !args.is_empty() => {
-            return Ok(Expr::MathSign(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathSign(Box::new(args.into_iter().next().unwrap())));
         }
         "abs" if !args.is_empty() => {
-            return Ok(Expr::MathAbs(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAbs(Box::new(args.into_iter().next().unwrap())));
         }
         "sqrt" if !args.is_empty() => {
-            return Ok(Expr::MathSqrt(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathSqrt(Box::new(args.into_iter().next().unwrap())));
         }
         "log" if !args.is_empty() => {
-            return Ok(Expr::MathLog(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathLog(Box::new(args.into_iter().next().unwrap())));
         }
         "log2" if !args.is_empty() => {
-            return Ok(Expr::MathLog2(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathLog2(Box::new(args.into_iter().next().unwrap())));
         }
         "log10" if !args.is_empty() => {
-            return Ok(Expr::MathLog10(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathLog10(Box::new(args.into_iter().next().unwrap())));
         }
         "pow" if args.len() >= 2 => {
             let mut args_iter = args.into_iter();
@@ -1582,34 +1562,22 @@ pub(crate) fn math_intrinsic(
             return Ok(Expr::MathImul(Box::new(a), Box::new(b)));
         }
         "sin" if !args.is_empty() => {
-            return Ok(Expr::MathSin(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathSin(Box::new(args.into_iter().next().unwrap())));
         }
         "cos" if !args.is_empty() => {
-            return Ok(Expr::MathCos(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathCos(Box::new(args.into_iter().next().unwrap())));
         }
         "tan" if !args.is_empty() => {
-            return Ok(Expr::MathTan(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathTan(Box::new(args.into_iter().next().unwrap())));
         }
         "asin" if !args.is_empty() => {
-            return Ok(Expr::MathAsin(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAsin(Box::new(args.into_iter().next().unwrap())));
         }
         "acos" if !args.is_empty() => {
-            return Ok(Expr::MathAcos(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAcos(Box::new(args.into_iter().next().unwrap())));
         }
         "atan" if !args.is_empty() => {
-            return Ok(Expr::MathAtan(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAtan(Box::new(args.into_iter().next().unwrap())));
         }
         "atan2" if args.len() >= 2 => {
             let mut args_iter = args.into_iter();
@@ -1618,17 +1586,13 @@ pub(crate) fn math_intrinsic(
             return Ok(Expr::MathAtan2(Box::new(y), Box::new(x)));
         }
         "cbrt" if !args.is_empty() => {
-            return Ok(Expr::MathCbrt(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathCbrt(Box::new(args.into_iter().next().unwrap())));
         }
         "hypot" => {
             return Ok(Expr::MathHypot(args));
         }
         "fround" if !args.is_empty() => {
-            return Ok(Expr::MathFround(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathFround(Box::new(args.into_iter().next().unwrap())));
         }
         "f16round" if !args.is_empty() => {
             return Ok(Expr::MathF16round(Box::new(
@@ -1636,54 +1600,34 @@ pub(crate) fn math_intrinsic(
             )));
         }
         "clz32" if !args.is_empty() => {
-            return Ok(Expr::MathClz32(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathClz32(Box::new(args.into_iter().next().unwrap())));
         }
         "expm1" if !args.is_empty() => {
-            return Ok(Expr::MathExpm1(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathExpm1(Box::new(args.into_iter().next().unwrap())));
         }
         "log1p" if !args.is_empty() => {
-            return Ok(Expr::MathLog1p(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathLog1p(Box::new(args.into_iter().next().unwrap())));
         }
         "sinh" if !args.is_empty() => {
-            return Ok(Expr::MathSinh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathSinh(Box::new(args.into_iter().next().unwrap())));
         }
         "cosh" if !args.is_empty() => {
-            return Ok(Expr::MathCosh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathCosh(Box::new(args.into_iter().next().unwrap())));
         }
         "tanh" if !args.is_empty() => {
-            return Ok(Expr::MathTanh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathTanh(Box::new(args.into_iter().next().unwrap())));
         }
         "asinh" if !args.is_empty() => {
-            return Ok(Expr::MathAsinh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAsinh(Box::new(args.into_iter().next().unwrap())));
         }
         "acosh" if !args.is_empty() => {
-            return Ok(Expr::MathAcosh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAcosh(Box::new(args.into_iter().next().unwrap())));
         }
         "atanh" if !args.is_empty() => {
-            return Ok(Expr::MathAtanh(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathAtanh(Box::new(args.into_iter().next().unwrap())));
         }
         "exp" if !args.is_empty() => {
-            return Ok(Expr::MathExp(Box::new(
-                args.into_iter().next().unwrap(),
-            )));
+            return Ok(Expr::MathExp(Box::new(args.into_iter().next().unwrap())));
         }
         _ => {} // Fall through to generic handling
     }

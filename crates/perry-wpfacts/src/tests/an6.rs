@@ -51,7 +51,11 @@ fn touch_of_a_native_born_box_settles() {
          console.log(`${a}`, a.toLocaleString(), String(o));",
     ] {
         let pf = settled(prog, 300).unwrap_or_else(|| panic!("no fixed point in 300 s: {prog}"));
-        assert!(!pf.stats.aborted, "work bound hit: {prog}\n{}", pf.dump_text());
+        assert!(
+            !pf.stats.aborted,
+            "work bound hit: {prog}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -75,5 +79,9 @@ console.log(s.length); // SITE
         .filter(|s| !s.is_call && s.key == "length" && (line..at as u32).contains(&s.byte_offset))
         .collect();
     assert!(!sites.is_empty(), "missing SITE\n{}", pf.dump_text());
-    assert!(sites.iter().all(|s| !matches!(s.verdict, Verdict::No(_))), "{}", pf.dump_text());
+    assert!(
+        sites.iter().all(|s| !matches!(s.verdict, Verdict::No(_))),
+        "{}",
+        pf.dump_text()
+    );
 }

@@ -233,7 +233,8 @@ fn judge(name: &str, v: &Val) -> Judge {
         }
     } else if name.starts_with("perry_concat_site_") {
         concat_site_word(v)
-    } else if name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|q| is(q)) {
+    } else if name.starts_with("mi_") || name.starts_with("_mi_") || PRISTINE.iter().any(|q| is(q))
+    {
         Judge::Pristine
     } else {
         Judge::Keep
@@ -250,6 +251,7 @@ struct Classified {
 /// Name every changed root word. A word in a pristine static is dropped; a
 /// word no symbol covers, one a static's rule stops, or one that holds a heap,
 /// stack or symbol-space address outside a pristine static, is unresolved.
+#[cfg(test)]
 fn classify(words: &[Word], st: &Symtab, data_start: u64) -> Classified {
     classify_with(words, st, data_start, false)
 }
@@ -295,7 +297,10 @@ fn classify_with(words: &[Word], st: &Symtab, data_start: u64, record: bool) -> 
         };
         let Some(s) = sym_at(if tls { &st.tls } else { &st.mem }, a) else {
             c.unresolved.push(if tls {
-                format!("{kind}+{:#x}: unnamed TLS word (outside every named TLS symbol)", w.off)
+                format!(
+                    "{kind}+{:#x}: unnamed TLS word (outside every named TLS symbol)",
+                    w.off
+                )
             } else {
                 format!("{kind}+{:#x}: no symbol names it", w.off)
             });
@@ -392,19 +397,22 @@ fn val_ll(v: &Val, ncells: usize) -> Result<(u64, String), String> {
             }
             (
                 1,
-                at(
-                    &format!("perry_snap_cell_{index}"),
-                    add(*hi, CELL_HEADER),
-                ),
+                at(&format!("perry_snap_cell_{index}"), add(*hi, CELL_HEADER)),
             )
         }
-        Val::Ext { hi, region, off, .. } => {
+        Val::Ext {
+            hi, region, off, ..
+        } => {
             let sym = match *region {
                 format::REGION_STRINGS => "__start_perry_strings",
                 format::REGION_LAYOUTS => "__start_perry_layouts",
                 format::REGION_ATOMS => "__start_perry_atoms",
                 format::REGION_EXE => "__executable_start",
-                r => return Err(format!("a value points into region {r}, which has no address")),
+                r => {
+                    return Err(format!(
+                        "a value points into region {r}, which has no address"
+                    ))
+                }
             };
             (2 | (u64::from(*region) << 8), at(sym, add(*hi, *off)))
         }
@@ -439,7 +447,8 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
                 ty.push(format!("[{} x i8]", o - pos));
                 val.push(bytes_ll(&c.bytes[pos..o]));
             }
-            let (_, e) = val_ll(v, nc).map_err(|m| format!("cell {ci} (type {}) slot {o}: {m}", c.obj_type))?;
+            let (_, e) = val_ll(v, nc)
+                .map_err(|m| format!("cell {ci} (type {}) slot {o}: {m}", c.obj_type))?;
             ty.push("i64".to_string());
             val.push(format!("i64 {e}"));
             pos = o + 8;
@@ -528,7 +537,13 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
     ll += &table("perry_snap_cells", nc, 2, &cell_rows);
     ll += &table("perry_snap_slots", slot_rows.len(), 3, &slot_rows);
     ll += &table("perry_snap_words", word_rows.len(), 4, &word_rows);
-    for n in ["perry_snap_cells", "perry_snap_slots", "perry_snap_words", "perry_snap_claims", "perry_snap_registry"] {
+    for n in [
+        "perry_snap_cells",
+        "perry_snap_slots",
+        "perry_snap_words",
+        "perry_snap_claims",
+        "perry_snap_registry",
+    ] {
         used.push(format!("@{n}"));
     }
     ll += &cells;
@@ -543,7 +558,10 @@ fn image_ll(img: &Image, words: &[Word], data_start: u64) -> Result<String, Stri
     ll += &format!(
         "@llvm.used = appending global [{} x ptr] [{}], section \"llvm.metadata\"\n",
         used.len(),
-        used.iter().map(|u| format!("ptr {u}")).collect::<Vec<_>>().join(", ")
+        used.iter()
+            .map(|u| format!("ptr {u}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     Ok(ll)
 }
@@ -578,11 +596,17 @@ fn decode_section(sec: &[u8], vaddr: u64, b: &Bases) -> Result<Image, String> {
     let mut img = Image {
         pending: pending as u32,
         claims_from: cf as u32,
-        claims: format::parse_claims_blob(sec.get(cp..).ok_or("the claim record is outside the section")?)
-            .ok_or("the claim record is malformed")?,
-        registry: format_read::parse_registry_blob(sec.get(rp..).ok_or("the registry record is outside the section")?)
-            .ok_or("the registry record is malformed")?
-            .0,
+        claims: format_read::parse_claims_blob(
+            sec.get(cp..)
+                .ok_or("the claim record is outside the section")?,
+        )
+        .ok_or("the claim record is malformed")?,
+        registry: format_read::parse_registry_blob(
+            sec.get(rp..)
+                .ok_or("the registry record is outside the section")?,
+        )
+        .ok_or("the registry record is malformed")?
+        .0,
         ..Image::default()
     };
     let mut user: std::collections::HashMap<u64, u32> = Default::default();
@@ -688,7 +712,11 @@ fn proof(b0: &[Sec], b1: &[Sec]) -> Result<usize, String> {
     if bad.is_empty() {
         Ok(n)
     } else {
-        Err(format!("{} section(s) differ: {}", bad.len(), bad.join("; ")))
+        Err(format!(
+            "{} section(s) differ: {}",
+            bad.len(),
+            bad.join("; ")
+        ))
     }
 }
 
@@ -704,19 +732,29 @@ fn placeholder_ll() -> String {
 pub(super) fn placeholder(work: &Path, target: Option<&str>) -> Result<(PathBuf, String), String> {
     let obj = perry_codegen::linker::compile_ll_to_object(
         &placeholder_ll(),
-        target.and_then(perry_codegen::resolve_target_triple).as_deref(),
+        target
+            .and_then(perry_codegen::resolve_target_triple)
+            .as_deref(),
     )
     .map_err(|e| format!("placeholder object: {e}"))?;
     let path = work.join("_perry_snap_placeholder.o");
     std::fs::write(&path, obj).map_err(|e| format!("placeholder object: {e}"))?;
-    Ok((path, format!("-Wl,--section-start={SECTION}={IMAGE_ADDR:#x}")))
+    Ok((
+        path,
+        format!("-Wl,--section-start={SECTION}={IMAGE_ADDR:#x}"),
+    ))
 }
 
 /// The placeholder is in B0 where it must be and the bss cannot reach it.
 fn check_b0_layout(secs: &[Sec], end: u64) -> Result<(), String> {
     match secs.iter().find(|s| s.name == SECTION) {
         Some(s) if s.addr == IMAGE_ADDR => {}
-        Some(s) => return Err(format!("B0 has the placeholder at {:#x}, wanted {IMAGE_ADDR:#x}", s.addr)),
+        Some(s) => {
+            return Err(format!(
+                "B0 has the placeholder at {:#x}, wanted {IMAGE_ADDR:#x}",
+                s.addr
+            ))
+        }
         None => return Err("B0 has no placeholder section".into()),
     }
     if end + IMAGE_HEADROOM > IMAGE_ADDR {
@@ -781,10 +819,16 @@ fn parse_phdrs(text: &str) -> Vec<(u64, String)> {
 /// segment (its file contents and size differ by design).
 fn phdr_proof(b0: &[(u64, String)], b1: &[(u64, String)]) -> Result<usize, String> {
     let rows = |v: &[(u64, String)]| -> Vec<String> {
-        v.iter().filter(|r| r.0 != IMAGE_ADDR).map(|r| r.1.clone()).collect()
+        v.iter()
+            .filter(|r| r.0 != IMAGE_ADDR)
+            .map(|r| r.1.clone())
+            .collect()
     };
     let (r0, r1) = (rows(b0), rows(b1));
-    if !b0.iter().any(|r| r.0 == IMAGE_ADDR) || !b1.iter().any(|r| r.0 == IMAGE_ADDR) || r0.is_empty() {
+    if !b0.iter().any(|r| r.0 == IMAGE_ADDR)
+        || !b1.iter().any(|r| r.0 == IMAGE_ADDR)
+        || r0.is_empty()
+    {
         return Err("a program header table has no image segment or no rows".to_string());
     }
     if r0 != r1 {
@@ -792,7 +836,11 @@ fn phdr_proof(b0: &[(u64, String)], b1: &[(u64, String)]) -> Result<usize, Strin
             .iter()
             .filter(|r| !r1.contains(r))
             .map(|r| format!("B0 only: {r}"))
-            .chain(r1.iter().filter(|r| !r0.contains(r)).map(|r| format!("B1 only: {r}")))
+            .chain(
+                r1.iter()
+                    .filter(|r| !r0.contains(r))
+                    .map(|r| format!("B1 only: {r}")),
+            )
             .collect();
         return Err(format!("program headers differ: {}", d.join("; ")));
     }
@@ -844,14 +892,26 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         return Err(stop_summary(&img.stops));
     }
     let (syms, secs, phdrs) = probe(b0)?;
-    let need = |n: &str| find_sym(&syms, n).ok_or_else(|| format!("B0 has no symbol {n} (symbols stripped?)"));
-    let (data_start, end, exe_start) = (need("__data_start")?, need("_end")?, need("__executable_start")?);
+    let need = |n: &str| {
+        find_sym(&syms, n).ok_or_else(|| format!("B0 has no symbol {n} (symbols stripped?)"))
+    };
+    let (data_start, end, exe_start) = (
+        need("__data_start")?,
+        need("_end")?,
+        need("__executable_start")?,
+    );
     check_b0_layout(&secs, end)?;
-    let est: u64 = img.cells.iter().map(|c| c.bytes.len() as u64 + 64 + 32 * c.slots.len() as u64).sum::<u64>()
+    let est: u64 = img
+        .cells
+        .iter()
+        .map(|c| c.bytes.len() as u64 + 64 + 32 * c.slots.len() as u64)
+        .sum::<u64>()
         + 64 * img.words.len() as u64
         + 4096;
     if est > IMAGE_WINDOW {
-        return Err(format!("the image needs about {est:#x} bytes, the window holds {IMAGE_WINDOW:#x}"));
+        return Err(format!(
+            "the image needs about {est:#x} bytes, the window holds {IMAGE_WINDOW:#x}"
+        ));
     }
     let c = classify_with(&img.words, &syms, data_start, !img.registry.is_empty());
     if !c.unresolved.is_empty() {
@@ -865,8 +925,13 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         ));
     }
     let ll = image_ll(&img, &c.kept, data_start)?;
-    let obj = perry_codegen::linker::compile_ll_to_object(&ll, target.and_then(perry_codegen::resolve_target_triple).as_deref())
-        .map_err(|e| format!("image object: {e}"))?;
+    let obj = perry_codegen::linker::compile_ll_to_object(
+        &ll,
+        target
+            .and_then(perry_codegen::resolve_target_triple)
+            .as_deref(),
+    )
+    .map_err(|e| format!("image object: {e}"))?;
     let object = work.join("_perry_snap_image.o");
     std::fs::write(&object, obj).map_err(|e| format!("image object: {e}"))?;
     let b0_dump = format_read::dump(&img);
@@ -888,7 +953,12 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         b0_syms: [data_start, end, exe_start],
         b0_phdrs: phdrs,
         dropped: c.dropped,
-        dropped_by: c.dropped_by.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; "),
+        dropped_by: c
+            .dropped_by
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; "),
         total_words,
         b0_dump,
     })
@@ -903,7 +973,10 @@ pub(super) fn verify(b1: &Path, p: &Prepared) -> Result<String, String> {
     let sym = |n: &str| find_sym(&st, n).unwrap_or(0);
     let now = [sym("__data_start"), sym("_end"), sym("__executable_start")];
     if now != p.b0_syms {
-        return Err(format!("B1 moved a boundary symbol: {:x?} in B0, {now:x?} in B1", p.b0_syms));
+        return Err(format!(
+            "B1 moved a boundary symbol: {:x?} in B0, {now:x?} in B1",
+            p.b0_syms
+        ));
     }
     let s = secs
         .iter()
@@ -998,10 +1071,20 @@ mod tests {
         let t = parse_syms(SYMS);
         assert_eq!(t.mem.len(), 3);
         assert_eq!(t.tls.len(), 1);
-        assert_eq!(sym_at(&t.mem, 0x600014).map(|s| s.name.as_str()), Some("perry_global_x"));
+        assert_eq!(
+            sym_at(&t.mem, 0x600014).map(|s| s.name.as_str()),
+            Some("perry_global_x")
+        );
         assert!(sym_at(&t.mem, 0x600008).is_none());
         let s = parse_secs("  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0\n  [16] .tdata            PROGBITS        0000000000600000 001000 000010 00 WAT  0   0  8\n");
-        assert_eq!(s, vec![Sec { name: ".tdata".into(), addr: 0x600000, size: 0x10 }]);
+        assert_eq!(
+            s,
+            vec![Sec {
+                name: ".tdata".into(),
+                addr: 0x600000,
+                size: 0x10
+            }]
+        );
     }
 
     #[test]
@@ -1023,18 +1106,31 @@ mod tests {
     }
 
     fn cell(slots: Vec<(u32, Val)>) -> Cell {
-        Cell { obj_type: 2, flags: 0x15, reserved: 0, size: 24, bytes: vec![7; 24], slots }
+        Cell {
+            obj_type: 2,
+            flags: 0x15,
+            reserved: 0,
+            size: 24,
+            bytes: vec![7; 24],
+            slots,
+        }
     }
 
-    const RES: &str = "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation11RESERVATION.0.llvm.1171";
+    const RES: &str =
+        "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation11RESERVATION.0.llvm.1171";
 
     #[test]
     fn pristine_names_match_exact_paths_not_substrings() {
         let o = Val::Opaque(0x7f00_0000_1000);
         assert_eq!(judge(RES, &o), Judge::Pristine);
         assert_eq!(judge("x_reservation_y", &o), Judge::Keep);
-        let longer = "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation13RESERVATION_X";
-        assert_eq!(judge(longer, &o), Judge::Keep, "a longer last component is another static");
+        let longer =
+            "_RNvNtNtNtCsXbwMRDrjNy_13perry_runtime5arena6region11reservation13RESERVATION_X";
+        assert_eq!(
+            judge(longer, &o),
+            Judge::Keep,
+            "a longer last component is another static"
+        );
         assert_eq!(judge("heap_main", &o), Judge::Pristine);
         assert_eq!(judge("not_heap_main_x", &o), Judge::Keep);
     }
@@ -1069,7 +1165,11 @@ mod tests {
         let ws = [word(format::WORD_DATA, 0x38, Val::Sym(0x7c07_79e0_0010))];
         let c = classify(&ws, &t, 0x600000);
         assert!(c.kept.is_empty());
-        assert!(c.unresolved[0].contains("symbol-space"), "{:?}", c.unresolved);
+        assert!(
+            c.unresolved[0].contains("symbol-space"),
+            "{:?}",
+            c.unresolved
+        );
     }
 
     #[test]
@@ -1079,7 +1179,10 @@ mod tests {
         let (a, b) = (parse_phdrs(t0), parse_phdrs(&t1));
         assert_eq!(phdr_proof(&a, &b), Ok(1), "only the image segment differs");
         let t2 = t0.replace("0x001000 0x001000 R E", "0x002000 0x002000 R E");
-        assert!(phdr_proof(&a, &parse_phdrs(&t2)).is_err(), "a moved segment must fail");
+        assert!(
+            phdr_proof(&a, &parse_phdrs(&t2)).is_err(),
+            "a moved segment must fail"
+        );
     }
 
     #[test]
@@ -1090,7 +1193,10 @@ mod tests {
             word(format::WORD_DATA, 8, Val::Opaque(0x7f00_0000_2000)),
         ];
         let r = classify(&ws, &t, 0x600000);
-        assert_eq!(r.dropped, 1, "the allocator static is pristine whatever it holds");
+        assert_eq!(
+            r.dropped, 1,
+            "the allocator static is pristine whatever it holds"
+        );
         assert_eq!(r.unresolved.len(), 1, "{:?}", r.unresolved);
         assert!(r.unresolved[0].contains("SOME_CACHE"));
     }
@@ -1108,18 +1214,52 @@ mod tests {
 
     #[test]
     fn cells_become_link_time_constants() {
-        let tag = Val::Cell { hi: 0x7FFD, bare: false, index: 1 };
+        let tag = Val::Cell {
+            hi: 0x7FFD,
+            bare: false,
+            index: 1,
+        };
         let img = Image {
-            cells: vec![cell(vec![(8, tag)]), cell(vec![(16, Val::Ext { hi: 0, bare: true, region: format::REGION_EXE, off: 0x40 })])],
+            cells: vec![
+                cell(vec![(8, tag)]),
+                cell(vec![(
+                    16,
+                    Val::Ext {
+                        hi: 0,
+                        bare: true,
+                        region: format::REGION_EXE,
+                        off: 0x40,
+                    },
+                )]),
+            ],
             ..Image::default()
         };
         let ll = image_ll(&img, &[], 0).expect("ll");
-        assert!(ll.contains(&format!("@perry_snap_cell_1, i64 {})", ((0x7FFDu64 << 48) + 8) as i64)), "{ll}");
+        assert!(
+            ll.contains(&format!(
+                "@perry_snap_cell_1, i64 {})",
+                ((0x7FFDu64 << 48) + 8) as i64
+            )),
+            "{ll}"
+        );
         assert!(ll.contains("ptr @__executable_start, i64 64"), "{ll}");
         assert!(ll.contains("section \"perry_snap_image\""));
-        let bad = Image { cells: vec![cell(vec![(8, Val::Opaque(0x7f00_0000_2000))])], ..Image::default() };
+        let bad = Image {
+            cells: vec![cell(vec![(8, Val::Opaque(0x7f00_0000_2000))])],
+            ..Image::default()
+        };
         assert!(image_ll(&bad, &[], 0).is_err());
-        let idx = Image { cells: vec![cell(vec![(8, Val::Cell { hi: 0, bare: true, index: 5 })])], ..Image::default() };
+        let idx = Image {
+            cells: vec![cell(vec![(
+                8,
+                Val::Cell {
+                    hi: 0,
+                    bare: true,
+                    index: 5,
+                },
+            )])],
+            ..Image::default()
+        };
         assert!(image_ll(&idx, &[], 0).is_err());
     }
 
@@ -1128,12 +1268,31 @@ mod tests {
         let v = 0x1000_0000u64;
         let mut s = vec![0u8; 300];
         let mut put = |o: usize, x: u64| s[o..o + 8].copy_from_slice(&x.to_le_bytes());
-        for (o, x) in [(0, SECTION_MAGIC), (8, 1), (16, 2), (24, 1), (32, 7), (40, v + 88), (48, v + 104), (56, v + 152), (64, v + 208), (72, 3), (80, v + 224)] {
+        for (o, x) in [
+            (0, SECTION_MAGIC),
+            (8, 1),
+            (16, 2),
+            (24, 1),
+            (32, 7),
+            (40, v + 88),
+            (48, v + 104),
+            (56, v + 152),
+            (64, v + 208),
+            (72, 3),
+            (80, v + 224),
+        ] {
             put(o, x);
         }
         put(88, v + 184);
         put(96, 2 | 0x15 << 8 | 24 << 32);
-        for (o, x) in [(104, 0), (112, 8), (120, 1), (128, 0), (136, 16), (144, 5 | 3 << 8)] {
+        for (o, x) in [
+            (104, 0),
+            (112, 8),
+            (120, 1),
+            (128, 0),
+            (136, 16),
+            (144, 5 | 3 << 8),
+        ] {
             put(o, x);
         }
         for (o, x) in [(152, 0), (160, 0x600010), (168, 0), (176, 5)] {
@@ -1142,13 +1301,46 @@ mod tests {
         put(192, (0x7FFDu64 << 48) | (v + 184 + 8));
         let blob = format::claims_blob(&[b"ab".to_vec(), b"c".to_vec()]);
         s[208..208 + blob.len()].copy_from_slice(&blob);
-        let rec = format::RegRec { key: b"k".to_vec(), init_off: 9, status: 2, exports: Some(Val::Cell { hi: 0x7FFD, bare: false, index: 0 }), factory: None };
+        let rec = format::RegRec {
+            key: b"k".to_vec(),
+            init_off: 9,
+            status: 2,
+            exports: Some(Val::Cell {
+                hi: 0x7FFD,
+                bare: false,
+                index: 0,
+            }),
+            factory: None,
+        };
         let rb = format::registry_blob(std::slice::from_ref(&rec));
         s[224..224 + rb.len()].copy_from_slice(&rb);
-        let b = Bases { strings: 0, layouts: 0, atoms: 0, exe: 0x400000, data_start: 0x600000 };
+        let b = Bases {
+            strings: 0,
+            layouts: 0,
+            atoms: 0,
+            exe: 0x400000,
+            data_start: 0x600000,
+        };
         let got = decode_section(&s, v, &b).expect("decode");
         let want = Image {
-            cells: vec![Cell { obj_type: 2, flags: 0x15, reserved: 0, size: 24, bytes: vec![0u8; 24], slots: vec![(8, Val::Cell { hi: 0x7FFD, bare: false, index: 0 }), (16, Val::Derived(3))] }],
+            cells: vec![Cell {
+                obj_type: 2,
+                flags: 0x15,
+                reserved: 0,
+                size: 24,
+                bytes: vec![0u8; 24],
+                slots: vec![
+                    (
+                        8,
+                        Val::Cell {
+                            hi: 0x7FFD,
+                            bare: false,
+                            index: 0,
+                        },
+                    ),
+                    (16, Val::Derived(3)),
+                ],
+            }],
             words: vec![word(format::WORD_DATA, 0x10, Val::Scalar(5))],
             stops: vec![],
             pending: 7,
@@ -1172,7 +1364,14 @@ mod tests {
     #[test]
     fn a_derived_slot_is_a_zero_word_in_the_ir() {
         let img = Image {
-            cells: vec![Cell { obj_type: 8, flags: 0, reserved: 0, size: 16, bytes: vec![0u8; 16], slots: vec![(8, Val::Derived(1))] }],
+            cells: vec![Cell {
+                obj_type: 8,
+                flags: 0,
+                reserved: 0,
+                size: 16,
+                bytes: vec![0u8; 16],
+                slots: vec![(8, Val::Derived(1))],
+            }],
             ..Image::default()
         };
         let ll = image_ll(&img, &[], 0x600000).expect("ir");
@@ -1182,7 +1381,18 @@ mod tests {
 
     #[test]
     fn a_moved_section_fails_the_proof() {
-        let a = vec![Sec { name: ".data".into(), addr: 0x600000, size: 16 }, Sec { name: ".bss".into(), addr: 0x600010, size: 8 }];
+        let a = vec![
+            Sec {
+                name: ".data".into(),
+                addr: 0x600000,
+                size: 16,
+            },
+            Sec {
+                name: ".bss".into(),
+                addr: 0x600010,
+                size: 8,
+            },
+        ];
         assert_eq!(proof(&a, &a), Ok(2));
         let mut b = a.clone();
         b[1].addr += 0x1000;
@@ -1195,10 +1405,22 @@ mod tests {
 
     #[test]
     fn every_other_section_must_be_equal_and_all_moves_are_listed() {
-        let sec = |n: &str, a: u64, z: u64| Sec { name: n.into(), addr: a, size: z };
+        let sec = |n: &str, a: u64, z: u64| Sec {
+            name: n.into(),
+            addr: a,
+            size: z,
+        };
         // The image section itself differs in size and does not count.
-        let b0 = vec![sec(".text", 0x401000, 0x100), sec(".data", 0x600000, 16), sec(SECTION, IMAGE_ADDR, 8)];
-        let b1 = vec![sec(".text", 0x401000, 0x100), sec(".data", 0x600000, 16), sec(SECTION, IMAGE_ADDR, 0x900)];
+        let b0 = vec![
+            sec(".text", 0x401000, 0x100),
+            sec(".data", 0x600000, 16),
+            sec(SECTION, IMAGE_ADDR, 8),
+        ];
+        let b1 = vec![
+            sec(".text", 0x401000, 0x100),
+            sec(".data", 0x600000, 16),
+            sec(SECTION, IMAGE_ADDR, 0x900),
+        ];
         assert_eq!(proof(&b0, &b1), Ok(2));
         // Two sections moved and one appeared: all three are named.
         let mut c = b1.clone();
@@ -1206,13 +1428,22 @@ mod tests {
         c[1].size += 8;
         c.push(sec(".extra", 0x700000, 4));
         let e = proof(&b0, &c).unwrap_err();
-        assert!(e.contains(".text") && e.contains(".data") && e.contains(".extra"), "{e}");
+        assert!(
+            e.contains(".text") && e.contains(".data") && e.contains(".extra"),
+            "{e}"
+        );
         assert!(e.starts_with("3 section(s) differ"), "{e}");
     }
 
     #[test]
     fn the_image_address_is_checked_against_the_bss() {
-        let sec = |a: u64| vec![Sec { name: SECTION.into(), addr: a, size: 8 }];
+        let sec = |a: u64| {
+            vec![Sec {
+                name: SECTION.into(),
+                addr: a,
+                size: 8,
+            }]
+        };
         assert!(check_b0_layout(&sec(IMAGE_ADDR), 0x80_0000).is_ok());
         assert!(check_b0_layout(&sec(IMAGE_ADDR), IMAGE_ADDR - IMAGE_HEADROOM + 1).is_err());
         assert!(check_b0_layout(&sec(IMAGE_ADDR + 0x1000), 0x80_0000).is_err());
@@ -1225,7 +1456,9 @@ mod tests {
 fn stop_summary(stops: &[format::Stop]) -> String {
     let mut by: std::collections::BTreeMap<(u8, u8), (usize, u64, u32, u32)> = Default::default();
     for t in stops {
-        let e = by.entry((t.kind, t.obj_type)).or_insert((0, t.value, t.off, t.cell));
+        let e = by
+            .entry((t.kind, t.obj_type))
+            .or_insert((0, t.value, t.off, t.cell));
         e.0 += 1;
     }
     let ty = |t: u8| match t {
@@ -1286,10 +1519,19 @@ mod unit_tests {
 
     #[test]
     fn the_class_table_stop_names_each_growing_table() {
-        let st = |cell: u32, value: u64| format::Stop { cell, obj_type: 0, kind: format::STOP_CLASS_TABLES, off: 0, value };
+        let st = |cell: u32, value: u64| format::Stop {
+            cell,
+            obj_type: 0,
+            kind: format::STOP_CLASS_TABLES,
+            off: 0,
+            value,
+        };
         assert!(class_table_message(&[]).is_none());
         let m = class_table_message(&[st(0, 5), st(18, 7)]).unwrap();
-        assert!(m.contains("12 row(s)") && m.contains("declarations +5") && m.contains("names +7"), "{m}");
+        assert!(
+            m.contains("12 row(s)") && m.contains("declarations +5") && m.contains("names +7"),
+            "{m}"
+        );
     }
 
     const SY: &str = "Symbol table '.symtab' contains 5 entries:\n   Num:    Value          Size Type    Bind   Vis      Ndx Name\n    10: 0000000000600000    48 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5ATOMS\n    11: 0000000000600030     8 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern4SLOT\n    12: 0000000000600040   256 OBJECT  LOCAL  DEFAULT   24 perry_concat_site_dep__1\n    13: 0000000000600200    16 OBJECT  LOCAL  DEFAULT   24 _RNvNtNtCsXbwMRDrjNy_13perry_runtime6string6intern5STATE\n    14: 0000000000000040     8 TLS     LOCAL  DEFAULT   20 perry_tls_y\n";
@@ -1307,14 +1549,25 @@ mod unit_tests {
             w(format::WORD_DATA, 0x30, Val::Scalar(0x3e)),
         ];
         let c = classify(&ws, &t, 0x600000);
-        assert_eq!(c.kept.len(), 1, "only the single-word static stays: {:?}", c.unresolved);
-        assert!(c.unresolved.iter().any(|u| u.contains("ATOMS") && u.contains("stops as one unit")));
+        assert_eq!(
+            c.kept.len(),
+            1,
+            "only the single-word static stays: {:?}",
+            c.unresolved
+        );
+        assert!(c
+            .unresolved
+            .iter()
+            .any(|u| u.contains("ATOMS") && u.contains("stops as one unit")));
     }
 
     #[test]
     fn the_scalar_words_of_a_runtime_container_are_not_kept() {
         let t = parse_syms(SY);
-        let ws = [w(format::WORD_DATA, 0x208, Val::Scalar(5)), w(format::WORD_DATA, 0x30, Val::Scalar(7))];
+        let ws = [
+            w(format::WORD_DATA, 0x208, Val::Scalar(5)),
+            w(format::WORD_DATA, 0x30, Val::Scalar(7)),
+        ];
         let c = classify(&ws, &t, 0x600000);
         assert_eq!(c.kept.len(), 1, "{:?}", c.unresolved);
         assert!(c.unresolved.len() == 1 && c.unresolved[0].contains("STATE"));
@@ -1324,17 +1577,44 @@ mod unit_tests {
     fn a_concat_site_slot_is_pristine_only_while_it_holds_a_string() {
         let t = parse_syms(SY);
         let s = Val::Scalar(0x7FF9_0000_0000_6e30);
-        let ok = classify(&[w(format::WORD_DATA, 0x40, s.clone()), w(format::WORD_DATA, 0x48, s)], &t, 0x600000);
-        assert!(ok.unresolved.is_empty() && ok.dropped == 2, "{:?}", ok.unresolved);
-        let bad = classify(&[w(format::WORD_DATA, 0x40, Val::Scalar(0x2a))], &t, 0x600000);
-        assert!(bad.unresolved.iter().any(|u| u.contains("not a string")), "{:?}", bad.unresolved);
+        let ok = classify(
+            &[
+                w(format::WORD_DATA, 0x40, s.clone()),
+                w(format::WORD_DATA, 0x48, s),
+            ],
+            &t,
+            0x600000,
+        );
+        assert!(
+            ok.unresolved.is_empty() && ok.dropped == 2,
+            "{:?}",
+            ok.unresolved
+        );
+        let bad = classify(
+            &[w(format::WORD_DATA, 0x40, Val::Scalar(0x2a))],
+            &t,
+            0x600000,
+        );
+        assert!(
+            bad.unresolved.iter().any(|u| u.contains("not a string")),
+            "{:?}",
+            bad.unresolved
+        );
     }
 
     #[test]
     fn a_tls_word_outside_every_named_symbol_is_unnamed() {
         let t = parse_syms(SY);
-        let c = classify(&[w(format::WORD_TLS, 0x2ef88, Val::Scalar(2))], &t, 0x600000);
-        assert!(c.unresolved.iter().any(|u| u.contains("unnamed TLS word")), "{:?}", c.unresolved);
+        let c = classify(
+            &[w(format::WORD_TLS, 0x2ef88, Val::Scalar(2))],
+            &t,
+            0x600000,
+        );
+        assert!(
+            c.unresolved.iter().any(|u| u.contains("unnamed TLS word")),
+            "{:?}",
+            c.unresolved
+        );
     }
 
     #[test]
@@ -1342,20 +1622,37 @@ mod unit_tests {
         let t = parse_syms(SY);
         let ws = [w(format::WORD_DATA, 0, Val::Opaque(0x7f00_0000_1000))];
         let r = classify_with(&ws, &t, 0x600000, true);
-        assert_eq!((r.dropped, r.unresolved.len()), (0, 1), "{:?}", r.unresolved);
+        assert_eq!(
+            (r.dropped, r.unresolved.len()),
+            (0, 1),
+            "{:?}",
+            r.unresolved
+        );
     }
 }
 
 /// The class-table stop text: the total rows and which table grew by how many.
 fn class_table_message(stops: &[format::Stop]) -> Option<String> {
-    let rows: Vec<_> = stops.iter().filter(|t| t.kind == format::STOP_CLASS_TABLES).collect();
+    let rows: Vec<_> = stops
+        .iter()
+        .filter(|t| t.kind == format::STOP_CLASS_TABLES)
+        .collect();
     if rows.is_empty() {
         return None;
     }
     let total: u64 = rows.iter().map(|t| t.value).sum();
     let per: Vec<String> = rows
         .iter()
-        .map(|t| format!("{} +{}", format::CLASS_TABLE_NAMES.get(t.cell as usize).copied().unwrap_or("?"), t.value))
+        .map(|t| {
+            format!(
+                "{} +{}",
+                format::CLASS_TABLE_NAMES
+                    .get(t.cell as usize)
+                    .copied()
+                    .unwrap_or("?"),
+                t.value
+            )
+        })
         .collect();
     Some(format!(
         "the class tables grew by {total} row(s) between the baseline and the cut ({}), and the image has no form that restores them",

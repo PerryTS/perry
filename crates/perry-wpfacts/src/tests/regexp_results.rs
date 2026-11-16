@@ -8,7 +8,6 @@
 //! the captures are then what that code returns, unknown.
 use super::*;
 
-
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;
@@ -186,7 +185,6 @@ fn written_exec_split_capture_call_is_unknown() {
          console.log(f(\"abc\", /b/));\n";
     unproven(src, "return x()", "()");
 }
-
 
 /// CHB13/CHB14: a RegExp object holds `lastIndex` as an own non-configurable
 /// data property (22.2.3.1 RegExpAlloc), and `new RegExp(p, f)` reads only

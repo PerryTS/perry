@@ -20,7 +20,7 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
-crates/perry/src/commands/compile/run_pipeline.rs	6371
+crates/perry/src/commands/compile/run_pipeline.rs	6479
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2056
 # Representation-aware codegen core; further decomposition is tracked in #1435.
@@ -52,7 +52,7 @@ crates/perry-stdlib/src/streams.rs	2454
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2877
 # Shape registry table and publication invariants require a coordinated split.
-crates/perry-runtime/src/object/shapes.rs	4950
+crates/perry-runtime/src/object/shapes.rs	4911
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.

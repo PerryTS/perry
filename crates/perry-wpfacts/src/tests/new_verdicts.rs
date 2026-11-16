@@ -146,7 +146,8 @@ fn own_or_absent_control_getter_defined() {
 /// `a`'s chain stays Object.prototype: `a.FOO` is own data or absent.
 #[test]
 fn own_or_absent_control_input_key_object_value() {
-    let src = "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
+    let src =
+        "const a: any = {};\nconst k = process.argv[2];\na[k] = { n: 1 };\nconsole.log(a.FOO);";
     all(src, "FOO", false, "OwnDataOrAbsent");
 }
 
@@ -157,7 +158,6 @@ fn own_or_absent_control_known_proto_key_object_value() {
     let src = "const a: any = {};\nconst k = process.argv[2] ? \"x\" : \"__proto__\";\na[k] = { n: 1 };\nconsole.log(a.FOO);";
     none(src, "FOO", false, "OwnDataOrAbsent");
 }
-
 
 // IntrinsicCall: a value call whose callee is one intrinsic function object,
 // while no unknown code exists.
@@ -240,6 +240,10 @@ fn ns_export_control_receiver_may_be_object() {
 #[test]
 fn ns_export_control_star_reexport() {
     let main = "import * as ns from \"./a\";\nconst y = ns.u;";
-    let pf = modules(&[("b", "export const u = 4;"), ("a", "export * from \"./b\";"), ("main", main)]);
+    let pf = modules(&[
+        ("b", "export const u = 4;"),
+        ("a", "export * from \"./b\";"),
+        ("main", main),
+    ]);
     none_pf(&pf, main, "u", false, "NsExport");
 }

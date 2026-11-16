@@ -53,9 +53,7 @@ pub(crate) fn ret_param(params: &[Param], body: &[Stmt], suspends: bool) -> Opti
     });
     for_each_stmts_expr(body, &mut |e| match e {
         Expr::LocalSet(x, _) | Expr::Update { id: x, .. } if *x == id => ok = false,
-        Expr::WithSet { fallback, .. }
-            if matches!(fallback, WithSetFallback::Local(x) | WithSetFallback::SloppyImplicit(x) if *x == id) =>
-        {
+        Expr::WithSet { fallback, .. } if matches!(fallback, WithSetFallback::Local(x) | WithSetFallback::SloppyImplicit(x) if *x == id) => {
             ok = false
         }
         _ => {}

@@ -285,7 +285,9 @@ mod named_record_tests {
         };
         let text = unsafe { core::slice::from_raw_parts(base.offset(delta as isize), len) };
         assert_eq!(text, b"parseInt");
-        let identity = info.metadata_identity().expect("identity follows the name tail");
+        let identity = info
+            .metadata_identity()
+            .expect("identity follows the name tail");
         assert_eq!(identity.owner, &OWNER as *const _);
     }
 }

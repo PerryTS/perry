@@ -263,8 +263,12 @@ fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
 /// store wrote onto the chain is `intrinsic_miss`'s).
 fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
     what == Some("RegExp")
-        && members::regexp_inherited(name)
-            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+        && members::regexp_inherited(name).is_some_and(|p| {
+            matches!(
+                members::realm_chain_find(p, name),
+                members::RealmFind::Absent
+            )
+        })
 }
 
 /// The primitive kind of `name` on the chain of a realm-born object
@@ -441,8 +445,12 @@ pub(super) fn realm_chain_start(
 /// `BYTES_PER_ELEMENT`), so its chain stands for every kind's. A key a
 /// store wrote onto the chain is `intrinsic_miss`'s.
 pub(super) fn view_member_absent(what: Option<&str>, name: &str) -> bool {
-    view_chain(what)
-        .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+    view_chain(what).is_some_and(|p| {
+        matches!(
+            members::realm_chain_find(p, name),
+            members::RealmFind::Absent
+        )
+    })
 }
 
 /// The realm prototype a typed array's or a Buffer's chain starts at
@@ -618,6 +626,21 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     if namespace_getter_load(m, t, t, ns, a, dst) {
         return;
     }
+    // A global accessor whose getter the runtime declares
+    // (`localStorage.<get>`: one Storage object per kind, born on its first
+    // read): the declared result of that getter on the global object,
+    // unless the program wrote the key.
+    if ns == BuiltinNs::GlobalThis
+        && !m.unit_mode
+        && !opaque_written(m, t, a, NativeMiss::Load(dst))
+    {
+        if let Some(e) =
+            super::effects::declared_at(&name, "<get>").filter(|e| !e.effects.is_empty())
+        {
+            super::effects::getter_load(m, e, t, a, dst);
+            return;
+        }
+    }
     if !m.unit_mode {
         if let Some(n) = namespace_native(m, t, ns, &name) {
             if opaque_written(m, t, a, NativeMiss::Load(dst)) {
@@ -768,6 +791,40 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 /// code; a later such write replays the read (`NativeMiss::Global`) to the
 /// same result.
 fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId) {
+    declared_global_value(m, t, n, dst);
+    m.add_tok(dst, birth);
+}
+
+/// Global `n`, an accessor of the global object whose getter the runtime
+/// declares (`localStorage.<get>`: `returns(fresh(Storage.prototype))`):
+/// a read of the bare name or of `globalThis.n` calls that getter on the
+/// global object, the one getter call per key (`effects::getter_load`), so
+/// every read sees the one object it births; plus what the program stored
+/// under the key, as for `declared_global_load`.
+fn declared_global_getter(
+    m: &Model,
+    n: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    if m.unit_mode {
+        return None;
+    }
+    super::effects::declared_at(n, "<get>").filter(|e| !e.effects.is_empty())
+}
+
+fn declared_global_getter_load(
+    m: &mut Model,
+    t: Tok,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    n: &str,
+    dst: NodeId,
+) {
+    declared_global_value(m, t, n, dst);
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let a = m.atom(n);
+    super::effects::getter_load(m, e, g, a, dst);
+}
+
+fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
     if super::native_protocol::global_any_names(m, n) {
         super::native_protocol::global_any_read(m, dst);
     }
@@ -785,7 +842,6 @@ fn declared_global_load(m: &mut Model, t: Tok, birth: Tok, n: &str, dst: NodeId)
             m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
         }
     }
-    m.add_tok(dst, birth);
 }
 
 /// The value the realm declares for global `n` other than a namespace
@@ -804,7 +860,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     // others `NATIVE_READ_GLOBALS` lists) is the live global.
     if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Module(_)))
         && match key {
-            Key::Named(a) => super::native_protocol::NATIVE_READ_GLOBALS.contains(&m.atoms[a as usize].as_str()),
+            Key::Named(a) => {
+                super::native_protocol::NATIVE_READ_GLOBALS.contains(&m.atoms[a as usize].as_str())
+            }
             Key::Any(_) => true,
         }
     {
@@ -823,6 +881,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 } else if realm_global_object(m, n) {
                     let birth = super::native_protocol::navigator_object(m);
                     declared_global_load(m, t, birth, n, dst);
+                } else if let Some(e) = declared_global_getter(m, n) {
+                    declared_global_getter_load(m, t, e, n, dst);
                 } else if !m.unit_mode && global_function(m, n) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let key = Key::Named(m.atom(n));
@@ -900,6 +960,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n) if realm_global_object(m, n) => {
                     let birth = super::native_protocol::navigator_object(m);
                     declared_global_load(m, t, birth, n, dst);
+                }
+                Some(n) if declared_global_getter(m, n).is_some() => {
+                    let e = declared_global_getter(m, n).unwrap();
+                    declared_global_getter_load(m, t, e, n, dst);
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
@@ -979,8 +1043,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // runtime's value has that type; a write of the
                 // key (a program store, `Object.defineProperty`, unknown code),
                 // now or later in the solve, makes the read opaque.
-                Some(n) if !m.unit_mode && m.native_property(t, n).and_then(|p| p.prim).is_some() => {
-                    let p = m.native_property(t, n).and_then(|p| p.prim).expect("guarded");
+                Some(n)
+                    if !m.unit_mode && m.native_property(t, n).and_then(|p| p.prim).is_some() =>
+                {
+                    let p = m
+                        .native_property(t, n)
+                        .and_then(|p| p.prim)
+                        .expect("guarded");
                     let Key::Named(a) = key else { unreachable!() };
                     if opaque_written(m, t, a, NativeMiss::Load(dst)) {
                         return opaque_member(m, dst);
@@ -1306,10 +1375,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (_, None) if ordinary_box(m, t) => {
                         // A host object of strings holds Strings only; an
                         // absent key is `undefined` or the chain's.
-                        m.add_prim(dst, match what {
-                            "stringrecord" => prim::STR | prim::UNDEF,
-                            _ => prim::ALL,
-                        });
+                        m.add_prim(
+                            dst,
+                            match what {
+                                "stringrecord" => prim::STR | prim::UNDEF,
+                                _ => prim::ALL,
+                            },
+                        );
                         family_any(m, Some(t), Family::Object, None, key, dst);
                     }
                     // A computed key on a null-prototype object a builtin makes

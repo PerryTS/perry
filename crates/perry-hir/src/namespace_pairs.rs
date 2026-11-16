@@ -52,7 +52,10 @@ impl Arms<'_> {
     /// (a body nested in a dead one stays dead: only running its parent
     /// creates it).
     fn enter(self, id: u32) -> Self {
-        Arms { dead: self.dead || self.inactive.contains(&id), ..self }
+        Arms {
+            dead: self.dead || self.inactive.contains(&id),
+            ..self
+        }
     }
 }
 
@@ -62,15 +65,20 @@ fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
     let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
         return None;
     };
-    let Expr::PropertyGet { object, byte_offset, .. } = callee.as_ref() else {
+    let Expr::PropertyGet {
+        object,
+        byte_offset,
+        ..
+    } = callee.as_ref()
+    else {
         return None;
     };
     match object.as_ref() {
-        Expr::PropertyGet { object: g, property, .. }
-            if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns =>
-        {
-            Some(*byte_offset)
-        }
+        Expr::PropertyGet {
+            object: g,
+            property,
+            ..
+        } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(*byte_offset),
         _ => None,
     }
 }
@@ -86,7 +94,13 @@ fn alias_call(member: &str, callee: &Expr, args: &[Expr]) -> Option<Expr> {
 }
 
 fn pick(e: &mut Expr, proven: Arms<'_>) {
-    if let Expr::Call { callee, args, byte_offset, .. } = e {
+    if let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = e
+    {
         if *byte_offset != 0 {
             if let Some(member) = proven.aliases.get(byte_offset) {
                 if let Some(rewritten) = alias_call(member, callee, args) {
@@ -95,7 +109,12 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
             }
         }
     }
-    if let Expr::Conditional { condition, then_expr, else_expr } = e {
+    if let Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    } = e
+    {
         if let Expr::NamespacePatched(ns) = condition.as_ref() {
             if let Some(offset) = pair_offset(ns, then_expr) {
                 let arm = if proven.dead || (offset != 0 && proven.proven.contains(&offset)) {
@@ -118,10 +137,15 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
 fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
     for stmt in body {
         match stmt {
-            Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
-                pick(e, proven)
-            }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::Let { init: Some(e), .. }
+            | Stmt::Expr(e)
+            | Stmt::Throw(e)
+            | Stmt::Return(Some(e)) => pick(e, proven),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 pick(condition, proven);
                 stmts(then_branch, proven);
                 if let Some(b) = else_branch {
@@ -132,7 +156,12 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
                 pick(condition, proven);
                 stmts(body, proven);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init) = init {
                     stmts(std::slice::from_mut(init), proven);
                 }
@@ -145,7 +174,12 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
                 stmts(body, proven);
             }
             Stmt::Labeled { body, .. } => stmts(std::slice::from_mut(body), proven),
-            Stmt::Try { body, catch, finally, .. } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+                ..
+            } => {
                 stmts(body, proven);
                 if let Some(c) = catch {
                     stmts(&mut c.body, proven);
@@ -154,7 +188,10 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
                     stmts(b, proven);
                 }
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 pick(discriminant, proven);
                 for case in cases {
                     if let Some(e) = &mut case.test {
@@ -200,7 +237,16 @@ pub fn pick_namespace_pair_arms(
     aliases: &BTreeMap<u32, String>,
 ) -> usize {
     let kept = std::cell::Cell::new(0);
-    module_arms(module, Arms { proven, inactive, dead: false, kept: &kept, aliases });
+    module_arms(
+        module,
+        Arms {
+            proven,
+            inactive,
+            dead: false,
+            kept: &kept,
+            aliases,
+        },
+    );
     kept.get()
 }
 
@@ -214,7 +260,13 @@ pub fn take_intrinsic_arms(module: &mut Module) {
     let aliases = BTreeMap::new();
     module_arms(
         module,
-        Arms { proven: &none, inactive: &none, dead: true, kept: &kept, aliases: &aliases },
+        Arms {
+            proven: &none,
+            inactive: &none,
+            dead: true,
+            kept: &kept,
+            aliases: &aliases,
+        },
     );
 }
 
@@ -287,7 +339,8 @@ mod tests {
     /// Two functions, `run` and `never`, each returning one unproven pair
     /// (offsets 10 and 20); `never` also holds a closure with one (30).
     fn module() -> Module {
-        let source = "function run(x: number) { return x; } function never(x: number) { return x; }";
+        let source =
+            "function run(x: number) { return x; } function never(x: number) { return x; }";
         let ast = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
         let mut m = crate::lower_module(&ast, "t", "t.ts").expect("source lowers");
         for (f, offset) in m.functions.iter_mut().zip([10, 20]) {
@@ -352,7 +405,12 @@ mod tests {
     fn mathc3_pair_in_an_inactive_body_takes_the_intrinsic() {
         let mut m = module();
         let never = m.functions[1].id;
-        pick_namespace_pair_arms(&mut m, &BTreeSet::new(), &BTreeSet::from([never]), &BTreeMap::new());
+        pick_namespace_pair_arms(
+            &mut m,
+            &BTreeSet::new(),
+            &BTreeSet::from([never]),
+            &BTreeMap::new(),
+        );
         // run: generic; never: closure intrinsic, return intrinsic.
         assert_eq!(arms(&m), ["generic", "intrinsic", "intrinsic"]);
     }
@@ -362,7 +420,12 @@ mod tests {
     #[test]
     fn mathc3_no_inactive_body_keeps_the_verdict_pick() {
         let mut m = module();
-        pick_namespace_pair_arms(&mut m, &BTreeSet::from([10]), &BTreeSet::new(), &BTreeMap::new());
+        pick_namespace_pair_arms(
+            &mut m,
+            &BTreeSet::from([10]),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        );
         assert_eq!(arms(&m), ["intrinsic", "generic", "generic"]);
     }
 

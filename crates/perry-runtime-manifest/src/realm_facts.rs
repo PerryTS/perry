@@ -733,7 +733,9 @@ pub(super) fn callable(
         return Err(format!("{kind} cannot annotate fn_info!"));
     }
     if this_ignored && !matches!(kind, "method" | "function") {
-        return Err(format!("{kind}: `this = ignored` declares a function's call"));
+        return Err(format!(
+            "{kind}: `this = ignored` declares a function's call"
+        ));
     }
     if (facts.instance_attrs.is_some() || facts.extends.is_some()) && kind != "constructor" {
         return Err("prototype attributes require a constructor birth".into());

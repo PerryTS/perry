@@ -17,15 +17,15 @@ pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
-pub(crate) mod settled;
 mod own_guard;
 mod own_store;
-pub(crate) mod ret_param;
 mod param_key;
+pub(crate) mod ret_param;
+pub(crate) mod settled;
 pub(crate) use own_guard::Region;
 mod primitives;
-mod proto_first;
 mod private_methods;
+mod proto_first;
 mod shared_closures;
 mod view;
 mod walk;
@@ -234,11 +234,6 @@ pub struct Gen<'a> {
     /// element kind, the primitives beside them). `ta_reported`: the fields
     /// a reader's census reported (`ta <key> of <display>`): sunk.
     pub field_tas: FxHashMap<(TmplId, Atom), (Option<u8>, u16)>,
-    /// DECISIONS 208: while a value contract is built
-    /// (`lib::value_contract_of_toks`), the layouts of this unit it
-    /// describes: each stands in `layouts_out` until the outermost one is
-    /// built.
-    pub(crate) describing: std::cell::RefCell<Option<Vec<String>>>,
     pub ta_reported: crate::pts::FxHashSet<(String, String)>,
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
@@ -759,7 +754,6 @@ impl<'a> Gen<'a> {
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
             field_tas: FxHashMap::default(),
-            describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
             indexed_allocation_sites: FxHashMap::default(),
@@ -920,7 +914,8 @@ impl<'a> Gen<'a> {
                 ));
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 let suspends = f.is_async || f.is_generator || f.was_plain_async;
-                self.m.funcs[fx as usize].ret_param = ret_param::ret_param(&f.params, &f.body, suspends);
+                self.m.funcs[fx as usize].ret_param =
+                    ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1066,8 +1061,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-
-
     /// A stand-in of another unit's function that unknown code may hold
     /// (design §18.9, DECISIONS 67): an open contract function (no
     /// argument contract, decision 19) whose receiver is unused. Its
@@ -1083,7 +1076,6 @@ impl<'a> Gen<'a> {
             .get(&t)
             .is_some_and(|c| c.closed.is_none() && !c.callable && c.lexical_this)
     }
-
 
     /// Resolve the typed parameters' entry-guard candidates (every class and
     /// import is known by now).
@@ -1581,12 +1573,7 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for ((cm, named), method_key) in c
-            .computed_members
-            .iter()
-            .zip(named)
-            .zip(method_named)
-        {
+        for ((cm, named), method_key) in c.computed_members.iter().zip(named).zip(method_named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -2113,7 +2100,6 @@ impl<'a> Gen<'a> {
             self.m.edge(w, n);
         }
     }
-
 
     pub(crate) fn global(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(name) = self.view.and_then(|v| v.foreign_globals.get(&id)) {

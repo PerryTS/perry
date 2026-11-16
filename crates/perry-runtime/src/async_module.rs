@@ -41,7 +41,7 @@ struct AsyncModule {
     reserved: u64,
 }
 /// Size of the module record: the layout's owner states it for the census.
-#[cfg(perry_gc_instruments)]
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) const MODULE_RECORD_SIZE: usize = std::mem::size_of::<AsyncModule>();
 struct Parent {
     module: *mut AsyncModule,

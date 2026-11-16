@@ -30,11 +30,22 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// (offset, is_call, is_store, verdict) of every site of `key` in a.ts.
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Verdict)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .filter(|s| s.module == mi && s.key == key)
-        .map(|s| (s.byte_offset, s.is_call, s.access.is_store(), s.verdict.clone()))
+        .map(|s| {
+            (
+                s.byte_offset,
+                s.is_call,
+                s.access.is_store(),
+                s.verdict.clone(),
+            )
+        })
         .collect()
 }
 
@@ -42,13 +53,19 @@ fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Ve
 /// store (rule A: the store adds or sets an own data property, exact for
 /// any layout) is no layout claim, so these KEEP tests do not count it.
 fn proven(v: &crate::Verdict) -> bool {
-    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore)
+    !matches!(
+        v,
+        crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore
+    )
 }
 
 fn show(tag: &str, pf: &crate::ProgramFacts, keys: &[&str], class: &str) {
     for k in keys {
         for s in sites(pf, k) {
-            eprintln!("RB1 {tag} .{k} @{} call={} store={} verdict={:?}", s.0, s.1, s.2, s.3);
+            eprintln!(
+                "RB1 {tag} .{k} @{} call={} store={} verdict={:?}",
+                s.0, s.1, s.2, s.3
+            );
         }
     }
     for t in pf.templates.iter().filter(|t| t.display.ends_with(class)) {
@@ -102,8 +119,14 @@ console.log(v.len());
 fn r9birth1_a1_shaped_key_store_leaves_methods() {
     let pf = facts(&a_src("\"x\", \"w\""));
     show("A1", &pf, &["set", "len"], "V");
-    assert!(all(&pf, "set", true, false, true), "A1 .set call not proven");
-    assert!(all(&pf, "len", true, false, true), "A1 .len call not proven");
+    assert!(
+        all(&pf, "set", true, false, true),
+        "A1 .set call not proven"
+    );
+    assert!(
+        all(&pf, "len", true, false, true),
+        "A1 .len call not proven"
+    );
 }
 
 // A2 KEEP: the key may be "set": an own `set` may shadow the method.
@@ -111,8 +134,14 @@ fn r9birth1_a1_shaped_key_store_leaves_methods() {
 fn r9birth1_a2_key_may_name_the_method() {
     let pf = facts(&a_src("\"x\", \"set\""));
     show("A2", &pf, &["set", "len"], "V");
-    assert!(all(&pf, "set", true, false, false), "A2 .set call proven, but the key may be \"set\"");
-    assert!(all(&pf, "len", true, false, true), "A2 .len call not proven");
+    assert!(
+        all(&pf, "set", true, false, false),
+        "A2 .set call proven, but the key may be \"set\""
+    );
+    assert!(
+        all(&pf, "len", true, false, true),
+        "A2 .len call not proven"
+    );
 }
 
 // A3 KEEP: a key of unknown content may be any key.
@@ -128,7 +157,10 @@ console.log(v.len());
     );
     let pf = facts(&src);
     show("A3", &pf, &["set"], "V");
-    assert!(all(&pf, "set", true, false, false), "A3 .set call proven under an unknown key");
+    assert!(
+        all(&pf, "set", true, false, false),
+        "A3 .set call proven under an unknown key"
+    );
 }
 
 // B1: PropertyMixer's constructor. Each case ends in `break` (or is the
@@ -151,10 +183,22 @@ console.log(m.get2());
 fn r9birth1_b1_switch_cases_start_at_the_dispatch() {
     let pf = facts(B1);
     show("B1", &pf, &["mix", "ci", "buf", "wi"], "M");
-    assert!(all(&pf, "mix", false, true, true), "B1 this.mix store not proven");
-    assert!(all(&pf, "ci", false, true, true), "B1 this.ci store not proven");
-    assert!(all(&pf, "buf", false, true, true), "B1 this.buf stores not proven");
-    assert!(all(&pf, "mix", false, false, true), "B1 this.mix read not proven");
+    assert!(
+        all(&pf, "mix", false, true, true),
+        "B1 this.mix store not proven"
+    );
+    assert!(
+        all(&pf, "ci", false, true, true),
+        "B1 this.ci store not proven"
+    );
+    assert!(
+        all(&pf, "buf", false, true, true),
+        "B1 this.buf stores not proven"
+    );
+    assert!(
+        all(&pf, "mix", false, false, true),
+        "B1 this.mix read not proven"
+    );
 }
 
 // B2 KEEP: case 1 falls through into case 2: run 1 adds `b` before `a`,
@@ -175,7 +219,10 @@ console.log(n.get());
 fn r9birth1_b2_fall_through_out_of_order() {
     let pf = facts(B2);
     show("B2", &pf, &["a", "b", "c"], "N");
-    assert!(all(&pf, "c", false, true, false), "B2 this.c store proven after an out-of-order add");
+    assert!(
+        all(&pf, "c", false, true, false),
+        "B2 this.c store proven after an out-of-order add"
+    );
 }
 
 // C1: MeshStandardMaterial's constructor: `super()`, then a store of the
@@ -192,9 +239,18 @@ console.log(q.m(), q.type, String(Math.random()).length > 0);
 fn r9birth1_c1_inherited_key_store_is_no_add() {
     let pf = facts(C1);
     show("C1", &pf, &["type", "d", "c"], "Q");
-    assert!(all(&pf, "d", false, true, true), "C1 this.d store not proven");
-    assert!(all(&pf, "c", false, true, true), "C1 this.c store not proven");
-    assert!(all(&pf, "c", false, false, true), "C1 this.c read not proven");
+    assert!(
+        all(&pf, "d", false, true, true),
+        "C1 this.d store not proven"
+    );
+    assert!(
+        all(&pf, "c", false, true, true),
+        "C1 this.c store not proven"
+    );
+    assert!(
+        all(&pf, "c", false, false, true),
+        "C1 this.c read not proven"
+    );
 }
 
 // C2 KEEP: the parent constructor may return another object: `this` after
@@ -210,7 +266,10 @@ console.log(q.m());
 fn r9birth1_c2_parent_returns_an_object() {
     let pf = facts(C2);
     show("C2", &pf, &["type", "c"], "Q");
-    assert!(all(&pf, "c", false, true, false), "C2 this.c store proven although super() may return another object");
+    assert!(
+        all(&pf, "c", false, true, false),
+        "C2 this.c store proven although super() may return another object"
+    );
 }
 
 // C3 KEEP: `delete this.type` removes the inherited key: the store after it
@@ -226,5 +285,8 @@ console.log(q.m(), Object.keys(q).join());
 fn r9birth1_c3_deleted_inherited_key() {
     let pf = facts(C3);
     show("C3", &pf, &["type", "c"], "Q");
-    assert!(all(&pf, "c", false, true, false), "C3 this.c store proven after a delete of an inherited key");
+    assert!(
+        all(&pf, "c", false, true, false),
+        "C3 this.c store proven after a delete of an inherited key"
+    );
 }

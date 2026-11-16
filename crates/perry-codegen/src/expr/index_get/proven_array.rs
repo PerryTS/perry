@@ -256,19 +256,17 @@ pub(crate) fn receiver_is_proven_array(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 /// and the value is one `uitofp`: a loop bound compares as an integer.
 /// `None` when the facts do not give `Arr` (or in check mode, where the
 /// generic read stays).
-pub(crate) fn lower_length(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-) -> anyhow::Result<Option<String>> {
+pub(crate) fn lower_length(ctx: &mut FnCtx<'_>, object: &Expr) -> anyhow::Result<Option<String>> {
     if crate::verify_facts::enabled() {
         return Ok(None);
     }
     let Some((rep, receiver)) = receiver_rep(ctx, object) else {
         return Ok(None);
     };
-    crate::verify_facts::consumed(crate::verify_facts::Fact::ArrayRep, || {
-        serde_json::json!({ "receiver": receiver.label(), "length": true })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "receiver": receiver.label(), "length": true }),
+    );
     crate::facts_consumed::used();
     let arr_box = crate::expr::lower_expr(ctx, object)?;
     let bits = ctx.block().bitcast_double_to_i64(&arr_box);
@@ -294,9 +292,11 @@ pub(crate) fn lower_length(
     let fast_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = cold_idx;
-    let slow = ctx
-        .block()
-        .call(DOUBLE, "js_value_length_property_f64", &[(DOUBLE, &arr_box)]);
+    let slow = ctx.block().call(
+        DOUBLE,
+        "js_value_length_property_f64",
+        &[(DOUBLE, &arr_box)],
+    );
     let slow = ctx.block().fptoui(DOUBLE, &slow, I32);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);

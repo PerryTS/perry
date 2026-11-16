@@ -32,7 +32,9 @@ fn verdict(src: &str, key: &str, marker: &str) -> (Verdict, String) {
 /// The reasons of the unknown values the solve created (explain on, so
 /// each origin is its own node) and whether unknown code holds the realm.
 fn top_origins(src: &str) -> (Vec<String>, bool) {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, true);
     g.m.max_work = 50_000_000;
@@ -72,7 +74,10 @@ fn w3j_a_k1_program_return_runs_at_break() {
          AIP.return = function () {{ console.log(\"RET\", r.v); return {{}}; }};\n{LOOP}"
     );
     let pf = facts_of(&src);
-    assert!(pf.array_iterator_close_written.is_some(), "close is observable");
+    assert!(
+        pf.array_iterator_close_written.is_some(),
+        "close is observable"
+    );
     let (v, dump) = verdict(&src, "v", "\"RET\"");
     assert_ne!(v, Verdict::Dead, "return() body runs\n{dump}");
 }
@@ -86,7 +91,10 @@ fn w3j_a_k2_return_getter_runs_at_break() {
          Object.defineProperty(AIP, \"return\", {{ get() {{ console.log(\"GET\", r.v); return undefined; }} }});\n{LOOP}"
     );
     let pf = facts_of(&src);
-    assert!(pf.array_iterator_close_written.is_some(), "close is observable");
+    assert!(
+        pf.array_iterator_close_written.is_some(),
+        "close is observable"
+    );
     let (v, dump) = verdict(&src, "v", "\"GET\"");
     assert_ne!(v, Verdict::Dead, "getter body runs\n{dump}");
 }
@@ -100,7 +108,10 @@ fn w3j_a_k3_replaced_array_iterator_runs() {
          (Array.prototype as any)[Symbol.iterator] = function* (this: any) {{ console.log(\"IT\", r.v); yield this[0]; }};\n{LOOP}"
     );
     let pf = facts_of(&src);
-    assert!(pf.array_iteration_written.is_some(), "iteration is observable");
+    assert!(
+        pf.array_iteration_written.is_some(),
+        "iteration is observable"
+    );
     let (v, dump) = verdict(&src, "v", "\"IT\"");
     assert_ne!(v, Verdict::Dead, "iterator body runs\n{dump}");
 }
@@ -116,11 +127,17 @@ const CWD: &str = "class M { v = 1; }\nconst m = new M();\n";
 // unknown code.
 #[test]
 fn w3j_b_r1_cwd_value_call_is_declared() {
-    for call in ["const s = process.cwd?.() ?? \"\";", "const f = process.cwd; const s = f();"] {
+    for call in [
+        "const s = process.cwd?.() ?? \"\";",
+        "const f = process.cwd; const s = f();",
+    ] {
         let src = format!("{CWD}{call}\nconsole.log(s.length, m.v);\n");
         let (tops, held) = top_origins(&src);
         assert!(!held, "{call}: realm not held; unknown values {tops:?}");
-        assert!(!tops.iter().any(|t| t.contains("Process")), "{call}: {tops:?}");
+        assert!(
+            !tops.iter().any(|t| t.contains("Process")),
+            "{call}: {tops:?}"
+        );
     }
 }
 

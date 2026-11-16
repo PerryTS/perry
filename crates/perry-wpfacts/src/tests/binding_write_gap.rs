@@ -34,7 +34,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-
 /// The one constructor-function template (`new <module>:<name>…`) of
 /// function `name`.
 fn fninst<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
@@ -235,11 +234,6 @@ fn a_method_of_the_constructed_instance_runs_on_it_in_the_owner() {
     );
 }
 
-
-
-
-
-
 fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
     let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
     // The per-unit dump carries the units' outputs and reports (`# uout`).
@@ -252,8 +246,3 @@ fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
         false => crate::compute(&list, &cfg),
     }
 }
-
-
-
-
-

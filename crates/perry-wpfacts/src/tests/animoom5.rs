@@ -17,7 +17,9 @@
 use crate::model::{Model, TmplKind, TokKind};
 
 fn solved(src: &str) -> Model {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 300_000;
@@ -81,20 +83,30 @@ fn animoom5_d1_unknown_store_key_never_relinks() {
     );
     let m = solved(&src);
     assert!(!m.aborted, "D1: the solve passed its work bound");
-    assert!(chain(&m, "C5").is_empty(), "D1: C5.prototype relinked to {:?}", chain(&m, "C5"));
+    assert!(
+        chain(&m, "C5").is_empty(),
+        "D1: C5.prototype relinked to {:?}",
+        chain(&m, "C5")
+    );
 }
 
 /// D1 KEEP: the named `__proto__` store still relinks (dot form).
 #[test]
 fn animoom5_d1_keep_named_dot_relinks() {
-    let src = format!("{}( C5.prototype as any ).__proto__ = P.prototype;\n{TAIL}", classes(8));
+    let src = format!(
+        "{}( C5.prototype as any ).__proto__ = P.prototype;\n{TAIL}",
+        classes(8)
+    );
     assert_eq!(chain(&solved(&src), "C5"), vec!["P".to_string()]);
 }
 
 /// D1 KEEP: the named `__proto__` store still relinks (string form).
 #[test]
 fn animoom5_d1_keep_named_string_relinks() {
-    let src = format!("{}( C5.prototype as any )[ \"__proto__\" ] = P.prototype;\n{TAIL}", classes(8));
+    let src = format!(
+        "{}( C5.prototype as any )[ \"__proto__\" ] = P.prototype;\n{TAIL}",
+        classes(8)
+    );
     assert_eq!(chain(&solved(&src), "C5"), vec!["P".to_string()]);
 }
 
@@ -118,7 +130,10 @@ fn animoom5_d2_computed_literal_key_defines() {
     );
     let m = solved(&src);
     let lit = lit_protos(&m);
-    assert!(lit.is_empty(), "D2: the computed literal key relinked to {lit:?}");
+    assert!(
+        lit.is_empty(),
+        "D2: the computed literal key relinked to {lit:?}"
+    );
 }
 
 /// D2 KEEP: `{ __proto__: p }` and `{ "__proto__": p }` set the prototype.
@@ -142,10 +157,15 @@ fn lit_protos(m: &Model) -> Vec<String> {
         if !matches!(m.tmpls[*tm as usize].kind, TmplKind::Lit { .. }) {
             continue;
         }
-        let Some(&n) = m.proto_node.get(&(t as u32)) else { continue };
+        let Some(&n) = m.proto_node.get(&(t as u32)) else {
+            continue;
+        };
         let mut toks = Vec::new();
         m.nodes[n as usize].pts.sorted_into(&mut toks);
-        out.extend(toks.iter().filter_map(|&p| class_of(m, p as usize).map(str::to_string)));
+        out.extend(
+            toks.iter()
+                .filter_map(|&p| class_of(m, p as usize).map(str::to_string)),
+        );
     }
     out.sort();
     out.dedup();

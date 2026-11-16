@@ -348,7 +348,9 @@ impl<'a> Gen<'a> {
             // is ToBoolean): no program code runs, nothing escapes, the
             // realm is not held. The result is the descriptor's kind.
             Expr::ExternFuncRef { name, .. } if self.native_extern(fx.module, name).is_some() => {
-                let r = self.native_extern(fx.module, name).unwrap_or(crate::NativeResult::Undefined);
+                let r = self
+                    .native_extern(fx.module, name)
+                    .unwrap_or(crate::NativeResult::Undefined);
                 self.m.native_extern_fired.push((fx.module, byte_offset));
                 let _ = (args, spread, byte_end);
                 self.prim_node(match r {
@@ -430,7 +432,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn bare_user_global(&self, mi: u32, object: &Expr, property: &str) -> bool {
         !self.m.unit_mode
             && matches!(object, Expr::GlobalGet(0))
-            && !self.modules[mi as usize].1.globals.iter().any(|g| g.id == 0)
+            && !self.modules[mi as usize]
+                .1
+                .globals
+                .iter()
+                .any(|g| g.id == 0)
             && crate::builtins::sentinel_user_global(&self.m, property)
     }
 

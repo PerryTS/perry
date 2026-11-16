@@ -25,7 +25,12 @@ fn xv(body: &str) -> (u16, bool, Vec<String>) {
         "#
     );
     let pf = facts(&src);
-    let fs: Vec<_> = pf.templates.iter().flat_map(|t| &t.fields).filter(|f| f.key == "xv").collect();
+    let fs: Vec<_> = pf
+        .templates
+        .iter()
+        .flat_map(|t| &t.fields)
+        .filter(|f| f.key == "xv")
+        .collect();
     assert!(!fs.is_empty(), "no field xv");
     let mut p = 0u16;
     let mut top = false;
@@ -86,8 +91,10 @@ fn a_builtin_then_never_fulfils_with_the_thenable() {
         let b = format!("const t: any = {{ then: {t}, zz: 1 }}; Promise.resolve(t).then((x: any) => {{ holder.xv = x; }}, () => 0);");
         !xv(&b).2.is_empty()
     };
-    let bad: Vec<&str> = ["Int8Array", "Map", "Math.max", "Array", "Object"].into_iter().filter(|t| f(t)).collect();
+    let bad: Vec<&str> = ["Int8Array", "Map", "Math.max", "Array", "Object"]
+        .into_iter()
+        .filter(|t| f(t))
+        .collect();
     assert!(bad.is_empty(), "fulfilled with the thenable: {bad:#?}");
     assert!(f("5"), "then: 5 must fulfil with the thenable");
 }
-

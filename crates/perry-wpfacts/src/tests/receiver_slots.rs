@@ -151,7 +151,6 @@ fn a_real_class_prototype_exposed_to_unknown_code_keeps_its_chain_obligation() {
     assert!(tmpl(&pf, "Item").chain.is_some(), "{}", pf.dump_text());
 }
 
-
 fn own_read_is_proven(pf: &ProgramFacts, key: &str) -> bool {
     let sites: Vec<_> = pf
         .sites
@@ -316,9 +315,6 @@ fn both_modes(src: &str) -> Vec<(&'static str, ProgramFacts)> {
     };
     vec![
         ("whole", crate::compute(&[("t.ts".to_string(), &h)], &cfg)),
-        (
-            "unit",
-            crate::compute(&[("t.ts".to_string(), &h)], &cfg),
-        ),
+        ("unit", crate::compute(&[("t.ts".to_string(), &h)], &cfg)),
     ]
 }

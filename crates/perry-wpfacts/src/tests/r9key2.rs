@@ -20,7 +20,11 @@ fn pick(keys: &[&str]) -> String {
     let n = keys.len();
     let mut k = format!("{:?}", keys[n - 1]);
     for i in (0..n - 1).rev() {
-        k = format!("( r < {} ? {:?} : {k} )", (i + 1) as f64 / n as f64, keys[i]);
+        k = format!(
+            "( r < {} ? {:?} : {k} )",
+            (i + 1) as f64 / n as f64,
+            keys[i]
+        );
     }
     k
 }
@@ -30,7 +34,10 @@ fn read(recv_src: &str, keys: &str) -> Vec<String> {
         "{OBJ}const r = Math.random();\nconst k: any = {keys};\nconst o: any = {recv_src};\nconst x: any = o[ k ];\nif ( x !== undefined && x !== null ) {{ console.log( x.p ); }}\n"
     ));
     let r = recv(&pf, "p");
-    eprintln!("R9KEY2 recv={recv_src} keys={} -> {r:?}", &keys[..keys.len().min(80)]);
+    eprintln!(
+        "R9KEY2 recv={recv_src} keys={} -> {r:?}",
+        &keys[..keys.len().min(80)]
+    );
     r
 }
 
@@ -54,9 +61,46 @@ fn r9key2_b2_empty_string_key_named() {
 
 /// r9's objectName in the activation pass (R9KEY1): 40 constants, one present.
 const R9_KEYS: [&str; 40] = [
-    "material", "", "1", "2", "e1", "e2", "i", "one1", "ne1", "one2", "ne2", "kinned", "inned", "nned", "ned", "ed",
-    "d", "kinned.material", "inned.material", ".material", "k", "ki", "kin", "kinn", "kinne", "s", "b", "bo", "bon",
-    "bone", "bone1", "bone2", "sk", "ski", "skin", "skinn", "skinne", "skinned", "skinned.material", "position",
+    "material",
+    "",
+    "1",
+    "2",
+    "e1",
+    "e2",
+    "i",
+    "one1",
+    "ne1",
+    "one2",
+    "ne2",
+    "kinned",
+    "inned",
+    "nned",
+    "ned",
+    "ed",
+    "d",
+    "kinned.material",
+    "inned.material",
+    ".material",
+    "k",
+    "ki",
+    "kin",
+    "kinn",
+    "kinne",
+    "s",
+    "b",
+    "bo",
+    "bon",
+    "bone",
+    "bone1",
+    "bone2",
+    "sk",
+    "ski",
+    "skin",
+    "skinn",
+    "skinne",
+    "skinned",
+    "skinned.material",
+    "position",
 ];
 
 // B3: a set of 40 constants is 40 named reads (no size threshold).
@@ -70,7 +114,10 @@ fn r9key2_b3_forty_constants_named() {
 #[test]
 fn r9key2_b4_array_receiver_element() {
     let r = read("[ new P(), new P() ]", &pick(&["1", "position"]));
-    assert!(r.contains(&"P".to_string()) && !r.contains(&"Q".to_string()), "B4 array: {r:?}");
+    assert!(
+        r.contains(&"P".to_string()) && !r.contains(&"Q".to_string()),
+        "B4 array: {r:?}"
+    );
 }
 
 // B5 KEEP: on a String "1" is a one-character String or undefined, "length"
@@ -85,5 +132,8 @@ fn r9key2_b5_string_receiver_index() {
 #[test]
 fn r9key2_b6_unknown_key_stays_any() {
     let r = read("new O()", "String( process.argv[ 2 ] )");
-    assert!(r.contains(&"P".to_string()) && r.contains(&"Q".to_string()), "B6 argv: {r:?}");
+    assert!(
+        r.contains(&"P".to_string()) && r.contains(&"Q".to_string()),
+        "B6 argv: {r:?}"
+    );
 }

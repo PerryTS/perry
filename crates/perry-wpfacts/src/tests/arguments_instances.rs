@@ -36,7 +36,11 @@ fn recv_of(pf: &ProgramFacts, key: &str) -> String {
         .lines()
         .find(|l| l.starts_with("S ") && l.contains(&pat))
         .unwrap_or_else(|| panic!("no site .{key}\n{d}"));
-    l.split(" recv={").nth(1).and_then(|r| r.split('}').next()).unwrap_or_default().to_string()
+    l.split(" recv={")
+        .nth(1)
+        .and_then(|r| r.split('}').next())
+        .unwrap_or_default()
+        .to_string()
 }
 
 const HEAD: &str = "const unknown: any = new Function(process.argv[2])();
@@ -72,7 +76,9 @@ const HEAD: &str = "const unknown: any = new Function(process.argv[2])();
 /// `y.parent` holds only `b`, `x.parent` only `a`.
 #[test]
 fn each_child_parent_is_only_its_own_receiver() {
-    let pf = whole(&format!("{HEAD}\n a.add(x); b.add(y); console.log(y.parent.p2, x.parent.p1);"));
+    let pf = whole(&format!(
+        "{HEAD}\n a.add(x); b.add(y); console.log(y.parent.p2, x.parent.p1);"
+    ));
     assert_eq!(recv_of(&pf, "p2"), "t.cts:P2", "{}", pf.dump_text());
     assert_eq!(recv_of(&pf, "p1"), "t.cts:P1", "{}", pf.dump_text());
 }
@@ -80,14 +86,18 @@ fn each_child_parent_is_only_its_own_receiver() {
 /// `b.kids` holds only `y`.
 #[test]
 fn each_receiver_kids_hold_only_its_own_child() {
-    let pf = whole(&format!("{HEAD}\n a.add(x); b.add(y); console.log(b.kids[0].yy);"));
+    let pf = whole(&format!(
+        "{HEAD}\n a.add(x); b.add(y); console.log(b.kids[0].yy);"
+    ));
     assert_eq!(recv_of(&pf, "yy"), "t.cts:Y", "{}", pf.dump_text());
 }
 
 /// The result of `b.add(y)` is only `b`.
 #[test]
 fn each_call_result_is_only_its_own_receiver() {
-    let pf = whole(&format!("{HEAD}\n const r = a.add(x); const q = b.add(y); console.log(q.p2, r.p1);"));
+    let pf = whole(&format!(
+        "{HEAD}\n const r = a.add(x); const q = b.add(y); console.log(q.p2, r.p1);"
+    ));
     assert_eq!(recv_of(&pf, "p2"), "t.cts:P2", "{}", pf.dump_text());
     assert_eq!(recv_of(&pf, "p1"), "t.cts:P1", "{}", pf.dump_text());
 }
@@ -96,7 +106,9 @@ fn each_call_result_is_only_its_own_receiver() {
 /// call (the loop's recursive `this.add`), and only those.
 #[test]
 fn every_argument_of_one_call_is_added() {
-    let pf = whole(&format!("{HEAD}\n a.add(x, x); b.add(y); console.log(x.parent.p1, b.kids[0].yy);"));
+    let pf = whole(&format!(
+        "{HEAD}\n a.add(x, x); b.add(y); console.log(x.parent.p1, b.kids[0].yy);"
+    ));
     assert_eq!(recv_of(&pf, "p1"), "t.cts:P1", "{}", pf.dump_text());
     assert_eq!(recv_of(&pf, "yy"), "t.cts:Y", "{}", pf.dump_text());
 }
@@ -118,7 +130,9 @@ const SUM: &str = "const unknown: any = new Function(process.argv[2])();
 #[test]
 #[ignore = "open: for-of over a run's own array is not per run"]
 fn iterated_arguments_are_only_the_calls_own() {
-    let pf = whole(&format!("{SUM}\n const p = S.sum(new K1()); unknown[0] = S.sum(new K2()); console.log(p.m1);"));
+    let pf = whole(&format!(
+        "{SUM}\n const p = S.sum(new K1()); unknown[0] = S.sum(new K2()); console.log(p.m1);"
+    ));
     assert!(escape_of(&pf, "m2").is_some(), "{}", pf.dump_text());
     assert_eq!(escape_of(&pf, "m1"), None, "{}", pf.dump_text());
 }
@@ -175,5 +189,9 @@ fn an_escaped_arguments_reader_takes_unknown_arguments() {
          unknown.f = E.e; E.e(new V());",
     );
     assert!(escape_of(&pf, "w").is_some(), "{}", pf.dump_text());
-    assert!(pf.dump_text().contains("# escaped-inactive=0\n"), "{}", pf.dump_text());
+    assert!(
+        pf.dump_text().contains("# escaped-inactive=0\n"),
+        "{}",
+        pf.dump_text()
+    );
 }

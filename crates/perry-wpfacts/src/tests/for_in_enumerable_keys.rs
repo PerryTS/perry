@@ -80,7 +80,10 @@ fn copies_from_language_builtin_instances_add_no_member() {
         "{R}(Set.prototype as any).zz = new K();\nfunction copy(): any {{ const t: any = Object.create(null); const s: any = new Set(); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n"
     );
     let k = v(&w);
-    assert!(k.top || k.objs.iter().any(|o| o.ends_with(":K")), "written: {k:?}");
+    assert!(
+        k.top || k.objs.iter().any(|o| o.ends_with(":K")),
+        "written: {k:?}"
+    );
     let u = format!(
         "{R}function copy(): any {{ const t: any = Object.create(null); const s: any = new Set(); new Function(process.argv[2])(s); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n"
     );

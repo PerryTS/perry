@@ -365,7 +365,7 @@ fn collecting_call(block: &crate::block::LlBlock, effects: &GcEffects) -> Option
     // The shadow slot stores are bounds-checked TLS stores that cannot
     // allocate or collect (`gc/roots/shadow_stack.rs`; the call-free clone
     // scans exempt the same, `LlInst::is_gc_unsafe_call`), and a body whose
-    // roots lower to stack maps drops them (`gc_call_effects::effects_of`).
+    // roots lower to stack maps drops them (`gc_call_effects::effects_of_ignoring`).
     let leaf = |callee: &str| {
         callee.starts_with("llvm.")
             || matches!(callee, "js_shadow_slot_set" | "js_shadow_slot_bind")

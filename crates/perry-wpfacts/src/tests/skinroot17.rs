@@ -21,8 +21,14 @@ fn run(src: &str) -> ProgramFacts {
 /// The realm is held when `console.log(o)` may call unknown code with `o`,
 /// so `o.m()` is not the program body (`held_realm_flow`).
 fn m_mono(src: &str) -> bool {
-    let pf = run(&format!("const o = {{ m() {{ return 1; }} }};\n{src}\nconsole.log(o);\no.m();"));
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == "m" && s.is_call).collect();
+    let pf = run(&format!(
+        "const o = {{ m() {{ return 1; }} }};\n{src}\nconsole.log(o);\no.m();"
+    ));
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .collect();
     assert!(!v.is_empty(), "no call site of m");
     v.iter().all(|s| {
         let x = format!("{:?}", s.verdict);
@@ -42,7 +48,10 @@ const R1: &[&str] = &[
 #[test]
 fn r1_typed_array_value_of_is_object_prototype_value_of() {
     for src in R1 {
-        assert!(m_mono(src), "RED: ToPrimitive of a typed-array-prototype object holds the realm: {src}");
+        assert!(
+            m_mono(src),
+            "RED: ToPrimitive of a typed-array-prototype object holds the realm: {src}"
+        );
     }
 }
 
@@ -51,6 +60,15 @@ const K1: &str = "Object.getPrototypeOf(Float32Array.prototype).valueOf = functi
 #[test]
 fn keep_k1_value_of_written_on_typed_array_prototype_runs() {
     let pf = run(K1);
-    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == "go" && s.is_call).collect();
-    assert!(v.iter().any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":M"))), "{}", pf.dump_text());
+    let v: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "go" && s.is_call)
+        .collect();
+    assert!(
+        v.iter()
+            .any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":M"))),
+        "{}",
+        pf.dump_text()
+    );
 }

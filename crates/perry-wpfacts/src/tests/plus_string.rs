@@ -7,7 +7,6 @@
 //! or an object on both sides keeps the result unknown.
 use super::*;
 
-
 /// The verdict of the one `.length` site that follows `marker` in `src`.
 fn length_at(pf: &ProgramFacts, src: &str, marker: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;

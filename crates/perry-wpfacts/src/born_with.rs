@@ -52,7 +52,12 @@ pub(crate) struct Run {
 fn literal(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) | Expr::String(_)
+        Expr::Undefined
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
     )
 }
 
@@ -96,7 +101,9 @@ pub(crate) fn runs(ss: &[Stmt]) -> Vec<Run> {
                     else {
                         break;
                     };
-                    let Expr::LocalGet(x) = object.as_ref() else { break };
+                    let Expr::LocalGet(x) = object.as_ref() else {
+                        break;
+                    };
                     let quiet = *byte_offset != 0
                         && args.iter().all(|a| match a {
                             Expr::LocalGet(l) => *l != e,
@@ -156,7 +163,9 @@ pub(crate) fn store_only_keys(f: &Function) -> Option<Vec<String>> {
                 && matches!(receiver.as_ref(), Expr::This)
                 && matches!(value.as_ref(), Expr::LocalGet(l) if f.params.iter().any(|p| p.id == *l)) =>
             {
-                let Expr::String(k) = key.as_ref() else { return None };
+                let Expr::String(k) = key.as_ref() else {
+                    return None;
+                };
                 keys.push(k.clone())
             }
             Stmt::Return(None) if i + 1 == n => {}
@@ -210,20 +219,30 @@ pub(crate) fn derive(
             let key = m.atoms[a as usize].clone();
             let mut stored: Option<Vec<Atom>> = None;
             for rt in on.pts.to_sorted() {
-                let TokKind::Obj(tm, _) = m.toks[rt as usize] else { continue 'rec };
-                let Some(tf) = by_id.get(&tm) else { continue 'rec };
+                let TokKind::Obj(tm, _) = m.toks[rt as usize] else {
+                    continue 'rec;
+                };
+                let Some(tf) = by_id.get(&tm) else {
+                    continue 'rec;
+                };
                 if !tf.prefix_stable {
                     continue 'rec;
                 }
-                let Ok(ns) = crate::derive::lookup(m, tf, rt, &key, a) else { continue 'rec };
+                let Ok(ns) = crate::derive::lookup(m, tf, rt, &key, a) else {
+                    continue 'rec;
+                };
                 for n in ns {
                     let nd = &m.nodes[n as usize];
                     if nd.prim != 0 || nd.pts.is_empty() {
                         continue 'rec;
                     }
                     for ft in nd.pts.to_sorted() {
-                        let TokKind::Func(f, _) = m.toks[ft as usize] else { continue 'rec };
-                        let Some(ks) = m.store_only.get(&f) else { continue 'rec };
+                        let TokKind::Func(f, _) = m.toks[ft as usize] else {
+                            continue 'rec;
+                        };
+                        let Some(ks) = m.store_only.get(&f) else {
+                            continue 'rec;
+                        };
                         stored = Some(match stored {
                             None => ks.clone(),
                             Some(s) => s.into_iter().filter(|k| ks.contains(k)).collect(),
