@@ -68,6 +68,7 @@ mod rest_instances;
 mod rest_positions;
 mod rest_shift;
 mod builtin_fn_identity;
+mod mathb1;
 mod builtin_fn_keys;
 mod builtin_members;
 mod builtin_program_fields;
