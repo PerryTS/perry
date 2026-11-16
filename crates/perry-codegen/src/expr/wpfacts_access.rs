@@ -773,7 +773,10 @@ pub(crate) fn prove(
             continue;
         }
         if access != Access::Get {
-            let keys_global = ctx.class_keys_globals.get(&name)?;
+            let Some(keys_global) = ctx.class_keys_globals.get(&name) else {
+                crate::fallback_diag::refuse("receiver class has no keys global for the constant-function lane");
+                return None;
+            };
             if crate::codegen::slot_may_be_constfn(keys_global, idx) {
                 crate::fallback_diag::refuse("constant-function lane requires checked store");
                 return None;
@@ -814,7 +817,10 @@ pub(crate) fn prove(
     let proof = FieldProof {
         class_ids: recv.class_ids.clone(),
         class_names: names,
-        slot: slot?,
+        slot: slot.or_else(|| {
+            crate::fallback_diag::refuse("receiver has no class");
+            None
+        })?,
         slots,
         nullable: recv.nullable,
         kind_mask,
