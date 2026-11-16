@@ -94,3 +94,38 @@ fn array_index_operands_call_their_valueof() {
         );
     }
 }
+
+/// ECMA-262 23.1.3 / 23.2.3 / 23.1.2.1: the index, count and length operands of
+/// these methods are converted (ToIntegerOrInfinity / ToLength: 7.1.5, 7.1.20 ->
+/// ToNumber -> ToPrimitive hint number), so an object operand's `valueOf` runs.
+/// One program per method; the control is `an_unconverted_key_object_leaves_its_tostring_inactive`.
+#[test]
+fn index_operands_of_the_runtime_converted_methods_call_their_valueof() {
+    let v = "const v: any = { valueOf() { return Number(process.argv[2] || 1); } };\n\
+             const a: any = [1, 2, 3, 4, 5]; const u = new Uint8Array([1, 2, 3, 4, 5]);\n\
+             const f = new Float64Array([1, 2, 3, 4, 5]);\n";
+    for op in [
+        "console.log(a.at(v));",
+        "console.log(a.with(v, 9).length);",
+        "console.log(a.toSpliced(v, v).length);",
+        "console.log(a.toSpliced(0, v, 7).length);",
+        "console.log(u.subarray(v, 4).length);",
+        "console.log(f.subarray(0, v).length);",
+        "console.log(u.slice(v).length);",
+        "console.log(u.at(v));",
+        "console.log(f.at(v));",
+        "console.log(u.with(v, 9).length);",
+        "console.log(f.with(v, 9).length);",
+        "console.log(u.copyWithin(v, 0).length);",
+        "console.log(f.copyWithin(0, v).length);",
+        "console.log(u.fill(7, v).length);",
+        "console.log(f.fill(7, 0, v).length);",
+        "console.log(Array.from({ length: v }).length);",
+    ] {
+        assert_eq!(
+            inactive(&format!("{v}{op}\n")),
+            0,
+            "valueOf must be reached by: {op}"
+        );
+    }
+}
