@@ -14,6 +14,7 @@ from actions_plan import load_catalog, path_matches, select
 
 
 CATALOG = load_catalog()
+WASI_JOBS = ("wasi-native", "wasi-execution", "wasi-components")
 
 
 def selected(category: str, event_name: str, event: dict, ref: str = "refs/heads/main",
@@ -186,19 +187,45 @@ class CategoryRoutingTests(unittest.TestCase):
         import yaml
         workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
         jobs = workflow["jobs"]
-        job = jobs["wasi-execution"]
-        self.assertIn("wasi-execution", jobs["gate"]["needs"])
-        self.assertEqual(job["needs"], "plan")
-        self.assertEqual(job["if"], "needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution")
-        self.assertNotIn("continue-on-error", job)
-        for step in job["steps"]:
-            self.assertNotIn("continue-on-error", step)
-        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        steps = []
+        for name in WASI_JOBS:
+            job = jobs[name]
+            self.assertIn(name, jobs["gate"]["needs"])
+            self.assertEqual(job["needs"], "plan")
+            self.assertEqual(job["if"], "needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution")
+            self.assertNotIn("continue-on-error", job)
+            for step in job["steps"]:
+                self.assertNotIn("continue-on-error", step)
+            steps += job["steps"]
+        commands = "\n".join(step.get("run", "") for step in steps)
         for suite in ["smoke", "acceptance", "gap"]:
             self.assertIn("--suite " + suite, commands)
         self.assertIn("wasi_build_runtime.py", commands)
         self.assertIn("--features target-wasi", commands)
-        self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in job["steps"]))
+        self.assertIn("wasm_eh", commands)
+        self.assertIn("component_check.sh", commands)
+        self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in jobs["wasi-execution"]["steps"]))
+
+    def test_actual_pr_gate_rejects_one_failed_planned_wasi_job(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        command = workflow["jobs"]["gate"]["steps"][0]["run"]
+        for failed in WASI_JOBS:
+            with self.subTest(failed=failed):
+                needs = {
+                    "route": {"result": "success"},
+                    "tokio-ban": {"result": "success"},
+                    "plan": {"result": "success", "outputs": {"plan": json.dumps({"jobs": {"wasi_execution": True}})}},
+                }
+                for name in WASI_JOBS:
+                    needs[name] = {"result": "skipped" if name == failed else "success"}
+                result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                    env=dict(os.environ, NEEDS=json.dumps(needs), TIER="pr"))
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(failed, result.stdout)
 
     def test_actual_pr_gate_rejects_skipped_or_missing_planned_wasi(self):
         import os
@@ -216,7 +243,8 @@ class CategoryRoutingTests(unittest.TestCase):
                         "plan": {"result": "success", "outputs": {"plan": json.dumps({"jobs": {"wasi_execution": planned}})}}
                     }
                     if outcome is not None:
-                        needs["wasi-execution"] = {"result": outcome}
+                        for name in WASI_JOBS:
+                            needs[name] = {"result": outcome}
                     result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
                         env=dict(os.environ, NEEDS=json.dumps(needs), TIER="pr"))
                     passes = outcome == "success" or (not planned and outcome in ["skipped", None])

@@ -5326,7 +5326,62 @@ jobs:
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
   # Linux command profile has a demonstrated green baseline (run39574495557).
+  wasi-native:
+    name: wasi-native
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-codegen
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: WASI native EH toolchain and codegen regression
+      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
+    - name: Link-argument and flavour unit tests (feature-enabled)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
+        # A filter that matches nothing also exits 0: require the tests ran.
+        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
+        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
+
   wasi-execution:
+    # The WASI checks run as three parallel jobs (wasi-native, wasi-execution,
+    # wasi-components) so the PR gate waits for the longest one, not their sum.
+    # `gate` requires each planned one.
     name: wasi-execution
     permissions:
       contents: read
@@ -5371,18 +5426,8 @@ jobs:
       uses: ./.github/actions/perry/actions/setup-node
       with:
         node-version-file: .node-version
-    - name: WASI native EH toolchain and codegen regression
-      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
     - name: Build perry with the WASI target
       run: cargo build --locked --profile perry-dev -p perry --features target-wasi
-    - name: Link-argument and flavour unit tests (feature-enabled)
-      shell: bash
-      run: |
-        set -euo pipefail
-        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
-        # A filter that matches nothing also exits 0: require the tests ran.
-        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
-        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
     - name: wasm32 IR matches the runtime ABI
       run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
     - name: Install the WASI toolchain
@@ -5440,15 +5485,75 @@ jobs:
         python tests/integration/wasi/p1-host/suite.py target/perry-dev/perry \
           --host tests/integration/wasi/p1-host/target/debug/perry-p1-host \
           --output target/wasi-validation/p1-host --min-cases 26
-    - name: Typed components, resources, moving GC and cross-language composition
-      run: ./scripts/component_check.sh
-    - name: Retain WASI and component execution evidence
+    - name: Retain WASI execution evidence
       uses: ./.github/actions/perry/actions/upload-artifact
       with:
         name: wasi-required-${{ github.sha }}
         retention-days: '7'
+        path: target/wasi-validation/
+      if: always()
+
+  wasi-components:
+    name: wasi-components
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-codegen
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Install pinned Node oracle for WASI compatibility tests
+      uses: ./.github/actions/perry/actions/setup-node
+      with:
+        node-version-file: .node-version
+    - name: Install the WASI toolchain
+      shell: bash
+      run: |
+        toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+        eval "$toolchain_env"
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+        done
+    - name: Typed components, resources, moving GC and cross-language composition
+      run: ./scripts/component_check.sh
+    - name: Retain component execution evidence
+      uses: ./.github/actions/perry/actions/upload-artifact
+      with:
+        name: wasi-components-${{ github.sha }}
+        retention-days: '7'
         path: |
-          target/wasi-validation/
           target/component-validation/**/*.log
           target/component-validation/**/results.json
           target/component-validation/**/*.component.wasm
@@ -5487,7 +5592,9 @@ jobs:
       - doc-tests
       - binary-size
       - security-audit
+      - wasi-native
       - wasi-execution
+      - wasi-components
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -5515,11 +5622,13 @@ jobs:
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
-          wasi_result="$(echo "$NEEDS" | jq -r '.["wasi-execution"].result')"
-          if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
-            echo "::error::planned WASI execution did not pass ($wasi_result)."
-            exit 1
-          fi
+          for wasi_job in wasi-native wasi-execution wasi-components; do
+            wasi_result="$(echo "$NEEDS" | jq -r --arg j "$wasi_job" '.[$j].result')"
+            if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
+              echo "::error::planned $wasi_job did not pass ($wasi_result)."
+              exit 1
+            fi
+          done
           bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"
           if [ -n "$bad" ]; then
             echo "::error::failed or cancelled: $(echo "$bad" | tr '\n' ' ')"
