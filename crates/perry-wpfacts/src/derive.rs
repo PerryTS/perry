@@ -2880,6 +2880,11 @@ fn judge_store(
                     },
                 }
             }
+            // R9STORE5 (i): a builtin function value or an Array.
+            _ if builtin_store_sets(m, t, key, s.key) => {
+                receivers.push(m.tok_name(t));
+                sets += 1;
+            }
             _ => {
                 receivers.push(m.tok_name(t));
                 why.get_or_insert("store: receiver is not a program class instance".into());
@@ -2896,17 +2901,23 @@ fn judge_store(
     // read side's `nullish_arms` form; proven only when the object arm is a
     // proven slot store (codegen: the receiver test sends a nullish value to
     // the complete [[Set]], CLS D3). Any other primitive is not this rule.
-    let nullish_beside = prim != 0
-        && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0
-        && !toks.iter().all(|&t| m.closed_marker(t));
+    // R9STORE5 (ii): a Number, String, Boolean, BigInt or Symbol base in
+    // strict code: [[Set]] on its wrapper with the primitive as Receiver
+    // (6.2.5.6 step 3.a-c) returns false at 10.1.9.2 step 2.b (a data
+    // property) or at step 3 (an accessor without a setter); PutValue throws
+    // the TypeError (step 3.e). Only a setter runs code: the one builtin
+    // setter on these chains is `Object.prototype.__proto__` (B.2.2.1.2),
+    // refused with any program write onto a builtin prototype under the key
+    // (`builtin_chain_plain`). A TypeError arm as rule N's.
+    let prim_obj = prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF);
+    let prim_throws = prim_obj == 0 || (strict && builtin_chain_plain(m, key, s.key));
+    let nullish_beside = prim != 0 && prim_throws && !toks.iter().all(|&t| m.closed_marker(t));
     // R9STORE4 rule T: only `undefined` / `null` reach the base (no object,
     // every token a closed marker): PutValue's ToObject (6.2.5.6 step 3.a,
     // 7.1.18) throws the TypeError after the value was evaluated (13.15.2),
     // on every run: `Verdict::Throws` (the caller demotes it when a source
     // left a value out). The emitted store stays the generic one.
-    let only_nullish = prim != 0
-        && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0
-        && toks.iter().all(|&t| m.closed_marker(t));
+    let only_nullish = prim != 0 && prim_throws && toks.iter().all(|&t| m.closed_marker(t));
     if prim != 0 && !nullish_beside && !only_nullish {
         why.get_or_insert("store: primitive receiver".into());
     }
@@ -2918,13 +2929,7 @@ fn judge_store(
     let verdict = match why {
         Some(w) => Verdict::No(w),
         None if only_nullish => {
-            use crate::model::prim::{NULL, UNDEF};
-            if prim & UNDEF != 0 {
-                receivers.push("primitive:undefined (TypeError)".to_string());
-            }
-            if prim & NULL != 0 {
-                receivers.push("primitive:null (TypeError)".to_string());
-            }
+            receivers.extend(prim_throw_arms(prim));
             Verdict::Throws
         }
         None if sets > 0 && acc.is_empty() && throws == 0 => Verdict::KnownObjectStore,
@@ -2946,14 +2951,13 @@ fn judge_store(
         None => Verdict::AddsKey,
     };
     let verdict = match verdict {
-        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore) if nullish_beside => {
-            use crate::model::prim::{NULL, UNDEF};
-            if prim & UNDEF != 0 {
-                receivers.push("primitive:undefined (TypeError)".to_string());
-            }
-            if prim & NULL != 0 {
-                receivers.push("primitive:null (TypeError)".to_string());
-            }
+        // A slot store's receiver test sends only a nullish base to the
+        // complete [[Set]] (rule N); another primitive arm composes with the
+        // generic store a KnownObjectStore keeps.
+        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore)
+            if nullish_beside && (prim_obj == 0 || matches!(v, Verdict::KnownObjectStore)) =>
+        {
+            receivers.extend(prim_throw_arms(prim));
             v
         }
         Verdict::No(w) => Verdict::No(w),
@@ -2970,6 +2974,62 @@ fn judge_store(
         (v, _, _) => v,
     };
     (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// The TypeError arms of a store's primitive receivers, by kind.
+fn prim_throw_arms(prim: u16) -> Vec<String> {
+    use crate::model::prim::*;
+    [
+        (NUM, "number"),
+        (STR, "string"),
+        (TRUE | FALSE, "boolean"),
+        (BIGINT, "bigint"),
+        (SYMBOL, "symbol"),
+        (UNDEF, "undefined"),
+        (NULL, "null"),
+    ]
+    .iter()
+    .filter(|(b, _)| prim & b != 0)
+    .map(|(_, n)| format!("primitive:{n} (TypeError)"))
+    .collect()
+}
+
+/// R9STORE5: no builtin prototype holds an accessor or a non-writable
+/// property under `key` that the description does not list: no program
+/// write or definition reaches a builtin prototype under it
+/// (`builtin_protos_unwritten`, `object_proto_unwritten`), no unknown code
+/// holds the realm, no interpreted code runs; not `__proto__` (the
+/// `Object.prototype` accessor, B.2.2.1) and not a private name.
+fn builtin_chain_plain(m: &Model, key: &str, a: Atom) -> bool {
+    !m.unit_mode
+        && !m.realm_held
+        && !m.interp_runs
+        && !m.is_private_atom(a)
+        && key != "__proto__"
+        && builtin_protos_unwritten(m, None, a).is_ok()
+        && object_proto_unwritten(m, a)
+}
+
+/// R9STORE5 (i): a named store of `key` onto `t` adds or overwrites an own
+/// data property with no user code: a builtin function value
+/// (`builtins::builtin_value_sets`) or an Array (`exact_array`) under a key
+/// that is no array index and not `length`: an Array's [[Set]] is
+/// OrdinarySet and its [[DefineOwnProperty]] is OrdinaryDefineOwnProperty
+/// for such a key (10.4.2.1 step 3; the chain `Array.prototype` /
+/// `Object.prototype` has no setter for it, `builtin_chain_plain`), on an
+/// array never HARD, escaped or relinked and with no own accessor.
+fn builtin_store_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let array = || {
+        exact_array(m, t)
+            && key != "length"
+            && !crate::builtins::members::is_index_name(key)
+            && !m.is_escaped(t)
+            && !m.hard.contains_key(&t)
+            && !m.super_relink.contains(&t)
+            && !m.accessors.contains_key(&(t, a))
+            && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+    };
+    builtin_chain_plain(m, key, a) && (crate::builtins::builtin_value_sets(m, t, a) || array())
 }
 
 /// R9STORE4 rule A (CWN decision 2026-11-16): a named store of `key`

@@ -2761,15 +2761,7 @@ pub(crate) fn builtin_value_absent(m: &Model, t: Tok, a: Atom) -> bool {
         return false;
     }
     let name = m.atoms[a as usize].as_str();
-    let absent = match &m.toks[t as usize] {
-        TokKind::Builtin(ns) => {
-            !members::is_host(*ns) && matches!(members::ns_member(*ns, name), Some(None))
-        }
-        TokKind::BuiltinFn(Native::Member { .. }) => {
-            name != "prototype" && members::member(Family::Function, name).is_none()
-        }
-        _ => false,
-    };
+    let absent = builtin_described_absent(m, t, name);
     // The solve's own value of the key on `t`: a store onto the function
     // object itself (a named store, a computed one, `__proto__`).
     absent && m.native_property(t, name).is_none() && builtin_value_untouched(m, t, a)
@@ -2830,6 +2822,44 @@ fn builtin_value_untouched(m: &Model, t: Tok, a: Atom) -> bool {
         && !m.is_escaped(t)
         && !m.hard.contains_key(&t)
         && !native_written(m, t, a)
+}
+
+/// The intrinsic description of builtin function value `t` lists no
+/// property `name`, own or on its chain (`builtin_value_absent`).
+fn builtin_described_absent(m: &Model, t: Tok, name: &str) -> bool {
+    match &m.toks[t as usize] {
+        TokKind::Builtin(ns) => {
+            !members::is_host(*ns) && matches!(members::ns_member(*ns, name), Some(None))
+        }
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            name != "prototype" && members::member(Family::Function, name).is_none()
+        }
+        _ => false,
+    }
+}
+
+/// R9STORE5 (i): a named store of key `a` onto builtin function value `t`
+/// adds or overwrites an own data property of `t` and runs no user code.
+/// The description lists `a` neither as an own property of `t` (so not the
+/// non-writable `length` / `name`, 10.3.4) nor on its chain
+/// (`Function.prototype` / `Object.prototype`: not the `caller` /
+/// `arguments` %ThrowTypeError% accessors, 10.2.4); no accessor, definition,
+/// delete or unknown writer reached `a` on `t` (a program store makes a
+/// writable data property, so it may), `t` is never HARD (freeze, seal,
+/// preventExtensions, defineProperty), never escaped and never relinked.
+/// ECMA-262 10.1.9.2 step 2.c-e: an own writable data property is set in
+/// place, else CreateDataProperty on the extensible `t` (10.3.4). The caller
+/// checks the builtin prototypes' writes under `a` (`builtin_chain_plain`).
+pub(crate) fn builtin_value_sets(m: &Model, t: Tok, a: Atom) -> bool {
+    let name = m.atoms[a as usize].as_str();
+    builtin_described_absent(m, t, name)
+        && m.native_property(t, name).is_none()
+        && !m.super_relink.contains(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && !native_nonplain_written(m, t, a)
 }
 
 /// A call of member `n` of host `h`: the runtime's own method (`native`)
