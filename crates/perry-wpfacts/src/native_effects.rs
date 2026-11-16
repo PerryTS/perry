@@ -10,6 +10,14 @@ pub fn realm() -> &'static [RealmEntry] {
     perry_realm_table::REALM
 }
 
+/// Does the realm declare, at the definition of native `name`, that its
+/// algorithm never reads its `this` value (`this = ignored`)?
+pub fn this_ignored(name: &str) -> bool {
+    realm()
+        .iter()
+        .any(|e| e.name == name && e.facts.contains("\"this_ignored\":true"))
+}
+
 #[cfg(test)]
 mod tests {
     use perry_hir::realm_manifest::{RealmEffect, RealmOperand, RealmSlotRoot};
