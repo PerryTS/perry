@@ -5,29 +5,6 @@
 
 use super::*;
 
-fn run(mods: &[(&str, &str)], unit: bool) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let cfg = FactsConfig::default();
-    match unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
 
 /// Proven sites (by module, offset, key) that name no receiver and no body.
 fn vacuous(pf: &ProgramFacts) -> Vec<String> {
@@ -169,4 +146,28 @@ fn unknown_code_cannot_write_an_escaped_module_namespace() {
         "{k:?}\n{}",
         w.dump_text()
     );
+}
+
+fn run(mods: &[(&str, &str)], unit: bool) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig::default();
+    match unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }
