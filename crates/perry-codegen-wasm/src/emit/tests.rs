@@ -617,6 +617,23 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
+// A zero-argument native method the object lacks still throws, as the call would.
+#[test]
+fn async_body_call_of_a_missing_host_method_throws() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  return r.missing();
+}
+f().then((v) => console.log("value " + v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "threw TypeError: missing is not a function"
+    );
+}
+
 // A method name is any string (`q["it's"]()`); the async JS emitter quotes it as a literal.
 #[test]
 fn an_async_body_calls_a_method_whose_name_needs_escaping() {
