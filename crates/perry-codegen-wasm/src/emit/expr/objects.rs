@@ -39,7 +39,7 @@ impl<'a> FuncEmitCtx<'a> {
                     _ => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
                 }
                 self.emit_store_arg(func, 3, &Expr::Array(args.clone(), None));
-                self.emit_memcall(func, "object_super_call", 4);
+                self.emit_memcall(func, "class_super_call", 4);
             }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);

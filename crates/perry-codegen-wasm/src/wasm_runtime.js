@@ -1933,14 +1933,6 @@ const __memDispatch = {
     if (proto === null) throw new TypeError(`Cannot read properties of null (reading '${String(key)}')`);
     return Reflect.get(proto, key, receiver);
   },
-  // Calls what object_super_get read, after the arguments were evaluated.
-  object_super_call: (fn, receiver, key, args) => {
-    if (typeof fn === 'function') return __callHostFunction(fn, args, receiver);
-    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') {
-      return __memDispatch.closure_call_spread(fn, args);
-    }
-    throw new TypeError(`(intermediate value)${key === undefined ? '' : '.' + String(key)} is not a function`);
-  },
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!obj || typeof obj !== 'object') return undefined;

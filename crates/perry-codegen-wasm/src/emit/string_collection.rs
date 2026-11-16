@@ -51,7 +51,6 @@ impl WasmModuleEmitter {
             "object_literal_set_prototype",
             "object_set_prototype_of",
             "object_super_get",
-            "object_super_call",
             "object_get_dynamic",
             "object_set_dynamic",
             "object_delete",
