@@ -78,13 +78,16 @@ fn r9store4_a3_nullish_beside() {
     assert!(known(&pf, "idx"), "A3 idx not a known-object store");
 }
 
-// K1 (KEEP): a subclass prototype holds a setter for the key.
+// K1: a subclass prototype holds a setter for the key. Since R9STORE6
+// (CWN decision 2026-11-16, per-kind store verdicts) the P arm adds the own
+// key and the D arm calls the one known setter: a KnownObjectStore (no slot
+// or setter claim: the generic store), never a rule-A-only verdict.
 #[test]
 fn r9store4_k1_subclass_setter() {
     let pf = facts(&format!(
         "{P}class D extends P {{ set skel(x: any) {{ (globalThis as any).g = x; }} }}\nfunction f(v: string) {{ const p = v.length > 1 ? new P(1) : new D(2); p.bind(v); return [p.a]; }}\n{TAIL}"
     ));
-    assert!(refused(&pf, "skel"), "K1 skel proven although D has a setter");
+    assert!(known(&pf, "skel"), "K1 skel: setter + own-data arms not the per-kind store verdict");
 }
 
 // K2 (KEEP): defineProperty puts a setter for the key on the prototype.
