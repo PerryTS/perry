@@ -149,6 +149,7 @@ fn a_key_with_a_literal_edge_through_a_variable_reads_no_constructor() {
     let one = KeyShape {
         globs: vec![vec!["1".to_string(), String::new()]],
         free: Vec::new(),
+        except: Vec::new(),
     };
     for s in ["1NaN", "1Infinity", "1-5", "11e+21", "10.5"] {
         assert!(one.admits(s), "{s}");
@@ -193,6 +194,7 @@ fn shape_matching_is_exact() {
     let s = |p: &[&str]| KeyShape {
         globs: vec![p.iter().map(|s| s.to_string()).collect()],
         free: Vec::new(),
+        except: Vec::new(),
     };
     assert!(s(&["", "s"]).admits("meshes"));
     assert!(!s(&["", "s"]).admits("constructor"));

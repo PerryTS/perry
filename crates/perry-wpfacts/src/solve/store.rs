@@ -451,6 +451,18 @@ impl Model {
                 }
             }
         }
+        // A String key set on a declared object whose prototype declares a
+        // `strkey(this)` store (a Web Storage object): that store instead
+        // (`effects::strkey_set`: WebIDL 3.9.2, the named property setter).
+        let (key, src) = if !self.unit_mode && builtins::declared_box(self, t) {
+            match builtins::strkey_set(self, t, key, src) {
+                Some(Some(ks)) => ks,
+                Some(None) => return,
+                None => (key, src),
+            }
+        } else {
+            (key, src)
+        };
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
         // named non-index key reads (`is_elem_array`); on another holder

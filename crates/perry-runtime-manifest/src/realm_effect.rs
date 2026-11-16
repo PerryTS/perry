@@ -45,6 +45,13 @@ pub enum RealmSlotStep {
     /// `record<K, V>` conversion reads them; an inherited member is never
     /// among them.
     OwnValues,
+    /// Any String-keyed own data property of the slot's object that the
+    /// native writes (`strkey(this)`): a Web Storage item, which perry
+    /// mirrors as a named own property of the storage object
+    /// (perry-runtime web_storage.rs `sync_named_property`) except under a
+    /// member name of the object's prototype or `length`. A value stored
+    /// there is read by every String key but those names.
+    StrKey,
     Field(Cow<'static, str>),
     Internal(Cow<'static, str>),
 }
@@ -448,6 +455,7 @@ pub mod emit {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),
             RealmSlotStep::Iterated => format!("{p}RealmSlotStep::Iterated"),
             RealmSlotStep::OwnValues => format!("{p}RealmSlotStep::OwnValues"),
+            RealmSlotStep::StrKey => format!("{p}RealmSlotStep::StrKey"),
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }

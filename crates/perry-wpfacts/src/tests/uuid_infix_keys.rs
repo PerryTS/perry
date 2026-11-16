@@ -214,6 +214,7 @@ fn glob_number_prefix_is_exact() {
         crate::model::KeyShape {
             globs: vec![vec![p.to_string(), String::new()]],
             free: Vec::new(),
+            except: Vec::new(),
         }
         .may_be_numeric()
     };

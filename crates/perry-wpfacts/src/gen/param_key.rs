@@ -174,6 +174,7 @@ impl<'a> Gen<'a> {
                 self.const_key_set(mi, e).map(|ks| KeyShape {
                     globs: ks.into_iter().map(|k| vec![k]).collect(),
                     free: Vec::new(),
+                    except: Vec::new(),
                 })
             }
             _ => KeyShape::of(e),
@@ -199,6 +200,7 @@ impl<'a> Gen<'a> {
             return Some(KeyShape {
                 globs: Vec::new(),
                 free: Vec::new(),
+                except: Vec::new(),
             });
         }
         seen.push(id);
@@ -220,6 +222,7 @@ impl<'a> Gen<'a> {
         Some(KeyShape {
             globs,
             free: Vec::new(),
+            except: Vec::new(),
         })
     }
 }

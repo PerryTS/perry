@@ -3729,6 +3729,9 @@ pub(crate) fn native_member(
                     TmplKind::BObj {
                         what: "TypedArray", ..
                     } => NativeFamily::TypedArray,
+                    TmplKind::BObj { what, .. } if crate::builtins::declared_family(m, what) => {
+                        NativeFamily::Declared(what)
+                    }
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -4615,6 +4618,25 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
     match fam {
         // A primitive owns no property ToObject's wrapper would not get
         // from its prototype (a Number wrapper owns no string key).
+        // A declared fresh object (`NativeFamily::Declared`): what the solve
+        // stored on it holds nothing under the key: its field, its any-key
+        // values, each shaped store whose shape admits the key (a Web
+        // Storage item: any String but Storage.prototype's own names); no
+        // accessor, no relink, no escape, no hard operation.
+        NativeFamily::Declared(_) => {
+            empty(m.fields.get(&(t, a)))
+                && empty(m.field_any.get(&t))
+                && empty(m.named_any.get(&t))
+                && m.shaped_of.get(&t).is_none_or(|v| {
+                    v.iter().all(|&(sh, n, store)| {
+                        !store || !m.key_may_name(Key::Any(sh), a) || empty(Some(&n))
+                    })
+                })
+                && !m.super_relink.contains(&t)
+                && !m.is_escaped(t)
+                && !m.hard.contains_key(&t)
+                && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
+        }
         NativeFamily::Str | NativeFamily::Num | NativeFamily::Bool => true,
         // `__proto__` (or a computed key that may be it) stored into it.
         NativeFamily::Array if m.super_relink.contains(&t) => false,

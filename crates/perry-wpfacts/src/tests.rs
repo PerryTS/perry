@@ -272,6 +272,7 @@ mod spread_elements;
 mod spread_enumerable;
 mod spread_iterable_args;
 mod spread_root;
+mod st2;
 mod static_call_value;
 mod step_done;
 mod string_prefix_keys;
