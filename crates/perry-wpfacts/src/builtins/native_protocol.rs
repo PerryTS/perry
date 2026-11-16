@@ -1113,6 +1113,7 @@ pub(super) fn navigator_object(m: &mut Model) -> Tok {
     }
     let t = anon_tmpl(m, "Navigator.prototype");
     m.navigator = Some(t);
+    global_any_navigator(m);
     t
 }
 
@@ -1209,7 +1210,7 @@ pub fn program_global_fn(m: &Model, name: &str) -> bool {
 /// program's own (bare-name value reads, `instanceof`, the `super()` of a
 /// builtin parent: class_return.rs:15) or run before program code
 /// (populate.rs).
-const NATIVE_READ_GLOBALS: &[&str] = &[
+pub(crate) const NATIVE_READ_GLOBALS: &[&str] = &[
     "URL",
     "URLSearchParams",
     "URLPattern",
@@ -1226,6 +1227,95 @@ const NATIVE_READ_GLOBALS: &[&str] = &[
     "DecompressionStream",
     "Navigator",
 ];
+
+/// GLOBK G2: does a store under an unknown String key on the global object
+/// (`global_any_field`) replace global binding `n`? Every string-named
+/// own property of the global object, except the non-writable,
+/// non-configurable `undefined`, `NaN`, `Infinity` (ECMA-262 19.1: the
+/// [[Set]] returns false, a strict store throws) and the getter-only
+/// `navigator` (no setter: the same).
+pub fn global_any_names(m: &Model, n: &str) -> bool {
+    !m.unit_mode && !matches!(n, "undefined" | "NaN" | "Infinity" | "navigator") && n != crate::STAR_KEY
+}
+
+/// G2: a read of a global binding (bare name, `globalThis.K`, a module
+/// export equal to a global a native reads by name) also reads what the
+/// program stored under unknown String keys.
+pub fn global_any_read(m: &mut Model, dst: NodeId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_any {
+        Some(ga) => m.edge(ga, dst),
+        None => m.global_any_reads.push(dst),
+    }
+}
+
+/// G2: `new K(...)` of a literal global name constructs what the program
+/// stored under unknown String keys as well (13.3.5.1 evaluates `K`).
+pub fn global_any_new(m: &mut Model, call: CallId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_any {
+        Some(ga) => m.cons(ga, Cons::New { call }),
+        None => m.global_any_news.push(call),
+    }
+}
+
+/// G2: the global object's field under any String key, made by the first
+/// store under an unknown String key (the reads and constructs made before
+/// it are linked now).
+pub fn global_any_field(m: &mut Model) -> NodeId {
+    if let Some(ga) = m.global_any {
+        return ga;
+    }
+    let ga = m.node_l("global-any-key");
+    m.global_any = Some(ga);
+    for d in std::mem::take(&mut m.global_any_reads) {
+        m.edge(ga, d);
+    }
+    for call in std::mem::take(&mut m.global_any_news) {
+        m.cons(ga, Cons::New { call });
+    }
+    global_any_navigator(m);
+    ga
+}
+
+/// G2: the realm's navigator object takes the live `Navigator`'s
+/// `prototype` as its [[Prototype]] when the getter first runs
+/// (perry-runtime navigator.rs:119 `builtin_value_core("Navigator")`,
+/// `navigator_object_with_constructor`): with a value stored under an
+/// unknown String key that may be what `Navigator` holds then.
+pub fn global_any_navigator(m: &mut Model) {
+    let (Some(ga), Some(nav)) = (m.global_any, m.navigator) else {
+        return;
+    };
+    if m.global_any_nav {
+        return;
+    }
+    m.global_any_nav = true;
+    let p = m.node_l("global-any-Navigator.prototype");
+    let key = Key::Named(m.atom("prototype"));
+    m.cons(ga, Cons::Load { key, dst: p });
+    m.given_prototype(nav, p);
+}
+
+/// G2 off: a native the model does not follow reads a global by name and
+/// hands the value on (`TextEncoderStream` / `TextDecoderStream`
+/// `.constructor`, perry-runtime class_meta): the stores under unknown
+/// String keys take the realm's sink as before G2.
+pub fn global_any_disable(m: &mut Model) {
+    if m.global_any_off || m.unit_mode {
+        return;
+    }
+    m.global_any_off = true;
+    for (t, key, src, site) in std::mem::take(&mut m.global_any_stores) {
+        let prev = m.store_at.take();
+        m.store_into(t, key, src, site);
+        m.store_at = prev;
+    }
+}
 
 /// The global object's field under program-owned key `a`.
 pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {

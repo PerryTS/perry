@@ -522,6 +522,32 @@ impl Model {
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
+        // GLOBK G2: a store on the global object under a String key the
+        // solver cannot name (a nonzero key shape never names a symbol;
+        // `Cons::StoreIndexed`) creates or replaces one string-named own
+        // property of the global object (ECMA-262 10.1.9 OrdinarySet,
+        // 10.1.6.3) and writes no other object: its value goes into the
+        // global's any-key field, which every global binding read takes
+        // (`global_any_read`). OPTIMISTIC (owner): an unknown String key
+        // never names `__proto__`; a key whose known strings do keeps the
+        // path below.
+        // A Number key (`num_only`: an element or digits key) names an
+        // index property of the global object (ToString, 7.1.19): a String
+        // key no global binding read names, the same field.
+        if let Key::Any(shape) = key {
+            if (shape != 0 || num_only)
+                && !theirs
+                && !self.unit_mode
+                && !self.global_any_off
+                && builtins::global_object(self, t)
+                && !self.key_names_known_str(key, "__proto__")
+            {
+                let ga = builtins::global_any_field(self);
+                self.edge(src, ga);
+                self.global_any_stores.push((t, key, src, site));
+                return;
+            }
+        }
         // A program-owned global: an ordinary field of the global object
         // (one field per key, whichever token stored it).
         if let Key::Named(a) = key {
