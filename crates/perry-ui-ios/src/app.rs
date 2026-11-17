@@ -223,7 +223,9 @@ unsafe extern "C" fn scene_will_connect(
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     // Create UIWindow attached to the scene (UIWindowScene)
-    let window_cls = AnyClass::get(c"UIWindow").unwrap();
+    // PerryWindow tracks active touches so view removal can wait for them
+    // (see touch_guard.rs).
+    let window_cls = crate::touch_guard::window_class();
     let window_alloc: *mut AnyObject = msg_send![window_cls, alloc];
     let window_raw: *mut AnyObject = msg_send![window_alloc, initWithWindowScene: scene];
     let window: Retained<UIWindow> =

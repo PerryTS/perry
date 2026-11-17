@@ -24,6 +24,7 @@ pub mod notifications;
 pub mod pointer;
 pub mod screenshot;
 pub mod state;
+pub mod touch_guard;
 pub mod websocket;
 pub mod widgets;
 

@@ -181,6 +181,9 @@ pub fn get_widget(handle: i64) -> Option<Retained<UIView>> {
 /// Set the hidden state of a widget.
 pub fn set_hidden(handle: i64, hidden: bool) {
     if let Some(view) = get_widget(handle) {
+        if crate::touch_guard::set_hidden_pending(&view, hidden) {
+            return;
+        }
         unsafe {
             let _: () = objc2::msg_send![&*view, setHidden: hidden];
         }
@@ -273,8 +276,8 @@ pub fn clear_children(handle: i64) {
                 cancel_active_gestures(Retained::as_ptr(sv) as *const AnyObject, 0);
                 unsafe {
                     let _: () = objc2::msg_send![stack, removeArrangedSubview: &**sv];
-                    sv.removeFromSuperview();
                 }
+                crate::touch_guard::detach(sv);
             }
 
             // Phase 4: Clean up HEIGHT_CONSTRAINTS for removed widgets
@@ -294,6 +297,7 @@ pub fn clear_children(handle: i64) {
 /// Add a child view to a parent view at a specific index.
 pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+        crate::touch_guard::reattach(&child);
         let is_stack = if let Some(cls) = AnyClass::get(c"UIStackView") {
             parent.isKindOfClass(cls)
         } else {
@@ -316,6 +320,7 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
 /// If the parent is a UIStackView, uses addArrangedSubview for proper layout.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
+        crate::touch_guard::reattach(&child);
         let is_stack = if let Some(cls) = AnyClass::get(c"UIStackView") {
             parent.isKindOfClass(cls)
         } else {
@@ -658,7 +663,7 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
                 let _: () = objc2::msg_send![stack, removeArrangedSubview: &*child];
             }
         }
-        child.removeFromSuperview();
+        crate::touch_guard::detach(&child);
     }
 }
 
