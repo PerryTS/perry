@@ -80,7 +80,7 @@ pub use derive::{
 };
 pub use family_reach::{FamilyReach, FamilyVerdict, NativeDispatch};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
-pub use member_ops::MemberOpFacts;
+pub use member_ops::{MemberForm, MemberOpFacts};
 use perry_hir::Module;
 pub use signatures::Signature;
 

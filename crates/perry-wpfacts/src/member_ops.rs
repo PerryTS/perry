@@ -21,7 +21,23 @@
 //! - **Static** ([`Op::Static`]): a namespace member (`Math.max`,
 //!   `Object.keys`, `JSON.parse`, ...), a direct call of the realm's
 //!   builtin. What its arguments run (an implicit ToPrimitive or iteration
-//!   on an object, a callback) are routes of their own.
+//!   on an object, a callback) are routes of their own. The key is always
+//!   the real JS member name, and a member of a sub-object has the
+//!   sub-object as its namespace (`process.stdout` / `columns`,
+//!   `crypto.subtle` / `digest`, `path.win32` / `join`). "Static" means
+//!   *direct, never reaches the tower*: that holds as well for a member
+//!   that is read, not called (`process.argv`, `os.EOL`, `path.sep`,
+//!   `process.stdout`), and for a setter (`process.title = v`). No node
+//!   uses such a key as a Get-then-Call key (the dispatcher fact's
+//!   obligation of a namespace record is a direct call), so there is no
+//!   separate kind for them.
+//! - **Construct** ([`Op::Construct`]): `new NS.Name(..)` of a realm
+//!   builtin (`new WebAssembly.Module`): not a member call. The key is the
+//!   constructor's name.
+//! - **Internal** ([`Op::Internal`]): a node whose Perry-source name is no
+//!   JS member (`crypto.randomUUIDv7`, `fs.rmRecursive`, the child_process
+//!   background helpers). The record keeps the Perry name as its key and
+//!   is marked [`MemberForm::Internal`]; no runtime method has that name.
 //! - **Unstated** ([`Op::Unstated`]): a receiver operation the generation
 //!   lowers through a shared arm, which names no receiver node of its own.
 //!   Its record states no receivers, so the dispatcher fact is open.
@@ -40,8 +56,23 @@ pub(crate) enum Op {
     Native,
     /// The namespace and the key.
     Static(&'static str, &'static str),
+    /// The namespace and the constructor's name.
+    Construct(&'static str, &'static str),
+    /// The namespace and the Perry-internal name (no JS member).
+    Internal(&'static str, &'static str),
     Unstated,
     Core,
+}
+
+/// What a namespace record states (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberForm {
+    /// `key` is the real JS member name.
+    Member,
+    /// `new namespace.key(..)`.
+    Construct,
+    /// `key` is a Perry-internal name; there is no JS member.
+    Internal,
 }
 
 /// The record of one HIR-specialized member op, as the generation makes it.
@@ -58,6 +89,7 @@ pub(crate) struct MemberOp {
     /// A folded node (`perry_hir::folded_call`): a receiver that is not the
     /// helper's own kind takes the generic call.
     pub folded: bool,
+    pub form: MemberForm,
 }
 
 /// The published record of a HIR-specialized member op: its obligation.
@@ -79,6 +111,7 @@ pub struct MemberOpFacts {
     /// handle may reach the generic method dispatcher (Get-then-Call of
     /// `key` on it).
     pub redispatch: bool,
+    pub form: MemberForm,
 }
 
 impl MemberOpFacts {
@@ -97,8 +130,13 @@ impl MemberOpFacts {
             ),
             (None, false) => "receivers=unstated".to_owned(),
         };
+        let form = match self.form {
+            MemberForm::Member => "",
+            MemberForm::Construct => " form=construct",
+            MemberForm::Internal => " form=internal",
+        };
         format!(
-            "# member_op {} {} key={} {recv} redispatch={}",
+            "# member_op {} {} key={} {recv} redispatch={}{form}",
             self.module, self.op, self.key, self.redispatch as u8
         )
     }
@@ -208,17 +246,17 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::ChildProcessExecFileSync { .. } => Op::Static("child_process", "execFileSync"),
         Expr::ChildProcessExecSync { .. } => Op::Static("child_process", "execSync"),
         Expr::ChildProcessFork { .. } => Op::Static("child_process", "fork"),
-        Expr::ChildProcessGetProcessStatus { .. } => Op::Static("child_process", "getProcessStatus"),
-        Expr::ChildProcessKillProcess { .. } => Op::Static("child_process", "killProcess"),
+        Expr::ChildProcessGetProcessStatus { .. } => Op::Internal("child_process", "getProcessStatus"),
+        Expr::ChildProcessKillProcess { .. } => Op::Internal("child_process", "killProcess"),
         Expr::ChildProcessSpawn { .. } => Op::Static("child_process", "spawn"),
-        Expr::ChildProcessSpawnBackground { .. } => Op::Static("child_process", "spawnBackground"),
+        Expr::ChildProcessSpawnBackground { .. } => Op::Internal("child_process", "spawnBackground"),
         Expr::ChildProcessSpawnSync { .. } => Op::Static("child_process", "spawnSync"),
-        Expr::CryptoMd5 { .. } => Op::Static("crypto", "md5"),
+        Expr::CryptoMd5 { .. } => Op::Internal("crypto", "md5"),
         Expr::CryptoRandomBytes { .. } => Op::Static("crypto", "randomBytes"),
         Expr::CryptoRandomFillSync { .. } => Op::Static("crypto", "randomFillSync"),
         Expr::CryptoRandomUUID { .. } => Op::Static("crypto", "randomUUID"),
-        Expr::CryptoRandomUUIDv7 { .. } => Op::Static("crypto", "randomUUIDv7"),
-        Expr::CryptoSha256 { .. } => Op::Static("crypto", "sha256"),
+        Expr::CryptoRandomUUIDv7 { .. } => Op::Internal("crypto", "randomUUIDv7"),
+        Expr::CryptoSha256 { .. } => Op::Internal("crypto", "sha256"),
         Expr::DateNow { .. } => Op::Static("Date", "now"),
         Expr::DateParse { .. } => Op::Static("Date", "parse"),
         Expr::DateUtc { .. } => Op::Static("Date", "UTC"),
@@ -233,9 +271,9 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::FsAppendFileSync { .. } => Op::Static("fs", "appendFileSync"),
         Expr::FsExistsSync { .. } => Op::Static("fs", "existsSync"),
         Expr::FsMkdirSync { .. } => Op::Static("fs", "mkdirSync"),
-        Expr::FsReadFileBinary { .. } => Op::Static("fs", "readFileBinary"),
+        Expr::FsReadFileBinary { .. } => Op::Static("fs", "readFileSync"),
         Expr::FsReadFileSync { .. } => Op::Static("fs", "readFileSync"),
-        Expr::FsRmRecursive { .. } => Op::Static("fs", "rmRecursive"),
+        Expr::FsRmRecursive { .. } => Op::Internal("fs", "rmRecursive"),
         Expr::FsUnlinkSync { .. } => Op::Static("fs", "unlinkSync"),
         Expr::FsWriteFileSync { .. } => Op::Static("fs", "writeFileSync"),
         Expr::IsFinite { .. } => Op::Static("globalThis", "isFinite"),
@@ -243,13 +281,13 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::IteratorFrom { .. } => Op::Static("Iterator", "from"),
         Expr::JsonIsRawJson { .. } => Op::Static("JSON", "isRawJson"),
         Expr::JsonParse { .. } => Op::Static("JSON", "parse"),
-        Expr::JsonParseReviver { .. } => Op::Static("JSON", "parseReviver"),
-        Expr::JsonParseTyped { .. } => Op::Static("JSON", "parseTyped"),
-        Expr::JsonParseWithReviver { .. } => Op::Static("JSON", "parseWithReviver"),
+        Expr::JsonParseReviver { .. } => Op::Static("JSON", "parse"),
+        Expr::JsonParseTyped { .. } => Op::Static("JSON", "parse"),
+        Expr::JsonParseWithReviver { .. } => Op::Static("JSON", "parse"),
         Expr::JsonRawJson { .. } => Op::Static("JSON", "rawJson"),
         Expr::JsonStringify { .. } => Op::Static("JSON", "stringify"),
-        Expr::JsonStringifyFull { .. } => Op::Static("JSON", "stringifyFull"),
-        Expr::JsonStringifyPretty { .. } => Op::Static("JSON", "stringifyPretty"),
+        Expr::JsonStringifyFull { .. } => Op::Static("JSON", "stringify"),
+        Expr::JsonStringifyPretty { .. } => Op::Static("JSON", "stringify"),
         Expr::MapGroupBy { .. } => Op::Static("Map", "groupBy"),
         Expr::MathAbs { .. } => Op::Static("Math", "abs"),
         Expr::MathAcos { .. } => Op::Static("Math", "acos"),
@@ -324,7 +362,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::OsCpus { .. } => Op::Static("os", "cpus"),
         Expr::OsDevNull { .. } => Op::Static("os", "devNull"),
         Expr::OsEndianness { .. } => Op::Static("os", "endianness"),
-        Expr::OsEOL { .. } => Op::Static("os", "eOL"),
+        Expr::OsEOL { .. } => Op::Static("os", "EOL"),
         Expr::OsFreemem { .. } => Op::Static("os", "freemem"),
         Expr::OsHomedir { .. } => Op::Static("os", "homedir"),
         Expr::OsHostname { .. } => Op::Static("os", "hostname"),
@@ -338,12 +376,12 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::OsType { .. } => Op::Static("os", "type"),
         Expr::OsUptime { .. } => Op::Static("os", "uptime"),
         Expr::OsUserInfo { .. } => Op::Static("os", "userInfo"),
-        Expr::OsUserInfoBuffer { .. } => Op::Static("os", "userInfoBuffer"),
+        Expr::OsUserInfoBuffer { .. } => Op::Static("os", "userInfo"),
         Expr::OsVersion { .. } => Op::Static("os", "version"),
         Expr::ParseFloat { .. } => Op::Static("globalThis", "parseFloat"),
         Expr::ParseInt { .. } => Op::Static("globalThis", "parseInt"),
         Expr::PathBasename { .. } => Op::Static("path", "basename"),
-        Expr::PathBasenameExt { .. } => Op::Static("path", "basenameExt"),
+        Expr::PathBasenameExt { .. } => Op::Static("path", "basename"),
         Expr::PathDelimiter { .. } => Op::Static("path", "delimiter"),
         Expr::PathDirname { .. } => Op::Static("path", "dirname"),
         Expr::PathExtname { .. } => Op::Static("path", "extname"),
@@ -355,14 +393,14 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::PathParse { .. } => Op::Static("path", "parse"),
         Expr::PathRelative { .. } => Op::Static("path", "relative"),
         Expr::PathResolve { .. } => Op::Static("path", "resolve"),
-        Expr::PathResolveJoin { .. } => Op::Static("path", "resolveJoin"),
+        Expr::PathResolveJoin { .. } => Op::Static("path", "resolve"),
         Expr::PathSep { .. } => Op::Static("path", "sep"),
         Expr::PathToNamespacedPath { .. } => Op::Static("path", "toNamespacedPath"),
         Expr::PathWin32 { .. } => Op::Static("path", "win32"),
-        Expr::PathWin32Join { .. } => Op::Static("path", "win32Join"),
+        Expr::PathWin32Join { .. } => Op::Static("path.win32", "join"),
         Expr::PerformanceNow { .. } => Op::Static("performance", "now"),
         Expr::ProcessAbort { .. } => Op::Static("process", "abort"),
-        Expr::ProcessActiveResourcesInfo { .. } => Op::Static("process", "activeResourcesInfo"),
+        Expr::ProcessActiveResourcesInfo { .. } => Op::Static("process", "getActiveResourcesInfo"),
         Expr::ProcessArgv { .. } => Op::Static("process", "argv"),
         Expr::ProcessAvailableMemory { .. } => Op::Static("process", "availableMemory"),
         Expr::ProcessChdir { .. } => Op::Static("process", "chdir"),
@@ -373,30 +411,35 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::ProcessEnv { .. } => Op::Static("process", "env"),
         Expr::ProcessExit { .. } => Op::Static("process", "exit"),
         Expr::ProcessHrtime { .. } => Op::Static("process", "hrtime"),
-        Expr::ProcessHrtimeBigint { .. } => Op::Static("process", "hrtimeBigint"),
+        Expr::ProcessHrtimeBigint { .. } => Op::Static("process.hrtime", "bigint"),
         Expr::ProcessKill { .. } => Op::Static("process", "kill"),
         Expr::ProcessMemoryUsage { .. } => Op::Static("process", "memoryUsage"),
         Expr::ProcessNextTick { .. } => Op::Static("process", "nextTick"),
         Expr::ProcessOn { .. } => Op::Static("process", "on"),
         Expr::ProcessOnce { .. } => Op::Static("process", "once"),
         Expr::ProcessPid { .. } => Op::Static("process", "pid"),
-        Expr::ProcessPosixCredential { .. } => Op::Static("process", "posixCredential"),
+        Expr::ProcessPosixCredential(k) => Op::Static("process", match k {
+            perry_hir::PosixCredentialKind::Uid => "getuid",
+            perry_hir::PosixCredentialKind::Euid => "geteuid",
+            perry_hir::PosixCredentialKind::Gid => "getgid",
+            perry_hir::PosixCredentialKind::Egid => "getegid",
+        }),
         Expr::ProcessPpid { .. } => Op::Static("process", "ppid"),
         Expr::ProcessResourceUsage { .. } => Op::Static("process", "resourceUsage"),
-        Expr::ProcessSetTitle { .. } => Op::Static("process", "setTitle"),
+        Expr::ProcessSetTitle { .. } => Op::Static("process", "title"),
         Expr::ProcessStderr { .. } => Op::Static("process", "stderr"),
-        Expr::ProcessStderrIsTTY { .. } => Op::Static("process", "stderrIsTTY"),
+        Expr::ProcessStderrIsTTY { .. } => Op::Static("process.stderr", "isTTY"),
         Expr::ProcessStdin { .. } => Op::Static("process", "stdin"),
-        Expr::ProcessStdinIsTTY { .. } => Op::Static("process", "stdinIsTTY"),
-        Expr::ProcessStdinLifecycle { .. } => Op::Static("process", "stdinLifecycle"),
-        Expr::ProcessStdinOn { .. } => Op::Static("process", "stdinOn"),
-        Expr::ProcessStdinRemoveListener { .. } => Op::Static("process", "stdinRemoveListener"),
-        Expr::ProcessStdinSetRawMode { .. } => Op::Static("process", "stdinSetRawMode"),
+        Expr::ProcessStdinIsTTY { .. } => Op::Static("process.stdin", "isTTY"),
+        Expr::ProcessStdinLifecycle { .. } => Op::Internal("process.stdin", "stdinLifecycle"),
+        Expr::ProcessStdinOn { .. } => Op::Static("process.stdin", "on"),
+        Expr::ProcessStdinRemoveListener { .. } => Op::Static("process.stdin", "removeListener"),
+        Expr::ProcessStdinSetRawMode { .. } => Op::Static("process.stdin", "setRawMode"),
         Expr::ProcessStdout { .. } => Op::Static("process", "stdout"),
-        Expr::ProcessStdoutColumns { .. } => Op::Static("process", "stdoutColumns"),
-        Expr::ProcessStdoutIsTTY { .. } => Op::Static("process", "stdoutIsTTY"),
-        Expr::ProcessStdoutOn { .. } => Op::Static("process", "stdoutOn"),
-        Expr::ProcessStdoutRows { .. } => Op::Static("process", "stdoutRows"),
+        Expr::ProcessStdoutColumns { .. } => Op::Static("process.stdout", "columns"),
+        Expr::ProcessStdoutIsTTY { .. } => Op::Static("process.stdout", "isTTY"),
+        Expr::ProcessStdoutOn { .. } => Op::Static("process.stdout", "on"),
+        Expr::ProcessStdoutRows { .. } => Op::Static("process.stdout", "rows"),
         Expr::ProcessThreadCpuUsage { .. } => Op::Static("process", "threadCpuUsage"),
         Expr::ProcessTitle { .. } => Op::Static("process", "title"),
         Expr::ProcessUmask { .. } => Op::Static("process", "umask"),
@@ -444,7 +487,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::WebAssemblyModuleCustomSections { .. } => Op::Static("WebAssembly.Module", "customSections"),
         Expr::WebAssemblyModuleExports { .. } => Op::Static("WebAssembly.Module", "exports"),
         Expr::WebAssemblyModuleImports { .. } => Op::Static("WebAssembly.Module", "imports"),
-        Expr::WebAssemblyModuleNew { .. } => Op::Static("WebAssembly.Module", "new"),
+        Expr::WebAssemblyModuleNew { .. } => Op::Construct("WebAssembly", "Module"),
         Expr::WebAssemblyValidate { .. } => Op::Static("WebAssembly", "validate"),
         Expr::WebCryptoDecrypt { .. } => Op::Static("crypto.subtle", "decrypt"),
         Expr::WebCryptoDeriveBits { .. } => Op::Static("crypto.subtle", "deriveBits"),
@@ -751,6 +794,7 @@ impl crate::gen::Gen<'_> {
             recv,
             namespace: namespace.map(str::to_owned),
             folded,
+            form: MemberForm::Member,
         });
     }
 
@@ -771,8 +815,15 @@ impl crate::gen::Gen<'_> {
             if !own {
                 self.member_op(module, e, "", None, None, false);
             }
-        } else if let Op::Static(ns, key) = op {
+        } else if let Op::Static(ns, key) | Op::Construct(ns, key) | Op::Internal(ns, key) = op {
             self.member_op(module, e, key, None, Some(ns), false);
+            if let Some(o) = self.member_ops.last_mut() {
+                o.form = match op {
+                    Op::Construct(..) => MemberForm::Construct,
+                    Op::Internal(..) => MemberForm::Internal,
+                    _ => MemberForm::Member,
+                };
+            }
         }
     }
 }

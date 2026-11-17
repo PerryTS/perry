@@ -100,6 +100,7 @@ impl<'a> Gen<'a> {
             recv: Some(recv),
             namespace: None,
             folded: true,
+            form: crate::member_ops::MemberForm::Member,
         });
         if let Some(site) = perry_hir::folded_call::receiver_site(receiver) {
             self.folded_sites.push(crate::gen::FoldedSite {
