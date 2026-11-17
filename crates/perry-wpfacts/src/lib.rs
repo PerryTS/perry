@@ -1437,7 +1437,7 @@ fn compute_act<'a>(
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         module_digests: Vec::new(),
     };
-    derive::dispatch::certify(&mut pf, &g, cfg.unit);
+    derive::dispatch::certify(&mut pf, &g, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
 }

@@ -103,9 +103,11 @@ fn direct_this(g: &Gen<'_>, s: &SiteFacts) -> bool {
         })
 }
 
-pub(crate) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, unit: bool) {
-    // The driver refuses all method-call elisions in these worlds.
-    if unit
+pub(crate) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConfig) {
+    // Check-mode field-read witnesses call lower_call_routes, which bypasses
+    // the proven-method route. That extra path has no certificate here.
+    if cfg.unit
+        || cfg.verify_facts
         || pf.stats.aborted
         || pf.interp_guard.is_some()
         || pf.sabotage.is_some()

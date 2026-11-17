@@ -314,3 +314,23 @@ fn native_dispatch_fill_push_uses_the_fill_certificate() {
     assert_eq!(pushes.len(), 1, "{}", pf.dump_text());
     assert!(!pushes[0].redispatch, "{}", pf.dump_text());
 }
+
+#[test]
+fn native_dispatch_check_mode_retains_witness_routes() {
+    let src =
+        "class P { m() { return 7; } run() { return this.m(); } } console.log(new P().run());";
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).unwrap();
+    let hir = perry_hir::lower_module(&module, "main", &path).unwrap();
+    let cfg = FactsConfig {
+        verify_facts: true,
+        ..FactsConfig::default()
+    };
+    let pf = crate::compute(&[(path, &hir)], &cfg);
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.is_call && s.key == "m")
+        .expect("live call");
+    assert!(s.dispatch_obligation().unwrap().redispatch);
+}
