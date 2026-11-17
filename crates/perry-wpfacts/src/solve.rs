@@ -1827,10 +1827,12 @@ impl Model {
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`).
-        if proto == Protocol::ToPrimitive {
-            if let TokKind::Proxy(p) = self.toks[t as usize] {
-                self.proxy_to_primitive(p, reason);
-                return;
+        // and the formatter shows it running no trap (`proxy_inspect_shown`).
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            match proto {
+                Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason),
+                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason),
+                _ => {}
             }
         }
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
