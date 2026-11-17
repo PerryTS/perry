@@ -138,11 +138,191 @@ unsafe fn touches_down(event: *mut AnyObject) -> bool {
     false
 }
 
+extern "C" {
+    fn NSLog(fmt: *const AnyObject, ...);
+}
+
+unsafe fn class_name(obj: *mut AnyObject) -> String {
+    if obj.is_null() {
+        return "nil".into();
+    }
+    let cls: *mut AnyObject = msg_send![obj, class];
+    let s: *mut objc2_foundation::NSString = msg_send![cls, description];
+    if s.is_null() { "?".into() } else { (*s).to_string() }
+}
+
+extern "C" {
+    fn class_getInstanceVariable(cls: *const AnyObject, name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+    fn object_getIvar(obj: *mut AnyObject, ivar: *const std::ffi::c_void) -> *mut AnyObject;
+    fn object_getClass(obj: *mut AnyObject) -> *const AnyObject;
+}
+
+/// Does UIKit still have a delayed-event dispatcher for this recognizer?
+/// (`_delayedEventComponentDispatcher`, set when the recognizer is registered
+/// with the app's gesture environment; nil means delaying a touch aborts.)
+/// If the ivar can't be found (a future UIKit), assume yes.
+unsafe fn has_dispatcher(gr: *mut AnyObject) -> bool {
+    let ivar = class_getInstanceVariable(object_getClass(gr), c"_delayedEventComponentDispatcher".as_ptr());
+    if ivar.is_null() {
+        return true;
+    }
+    !object_getIvar(gr, ivar).is_null()
+}
+
+/// perry/ui runs the app's top-level code — which builds the shell, scroll
+/// views included — before UIApplicationMain. UIKit registers a recognizer
+/// with the app's gesture environment when it is added to a view; with no
+/// UIApplication yet, those recognizers never get a delayed-event dispatcher,
+/// and the first touch a UIScrollView delays aborts the app. Once the scene
+/// is up, re-add every such recognizer to its view (remove + add, public
+/// API) so UIKit registers it properly.
+pub fn reregister_early_recognizers() {
+    let mut fixed = 0usize;
+    unsafe fn walk(view: *mut AnyObject, depth: u32, fixed: &mut usize) {
+        if view.is_null() || depth > 80 {
+            return;
+        }
+        let grs: *mut AnyObject = msg_send![view, gestureRecognizers];
+        if !grs.is_null() {
+            let copy: *mut AnyObject = msg_send![grs, copy];
+            let m: usize = msg_send![copy, count];
+            for j in 0..m {
+                let gr: *mut AnyObject = msg_send![copy, objectAtIndex: j];
+                if !has_dispatcher(gr) {
+                    let _: *mut AnyObject = msg_send![gr, retain];
+                    let _: () = msg_send![view, removeGestureRecognizer: gr];
+                    let _: () = msg_send![view, addGestureRecognizer: gr];
+                    let _: () = msg_send![gr, release];
+                    *fixed += 1;
+                }
+            }
+            let _: () = msg_send![copy, release];
+        }
+        let subs: *mut AnyObject = msg_send![view, subviews];
+        let n: usize = msg_send![subs, count];
+        for i in 0..n {
+            let s: *mut AnyObject = msg_send![subs, objectAtIndex: i];
+            walk(s, depth + 1, fixed);
+        }
+    }
+    crate::widgets::for_each_widget(|v| unsafe {
+        walk(Retained::as_ptr(v) as *mut AnyObject, 0, &mut fixed);
+    });
+    if std::env::var_os("PERRY_TOUCH_AUDIT").is_some() {
+        let mut left = 0usize;
+        unsafe fn count(view: *mut AnyObject, depth: u32, left: &mut usize) {
+            if view.is_null() || depth > 80 {
+                return;
+            }
+            let grs: *mut AnyObject = msg_send![view, gestureRecognizers];
+            if !grs.is_null() {
+                let m: usize = msg_send![grs, count];
+                for j in 0..m {
+                    let gr: *mut AnyObject = msg_send![grs, objectAtIndex: j];
+                    if !has_dispatcher(gr) {
+                        *left += 1;
+                    }
+                }
+            }
+            let subs: *mut AnyObject = msg_send![view, subviews];
+            let n: usize = msg_send![subs, count];
+            for i in 0..n {
+                let s: *mut AnyObject = msg_send![subs, objectAtIndex: i];
+                count(s, depth + 1, left);
+            }
+        }
+        crate::widgets::for_each_widget(|v| unsafe { count(Retained::as_ptr(v) as *mut AnyObject, 0, &mut left) });
+        let msg = objc2_foundation::NSString::from_str(&format!(
+            "[perry] re-registered {fixed} gesture recognizer(s) created before launch; {left} still without a dispatcher"
+        ));
+        unsafe { NSLog(Retained::as_ptr(&objc2_foundation::NSString::from_str("%@")) as *const AnyObject, Retained::as_ptr(&msg)) };
+    }
+}
+
+/// A gesture recognizer that UIKit removed from its view (so it lost its
+/// delayed-event dispatcher) can stay attached to an in-flight touch. If it
+/// delays touches, UIKit inserts a nil "delayed touch" into an array on the
+/// next phase and aborts. Such a recognizer can't recognize anything any
+/// more, so stop it delaying touches before UIKit routes the event.
+unsafe fn defuse_orphaned_recognizers(event: *mut AnyObject) {
+    let set: *mut AnyObject = msg_send![event, allTouches];
+    if set.is_null() {
+        return;
+    }
+    let touches: *mut AnyObject = msg_send![set, allObjects];
+    let n: usize = msg_send![touches, count];
+    for i in 0..n {
+        let t: *mut AnyObject = msg_send![touches, objectAtIndex: i];
+        let grs: *mut AnyObject = msg_send![t, gestureRecognizers];
+        if grs.is_null() {
+            continue;
+        }
+        let m: usize = msg_send![grs, count];
+        for j in 0..m {
+            let gr: *mut AnyObject = msg_send![grs, objectAtIndex: j];
+            let view: *mut AnyObject = msg_send![gr, view];
+            if !view.is_null() && has_dispatcher(gr) {
+                continue;
+            }
+            let began: Bool = msg_send![gr, delaysTouchesBegan];
+            let ended: Bool = msg_send![gr, delaysTouchesEnded];
+            if began.as_bool() || ended.as_bool() {
+                let msg = objc2_foundation::NSString::from_str(&format!(
+                    "[perry] defusing gesture recognizer {} on {} without a delayed-event dispatcher (delaysBegan={} delaysEnded={})",
+                    class_name(gr),
+                    class_name(view),
+                    began.as_bool(),
+                    ended.as_bool()
+                ));
+                NSLog(Retained::as_ptr(&objc2_foundation::NSString::from_str("%@")) as *const AnyObject, Retained::as_ptr(&msg));
+                let _: () = msg_send![gr, setDelaysTouchesBegan: Bool::NO];
+                let _: () = msg_send![gr, setDelaysTouchesEnded: Bool::NO];
+            }
+        }
+    }
+}
+
+/// Debug: log every recognizer in the view tree that has lost its dispatcher.
+unsafe fn audit_tree(view: *mut AnyObject, depth: u32) {
+    if view.is_null() || depth > 80 {
+        return;
+    }
+    let grs: *mut AnyObject = msg_send![view, gestureRecognizers];
+    if !grs.is_null() {
+        let m: usize = msg_send![grs, count];
+        for j in 0..m {
+            let gr: *mut AnyObject = msg_send![grs, objectAtIndex: j];
+            if !has_dispatcher(gr) {
+                let began: Bool = msg_send![gr, delaysTouchesBegan];
+                let ended: Bool = msg_send![gr, delaysTouchesEnded];
+                let msg = objc2_foundation::NSString::from_str(&format!(
+                    "[perry] audit: {} on {} has no dispatcher (delaysBegan={} delaysEnded={})",
+                    class_name(gr),
+                    class_name(view),
+                    began.as_bool(),
+                    ended.as_bool()
+                ));
+                NSLog(Retained::as_ptr(&objc2_foundation::NSString::from_str("%@")) as *const AnyObject, Retained::as_ptr(&msg));
+            }
+        }
+    }
+    let subs: *mut AnyObject = msg_send![view, subviews];
+    let n: usize = msg_send![subs, count];
+    for i in 0..n {
+        let s: *mut AnyObject = msg_send![subs, objectAtIndex: i];
+        audit_tree(s, depth + 1);
+    }
+}
+
 extern "C" fn window_send_event(this: &AnyObject, _cmd: Sel, event: *mut AnyObject) {
     unsafe {
         let kind: isize = msg_send![event, type];
         if kind == 0 {
+            if !touch_active() && std::env::var_os("PERRY_TOUCH_AUDIT").is_some() {
+                audit_tree(this as *const AnyObject as *mut AnyObject, 0);
+            }
             TOUCH_ACTIVE.with(|t| t.set(true));
+            defuse_orphaned_recognizers(event);
         }
         let _: () = msg_send![super(this, AnyClass::get(c"UIWindow").unwrap()), sendEvent: event];
         if kind == 0 {

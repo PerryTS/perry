@@ -286,6 +286,9 @@ unsafe extern "C" fn scene_will_connect(
 
     window.setRootViewController(Some(&vc));
     window.makeKeyAndVisible();
+    // Widgets built before UIApplicationMain have unregistered gesture
+    // recognizers (see touch_guard.rs); register them now.
+    crate::touch_guard::reregister_early_recognizers();
 
     // Store the view for keyboard avoidance
     let vc_view_ptr = Retained::as_ptr(&vc_view) as usize;

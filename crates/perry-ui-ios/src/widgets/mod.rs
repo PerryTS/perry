@@ -56,6 +56,14 @@ thread_local! {
     static HEIGHT_CONSTRAINTS: RefCell<std::collections::HashMap<i64, Retained<AnyObject>>> = RefCell::new(std::collections::HashMap::new());
 }
 
+/// Visit every registered widget view.
+pub fn for_each_widget(mut f: impl FnMut(&Retained<UIView>)) {
+    let views: Vec<Retained<UIView>> = WIDGETS.with(|w| w.borrow().clone());
+    for v in &views {
+        f(v);
+    }
+}
+
 /// Store a UIView and return its handle (1-based i64).
 pub fn register_widget(view: Retained<UIView>) -> i64 {
     let handle = WIDGETS.with(|w| {
