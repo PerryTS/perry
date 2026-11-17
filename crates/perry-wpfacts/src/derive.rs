@@ -5113,6 +5113,7 @@ pub(crate) fn member_op_facts(g: &crate::gen::Gen) -> Vec<crate::MemberOpFacts> 
                 receiver_prims,
                 stated: o.recv.is_some() || o.namespace.is_some(),
                 redispatch,
+                form: o.form,
             }
         })
         .collect()

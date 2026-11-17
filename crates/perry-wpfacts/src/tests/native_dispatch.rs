@@ -179,3 +179,33 @@ fn a_per_unit_run_has_no_fact() {
     };
     assert!(crate::compute(&list, &cfg).native_dispatch.is_none());
 }
+
+/// The Static keys are the real JS member names; a sub-object member has the
+/// sub-object as its namespace (the names runtime method names match).
+#[test]
+fn static_member_op_keys_are_the_real_js_names() {
+    let (pf, _d) = dispatch(
+        "import * as os from \"os\";\n\
+         const c = process.stdout.columns;\n\
+         const j = JSON.parse(\"[1]\");\n\
+         const u = process.getuid();\n\
+         console.log(os.EOL.length, c, j, u);\n",
+    );
+    let has = |op: &str, ns: &str, key: &str| {
+        pf.member_ops
+            .iter()
+            .any(|o| o.op == op && o.namespace.as_deref() == Some(ns) && o.key == key && o.stated)
+    };
+    assert!(has("OsEOL", "os", "EOL"), "{}", pf.dump_text());
+    assert!(
+        has("ProcessStdoutColumns", "process.stdout", "columns"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(has("JsonParse", "JSON", "parse"), "{}", pf.dump_text());
+    assert!(
+        has("ProcessPosixCredential", "process", "getuid"),
+        "{}",
+        pf.dump_text()
+    );
+}
