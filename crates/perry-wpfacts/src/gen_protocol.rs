@@ -78,6 +78,28 @@ impl<'a> Gen<'a> {
         (out, rj)
     }
 
+    /// The value an admitted settled resume yields (`AsyncStepResumeNow`):
+    /// a primitive as itself, a native promise's fulfilled value. Nothing
+    /// rejects and no `then` runs; an object fulfils as itself only through
+    /// `Cons::Fulfil` (a superset of the admitted primitives).
+    pub(crate) fn settled_now(&mut self, v: NodeId) -> NodeId {
+        let out = self.tmp("settled-now");
+        if self.m.reach_thenable {
+            self.m.cons(v, Cons::Fulfil { dst: out });
+        } else {
+            self.m.edge(v, out);
+        }
+        let pa = crate::builtins::promise_result_atom(&mut self.m);
+        self.m.cons(
+            v,
+            Cons::Load {
+                key: Key::Named(pa),
+                dst: out,
+            },
+        );
+        out
+    }
+
     /// `PERRY_FACTS_REACH_THENABLE=0` (`reach::thenable`): the previous
     /// `awaited`, where the value also flows into `out` as itself and the
     /// resolve function copies what a thenable passes it.

@@ -571,6 +571,27 @@ impl<'a> Gen<'a> {
     }
 
     /// The body of closure `e` in its context `cfx` (once per function).
+    /// The plain-async step closure (`build_async_step_driver_direct`): two
+    /// parameters, and a body that first binds `CurrentStepClosure` (which
+    /// only that driver emits). It gets its error carrier (`StepSplits`).
+    fn step_register(&mut self, mi: u32, params: &[perry_hir::Param], body: &[Stmt]) {
+        let (
+            [v, flag],
+            Some(Stmt::Let {
+                id: me,
+                init: Some(Expr::CurrentStepClosure),
+                ..
+            }),
+        ) = (params, body.first())
+        else {
+            return;
+        };
+        let err = self.tmp("step-error");
+        self.step.by_value.insert((mi, v.id), err);
+        self.step.by_flag.insert((mi, flag.id), v.id);
+        self.step.by_self.insert((mi, *me), err);
+    }
+
     pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
         if self.walked.contains(&cfx.f) {
             return;
@@ -643,6 +664,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
+        self.step_register(cfx.module, params, body);
         if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());

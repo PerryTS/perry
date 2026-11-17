@@ -242,9 +242,11 @@ fn px4_r2_null_test_of_a_proxy_field() {
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
     let v = verdicts(LAZY, "color");
+    // PROXY9 (owner 2026-11-17): the field holds the Proxy or `null`: the
+    // trap verdict, `null` its TypeError arm.
     assert!(
-        !v.is_empty() && v.iter().all(|s| s.contains("Proxy")),
-        "color sites see the Proxy, no escape: {v:?}"
+        !v.is_empty() && v.iter().all(|s| s == "ProxyTrap"),
+        "color sites are trap sites: {v:?}"
     );
 }
 
@@ -397,4 +399,53 @@ console.log(p, p.length);
     let (tops, held) = solve(src);
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
+}
+
+const PX9_MK: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { item: (i: number): string => "i" + i };
+  return new Proxy(api, { get(t: any, k: any) { return k === "color" ? "c" + N : t[k]; } });
+}
+"#;
+
+// PROXY9 R6: a Proxy or `null` / `undefined`: reads, calls and stores are
+// trap sites (the nullish arm throws the TypeError).
+#[test]
+fn px9_r6_proxy_or_nullish_is_a_trap_site() {
+    let src = format!(
+        "{PX9_MK}const p: any = N === \"x\" ? null : N === \"y\" ? undefined : mk();
+try {{ p.color = N; console.log(p.color, p.item(1)); }} catch (e) {{ console.log((e as Error).message); }}
+"
+    );
+    for key in ["color", "item"] {
+        let v = verdicts(&src, key);
+        assert!(
+            !v.is_empty() && v.iter().all(|s| s == "ProxyTrap"),
+            "{key}: {v:?}"
+        );
+    }
+}
+
+// PROXY9 K15: a Proxy or an ordinary object stays mixed; a Proxy or a
+// string stays undecided by the trap rule.
+#[test]
+fn px9_k15_proxy_beside_an_object_stays_mixed() {
+    let src = format!(
+        "{PX9_MK}const o: any = N === \"x\" ? {{ color: \"o\" }} : mk();
+console.log(o.color);
+o.color = N;
+const q: any = N === \"y\" ? \"s\" : mk();
+console.log(q.item);
+"
+    );
+    let v = verdicts(&src, "color");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s != "ProxyTrap"),
+        "color: {v:?}"
+    );
+    let v = verdicts(&src, "item");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s != "ProxyTrap"),
+        "item: {v:?}"
+    );
 }
