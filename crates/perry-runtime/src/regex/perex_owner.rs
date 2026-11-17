@@ -1,6 +1,6 @@
 //! Perry's program and subject owners for Perex's scoped-borrow API.
 //!
-//! Programs contain only an inline word count and immutable program words.
+//! Program cells hold immutable words and process-local validation metadata.
 //! The collector can move them; owners retain registered handles, never bases.
 //! Compilation scratch belongs to the caller, and emission writes directly
 //! into the final GC allocation after the pattern borrow has ended.
@@ -396,7 +396,7 @@ impl<'scope> GcProgram<'scope> {
             0,
             "a program cell's witness must not be written while a view of its words is live"
         );
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // Validation metadata and native code pointers need no GC barrier.
         root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness);
         });
@@ -701,7 +701,7 @@ impl InPlace {
     pub(crate) fn record_witness(&self, witness: perex::binding::ProgramWitness) {
         #[cfg(debug_assertions)]
         debug_assert_eq!(PROGRAM_VIEWS.with(std::cell::Cell::get), 0);
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // Validation metadata and native code pointers need no GC barrier.
         self.with_cell(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness)
         });
@@ -717,7 +717,7 @@ impl InPlace {
     /// of a binding of this same cell.
     #[inline]
     pub(crate) fn record_registers(&self, registers: usize) {
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // A scalar store needs no GC barrier.
         self.with_cell(|cell| unsafe { (*(cell as *mut ProgramCell)).registers = Some(registers) });
     }
 
