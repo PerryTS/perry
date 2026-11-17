@@ -54,8 +54,8 @@ use super::collections::cb_call;
 use super::*;
 use crate::pts::FxHashMap;
 use perry_hir::realm_manifest::{
-    RealmEffect, RealmEntry, RealmField, RealmKind, RealmOperand, RealmPrim, RealmProtocol,
-    RealmSlot, RealmSlotRoot, RealmSlotStep,
+    RealmEffect, RealmEntry, RealmField, RealmKind, RealmOperand, RealmOwnValue, RealmPrim,
+    RealmProtocol, RealmSlot, RealmSlotRoot, RealmSlotStep,
 };
 use std::borrow::Cow;
 use std::sync::OnceLock;
@@ -206,9 +206,10 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             slot(callee) || operand(this) || args.iter().any(operand)
         }
         RealmEffect::Stores { src, dst } => slot(src) || slot(dst),
-        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) | RealmEffect::Identity(s) => {
-            slot(s)
-        }
+        RealmEffect::Escapes(s)
+        | RealmEffect::AsyncResource(s)
+        | RealmEffect::Identity(s)
+        | RealmEffect::StoresBytes(s) => slot(s),
         RealmEffect::Returns(o) => operand(o),
         RealmEffect::StoresFresh | RealmEffect::Open => false,
     })
@@ -293,10 +294,9 @@ pub(super) fn declared_setter(proto: &str, key: &str) -> Option<&'static RealmEn
                     && src.steps.is_empty()
                     && dst.root == RealmSlotRoot::This
                     && !dst.steps.is_empty()
-                    && dst
-                        .steps
-                        .iter()
-                        .all(|st| !matches!(st, RealmSlotStep::Elems))
+                    && dst.steps.iter().all(|st| {
+                        matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_))
+                    })
             }
             RealmEffect::Returns(RealmOperand::Prim(_)) => true,
             _ => false,
@@ -409,6 +409,8 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
+            // Bytes into a byte view's backing store: no value flows.
+            RealmEffect::StoresBytes(s) => slot(s),
             // An observation of the slot's values: no flow to model.
             RealmEffect::Identity(_) => true,
             RealmEffect::Escapes(s) => slot(s),
@@ -445,6 +447,7 @@ fn protocol(p: RealmProtocol) -> Protocol {
         RealmProtocol::Iterate => Protocol::Iterate,
         RealmProtocol::IterNext => Protocol::IterNext,
         RealmProtocol::IterResult => Protocol::IterResult,
+        RealmProtocol::AsyncIterate => Protocol::AsyncIterate,
         RealmProtocol::Json => Protocol::Json,
         RealmProtocol::HasInstance => Protocol::HasInstance,
         RealmProtocol::OwnKeys => Protocol::OwnKeys,
@@ -501,9 +504,9 @@ impl Run {
                     v.nodes.push(spread_elems(m, s));
                 }
             }
-            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.args.get(i as usize)),
+            RealmSlotRoot::Arg(i) => v.nodes.extend(self.c.arg(i as usize)),
             RealmSlotRoot::Rest(i) => {
-                v.nodes.extend(self.c.args.iter().skip(i as usize));
+                v.nodes.extend(self.c.args_from(i as usize).iter());
                 for s in self.c.spread.clone() {
                     v.nodes.push(spread_elems(m, s));
                 }
@@ -536,6 +539,21 @@ impl Run {
                 self.walk(m, n, rest)
             }
             (r, []) => self.root(m, r),
+            // The values iterating a slot yields, or its own enumerable
+            // properties' values: taken from the slot the step is in.
+            (r, [inner @ .., st @ (RealmSlotStep::Iterated | RealmSlotStep::OwnValues)]) => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                Vals {
+                    nodes: vec![self.value_step(m, n, st)],
+                    spread: vec![],
+                }
+            }
             // The receiver's elements: its element node.
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
                 nodes: vec![m.field_any(
@@ -578,7 +596,12 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
-                    st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
+                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+                        unreachable!("a value step is taken above")
+                    }
+                    st @ (RealmSlotStep::Field(_)
+                    | RealmSlotStep::Internal(_)
+                    | RealmSlotStep::StrKey) => {
                         let key = step_key(m, st);
                         let dst = m.node_l("native-get");
                         m.cons(n, Cons::Load { key, dst });
@@ -641,7 +664,13 @@ impl Run {
                     nodes: vec![],
                     spread: vec![base],
                 },
-                st @ (RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)) => {
+                RealmSlotStep::Iterated | RealmSlotStep::OwnValues => Vals {
+                    nodes: vec![self.value_step(m, base, st)],
+                    spread: vec![],
+                },
+                st @ (RealmSlotStep::Field(_)
+                | RealmSlotStep::Internal(_)
+                | RealmSlotStep::StrKey) => {
                     let key = step_key(m, st);
                     let dst = m.node_l("native-get");
                     m.cons(base, Cons::Load { key, dst });
@@ -653,6 +682,22 @@ impl Run {
             };
         }
         cur
+    }
+
+    /// The values step `st` takes from node `n`: what iterating it yields
+    /// (`collections::iterate`: the array-like elements and the protocol's
+    /// `next().value`), or the values of its own enumerable properties
+    /// (`Cons::OwnValues`: no inherited member).
+    fn value_step(&mut self, m: &mut Model, n: NodeId, st: &RealmSlotStep) -> NodeId {
+        match st {
+            RealmSlotStep::Iterated => super::collections::iterate(m, self.call, n),
+            RealmSlotStep::OwnValues => {
+                let dst = m.node_l("native-own-values");
+                m.cons(n, Cons::OwnValues { dst });
+                dst
+            }
+            _ => unreachable!("value_step takes a value step"),
+        }
     }
 
     /// The slot's values as one node (`None`: the slot holds nothing, an
@@ -730,10 +775,13 @@ impl Run {
             // What JSON.parse makes (`builtins::json_value`).
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
-                let (j, ja) = crate::builtins::json_value(m, self.call);
+                let positions = m.json_positions;
+                let (j, ja) = crate::builtins::json_value(m, self.call, positions, false);
                 m.add_tok(n, j);
                 m.add_tok(n, ja);
-                m.add_prim(n, prim::ALL);
+                // JSON text holds no other primitive (ECMA-262 25.5.1);
+                // the operand takes no reviver.
+                m.add_prim(n, prim::JSON);
                 n
             }
             // What unknown code hands back: the declaration escaped the
@@ -764,6 +812,17 @@ impl Run {
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
+            // An object of prototype %ArrayBuffer.prototype% the realm makes
+            // (`Body.arrayBuffer()`) is the one AllocateArrayBuffer makes
+            // (25.1.3.1): the ArrayBuffer of `new ArrayBuffer(n)`
+            // (constructors.rs), with its modelled members (`slice`,
+            // 25.1.6.7). Likewise a shared one (25.2.2.1).
+            Cow::Borrowed("ArrayBuffer.prototype") => "ArrayBuffer",
+            Cow::Borrowed("SharedArrayBuffer.prototype") => "SharedArrayBuffer",
+            // The URLSearchParams object a URL's `searchParams` getter returns
+            // is the one `new URLSearchParams()` makes (constructors.rs),
+            // with its modelled members (WHATWG URL 6.2).
+            Cow::Borrowed("URLSearchParams.prototype") => "URLSearchParams",
             Cow::Borrowed(p) => p,
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
@@ -929,7 +988,7 @@ fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
 }
 
 /// The key of internal slot `name`: `[[name]]`, as the promise's settled
-/// value is `#value` (`promise_value`); a family's chain has no member
+/// value is `[[PromiseResult]]` (`promise_value`); a family's chain has no member
 /// under it (`loads::family_load`).
 pub(crate) fn internal_atom(m: &mut Model, name: &str) -> Atom {
     m.atom(&format!("[[{name}]]"))
@@ -944,7 +1003,11 @@ fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
     match st {
         RealmSlotStep::Field(k) => Key::Named(m.atom(k)),
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
-        RealmSlotStep::Elems => unreachable!("an elements step has no key"),
+        // Read back: any String key (the exclusion is the store's).
+        RealmSlotStep::StrKey => Key::any(),
+        RealmSlotStep::Elems | RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+            unreachable!("an elements or value step has no key")
+        }
     }
 }
 
@@ -1004,6 +1067,7 @@ fn run(
         *runs += 1;
         sites.insert(site);
     }
+    let _c = &m.calls[call as usize];
     let mut run = Run {
         name: entry.name,
         t,
@@ -1040,6 +1104,11 @@ fn run(
                 }
             }
             RealmEffect::StoresFresh => {}
+            // A byte copy into the slot's byte views: an element read of a
+            // typed array already carries its element type
+            // (`typed_array_elem_prim`, ECMA-262 10.4.5.15) and no [[Set]]
+            // runs, so nothing flows; the slot's values are not kept.
+            RealmEffect::StoresBytes(_) => {}
             // The body compares the slot's values by identity (DESIGN-p4l4
             // §2.2): recorded for the value-record derive only.
             RealmEffect::Identity(s) if m.value_records => {
@@ -1113,7 +1182,11 @@ fn run(
             RealmEffect::Stores { src, dst }
                 if matches!(
                     dst.steps.last(),
-                    Some(RealmSlotStep::Field(_) | RealmSlotStep::Internal(_))
+                    Some(
+                        RealmSlotStep::Field(_)
+                            | RealmSlotStep::Internal(_)
+                            | RealmSlotStep::StrKey
+                    )
                 ) =>
             {
                 let [inner @ .., st] = &*dst.steps else {
@@ -1140,7 +1213,30 @@ fn run(
                     };
                     run.node(m, &of).into_iter().collect()
                 };
-                let key = step_key(m, st);
+                // `strkey(this)` (a Web Storage item, perry-runtime
+                // web_storage.rs `sync_named_property`): the String
+                // ToString(value) makes, under any String key but an own
+                // member name of the declaring method's prototype (the
+                // runtime's reserved names: Storage.prototype's members and
+                // its `length`); never the value itself.
+                let (key, value) = match st {
+                    RealmSlotStep::StrKey => {
+                        let holder = entry.name.rsplit_once('.').map_or("", |(h, _)| h);
+                        let names: Vec<String> = super::members::realm_entry(holder)
+                            .map(|e| {
+                                e.own
+                                    .iter()
+                                    .filter(|p| !p.symbol)
+                                    .map(|p| p.key.to_string())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let s = m.node_l("native-strkey");
+                        m.add_prim(s, crate::model::prim::STR);
+                        (Key::Any(m.except_shape(names)), s)
+                    }
+                    _ => (step_key(m, st), value),
+                };
                 for n in base {
                     let site = m.anon_store_site();
                     m.cons(
@@ -1170,6 +1266,69 @@ fn run(
     }
 }
 
+/// A program [[Set]] of key `key` on `t`, a declared fresh object
+/// (`builtins::declared_box`) whose prototype P declares a method storing
+/// into `strkey(this)` (`Storage.prototype.setItem`): WebIDL 3.9.2's named
+/// property setter, as perry-runtime runs it (web_storage.rs: a String key
+/// set on a Storage object is setItem): that method's coercion of the
+/// stored argument (ToString: program `toString` / `valueOf` may run) and
+/// a String under the key unless it is one of P's own names (the runtime
+/// keeps the item off the object then). `None`: no such method; else the
+/// key and value the store writes, `None` inside when it writes nothing.
+pub(crate) fn strkey_set(
+    m: &mut Model,
+    t: Tok,
+    key: Key,
+    src: NodeId,
+) -> Option<Option<(Key, NodeId)>> {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return None;
+    };
+    let TmplKind::BObj { what, .. } = m.tmpls[tm as usize].kind else {
+        return None;
+    };
+    let holder = super::members::realm_entry(what)?;
+    let (entry, arg) = holder.own.iter().find_map(|o| {
+        let RealmOwnValue::Reference(r) = o.value else {
+            return None;
+        };
+        let (owner, name) = r.rsplit_once('.')?;
+        let e = declared_at(owner, name)?;
+        e.effects.iter().find_map(|f| match f {
+            RealmEffect::Stores { src, dst }
+                if dst.root == RealmSlotRoot::This
+                    && matches!(&*dst.steps, [RealmSlotStep::StrKey]) =>
+            {
+                Some((e, src.root))
+            }
+            _ => None,
+        })
+    })?;
+    for f in entry.effects.iter() {
+        if let RealmEffect::Coerce { slot, protocol: p } = f {
+            if slot.root == arg && slot.steps.is_empty() {
+                let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
+                let proto = protocol(*p);
+                m.cons(src, Cons::Implicit { reason, proto });
+            }
+        }
+    }
+    let names: Vec<String> = holder
+        .own
+        .iter()
+        .filter(|o| !o.symbol)
+        .map(|o| o.key.to_string())
+        .collect();
+    let key = match key {
+        Key::Named(a) if names.iter().any(|n| *n == m.atoms[a as usize]) => return Some(None),
+        Key::Named(a) => Key::Named(a),
+        Key::Any(_) => Key::Any(m.except_shape(names)),
+    };
+    let s = m.node_l("native-strkey");
+    m.add_prim(s, crate::model::prim::STR);
+    Some(Some((key, s)))
+}
+
 fn slot_text(s: &RealmSlot) -> String {
     let mut out = match s.root {
         RealmSlotRoot::This => "this".to_string(),
@@ -1182,6 +1341,9 @@ fn slot_text(s: &RealmSlot) -> String {
     for st in s.steps.iter() {
         out = match st {
             RealmSlotStep::Elems => format!("elems({out})"),
+            RealmSlotStep::Iterated => format!("iterated({out})"),
+            RealmSlotStep::OwnValues => format!("values({out})"),
+            RealmSlotStep::StrKey => format!("strkey({out})"),
             RealmSlotStep::Field(k) => format!("field({out}, {k})"),
             RealmSlotStep::Internal(k) => format!("islot({out}, {k})"),
         };

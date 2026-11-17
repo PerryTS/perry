@@ -245,6 +245,13 @@ pub extern "C" fn js_array_to_spliced(
             let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
             source.set_raw_const_ptr(copy as *const ArrayHeader);
         }
+        // 23.1.3.35 steps 5-8: ToIntegerOrInfinity( start ), then of
+        // `skipCount`, in that order; an object operand's `valueOf` runs here
+        // with the receiver and the items rooted.
+        let (start, _) =
+            source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(start));
+        let (delete_count, _) = source
+            .across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(delete_count));
         let arr = source.get_raw_const_ptr::<ArrayHeader>();
         let len = (*arr).length as isize;
 
@@ -338,6 +345,9 @@ pub extern "C" fn js_array_with(
     // source local can't corrupt it. No-op for SSO / non-string. The cloned
     // elements come from `arr` and are already shared. (Mirrors #5548.)
     crate::string::js_string_addref_if_heap_string(value);
+    // 23.1.3.39 step 4 / 23.2.3.36: ToIntegerOrInfinity( index ) before the
+    // receiver is read (an object operand's `valueOf` runs here).
+    let (index, arr) = super::splice_slice::index_operand_across(arr, index);
     // #3148/#2879/#8096: %TypedArray% receiver — replace one element over
     // element-typed storage. Asked BEFORE `clean_arr_ptr` for the reason
     // `typed_array_receiver` documents: written after the clean this branch is

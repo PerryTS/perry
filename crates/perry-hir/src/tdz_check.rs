@@ -398,6 +398,7 @@ pub(crate) fn for_each_stmt_part<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(Part<'a>)
             body,
             catch,
             finally,
+            ..
         } => {
             f(Part::Stmts(body));
             if let Some(catch) = catch {

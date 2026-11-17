@@ -398,3 +398,34 @@ pub(crate) unsafe fn test_init_owned_map_store(map: *mut MapHeader, capacity: u3
     // GC_STORE_AUDIT(INIT): cfg(test) constructor allocates tenured store, zeroes whole payload, sets used=capacity, then initializes test header.store/entries before fixture publication. Store is an old GC allocation; entries only aliases its inline payload. Keep distinction from pointer-free data.
     (*map).entries = (*store).entries;
 }
+
+/// Byte layout the image run needs of a store, relative to the cell's user
+/// address: the entries alias word, the start of the derived native indexes,
+/// and where the inline entries begin. The header's `entries` and `store` words.
+pub(crate) struct ImageForm {
+    pub entries: usize,
+    pub index: (usize, usize),
+    pub inline: usize,
+    pub header_entries: usize,
+    pub header_store: usize,
+}
+
+pub(crate) const fn image_form() -> ImageForm {
+    ImageForm {
+        entries: std::mem::offset_of!(MapStore, entries),
+        index: (
+            std::mem::offset_of!(MapStore, numeric),
+            std::mem::size_of::<MapStore>(),
+        ),
+        inline: std::mem::size_of::<MapStore>(),
+        header_entries: std::mem::offset_of!(super::MapHeader, entries),
+        header_store: std::mem::offset_of!(super::MapHeader, store),
+    }
+}
+
+/// Whether the store's indexes are all rebuildable from its entries: string and
+/// number keys only (no pointer-key index, no array-key index, no compaction log).
+pub(crate) unsafe fn image_keys_derivable(store: *const MapStore) -> bool {
+    let s = unsafe { &*store };
+    s.pointers.is_empty() && s.arrays.is_none() && s.compaction.is_none()
+}

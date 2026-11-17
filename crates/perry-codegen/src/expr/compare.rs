@@ -1328,7 +1328,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // classifier's integer result instead of materializing a
                     // heap string and entering string equality.
                     let negate = matches!(op, CompareOp::Ne | CompareOp::LooseNe);
-                    let value = lower_expr(ctx, operand)?;
+                    let value =
+                        match super::literals_vars::lower_typeof_global_operand(ctx, operand)? {
+                            Some(value) => value,
+                            None => lower_expr(ctx, operand)?,
+                        };
                     let bit = lower_typeof_literal_inline(ctx, &value, expected_tag, negate);
                     let tagged = ctx.block().select(
                         I1,

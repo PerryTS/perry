@@ -1607,3 +1607,10 @@ const _: () = assert!(
 #[cfg(test)]
 #[path = "declarations_role_tests.rs"]
 mod role_tests;
+
+impl ClassDeclarationIndex {
+    /// Registered declarations (image run capture: logical size).
+    pub(crate) fn snap_image_len(&self) -> usize {
+        self.dense.iter().filter(|&&a| a != 0).count() + self.spill.len()
+    }
+}

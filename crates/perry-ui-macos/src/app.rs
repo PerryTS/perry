@@ -1349,6 +1349,16 @@ define_class!(
                     // CADisplayLink-quality vsync alignment is a follow-up.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // Turn this agent's turnloop once (non-blocking). Since the
+                    // tokio removal, fetch / node:net / node:http complete on
+                    // NET_* completions that only a loop turn collects. A CLI
+                    // program turns it in `js_wait_for_event`; a UI app never
+                    // calls that, so without this no network I/O ever finishes
+                    // and `await fetch(...)` hangs forever.
+                    {
+                        extern "C" { fn js_loop_settle_once(); }
+                        js_loop_settle_once();
+                    }
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).
                     js_run_stdlib_pump();

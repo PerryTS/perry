@@ -233,6 +233,39 @@ pub(crate) unsafe fn family_own_key_hashed(
     desc_own_key(d, bytes, hash)
 }
 
+/// [`family_own_key`] for a data read: `Some(Some(slot))` when the layout
+/// names `bytes` as a DATA key at storage slot `slot` (the slot may hold the
+/// hole: the key is absent), `Some(None)` when it names no such own key,
+/// `None` when `obj` is not a family object without overflow or the layout
+/// key is an accessor (its caller owns `[[Get]]` then). The same descriptor
+/// index probe as [`family_own_key`]; allocation-free.
+///
+/// # Safety
+/// `obj` is a live object.
+#[inline]
+pub(crate) unsafe fn family_own_data_slot(
+    obj: *const ObjectHeader,
+    bytes: &[u8],
+) -> Option<Option<u32>> {
+    let word = (*obj).parent_class_id;
+    if word & LAYOUT_SHADOW_BIT != 0
+        || !(word_in_layout_index(word)
+            || super::super::shapes::shape_word_kind(word)
+                == super::super::shapes::SHAPE_ID_KIND_MIXED)
+    {
+        return None;
+    }
+    let record = super::super::shapes::shape_record_of_receiver(word)?;
+    let d = evaluation_layout_desc(record.family_desc_index_plus_one())?;
+    match desc_own_key(d, bytes, None)? {
+        None => Some(None),
+        Some((pos, slot)) => {
+            ((*d.keys.add(pos as usize)).attrs & super::super::key_attrs::ENTRY_ACCESSOR_MASK == 0)
+                .then_some(Some(slot))
+        }
+    }
+}
+
 /// [`family_own_key_hashed`] of an object whose family descriptor the caller
 /// already holds (`d`, from its layout word or its shape record).
 ///

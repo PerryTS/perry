@@ -72,7 +72,7 @@ pub(crate) fn function_prototype_ptr_materialized() -> usize {
     if proto != 0 {
         return proto as usize;
     }
-    let _ = crate::object::js_get_global_this();
+    let _ = crate::object::realm_core();
     FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire) as usize
 }
 

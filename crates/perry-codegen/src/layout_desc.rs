@@ -646,6 +646,7 @@ fn walk_stmts<'a>(body: &'a [Stmt], out: &mut Vec<&'a [(String, Expr)]>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, out);
                 if let Some(c) = catch {

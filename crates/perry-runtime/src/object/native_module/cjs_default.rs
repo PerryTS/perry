@@ -31,7 +31,7 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
         // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
         // bare `import * as` namespace).
-        "cluster" => Some(crate::cluster::cluster_default_value()),
+        "cluster" => Some(crate::cluster::cluster_default_value_installed()),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
         "process" => Some(js_create_native_module_namespace(
             b"process".as_ptr(),

@@ -220,16 +220,22 @@ pub(crate) fn note_realm_intrinsic(
 /// none (a builtin not yet bound while the realm is being populated). Builds
 /// the realm when this thread has none yet, exactly as the `globalThis`
 /// read it replaces did.
+// Its own function with the materialize point inlined into it, as it was
+// before the realm had phases: its callers (`builtin_prototype_value` and the
+// prototype resolvers, which a large program calls 10^5 times at start-up)
+// stay small enough to be inlined where their name is a constant, and pay one
+// call with one argument.
+#[inline(never)]
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity))
+    realm_intrinsic_addr_inline(&intrinsic_entry(identity).prototype, identity, true)
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
 /// else 0. Never builds the realm: a prototype that was never born cannot
 /// have been written either (the per-call `dv.get*` guard asks exactly that).
-#[inline]
+#[inline(always)]
 pub(crate) fn intrinsic_prototype_addr_if_bound(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
@@ -246,7 +252,7 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None)
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, identity, false)
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -264,32 +270,74 @@ pub(crate) fn intrinsic_constructor_addr_if_bound(
 
 /// The one materialize point of the realm's intrinsics: builds the realm when
 /// this thread has none yet, then births a `lazy` family
-/// (`BuiltinConstructorDeclaration::lazy`) whose prototype `family` names
-/// the first time it is asked for. Every reader that may build goes through
+/// (`BuiltinConstructorDeclaration::lazy`) whose prototype is asked for
+/// (`prototype`) the first time. Every reader that may build goes through
 /// here; the `_if_bound` readers never build (an unborn family was never
 /// written either).
+///
+/// Two-phase realm (`perry_abi::realm_phase`): an unbound entry while the
+/// realm is not complete is a family whose phase has not run. A phase-A
+/// family needs the core; a phase-B family (`realm_rest_global`) the complete
+/// realm, so this is the point that runs phase B for every internal birth of
+/// one (a `WeakMap`'s inherited read, a `WeakRef`'s `constructor`). The name
+/// is looked at only in that state: with the realm complete, as from its
+/// allocation in a realm populated in one pass, the test is the one load it
+/// was.
+#[inline(never)]
 fn realm_intrinsic_addr(
     cell: &Cell<usize>,
-    family: Option<crate::object::BuiltinConstructorIdentity>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
+) -> usize {
+    realm_intrinsic_addr_inline(cell, identity, prototype)
+}
+
+/// [`realm_intrinsic_addr`], inlined into [`intrinsic_prototype_addr`]. The
+/// bound entry and the entry of a complete realm cost what they cost before
+/// the realm had phases; everything a two-phase realm adds is behind
+/// [`realm_intrinsic_incomplete`].
+#[inline(always)]
+fn realm_intrinsic_addr_inline(
+    cell: &Cell<usize>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
 ) -> usize {
     let mut addr = cell.get();
-    if addr == 0 && !crate::object::global_this_is_materialized() {
-        crate::object::js_get_global_this();
-        addr = cell.get();
+    if addr == 0 && !crate::object::realm_is_complete() {
+        addr = realm_intrinsic_incomplete(cell, identity);
     }
     if addr == 0 {
-        match family {
-            Some(identity) if identity.declaration().lazy => {
-                crate::object::birth_lazy_family(identity);
-                addr = cell.get();
-                if addr == 0 {
-                    return 0;
-                }
-            }
-            _ => return 0,
+        if prototype && identity.declaration().lazy {
+            crate::object::birth_lazy_family(identity);
+            addr = cell.get();
+        }
+        if addr == 0 {
+            return 0;
         }
     }
     heal_prototype_addr(cell, addr)
+}
+
+/// An unbound entry of a realm that is not complete: this thread's first
+/// touch of the realm (through the entry the link chose: the full entry
+/// unless the program is two-phase), then, for a two-phase realm's core only,
+/// phase B if it binds the family. Out of line (once per thread in a
+/// one-pass program); listed in the default hot-text order.
+#[inline(never)]
+fn realm_intrinsic_incomplete(
+    cell: &Cell<usize>,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let mut addr = 0;
+    if !crate::object::global_this_is_materialized() {
+        crate::object::realm_core();
+        addr = cell.get();
+    }
+    if addr == 0 && !crate::object::realm_is_complete() {
+        crate::object::realm_family_phase(identity);
+        addr = cell.get();
+    }
+    addr
 }
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).

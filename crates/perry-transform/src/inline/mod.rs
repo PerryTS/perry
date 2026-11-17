@@ -243,6 +243,7 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_are_safe(body, target, saw_target)
                     && catch
@@ -384,6 +385,7 @@ fn inline_functions_inner(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     for s in body {
                         walk_stmt_exprs(s, f);
@@ -873,6 +875,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }

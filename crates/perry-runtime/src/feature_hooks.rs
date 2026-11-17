@@ -88,6 +88,7 @@ fn install_compiled_for_tests() {
         js_runtime_install_compiled();
         crate::object::js_nm_install_events();
         crate::object::js_nm_install_fs();
+        crate::cluster::install_default_value();
     });
 }
 
@@ -311,6 +312,9 @@ pub extern "C" fn js_runtime_install_diagnostics() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_dyn_eval() {
     perry_install_once!({
+        // Interpreted code can obtain a native namespace through a runtime
+        // specifier, even when the compiled source names no native module.
+        crate::object::native_module::constant_getters::install_all();
         crate::object::install_dyn_eval();
         crate::dyn_eval_hooks::install();
     });
@@ -448,6 +452,7 @@ pub extern "C" fn js_runtime_install_global_websocket() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_webcrypto() {
     perry_install_once!({
+        crate::object::native_module::constant_getters::webcrypto();
         crate::object::global_this::web_hooks::install_webcrypto();
     });
 }
@@ -531,7 +536,8 @@ pub extern "C" fn js_runtime_install_proxy() {
 /// Formatting can stringify without publishing a JSON namespace.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_json_format() {
-    // The sole store is idempotent; no initialization work needs a Once.
+    // Cache roots are per thread; the formatting slot is process-global.
+    crate::json_hooks::register_roots();
     crate::builtins::install_json_format();
 }
 

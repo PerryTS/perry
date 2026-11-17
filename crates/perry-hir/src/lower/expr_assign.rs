@@ -1367,7 +1367,9 @@ fn compound_member_assign_once(
                 object: Box::new(Expr::LocalGet(base_id)),
                 property: p.clone(),
                 value: Box::new(value),
-                byte_offset: 0,
+                // ACCSITE1: the compound's PutValue is a store site at the
+                // member's offset (13.15.3), with its GetValue beside it.
+                byte_offset: member.span.lo.0,
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
@@ -1598,7 +1600,9 @@ pub(crate) fn hoist_compound_member_assign(
                 object: Box::new(base_ref.clone()),
                 property: p.clone(),
                 value: Box::new(value),
-                byte_offset: 0,
+                // ACCSITE1: the compound's PutValue is a store site at the
+                // member's offset (13.15.3), with its GetValue beside it.
+                byte_offset: member.span.lo.0,
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {

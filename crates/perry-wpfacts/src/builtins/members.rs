@@ -326,8 +326,46 @@ pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
         .map(|(key, _)| *key)
 }
 
+/// `Object.prototype` holds `name` as an intrinsic member.
+pub(crate) fn object_proto_has(name: &str) -> bool {
+    find(OBJECT, name).is_some()
+}
+
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
+}
+
+/// The realm prototypes a value of family `fam` (kind `what`) may have
+/// when it is a primitive or a primitive wrapper (`loads::wrapper_member`):
+/// its kind's prototype; `Object(value)` (20.1.1.1) of a primitive of any
+/// kind is a wrapper of that kind (7.1.18 ToObject), and of `undefined` or
+/// `null` an ordinary object. `None`: any other value.
+pub(super) fn wrapper_protos(fam: Family, what: Option<&str>) -> Option<&'static [&'static str]> {
+    const PRIMS: [&str; 5] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+    ];
+    const ANY: [&str; 6] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+        "Object.prototype",
+    ];
+    Some(match (fam, what) {
+        (Family::Str, None) | (Family::Wrapper, Some("BoxedString")) => &PRIMS[0..1],
+        (Family::Num, None) | (Family::Wrapper, Some("BoxedNumber")) => &PRIMS[1..2],
+        (Family::Bool, None) | (Family::Wrapper, Some("BoxedBoolean")) => &PRIMS[2..3],
+        (Family::Sym, None) | (Family::Wrapper, Some("BoxedSymbol")) => &PRIMS[3..4],
+        (Family::BigInt, None) | (Family::Wrapper, Some("BoxedBigInt")) => &PRIMS[4..5],
+        (Family::Wrapper, Some("Object(prim)")) => &PRIMS,
+        (Family::Wrapper, Some("Object()")) => &ANY,
+        _ => return None,
+    })
 }
 
 /// `name` is a member of some described builtin family (`length`, `size`,
@@ -495,7 +533,6 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockKey};
     use perry_abi::BuiltinProto as P;
     // The locked prototypes the lookup passes before `Object.prototype`
     // (which follows on every chain), each with whether `name` is one of its
@@ -553,40 +590,55 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             return false
         }
     };
-    let class = |image: bool| {
-        if name == "constructor" {
-            LockKey::Constructor
-        } else if image {
-            LockKey::Image
-        } else if name == crate::model::NUM_KEY {
-            LockKey::Index
-        } else {
-            LockKey::Absent
-        }
-    };
-    // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
-    // prototype the lookup passes: an image member ends it, an absent key
-    // goes on to the next prototype.
+    // The lock's one decision on each prototype the lookup passes: a read
+    // there is final when no store the program can make there succeeds
+    // (`store_admitted`); an image member ends the lookup, an absent key goes
+    // on to the next prototype.
     for &(holder, image) in chain {
-        let key = class(image);
-        if !final_on(holder, key) {
+        if store_admitted(holder, name, image) {
             return false;
         }
-        if key == LockKey::Image {
+        if image && name != "constructor" {
             return true;
         }
     }
-    final_on(
+    !store_admitted(
         LockHolder::Proto(P::Object),
-        class(find(OBJECT, name).is_some()),
+        name,
+        find(OBJECT, name).is_some(),
     )
 }
 
+/// DEC 250, the solver's one question about a write onto a built-in
+/// prototype: can a store of key `name` onto locked holder `holder` succeed
+/// at run time (`image`: the realm image gives `holder` the key)? It asks
+/// the runtime's own decision (`perry_abi::lock::refuses`): replacing an
+/// image member is refused, adding a key is refused on the add-locked
+/// prototypes (an index on `Array.prototype` too), `constructor` is exempt.
+/// A refused store throws a TypeError and writes nothing, so a read the
+/// store would change is final ([`locked_read`]), and a store into ⊤ (which
+/// may be the holder) writes nothing there. Where the runtime admits the
+/// store the caller keeps the write.
+pub(crate) fn store_admitted(holder: LockHolder, name: &str, image: bool) -> bool {
+    use perry_abi::lock::{refuses, LockKey, LockMutation};
+    let (key, mutation) = if name == "constructor" {
+        (LockKey::Constructor, LockMutation::Replace)
+    } else if image {
+        (LockKey::Image, LockMutation::Replace)
+    } else if name == crate::model::NUM_KEY {
+        (LockKey::Index, LockMutation::Add)
+    } else {
+        (LockKey::Absent, LockMutation::Add)
+    };
+    !refuses(holder, key, mutation)
+}
+
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
-/// value of family `fam` (an exact Array or a primitive String).
+/// value of family `fam` (an exact Array, a primitive String or Number, a
+/// native Promise).
 pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     match fam {
-        Family::Array | Family::Str => member(fam, name),
+        Family::Array | Family::Str | Family::Num | Family::Promise => member(fam, name),
         _ => None,
     }
 }
@@ -602,12 +654,16 @@ pub(crate) const ANY_ITERATOR: &str = "Iterator";
 pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
+/// `%StringIteratorPrototype%` (22.1.5.1), what `String.prototype[@@iterator]`
+/// (22.1.3.36) gives its iterator.
+pub(crate) const STRING_ITERATOR: &str = "StringIterator";
 
 /// The intrinsic prototype of builtin object kind `what` whose image members
 /// the runtime locks while it takes adds: `%MapIteratorPrototype%`,
-/// `%SetIteratorPrototype%` (`builtin_proto.rs` `MAP_ITERATOR_FAMILY`,
-/// `SET_ITERATOR_FAMILY`), `RegExp.prototype` and `Date.prototype`
-/// (`seal_realm` seals every `BuiltinProto`). Its realm-table name and its
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` (`builtin_proto.rs`
+/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`, `STRING_ITERATOR_FAMILY`),
+/// `RegExp.prototype` and `Date.prototype` (`seal_realm` seals every
+/// `BuiltinProto`). Its realm-table name and its
 /// lock holder (`perry_abi::lock`), for `builtins::locked_chain_read` and
 /// `builtins::native_locked`: a read of an image member there is final, an
 /// absent key is not.
@@ -616,6 +672,7 @@ pub(crate) fn image_locked_prototype(what: &str) -> Option<(&'static str, LockHo
     match what {
         MAP_ITERATOR => Some(("%MapIteratorPrototype%", LockHolder::MapIterator)),
         SET_ITERATOR => Some(("%SetIteratorPrototype%", LockHolder::SetIterator)),
+        STRING_ITERATOR => Some(("%StringIteratorPrototype%", LockHolder::StringIterator)),
         "RegExp" => Some(("RegExp.prototype", LockHolder::Proto(P::RegExp))),
         "Date" => Some(("Date.prototype", LockHolder::Proto(P::Date))),
         _ => None,
@@ -635,15 +692,18 @@ pub(super) fn collection_iterator(what: &str) -> &'static str {
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR | STRING_ITERATOR => {
+            Family::Iterator
+        }
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "hostrecord" => Family::Box,
-        "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
+        "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
+        | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
     }
 }
@@ -659,7 +719,9 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// a Map, `Family::Collection`, not a box.)
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" | "stringrecord" => {
+            BoxChain::Object
+        }
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,
@@ -676,7 +738,7 @@ pub(crate) enum BoxChain {
 }
 
 /// A canonical array index (`"0"`, `"17"`): an element, not a member.
-pub(super) fn is_index_name(name: &str) -> bool {
+pub(crate) fn is_index_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 10
         && name.bytes().all(|b| b.is_ascii_digit())
@@ -728,7 +790,6 @@ impl Own {
     }
 
     /// Its keys, spelled as atoms are (`@@__perry_wk_species`).
-    #[cfg(test)]
     fn keys(self) -> Vec<String> {
         match self {
             Own::Listed(set) => set.iter().map(|(key, _)| key.to_string()).collect(),
@@ -744,7 +805,7 @@ impl Own {
 }
 
 /// Is the realm's own property `p` the key atoms spell `name`?
-fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
+pub(super) fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
     match name.strip_prefix(super::WK_PREFIX) {
         Some(wk) => p.symbol && p.key.strip_prefix("@@") == Some(wk),
         None => !p.symbol && p.key == name,
@@ -796,6 +857,17 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
     None
 }
 
+/// `RegExp.prototype`'s realm declaration when a RegExp's member `name` is
+/// not one of its own (22.2.6): the member is then its declared chain's
+/// (`Object.prototype`'s) or absent, never a RegExp method.
+pub(super) fn regexp_inherited(
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let p = realm_entry("RegExp.prototype").filter(|e| e.kind == RealmKind::Prototype)?;
+    let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
+    (!own).then_some(p)
+}
+
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
 /// (`realm_born`): its realm-declared own properties, then those of its
 /// declared [[Prototype]]s, to `null`.
@@ -813,6 +885,28 @@ pub(super) fn realm_chain_find(
             None => return RealmFind::Absent,
         }
     }
+}
+
+/// The keys the realm declares on `start` and on every [[Prototype]] of its
+/// declared chain, spelled as atoms are (a well-known symbol key with
+/// `WK_PREFIX`), each once.
+pub(super) fn realm_chain_keys(start: &'static RealmEntry) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut at = Some(start);
+    while let Some(e) = at {
+        for p in e.own.iter() {
+            let n = match (p.symbol, p.key.strip_prefix("@@")) {
+                (true, Some(wk)) => format!("{}{wk}", super::WK_PREFIX),
+                (true, None) => continue,
+                (false, _) => p.key.to_string(),
+            };
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        at = e.proto.and_then(realm_entry);
+    }
+    out
 }
 
 pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
@@ -847,6 +941,26 @@ fn realm_mem(p: &RealmOwn) -> Option<Mem> {
         } if p.symbol && p.key == "@@species" && returns_receiver(realm_entry(get)?) => Mem::Ctor,
         _ => return None,
     })
+}
+
+/// Does a function object the realm declares (a builtin function or
+/// constructor: `get [Symbol.species]` on Array, Map, ...; the host
+/// constructors' statics such as `EventEmitter.defaultMaxListeners`) own an
+/// accessor under the key atoms spell `name` (`None`: under any key)?
+pub(super) fn realm_fn_own_accessor(name: Option<&str>) -> bool {
+    crate::native_effects::realm()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                RealmKind::Constructor | RealmKind::Function | RealmKind::Method
+            )
+        })
+        .flat_map(|e| e.own.iter())
+        .any(|p| {
+            matches!(p.value, RealmOwnValue::Accessor { .. })
+                && name.is_none_or(|n| realm_key_is(p, n))
+        })
 }
 
 fn returns_receiver(e: &RealmEntry) -> bool {
@@ -1235,6 +1349,29 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     described_member(ns_statics(ns), name)
 }
 
+/// Does the realm declare `name` on namespace `ns` (MATHB1)?
+pub(crate) fn ns_declares(ns: BuiltinNs, name: &str) -> bool {
+    matches!(ns_member(ns, name), Some(Some(_)))
+}
+
+/// Is `name` an own static function of namespace `ns` (listed on the
+/// namespace itself, not found on its chain)?
+pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
+    matches!(
+        ns_statics(ns).members.and_then(|own| own.find(name)),
+        Some(Mem::Fn)
+    )
+}
+
+/// Is `name` listed on namespace `ns` itself (an own static of any kind,
+/// not a member of its chain)?
+pub(super) fn ns_own_member(ns: BuiltinNs, name: &str) -> bool {
+    ns_statics(ns)
+        .members
+        .and_then(|own| own.find(name))
+        .is_some()
+}
+
 fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
     let own = description.members?;
     if let Some(mem) = own.find(name) {
@@ -1266,6 +1403,57 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
 /// (`Object.prototype` included): the kinds of its data members, and
 /// whether its own prototype has a function member (`Object.prototype`'s
 /// methods, its `constructor` and `__proto__` are on every chain).
+/// The own member table of family `fam`'s intrinsic prototype, when the
+/// family is described member by member (`None`: Box, Wrapper, Opaque).
+fn own_table(fam: Family) -> Option<&'static [(&'static str, Mem)]> {
+    Some(match fam {
+        Family::Object => &[],
+        Family::Function => FUNCTION,
+        Family::Array => ARRAY,
+        Family::Str => STRING,
+        Family::Num => NUMBER,
+        Family::Bool => BOOLEAN,
+        Family::Sym => SYMBOL,
+        Family::BigInt => BIGINT,
+        Family::Collection => COLLECTION,
+        Family::Iterator => ITERATOR,
+        Family::Promise => PROMISE,
+        Family::Error => ERROR,
+        Family::Box | Family::Wrapper | Family::Opaque => return None,
+    })
+}
+
+/// Is family `fam` described member by member (`own_table`)? Box, Wrapper
+/// and Opaque are not: every name is a member of unknown kind.
+pub(super) fn described(fam: Family) -> bool {
+    own_table(fam).is_some()
+}
+
+/// The names on family `fam`'s intrinsic chain: its own prototype's, then
+/// the `Object.prototype` ones it does not shadow (`member`'s order).
+/// `None`: the family has no member table.
+pub(super) fn chain_names(fam: Family) -> Option<impl Iterator<Item = &'static str>> {
+    let own = own_table(fam)?;
+    let object = OBJECT.iter().filter(move |(n, _)| find(own, n).is_none());
+    Some(own.iter().chain(object).map(|(n, _)| *n))
+}
+
+/// The own statics of described namespace `ns` and of the constructors
+/// its chain passes (`NsProto::Constructor`), spelled as atoms are; `None`
+/// where the namespace or a constructor on its chain is undescribed.
+pub(super) fn ns_static_names(ns: BuiltinNs) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut d = ns_statics(ns);
+    loop {
+        out.extend(d.members?.keys());
+        match d.prototype {
+            NsProto::Function | NsProto::Object => return Some(out),
+            NsProto::Constructor(parent) => d = ns_statics(parent),
+            NsProto::Unknown(_) => return None,
+        }
+    }
+}
+
 pub(super) fn any_member(fam: Family) -> (bool, u16) {
     let own: &[(&str, Mem)] = match fam {
         Family::Object => &[],

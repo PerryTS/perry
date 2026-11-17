@@ -41,7 +41,8 @@ pub(crate) fn step_done() -> bool {
 
 /// `PERRY_FACTS_REACH_SPREAD_ARGS=0`: a hand-written built-in rule reads
 /// its arguments by position among the direct arguments only; what a
-/// spread argument supplies reaches no position (`Model::positional`).
+/// spread argument supplies reaches no position (`Model::builtin_args_view`
+/// returns the call as it is).
 pub(crate) fn spread_args() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_REACH_SPREAD_ARGS").as_deref(),
@@ -191,11 +192,12 @@ impl Model {
 
     /// `json_replacer_calls` for a call of the built-in `JSON.stringify`
     /// value (`builtins::call_builtin`; an alias, a spread argument list,
-    /// `.call`): arguments by position (`positional`), the root's holder
-    /// `holder` made per call site.
+    /// `.call`): arguments by position (`CallSite::arg`; a spread call is
+    /// its view, `Model::builtin_args_view`), the root's holder `holder`
+    /// made per call site.
     pub(crate) fn json_replacer_builtin_call(&mut self, call: CallId, holder: Tok) {
-        let c = self.positional(call, 2);
-        let (Some(&value), Some(&replacer)) = (c.args.first(), c.args.get(1)) else {
+        let c = self.calls[call as usize].clone();
+        let (Some(&value), Some(&replacer)) = (c.arg(0), c.arg(1)) else {
             return;
         };
         let frame = self.call_run(call);
@@ -222,6 +224,7 @@ impl Model {
             self.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this,
                     args,
                     spread: vec![],
@@ -242,41 +245,6 @@ impl Model {
             }
             self.edge(ret, n.seen);
         }
-    }
-
-    /// The call site of `call` as a hand-written built-in rule reads it by
-    /// position (`c.args.first()`, `c.args.get(i)`): its first `n`
-    /// positions at least. Without a spread argument, the site itself. A
-    /// spread shifts positions and they are not kept (`f(...a, b)` and
-    /// `f(b, ...a)` are both `args [b]`, `spread [a]`), so position `i`
-    /// holds a direct argument at index `i` or before, or an element a
-    /// spread argument supplies: the rule the declared effects use
-    /// (`effects::Run::root`, `RealmSlotRoot::Arg`). A callback given as
-    /// `xs.forEach(...[cb])` is then the callback the rule calls. `spread`
-    /// stays, so a rule can tell that a position may also be absent.
-    pub(crate) fn positional(&mut self, call: CallId, n: usize) -> CallSite {
-        let mut c = self.calls[call as usize].clone();
-        if c.spread.is_empty() || !self.reach_spread_args {
-            return c;
-        }
-        let frame = self.call_run(call);
-        let elems = self.node_l("spread-arg-elems");
-        self.nodes[elems as usize].frame = frame;
-        let key = self.elem_key();
-        for &s in &c.spread {
-            self.cons(s, Cons::Load { key, dst: elems });
-        }
-        let direct = std::mem::take(&mut c.args);
-        for i in 0..n.max(direct.len()) {
-            let a = self.node_l("spread-arg");
-            self.nodes[a as usize].frame = frame;
-            for &d in direct.iter().take(i + 1) {
-                self.edge(d, a);
-            }
-            self.edge(elems, a);
-            c.args.push(a);
-        }
-        c
     }
 
     /// `json_reviver_values`: the templates in `fresh` now met a delete,

@@ -3,7 +3,7 @@
 //! read `c.args.first()` and found no callback, so the callback's body was
 //! called inactive while Node ran it (check mode: "inactive body: body
 //! entered" on spread/test_gap_6718_spread_call_native_method). The rules
-//! now read their positions through `Model::positional`: position `i` is a
+//! now read their positions through `CallSite::arg`: position `i` is a
 //! direct argument at index `i` or before, or a spread argument's element.
 //! Each program's marker function `hit` runs only through the value the
 //! spread supplies; the control is the same solve without the rule

@@ -30,21 +30,26 @@ fn usable(ctx: &FnCtx<'_>) -> bool {
 
 /// What proves `expr` a Boolean, for the check-mode report: a local of
 /// `boolean_locals`, or a guard-free read of a field of `boolean_fields`.
-fn proven(ctx: &FnCtx<'_>, expr: &Expr) -> Option<String> {
+fn proven(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(String, bool)> {
     if !usable(ctx) {
         return None;
     }
     match expr {
-        Expr::LocalGet(id) => ctx
-            .wpfacts
-            .boolean_locals
-            .contains(id)
-            .then(|| format!("local {id} holds booleans")),
+        Expr::LocalGet(id) => {
+            if ctx.wpfacts.boolean_locals.contains(id) {
+                Some((format!("local {id} holds booleans"), false))
+            } else if ctx.wpfacts.nullish_boolean_locals.contains(id) {
+                Some((format!("local {id} holds booleans or nullish"), true))
+            } else {
+                None
+            }
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
             // Only a receiver that can have a field proof at all is asked.
-            if ctx.wpfacts.boolean_fields.is_empty()
+            if (ctx.wpfacts.boolean_fields.is_empty()
+                && ctx.wpfacts.nullish_boolean_fields.is_empty())
                 || !matches!(object.as_ref(), Expr::LocalGet(_) | Expr::This)
             {
                 return None;
@@ -55,7 +60,15 @@ fn proven(ctx: &FnCtx<'_>, expr: &Expr) -> Option<String> {
                 property,
                 super::wpfacts_access::Access::Get,
             )?;
-            (proof.booleans && !proof.guarded()).then(|| format!("field {property} holds booleans"))
+            if proof.guarded() {
+                None
+            } else if proof.booleans {
+                Some((format!("field {property} holds booleans"), false))
+            } else if proof.nullish_booleans {
+                Some((format!("field {property} holds booleans or nullish"), true))
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -64,19 +77,19 @@ fn proven(ctx: &FnCtx<'_>, expr: &Expr) -> Option<String> {
 /// The truthiness of `value`, the lowering of `expr`, when the facts prove
 /// `expr` a Boolean (module docs): `bits == TAG_TRUE` as an `i1`.
 pub(crate) fn truthy(ctx: &mut FnCtx<'_>, value: &str, expr: &Expr) -> Option<String> {
-    let what = proven(ctx, expr)?;
+    let (what, nullish) = proven(ctx, expr)?;
     crate::facts_consumed::used();
     crate::verify_facts::covered(
         crate::verify_facts::Fact::Boolean,
         || serde_json::json!({ "truthy": what }),
     );
     let bits = ctx.block().bitcast_double_to_i64(value);
-    witness(ctx, value, &bits, &what);
+    witness(ctx, value, &bits, &what, nullish);
     Some(ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64))
 }
 
 /// Check mode: `bits` is `TAG_TRUE` or `TAG_FALSE`.
-fn witness(ctx: &mut FnCtx<'_>, value: &str, bits: &str, what: &str) {
+fn witness(ctx: &mut FnCtx<'_>, value: &str, bits: &str, what: &str, nullish: bool) {
     if !crate::verify_facts::enabled() {
         return;
     }
@@ -87,7 +100,13 @@ fn witness(ctx: &mut FnCtx<'_>, value: &str, bits: &str, what: &str) {
     let blk = ctx.block();
     let is_true = blk.icmp_eq(I64, bits, crate::nanbox::TAG_TRUE_I64);
     let is_false = blk.icmp_eq(I64, bits, crate::nanbox::TAG_FALSE_I64);
-    let boolean = blk.or(I1, &is_true, &is_false);
+    let mut boolean = blk.or(I1, &is_true, &is_false);
+    if nullish {
+        let is_undef = blk.icmp_eq(I64, bits, crate::nanbox::TAG_UNDEFINED_I64);
+        let is_null = blk.icmp_eq(I64, bits, crate::nanbox::TAG_NULL_I64);
+        let nullish = blk.or(I1, &is_undef, &is_null);
+        boolean = blk.or(I1, &boolean, &nullish);
+    }
     blk.cond_br(&boolean, &next_l, &miss_l);
     ctx.current_block = miss;
     let site = crate::verify_facts::site_arg(ctx, what, crate::verify_facts::Fact::Boolean, &[]);

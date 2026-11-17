@@ -100,6 +100,7 @@ fn class_p() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),

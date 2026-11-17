@@ -615,6 +615,7 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for_each_stmt(body, f);
                 if let Some(catch) = catch {
@@ -987,6 +988,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             static_accessor_names: Vec::new(),

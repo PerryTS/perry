@@ -46,6 +46,7 @@ fn class_c() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -1526,6 +1527,7 @@ fn a_catch_bound_callee_id_is_not_resolved() {
                 body: Vec::new(),
             }),
             finally: None,
+            forof_completion: None,
         }],
         "a catch binding on the same id",
     );

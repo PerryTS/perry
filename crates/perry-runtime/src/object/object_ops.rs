@@ -40,7 +40,8 @@ pub(crate) use define_property::{
 pub use from_entries::js_object_from_entries;
 pub use has_own::{js_object_has_own, js_object_is, js_object_property_is_enumerable};
 pub use prototype::{
-    js_get_global_this_builtin_value, js_object_create, js_object_get_prototype_of,
+    builtin_value_core, js_get_global_this_builtin_value, js_object_create,
+    js_object_get_prototype_of,
 };
 
 // Internal `pub(crate)` helpers shared between siblings / the rest of the crate.

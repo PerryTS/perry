@@ -28,7 +28,23 @@ pub(crate) fn array_length_from_number_or_throw(number: f64) -> u32 {
 
 pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
     let number = crate::builtins::js_number_coerce(value);
-    array_length_from_number_or_throw(number)
+    if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return array_length_from_number_or_throw(number);
+    }
+    // 10.4.2.4 ArraySetLength steps 3-5: newLen = ToUint32( Desc.[[Value]] ) and
+    // numberLen = ToNumber( Desc.[[Value]] ) convert the value TWICE (an object's
+    // valueOf runs twice); a RangeError unless newLen == numberLen. The Number
+    // fast path above converts nothing and adds no call.
+    let again = crate::builtins::js_number_coerce(value);
+    let new_len = if number.is_finite() {
+        number.trunc().rem_euclid(4_294_967_296.0)
+    } else {
+        0.0
+    };
+    if new_len != again {
+        throw_invalid_array_length()
+    }
+    new_len as u32
 }
 
 /// RULE 3 (single-path object model, `object/shape_rule3.rs`): an
@@ -619,6 +635,11 @@ unsafe fn js_array_from_arraylike_with_missing(
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let length_val = crate::object::js_object_get_field_by_name_f64(obj, length_key);
+    // 7.1.20 ToLength( 7.1.4 ToNumber( length ) ): an object `length` runs its
+    // `@@toPrimitive` / `valueOf` / `toString` (the receiver stays rooted).
+    let (length_val, obj) =
+        super::splice_slice::index_operand_across(obj as *const ArrayHeader, length_val);
+    let obj = obj as *const crate::object::ObjectHeader;
     let length_bits = length_val.to_bits();
     // ToLength coercion: NaN / undefined / non-finite / negative → 0.
     let len = if length_val.is_nan()

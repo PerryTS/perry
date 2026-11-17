@@ -102,7 +102,7 @@ impl Model {
             || (shadow && !stored)
             || (stored && marker)
         {
-            let f = self.field(t, a);
+            let f = self.field_r(t, a);
             self.edge(f, n);
         }
         Some(n)
@@ -184,11 +184,13 @@ impl Model {
             ret,
             args_all,
             has_arguments: true,
+            arguments: None,
             own_test: crate::model::OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
+            foreign_params: true,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -198,6 +200,7 @@ impl Model {
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
         let r = self.reason("passed to an unknown function");
         self.sink_node(args_all, r);
@@ -287,7 +290,7 @@ impl Model {
                     for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
                         if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
                             if self.is_marker(vt) {
-                                let f = self.field(vt, a);
+                                let f = self.field_r(vt, a);
                                 self.edge(f, n);
                             } else {
                                 self.edge(s, n);
@@ -360,7 +363,7 @@ impl Model {
                 };
                 for a in keys {
                     if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
-                        let f = self.field(vt, a);
+                        let f = self.field_r(vt, a);
                         self.edge(f, n);
                     }
                 }

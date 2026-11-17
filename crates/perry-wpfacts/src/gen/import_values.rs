@@ -718,11 +718,13 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: c.variadic,
+            arguments: None,
             own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
+            foreign_params: true,
             gen_proto: None,
             gen_fn_protos: None,
             gen_async: false,
@@ -732,6 +734,7 @@ impl<'a> Gen<'a> {
             forwards_super: false,
             parent: NO_FN,
             forwarded: c.closed.is_none(),
+            ret_param: None,
         });
         // Registered before its result is built: a result layout whose
         // field holds this function reaches it again (`stand_in_class`).
@@ -876,6 +879,21 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        // Its descriptor's get/set are that unit's values,
+                        // unknown here: installed as unknown accessors.
+                        let f = self.m.node_l("another unit's accessor");
+                        self.m
+                            .add_top(f, |_| "accessor defined by another unit's function".into());
+                        for setter in [false, true] {
+                            self.m.cons(
+                                f,
+                                Cons::Accessor {
+                                    holder: p,
+                                    key,
+                                    setter,
+                                },
+                            );
+                        }
                     }
                     None => self.m.cons(
                         p,

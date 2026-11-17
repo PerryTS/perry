@@ -277,6 +277,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(|s| self.stmt_this_safe(s, ctx))
                     && catch
@@ -605,6 +606,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     stmt_visit(s, found);

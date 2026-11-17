@@ -377,13 +377,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atan", &[(DOUBLE, &v)]))
         }
-        Expr::MathAtan2(y, x) => {
-            let y_v = lower_math_operand(ctx, y)?;
-            let x_v = lower_math_operand(ctx, x)?;
+        Expr::MathAtan2(y, x) => super::dispatch::with_math_operands(ctx, &[y, x], |ctx, v| {
             Ok(ctx
                 .block()
-                .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &y_v), (DOUBLE, &x_v)]))
-        }
+                .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &v[0]), (DOUBLE, &v[1])]))
+        }),
 
         // -------- String.fromCharCode(code) --------
         Expr::StringFromCharCode(o) => {

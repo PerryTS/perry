@@ -567,6 +567,7 @@ pub(crate) fn remap_let_ids_in_stmt(stmt: &mut Stmt, remap: &HashMap<u32, u32>) 
             body,
             catch,
             finally,
+            ..
         } => {
             remap_let_ids_in_stmts(body, remap);
             if let Some(c) = catch {
@@ -614,6 +615,7 @@ pub(crate) fn collect_local_ids_in_stmts(stmts: &[Stmt], out: &mut Vec<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_local_ids_in_stmts(body, out);
                 if let Some(c) = catch {

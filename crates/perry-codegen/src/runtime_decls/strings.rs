@@ -1484,6 +1484,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_splice", I64, &[I64, I32, I32, PTR, I32, PTR]);
     module.declare_function("js_array_splice_delete_count", I32, &[DOUBLE]);
     module.declare_function("js_parse_int", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_parse_int_value", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_parse_float", DOUBLE, &[I64]);
     module.declare_function("js_array_reduce", DOUBLE, &[I64, I64, I32, DOUBLE]);
     module.declare_function("js_array_reduce_right", DOUBLE, &[I64, I64, I32, DOUBLE]);
@@ -1839,6 +1840,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #13488: a resolved `import()` site validates its options first; `0`
+    // or the rejected promise the call evaluates to.
+    module.declare_function("js_module_dynamic_import_check_options", I64, &[DOUBLE]);
     module.declare_function(
         "js_module_dynamic_import_deferred",
         DOUBLE,

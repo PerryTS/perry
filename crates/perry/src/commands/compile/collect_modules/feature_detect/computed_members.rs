@@ -278,6 +278,7 @@ fn date_receiver(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 returns_value(body)
                     || catch

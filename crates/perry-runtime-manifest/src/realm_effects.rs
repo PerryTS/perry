@@ -24,7 +24,7 @@
 //! `path(slot)`: what node does to a PathLike argument (getValidatedPath:
 //! `toPathIfFileURL`, then the type check), as the reads and coercions it
 //! stands for (`path_effects`).
-//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys | ShallowInspect
+//! Protocol := ToPrimitive | Iterate | IterNext | IterResult | AsyncIterate | Json | HasInstance | OwnKeys | ShallowInspect
 //! kind     := undefined | null | bool | num | str | bigint | symbol
 //! ```
 use super::info;
@@ -70,10 +70,17 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         ("arg" | "rest" | "returned", Some(_)) => {
             (tagged(name, index(name, inner)?), Vec::new())
         }
-        ("elems", Some(inner)) => {
+        (step @ ("elems" | "iterated" | "values"), Some(inner)) => {
             let Value::Object(mut base) = slot(inner)? else { unreachable!() };
             let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
-            steps.push(Value::String("elems".into()));
+            let tag = if step == "values" { "own_values" } else { step };
+            steps.push(Value::String(tag.into()));
+            (base.remove("root").unwrap(), steps)
+        }
+        ("strkey", Some(inner)) => {
+            let Value::Object(mut base) = slot(inner)? else { unreachable!() };
+            let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
+            steps.push(Value::String("str_key".into()));
             (base.remove("root").unwrap(), steps)
         }
         (step @ ("field" | "islot"), Some(inner)) => {
@@ -96,7 +103,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), field(slot, key), islot(slot, name))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), strkey(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }
@@ -309,6 +316,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
         "escapes" => tagged("escapes", slot(inner()?)?),
         "identity" => tagged("identity", slot(inner()?)?),
         "async_resource" => tagged("async_resource", slot(inner()?)?),
+        "stores_bytes" => tagged("stores_bytes", slot(inner()?)?),
         "coerce" => {
             let parts = info::split(inner()?, ",");
 
@@ -320,6 +328,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Iterate" => "iterate",
                 "IterNext" => "iter_next",
                 "IterResult" => "iter_result",
+                "AsyncIterate" => "async_iterate",
                 "Json" => "json",
                 "HasInstance" => "has_instance",
                 "OwnKeys" => "own_keys",
@@ -327,7 +336,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
                 "Any" => return Err("coerce(.., Any) is not declarable: name the protocol".into()),
                 p => {
                     return Err(format!(
-                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, Json, HasInstance, OwnKeys, ShallowInspect)"
+                        "unknown protocol `{p}` (ToPrimitive, Iterate, IterNext, IterResult, AsyncIterate, Json, HasInstance, OwnKeys, ShallowInspect)"
                     ))
                 }
             };

@@ -9,8 +9,8 @@
 //! function that grows by a few bytes changes its rank and with it the unit
 //! of many functions that did not change.
 //!
-//! [`units_by_locality`] (`PERRY_CODEGEN_UNIT_LOCALITY=1`; the size partition
-//! is the default) is a function of the call graph:
+//! [`units_by_locality`] (the default; `PERRY_CODEGEN_UNIT_LOCALITY=0` selects
+//! the size partition) is a function of the call graph:
 //!
 //! 1. **Clusters.** Functions joined by a reference grow into clusters, the
 //!    strongest reference first: a direct call inside a recursion cycle, a
@@ -61,11 +61,11 @@ pub(crate) struct UnitEdge {
     pub direct: bool,
 }
 
-/// `PERRY_CODEGEN_UNIT_LOCALITY=1`/`on`/`true` selects the locality partition.
-/// Off by default: with every definition of a split module external, a callee
-/// that LLVM inlines stays in the image as well, so bringing callers and
-/// callees together grows the three.js binaries (+0.2 % and +0.5 %) for no
-/// measured gain in instructions.
+/// The locality partition is the default; `PERRY_CODEGEN_UNIT_LOCALITY=0`/
+/// `off`/`false` selects the size partition. A caller and its small callee
+/// in one unit lets LLVM inline the call; on three.js (whose methods became
+/// direct calls once the facts resolve them) that is 2.0 to 2.4 % fewer
+/// instructions and 0.9 % less `.text`.
 pub(crate) fn locality_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
@@ -75,7 +75,7 @@ pub(crate) fn locality_enabled() -> bool {
 }
 
 pub(crate) fn locality_enabled_from_env(value: Option<&str>) -> bool {
-    matches!(value, Some("1" | "on" | "true"))
+    !matches!(value, Some("0" | "off" | "false"))
 }
 
 /// Greedy largest-first bin packing: each function into the currently

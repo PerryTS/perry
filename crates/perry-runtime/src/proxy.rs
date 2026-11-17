@@ -38,6 +38,7 @@ pub(crate) mod own_keys;
 pub(crate) mod prototype;
 pub(crate) mod reflect;
 pub(crate) mod reflect_misc;
+pub(crate) mod to_primitive;
 pub use reflect_misc::{
     js_reflect_apply, js_reflect_construct, js_reflect_define_property,
     js_reflect_get_prototype_of, js_reflect_is_extensible, js_reflect_own_keys,

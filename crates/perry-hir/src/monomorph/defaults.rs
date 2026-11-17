@@ -170,6 +170,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
             body,
             catch,
             finally,
+            ..
         } => {
             fill_defaults_in_stmts(body, cx);
             if let Some(ref mut c) = catch {

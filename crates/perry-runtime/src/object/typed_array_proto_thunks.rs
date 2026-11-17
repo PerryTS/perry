@@ -283,7 +283,14 @@ fn is_undefined_arg(value: f64) -> bool {
 
 #[inline]
 fn to_integer_or_infinity(value: f64) -> f64 {
-    let number = crate::value::JSValue::from_bits(value.to_bits()).to_number();
+    // 7.1.5 ToIntegerOrInfinity( ToNumber( value ) ): an object operand
+    // runs its valueOf (the same js_number_coerce as the other index operands); a
+    // plain double passes one tag test.
+    let number = if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        value
+    } else {
+        crate::builtins::js_number_coerce(value)
+    };
     if number.is_nan() || number == 0.0 {
         0.0
     } else if !number.is_finite() {

@@ -1007,7 +1007,7 @@ unsafe fn array_slots_are_numeric(arr: *const ArrayHeader) -> bool {
 }
 
 #[inline]
-pub(super) unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
+pub(crate) unsafe fn array_gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader> {
     if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }

@@ -198,6 +198,7 @@ fn fold_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Census) {
             body,
             catch,
             finally,
+            ..
         } => {
             fold_list(body, avail, cx);
             if let Some(catch) = catch {
@@ -281,6 +282,7 @@ fn reads_in_stmt(stmt: &Stmt, q: LocalId) -> usize {
             body,
             catch,
             finally,
+            ..
         } => {
             reads_in_stmts(body, q)
                 + catch.as_ref().map_or(0, |c| reads_in_stmts(&c.body, q))
@@ -366,6 +368,7 @@ fn rename_in_stmt(stmt: &mut Stmt, q: LocalId, p: LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             rename_in_stmts(body, q, p);
             if let Some(c) = catch {

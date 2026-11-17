@@ -751,6 +751,7 @@ impl<'e> Walk<'_, 'e> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(c) = catch {
@@ -1138,6 +1139,7 @@ fn aliases(f: &Function) -> Vec<(LocalId, usize)> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     scan(body, f, writes, out);
                     if let Some(c) = catch {

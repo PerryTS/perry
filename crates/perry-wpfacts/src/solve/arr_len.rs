@@ -143,6 +143,34 @@ impl Model {
         }
     }
 
+    /// `Cons::IndexHoleIn`: an index store into Array `t` under the Number
+    /// key node `key`. ECMA-262 10.4.2.1: a store at an index below the
+    /// length writes that element (a hole there is filled, none is made);
+    /// only an index past the end leaves the indices between as holes. On
+    /// a program Array of this unit with a length interval
+    /// (`elem_undef_watched`) the hole node (`hole`) is the destination of
+    /// the watched read rule: `Cons::ElemUndef` gives it `undefined` once a
+    /// key may reach the lower bound of the length (Invariant L: the length
+    /// never drops below it) or the length is ⊤. Any other Array may get a
+    /// hole at once (`mark_hole`).
+    pub(crate) fn index_hole_in(&mut self, t: Tok, key: NodeId) {
+        if !self.elem_undef_watched(t) {
+            self.mark_hole(t);
+            return;
+        }
+        let h = self.hole(t);
+        if self.idx_done.insert((key, t, h, crate::model::IDX_HOLE_IN)) {
+            let c = Cons::ElemUndef {
+                obj: t,
+                key,
+                dst: h,
+            };
+            self.cons(key, c);
+            let len = self.arr_len(t);
+            self.cons(len, c);
+        }
+    }
+
     /// Array `t` is born in this unit and no event may shrink it
     /// (`arr_shrunk`). One unit of a per-unit solve sees the other units'
     /// writes only through contracts: no Array is grow-only there.
@@ -343,11 +371,7 @@ impl Model {
     /// (`kept_reads`). Not with `PERRY_FACTS_ELEM_UNDEF=0`: every computed
     /// read then yields `undefined`.
     pub(crate) fn kept_read(&self, t: Tok) -> bool {
-        self.inbounds_read
-            && self.elem_undef
-            && t != TOP
-            && self.is_arr(t)
-            && self.arr_grow_only(t)
+        self.inbounds_read && self.elem_undef && t != TOP && self.is_arr(t) && self.arr_grow_only(t)
     }
 
     /// The read of `t` under `key` into `dst` is a kept in-bounds read.

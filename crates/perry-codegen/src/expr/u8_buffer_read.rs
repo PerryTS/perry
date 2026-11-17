@@ -543,6 +543,7 @@ pub(crate) fn loop_param_is_accessed(body: &[perry_hir::Stmt], id: u32) -> bool 
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().any(|stmt| loop_reads(stmt, id))
                     || catch

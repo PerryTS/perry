@@ -344,6 +344,7 @@ pub fn scan_for_native_func_returns(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_for_native_func_returns(
@@ -465,6 +466,7 @@ pub fn scan_for_ident_init_propagation(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 if scan_for_ident_init_propagation(
@@ -733,6 +735,7 @@ pub fn fix_native_instance_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 fix_native_instance_stmt(s, native_instances, local_id_instances);

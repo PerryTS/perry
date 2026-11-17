@@ -229,6 +229,7 @@ fn collect_used_new_fields_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_used_new_fields_in_stmts(body, non_escaping_news, used);
                 if let Some(catch) = catch {

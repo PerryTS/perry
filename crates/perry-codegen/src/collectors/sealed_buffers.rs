@@ -235,6 +235,7 @@ impl Probe<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(c) = catch {
@@ -558,6 +559,7 @@ impl<'a> Scan<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {

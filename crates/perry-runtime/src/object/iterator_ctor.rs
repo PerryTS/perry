@@ -72,13 +72,13 @@ pub(crate) fn install_prototype_accessors(proto: *mut ObjectHeader) {
 /// once the global bootstrap creates it.
 fn install_constructor_accessor(proto: *mut ObjectHeader) {
     let get = native_fn(
-        crate::fn_info!(iterator_constructor_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(iterator_constructor_getter_thunk, 0; with_name("get constructor"), with_declared(0)),
         "get constructor",
         0,
         Some(f64::from_bits(crate::value::TAG_UNDEFINED)),
     );
     let set = native_fn(
-        crate::fn_info!(iterator_constructor_setter_thunk, 1; with_declared(1)),
+        crate::fn_info!(iterator_constructor_setter_thunk, 1; with_name("set constructor"), with_declared(1)),
         "set constructor",
         1,
         None,

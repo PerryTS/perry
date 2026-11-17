@@ -152,7 +152,7 @@ pub(crate) fn settle_reservations(
                 .filter_map(|prop| key_name(&prop.key)),
         );
         if let Some(body) = &ctor.body {
-            super::class_decl::constructor_store_keys(&body.stmts, &mut order);
+            super::class_decl::constructor_store_keys_of(Some(class), &body.stmts, &mut order);
         }
     }
     fields.retain(|field| field.origin.is_definition() || order.contains(&field.name));

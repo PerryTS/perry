@@ -402,6 +402,7 @@ pub(crate) fn emit_module_globals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_init_lets(body, out);
                     if let Some(c) = catch {

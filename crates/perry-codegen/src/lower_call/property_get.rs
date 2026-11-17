@@ -24,6 +24,7 @@ use crate::types::{DOUBLE, I1, I64};
 mod builtin_kind_guard;
 pub(crate) mod completed_object;
 mod dynamic_dispatch;
+pub(crate) use dynamic_dispatch::try_lower_proven_method_call;
 pub(crate) use dynamic_dispatch::{
     lower_function_spread_call, method_target_is_cased, try_lower_instance_method_spread_call,
 };

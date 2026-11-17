@@ -110,7 +110,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let cache_reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| wrapped(s) && s.key.starts_with(&root))
+        .filter(|s| wrapped(s) && s.key.starts_with(&root) && !s.access.is_store())
         .collect();
     // a.js requires b and c, c.js requires b: three static edges, each
     // reading the live entry and, after a reload, the new one.
@@ -135,7 +135,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let exports_reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| wrapped(s) && s.key == "exports" && !s.is_call)
+        .filter(|s| wrapped(s) && s.key == "exports" && !s.is_call && !s.access.is_store())
         .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
         .collect();
     assert!(exports_reads.len() >= 6, "{dump}");
@@ -147,7 +147,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
         let reads: Vec<_> = pf
             .sites
             .iter()
-            .filter(|s| s.module == support && s.key == key && !s.is_call)
+            .filter(|s| s.module == support && s.key == key && !s.is_call && !s.access.is_store())
             .collect();
         assert!(!reads.is_empty(), "no `{key}` read in link\n{dump}");
         for s in reads {
@@ -180,7 +180,7 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
     let extra: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.module != support && s.key == "extra" && !s.is_call)
+        .filter(|s| s.module != support && s.key == "extra" && !s.is_call && !s.access.is_store())
         .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
         .collect();
     assert!(!extra.is_empty(), "{dump}");
@@ -194,7 +194,10 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
     assert!(
         pf.sites
             .iter()
-            .filter(|s| s.module != support && s.key == "exports" && !s.is_call)
+            .filter(|s| s.module != support
+                && s.key == "exports"
+                && !s.is_call
+                && !s.access.is_store())
             .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
             .all(|s| proven(&s.verdict)),
         "{dump}"
@@ -223,7 +226,7 @@ fn the_born_exports_object_has_the_module_s_export_contract() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -246,7 +249,7 @@ fn the_exports_contract_does_not_follow_a_replacement() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "a" && !s.is_call)
+        .filter(|s| s.key == "a" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -272,7 +275,7 @@ fn a_declared_export_redefined_as_an_accessor_is_not_a_slot() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "v" && !s.is_call)
+        .filter(|s| s.key == "v" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -436,7 +439,7 @@ fn cache_reads(dir: &tempfile::TempDir, pf: &ProgramFacts) -> Vec<(String, bool)
     let support = support_index(pf);
     pf.sites
         .iter()
-        .filter(|s| s.module != support && s.key.starts_with(&root))
+        .filter(|s| s.module != support && s.key.starts_with(&root) && !s.access.is_store())
         .map(|s| {
             let name = s.key.rsplit('/').next().unwrap_or_default().to_string();
             (name, proven(&s.verdict))
@@ -479,7 +482,7 @@ fn a_cache_deletion_ends_the_factory_order() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -502,7 +505,7 @@ fn an_export_added_in_a_loop_keeps_no_order() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()

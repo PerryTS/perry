@@ -1252,6 +1252,7 @@ fn collect_owned_buffer_lets(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_owned_buffer_lets_child_scope(body, out, known_length_locals, lengths);
                 if let Some(catch) = catch {
@@ -1510,6 +1511,7 @@ impl ArrayFactCollector {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_stmts(body);
                 if let Some(catch) = catch {

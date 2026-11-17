@@ -257,6 +257,7 @@ fn each_stmt<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(&'a Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 each_stmt(body, f);
                 if let Some(cc) = catch {
@@ -558,6 +559,7 @@ impl Walk<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 // A throw can leave the block before any of its writes, so
                 // the catch and the finally start from the state before it.
@@ -938,6 +940,7 @@ mod tests {
                 body: catch_body,
             }),
             finally: None,
+            forof_completion: None,
         };
         assert!(!flags_x(vec![try_(vec![throw()])]));
         assert!(flags_x(vec![try_(vec![])]));
@@ -952,6 +955,7 @@ mod tests {
                 body: vec![],
                 catch: None,
                 finally: Some(vec![Stmt::Return(None)]),
+                forof_completion: None,
             }],
             else_branch: Some(vec![set(X, Expr::Integer(1))]),
         }]));
@@ -964,12 +968,14 @@ mod tests {
                 body: vec![],
             }),
             finally: Some(vec![]),
+            forof_completion: None,
         }]));
         // A finally's write counts after the try ...
         assert!(!flags_x(vec![Stmt::Try {
             body: vec![],
             catch: None,
             finally: Some(vec![set(X, Expr::Integer(1))]),
+            forof_completion: None,
         }]));
         // ... but a read in it still sees the state before the block.
         let body = vec![
@@ -978,6 +984,7 @@ mod tests {
                 body: vec![set(X, Expr::Integer(1))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(get(X))]),
+                forof_completion: None,
             },
         ];
         assert!(reads_before_write(&body, &HashSet::from([X])).contains(&X));

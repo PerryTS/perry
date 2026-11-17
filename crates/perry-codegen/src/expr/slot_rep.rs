@@ -771,6 +771,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     scan_declared(body, out);
                     if let Some(c) = catch {
@@ -937,6 +938,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.stmts(body);
                     if let Some(c) = catch {

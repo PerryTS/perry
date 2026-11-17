@@ -342,12 +342,12 @@ fn fixed_slice_write_encoding(method_name: &str) -> Option<i32> {
     })
 }
 
-unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
-    let raw = bits.to_bits();
-    if (raw >> 48) as u16 == 0x7FFC {
+pub(super) unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
+    let options = JSValue::from_bits(bits.to_bits());
+    if !options.is_pointer() {
         return None;
     }
-    let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    let obj = options.as_pointer::<ObjectHeader>();
     if (obj as usize) < 0x1000 {
         return None;
     }
@@ -753,7 +753,9 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
     }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {
-            args[i] as i32
+            // 7.1.5 ToIntegerOrInfinity( ToNumber( arg ) ): an object operand
+            // runs its `valueOf` (the sibling Array `slice` conversion).
+            crate::array::array_slice_value_to_index(args[i])
         } else {
             0
         }
@@ -851,7 +853,7 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         "copyWithin" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i64;
             let rel = |v: f64| -> i64 {
-                let n = crate::value::JSValue::from_bits(v.to_bits()).to_number();
+                let n = crate::builtins::js_number_coerce(v);
                 if n.is_nan() {
                     return 0;
                 }
@@ -974,8 +976,6 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         }
         "fill" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
-            let end = if args.len() >= 3 { arg_i32(2) } else { len };
             let value = args
                 .first()
                 .copied()
@@ -1002,6 +1002,10 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                     return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                 }
             }
+            // Buffer.prototype.fill converts here; a plain Uint8Array's typed-array
+            // fill above converts its own operands (once).
+            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let end = if args.len() >= 3 { arg_i32(2) } else { len };
             let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }

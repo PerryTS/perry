@@ -1374,6 +1374,7 @@ impl<'a> UseWalk<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {

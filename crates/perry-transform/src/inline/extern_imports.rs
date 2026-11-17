@@ -244,6 +244,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, out);
             if let Some(catch) = catch {

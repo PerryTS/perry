@@ -303,6 +303,7 @@ fn for_each_stmt_expr<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|s| for_each_stmt_expr(s, f));
             if let Some(c) = catch {
@@ -362,6 +363,7 @@ fn for_each_stmt<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|s| for_each_stmt(s, f));
             if let Some(c) = catch {

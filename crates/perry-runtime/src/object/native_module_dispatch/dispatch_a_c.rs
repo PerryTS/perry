@@ -472,6 +472,9 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
         }
         ("buffer", "isAscii") => crate::buffer::js_buffer_is_ascii(arg(0)),
         ("buffer", "isUtf8") => crate::buffer::js_buffer_is_utf8(arg(0)),
+        ("buffer", "resolveObjectURL") => {
+            crate::object::global_fetch::call_buffer_resolve_object_url(arg(0))
+        }
 
         // ── process EventEmitter API ──
         _ => f64::from_bits(JSValue::undefined().bits()),

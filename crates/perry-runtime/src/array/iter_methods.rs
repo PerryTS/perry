@@ -903,6 +903,10 @@ pub extern "C" fn js_array_find_last_index(
 /// at - element access supporting negative indices (arr.at(-1) = last)
 #[no_mangle]
 pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
+    // 23.1.3.1 step 3 / 23.2.3.1: ToIntegerOrInfinity( index ) runs an object
+    // operand's `valueOf` before the receiver is read; the typed-array and
+    // Buffer arms below get the number.
+    let (index, arr) = super::splice_slice::index_operand_across(arr, index);
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

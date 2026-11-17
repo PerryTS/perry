@@ -246,6 +246,7 @@ fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_iter_result_returns_in_async_step_done(body);
                 if let Some(c) = catch {
@@ -1231,7 +1232,12 @@ pub fn transform_generator_function_with_extra_captures(
             done_id,
             Box::new(Expr::Bool(true)),
         ))];
-        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.extend(build_finally_run_stmts(
+            &finallys,
+            state_id,
+            true,
+            &hoisted_ids,
+        ));
         return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
@@ -1661,6 +1667,17 @@ pub fn transform_generator_function_with_extra_captures(
                 }]
             };
             fixed_state::record_step_kinds(&mut body, step_id.expect("fixed-state record"));
+            // 27.5.3.3 GeneratorResume: an abrupt completion of the body
+            // completes the generator. The record body carries that itself,
+            // as the source-level `try` lowering does any catch, so a caller
+            // that enters it directly needs no trap of its own.
+            let completion_catch_id = alloc_local(next_local_id);
+            let body = resume::wrap_fixed_state_completion(
+                body,
+                executing_id,
+                done_id,
+                completion_catch_id,
+            );
             Expr::Closure {
                 func_id: next_func_id_val,
                 params,

@@ -230,19 +230,21 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
     };
     let layout = |k: &Key| matches!(k, Key::Named(a) if keys.contains(a));
     match c {
+        // `k in o` (no flow; before PROXY2 it made no constraint at all).
+        Cons::HasProp { .. } => Allowed,
         Cons::Identity { route } => match route {
             IdentityRoute::JsonReplacer => Reject(R5Protocol("JsonReplacer".into())),
             r => Reject(R4Identity(r.name().into())),
         },
         // Value flow and field reads.
-        Cons::Load { key: k, .. } if layout(k) => Allowed,
+        Cons::Load { key: k, .. } | Cons::FieldTruthy { key: k, .. } if layout(k) => Allowed,
         // A protocol's well-known-symbol lookup (`@@toStringTag` of
         // `Object.prototype.toString`, `@@toPrimitive`): a miss on a literal
         // (R1 admits only never-written `undefined` keys beside the layout).
         Cons::Load {
             key: Key::Named(a), ..
         } if m.atoms[*a as usize].starts_with("@@__perry_wk_") => Allowed,
-        Cons::Load { key: k, .. } => Reject(R5Load(key(k))),
+        Cons::Load { key: k, .. } | Cons::FieldTruthy { key: k, .. } => Reject(R5Load(key(k))),
         // A resolution reads `then` (a protocol, 27.2.1.3.2 step 9).
         Cons::Fulfil { .. } => Reject(R5Load("then".into())),
         Cons::BirthField { key: k, .. } if layout(k) => Allowed,
@@ -252,7 +254,10 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
             Reject(R5Load("()".into()))
         }
         Cons::MCall { key: k, .. } => Reject(R5Load(format!("{}()", key(k)))),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::OwnGate { .. } => {
+        Cons::IdxLoad { .. }
+        | Cons::IdxOwnLoad { .. }
+        | Cons::OwnGate { .. }
+        | Cons::EnumLoad { .. } => {
             Reject(R5Load("[computed]".into()))
         }
         Cons::IdxMCall { .. } => Reject(R5Load("[computed]()".into())),
@@ -261,16 +266,23 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         Cons::Falsy { .. }
         | Cons::Objects { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
+        | Cons::NotNull { .. }
+        | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. } => Allowed,
+        | Cons::Raise { .. }
+        // It reads the node's Strings only (rule CONSOLE-PCT).
+        | Cons::ConsoleFormat { .. } => Allowed,
         // Arithmetic and coercion: ToPrimitive on the record.
         Cons::Implicit { proto, .. } if sanctioned(*proto) => Allowed,
         Cons::Implicit { proto, .. } => Reject(R5Protocol(proto.name().into())),
-        Cons::Arith { .. } | Cons::Plus { .. } => Reject(R5Protocol("ToPrimitive".into())),
+        Cons::Arith { .. } | Cons::Plus { .. } | Cons::CaseMap { .. } | Cons::StrReplace { .. } | Cons::StrIndex { .. } | Cons::StrSubstring { .. } | Cons::ClassReplace { .. } => {
+            Reject(R5Protocol("ToPrimitive".into()))
+        }
         // Stores into the record or its layout.
         Cons::Store { key: k, .. } => Reject(R2Write(key(k))),
         Cons::DeleteKey { key: a, .. } | Cons::DefineKey { key: a, .. } => {
@@ -282,7 +294,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::AnnexBDefine { .. }
         | Cons::UnnamedSet { .. } => Reject(R2Write(c.kind_name().into())),
         Cons::RuntimeStore { .. } => Reject(R5StoreHeap("realm".into())),
-        Cons::IndexHole | Cons::IndexKept | Cons::LenIndex { .. } | Cons::LenPermuted { .. } => {
+        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept | Cons::LenIndex { .. } | Cons::LenPermuted { .. } => {
             Reject(R2Write("[index]".into()))
         }
         Cons::ArrayLenArg { .. } => Reject(R5StoreHeap("Array(x)".into())),
@@ -294,6 +306,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::StoreIndexed { .. }
         | Cons::StoreKeyed { .. }
         | Cons::DefineKeyed { .. }
+        | Cons::DefineAnyKey { .. }
         | Cons::AccessorKeyed { .. } => Reject(R5Protocol("ToPropertyKey".into())),
         // Escape.
         Cons::TopSink { .. }
@@ -301,12 +314,22 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::RequireSpec { .. }
         | Cons::Hard { .. }
         | Cons::Miss { .. }
-        | Cons::ShareBuffer { .. } => Reject(R5Escape(c.kind_name().into())),
+        | Cons::BoundCall { .. }
+        | Cons::ShareBuffer { .. }
+        | Cons::Captures { .. }
+        | Cons::ObjTagProbe { .. }
+        | Cons::RegExpPattern { .. }
+        | Cons::ViewedBuffer { .. } => Reject(R5Escape(c.kind_name().into())),
         // Prototype and construction.
         Cons::ProtoKey { .. }
         | Cons::Chain { .. }
+        | Cons::EnumChain { .. }
+        | Cons::ForInAcc { .. }
+        | Cons::OwnDescAcc { .. }
+        | Cons::ForInMeet { .. }
         | Cons::ProtoFrom { .. }
         | Cons::ProtoGiven { .. }
+        | Cons::ProtoObjects { .. }
         | Cons::ProtoOf { .. }
         | Cons::ProtoMethods { .. }
         | Cons::ProtoValues { .. }
@@ -351,11 +374,16 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         // Iteration, spread, enumeration.
         Cons::Spread { .. }
         | Cons::SpreadFrom { .. }
+        | Cons::OwnComputedKey { .. }
+        | Cons::ProtoKeySet { .. }
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::ForInBody { .. }
         | Cons::ForInKeys { .. }
-        | Cons::OwnValues { .. } => Reject(R5Iterate(c.kind_name().into())),
+        | Cons::EnumKeyStore { .. }
+        | Cons::EnumKeyAny { .. }
+        | Cons::OwnValues { .. }
+        | Cons::OwnDescValues { .. } => Reject(R5Iterate(c.kind_name().into())),
         // Accessors.
         Cons::Accessor { .. }
         | Cons::AccessorInstall { .. }
@@ -383,6 +411,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::Falsy { .. }
         | Cons::Objects { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
+        | Cons::NotNull { .. }
+        | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
         | Cons::Range { .. }
@@ -390,10 +421,16 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::TopIfTop { .. }
         | Cons::Raise { .. } => Use::Allowed,
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
-        Cons::MCall { key, .. } | Cons::Load { key, .. } => op(named(key)),
+        Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
+            op(named(key))
+        }
         Cons::Fulfil { .. } => op("then".into()),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
-        Cons::IndexHole | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
+        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
+            op("[index]".into())
+        }
+        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => {
+            Use::Reject(R6Store("hole".into()))
+        }
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }
             if m.stores
@@ -1285,6 +1322,9 @@ impl<'a, 'g> Scan<'a, 'g> {
                                 Cons::Falsy { .. }
                                     | Cons::Objects { .. }
                                     | Cons::NotNullish { .. }
+                                    | Cons::NotBuffer { .. }
+                                    | Cons::NotNull { .. }
+                                    | Cons::TypeIs { .. }
                                     | Cons::NotUndefined { .. }
                                     | Cons::Guard { .. }
                                     | Cons::Defined { .. }
@@ -1842,10 +1882,14 @@ impl<'a, 'g> Scan<'a, 'g> {
             let use_kind = match c {
                 Cons::Identity { .. } => "identity",
                 Cons::Load { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::Objects { .. }
                 | Cons::NotNullish { .. }
+                | Cons::NotBuffer { .. }
+                | Cons::NotNull { .. }
+                | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Guard { .. }
                 | Cons::Range { .. }
@@ -1854,7 +1898,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Raise { .. }
                 | Cons::ArgInto { .. }
                 | Cons::Arith { .. }
-                | Cons::Plus { .. } => continue,
+                | Cons::Plus { .. }
+                | Cons::ConsoleFormat { .. } => continue,
                 Cons::Implicit { proto, .. } if sanctioned(*proto) => continue,
                 Cons::Store { .. }
                 | Cons::DeleteKey { .. }
@@ -1865,6 +1910,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::ProtoFrom { .. }
                 | Cons::AnnexBDefine { .. }
                 | Cons::IndexHole
+                | Cons::IndexHoleIn { .. }
                 | Cons::IndexKept => "mutate",
                 Cons::RetInto { .. }
                 | Cons::TopSink { .. }

@@ -370,7 +370,27 @@ unsafe fn densify_sparse_receiver(
     (dense, items)
 }
 
-fn array_slice_value_to_index(value: f64) -> i32 {
+/// ToNumber( v ) of an index operand (ECMA-262 7.1.4 -> ToPrimitive hint number:
+/// `@@toPrimitive`, `valueOf`, `toString`) while the receiver stays rooted: the
+/// conversion runs user code and a collection may move the receiver, so the
+/// reloaded pointer is returned with the number. The same `js_number_coerce`
+/// every sibling operand uses; a plain double returns after one tag test.
+#[inline]
+pub(crate) fn index_operand_across(arr: *const ArrayHeader, v: f64) -> (f64, *const ArrayHeader) {
+    if (v.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return (v, arr);
+    }
+    index_operand_across_slow(arr, v)
+}
+
+#[inline(never)]
+fn index_operand_across_slow(arr: *const ArrayHeader, v: f64) -> (f64, *const ArrayHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_const_ptr(arr);
+    receiver.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(v))
+}
+
+pub(crate) fn array_slice_value_to_index(value: f64) -> i32 {
     let number = crate::builtins::js_number_coerce(value);
     if number.is_nan() {
         0

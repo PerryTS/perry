@@ -60,10 +60,11 @@ fn object_assign_of_a_number_is_its_wrapper() {
             !ls.iter().any(|l| l.contains("range=[5,5]")),
             "{init}: {ls:#?}"
         );
-        // The read of the copied key is on the wrapper, and only on it.
+        // The read of the copied key is on the Number wrapper (ToObject, 7.1.18:
+        // the per-kind `BoxedNumber` site wrapper), and only on it.
         let (got, top) = receivers(&pf, key);
         assert!(
-            !top && got.len() == 1 && got[0].contains("Object("),
+            !top && got.len() == 1 && got[0].contains("BoxedNumber"),
             "{init}: {got:?} top={top}\n{}",
             pf.dump_text()
         );

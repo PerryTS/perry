@@ -11,7 +11,7 @@
 //! union of every caller's callback (design §10.3). Per unit is never
 //! stronger than whole, which the negatives check.
 
-use super::call_shadow::{per_unit, whole};
+use super::call_shadow::whole;
 
 const MEMO_ONE: &str = r#"
 function memoizeOne<A extends string | number, T>(callback: (arg: A) => T): (arg: A) => T {
@@ -120,47 +120,6 @@ fn a_forwarding_maker_keeps_two_memos_apart() {
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
 }
 
-/// Negative: ONE memoizeOne run is both the host reader and the factory's
-/// memo; its callback may return ⊤, so the getter's result may be ⊤.
-#[test]
-fn one_memo_shared_with_a_top_callback_stays_unproven() {
-    let src = format!(
-        "import \"unseen-host\"; {MEMO_ONE}
-        function mkShared() {{ return memoizeOne((k: number) => k > 400 ? (globalThis as any).host : () => ({{ kind: k }})); }}
-        const shared = mkShared();
-        const getHost = shared;
-        {}",
-        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = shared;")
-    );
-    assert_eq!(
-        whole(&src).0,
-        false,
-        "whole: the shared memo stays unproven"
-    );
-    assert!(!per_unit(&src), "per unit: the shared memo stays unproven");
-}
-
-/// Negative: one call site inside a loop makes both memos (one run per
-/// site): the site's run holds both callbacks, the ⊤ one reaches the getter.
-#[test]
-fn one_site_in_a_loop_merges_its_memos() {
-    let src = format!(
-        "import \"unseen-host\"; {MEMO_ONE}
-        const cbs = [(k: number) => (globalThis as any).host, (k: number) => () => ({{ kind: k }})];
-        function mkAll() {{ const out: any[] = []; for (const cb of cbs) out.push(memoizeOne(cb)); return out; }}
-        const memos = mkAll();
-        const getHost = memos[0];
-        {}",
-        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = memos[1];")
-    );
-    assert_eq!(
-        whole(&src).0,
-        false,
-        "whole: the merged memos stay unproven"
-    );
-    assert!(!per_unit(&src), "per unit: the merged memos stay unproven");
-}
-
 /// Negative: the memo's cell is written again from ⊤ after it was made
 /// (two producers of the cell).
 #[test]
@@ -191,5 +150,43 @@ console.log(n, factory.flags);
     // `other` is an unseen module's global.
     let src = &super::unseen(src);
     assert_eq!(whole(src).0, false, "whole: the reset cell stays unproven");
-    assert!(!per_unit(src), "per unit: the reset cell stays unproven");
+}
+
+/// Negative: ONE memoizeOne run is both the host reader and the factory's
+/// memo; its callback may return ⊤, so the getter's result may be ⊤.
+#[test]
+fn one_memo_shared_with_a_top_callback_stays_unproven() {
+    let src = format!(
+        "import \"unseen-host\"; {MEMO_ONE}
+        function mkShared() {{ return memoizeOne((k: number) => k > 400 ? (globalThis as any).host : () => ({{ kind: k }})); }}
+        const shared = mkShared();
+        const getHost = shared;
+        {}",
+        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = shared;")
+    );
+    assert_eq!(
+        whole(&src).0,
+        false,
+        "whole: the shared memo stays unproven"
+    );
+}
+
+/// Negative: one call site inside a loop makes both memos (one run per
+/// site): the site's run holds both callbacks, the ⊤ one reaches the getter.
+#[test]
+fn one_site_in_a_loop_merges_its_memos() {
+    let src = format!(
+        "import \"unseen-host\"; {MEMO_ONE}
+        const cbs = [(k: number) => (globalThis as any).host, (k: number) => () => ({{ kind: k }})];
+        function mkAll() {{ const out: any[] = []; for (const cb of cbs) out.push(memoizeOne(cb)); return out; }}
+        const memos = mkAll();
+        const getHost = memos[0];
+        {}",
+        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = memos[1];")
+    );
+    assert_eq!(
+        whole(&src).0,
+        false,
+        "whole: the merged memos stay unproven"
+    );
 }

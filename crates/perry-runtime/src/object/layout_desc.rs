@@ -1441,6 +1441,13 @@ fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
+/// Image run: whether a record on a static row below the dynamic rows belongs there: the word
+/// is a runtime layout's (installed at its first birth) or a lazy image row whose descriptor
+/// carries the word.
+pub(crate) fn snap_image_static_row_names_word(word: u32) -> bool {
+    registration::is_runtime_layout_word(word) || lazy_image::row_names_word(word)
+}
+
 /// The class declaration owns the immutable pointer to its instance layout.
 /// No descriptor registry or learned class-to-layout mapping.
 pub(crate) fn family_of_class(class_id: u32) -> Option<(u32, *const PerryLayoutDesc)> {
@@ -1843,6 +1850,7 @@ mod store;
 pub(crate) use store::desc_own_key;
 pub(crate) use store::desc_position_hashed;
 pub(crate) use store::family_create;
+pub(crate) use store::family_own_data_slot;
 pub(crate) use store::family_own_key;
 pub(crate) use store::family_own_key_hashed;
 pub(crate) use store::family_store;

@@ -1,0 +1,1 @@
+`--target web`: `textSetFontWeight(widget, size, weight)` sets the font size and the font weight instead of using the size as the weight; the weight is the native 0..1 scale, mapped onto CSS 100..900 and clamped as on HarmonyOS.

@@ -27,6 +27,7 @@ fn body(with_facts: bool, checked: bool, interp: bool, kind: u16) -> String {
         facts.classes.insert(
             c.id,
             FactsClass {
+                absent: Vec::new(),
                 display: c.name.clone(),
                 fixed_layout: true,
                 fields: vec![FactsField {

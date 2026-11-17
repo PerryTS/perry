@@ -484,19 +484,18 @@ fn set_dynamic_slot_any(
     core::hint::black_box(value)
 }
 
-/// [`js_put_value_set_dynamic`]'s barrier for an overflow value word the
-/// leaf wrote ([`crate::object::layout_probe::OwnSet::Table`]).
+/// [`js_put_value_set_dynamic`]'s barriered store into the overflow value
+/// word the leaf found ([`crate::object::layout_probe::OwnSet::Table`]).
 #[inline(never)]
 fn set_dynamic_table_barrier(
     t: *mut crate::object::overflow::Table,
     address: *mut u64,
     value: f64,
 ) -> f64 {
-    crate::gc::runtime_write_barrier_slot(
-        t as usize,
-        address as usize,
-        crate::object::layout_probe::store_bits(value),
-    );
+    let bits = crate::object::layout_probe::store_bits(value);
+    // GC_STORE_AUDIT(BARRIERED): the table owns this value word.
+    unsafe { *address = bits };
+    crate::gc::runtime_write_barrier_slot(t as usize, address as usize, bits);
     // Opaque: a returned argument lets IPO take the call out of tail position.
     core::hint::black_box(value)
 }

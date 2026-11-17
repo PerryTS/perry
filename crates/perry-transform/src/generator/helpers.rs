@@ -82,6 +82,7 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
             if let Some(c) = catch {
@@ -143,6 +144,7 @@ pub fn rewrite_hoisted_lets_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
             if let Some(c) = catch {
@@ -236,6 +238,7 @@ pub fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_returns_in_promise(body);
                 if let Some(c) = catch {

@@ -25,6 +25,7 @@ pub fn stmt_contains_return(s: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_return)
                 || catch
@@ -97,6 +98,7 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 convert_returns_in_stmts(body, let_id);
                 if let Some(c) = catch {
@@ -151,6 +153,7 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if !inspect(body, saw_return)
                         || catch
@@ -275,6 +278,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 loop_has_prototype_surgery(body)
                     || catch
@@ -2065,6 +2069,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 fold_scalar_aggregate_param_length(body, param_id, len);
                 if let Some(catch) = catch {

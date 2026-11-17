@@ -380,6 +380,7 @@ fn visit_stmt<'a>(
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, home, stmt, expr);
             if let Some(c) = catch {

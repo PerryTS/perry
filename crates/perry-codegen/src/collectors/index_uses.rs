@@ -110,6 +110,7 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 absorb_writes_into_index_used(body, out);
                 if let Some(c) = catch {
@@ -274,6 +275,7 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_index_uses_in_stmts(body, out);
                 if let Some(c) = catch {

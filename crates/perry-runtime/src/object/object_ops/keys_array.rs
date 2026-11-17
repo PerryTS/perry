@@ -769,17 +769,8 @@ pub(crate) unsafe fn install_builtin_accessor(
             .apply(0),
     );
     ensure_key_in_keys_array_with_entry(proto, key_str, entry);
-    // Spec: an accessor getter's `.name` is `"get " + key` (e.g.
-    // `Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength").get.name
-    // === "get byteLength"`). Register it against the getter closure's func_ptr;
-    // without this the `.name` read returned `""`.
-    for (bits, prefix) in [(getter_bits, "get"), (setter_bits, "set")] {
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr) {
-            let info = &*(*(ptr as *const crate::closure::ClosureHeader)).info;
-            crate::builtins::register_function_name_if_absent(info, &format!("{prefix} {key}"));
-        }
-    }
+    // The `.name` of the getter and of the setter (`"get " + key`) is static
+    // data of their function records (`with_name`); nothing is named here.
     set_builtin_accessor_descriptor(
         proto as usize,
         key.to_string(),

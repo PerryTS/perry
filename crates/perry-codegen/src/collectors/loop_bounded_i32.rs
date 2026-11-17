@@ -442,6 +442,7 @@ pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out);
                     if let Some(c) = catch {
@@ -527,6 +528,7 @@ fn for_each_let(stmts: &[Stmt], f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for_each_let(body, f);
                 if let Some(c) = catch {
@@ -655,6 +657,7 @@ fn scan_level_writes(stmts: &[Stmt], id: u32, st: &State, f: &mut dyn FnMut(Opti
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_level_writes(body, id, st, f);
                 if let Some(c) = catch {
@@ -900,6 +903,7 @@ fn walk_stmts(stmts: &[Stmt], guard: &HashMap<u32, GuardedLevel>, st: &mut State
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, guard, st);
                 if let Some(c) = catch {
@@ -1437,6 +1441,7 @@ fn walk_accumulator_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_accumulator_stmts(
                     body,

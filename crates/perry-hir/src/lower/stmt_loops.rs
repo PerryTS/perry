@@ -277,6 +277,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
             ],
             else_branch: None,
         }]),
+        forof_completion: Some(state_id),
     }
 }
 
@@ -418,6 +419,7 @@ fn mark_iterator_completion_on_abrupt(
                 mut body,
                 mut catch,
                 mut finally,
+                forof_completion,
             } => {
                 mark_iterator_completion_on_abrupt(
                     ctx,
@@ -462,6 +464,7 @@ fn mark_iterator_completion_on_abrupt(
                     body,
                     catch,
                     finally,
+                    forof_completion,
                 });
             }
             Stmt::While {

@@ -49,12 +49,12 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
     };
     let (target, bthis, bargs) = m.bound[b as usize].clone();
     m.add_tok(target, t);
-    match c.args.first() {
+    match c.arg(0) {
         Some(&n) => m.edge(n, bthis),
         None => m.add_prim(bthis, prim::UNDEF),
     }
     let mut extra = Vec::new();
-    for (i, &a) in c.args.iter().skip(1).enumerate() {
+    for (i, &a) in c.args_from(1).iter().enumerate() {
         match bargs.get(i) {
             Some(&p) => m.edge(a, p),
             None => extra.push(a),
@@ -95,35 +95,42 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             }
         }
         Some("call") => {
-            let this = match c.args.first() {
+            let this = match c.arg(0) {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
-            let call2 = m.solver_call(
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_FN_CALL, t, 0),
+                None,
                 CallSite {
+                    first_arg_fixed: false,
                     this,
-                    args: c.args.iter().skip(1).copied().collect(),
+                    args: c.args_from(1).iter().copied().collect(),
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
                     region: m.thrown,
                 },
-            );
-            m.call_tok(call2, t, None);
+            ) {
+                m.call_tok(call2, t, None);
+            }
         }
         Some("apply") => {
-            let this = match c.args.first() {
+            let this = match c.arg(0) {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
             let mut spread = c.spread.clone();
-            if let Some(&a) = c.args.get(1) {
+            if let Some(&a) = c.arg(1) {
                 spread.push(a);
             }
-            let call2 = m.solver_call(
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_FN_APPLY, t, 0),
+                None,
                 CallSite {
+                    first_arg_fixed: false,
                     this,
                     args: vec![],
                     spread,
@@ -131,8 +138,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     site: c.site,
                     region: m.thrown,
                 },
-            );
-            m.call_tok(call2, t, None);
+            ) {
+                m.call_tok(call2, t, None);
+            }
         }
         // A `Function.prototype` method the runtime declares (`bind`): its
         // declaration runs.
@@ -147,10 +155,26 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // `Function.prototype` and `Object.prototype`, which define none of
         // them unless the program wrote one there (the written-method
         // arrival, `own_method_inner`); absent, the call throws a TypeError.
-        // A computed key on one is a runtime property: unknown.
+        // A computed key on one is an ordinary [[Get]] of one of those keys:
+        // its own statics (`method_on`), else a method of the described
+        // chain (`Function.prototype`, `Object.prototype`): the call of
+        // each of them by its name. A member the program wrote onto the
+        // chain is the written-method arrival, as for a named key.
         Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
             if name.is_none() {
-                unknown_method(m, call, "computed method of a function value");
+                match members::chain_names(Family::Function) {
+                    Some(names) => {
+                        let fns: Vec<&str> = names
+                            .filter(|n| {
+                                matches!(members::member(Family::Function, n), Some(Mem::Fn))
+                            })
+                            .collect();
+                        for n in fns {
+                            function_method(m, t, Some(n), call);
+                        }
+                    }
+                    None => unknown_method(m, call, "computed method of a function value"),
+                }
             }
         }
         // An async generator's step: the function runs with this = itself.
@@ -172,7 +196,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             // (numeric operation, value); public extra arguments are ignored.
             let arg = m.node_l("gen-resume-arg");
             m.nodes[arg as usize].frame = m.call_run(call);
-            match c.args.first() {
+            match c.arg(0) {
                 Some(&value) => m.edge(value, arg),
                 None => m.add_prim(arg, prim::UNDEF),
             }
@@ -196,6 +220,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             let call2 = m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: c.this.clone(),
                     args,
                     spread: vec![],
@@ -257,7 +282,7 @@ fn gen_throw_passes(
 // ------------------------------------------------------------- arrays
 
 /// Position value `n` of `c` where the position may also be absent: with
-/// a spread argument (`Model::positional`) the argument list may end before
+/// a spread argument (`Model::builtin_args_view`) the argument list may end before
 /// it, and the rule then reads `undefined` there (a `thisArg`).
 fn maybe_absent(m: &mut Model, c: &CallSite, n: NodeId) -> NodeId {
     if c.spread.is_empty() {
@@ -270,6 +295,18 @@ fn maybe_absent(m: &mut Model, c: &CallSite, n: NodeId) -> NodeId {
     v
 }
 
+/// A native's call of callback `cb` from the run of call `by`.
+///
+/// Where `by` is itself a callback call a native made (the callee of a
+/// callback is a native that calls back: `a.some(Array.prototype.some, 1)`
+/// calls `some` on `Object(1)`, whose callback is the element again), its
+/// call is the one call of this code position with this many arguments
+/// under the chain's root (`Model::chain_call`): a call per run never
+/// settles there, since every run makes a new call, whose run on the
+/// receiver its new call boxes (`Object(1)` born at the call, 7.1.18
+/// ToObject) makes a new call again. Its callee constraint sits on the
+/// shared call's own target node, added once; every run's `cb` flows in.
+#[track_caller]
 pub(super) fn cb_call(
     m: &mut Model,
     by: CallId,
@@ -277,35 +314,89 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
+    let thrown = m.thrown;
+    cb_call_in(m, by, cb, this, args, thrown)
+}
+
+/// `cb_call` whose callback throws into `region` (a job's own promise, or
+/// the host for a callback the event loop calls; R-JOBTHROW).
+#[track_caller]
+pub(super) fn cb_call_in(
+    m: &mut Model,
+    by: CallId,
+    cb: NodeId,
+    this: ThisArg,
+    args: Vec<NodeId>,
+    region: NodeId,
+) -> NodeId {
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
-    let call2 = m.calls.len() as CallId;
-    m.solver_call(
+    let site = m.calls.len() as CallId;
+    m.why_mint_by(site, by);
+    m.chain_call(
         by,
+        0,
+        cb,
         CallSite {
+            first_arg_fixed: false,
             this,
             args,
             spread: vec![],
             ret,
-            site: call2,
-            region: m.thrown,
+            site,
+            region,
         },
+        |m, tg, c| m.cons(tg, Cons::Call { call: c }),
     );
-    m.cons(cb, Cons::Call { call: call2 });
     ret
 }
 
 /// The one call a builtin method makes of member `key` of receiver `t`
 /// (`Array.prototype.toString`'s Invoke(this, "join"), `toLocaleString`'s
-/// of each element), whatever call ran the method: the member, its `this`
-/// and its arguments depend on `t` alone, so every run of the method on `t`
-/// shares it. A call per run never settles when the member is the method
-/// itself (`o.join = Array.prototype.toString`: the method's run on `o` in
-/// the new call makes a new call again). Its `nargs` argument nodes and its
-/// result are of `t`'s run (`fam_home`), as a protocol call's; it is born
-/// at no program site. `true`: made now, the caller adds its callee.
-fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (CallId, bool) {
-    member_call(m, t, key, false, this, nargs)
+/// of each element) while it runs for `by`: the one call of this code
+/// position, key and argument count under the chain's root
+/// (`Model::chain_call`). A call per run (or per receiver a native minted)
+/// never settles when the member is the method itself
+/// (`o.join = Array.prototype.toString`) or a native whose callback call
+/// boxes a new receiver. `target` is the node the member's callee
+/// constraint reads (the receiver); `callee` adds that constraint, once,
+/// on the shared call's own target node. Its argument nodes and result are
+/// the shared call's: every run's caller uses them.
+#[track_caller]
+fn recv_call(
+    m: &mut Model,
+    by: CallId,
+    t: Tok,
+    key: Atom,
+    this: ThisArg,
+    nargs: usize,
+    target: NodeId,
+    callee: impl FnOnce(&mut Model, NodeId, CallId),
+) -> CallId {
+    let home = m.fam_home(t);
+    let mk = |m: &mut Model, l: &'static str| {
+        let n = m.node_l(l);
+        m.nodes[n as usize].frame = home;
+        n
+    };
+    let args = (0..nargs).map(|_| mk(m, "recv-call-arg")).collect();
+    let ret = mk(m, "recv-call-ret");
+    let site = m.calls.len() as CallId;
+    m.chain_call(
+        by,
+        key,
+        target,
+        CallSite {
+            first_arg_fixed: false,
+            this,
+            args,
+            spread: vec![],
+            ret,
+            site,
+            region: m.thrown,
+        },
+        callee,
+    )
 }
 
 /// The one run of the declared getter of key `key` on receiver `t`
@@ -316,6 +407,7 @@ pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
     member_call(m, t, key, true, ThisArg::Tok(t), 0)
 }
 
+#[track_caller]
 fn member_call(
     m: &mut Model,
     t: Tok,
@@ -324,20 +416,20 @@ fn member_call(
     this: ThisArg,
     nargs: usize,
 ) -> (CallId, bool) {
+    let home = m.fam_home(t);
+    let mk = |m: &mut Model, l: &'static str| {
+        let n = m.node_l(l);
+        m.nodes[n as usize].frame = home;
+        n
+    };
     if let Some(&c) = m.recv_calls.get(&(t, key, get)) {
         return (c, false);
     }
-    let home = m.fam_home(t);
-    let mut args = Vec::with_capacity(nargs);
-    for _ in 0..nargs {
-        let a = m.node_l("recv-call-arg");
-        m.nodes[a as usize].frame = home;
-        args.push(a);
-    }
-    let ret = m.node_l("recv-call-ret");
-    m.nodes[ret as usize].frame = home;
+    let args = (0..nargs).map(|_| mk(m, "recv-call-arg")).collect();
+    let ret = mk(m, "recv-call-ret");
     let call = m.calls.len() as CallId;
     m.calls.push(CallSite {
+        first_arg_fixed: false,
         this,
         args,
         spread: vec![],
@@ -346,6 +438,7 @@ fn member_call(
         region: m.thrown,
     });
     m.recv_calls.insert((t, key, get), call);
+    m.why_mint(call, Some(t), u32::MAX);
     (call, true)
 }
 
@@ -426,6 +519,7 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
     let mc = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args: vec![exec],
             spread: vec![],
@@ -473,11 +567,13 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         ret,
         args_all,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token: tok,
         ctor_of: None,
         lexical_this: true,
         no_summary: false,
+        foreign_params: false,
         gen_proto: None,
         gen_fn_protos: None,
         gen_async: false,
@@ -487,6 +583,7 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         forwards_super: false,
         parent: NO_FN,
         forwarded: false,
+        ret_param: None,
     });
     m.add_prim(ret, prim::UNDEF);
     m.executors.insert(settled, tok);
@@ -520,9 +617,10 @@ pub(crate) fn method_call(
     let ret = m.node_l("method-ret");
     m.nodes[ret as usize].frame = m.call_run(call);
     let site = m.calls.len() as CallId;
-    m.solver_call(
+    let site = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Node(recv),
             args,
             spread: vec![],
@@ -550,12 +648,15 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     m.nodes[out as usize].frame = m.call_run(call);
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
-    let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+    let sub = |m: &mut Model, this: NodeId, key: Key, step: u32| -> NodeId {
         let ret = m.node_l("b-iter-ret");
         m.nodes[ret as usize].frame = m.call_run(call);
-        let c2 = m.solver_call(
+        let Some(c2) = m.solver_call_keyed(
             call,
+            (crate::summary::MK_ITERATE, step, 0),
+            Some(this),
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(this),
                 args: vec![],
                 spread: vec![],
@@ -563,16 +664,18 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 site,
                 region: m.thrown,
             },
-        );
+        ) else {
+            return ret;
+        };
         m.protocol_calls.insert(c2);
         m.cons(this, Cons::MCall { key, call: c2 });
         ret
     };
     let wk = Key::Named(m.atom(WK_ITERATOR));
-    let it = sub(m, v, wk);
+    let it = sub(m, v, wk, 0);
     let na = Key::Named(m.atom("next"));
-    let r1 = sub(m, it, na);
-    let r2 = sub(m, v, na);
+    let r1 = sub(m, it, na, 1);
+    let r2 = sub(m, v, na, 2);
     let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
@@ -583,8 +686,8 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     // was no object) calls `return` on it.
     if m.reach_iter_close {
         let ra = Key::Named(m.atom("return"));
-        let _ = sub(m, it, ra);
-        let _ = sub(m, v, ra);
+        let _ = sub(m, it, ra, 3);
+        let _ = sub(m, v, ra, 4);
     }
     out
 }
@@ -593,6 +696,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
 /// `@@__perry_wk_iterator`), see `Gen::key_of`.
 pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
 pub(crate) const WK_ITERATOR: &str = "@@__perry_wk_iterator";
+pub(crate) const WK_ASYNC_ITERATOR: &str = "@@__perry_wk_asyncIterator";
 
 /// The values a builtin iterator yields, held in its `#elems` field: an
 /// all-keys read (`iterate`) sees them, a named read (`it.next`) does not.
@@ -606,7 +710,8 @@ fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
 /// iterator's intrinsic prototype: `members::ARRAY_ITERATOR`
 /// (`%ArrayIteratorPrototype%`, what the realm declares Array, its
 /// prototype's methods and `%TypedArray%.prototype` birth),
-/// `members::MAP_ITERATOR`, `members::SET_ITERATOR`, or
+/// `members::MAP_ITERATOR`, `members::SET_ITERATOR`,
+/// `members::STRING_ITERATOR`, or
 /// `members::ANY_ITERATOR` where the model does not know which (an iterator
 /// helper, a folded `.values()` whose receiver may be any iterable).
 pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values: NodeId) -> Tok {
@@ -617,14 +722,23 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
 }
 
 /// The `[key, value]` pairs of an `entries()` iterator: one array template
-/// per call site holding `values` (plus the index for arrays).
-pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
+/// per call site, CreateArrayFromList(« key, value ») (ECMA-262 23.1.5.1,
+/// 24.1.5.1, 24.2.5.1): index 0 holds `keys`, index 1 `values`, each its own
+/// slot (`Model::index_slot`); `keys` = None: the index, a Number.
+pub(super) fn entry_pairs(
+    m: &mut Model,
+    call: CallId,
+    keys: Option<NodeId>,
+    values: NodeId,
+) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
-    let fa = m.field_any(pair);
-    m.edge(values, fa);
-    if index {
-        m.add_prim(fa, prim::NUM);
+    let k = m.index_slot(pair, 0);
+    match keys {
+        Some(keys) => m.edge(keys, k),
+        None => m.add_prim(k, prim::NUM),
     }
+    let v = m.index_slot(pair, 1);
+    m.edge(values, v);
     let n = m.node_l("entry-pairs");
     m.add_tok(n, pair);
     n
@@ -634,7 +748,7 @@ pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bo
 /// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
 /// callback on the values. Builtin iterators have no `return`/`throw`.
 pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
-    let c = m.positional(call, 2);
+    let c = m.calls[call as usize].clone();
     let elems = iter_elems(m, t);
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
@@ -664,7 +778,7 @@ pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             ret_tok(m, call, arr);
         }
         Some("forEach" | "some" | "every" | "find" | "map" | "filter" | "flatMap") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, num]);
@@ -697,11 +811,11 @@ pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             ret_tok(m, call, it);
         }
         Some("reduce") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let acc = m.node_l("acc");
-            match c.args.get(1) {
+            match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
@@ -733,12 +847,14 @@ pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 pub(crate) fn construct_into(
     m: &mut Model,
     ctor: NodeId,
-    mc: CallId,
+    mc: Option<CallId>,
     out: Tok,
     made: NodeId,
     ret: NodeId,
 ) {
-    m.cons(ctor, Cons::NewProgram { call: mc });
+    if let Some(mc) = mc {
+        m.cons(ctor, Cons::NewProgram { call: mc });
+    }
     let site = m.anon_post_site("elements of an array a program constructor made");
     let elems = m.field_any(out);
     let ek = m.elem_key();
@@ -778,6 +894,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
     let mc = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -786,7 +903,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             region: m.thrown,
         },
     );
-    construct_into(m, sc, mc, out, made, c.ret);
+    construct_into(m, sc, Some(mc), out, made, c.ret);
 }
 
 /// The receivers' `constructor`, read off the receivers in `src`.
@@ -901,10 +1018,6 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
 /// elements the call already takes).
 pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
     if !m.is_arr(t) {
-        let own = m.num_fields(t);
-        let elems = m.field_any(t);
-        m.edge(own, elems);
-        m.plain_key(t, ChainAct::Load(elems));
         non_array_this(m, t, name, call);
     }
     array_method(m, t, Some(name), call);
@@ -922,7 +1035,59 @@ pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// of an index (the program's `delete o[i]`: E7), `toString`'s Invoke of
 /// `join`, `concat`'s Get of `@@isConcatSpreadable`. HasProperty runs
 /// program code only as a Proxy's `has` trap, and a Proxy is ⊤.
+///
+/// Everything but `toString`'s `join` call reads `t` and `name` only, never
+/// the call: it is made once per (receiver, method) (`array_like_model`,
+/// `Model::array_like_this`) and serves every call site that applies the
+/// method to `t`. The same constraints on the same nodes once instead of
+/// once per site: the same facts.
 fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    let a = m.atom(name);
+    let recv = match m.array_like_this.get(&(t, a)) {
+        Some(&r) => r,
+        None => {
+            let r = array_like_model(m, t, name);
+            m.array_like_this.insert((t, a), r);
+            r
+        }
+    };
+    if name == "toString" {
+        let ja = m.atom("join");
+        let jc = recv_call(
+            m,
+            call,
+            t,
+            ja,
+            ThisArg::Tok(t),
+            0,
+            recv,
+            move |m, tg, jc| {
+                let f = m.node_l("array-like-join");
+                m.cons(
+                    tg,
+                    Cons::Load {
+                        key: Key::Named(ja),
+                        dst: f,
+                    },
+                );
+                m.tostring_join_calls.insert(jc);
+                m.cons(f, Cons::Call { call: jc });
+            },
+        );
+        let r = m.calls[jc as usize].ret;
+        let ret = m.calls[call as usize].ret;
+        m.edge(r, ret);
+    }
+}
+
+/// The call-free part of `non_array_this` for (`t`, `name`): the index
+/// reads (`num_fields` into the any-field, the plain-key chain read), the
+/// receiver node and what the method does to it. Returns the receiver node.
+fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
+    let own = m.num_fields(t);
+    let elems = m.field_any(t);
+    m.edge(own, elems);
+    m.plain_key(t, ChainAct::Load(elems));
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -961,40 +1126,42 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
             },
         );
     }
-    match name {
-        "toString" => {
-            let ja = m.atom("join");
-            let (jc, made) = recv_call(m, t, ja, ThisArg::Tok(t), 0);
-            if made {
-                let f = m.node_l("array-like-join");
-                m.cons(
-                    recv,
-                    Cons::Load {
-                        key: Key::Named(ja),
-                        dst: f,
-                    },
-                );
-                m.cons(f, Cons::Call { call: jc });
-            }
-            let r = m.calls[jc as usize].ret;
-            let ret = m.calls[call as usize].ret;
-            m.edge(r, ret);
-        }
-        "concat" => {
-            let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
-            let v = m.node_l("array-like-spreadable");
-            m.cons(recv, Cons::Load { key: k, dst: v });
-        }
-        _ => {}
+    if name == "concat" {
+        let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
+        let v = m.node_l("array-like-spreadable");
+        m.cons(recv, Cons::Load { key: k, dst: v });
     }
+    recv
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    // A key that names no method of the array's intrinsic chain
+    // (`Array.prototype`, then `Object.prototype`) has no builtin callee:
+    // the lookup (7.3.2 GetMethod, 7.3.14 Call) finds a program-written
+    // function, which the chain read runs (`own_method_inner`), or nothing.
+    // A protocol that probes such a key (`[inspect.custom]`, `toJSON` on a
+    // plain Array) then calls nothing; a source call throws. Neither runs
+    // a builtin on the receiver.
+    if name.is_some_and(|n| !matches!(members::member(Family::Array, n), Some(Mem::Fn))) {
+        return;
+    }
     // I32 at rest (PR B): a builtin method touches the elements undecoded,
     // but the fused fill of an at-rest birth (`rest_elems`) and the negative
     // control `restelem`.
     if !m.rest_elem_sabotage && !crate::rest_elems::fused_fill(m, call) {
         m.rest_used(t);
+    }
+    // DEADFN15 C1, C2: a rest array keeps its front for one `shift()`
+    // site in its function's own body outside any loop (one run per
+    // activation), the only method call that writes it.
+    if m.is_rest_arr(t) && !crate::const_arrays::method_reads_only(name) {
+        let site = m.calls[call as usize].site;
+        let own = name == Some("shift")
+            && m.rest_owner_of(t)
+                .is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
+        if !own || *m.rest_front_site.entry(t).or_insert(site) != site {
+            m.rest_front_widen(t);
+        }
     }
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
@@ -1067,7 +1234,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     } else if matches!(name, Some("reverse" | "copyWithin")) {
         m.arr_len_permuted(t);
     }
-    let c = m.positional(call, 3);
+    let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     // Every method here reads or writes the receiver's indices through its
     // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
@@ -1081,10 +1248,33 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
         m.rest_fill_relays.push(recv);
     }
-    let this_arg = |m: &mut Model, i: usize| match c.args.get(i) {
+    let this_arg = |m: &mut Model, i: usize| match c.arg(i) {
         Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
         None => ThisArg::Undef,
     };
+    // The index operands each method's own algorithm converts with
+    // ToIntegerOrInfinity (7.1.5: ToNumber, so an object's `@@toPrimitive`,
+    // `valueOf` or `toString` runs): `at` (23.1.3.1) its index; `flat`
+    // (23.1.3.13) its depth; `slice` (23.1.3.28), `splice` (23.1.3.31) and
+    // `toSpliced` (23.1.3.35) start and end / deleteCount; `copyWithin`
+    // (23.1.3.4) target, start and end; `with` (23.1.3.39) its index;
+    // `lastIndexOf` (23.1.3.20) fromIndex. The other operands (items,
+    // values, the searched element) are not converted. A spread may place
+    // any argument at an index position.
+    let index_operands: &[usize] = match name {
+        Some("at" | "flat" | "with") => &[0],
+        Some("slice" | "splice" | "toSpliced") => &[0, 1],
+        Some("copyWithin") => &[0, 1, 2],
+        Some("lastIndexOf") => &[1],
+        _ => &[],
+    };
+    if !index_operands.is_empty() {
+        let spread = c.spread.iter().copied();
+        let at = index_operands.iter().filter_map(|&i| c.arg(i).copied());
+        for a in at.chain(spread) {
+            to_prim(m, a, "array index operand ToIntegerOrInfinity");
+        }
+    }
     match name {
         // `[Symbol.iterator]()`: a fresh iterator over the elements.
         Some(WK_ITERATOR) => {
@@ -1128,13 +1318,19 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_prim(m, call, prim::NUM);
         }
         Some("pop" | "shift" | "at") => {
-            m.edge(elems, c.ret);
+            if name == Some("shift") && m.is_rest_arr(t) && !m.rest_front_open.contains(&t) {
+                let f = m.rest_front(t);
+                m.edge(f, c.ret);
+                m.rest_front_reads.entry(t).or_default().push(c.ret);
+            } else {
+                m.edge(elems, c.ret);
+            }
             ret_prim(m, call, prim::UNDEF);
         }
         // The removed elements, in an array made through the receiver's
         // `constructor`.
         Some("splice") => {
-            for &a in c.args.iter().skip(2) {
+            for &a in c.args_from(2).iter() {
                 m.edge(a, elems);
             }
             let out = site_tmpl(m, call, "Array");
@@ -1184,8 +1380,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let added: &[NodeId] = match name {
                 // Array arguments contribute their elements, others themselves.
                 Some("concat") => &c.args,
-                Some("with") => c.args.get(1..).unwrap_or(&[]),
-                Some("toSpliced") => c.args.get(2..).unwrap_or(&[]),
+                Some("with") => c.args_from(1),
+                Some("toSpliced") => c.args_from(2),
                 _ => &[],
             };
             for &a in added {
@@ -1198,20 +1394,18 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 }
             }
             if name == Some("flat") {
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: ofa,
-                    },
-                );
+                // FlattenIntoArray (ECMA-262 23.1.3.13.1): an element that
+                // IsArray gives `Get(element, ToString(k))` for its indices,
+                // never a member of its chain; another element is itself.
+                let key = m.elem_key();
+                m.cons(elems, Cons::Load { key, dst: ofa });
             }
             ret_tok(m, call, out);
         }
         // toSorted has no interpreted declaration; its comparator's result
         // is converted (ToNumber).
         Some("toSorted") => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
                 m.cons(
@@ -1232,7 +1426,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // (`prim(num) | elems(this)`), an array's is a number. `map` and
         // `filter` run their declarations (`species(this, ...)`).
         Some("forEach" | "findIndex" | "findLast" | "findLastIndex" | "flatMap") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let this = this_arg(m, 1);
@@ -1243,13 +1437,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     species_from(m, out, t, call, None);
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
-                    m.cons(
-                        r,
-                        Cons::Load {
-                            key: Key::any(),
-                            dst: ofa,
-                        },
-                    );
+                    // FlattenIntoArray at depth 1 (23.1.3.12 step 3): the
+                    // indices of a returned array, as for `flat`.
+                    let key = m.elem_key();
+                    m.cons(r, Cons::Load { key, dst: ofa });
                     ret_tok(m, call, out);
                 }
                 Some("findLast") => {
@@ -1261,11 +1452,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             }
         }
         Some("reduce" | "reduceRight") => {
-            let Some(&cb) = c.args.first() else {
+            let Some(&cb) = c.arg(0) else {
                 return;
             };
             let acc = m.node_l("acc");
-            match c.args.get(1) {
+            match c.arg(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
@@ -1284,25 +1475,33 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let (nested, made) = recv_call(m, t, a, ThisArg::Node(elems), 2);
-            if made {
-                m.cons(
-                    elems,
-                    Cons::MCall {
-                        key: Key::Named(a),
-                        call: nested,
-                    },
-                );
-                let r = m.calls[nested as usize].ret;
-                let why = m.reason("array join (locale element ToString)");
-                m.cons(
-                    r,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-            }
+            let nested = recv_call(
+                m,
+                call,
+                t,
+                a,
+                ThisArg::Node(elems),
+                2,
+                elems,
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    );
+                    let r = m.calls[nested as usize].ret;
+                    let why = m.reason("array join (locale element ToString)");
+                    m.cons(
+                        r,
+                        Cons::Implicit {
+                            reason: why,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                },
+            );
             let params = m.calls[nested as usize].args.clone();
             for (&x, p) in c.args.iter().zip(params) {
                 m.edge(x, p);
@@ -1332,7 +1531,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
         Some("entries") => {
             let iterated = arr_iterated(m, t);
-            let pairs = entry_pairs(m, call, iterated, true);
+            let pairs = entry_pairs(m, call, None, iterated);
             let it = iter_over(m, call, members::ARRAY_ITERATOR, pairs);
             ret_tok(m, call, it);
         }
@@ -1375,7 +1574,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
     }
 
-    let c = m.positional(call, 2);
+    let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     // The four collection kinds share one model of their contents; a
     // member no arm models is looked up on the kind's own chain.
@@ -1418,62 +1617,97 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
-            // `[Symbol.iterator]()`: Map entries or Set values.
-            let pairs = entry_pairs(m, call, elems, false);
-            let vals = m.node_l("coll-iter");
-            m.edge(elems, vals);
-            m.edge(pairs, vals);
+            // `[Symbol.iterator]()`: Map entries or Set values. Map.prototype
+            // [@@iterator] is Map.prototype.entries (ECMA-262 24.1.3.12): its
+            // iterator yields CreateArrayFromList(« key, value ») only
+            // (24.1.5.1), never a key or a value itself; Set.prototype
+            // [@@iterator] is values (24.2.3.11): the elements.
+            let vals = match m.keyed_collection(t) {
+                true => {
+                    let (keys, vals) = (m.map_keys(t), m.map_vals(t));
+                    entry_pairs(m, call, Some(keys), vals)
+                }
+                false => {
+                    let pairs = entry_pairs(m, call, Some(elems), elems);
+                    let vals = m.node_l("coll-iter");
+                    m.edge(elems, vals);
+                    m.edge(pairs, vals);
+                    vals
+                }
+            };
             let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
             // The key is compared by SameValueZero (identity for objects).
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
             for &a in &c.args {
                 m.edge(a, elems);
             }
-            if kind == "Map" && name == Some("set") {
+            if matches!(kind, "Map" | "WeakMap") && name == Some("set") {
                 m.map_set(t, &c.args, !c.spread.is_empty());
             }
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
-            // A Map's values, not its keys (`solve/map_vals.rs`).
-            let vals = if kind == "Map" { m.map_vals(t) } else { elems };
+            // A Map's or WeakMap's values, not its keys (24.1.3.6, 24.3.3.3;
+            // `solve/map_vals.rs`).
+            let vals = match kind {
+                "Map" | "WeakMap" => m.map_vals(t),
+                _ => elems,
+            };
             m.edge(vals, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
         ("Collection", Some("has" | "delete")) => {
-            if let Some(&k) = c.args.first() {
+            if let Some(&k) = c.arg(0) {
                 m.identity(k, IdentityRoute::Collection);
             }
             ret_prim(m, call, prim::BOOL)
         }
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
-        ("Collection", Some("keys" | "values")) => {
-            let it = iter_over(m, call, members::collection_iterator(kind), elems);
+        ("Collection", Some(n @ ("keys" | "values"))) => {
+            // Map.prototype.values (24.1.3.11) iterates the entries' values
+            // only; a Set's values are its elements (24.2.3.10).
+            let vals = match (kind, n) {
+                ("Map", "values") => m.map_vals(t),
+                _ => elems,
+            };
+            let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
         ("Collection", Some("entries")) => {
-            let pairs = entry_pairs(m, call, elems, false);
+            let pairs = match m.keyed_collection(t) {
+                true => {
+                    let (keys, vals) = (m.map_keys(t), m.map_vals(t));
+                    entry_pairs(m, call, Some(keys), vals)
+                }
+                false => entry_pairs(m, call, Some(elems), elems),
+            };
             let it = iter_over(m, call, members::collection_iterator(kind), pairs);
             ret_tok(m, call, it);
         }
         ("Collection", Some("forEach")) => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let recv = m.node_l("coll");
                 m.add_tok(recv, t);
-                let this = match c.args.get(1) {
+                let this = match c.arg(1) {
                     Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
                     None => ThisArg::Undef,
                 };
-                let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
+                // Map.prototype.forEach (24.1.3.5) calls back with (value,
+                // key, map); a Set's value is its key (24.2.3.6).
+                let first = match kind {
+                    "Map" => m.map_vals(t),
+                    _ => elems,
+                };
+                let _ = cb_call(m, call, cb, this, vec![first, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }
@@ -1484,10 +1718,16 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let exec = capability_executor(m, call, ov, name == Some("finally"));
             promise_species(m, t, call, exec);
             let thrown = m.thrown;
+            // R-JOBTHROW (27.2.5.4, 27.2.2.1 NewPromiseReactionJob): the
+            // rejection handler reads this promise's reason (and `thrown`,
+            // the rejections no promise holds); a handler's abrupt
+            // completion rejects the derived promise `out`.
+            let tr = super::promise_reason(m, t);
+            let or = super::promise_reason(m, out);
             let (on_ok, on_err) = match name {
-                Some("then") => (c.args.first().copied(), c.args.get(1).copied()),
-                Some("catch") => (None, c.args.first().copied()),
-                _ => (c.args.first().copied(), c.args.first().copied()),
+                Some("then") => (c.arg(0).copied(), c.arg(1).copied()),
+                Some("catch") => (None, c.arg(0).copied()),
+                _ => (c.arg(0).copied(), c.arg(0).copied()),
             };
             if let Some(f) = on_ok {
                 let arg = if name == Some("finally") {
@@ -1497,23 +1737,40 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 } else {
                     v
                 };
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![arg]);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![arg], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
+                } else {
+                    // thenFinally / catchFinally (27.2.5.3.1-2): a rejected
+                    // result of the handler rejects the derived promise.
+                    let ra = super::promise_reason_atom(m);
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::Named(ra),
+                            dst: or,
+                        },
+                    );
                 }
             }
             if let Some(f) = on_err {
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![thrown]);
+                let ej = m.node_l("rejection");
+                m.edge(thrown, ej);
+                m.edge(tr, ej);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![ej], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
                 }
             }
             if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
                 m.edge(v, ov);
             }
+            if name == Some("finally") || on_err.is_none() || !c.spread.is_empty() {
+                m.edge(tr, or);
+            }
             ret_tok(m, call, out);
         }
-        ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        ("Error", Some("toString")) => super::error_to_string(m, t, call),
         // ECMA-262 21.4.4: getters inspect [[DateValue]], never the
         // operands. The known Date token and intrinsic_miss in own_method
         // guard this rule; a written method also takes the opaque path.
@@ -1564,9 +1821,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             string_methods::to_prim(m, recv, "Date toJSON time");
             let a = m.atom("toISOString");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
+            let _nested = m.chain_call(
                 call,
+                0,
+                recv,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(recv),
                     args: vec![],
                     spread: vec![],
@@ -1574,12 +1834,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     site: nested,
                     region: m.thrown,
                 },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    )
                 },
             );
             ret_prim(m, call, prim::NULL);
@@ -1612,7 +1874,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         ("URLSearchParams", Some("sort")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
         ("URLSearchParams", Some("forEach")) if c.spread.is_empty() => {
-            if let Some(&cb) = c.args.first() {
+            if let Some(&cb) = c.arg(0) {
                 let recv = m.node_l("params");
                 m.add_tok(recv, t);
                 let text = m.node_l("param-string");
@@ -1634,7 +1896,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let text = m.node_l("param-string");
             m.add_prim(text, prim::STR);
             let vals = if matches!(n, "entries" | "@@__perry_wk_iterator") {
-                entry_pairs(m, call, text, false)
+                entry_pairs(m, call, Some(text), text)
             } else {
                 text
             };
@@ -1645,7 +1907,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // BufferSource/destination Uint8Array are validated via internal
         // slots, with no JS property reads or identity handout.
         ("TextCodec", Some("encode" | "encodeInto")) if c.spread.is_empty() => {
-            if let Some(&src) = c.args.first() {
+            if let Some(&src) = c.arg(0) {
                 string_methods::to_prim(m, src, "TextEncoder source USVString");
             }
             if name == Some("encode") {
@@ -1664,7 +1926,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             }
         }
         ("TextCodec", Some("decode")) if c.spread.is_empty() => {
-            if let Some(&options) = c.args.get(1) {
+            if let Some(&options) = c.arg(1) {
                 string_methods::read_only(m, options, "stream");
             } // ToBoolean, no hooks.
             ret_prim(m, call, prim::STR);
@@ -1681,14 +1943,27 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("Timer", Some("@@__perry_wk_dispose")) if c.spread.is_empty() => {
             ret_prim(m, call, prim::UNDEF)
         }
+        // A primitive wrapper object runs the method of the primitive kind
+        // it wraps, or its realm chain's (`wrapper_method`).
+        (
+            "BoxedNumber" | "BoxedString" | "BoxedBoolean" | "BoxedSymbol" | "BoxedBigInt",
+            Some(n),
+        ) => wrapper_method(m, t, &what, n, call),
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
+        // A member `RegExp.prototype` does not own is its chain's
+        // (`Object.prototype.toLocaleString` uses no argument) or absent
+        // (the call throws before any argument is used).
+        ("RegExp", Some(n)) if members::regexp_inherited(n).is_some() => {
+            let p = members::regexp_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
+        }
         (
-            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin"
-            | "BoxedPrimitive" | "Timer",
+            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
+            anyfall("builtin method argument", &what, &n);
             implicit_args(m, call, "builtin method argument", Protocol::Any);
             if what == "Date" && n == "toJSON" {
                 // 21.4.4.37: ToPrimitive(this), then Invoke(this, "toISOString").
@@ -1720,7 +1995,18 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let e = effects::declared_at("Buffer.prototype", n).expect("declared");
             effects::run_native(m, e, t, call);
         }
+        // A key no object of the Buffer's chain holds: [[Get]] is
+        // `undefined`, the call throws before its arguments are used
+        // (10.1.8.1, 13.3.6.2 EvaluateCall, 7.3.14 Call), unless the
+        // program wrote it there.
+        ("Buffer", Some(n))
+            if super::loads::view_member_absent(Some("Buffer"), n)
+                && !{
+                    let a = m.atom(n);
+                    intrinsic_written(m, a)
+                } => {}
         ("Buffer", _) => {
+            anyfall("buffer method argument", &what, &name);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
@@ -1742,12 +2028,39 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, t);
             implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
         }
+        // DataView.prototype get*/set* (ECMA-262 25.3.4.5-25.3.4.26, GetViewValue
+        // and SetViewValue 25.3.1.5/25.3.1.6): ToIndex of the offset and
+        // ToNumber / ToBigInt of a stored value (ToPrimitive on an object),
+        // ToBoolean of `littleEndian` (no call). A get is a Number, a BigInt
+        // for the 64-bit integer kinds; a set is undefined. A spread argument
+        // may land at any position: ToPrimitive on its elements.
+        ("DataView", Some(n)) if dataview_access(n).is_some() => {
+            let (get, big) = dataview_access(n).expect("the guard found it");
+            let r = m.reason("DataView offset / value conversion");
+            let converted = if get { 1 } else { 2 };
+            for &a in c.args.iter().take(converted).chain(c.spread.iter()) {
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+            }
+            let p = match (get, big) {
+                (true, true) => prim::BIGINT,
+                (true, false) => prim::NUM,
+                (false, _) => prim::UNDEF,
+            };
+            ret_prim(m, call, p);
+        }
         // A method the buffer's or DataView's prototype chain declares
-        // (`getInt8`, `slice` spread, `toString`): its arguments converted,
+        // (`slice` spread, `toString`): its arguments converted,
         // its result a primitive.
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
             if !super::loads::buffer_member_absent(m, Some(what), n) =>
         {
+            anyfall("buffer method argument", &what, &n);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
@@ -1761,6 +2074,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // already answered by `own_method_inner` (the receiver is described:
         // the written method runs now, or on the replay of the miss).
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(_)) => {}
+        // A key neither `%TypedArray%.prototype` nor `Object.prototype`
+        // declares: the lookup is `undefined` and the call throws a fresh
+        // TypeError; nothing runs and nothing escapes (as for a buffer above).
+        ("TypedArray", Some(n)) if super::loads::typed_array_member_absent(m, n) => {}
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
             if name == Some("toString") {
@@ -1775,7 +2092,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "hostrecord",
+            | "fromEntries" | "hostrecord" | "stringrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {
@@ -1797,5 +2114,19 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             members::BoxChain::Null => {}
         },
         (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
+    }
+}
+
+/// A DataView.prototype accessor method (ECMA-262 25.3.4): `(is a get, is a
+/// 64-bit BigInt kind)`.
+fn dataview_access(n: &str) -> Option<(bool, bool)> {
+    match n {
+        "getInt8" | "getUint8" | "getInt16" | "getUint16" | "getInt32" | "getUint32"
+        | "getFloat16" | "getFloat32" | "getFloat64" => Some((true, false)),
+        "getBigInt64" | "getBigUint64" => Some((true, true)),
+        "setInt8" | "setUint8" | "setInt16" | "setUint16" | "setInt32" | "setUint32"
+        | "setFloat16" | "setFloat32" | "setFloat64" => Some((false, false)),
+        "setBigInt64" | "setBigUint64" => Some((false, true)),
+        _ => None,
     }
 }

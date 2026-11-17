@@ -281,11 +281,14 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         );
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
-    if let Some(key_algo) = ml_kem_key_algo_from_name(&algo_upper) {
+    if let Some(key_algo) = akp_key_algo_from_name(&algo_upper) {
         let bad_message = match key_algo {
             KeyAlgo::MlKem512 => "Unsupported key usage for a ML-KEM-512 key",
             KeyAlgo::MlKem768 => "Unsupported key usage for a ML-KEM-768 key",
             KeyAlgo::MlKem1024 => "Unsupported key usage for a ML-KEM-1024 key",
+            KeyAlgo::MlDsa44 => "Unsupported key usage for ML-DSA-44 key",
+            KeyAlgo::MlDsa65 => "Unsupported key usage for ML-DSA-65 key",
+            KeyAlgo::MlDsa87 => "Unsupported key usage for ML-DSA-87 key",
             _ => unreachable!(),
         };
         let (private_usages, public_usages) = match validate_key_pair_usages(
@@ -306,7 +309,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
         let mut seed = [0u8; 64];
         rand_core_06::OsRng.fill_bytes(&mut seed);
-        let (private_der, public_der) = match ml_kem_der_pair_from_seed(key_algo, &seed) {
+        let seed = &seed[..akp_seed_len(key_algo)];
+        let (private_der, public_der) = match akp_der_pair_from_seed(key_algo, seed) {
             Some(pair) => pair,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };

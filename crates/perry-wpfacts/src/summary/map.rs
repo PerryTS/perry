@@ -33,9 +33,15 @@ pub fn map_cons(
         Load { key, dst } => Load { key, dst: n(dst) },
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
+        OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
         IndexHole => IndexHole,
+        IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
+        HasProp { key, idx } => HasProp {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+        },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -117,9 +123,21 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
+        FieldTruthy { key, test, dst } => FieldTruthy {
+            key,
+            test,
+            dst: n(dst),
+        },
         Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
+        NotNull { dst } => NotNull { dst: n(dst) },
+        TypeIs { mask, dst } => TypeIs { mask, dst: n(dst) },
+        ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
+        NotBuffer { shared, dst } => NotBuffer {
+            shared,
+            dst: n(dst),
+        },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -269,15 +287,44 @@ pub fn map_cons(
             idx,
             dst,
             shape,
+            enumerable,
             kept,
         } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
             kept,
         },
-        IdxKey { obj, dst, shape } => IdxKey {
+        EnumLoad { key, dst } => EnumLoad { key, dst: n(dst) },
+        EnumChain { key, dst, of, from } => EnumChain {
+            key,
+            dst: n(dst),
+            of,
+            from,
+        },
+        ForInAcc { key, setter, probe } => ForInAcc {
+            key,
+            setter,
+            probe: n(probe),
+        },
+        OwnDescAcc { setter, dst } => OwnDescAcc {
+            setter,
+            dst: n(dst),
+        },
+        ForInMeet { other, src, gate } => ForInMeet {
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            src: n(src),
+            gate: n(gate),
+        },
+        IdxKey {
             obj,
+            prim,
+            dst,
+            shape,
+        } => IdxKey {
+            obj,
+            prim,
             dst: n(dst),
             shape,
         },
@@ -286,10 +333,16 @@ pub fn map_cons(
             key: n(key),
             dst: n(dst),
         },
-        IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
+        IdxOwnLoad {
+            idx,
+            dst,
+            shape,
+            enumerable,
+        } => IdxOwnLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
         },
         IdxOwnKey { obj, dst, shape } => IdxOwnKey {
             obj,
@@ -302,11 +355,13 @@ pub fn map_cons(
             idx,
             dst,
             shape,
+            enumerable,
         } => OwnGate {
             obj: n(obj),
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
         },
         IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
@@ -338,7 +393,19 @@ pub fn map_cons(
             reason,
             accessor,
         },
-        StoreKeyed { o, src, site } => StoreKeyed {
+        StoreKeyed { o, src, site, subj } => StoreKeyed {
+            o: n(o),
+            src: n(src),
+            site,
+            subj: if subj == NO_NODE { NO_NODE } else { n(subj) },
+        },
+        EnumKeyStore { o, src, site, from } => EnumKeyStore {
+            o: n(o),
+            src: n(src),
+            site,
+            from,
+        },
+        EnumKeyAny { o, src, site } => EnumKeyAny {
             o: n(o),
             src: n(src),
             site,
@@ -359,7 +426,29 @@ pub fn map_cons(
             f: n(f),
             setter,
         },
-        Arith { dst } => Arith { dst: n(dst) },
+        DefineAnyKey {
+            o,
+            key,
+            value,
+            get,
+            set,
+            site,
+            reason,
+            accessor,
+        } => DefineAnyKey {
+            o: n(o),
+            key: n(key),
+            value: n(value),
+            get: n(get),
+            set: n(set),
+            site,
+            reason,
+            accessor,
+        },
+        Arith { dst, other } => Arith {
+            dst: n(dst),
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+        },
         Range {
             op,
             other,
@@ -371,12 +460,67 @@ pub fn map_cons(
             dst: n(dst),
             right,
         },
-        Plus { str, num } => Plus {
+        Plus {
+            str,
+            num,
+            other,
+            right,
+        } => Plus {
             str: n(str),
             num: n(num),
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            right,
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
+        CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
+        ConsoleFormat { reason, agg } => ConsoleFormat {
+            reason,
+            agg: n(agg),
+        },
         ShareBuffer { ta } => ShareBuffer { ta },
+        Captures { rec, pat } => Captures { rec, pat },
+        ObjTagProbe { t, key } => ObjTagProbe { t, key },
+        StrReplace {
+            dst,
+            recv,
+            search,
+            repl,
+        } => StrReplace {
+            dst: n(dst),
+            recv: n(recv),
+            search: n(search),
+            repl: n(repl),
+        },
+        StrIndex {
+            dst,
+            recv,
+            search,
+            last,
+        } => StrIndex {
+            dst: n(dst),
+            recv: n(recv),
+            search: n(search),
+            last,
+        },
+        StrSubstring {
+            dst,
+            recv,
+            start,
+            end,
+        } => StrSubstring {
+            dst: n(dst),
+            recv: n(recv),
+            start: if start == NO_NODE { NO_NODE } else { n(start) },
+            end: if end == NO_NODE { NO_NODE } else { n(end) },
+        },
+        ClassReplace { dst, tok, repl } => ClassReplace {
+            dst: n(dst),
+            tok,
+            repl: n(repl),
+        },
+        RegExpPattern { tok } => RegExpPattern { tok },
+        ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
+        BoundCall { reason, bound } => BoundCall { reason, bound },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
         RetInto { call, run } => RetInto { call: k(call), run },
@@ -393,6 +537,15 @@ pub fn map_cons(
             src,
             site,
             from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
+        OwnComputedKey { key, val } => OwnComputedKey {
+            key: n(key),
+            val: n(val),
+        },
+        ProtoKeySet { target, val, site } => ProtoKeySet {
+            target,
+            val: n(val),
+            site,
         },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
@@ -417,6 +570,7 @@ pub fn map_cons(
 
 pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
     CallSite {
+        first_arg_fixed: c.first_arg_fixed,
         this: match c.this {
             ThisArg::Node(x) => ThisArg::Node(n(x)),
             ThisArg::Tok(t) => ThisArg::Tok(t),
@@ -466,6 +620,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }
+            | OwnDescValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
             | Store { .. }
@@ -488,8 +643,13 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }
+            | FieldTruthy { .. }
             | Fulfil { .. }
             | Falsy { .. }
+            | NotBuffer { .. }
+            | ProtoObjects { .. }
+            | NotNull { .. }
+            | TypeIs { .. }
             | Objects { .. }
             | NotUndefined { .. }
             | Hard { .. }
@@ -501,6 +661,11 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | HasInstance { .. }
             | IdxLoad { .. }
+            | EnumChain { .. }
+            | EnumLoad { .. }
+            | ForInAcc { .. }
+            | OwnDescAcc { .. }
+            | ForInMeet { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }
             | IdxOwnKey { .. }
@@ -513,11 +678,13 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | StoreKeyed { .. }
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
+            | DefineAnyKey { .. }
             | Arith { .. }
             | Range { .. }
             | LenIndex { .. }
             | Plus { .. }
             | ArrayLenArg { .. }
+            | CaseMap { .. }
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
@@ -526,6 +693,15 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NewTargetHard { .. }
             | NativeParent { .. }
             | ShareBuffer { .. }
+            | Captures { .. }
+            | ObjTagProbe { .. }
+            | StrReplace { .. }
+            | StrIndex { .. }
+            | StrSubstring { .. }
+            | ClassReplace { .. }
+            | RegExpPattern { .. }
+            | ViewedBuffer { .. }
+            | BoundCall { .. }
             | AnnexBDefine { .. }
             | AnnexBLookup { .. }
             | Accessor { .. }
@@ -542,16 +718,24 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         Load { dst, .. }
         | ProtoKey { dst, .. }
         | OwnValues { dst }
+        | OwnDescValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
+        | EnumChain { dst, .. }
+        | EnumLoad { dst, .. }
         | IdxKey { dst, .. }
         | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }
-        | Arith { dst }
+        | Arith { dst, .. }
         | Range { dst, .. }
         | ArrayLenArg { dst }
+        | CaseMap { dst, .. }
+        | StrReplace { dst, .. }
+        | StrIndex { dst, .. }
+        | StrSubstring { dst, .. }
+        | ClassReplace { dst, .. }
         | IterNext { dst }
         | FromArrayLike { dst }
         | ProtoOf { dst }

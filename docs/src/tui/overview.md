@@ -13,6 +13,8 @@
 
 `perry/tui` enters the terminal's [alternate screen buffer](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-The-Alternate-Screen-Buffer) (so your scrollback isn't polluted), captures raw-mode keypresses, and re-renders only the cells that changed between frames. The cell grid is a packed `Vec<Cell>` so an 80×24 terminal fits in ~15 KB — well within L2.
 
+Cursor positions retain the full `u16` grid dimensions, including rows or columns beyond 255 and 999. Grid indices are zero-based; the renderer converts them to one-based ANSI coordinates without truncation.
+
 ## Quick Start
 
 The smallest interactive `perry/tui` program — a counter that increments on `+`, decrements on `-`, and quits on `q`:
@@ -53,7 +55,15 @@ If you've used ink, the only real difference at the surface is the **factory cal
 
 ## Architecture in one paragraph
 
-`run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: reset hook index → call the component closure → diff the returned widget tree against the front buffer → emit minimal ANSI to reconcile → drain pending keypresses (dispatching to `useInput` handlers and the focus ring) → if any state changed, immediately re-render; else idle 16 ms. Exit happens when `exit()` (or `useApp().exit()`) flips a flag the loop checks at the top of every iteration. On exit, raw mode is restored and the alt screen is left so your terminal returns to exactly the state it was in before the program ran.
+`run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: take a nonblocking Turnloop I/O turn on native targets, then advance Perry's existing event pump → clear the previous dirty flag and reset the hook index → call the component closure → diff and flush the widget tree → drain pending keypresses → if any state changed, immediately re-render; else idle 16 ms. The I/O turn and pump advance network completions, promise jobs, timers and registered stdlib completions without requiring keyboard input. Both run outside component construction. Updates made during a frame or input dispatch remain dirty for the next iteration. Exit requests are checked after pumping and before dispatch/idle so an async callback can stop the loop without constructing another frame. On normal exit, raw mode is restored and the alternate screen is left.
+
+Widget handles key a hash-indexed registry, so looking one up is average O(1) however many widgets exist; `lookup` still copies the node, so its cost follows the node's text or child count. A handle stays valid for the rest of the process: the registry never reclaims nodes.
+
+## Unix input reader lifetime
+
+On macOS and Linux, leaving `run()` cancels and joins its input reader before restoring terminal settings. Stopping does not require another keystroke, and the reader does not hold stdin or consume subsequent input. Pending TUI bytes are discarded at shutdown. The reader reads the input file descriptor without Rust stdin buffering or changes to its shared file-status flags; TUI owns stdin exclusively while it is active.
+
+Enabling input again starts a fresh reader after shutdown or EOF and saves that session's terminal settings. This guarantees the reader's lifecycle only: repeated `run()` calls still require separate reset semantics for the exit flag, hooks, focus and handlers. Windows reader cancellation and uncaught-exception/process-abort recovery are unchanged.
 
 ## What's next
 

@@ -47,6 +47,10 @@ impl WasmModuleEmitter {
             "object_new",
             "object_set",
             "object_get",
+            "object_literal_define",
+            "object_literal_set_prototype",
+            "object_set_prototype_of",
+            "object_super_get",
             "object_get_dynamic",
             "object_set_dynamic",
             "object_delete",
@@ -137,8 +141,13 @@ impl WasmModuleEmitter {
             "array_some",
             "array_every",
             "class_new",
+            "tagged_template",
+            "template_raw",
+            "class_ref",
             "class_set_method",
             "class_call_method",
+            "class_super_get",
+            "class_super_call",
             "class_get_field",
             "class_set_field",
             "generator_new",
@@ -206,6 +215,7 @@ impl WasmModuleEmitter {
             "date_to_json",
             "error_new",
             "error_message",
+            "error_super_init",
             "global_property",
             "global_receiver",
             "propagate_exception",
@@ -469,6 +479,7 @@ impl WasmModuleEmitter {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_strings_in_stmts(body);
                 if let Some(c) = catch {
@@ -574,6 +585,14 @@ impl WasmModuleEmitter {
             Expr::Array(elems, _) => {
                 for e in elems {
                     self.collect_strings_in_expr(e);
+                }
+            }
+            Expr::TaggedTemplateStrings { cooked, raw, .. } => {
+                for e in cooked {
+                    self.collect_strings_in_expr(e);
+                }
+                for s in raw {
+                    self.intern_string(s);
                 }
             }
             Expr::Object(fields) => {

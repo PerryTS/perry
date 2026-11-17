@@ -4,9 +4,12 @@ use super::*;
 
 impl Model {
     /// Run for-in body `ft` (through template call `call`) over the iterated
-    /// value `t` (FVA 4.3b): once per key of a literal whose keys are exactly
-    /// its birth keys (`for_in_keys`), each run's key parameter holding its
-    /// one key, else once with every key.
+    /// value `t` (FVA 4.3b): once per key of a literal whose enumerable keys
+    /// are known (`for_in_keys`), each run's key parameter holding its one
+    /// key, else once with every key. Each iteration binds one key and
+    /// `t[k]` in it reads that key only (ECMA-262 14.7.5.6
+    /// ForIn/OfBodyEvaluation, 14.7.5.9 EnumerateObjectProperties), so the
+    /// per-key runs are the loop's whole effect on `t`.
     pub(crate) fn for_in_tok(&mut self, call: CallId, ft: Tok, t: Tok) {
         if self.act.is_some() {
             let f = self.tok_fn(ft);
@@ -17,49 +20,128 @@ impl Model {
             return;
         }
         let f = self.tok_fn(ft);
-        let keys = match self.summarized(f) && self.instantiable(ft) {
-            true => self.for_in_keys(f, t, None),
-            false => None,
-        };
-        let Some(keys) = keys else {
+        let runs = self.summarized(f) && self.instantiable(ft);
+        let Some(keys) = self.for_in_keys(f, t) else {
+            if for_in_diag() {
+                self.for_in_diag_why(f, ft, t);
+            }
             return self.for_in_every_key(call, ft);
         };
-        for k in keys {
+        if !runs {
+            self.for_in_named_run(call, ft, &keys);
+            self.for_in_named.push((call, ft, t));
+            return;
+        }
+        if self.for_in_key_runs(call, ft, &keys).is_some() {
+            self.for_in_runs.push((call, ft, t));
+        }
+    }
+
+    /// The runs of body `ft` for `keys`, made on first use. `None`: the body
+    /// does not take its key as a fresh slot, so it ran with every key
+    /// instead; else whether a run was new.
+    fn for_in_key_runs(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> Option<bool> {
+        let mut made = false;
+        for &k in keys {
+            made |= !self
+                .sum
+                .inst_key
+                .contains_key(&(6, k, ft, crate::summary::NO_VAL));
             let inst = self.instance((6, k, ft));
             match self.sum.insts[inst as usize].params.first().copied() {
                 // The run reads no key.
                 Some(NO_NODE) => {}
                 // A fresh slot: the run's key (its key variable's copy holds
-                // the key's atom, `instance`).
-                Some(p) if self.nodes[p as usize].frame == inst + 1 => self.add_prim(p, prim::STR),
-                _ => return self.for_in_every_key(call, ft),
+                // the key's atom, `instance`). The run binds that one String
+                // (14.7.5.10 %ForInIteratorPrototype%.next): a String
+                // constant, so `'x ' + key` in the run is a constant too.
+                Some(p) if self.nodes[p as usize].frame == inst + 1 => {
+                    let set = self.str_set(&[k]);
+                    let set = self.run_born(set);
+                    self.add_s(p, &[], prim::STR, set);
+                }
+                _ => {
+                    self.for_in_every_key(call, ft);
+                    return None;
+                }
             }
         }
-        self.for_in_runs.push((call, ft, t));
+        Some(made)
+    }
+
+    /// FORIN1: a body with no per-key runs (not summarized: the activation
+    /// pass, a refused summary) runs once, shared, with its key parameter
+    /// holding the keys `for_in_keys` lists for each value it iterates
+    /// (ECMA-262 14.7.5.9 EnumerateObjectProperties, 14.7.5.10
+    /// %ForInIteratorPrototype%.next: a key is yielded only while it names
+    /// an own enumerable String-keyed property of the object or of its
+    /// chain; the built-in members of `%Object.prototype%` are not
+    /// enumerable, 20.1.3). The union over the iterated values holds every
+    /// key any iteration binds, so the run covers the loop; a key written
+    /// later joins the union (`settle_for_in`); a value whose keys are not
+    /// known runs the body with every key (`for_in_every_key`).
+    fn for_in_named_run(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> bool {
+        let k = match self.for_in_named_call.get(&(call, ft)) {
+            Some(&(_, k)) => k,
+            None => {
+                let k = self.node_l("forin-names");
+                let mut cs = self.calls[call as usize].clone();
+                cs.args = vec![k];
+                let nc = self.calls.len() as CallId;
+                self.calls.push(cs);
+                self.for_in_named_call.insert((call, ft), (nc, k));
+                self.call_tok(nc, ft, None);
+                k
+            }
+        };
+        if keys.is_empty() {
+            return false;
+        }
+        let mut v = keys.to_vec();
+        v.sort_unstable();
+        v.dedup();
+        let set = self.str_set(&v);
+        let set = self.run_born(set);
+        let before = (self.nodes[k as usize].prim, self.nodes[k as usize].strs);
+        self.add_s(k, &[], prim::STR, set);
+        before != (self.nodes[k as usize].prim, self.nodes[k as usize].strs)
     }
 
     /// Run for-in body `ft` once with every key (the loop as it is).
+    #[track_caller]
     pub(crate) fn for_in_every_key(&mut self, call: CallId, ft: Tok) {
+        if for_in_diag() {
+            eprintln!(
+                "perry: wpfacts forindiag every-key body={} at={}",
+                self.funcs[self.tok_fn(ft) as usize].name,
+                std::panic::Location::caller()
+            );
+        }
         if self.for_in_any.insert((call, ft)) {
+            // The loop as it is: its key is any String key of the value
+            // (14.7.5.10: a String, never a Symbol).
+            if let Some(&k) = self.calls[call as usize].args.first() {
+                self.add_prim(k, prim::STR);
+            }
             self.call_tok(call, ft, None);
         }
     }
 
-    /// The keys a for-in run of body `f` over `t` visits, when they are
-    /// exactly `t`'s: a literal not escaped and not HARD, with no key added
-    /// after birth or stored under a computed key, no computed member, no
-    /// `__proto__`, whose chain gets no enumerable key from the program
-    /// (nothing writes `Object.prototype`, `object_proto_written`); a body
-    /// defining a property under its key also needs each key to be one
-    /// generation named (`for_in_define_keys`). `late`: the keys stored into
-    /// each template (`settle_for_in`; the check before it only knows the
-    /// cheap facts).
-    fn for_in_keys(
-        &self,
-        f: FnIdx,
-        t: Tok,
-        late: Option<&FxHashMap<TmplId, Vec<Atom>>>,
-    ) -> Option<Vec<Atom>> {
+    /// The keys a for-in run of body `f` over `t` visits, as far as the
+    /// solve knows them now: `t` is a subject of ENUM3 (`enum_subject`:
+    /// its enumerable keys are the names the program wrote on it), a
+    /// literal (its chain is `Object.prototype`, or its class's prototype
+    /// whose program-written keys are listed, `proto_writers`) not escaped
+    /// and not HARD, never written under a key no name lists
+    /// (`enum_any_written`), with no computed member and no `__proto__`,
+    /// whose chain gets no enumerable key from the program (nothing writes
+    /// `Object.prototype`, `object_proto_written`); a body defining a
+    /// property under its key also needs each key to be one generation
+    /// named (`for_in_define_keys`). The keys are its birth keys, its
+    /// methods and every enumerable field the program wrote
+    /// (`Node::enum_key`); keys written later get their run once the
+    /// worklist is empty (`settle_for_in`).
+    fn for_in_keys(&self, f: FnIdx, t: Tok) -> Option<Vec<Atom>> {
         let TokKind::Obj(tm, _) = self.toks[t as usize] else {
             return None;
         };
@@ -74,11 +156,41 @@ impl Model {
         );
         if !literal
             || tpl.has_computed_members
+            || !self.enum_subject(t)
             || self.is_escaped(t)
             || self.hard.contains_key(&t)
-            || self.adds_keys.get(&tm).is_some_and(|&n| n > 0)
-            || self.any_writers.contains_key(&tm)
+            || self.enum_any_written(t)
             || self.object_proto_written()
+        {
+            return None;
+        }
+        // The keys below are the object's own and its template's methods:
+        // the chain beyond them is `%Object.prototype%`, whose members are
+        // not enumerable. A chain that may hold another object (the literal
+        // `{ __proto__: p }`, B.3.1; a relink) also visits that object's
+        // enumerable keys (14.7.5.9 EnumerateObjectProperties, 14.7.5.10):
+        // the general walk runs.
+        let born_chain = self.proto_node.get(&t).is_none_or(|&pn| {
+            let nd = &self.nodes[pn as usize];
+            nd.prim == 0
+                && nd
+                    .pts
+                    .to_sorted()
+                    .iter()
+                    .all(|&p| match self.toks[p as usize] {
+                        TokKind::ObjectProto => true,
+                        TokKind::Proto(pm) => pm == tm,
+                        _ => false,
+                    })
+        });
+        if !born_chain {
+            return None;
+        }
+        let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
+        if self
+            .accessor_keys
+            .get(&t)
+            .is_some_and(|ks| ks.iter().any(|&a| star(a)))
         {
             return None;
         }
@@ -90,20 +202,30 @@ impl Model {
             .proto_members
             .iter()
             .filter(|&&a| self.atoms[a as usize] != "constructor");
-        for &a in own.chain(methods) {
+        // The enumerable fields the program wrote (ENUM3).
+        let written = self.field_keys.get(&t).into_iter().flatten().filter(|&&a| {
+            self.fields
+                .get(&(t, a))
+                .is_some_and(|&n| self.nodes[n as usize].enum_key)
+        });
+        for &a in own.chain(methods).chain(written) {
             let name = self.atoms[a as usize].as_str();
-            if name == "__proto__" {
+            if name == "__proto__" || star(a) {
                 return None;
             }
             // A symbol is no for-in key.
-            if !name.starts_with(crate::builtins::WK_PREFIX) && !keys.contains(&a) {
+            if !name.starts_with(crate::builtins::WK_PREFIX)
+                && self.enum_string_key(a)
+                && !keys.contains(&a)
+            {
                 keys.push(a);
             }
         }
-        if late.is_some_and(|l| {
-            l.get(&tm)
-                .is_some_and(|ws| ws.iter().any(|a| !keys.contains(a)))
-        }) {
+        if self
+            .proto_writers
+            .keys()
+            .any(|&(w, a)| w == tm && !keys.contains(&a))
+        {
             return None;
         }
         if self.for_in_defines.contains(&f)
@@ -129,35 +251,95 @@ impl Model {
             .any(|&(w, _)| matches!(self.toks[w as usize], TokKind::ObjectProto))
     }
 
-    /// Once the worklist is empty: a literal a for-in body ran per key over
-    /// that gained a key after birth (or escaped, or turned HARD) since runs
-    /// the body once more with every key. True when one did.
+    /// Once the worklist is empty: each literal a for-in body ran per key
+    /// over is looked at again. A key written on it since gets its run; one
+    /// that escaped, turned HARD or was written under a key no name lists
+    /// since runs the body once more with every key. True when either
+    /// happened.
     pub(crate) fn settle_for_in(&mut self) -> bool {
-        if self.for_in_runs.is_empty() {
-            return false;
-        }
-        let tms: crate::pts::FxHashSet<TmplId> = self
-            .for_in_runs
-            .iter()
-            .filter_map(|&(_, _, t)| self.tmpl_of(t))
-            .collect();
-        let mut late: FxHashMap<TmplId, Vec<Atom>> = FxHashMap::default();
-        for &(tm, a) in self.writers.keys().chain(self.proto_writers.keys()) {
-            if tms.contains(&tm) {
-                late.entry(tm).or_default().push(a);
-            }
-        }
         let mut more = false;
         for (call, ft, t) in self.for_in_runs.clone() {
             if self.for_in_any.contains(&(call, ft)) {
                 continue;
             }
             let f = self.tok_fn(ft);
-            if self.for_in_keys(f, t, Some(&late)).is_none() {
-                self.for_in_every_key(call, ft);
-                more = true;
+            match self.for_in_keys(f, t) {
+                None => {
+                    self.for_in_every_key(call, ft);
+                    more = true;
+                }
+                Some(keys) => more |= self.for_in_key_runs(call, ft, &keys) != Some(false),
+            }
+        }
+        // FORIN1: the shared named runs, the same way.
+        for (call, ft, t) in self.for_in_named.clone() {
+            if self.for_in_any.contains(&(call, ft)) {
+                continue;
+            }
+            let f = self.tok_fn(ft);
+            match self.for_in_keys(f, t) {
+                None => {
+                    self.for_in_every_key(call, ft);
+                    more = true;
+                }
+                Some(keys) => more |= self.for_in_named_run(call, ft, &keys),
             }
         }
         more
+    }
+}
+
+/// `PERRY_WPF_FORINDIAG`: print why a for-in body runs with every key.
+fn for_in_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_FORINDIAG").is_some())
+}
+
+impl Model {
+    fn for_in_diag_why(&self, f: FnIdx, ft: Tok, t: Tok) {
+        let lit = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => {
+                let tpl = &self.tmpls[tm as usize];
+                format!(
+                    "lit={} computed={}",
+                    matches!(
+                        tpl.kind,
+                        TmplKind::Lit { .. }
+                            | TmplKind::Class {
+                                literal_shape: true,
+                                ..
+                            }
+                    ),
+                    tpl.has_computed_members
+                )
+            }
+            _ => "lit=notobj".to_string(),
+        };
+        eprintln!(
+            "perry: wpfacts forindiag body={} tok={} summarized={} inst={} {lit} subj={} escaped={} hard={} anywritten={} protowritten={}",
+            self.funcs[f as usize].name,
+            self.tok_name(t),
+            self.summarized(f),
+            self.instantiable(ft),
+            self.enum_subject(t),
+            self.is_escaped(t),
+            self.hard.contains_key(&t),
+            self.enum_any_written(t),
+            self.object_proto_written()
+        );
+        let held = |n: NodeId| {
+            let nd = &self.nodes[n as usize];
+            format!("n{n}(pts={},prim={:#x})", nd.pts.len(), nd.prim)
+        };
+        let any = self.field_any.get(&t).map(|&n| held(n));
+        let shaped: Vec<String> = self
+            .shaped_of
+            .get(&t)
+            .into_iter()
+            .flatten()
+            .filter(|&&(_, _, store)| store)
+            .map(|&(k, n, _)| format!("shape{k}:{}", held(n)))
+            .collect();
+        eprintln!("perry: wpfacts forindiag   any={any:?} shaped={shaped:?}");
     }
 }

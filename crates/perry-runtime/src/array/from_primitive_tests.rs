@@ -156,7 +156,7 @@ fn element_bytes(arr: *mut ArrayHeader, index: u32) -> Vec<u8> {
         crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
     unsafe {
         let len = (*sptr).byte_len as usize;
-        let data = (sptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = crate::string::string_data(sptr);
         std::slice::from_raw_parts(data, len).to_vec()
     }
 }

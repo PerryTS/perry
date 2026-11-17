@@ -117,6 +117,10 @@ d:#8d5a2849b0ffe9b3
 d:#5edaee912ada109a
 r:#bd5b549211c17a2b
 r:#e7b6e81c78116a02
+d:#cf7904ff15bb8f62
+r:#0de7e0037b475bf8
+r:#3e0cc15b33edaf30
+r:#e83d6808c74b1a8a
 # tier common: 50% to 90%; 828 sections, 37858 bytes
 r:#b5bc7022ff1e68bf
 r:#c98245529180f8d3

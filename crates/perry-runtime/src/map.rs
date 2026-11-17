@@ -4082,3 +4082,5 @@ pub(crate) fn test_enter_catch_foreach(mark: usize) {
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use store::snap_native_index_range;
+
+pub(crate) use store::{image_form, image_keys_derivable, MapStore};

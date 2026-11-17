@@ -1924,7 +1924,7 @@ pub(crate) fn life_collect_full() {
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }
 
-#[cfg(perry_gc_instruments)]
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use layout_slot_visit::visit_traced_slots;
 
 #[cfg(perry_gc_instruments)]

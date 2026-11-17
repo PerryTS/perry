@@ -35,6 +35,23 @@ pub enum RealmSlotRoot {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmSlotStep {
     Elems,
+    /// The values iterating the slot yields (`iterated(s)`): GetIterator,
+    /// then each IteratorStepValue (ECMA-262 7.4.3, 7.4.10), as a WebIDL
+    /// `sequence<T>` conversion reads them; the iteration protocol calls
+    /// are this step's.
+    Iterated,
+    /// The values of the slot's own enumerable properties (`values(s)`):
+    /// EnumerableOwnProperties (ECMA-262 7.3.23), as a WebIDL
+    /// `record<K, V>` conversion reads them; an inherited member is never
+    /// among them.
+    OwnValues,
+    /// Any String-keyed own data property of the slot's object that the
+    /// native writes (`strkey(this)`): a Web Storage item, which perry
+    /// mirrors as a named own property of the storage object
+    /// (perry-runtime web_storage.rs `sync_named_property`) except under a
+    /// member name of the object's prototype or `length`. A value stored
+    /// there is read by every String key but those names.
+    StrKey,
     Field(Cow<'static, str>),
     Internal(Cow<'static, str>),
 }
@@ -58,6 +75,10 @@ pub enum RealmProtocol {
     Iterate,
     IterNext,
     IterResult,
+    /// Async iteration (`@@asyncIterator`, then the iterator's awaited
+    /// `next()` / `return()` results, their `done` and `value` read as
+    /// byte chunks): undici's `ReadableStreamFrom`.
+    AsyncIterate,
     Json,
     HasInstance,
     OwnKeys,
@@ -179,6 +200,13 @@ pub enum RealmEffect {
     /// (a ToObject wrapper, a temporary, its fresh result); it keeps nothing
     /// in an object the program already holds.
     StoresFresh,
+    /// `stores_bytes(slot)`: the body copies bytes into the backing store of
+    /// the byte views in the slot (a Buffer, a TypedArray, a DataView, an
+    /// ArrayBuffer) without a [[Set]]: no program value is kept, no setter
+    /// or coercion runs, and a value of any other kind is left as it is. An
+    /// element read of a typed array gives its element type whatever its
+    /// bytes are (ECMA-262 10.4.5.15 TypedArrayGetElement).
+    StoresBytes(RealmSlot),
     /// What the call returns; several `returns` are a union.
     Returns(RealmOperand),
     /// Compares the slot's values by identity (SameValue, SameValueZero,
@@ -400,6 +428,7 @@ pub fn validate_effects(
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
+            RealmEffect::StoresBytes(slot) => not_result(slot)?,
             // An input of the call: not its result, not a call's return.
             RealmEffect::Identity(slot) => not_result(slot)?,
             // The runtime hands over the object it made and returns.
@@ -432,6 +461,9 @@ pub mod emit {
         };
         let steps = list(&s.steps, |step| match step {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),
+            RealmSlotStep::Iterated => format!("{p}RealmSlotStep::Iterated"),
+            RealmSlotStep::OwnValues => format!("{p}RealmSlotStep::OwnValues"),
+            RealmSlotStep::StrKey => format!("{p}RealmSlotStep::StrKey"),
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }
@@ -523,6 +555,9 @@ pub mod emit {
                         format!("{p}RealmEffect::AsyncResource({})", slot(p, s))
                     }
                     RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
+                    RealmEffect::StoresBytes(s) => {
+                        format!("{p}RealmEffect::StoresBytes({})", slot(p, s))
+                    }
                     RealmEffect::Identity(s) => format!("{p}RealmEffect::Identity({})", slot(p, s)),
 
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),

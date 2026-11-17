@@ -435,6 +435,7 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 let target = finally.as_ref().map(|_| {
                     func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
@@ -535,11 +536,10 @@ impl<'a> FuncEmitCtx<'a> {
                 self.block_depth -= 1;
                 func.instruction(&Instruction::End);
             }
-            // Issue #569: Wasm backend has no equivalent of LLVM's
-            // alloca'd box slot — JS hoisting in the host runtime handles
-            // forward refs natively. Emit nothing.
-            // A closure created before its captured `let` runs shares the cell made here.
-            Stmt::PreallocateBoxes(ids) => {
+            // A closure created before its captured binding's `Let` runs shares the cell
+            // made here, and the `Let` fills it. A TDZ cell starts as `undefined`: the
+            // wasm target does not throw on a read inside the dead zone.
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
                     if let Some(&idx) = self.local_map.get(id).filter(|_| self.is_boxed(id)) {
                         func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
@@ -549,7 +549,7 @@ impl<'a> FuncEmitCtx<'a> {
                     }
                 }
             }
-            Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+            Stmt::ReleaseBoxes(_) => {}
         }
     }
 
@@ -606,6 +606,7 @@ pub(super) fn has_return(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(has_return)
                 || catch

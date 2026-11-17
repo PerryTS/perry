@@ -1,0 +1,1 @@
+Fix child-process stdio finalization raising an unhandled `shutdown ENOTCONN` after the child exits. A completed shutdown on an already-disconnected peer now finishes pending callbacks without discarding stdout, stderr, or the child's exit status; other socket errors remain observable.

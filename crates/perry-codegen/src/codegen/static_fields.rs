@@ -511,6 +511,7 @@ fn collect_inline_invoked_static_blocks(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().for_each(|s| walk_stmt(s, out));
                 if let Some(c) = catch {

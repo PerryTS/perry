@@ -221,6 +221,7 @@ pub fn constructor_added_key_count_in<'c>(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     visit_stmts(body, declared, added);
                     if let Some(c) = catch {

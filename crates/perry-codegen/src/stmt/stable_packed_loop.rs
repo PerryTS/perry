@@ -432,6 +432,7 @@ fn stmt_contains_break(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_break)
                 || catch

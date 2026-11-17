@@ -58,6 +58,9 @@ mod declaration_keys_tests;
 #[cfg(test)]
 #[path = "lazy_family_tests.rs"]
 mod lazy_family_tests;
+#[cfg(test)]
+#[path = "two_phase_tests.rs"]
+mod two_phase_tests;
 
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
@@ -70,18 +73,16 @@ mod lazy_family_tests;
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
 ///
-/// The population has two phases: phase A, the core ([`populate_realm_core`]),
-/// then phase B, the rest ([`populate_realm_rest`]). This runs both back to
-/// back: the complete realm, for a global that is not the thread's own (a
-/// `vm` context, an eval realm, the Rust tests).
+/// The population has two phases (`perry_abi::realm_phase`): phase A, the
+/// core, then phase B, the rest. This runs both in ONE pass, every row in its
+/// declared place: the complete realm, for the thread's realm when the
+/// program is not compiled for a two-phase realm, and for a global that is
+/// not the thread's own (a `vm` context, an eval realm, the Rust tests).
+// Out of line and listed in the default hot-text order
+// (`hot_text_order.txt`), so that its builtin-definition scope is inlined
+// here and nowhere else, whichever callers the realm has.
+#[inline(never)]
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
-    populate_realm_core(singleton_at_entry);
-    populate_realm_rest(singleton_at_entry);
-}
-
-/// Phase A of the population of the realm global `singleton_at_entry`.
-/// Every row is in phase A today.
-pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     // Every install below is a builtin definition, which arms the own-override
     // guard only on a Map, Set or Date owner (#10697).
     super::super::own_override::as_builtin_definition(|| {
@@ -89,18 +90,82 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     })
 }
 
-/// Phase B of the population of the realm global `singleton_at_entry`: the
-/// rows phase A left unbound. No row yet. A row that moves here keeps its
-/// declared slot (the global's layout is static) and its place in its
-/// family's declaration order. Runs inside the caller's no-move window.
+/// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
+/// Linked only into a program compiled for a two-phase realm.
+#[inline(never)]
+pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
+    super::super::own_override::as_builtin_definition(|| {
+        populate_realm_phase(singleton_at_entry, RealmPhases::Core)
+    })
+}
+
+/// Phase B alone, on a realm global phase A populated: the rows it left
+/// unbound (`REALM_REST_GLOBALS`). Each keeps its declared slot (the global's
+/// layout is static, so no key is added and none moves) and its family's
+/// declaration order (the same `birth_family`). Runs inside the caller's
+/// no-move window, and no program code runs inside it.
+#[cold]
+#[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
-    let _ = singleton_at_entry;
+    super::super::own_override::as_builtin_definition(|| {
+        populate_realm_phase(singleton_at_entry, RealmPhases::Rest)
+    })
+}
+
+/// Which phase(s) of the population one pass over the rows runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealmPhases {
+    /// Every row, in declaration order.
+    Both,
+    /// Phase A.
+    Core,
+    /// Phase B.
+    Rest,
+}
+
+impl RealmPhases {
+    /// Does this pass run the rows that are not a declared phase-B name?
+    #[inline(always)]
+    fn core(self) -> bool {
+        self != RealmPhases::Rest
+    }
+    /// Does this pass bind the declared global `name`? The name is looked at
+    /// only in a phase of a two-phase realm.
+    #[inline(always)]
+    fn binds(self, name: &str) -> bool {
+        match self {
+            RealmPhases::Both => true,
+            RealmPhases::Core => !crate::codegen_abi::realm_rest_global(name),
+            RealmPhases::Rest => crate::codegen_abi::realm_rest_global(name),
+        }
+    }
 }
 crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 4, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
 // Compact the once-per-realm installer, not the methods it installs. Blanket
 // Oz also shrinks/outlines hot array and iterator helpers (#13662).
+//
+// The one-pass population: every row, in declaration order. Its body is
+// `populate_rows` specialized for `RealmPhases::Both`, so no row tests a
+// phase: the code of the population as it was before the realm had phases.
 #[optimize(size)]
+#[inline(never)]
 fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
+    populate_rows(singleton_at_entry, RealmPhases::Both)
+}
+
+/// One phase of a two-phase realm: the same rows, each behind its phase test
+/// (`RealmPhases::binds`). A second copy of the population, linked only into
+/// a program compiled for a two-phase realm.
+#[optimize(size)]
+#[inline(never)]
+fn populate_realm_phase(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
+    populate_rows(singleton_at_entry, phases)
+}
+
+/// The rows of the population. Inlined into its two callers: with the
+/// constant `Both` every phase test folds away.
+#[inline(always)]
+fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     if singleton_at_entry.is_null() {
         return;
     }
@@ -172,7 +237,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
-    {
+    if phases.core() {
         let name = b"globalThis";
         let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
@@ -184,7 +249,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
-    {
+    if phases.core() {
         // #4511: Node exposes the global object as `global` too
         // (`global === globalThis`). Install the same self-reference so bare
         // `global` / `(global as any).x` reads resolve to the real singleton
@@ -204,11 +269,19 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // typed-array constructors can link their `__proto__` to it as they're
     // built below, and the per-kind `.prototype` objects can be flagged with
     // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
-    let (typed_array_intrinsic_ctor, _) = ensure_typed_array_intrinsic();
+    // Built by the pass that binds the typed arrays; phase A alone leaves it
+    // to phase B (or to the first reader that asks for it on its own).
+    let typed_array_intrinsic_ctor = if phases.binds("Uint8Array") {
+        ensure_typed_array_intrinsic().0
+    } else {
+        std::ptr::null_mut()
+    };
     // #3664: build the generator / async-generator intrinsic prototype towers
     // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
     // `%Generator(.prototype)%` chains resolve to real objects.
-    ensure_generator_intrinsics();
+    if phases.core() {
+        ensure_generator_intrinsics();
+    }
     // Constructors: ClosureHeader-backed so typeof is "function".
     // #4533: native error subclasses must link to `Error` / `Error.prototype`.
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
@@ -218,8 +291,16 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         error_proto_bits: None,
         typed_array_intrinsic_ctor,
     };
+    if phases == RealmPhases::Rest {
+        // Phase A bound `Error`: a phase-B family reads it as a lazy birth does.
+        birth = FamilyBirthState::of_bound_realm();
+        birth.typed_array_intrinsic_ctor = typed_array_intrinsic_ctor;
+    }
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
+        if !phases.binds(name) {
+            continue;
+        }
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
             let name_key = super::global_name_key(name_bytes);
@@ -308,6 +389,15 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         } else {
             birth_family(declaration, closure_ptr, &singleton, &mut birth)
         };
+        if phases == RealmPhases::Rest {
+            // The replace-lock of a phase-B family prototype is set here,
+            // before the global's slot can name its constructor: phase A's
+            // realm seal has already run and will not come back for it.
+            crate::object::builtin_proto::seal_realm_family_of(declaration);
+            // A constructor that is also a builtin namespace (`Date`): its
+            // member holder (the constructor's bag) is sealed with it.
+            super::super::builtin_namespace::seal_namespace_value(name, ctor_value.to_bits());
+        }
         if name == "Storage" {
             // Node: `localStorage` / `sessionStorage` are accessors whose
             // getters make the areas; bound here, ahead of `Storage`.
@@ -334,6 +424,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     for (child, parent, constructor_inherits) in INTERFACE_PARENTS {
         if crate::object::BuiltinConstructorIdentity::for_name(child)
             .is_some_and(|identity| identity.declaration().lazy)
+            || !phases.binds(child)
         {
             continue;
         }
@@ -362,68 +453,73 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // The hidden async/generator towers are allocated before the constructor
     // loop, but their parents are the `Function` values installed by that
     // loop. Complete those links now that both are available.
-    wire_function_intrinsic_parents();
+    if phases.core() {
+        wire_function_intrinsic_parents();
+    }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
+        if !phases.binds(name) {
+            continue;
+        }
         let (info, arity, enumerable) = match name {
             "eval" => (
-                crate::fn_info!(#[realm(eval)] export crate::object::global_this::fetch_globals::global_this_eval_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(eval)] export crate::object::global_this::fetch_globals::global_this_eval_thunk, 1; with_name("eval"), with_declared(1)),
                 1,
                 false,
             ),
             "fetch" => (
-                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), Iterate); coerce(elems(field(arg(1), headers)), Iterate); coerce(field(arg(1), headers), OwnKeys); coerce(elems(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(fetch, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), OwnKeys); coerce(iterated(iterated(field(arg(1), headers))), ToPrimitive); coerce(values(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(promise(fresh(Response.prototype, slots = {bodyError: islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason)}), reject = fresh(TypeError.prototype) | fresh(DOMException.prototype) | islot(field(arg(1), signal), reason) | islot(islot(arg(0), signal), reason))) })] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_name("fetch"), with_rest(1)),
                 1,
                 true,
             ),
             "structuredClone" => (
-                crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] export crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] export crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk, 2; with_name("structuredClone"), with_declared(2)),
                 2,
                 true,
             ),
             "atob" => (
-                crate::fn_info!(#[realm(atob, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_atob_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(atob, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_atob_thunk, 1; with_name("atob"), with_declared(1)),
                 1,
                 true,
             ),
             "btoa" => (
-                crate::fn_info!(#[realm(btoa, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_btoa_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(btoa, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_btoa_thunk, 1; with_name("btoa"), with_declared(1)),
                 1,
                 true,
             ),
             "setTimeout" => (
-                crate::fn_info!(#[realm(setTimeout)] export crate::object::global_this::array_error::global_this_set_timeout_thunk, 3; with_rest(2)),
+                crate::fn_info!(#[realm(setTimeout)] export crate::object::global_this::array_error::global_this_set_timeout_thunk, 3; with_name("setTimeout"), with_rest(2)),
                 2,
                 true,
             ),
             "clearTimeout" => (
-                crate::fn_info!(#[realm(clearTimeout)] export crate::object::global_this::array_error::global_this_clear_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearTimeout)] export crate::object::global_this::array_error::global_this_clear_timeout_thunk, 1; with_name("clearTimeout"), with_declared(1)),
                 1,
                 true,
             ),
             "setInterval" => (
-                crate::fn_info!(#[realm(setInterval)] export crate::object::global_this::array_error::global_this_set_interval_thunk, 3; with_rest(2)),
+                crate::fn_info!(#[realm(setInterval)] export crate::object::global_this::array_error::global_this_set_interval_thunk, 3; with_name("setInterval"), with_rest(2)),
                 2,
                 true,
             ),
             "clearInterval" => (
-                crate::fn_info!(#[realm(clearInterval)] export crate::object::global_this::array_error::global_this_clear_interval_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearInterval)] export crate::object::global_this::array_error::global_this_clear_interval_thunk, 1; with_name("clearInterval"), with_declared(1)),
                 1,
                 true,
             ),
             "setImmediate" => (
-                crate::fn_info!(#[realm(setImmediate)] export crate::object::global_this::array_error::global_this_set_immediate_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(setImmediate)] export crate::object::global_this::array_error::global_this_set_immediate_thunk, 2; with_name("setImmediate"), with_rest(1)),
                 1,
                 true,
             ),
             "clearImmediate" => (
-                crate::fn_info!(#[realm(clearImmediate)] export crate::object::global_this::array_error::global_this_clear_immediate_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearImmediate)] export crate::object::global_this::array_error::global_this_clear_immediate_thunk, 1; with_name("clearImmediate"), with_declared(1)),
                 1,
                 true,
             ),
             "queueMicrotask" => (
-                crate::fn_info!(#[realm(queueMicrotask)] export crate::object::global_this::array_error::global_this_queue_microtask_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(queueMicrotask)] export crate::object::global_this::array_error::global_this_queue_microtask_thunk, 1; with_name("queueMicrotask"), with_declared(1)),
                 1,
                 true,
             ),
@@ -431,60 +527,60 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // Non-enumerable (a debug/diagnostic global). The optional `force`
             // arg is accepted (arity 1) but ignored — Perry's gc is full.
             "gc" => (
-                crate::fn_info!(#[realm(gc)] export crate::object::global_this::builtin_thunks::global_this_gc_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(gc)] export crate::object::global_this::builtin_thunks::global_this_gc_thunk, 1; with_name("gc"), with_declared(1)),
                 1,
                 false,
             ),
             // #2905: standard global helper functions.
             "parseInt" => (
-                crate::fn_info!(#[realm(parseInt)] export crate::object::global_this::builtin_thunks::global_this_parse_int_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(parseInt)] export crate::object::global_this::builtin_thunks::global_this_parse_int_thunk, 2; with_name("parseInt"), with_declared(2)),
                 2,
                 false,
             ),
             "parseFloat" => (
-                crate::fn_info!(#[realm(parseFloat)] export crate::object::global_this::builtin_thunks::global_this_parse_float_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(parseFloat)] export crate::object::global_this::builtin_thunks::global_this_parse_float_thunk, 1; with_name("parseFloat"), with_declared(1)),
                 1,
                 false,
             ),
             "isNaN" => (
-                crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_name("isNaN"), with_declared(1)),
                 1,
                 false,
             ),
             "isFinite" => (
-                crate::fn_info!(#[realm(isFinite)] export crate::object::global_this::builtin_thunks::global_this_is_finite_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(isFinite)] export crate::object::global_this::builtin_thunks::global_this_is_finite_thunk, 1; with_name("isFinite"), with_declared(1)),
                 1,
                 false,
             ),
             "encodeURI" => (
-                crate::fn_info!(#[realm(encodeURI)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(encodeURI)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk, 1; with_name("encodeURI"), with_declared(1)),
                 1,
                 false,
             ),
             "decodeURI" => (
-                crate::fn_info!(#[realm(decodeURI)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(decodeURI)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk, 1; with_name("decodeURI"), with_declared(1)),
                 1,
                 false,
             ),
             "encodeURIComponent" => (
-                crate::fn_info!(#[realm(encodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(encodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk, 1; with_name("encodeURIComponent"), with_declared(1)),
                 1,
                 false,
             ),
             "decodeURIComponent" => (
-                crate::fn_info!(#[realm(decodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(decodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk, 1; with_name("decodeURIComponent"), with_declared(1)),
                 1,
                 false,
             ),
             // #4511: legacy escape/unescape (ES Annex B).
             // #4511: legacy escape/unescape (ES Annex B).
             "escape" => (
-                crate::fn_info!(#[realm(escape)] export crate::object::global_this::builtin_thunks::global_this_escape_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(escape)] export crate::object::global_this::builtin_thunks::global_this_escape_thunk, 1; with_name("escape"), with_declared(1)),
                 1,
                 false,
             ),
             "unescape" => (
-                crate::fn_info!(#[realm(unescape)] export crate::object::global_this::builtin_thunks::global_this_unescape_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(unescape)] export crate::object::global_this::builtin_thunks::global_this_unescape_thunk, 1; with_name("unescape"), with_declared(1)),
                 1,
                 false,
             ),
@@ -493,9 +589,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         let closure_ptr = crate::closure::js_closure_alloc(info, 0);
         if closure_ptr.is_null() {
             continue;
-        }
-        unsafe {
-            crate::builtins::register_function_name(&*info, name.as_bytes());
         }
         super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
         // Every global helper installed here (parseInt/parseFloat/isNaN/
@@ -526,10 +619,15 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // singleton. A value-read of `Number.parseFloat` resolves to the Number
     // constructor's own `parseFloat` field (see expr_member.rs reroute-undo),
     // which now holds the identical closure the bare `parseFloat` resolves to.
-    alias_number_static_to_global_function(singleton(), "parseFloat");
-    alias_number_static_to_global_function(singleton(), "parseInt");
+    if phases.core() {
+        alias_number_static_to_global_function(singleton(), "parseFloat");
+        alias_number_static_to_global_function(singleton(), "parseInt");
+    }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
+        if !phases.binds(name) {
+            continue;
+        }
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         let ns_value = if matches!(name, "console" | "process") {
@@ -580,6 +678,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
+        if phases == RealmPhases::Rest {
+            // As for a phase-B family prototype: sealed before the global's
+            // slot can name it.
+            super::super::builtin_namespace::seal_namespace_value(name, ns_value.to_bits());
+        }
         super::super::define_builtin_data_property(
             singleton(),
             name_key,
@@ -591,7 +694,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
     // require("perf_hooks").performance` (#1327). typeof stays "object".
-    {
+    if phases.binds("performance") {
         let pname = b"performance";
         let pkey = super::global_name_key(pname);
         let pval = crate::perf_hook_slots::performance_namespace();
@@ -607,6 +710,9 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         "PerformanceObserverEntryList",
         "PerformanceResourceTiming",
     ] {
+        if !phases.binds(name) {
+            continue;
+        }
         let key = super::global_name_key(name);
         let value =
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
@@ -616,7 +722,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // Performance.prototype -> EventTarget.prototype -> Object.prototype, and
     // `Performance` inherits EventTarget's statics, among them the
     // `Symbol.for("nodejs.event_target")` brand the listener methods check.
-    {
+    if phases.binds("Performance") {
         let scope = crate::gc::RuntimeHandleScope::new();
         let perf_ctor = scope.root_nanbox_f64(
             super::super::native_module::bound_native_callable_export_value(
@@ -649,90 +755,93 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             }
         }
     }
-    let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
-        0,
-    );
-    let getter_bits = if getter.is_null() {
-        0
-    } else {
-        crate::value::js_nanbox_pointer(getter as i64).to_bits()
-    };
-    super::super::set_builtin_accessor_descriptor(
-        singleton() as usize,
-        "crypto".to_string(),
-        super::super::AccessorDescriptor {
-            get: getter_bits,
-            set: 0,
-        },
-        super::super::PropertyAttrs::new(true, true, true),
-    );
-    // #2923: `globalThis.navigator` — Node's browser-compatible runtime
-    // metadata object. Node installs it as a lazy accessor (get only,
-    // enumerable, configurable); so does Perry. The getter builds the object
-    // on the first read and keeps it in its one capture, so `navigator.language`
-    // reads LC_ALL / LANG on first use, not while the realm is populated.
-    {
+    // Accessors, value properties, aliases and the seal: phase A.
+    if phases.core() {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined])] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
-            1,
+            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
+            0,
         );
         let getter_bits = if getter.is_null() {
             0
         } else {
-            crate::closure::js_closure_set_capture_bits(getter, 0, crate::value::TAG_UNDEFINED);
             crate::value::js_nanbox_pointer(getter as i64).to_bits()
         };
         super::super::set_builtin_accessor_descriptor(
             singleton() as usize,
-            "navigator".to_string(),
+            "crypto".to_string(),
             super::super::AccessorDescriptor {
                 get: getter_bits,
                 set: 0,
             },
             super::super::PropertyAttrs::new(true, true, true),
         );
-    }
-    // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
-    // properties of the global object with {writable:false, enumerable:false,
-    // configurable:false}.  Install them so that
-    // `Object.getOwnPropertyDescriptor(globalThis, "NaN")` returns a real
-    // descriptor (test262 15.2.3.3-4-178/179/180) and
-    // `Object.getOwnPropertyNames(globalThis)` includes them (15.2.3.4-4-1).
-    {
-        let non_writable = super::super::PropertyAttrs::new(false, false, false);
-        for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
-            let key = super::global_name_key(name);
-            super::super::define_builtin_data_property(
-                singleton(),
-                key,
-                value,
-                name.to_string(),
-                non_writable,
+        // #2923: `globalThis.navigator` — Node's browser-compatible runtime
+        // metadata object. Node installs it as a lazy accessor (get only,
+        // enumerable, configurable); so does Perry. The getter builds the object
+        // on the first read and keeps it in its one capture, so `navigator.language`
+        // reads LC_ALL / LANG on first use, not while the realm is populated.
+        {
+            let getter = crate::closure::js_closure_alloc(
+                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined])] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
+                1,
+            );
+            let getter_bits = if getter.is_null() {
+                0
+            } else {
+                crate::closure::js_closure_set_capture_bits(getter, 0, crate::value::TAG_UNDEFINED);
+                crate::value::js_nanbox_pointer(getter as i64).to_bits()
+            };
+            super::super::set_builtin_accessor_descriptor(
+                singleton() as usize,
+                "navigator".to_string(),
+                super::super::AccessorDescriptor {
+                    get: getter_bits,
+                    set: 0,
+                },
+                super::super::PropertyAttrs::new(true, true, true),
             );
         }
-        let undef_key = super::global_name_key(b"undefined");
-        let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
-        super::super::define_builtin_data_property(
-            singleton(),
-            undef_key,
-            undef_val,
-            "undefined".to_string(),
-            super::super::PropertyAttrs::new(false, false, false),
-        );
+        // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
+        // properties of the global object with {writable:false, enumerable:false,
+        // configurable:false}.  Install them so that
+        // `Object.getOwnPropertyDescriptor(globalThis, "NaN")` returns a real
+        // descriptor (test262 15.2.3.3-4-178/179/180) and
+        // `Object.getOwnPropertyNames(globalThis)` includes them (15.2.3.4-4-1).
+        {
+            let non_writable = super::super::PropertyAttrs::new(false, false, false);
+            for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
+                let key = super::global_name_key(name);
+                super::super::define_builtin_data_property(
+                    singleton(),
+                    key,
+                    value,
+                    name.to_string(),
+                    non_writable,
+                );
+            }
+            let undef_key = super::global_name_key(b"undefined");
+            let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
+            super::super::define_builtin_data_property(
+                singleton(),
+                undef_key,
+                undef_val,
+                "undefined".to_string(),
+                super::super::PropertyAttrs::new(false, false, false),
+            );
+        }
+        // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
+        // same function object as `Array.prototype.toString`. Alias it now that
+        // both the Array constructor and the TypedArray intrinsic are set up.
+        alias_typed_array_proto_to_string(singleton());
+        // #10497: memoize the intrinsic prototype identities while every
+        // `globalThis.<Builtin>` still names its intrinsic — before any user code
+        // can reassign the writable `globalThis.Function`.
+        crate::array::prime_prototype_addr_cache();
+        // #11915: every runtime-owned install and link above is done; from here a
+        // mutation of an intrinsic prototype is the program's, and withdraws its
+        // family's `Pristine` fact.
+        crate::object::builtin_proto::seal_realm(singleton());
     }
-    // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
-    // same function object as `Array.prototype.toString`. Alias it now that
-    // both the Array constructor and the TypedArray intrinsic are set up.
-    alias_typed_array_proto_to_string(singleton());
-    // #10497: memoize the intrinsic prototype identities while every
-    // `globalThis.<Builtin>` still names its intrinsic — before any user code
-    // can reassign the writable `globalThis.Function`.
-    crate::array::prime_prototype_addr_cache();
-    // #11915: every runtime-owned install and link above is done; from here a
-    // mutation of an intrinsic prototype is the program's, and withdraws its
-    // family's `Pristine` fact.
-    crate::object::builtin_proto::seal_realm(singleton());
     if let Some(started) = bootstrap_started {
         eprintln!(
             "[gc-globalthis-bootstrap] elapsed_us={}",
@@ -748,6 +857,25 @@ pub(super) struct FamilyBirthState {
     pub(super) error_ctor_bits: Option<u64>,
     pub(super) error_proto_bits: Option<u64>,
     pub(super) typed_array_intrinsic_ctor: *mut crate::closure::ClosureHeader,
+}
+
+impl FamilyBirthState {
+    /// The state for a family born after its realm's phase A: `Error` as the
+    /// realm bound it, and `%TypedArray%` if it exists (only a typed-array
+    /// row reads it, and the pass that binds those builds it first).
+    fn of_bound_realm() -> Self {
+        let bits = |addr: usize| {
+            (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits())
+        };
+        let error = crate::object::BuiltinConstructorIdentity::Error;
+        FamilyBirthState {
+            error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
+            error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
+            typed_array_intrinsic_ctor: crate::object::TYPED_ARRAY_INTRINSIC_PTR
+                .load(Ordering::Acquire)
+                as *mut crate::closure::ClosureHeader,
+        }
+    }
 }
 
 /// (child, parent, the constructor also inherits) for the interface families.
@@ -1184,15 +1312,9 @@ pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdent
     // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
     let _realm = crate::snap_census::realm_build();
     let _no_move = crate::gc::GcSuppressScope::new();
-    let global = (js_get_global_this().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    let bits =
-        |addr: usize| (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64).to_bits());
-    let error = crate::object::BuiltinConstructorIdentity::Error;
-    let mut state = FamilyBirthState {
-        error_ctor_bits: bits(crate::array::intrinsic_constructor_addr_if_bound(error)),
-        error_proto_bits: bits(crate::array::intrinsic_prototype_addr_if_bound(error)),
-        typed_array_intrinsic_ctor: ensure_typed_array_intrinsic().0,
-    };
+    let global =
+        (fetch_globals::realm_core().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let mut state = FamilyBirthState::of_bound_realm();
     super::super::own_override::as_builtin_definition(|| {
         birth_family(
             declaration,
@@ -1255,7 +1377,10 @@ fn unborn_lazy_identity(
         .then_some(identity)
 }
 
-fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
+// Inlined into its callers (the population's two copies, and `%TypedArray%`'s
+// late build), as it was when the population was its only caller.
+#[inline(always)]
+pub(super) fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {
         return;

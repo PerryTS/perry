@@ -979,6 +979,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for_each_expr_in_stmts(body, f);
             if let Some(catch) = catch {
@@ -1075,6 +1076,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),

@@ -831,3 +831,9 @@ mod tests {
         assert!(!ll.contains("@llvm.global_ctors"), "{ll}");
     }
 }
+
+/// `PERRY_SNAP_IMAGE_RUN` set while compiling: the binary carries the two
+/// calls that take an image of the heap after the static dependency inits.
+pub fn snap_image_run() -> bool {
+    std::env::var_os("PERRY_SNAP_IMAGE_RUN").is_some_and(|v| !v.is_empty())
+}

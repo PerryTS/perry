@@ -413,6 +413,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     visit_stmts(
                         body,

@@ -276,6 +276,7 @@ impl PrefixContainedParamUse {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(catch) = catch {

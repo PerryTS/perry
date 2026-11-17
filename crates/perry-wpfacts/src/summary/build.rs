@@ -12,6 +12,11 @@ struct Index {
     call_refs: FxHashMap<CallId, Vec<(NodeId, u32)>>,
     /// node -> calls with it as an operand (this/args/spread/ret).
     calls_of: FxHashMap<NodeId, Vec<CallId>>,
+    /// Calls some constraint names (a rule runs them). A call no
+    /// constraint names is never run: an operation's record (a typed
+    /// array construct, `typed_array_new`) whose steps are the solver
+    /// calls and constraints it made, each run by its own rule.
+    named: FxHashSet<CallId>,
 }
 
 fn build_index(m: &Model) -> Index {
@@ -23,6 +28,7 @@ fn build_index(m: &Model) -> Index {
         refs: FxHashMap::default(),
         call_refs: FxHashMap::default(),
         calls_of: FxHashMap::default(),
+        named: FxHashSet::default(),
     };
     for (c, cs) in m.calls.iter().enumerate() {
         for x in call_nodes(cs) {
@@ -49,6 +55,7 @@ fn build_index(m: &Model) -> Index {
                 }
             }
             for k in ks {
+                ix.named.insert(k);
                 let cs = &m.calls[k as usize];
                 if call_nodes(cs).into_iter().any(owned) {
                     ix.call_refs.entry(k).or_default().push((a, i as u32));
@@ -122,7 +129,13 @@ fn slice(
     let mut d = Vec::new();
     let mut work: Vec<NodeId> = through.to_vec();
     let this = (!fi.lexical_this).then_some(fi.this);
-    for &p in fi.params.iter().chain(this.iter()).chain(roots) {
+    for &p in fi
+        .params
+        .iter()
+        .chain(this.iter())
+        .chain(fi.rest.iter())
+        .chain(roots)
+    {
         if ok(p) && seen.insert(p) {
             d.push(p);
             work.push(p);
@@ -222,7 +235,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         }
     }
     for t in holders.keys() {
-        for map in [&m.all_fields, &m.proto_node] {
+        for map in [&m.all_fields, &m.proto_node, &m.named_any] {
             if let Some(&n) = map.get(t) {
                 own_of.insert(n, *t);
             }
@@ -247,6 +260,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         if !cand[f as usize] {
             continue;
         }
+        // What every call passes reaches the `arguments` object through
+        // `args_all`; a run binds its own call's arguments instead.
+        let args_all = m.funcs[f as usize].args_all;
         let hs = &holders[&t];
         if hs.iter().any(|&h| m.node_fn[h as usize] != f) {
             continue;
@@ -258,17 +274,57 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             .collect();
         own.sort_unstable();
         let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
-        // An array's named-key node (a computed-key store fills it) has no
-        // birth key, so a token holding one is not born from the summary.
-        let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty())
-            && !m.named_any.contains_key(&t);
+        // An array's named-key node (`named_any`) has no birth key: a born
+        // token makes its own, empty, so the template's may hold nothing
+        // (no writer, checked below). The prototype node's chain closure and
+        // its values under a key (`cv_of`; and the raise of the code they
+        // may run) are the token's own lookup cache, which every born token
+        // makes for itself on its first lookup (`Model::cp`): no effect of
+        // the body.
+        let pn = m.proto_node.get(&t).copied();
+        let cache = |n: NodeId, c: &Cons| {
+            Some(n) == pn
+                && match c {
+                    Cons::ProtoClosure { .. } | Cons::Raise { .. } => true,
+                    Cons::ChainUnion { of, .. } => *of == t,
+                    _ => false,
+                }
+        };
+        // A method the body calls on the literal (`params.shift()`): its
+        // field node binds `this` to the literal and runs per (call,
+        // receiver) for this body's calls only (`Model::bind_via`), with
+        // the raise of the code it may run. A born token's own field binds
+        // the instance's copy of the call the same way on its own lookup:
+        // the binding is the token's, no effect of the body. Only a rest
+        // array (8.6.3: a fresh array per call) is born so: any other
+        // literal whose methods its body calls keeps the merged token, as
+        // its born tokens' method runs would birth again from born tokens.
+        let rest = m.rest_param_tmpls.contains(&tm);
+        let bound = |n: NodeId, c: &Cons| match c {
+            Cons::ThisTo { origin } => *origin == t,
+            Cons::BuiltinCallee => m.callee_sites.get(&n).is_some_and(|v| {
+                v.iter()
+                    .all(|&(k, o)| o == t && m.node_fn[m.calls[k as usize].ret as usize] == f)
+            }),
+            _ => false,
+        };
+        let own_cons = |n: NodeId| {
+            let cs = &m.nodes[n as usize].cons;
+            let binds = rest
+                && cs.iter().any(|c| bound(n, c))
+                && cs
+                    .iter()
+                    .all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+            binds || cs.iter().all(|c| cache(n, c))
+        };
+        let mut ok = own.iter().all(|&n| own_cons(n));
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
         fl.sort_unstable_by_key(|x| x.1);
         for (k, n) in fl {
             let mut ws = Vec::new();
             for &p in preds.get(&n).map(|v| v.as_slice()).unwrap_or(&[]) {
-                if is_own(p) {
+                if is_own(p) || p == args_all {
                     continue;
                 }
                 let pf = m.node_fn[p as usize];
@@ -280,7 +336,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             fields.push((k, n, ws, m.nodes[n as usize].prim));
         }
         // Only the template's own nodes reach its other nodes.
-        for map in [&m.all_fields, &m.proto_node] {
+        for map in [&m.all_fields, &m.proto_node, &m.named_any] {
             if let Some(&n) = map.get(&t) {
                 if preds.get(&n).is_some_and(|v| v.iter().any(|&p| !is_own(p))) {
                     ok = false;
@@ -505,6 +561,22 @@ fn plan(
                 }
             }
         }
+        // Rule M1: what a clause of the body's switch on a parameter makes
+        // is a value of the slice: each run of one string constant has its
+        // own copy of the clauses it reaches (`Summary::switch`).
+        if m.switch_runs.contains_key(&f) {
+            let own = |x: NodeId| {
+                (x as usize) < m.node_fn.len() && m.node_fn[x as usize] == f && !pinned.contains(&x)
+            };
+            let mut more: Vec<NodeId> = Vec::new();
+            more.extend(m.cons_reach.keys().map(|&(h, _)| h));
+            more.extend(m.edge_reach.keys().flat_map(|&(a, b)| [a, b]));
+            more.extend(m.call_reach.keys().map(|&k| m.calls[k as usize].ret));
+            more.retain(|&x| own(x));
+            more.sort_unstable();
+            more.dedup();
+            roots.extend(more);
+        }
         let d = loop {
             let d = slice(m, ix, f, &roots, &through, pinned);
             let dset: FxHashSet<NodeId> = d.iter().copied().collect();
@@ -544,6 +616,21 @@ fn plan(
     //    is plain nodes for every other summary).
     let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
     let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
+    // The computed stores into each object node (`Cons::StoreIndexed` on
+    // the key, by its `o`): the hole marks they derive on the object
+    // (`IndexHole`, `IndexKept`) are relays a run rebuilds from its own
+    // copy of the store.
+    let mut indexed_into: FxHashMap<NodeId, Vec<(NodeId, u32)>> = FxHashMap::default();
+    for (x, nd) in m.nodes.iter().enumerate() {
+        for (i, c) in nd.cons.iter().enumerate() {
+            if let Cons::StoreIndexed { o, .. } = *c {
+                indexed_into
+                    .entry(o)
+                    .or_default()
+                    .push((x as NodeId, i as u32));
+            }
+        }
+    }
     loop {
         let mut dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
         for &f in &fs {
@@ -598,6 +685,20 @@ fn plan(
                     return;
                 }
                 match disposition(m, lex, &dof, &oset, f, h, c) {
+                    // A hole mark the body's own computed store derived on
+                    // its object: each run's copy of that store derives it
+                    // on the run's copy of the object from the run's own key
+                    // (`Cons::StoreIndexed` in `solve/apply.rs`).
+                    Ok(true)
+                        if matches!(
+                            c,
+                            Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept
+                        ) && indexed_into.get(&h).is_some_and(|v| {
+                            v.iter().any(|&(x, j)| {
+                                let sc = &m.nodes[x as usize].cons[j as usize];
+                                disposition(m, lex, &dof, &oset, f, x, sc) == Ok(true)
+                            })
+                        }) => {}
                     Ok(true) => {
                         if !gen_kind(c) {
                             *bad = true;
@@ -692,7 +793,7 @@ fn plan(
                         bad_now.insert(a);
                     }
                 }
-                if !run_calls.contains(&k) {
+                if !run_calls.contains(&k) && ix.named.contains(&k) {
                     note(format!("call {k} run by no rule"), &mut bad, &mut why);
                 }
             }
@@ -726,7 +827,7 @@ pub(super) fn build_summaries(m: &mut Model) {
     let cand: Vec<bool> = m
         .funcs
         .iter()
-        .map(|fi| !fi.no_summary && fi.rest.is_none() && !fi.has_arguments)
+        .map(|fi| !fi.no_summary && fi.arguments_per_run())
         .collect();
     // Closure values: the generation node holding a closure's token in its
     // parent's body.
@@ -858,10 +959,29 @@ pub(super) fn build_summaries(m: &mut Model) {
             .collect()
     };
     let (ncomposed, nsccs) = compose(m, &obs_of);
-    for s in m.sum.of.values_mut() {
+    // The parameter bindings of every function: an edge into one is a call
+    // passing an argument (rule M3, `keyed_param`).
+    let param_nodes: FxHashSet<NodeId> = m
+        .funcs
+        .iter()
+        .flat_map(|g| g.params.iter().copied())
+        .collect();
+    for (f, s) in m.sum.of.iter_mut() {
         let s = Rc::make_mut(s);
         bind_written_params(s);
         s.rel = relative_params(s);
+        s.called = called_param(s);
+        s.switch = switch_param(s, m.switch_runs.get(f));
+        // Rule M3: a parameter used only as a computed key runs per string
+        // value, as a switch parameter does, with no clauses to select.
+        if s.switch.is_none() && s.called.is_none() {
+            s.switch = keyed_param(s, &param_nodes).map(|j| (j, Vec::new()));
+        }
+        if s.switch.is_none() {
+            s.edge_reach = Default::default();
+            s.cons_reach = Vec::new();
+            s.call_reach = Vec::new();
+        }
     }
     let size_after: usize = m
         .sum
@@ -951,6 +1071,199 @@ fn bind_written_params(s: &mut Summary) {
 /// Per parameter of summary `s`: a slot only the calls write (DECISIONS 44
 /// (b)); after `bind_written_params` every slot parameter is one. A
 /// parameter that is not a slot (a captured parameter's node) is not.
+/// The first parameter the body only calls: no edge, rule, call result or
+/// seed writes it (`rel`: never assigned; a body with `arguments` has no
+/// summary, a direct eval writes its locals), it carries only the rules of
+/// a plain call of it (`Cons::Call`: it is the callee; `Cons::Raise`: where
+/// what that call throws goes) and is no operand of anything
+/// else: never copied, stored, passed on, returned or captured. The run's
+/// result then depends on which function the call passes and on nothing
+/// else of that argument (`Model::called_val`).
+/// Rule M1: the switch generation found on parameter `j`
+/// (`Model::switch_runs`) when the parameter is a slot nothing of the body
+/// writes (`rel`) and no other interface term, and the body has no called
+/// parameter (one value per run).
+fn switch_param(
+    s: &Summary,
+    w: Option<&(u32, Vec<Option<crate::model::Atom>>)>,
+) -> Option<(u32, Vec<Option<crate::model::Atom>>)> {
+    let (j, labels) = w?;
+    let p = *s.params.get(*j as usize)?;
+    let alone = s
+        .params
+        .iter()
+        .enumerate()
+        .all(|(i, &q)| i == *j as usize || q != p);
+    (s.called.is_none()
+        && is_slot(p)
+        && s.rel.get(*j as usize).is_some_and(|&r| r)
+        && alone
+        && !s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
+        && ![s.ret, s.this, s.rest].contains(&p))
+    .then(|| (*j, labels.clone()))
+}
+
+/// Rule M3: a parameter the body uses only as the key of computed reads
+/// and stores (`IdxLoad`, `StoreIndexed`), as call arguments and as a
+/// receiver of reads and method calls, never written, stored, returned or
+/// captured: what each run reads or writes
+/// depends on that key's string alone (ECMA-262 7.1.19 ToPropertyKey, 10.2.1
+/// binding; an argument passes the string itself). GLTFLoader
+/// `GLTFRegistry.get(key)`, `add(key, object)`; three.js `Cache.get(key)`,
+/// `add(key, file)` (`isBlobURL(key)`).
+fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
+    // The parameter and the locals only it writes (the body's binding of
+    // the parameter is a copy of it): each is a key and nothing else.
+    let copies_of = |p: NodeId| -> Option<Vec<NodeId>> {
+        let mut k = vec![p];
+        let mut i = 0;
+        while i < k.len() {
+            let x = k[i];
+            i += 1;
+            for &(a, b) in &s.edges {
+                if a != x || k.contains(&b) {
+                    continue;
+                }
+                // A known callee's parameter: the call passes the string.
+                if !is_slot(b) && param_nodes.contains(&b) {
+                    continue;
+                }
+                if !is_slot(b)
+                    || s.params.contains(&b)
+                    || [s.ret, s.this, s.rest].contains(&b)
+                    || s.edges.iter().any(|&(c, d)| d == b && !k.contains(&c))
+                {
+                    return None;
+                }
+                k.push(b);
+            }
+        }
+        Some(k)
+    };
+    let only_keyed = |j: usize| {
+        let p = s.params[j];
+        if !is_slot(p) || !s.rel[j] || [s.ret, s.this, s.rest].contains(&p) {
+            return false;
+        }
+        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p) {
+            return false;
+        }
+        let Some(k) = copies_of(p) else {
+            return false;
+        };
+        if s.seeds.iter().any(|(sl, ..)| k.contains(&(SLOT | *sl)))
+            || s.closures.iter().any(|(sl, _, terms, _)| {
+                k.contains(&(SLOT | *sl)) || terms.iter().any(|t| k.contains(t))
+            })
+            || s.births.iter().any(|&(sl, _)| k.contains(&(SLOT | sl)))
+        {
+            return false;
+        }
+        let mut keyed = false;
+        for (h, c) in &s.cons {
+            if k.contains(h) {
+                match c {
+                    Cons::StoreIndexed { .. } => keyed = true,
+                    // ToPropertyKeys ToPrimitive: a runs key is one string.
+                    Cons::Implicit {
+                        proto: crate::model::Protocol::ToPrimitive,
+                        ..
+                    } => {}
+                    Cons::Raise { .. } => {}
+                    // The key as a receiver (`key.slice(i)`, `key.length`;
+                    // three.js `isBlobURL(key)` composed into Cache.get/add):
+                    // the read binds `this` to the same value and changes
+                    // nothing of it (ECMA-262 7.3.2 GetV, 10.2.1), so the
+                    // run's key is still that one value at every use. The
+                    // call's result and operands are checked below.
+                    Cons::MCall { .. } => {}
+                    Cons::Load { dst, .. } if !k.contains(dst) => {}
+                    _ => return false,
+                }
+            } else if super::map::cons_fields(c).0.iter().any(|x| k.contains(x)) {
+                match c {
+                    Cons::IdxLoad { idx, dst, .. } if k.contains(idx) && !k.contains(dst) => {
+                        keyed = true
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        // An argument or receiver is passed by value (ECMA-262 10.2.1): a
+        // key the run passes on is still that one value, the callee binds
+        // its own copy. A spread, the call's result or its region is not a
+        // key.
+        for (_, cs) in &s.calls {
+            if cs.spread.iter().any(|x| k.contains(x))
+                || k.contains(&cs.ret)
+                || k.contains(&cs.region)
+            {
+                return false;
+            }
+        }
+        // Rule KEY-ARG (SKINBLD1): a key the body passes on unchanged as an
+        // argument (`getDependencies( type ) { this.cache.get( type ) }`)
+        // is that one value in the callee too (10.2.1), so the run is keyed
+        // by it as the callee's is: a run per key entry (`called_val`,
+        // `switch_vals`), finite (the entries are the program's literals
+        // and the shapes made from them), and an argument that gains an
+        // entry binds that entry's run as well (`settle_val_runs`).
+        keyed
+            || s.calls
+                .iter()
+                .any(|(_, cs)| cs.args.iter().any(|x| k.contains(x)))
+    };
+    (0..s.params.len())
+        .find(|&j| only_keyed(j))
+        .map(|j| j as u32)
+}
+
+fn called_param(s: &Summary) -> Option<u32> {
+    let only_called = |j: usize| {
+        let p = s.params[j];
+        if !s.rel[j] || [s.ret, s.this, s.rest].contains(&p) {
+            return false;
+        }
+        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p)
+            || s.edges.iter().any(|&(a, b)| a == p || b == p)
+            || s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
+            || s.closures
+                .iter()
+                .any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
+            || s.births.iter().any(|&(sl, _)| SLOT | sl == p)
+        {
+            return false;
+        }
+        let mut called = false;
+        for (h, c) in &s.cons {
+            if *h == p {
+                // The call of it, and where what it throws goes.
+                match c {
+                    Cons::Call { .. } => called = true,
+                    Cons::Raise { .. } => {}
+                    _ => return false,
+                }
+            } else if super::map::cons_fields(c).0.contains(&p) {
+                return false;
+            }
+        }
+        for (_, cs) in &s.calls {
+            let mut seen = false;
+            super::map::map_call(cs, |x| {
+                seen |= x == p;
+                x
+            });
+            if seen {
+                return false;
+            }
+        }
+        called
+    };
+    (0..s.params.len())
+        .find(|&j| only_called(j))
+        .map(|j| j as u32)
+}
+
 fn relative_params(s: &Summary) -> Vec<bool> {
     let written = written_slots(s);
     s.params
@@ -1024,10 +1337,17 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     };
     let mut callix: FxHashMap<CallId, u32> = FxHashMap::default();
     let mut s = BodyInput::new(d, of);
+    // Rule M1: a body with a switch on a parameter keeps the reach masks.
+    let sw = m.switch_runs.contains_key(&f);
+    let er = |a: NodeId, b: NodeId| m.edge_reach.get(&(a, b)).copied().unwrap_or(REACH_ALL);
     for (i, &k) in e.calls.iter().enumerate() {
         callix.insert(k, i as u32);
         s.calls
             .push((k, BodyCall::capture(&m.calls[k as usize], enc)));
+        if sw {
+            s.call_reach
+                .push(m.call_reach.get(&k).copied().unwrap_or(REACH_ALL));
+        }
     }
     let kenc = |k: CallId| match callix.get(&k) {
         Some(&i) => CallOperand::Template(i),
@@ -1102,11 +1422,19 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     }
     for &x in d {
         let node = &m.nodes[x as usize];
+        // A token one of this body's own calls made in the template run
+        // (born with that call as its context: `Model::birth_ctx` before
+        // the summaries) is that run's object, never an instance's: each
+        // instance's copy of the call makes its own (ECMA-262 27.2.4.1
+        // step 1: every evaluation of Promise.all makes a new Array).
         let toks: Vec<Tok> = node
             .pts
             .to_sorted()
             .into_iter()
             .filter(|t| !strip.contains(t))
+            .filter(
+                |&t| !matches!(m.toks[t as usize], TokKind::Obj(_, c) if callix.contains_key(&c)),
+            )
             .collect();
         if !toks.is_empty() || node.prim != 0 || node.own_refuted {
             s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
@@ -1114,6 +1442,9 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
         for &y in node.succ.iter() {
             if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
                 s.edges.push((enc(x), enc(y)));
+                if sw {
+                    s.edge_reach.push(er(x, y));
+                }
             }
         }
         if let Some(ps) = ix.preds.get(&x) {
@@ -1123,15 +1454,34 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
                     Role::Outer => s.edges.push((enc(p), enc(x))),
                     Role::Abs => s.edges.push((Operand::Absolute(p), enc(x))),
                 }
+                if sw && s.edge_reach.len() < s.edges.len() {
+                    s.edge_reach.push(er(p, x));
+                }
             }
         }
+    }
+    if sw {
+        s.cons_reach.resize(s.cons.len(), REACH_ALL);
     }
     for &(h, i) in &e.cons {
         let c = &m.nodes[h as usize].cons[i as usize];
         s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
+        if sw {
+            s.cons_reach
+                .push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));
+        }
     }
     s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
     s.ret = enc(m.funcs[f as usize].ret);
+    // A run's fresh rest array, or its `arguments` object (no rest beside
+    // it, `arguments_per_run`): both take the run's own call arguments.
+    let fi = &m.funcs[f as usize];
+    if let Some(r) = fi.rest.or(fi.arguments.map(|a| a.0)) {
+        s.rest = enc(r);
+        if matches!(s.rest, Operand::Absolute(_)) {
+            s.rest = Operand::Absolute(NO_NODE);
+        }
+    }
     s.this = if m.funcs[f as usize].lexical_this {
         Operand::Absolute(NO_NODE)
     } else {

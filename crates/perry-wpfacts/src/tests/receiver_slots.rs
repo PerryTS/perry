@@ -151,22 +151,6 @@ fn a_real_class_prototype_exposed_to_unknown_code_keeps_its_chain_obligation() {
     assert!(tmpl(&pf, "Item").chain.is_some(), "{}", pf.dump_text());
 }
 
-fn both_modes(src: &str) -> Vec<(&'static str, ProgramFacts)> {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let h = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let cfg = FactsConfig {
-        max_work: Some(50_000_000),
-        ..FactsConfig::default()
-    };
-    vec![
-        ("whole", crate::compute(&[("t.ts".to_string(), &h)], &cfg)),
-        (
-            "unit",
-            crate::compute_units(&[("t.ts".to_string(), &h)], &cfg),
-        ),
-    ]
-}
-
 fn own_read_is_proven(pf: &ProgramFacts, key: &str) -> bool {
     let sites: Vec<_> = pf
         .sites
@@ -320,4 +304,17 @@ fn an_any_key_accessor_on_object_prototype_refuses_only_a_receiver_with_a_miss()
             pf.dump_text()
         );
     }
+}
+
+fn both_modes(src: &str) -> Vec<(&'static str, ProgramFacts)> {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let h = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let cfg = FactsConfig {
+        max_work: Some(50_000_000),
+        ..FactsConfig::default()
+    };
+    vec![
+        ("whole", crate::compute(&[("t.ts".to_string(), &h)], &cfg)),
+        ("unit", crate::compute(&[("t.ts".to_string(), &h)], &cfg)),
+    ]
 }

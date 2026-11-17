@@ -287,6 +287,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_use_this_as_value(body, fields)
                     || catch
@@ -604,6 +605,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             static_accessor_names: Vec::new(),

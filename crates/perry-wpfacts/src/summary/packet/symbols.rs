@@ -39,9 +39,14 @@ impl Model {
             ),
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
+            Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
+            Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
+            Cons::HasProp { key, idx } => {
+                format!("HasProp key={:?} idx={idx}", self.packet_key(key))
+            }
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
@@ -142,9 +147,18 @@ impl Model {
             }
             Cons::Defined { dst } => format!("Defined dst={:?}", dst),
             Cons::NotNullish { dst } => format!("NotNullish dst={:?}", dst),
+            Cons::FieldTruthy { key, test, dst } => {
+                format!("FieldTruthy key={:?} test={} dst={:?}", key, test, dst)
+            }
             Cons::Fulfil { dst } => format!("Fulfil dst={:?}", dst),
             Cons::Falsy { dst } => format!("Falsy dst={:?}", dst),
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
+            Cons::NotNull { dst } => format!("NotNull dst={:?}", dst),
+            Cons::TypeIs { mask, dst } => format!("TypeIs mask={mask:#x} dst={:?}", dst),
+            Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
+            Cons::NotBuffer { shared, dst } => {
+                format!("NotBuffer shared={shared} dst={:?}", dst)
+            }
             Cons::Objects { dst } => format!("Objects dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(
                 "Hard kind={:?} reason={:?}",
@@ -319,30 +333,55 @@ impl Model {
                 self.reasons.get(reason as usize)
             ),
             Cons::IdxLoad {
-                idx, dst, shape, ..
+                idx,
+                dst,
+                shape,
+                enumerable,
+                ..
             } => {
                 format!(
-                    "IdxLoad idx={:?} dst={:?} shape={:?}",
+                    "IdxLoad idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                     idx,
                     dst,
                     self.packet_shape(shape)
                 )
             }
+            Cons::EnumLoad { key, dst } => format!("EnumLoad key={key:?} dst={dst:?}"),
+            Cons::ForInAcc { key, setter, probe } => {
+                format!("ForInAcc key={key:?} setter={setter} probe={probe:?}")
+            }
+            Cons::OwnDescAcc { setter, dst } => format!("OwnDescAcc setter={setter} dst={dst:?}"),
+            Cons::ForInMeet { other, src, gate } => {
+                format!("ForInMeet other={other:?} src={src:?} gate={gate:?}")
+            }
+            Cons::EnumChain { key, dst, of, .. } => format!(
+                "EnumChain key={:?} dst={:?} of={:?}",
+                key,
+                dst,
+                self.packet_token(of, packet)
+            ),
             Cons::ElemUndef { obj, key, dst } => format!(
                 "ElemUndef obj={:?} key={:?} dst={:?}",
                 self.packet_token(obj, packet),
                 key,
                 dst
             ),
-            Cons::IdxKey { obj, dst, shape } => format!(
+            Cons::IdxKey {
+                obj, dst, shape, ..
+            } => format!(
                 "IdxKey obj={:?} dst={:?} shape={:?}",
                 self.packet_token(obj, packet),
                 dst,
                 self.packet_shape(shape)
             ),
-            Cons::IdxOwnLoad { idx, dst, shape } => {
+            Cons::IdxOwnLoad {
+                idx,
+                dst,
+                shape,
+                enumerable,
+            } => {
                 format!(
-                    "IdxOwnLoad idx={:?} dst={:?} shape={:?}",
+                    "IdxOwnLoad idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                     idx,
                     dst,
                     self.packet_shape(shape)
@@ -360,8 +399,9 @@ impl Model {
                 idx,
                 dst,
                 shape,
+                enumerable,
             } => format!(
-                "OwnGate obj={:?} idx={:?} dst={:?} shape={:?}",
+                "OwnGate obj={:?} idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                 obj,
                 idx,
                 dst,
@@ -403,7 +443,14 @@ impl Model {
                 self.reasons.get(reason as usize),
                 accessor
             ),
-            Cons::StoreKeyed { o, src, site } => format!(
+            Cons::EnumKeyStore { o, src, site, from } => format!(
+                "EnumKeyStore o={:?} src={:?} site={site} from={from:?}",
+                o, src
+            ),
+            Cons::EnumKeyAny { o, src, site } => {
+                format!("EnumKeyAny o={:?} src={:?} site={site}", o, src)
+            }
+            Cons::StoreKeyed { o, src, site, .. } => format!(
                 "StoreKeyed o={:?} src={:?} site={:?}",
                 o,
                 src,
@@ -425,11 +472,12 @@ impl Model {
                     .map(|s| (&s.desc, s.birth, s.rooted)),
                 self.packet_shape(shape)
             ),
+            Cons::DefineAnyKey { o, key, .. } => format!("DefineAnyKey o={:?} key={:?}", o, key),
             Cons::AccessorKeyed { holder, f, setter } => format!(
                 "AccessorKeyed holder={:?} f={:?} setter={:?}",
                 holder, f, setter
             ),
-            Cons::Arith { dst } => format!("Arith dst={:?}", dst),
+            Cons::Arith { dst, .. } => format!("Arith dst={:?}", dst),
             Cons::Range {
                 op,
                 other,
@@ -442,11 +490,60 @@ impl Model {
                 dst,
                 right
             ),
-            Cons::Plus { str, num } => format!("Plus str={:?} num={:?}", str, num),
+            Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
+            Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
+            Cons::ConsoleFormat { reason, agg } => {
+                format!("ConsoleFormat reason={reason} agg={:?}", agg)
+            }
+            Cons::BoundCall { reason, bound } => format!(
+                "BoundCall reason={:?} bound={:?}",
+                self.reasons.get(reason as usize),
+                self.packet_token(bound, packet)
+            ),
             Cons::ShareBuffer { ta } => {
                 format!("ShareBuffer ta={:?}", self.packet_token(ta, packet))
             }
+            Cons::StrReplace {
+                dst,
+                recv,
+                search,
+                repl,
+            } => format!("StrReplace dst={dst:?} recv={recv:?} search={search:?} repl={repl:?}"),
+            Cons::StrIndex {
+                dst,
+                recv,
+                search,
+                last,
+            } => format!("StrIndex dst={dst:?} recv={recv:?} search={search:?} last={last}"),
+            Cons::StrSubstring {
+                dst,
+                recv,
+                start,
+                end,
+            } => {
+                format!("StrSubstring dst={dst:?} recv={recv:?} start={start:?} end={end:?}")
+            }
+            Cons::ClassReplace { dst, tok, repl } => format!(
+                "ClassReplace dst={dst:?} tok={:?} repl={repl:?}",
+                self.packet_token(tok, packet)
+            ),
+            Cons::RegExpPattern { tok } => {
+                format!("RegExpPattern tok={:?}", self.packet_token(tok, packet))
+            }
+            Cons::ObjTagProbe { t, key } => {
+                format!("ObjTagProbe t={:?} key={key}", self.packet_token(t, packet))
+            }
+            Cons::Captures { rec, pat } => {
+                format!(
+                    "Captures rec={:?} pat={pat}",
+                    self.packet_token(rec, packet)
+                )
+            }
+            Cons::ViewedBuffer { view, fresh, share } => format!(
+                "ViewedBuffer view={:?} fresh={fresh:?} share={share}",
+                self.packet_token(view, packet)
+            ),
             Cons::ThisTo { origin } => {
                 format!("ThisTo origin={:?}", self.packet_token(origin, packet))
             }
@@ -461,6 +558,11 @@ impl Model {
                 self.stores
                     .get(site as usize)
                     .map(|s| (&s.desc, s.birth, s.rooted))
+            ),
+            Cons::OwnComputedKey { key, val } => format!("OwnComputedKey key={key:?} val={val:?}"),
+            Cons::ProtoKeySet { target, val, site } => format!(
+                "ProtoKeySet target={:?} val={val:?} site={site:?}",
+                self.packet_token(target, packet)
             ),
             Cons::SpreadFrom { src, site, .. } => format!(
                 "SpreadFrom src={:?} site={:?}",

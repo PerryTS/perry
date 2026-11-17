@@ -8,7 +8,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-use super::{is_qualified_type_name, typed_array_lacks_array_method};
+use super::{is_array_generic_base, is_qualified_type_name, typed_array_lacks_array_method};
 
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
@@ -67,12 +67,11 @@ fn is_push_owning_class_type(ty: &Type, ctx: &LoweringContext) -> bool {
         // #11128: an `InstanceType<typeof C>` receiver is whatever `C`
         // constructs — never proven to be an array.
         Type::Generic { base, .. } if base == "InstanceType" => true,
+        // Only `Array`/`ReadonlyArray` generics are array receivers; `Pick<Svc, "join">`
+        // and other utility or user generics keep their own methods.
         Type::Generic { base, .. } => {
             let builtin = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-            !builtin.contains(&base.as_str())
-                && (ctx.lookup_class(base).is_some()
-                    || ctx.is_interface_type(base)
-                    || is_qualified_type_name(base))
+            !builtin.contains(&base.as_str()) && !is_array_generic_base(base)
         }
         Type::Object(_) => true, // object type literal with push property
         Type::Union(variants) => variants.iter().any(|v| is_push_owning_class_type(v, ctx)),

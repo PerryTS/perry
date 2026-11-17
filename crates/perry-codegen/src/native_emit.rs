@@ -288,7 +288,11 @@ fn freeze_unit(
     external_declarations: &[(String, String)],
 ) -> Result<FrozenUnit> {
     let crate::module::OwnedCodegenUnitPart {
-        pre, post, funcs, ..
+        pre,
+        post,
+        funcs,
+        copies,
+        ..
     } = part;
     let mut skeleton = format!("{pre}{post}");
     // Text units minimize declarations with a rendered-reference scan. Typed
@@ -318,7 +322,7 @@ fn freeze_unit(
         }
     }
     let function_count = funcs.len();
-    let mut functions = Vec::with_capacity(function_count);
+    let mut functions = Vec::with_capacity(function_count + copies.len());
     for entry in funcs {
         match entry.body? {
             FrozenBody::Skeleton(text) => {
@@ -334,6 +338,22 @@ fn freeze_unit(
                 functions.push(function);
             }
         }
+    }
+    // `available_externally` bodies of other units' callees: the identical
+    // final text, streamed as text items like a stack-map function's body.
+    for copy in copies {
+        let mut lines = copy.text.lines();
+        let header = lines.next().unwrap_or_default().to_string();
+        skeleton.push_str(&copy.declaration);
+        skeleton.push('\n');
+        functions.push(FrozenFunction {
+            name: copy.name,
+            header,
+            items: lines
+                .filter(|line| *line != "}")
+                .map(|line| FrozenItem::Text(line.to_string()))
+                .collect(),
+        });
     }
     Ok(FrozenUnit {
         skeleton,

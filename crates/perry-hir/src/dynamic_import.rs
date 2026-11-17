@@ -630,6 +630,7 @@ fn collect_local_candidate_defs_from_frames<'a>(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if let Some(finally) = finally {
                         push_local_candidate_stmt_slice(stack, finally);
@@ -835,6 +836,7 @@ fn collect_param_literal_sets_from_frames(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if let Some(finally) = finally {
                         push_param_stmt_slice(stack, finally);
@@ -980,6 +982,7 @@ fn collect_const_locals_from_frames<'a>(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(fb) = finally {
                             push_const_stmt_slice(stack, fb);
@@ -1100,6 +1103,7 @@ fn scan_mutations_from_frames(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(fb) = finally {
                             push_mutation_stmt_slice(stack, fb);

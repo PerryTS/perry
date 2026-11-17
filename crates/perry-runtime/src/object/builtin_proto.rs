@@ -252,6 +252,39 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
     });
 }
 
+/// Seal the intrinsic prototype of the family `declaration` births, when the
+/// realm seals that family (`realm_seals_constructor_prototype`), the moment
+/// phase B of a two-phase realm has born it and before the realm global's
+/// slot names its constructor: the realm seal ran at the end of phase A and
+/// skipped it (its slot was unbound). No-op for any other family.
+#[cold]
+#[inline(never)]
+pub(crate) fn seal_realm_family_of(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) {
+    let Some((family, _)) = BuiltinProto::REALM
+        .iter()
+        .find(|(_, ctor)| *ctor == declaration.name)
+    else {
+        return;
+    };
+    let proto = crate::array::intrinsic_prototype_addr_if_bound(declaration.identity);
+    // SAFETY: the realm's just-born prototype (a header read).
+    let is_object = unsafe { crate::value::addr_class::try_read_gc_header(proto) }
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
+    if proto != 0 && is_object {
+        // `seal_built_intrinsic`'s three steps, written out: that function
+        // keeps its one caller (and its place in the start-up text).
+        let proto = proto as *mut ObjectHeader;
+        let _no_move = crate::gc::GcSuppressScope::new();
+        super::own_override::as_builtin_definition(|| unsafe {
+            trace_seal(*family, (*proto).parent_class_id);
+            seal_object(proto, *family);
+            crate::agent_ptrs::publish_intrinsic_proto(*family as usize, proto);
+        });
+    }
+}
+
 /// Seal a host family's prototype (`Buffer.prototype`) when the member install
 /// reached only through its feature group completes it
 /// (`typedarray_hook_slots::buffer_prototype_members`), and publish it in the
@@ -493,6 +526,9 @@ pub(crate) unsafe fn name_runtime_prototype(
 /// Seal every family's intrinsic prototype of THIS thread's realm. Called once
 /// at the end of `populate_global_this_builtins`, after every runtime-owned
 /// install, link and the prototype-address priming.
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 #[optimize(size)]
 pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     if global.is_null() {

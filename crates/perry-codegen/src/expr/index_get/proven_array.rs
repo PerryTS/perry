@@ -246,6 +246,67 @@ pub(crate) fn receiver_is_proven_array(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     receiver_rep(ctx, object).is_some()
 }
 
+/// `object.length` for a receiver the facts give `Arr` (every value it
+/// holds is an Array). An Array exotic object's `length` is an own data
+/// property whose value is an integer in `[0, 2^32 - 1]` (ECMA-262 10.4.2),
+/// and OrdinaryGet (10.1.8.1) returns it: the header's `u32` length, with
+/// no type, string or object arm. A storage that may grow may be forwarded
+/// (the `arep` reads' test); a forwarded header takes the exact generic
+/// read, whose result is that same integer, so both arms meet as an `i32`
+/// and the value is one `uitofp`: a loop bound compares as an integer.
+/// `None` when the facts do not give `Arr` (or in check mode, where the
+/// generic read stays).
+pub(crate) fn lower_length(ctx: &mut FnCtx<'_>, object: &Expr) -> anyhow::Result<Option<String>> {
+    if crate::verify_facts::enabled() {
+        return Ok(None);
+    }
+    let Some((rep, receiver)) = receiver_rep(ctx, object) else {
+        return Ok(None);
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "receiver": receiver.label(), "length": true }),
+    );
+    crate::facts_consumed::used();
+    let arr_box = crate::expr::lower_expr(ctx, object)?;
+    let bits = ctx.block().bitcast_double_to_i64(&arr_box);
+    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    if rep.unmoved() {
+        let ptr = ctx.block().inttoptr(I64, &handle);
+        let len = ctx.block().load(I32, &ptr);
+        return Ok(Some(ctx.block().uitofp(I32, &len, DOUBLE)));
+    }
+    let word = super::guarded_array::emit_array_guard_word(ctx.block(), &handle);
+    let moved = ctx.block().and(I32, &word, FORWARDED_I32);
+    let live = ctx.block().icmp_eq(I32, &moved, "0");
+    let live_idx = ctx.new_block("alen.live");
+    let cold_idx = ctx.new_block("alen.cold");
+    let merge_idx = ctx.new_block("alen.merge");
+    let live_l = ctx.block_label(live_idx);
+    let cold_l = ctx.block_label(cold_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&live, &live_l, &cold_l);
+    ctx.current_block = live_idx;
+    let ptr = ctx.block().inttoptr(I64, &handle);
+    let fast = ctx.block().load(I32, &ptr);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = cold_idx;
+    let slow = ctx.block().call(
+        DOUBLE,
+        "js_value_length_property_f64",
+        &[(DOUBLE, &arr_box)],
+    );
+    let slow = ctx.block().fptoui(DOUBLE, &slow, I32);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge_idx;
+    let len = ctx
+        .block()
+        .phi(I32, &[(&fast, &fast_end), (&slow, &slow_end)]);
+    Ok(Some(ctx.block().uitofp(I32, &len, DOUBLE)))
+}
+
 /// The read of a field read call whose own index is in the floor
 /// (`lower_call::field_read_call`), when the tier takes it: the receiver
 /// expression's representation, dense, with a floor.

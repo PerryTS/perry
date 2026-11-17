@@ -932,9 +932,25 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
     })
 }
 
+/// Node lib/internal/util/inspect.js `formatValue`: a Proxy is unwrapped
+/// (`getProxyDetails`) before anything else, so no trap runs. A revoked one
+/// prints `<Revoked Proxy>`. Without `showProxy` the `[util.inspect.custom]`
+/// hook is read off the TARGET and called with `this` = the Proxy; what it
+/// returns is the output. Else the target is formatted, as `Proxy(..)`.
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
+    if crate::proxy_hooks::proxy_is_revoked(value) != 0 {
+        return "<Revoked Proxy>".to_string();
+    }
     let target = crate::proxy_hooks::proxy_target(value);
     if !inspect_show_proxy() {
+        if inspect_custom_inspect_enabled() {
+            if let Some(obj) = plain_object_ptr(target) {
+                // SAFETY: `obj` is a live GC object of type OBJECT.
+                if let Some(hook) = unsafe { inspect_custom_hook(obj) } {
+                    return unsafe { run_inspect_custom_hook(hook, Some(value), obj, depth) };
+                }
+            }
+        }
         let target_str = if json {
             format_jsvalue_for_json(target, depth)
         } else {
@@ -955,6 +971,151 @@ fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
         format_jsvalue(handler, depth + 1)
     };
     format!("Proxy [ {}, {} ]", target_str, handler_str)
+}
+
+/// The object a NaN-boxed pointer `v` holds, when it is an ordinary object
+/// (GC type OBJECT, not a Proxy).
+fn plain_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
+    let bits = v.to_bits();
+    if bits & 0xFFFF_0000_0000_0000 != 0x7FFD_0000_0000_0000
+        || crate::proxy_hooks::proxy_is_proxy(v) != 0
+    {
+        return None;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+    if (ptr as usize) < 0x10000 {
+        return None;
+    }
+    // SAFETY: a tagged heap pointer is preceded by its GC header.
+    let ty =
+        unsafe { (*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).obj_type };
+    (ty == crate::gc::GC_TYPE_OBJECT).then_some(ptr as *const crate::object::ObjectHeader)
+}
+
+/// The `[util.inspect.custom]` hook an object carries: its own entry for
+/// `Symbol.for("nodejs.util.inspect.custom")` when that is a closure, else a
+/// class method `[util.inspect.custom]() {}`, which HIR renames to
+/// `__perry_inspect_custom__` on the class vtable (#1248).
+#[derive(Clone, Copy)]
+enum InspectCustomHook {
+    Own(*const crate::closure::ClosureHeader),
+    Method {
+        func_ptr: usize,
+        param_count: u32,
+        has_synthetic_arguments: bool,
+        has_rest: bool,
+    },
+}
+
+unsafe fn inspect_custom_hook(
+    obj_ptr: *const crate::object::ObjectHeader,
+) -> Option<InspectCustomHook> {
+    let custom_sym = crate::symbol::inspect_custom_symbol_ptr();
+    if custom_sym != 0 {
+        let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_ptr as usize);
+        for (sym_ptr, val_bits) in &entries {
+            if *sym_ptr != custom_sym {
+                continue;
+            }
+            let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+            if val_tag != 0x7FFD_0000_0000_0000 {
+                break;
+            }
+            let val_ptr = (val_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+            if val_ptr.is_null() || (val_ptr as usize) < 0x10000 {
+                break;
+            }
+            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+                break;
+            }
+            return Some(InspectCustomHook::Own(
+                val_ptr as *const crate::closure::ClosureHeader,
+            ));
+        }
+    }
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
+        if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
+            crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
+        {
+            return Some(InspectCustomHook::Method {
+                func_ptr,
+                param_count,
+                has_synthetic_arguments,
+                has_rest,
+            });
+        }
+    }
+    None
+}
+
+/// Run `hook` of `obj_ptr` and format what it returns. Node invokes it as
+/// `hook.call(context, depth, options, inspect)` (#1247): `this_value` is
+/// that context when the value shown is a Proxy over `obj_ptr`; `None` keeps
+/// the receiver an ordinary object's hook has always had. `depth` is the
+/// REMAINING recursion budget (counts down from `util.inspect`'s `depth`
+/// option, default 2); perry's internal `depth` counts UP from 0. `options`
+/// is a placeholder object; `inspect` is undefined. The hook runs with
+/// `customInspect` off, so a hook returning `this` does not recurse.
+unsafe fn run_inspect_custom_hook(
+    hook: InspectCustomHook,
+    this_value: Option<f64>,
+    obj_ptr: *const crate::object::ObjectHeader,
+    depth: usize,
+) -> String {
+    let _guard = InspectCustomInspectGuard::new(false);
+    let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
+    let options_obj = crate::object::js_object_alloc(0, 0);
+    let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
+    let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let ret = match hook {
+        InspectCustomHook::Own(closure_ptr) => crate::closure::js_closure_call3(
+            closure_ptr,
+            this_value.map_or(
+                crate::closure::plain_call_receiver(),
+                crate::codegen_abi::JsThis::from_f64,
+            ),
+            remaining,
+            options_arg,
+            undef_arg,
+        ),
+        InspectCustomHook::Method {
+            func_ptr,
+            param_count,
+            has_synthetic_arguments,
+            has_rest,
+        } => {
+            let args = [remaining, options_arg, undef_arg];
+            match this_value {
+                None => crate::object::call_vtable_method(
+                    func_ptr,
+                    obj_ptr as i64,
+                    args.as_ptr(),
+                    args.len(),
+                    param_count,
+                    has_synthetic_arguments,
+                    has_rest,
+                ),
+                Some(this) => crate::object::call_vtable_method_value(
+                    func_ptr,
+                    this,
+                    args.as_ptr(),
+                    args.len(),
+                    param_count,
+                    has_synthetic_arguments,
+                    has_rest,
+                    None,
+                ),
+            }
+        }
+    };
+    let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
+    if ret_jv.is_any_string() {
+        return jsvalue_string_content(ret).unwrap_or_default();
+    }
+    // #1251: a non-string result is formatted at the hook's own `depth`.
+    format_jsvalue(ret, depth)
 }
 
 fn format_weak_wrapper(
@@ -1020,91 +1181,8 @@ unsafe fn format_object_as_json(
     // hook itself runs with `customInspect` temporarily disabled to prevent
     // unbounded recursion if the hook returns `this`. Refs #1201.
     if inspect_custom_inspect_enabled() {
-        let custom_sym = crate::symbol::inspect_custom_symbol_ptr();
-        if custom_sym != 0 {
-            let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
-            for (sym_ptr, val_bits) in &entries {
-                if *sym_ptr != custom_sym {
-                    continue;
-                }
-                let val_tag = val_bits & 0xFFFF_0000_0000_0000;
-                if val_tag != 0x7FFD_0000_0000_0000 {
-                    break;
-                }
-                let val_ptr = (val_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-                if val_ptr.is_null() || (val_ptr as usize) < 0x10000 {
-                    break;
-                }
-                let gc_header =
-                    val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
-                    break;
-                }
-                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
-                let _guard = InspectCustomInspectGuard::new(false);
-                // Node invokes the hook as `hook.call(this, depth, options, inspect)`
-                // — see #1247. `depth` is the REMAINING recursion budget (counts
-                // down from `util.inspect`'s `depth` option, default 2). Perry's
-                // internal `depth` counts UP from 0 so we invert it. `options`
-                // is a placeholder object — populating its fields properly is
-                // its own follow-up. `inspect` is undefined since we don't yet
-                // expose a JS-callable equivalent.
-                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
-                let options_obj = crate::object::js_object_alloc(0, 0);
-                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
-                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
-                let ret = crate::closure::js_closure_call3(
-                    closure_ptr,
-                    crate::closure::plain_call_receiver(),
-                    remaining,
-                    options_arg,
-                    undef_arg,
-                );
-                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
-                if ret_jv.is_any_string() {
-                    return jsvalue_string_content(ret).unwrap_or_default();
-                }
-                // #1251: non-string return values count as one nesting
-                // level — but the hook itself was reached from the
-                // formatter at `depth`, so the return value's nested
-                // structure starts at `depth` (NOT `depth + 1`). Node
-                // ends up truncating `[Object]` at the same boundary
-                // because both formatters increment by 1 per descent.
-                return format_jsvalue(ret, depth);
-            }
-        }
-
-        // #1248: class-method `[util.inspect.custom]() {}` is not stored in
-        // the per-instance symbol side table — HIR renames it to
-        // `__perry_inspect_custom__` and registers it on the class vtable
-        // (see crates/perry-hir/src/lower_decl/class_decl.rs). Walk the
-        // object's class chain when the instance lookup misses.
-        let class_id = (*obj_ptr).class_id;
-        if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
-            if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
-            {
-                let _guard = InspectCustomInspectGuard::new(false);
-                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
-                let options_obj = crate::object::js_object_alloc(0, 0);
-                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
-                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
-                let args = [remaining, options_arg, undef_arg];
-                let ret = crate::object::call_vtable_method(
-                    func_ptr,
-                    obj_ptr as i64,
-                    args.as_ptr(),
-                    args.len(),
-                    param_count,
-                    has_synthetic_arguments,
-                    has_rest,
-                );
-                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
-                if ret_jv.is_any_string() {
-                    return jsvalue_string_content(ret).unwrap_or_default();
-                }
-                return format_jsvalue(ret, depth);
-            }
+        if let Some(hook) = inspect_custom_hook(obj_ptr) {
+            return run_inspect_custom_hook(hook, None, obj_ptr, depth);
         }
     }
 

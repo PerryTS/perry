@@ -265,11 +265,15 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         Cons::Identity { .. }
         | Cons::Raise { .. }
         | Cons::IndexHole
+        | Cons::IndexHoleIn { .. }
         | Cons::IndexKept
         | Cons::LenIndex { .. }
         | Cons::Guard { .. }
         | Cons::Defined { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
+        | Cons::NotNull { .. }
+        | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }
         | Cons::Objects { .. }
@@ -312,6 +316,7 @@ fn object_use(m: &Model, c: &Cons) -> Option<NodeId> {
         Cons::StoreIndexed { o, site, .. } => (!index_store(m, site)).then_some(o),
         Cons::StoreKeyed { o, .. }
         | Cons::DefineKeyed { o, .. }
+        | Cons::DefineAnyKey { o, .. }
         | Cons::DefineAll { o, .. }
         | Cons::DefineDesc { o, .. } => Some(o),
         Cons::OwnGate { obj, .. } => Some(obj),

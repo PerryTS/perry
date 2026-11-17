@@ -192,6 +192,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt(s, ctx);

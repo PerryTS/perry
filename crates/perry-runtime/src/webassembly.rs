@@ -1213,11 +1213,11 @@ fn make_global_object(external: *mut c_void, receiver: f64) -> f64 {
         .root_raw_mut_ptr(born_value.as_pointer::<crate::object::ObjectHeader>()
             as *mut crate::object::ObjectHeader);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(js_wasm_global_get, 0; with_declared(0)),
+        crate::fn_info!(js_wasm_global_get, 0; with_name("get value"), with_declared(0)),
         0,
     ));
     let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(js_wasm_global_set, 1; with_declared(1)),
+        crate::fn_info!(js_wasm_global_set, 1; with_name("set value"), with_declared(1)),
         0,
     ));
     let object_ptr = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();

@@ -962,7 +962,7 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
             continue;
         }
         let f = &raw[i];
-        let usable = |k: &String| !owns[i].contains(k) && !f.members.contains(k) && late_key_ok(k);
+        let usable = |k: &String| !owns[i].contains(k) && !f.late_blocked(k) && late_key_ok(k);
         // The family's creation groups, and the parameter that splits them.
         let creations: Vec<&Group> = groups
             .iter()
@@ -1102,7 +1102,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
             .get(&f.parent)
             .map(|v| {
                 v.iter()
-                    .filter(|k| !own.contains(k.as_str()) && !f.members.contains(*k))
+                    .filter(|k| !own.contains(k.as_str()) && !f.late_blocked(k))
                     .cloned()
                     .collect()
             })
@@ -1132,7 +1132,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
                 creation.extend(g.stores.iter().cloned());
             }
             for (k, n) in &g.sites {
-                if !own.contains(k.as_str()) && !f.members.contains(k) && late_key_ok(k) {
+                if !own.contains(k.as_str()) && !f.late_blocked(k) && late_key_ok(k) {
                     *sites.entry(k.clone()).or_default() += n;
                 }
             }

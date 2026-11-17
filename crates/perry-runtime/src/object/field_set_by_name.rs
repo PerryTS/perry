@@ -137,6 +137,9 @@ pub extern "C" fn js_object_set_field_by_name(
     // Aliased `process.env` writes must update the OS environment, not only the
     // materialized object's field bag. The helper declines internal cache
     // mirror writes so those can proceed through the ordinary setter below.
+    if crate::web_storage::storage_set_field(obj, key, value) {
+        return;
+    }
     if crate::process::process_env_set_field(obj, key, value) {
         return;
     }

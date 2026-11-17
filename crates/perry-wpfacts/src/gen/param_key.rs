@@ -173,6 +173,8 @@ impl<'a> Gen<'a> {
             Expr::LocalGet(_) | Expr::GlobalGet(_) => {
                 self.const_key_set(mi, e).map(|ks| KeyShape {
                     globs: ks.into_iter().map(|k| vec![k]).collect(),
+                    free: Vec::new(),
+                    except: Vec::new(),
                 })
             }
             _ => KeyShape::of(e),
@@ -195,7 +197,11 @@ impl<'a> Gen<'a> {
         let pc = &self.param_calls[&mi];
         let &(k, i, def) = pc.params.get(&id)?;
         if seen.contains(&id) {
-            return Some(KeyShape { globs: Vec::new() });
+            return Some(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
         seen.push(id);
         let calls: Vec<&'a [Expr]> = pc.calls.get(&k).cloned().unwrap_or_default();
@@ -213,6 +219,10 @@ impl<'a> Gen<'a> {
         }
         globs.sort();
         globs.dedup();
-        Some(KeyShape { globs })
+        Some(KeyShape {
+            globs,
+            free: Vec::new(),
+            except: Vec::new(),
+        })
     }
 }

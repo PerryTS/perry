@@ -39,14 +39,14 @@ The encoding piggy-backs on IEEE 754: any `f64` whose exponent is all-ones and w
 | `0x7FFB` | JS handle | low 48 bits = handle id (V8-backed objects) |
 | `0xFFF9` | Native handle | low 48 bits = registry id, not a heap pointer |
 | `0x7FFD` | Object / Array / Closure | low 48 bits = heap pointer |
-| `0x7FFE` | Int32 | low 32 bits = signed int |
+| `0x7FFE` | Runtime-internal word | never a JS value: I32 slot words, route markers, class-id and state captures |
 | `0x7FFF` | String | low 48 bits = heap pointer |
 | anything else | `f64` | the full 64 bits are the number |
 
 <!-- gc-fact: HANDLE_TAG = 0xFFF9_0000_0000_0000 in crates/perry-abi/src/lib.rs -->
 <!-- gc-fact: POINTER_TAG = 0x7FFD_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: STRING_TAG = 0x7FFF_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
-<!-- gc-fact: INT32_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: INTERNAL_WORD_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: BIGINT_TAG = 0x7FFA_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: SHORT_STRING_TAG = 0x7FF9_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: TAG_UNDEFINED = 0x7FFC_0000_0000_0001 in crates/perry-runtime/src/value/tags.rs -->

@@ -318,7 +318,7 @@ fn native_instanceof(
             let function = constructor
                 .as_ref()
                 .map(|rhs| rhs.get_nanbox_f64())
-                .unwrap_or_else(|| js_get_global_this_builtin_value(b"Function".as_ptr(), 8));
+                .unwrap_or_else(|| crate::object::builtin_value_core("Function"));
             if ordinary_has_instance_prototype_walk(rooted_value.get_nanbox_f64(), function) {
                 return true_val;
             }
@@ -734,8 +734,7 @@ fn native_instanceof(
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, constructor)
                 } else {
                     let scope = crate::gc::RuntimeHandleScope::new();
-                    let object = scope
-                        .root_nanbox_f64(js_get_global_this_builtin_value(b"Object".as_ptr(), 6));
+                    let object = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, &object)
                 };
                 return if matches { true_val } else { false_val };

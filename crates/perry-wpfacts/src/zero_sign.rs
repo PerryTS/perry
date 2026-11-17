@@ -104,7 +104,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         },
         // A ToNumeric operand: its integer rule decides (above); without
         // one (`/`, `**`) the result depends on the sign.
-        Cons::Arith { dst } => {
+        Cons::Arith { dst, .. } => {
             let ruled = m.nodes[n as usize]
                 .cons
                 .iter()
@@ -121,8 +121,13 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         Cons::Guard { from, dst, .. } => Use::Between(from, dst),
         Cons::Defined { dst }
         | Cons::NotNullish { dst }
+        | Cons::FieldTruthy { dst, .. }
         | Cons::Fulfil { dst }
         | Cons::Falsy { dst }
+        | Cons::NotBuffer { dst, .. }
+        | Cons::ProtoObjects { dst }
+        | Cons::NotNull { dst }
+        | Cons::TypeIs { dst, .. }
         | Cons::Objects { dst }
         | Cons::NotUndefined { dst } => Use::To(dst),
         Cons::RetInto { call, .. } | Cons::ArgInto { call, .. } => {
@@ -145,6 +150,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::IdxOwnKey { .. }
         | Cons::IdxKeyCall { .. }
         | Cons::AccessorKeyed { .. }
+        | Cons::DefineAnyKey { .. }
         | Cons::StoreKeyed { .. }
         | Cons::StoreIndexed { .. }
         | Cons::DefineKeyed { .. }
@@ -152,8 +158,11 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::LenIndex { .. }
         | Cons::LenPermuted { .. }
         | Cons::ArrayLenArg { .. }
+        | Cons::CaseMap { .. }
+        | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. }
         | Cons::Identity { .. }
+        | Cons::HasProp { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
@@ -166,9 +175,12 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::BirthField { .. }
         | Cons::Spread { .. }
         | Cons::SpreadFrom { .. }
+        | Cons::OwnComputedKey { .. }
+        | Cons::ProtoKeySet { .. }
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::IndexHole
+        | Cons::IndexHoleIn { .. }
         | Cons::IndexKept
         | Cons::AddsKeys
         | Cons::Call { .. }
@@ -205,11 +217,21 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NewTargetHard { .. }
         | Cons::NativeParent { .. }
         | Cons::ShareBuffer { .. }
+        | Cons::Captures { .. }
+        | Cons::ObjTagProbe { .. }
+        | Cons::StrReplace { .. }
+        | Cons::StrIndex { .. }
+        | Cons::StrSubstring { .. }
+        | Cons::ClassReplace { .. }
+        | Cons::RegExpPattern { .. }
+        | Cons::ViewedBuffer { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }
         | Cons::ForInBody { .. }
         | Cons::ForInKeys { .. }
+        | Cons::EnumKeyStore { .. }
+        | Cons::EnumKeyAny { .. }
         | Cons::CjsPublish { .. } => Use::Absorb,
         // A property read or a method call on a Number runs its prototype's
         // code with the Number as `this` (`(-0).toLocaleString()` is "-0");
@@ -218,7 +240,13 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         Cons::Load { .. }
         | Cons::ProtoKey { .. }
         | Cons::OwnValues { .. }
+        | Cons::OwnDescValues { .. }
         | Cons::Chain { .. }
+        | Cons::EnumChain { .. }
+        | Cons::EnumLoad { .. }
+        | Cons::ForInAcc { .. }
+        | Cons::OwnDescAcc { .. }
+        | Cons::ForInMeet { .. }
         | Cons::IdxLoad { .. }
         | Cons::IdxOwnLoad { .. }
         | Cons::MCall { .. }
@@ -231,6 +259,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::SuperFrom { .. }
         | Cons::AnnexBLookup { .. }
         | Cons::HasInstance { .. }
+        | Cons::BoundCall { .. }
         | Cons::Miss { .. }
         | Cons::TopSink { .. }
         | Cons::RuntimeStore { .. }

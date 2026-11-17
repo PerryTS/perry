@@ -57,6 +57,17 @@ macro_rules! fn_info {
         $crate::fn_info!(@image_static INFO, $($body)::+, $n, [$($builder($($arg)*)),*], $init);
         &INFO as *const $crate::JsFunctionInfo
     }};
+    // A runtime-native record that names itself (`with_name("text")` first in
+    // its builders) keeps the text in the same static, after its tails: the
+    // JS-visible name is static data, read with no run-time naming call.
+    (@image_record owned $($body:ident)::+, $n:tt, [with_name($name:literal) $(, $builder:ident($($arg:tt)*))*], $init:expr) => {{
+        static OWNER: $crate::FunctionMetadataOwner = $crate::FunctionMetadataOwner::native();
+        const NAME: &str = $name;
+        #[export_name = $crate::fn_info!(@image_name $($body)::+, $n, [with_name($name) $(, $builder($($arg)*))*])]
+        static INFO: $crate::NamedNativeFunctionInfo<{ NAME.len() }> =
+            $crate::NamedNativeFunctionInfo::new($init, &OWNER, NAME);
+        &INFO.info as *const $crate::JsFunctionInfo
+    }};
     // A runtime-native record owns its canonical metadata entry, exactly as
     // the runtime's unexported records do; the export names the same storage.
     (@image_record owned $($body:ident)::+, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {{

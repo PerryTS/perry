@@ -707,3 +707,9 @@ pub(crate) fn test_publish_bundle_name(code: usize, bytes: &[u8]) {
 #[cfg(test)]
 #[path = "fn_metadata_owner_tests.rs"]
 mod tests;
+/// Whether `info`'s owner record has allocated state (a run-time name, an
+/// override or a copied image entry).
+#[cfg(test)]
+pub(crate) fn test_owner_has_state(info: &JsFunctionInfo) -> bool {
+    Record::for_info(info).is_some_and(|record| state(record.owner).is_some())
+}

@@ -142,6 +142,9 @@ pub(crate) fn is_builtin_hook(value: f64) -> bool {
         .any(|hook| std::ptr::eq(*hook, info))
 }
 
+/// The writable table's rows from here on are not readable rows.
+const WRITABLE_OWN_ROWS: usize = 15;
+
 /// Identify the exact stream/emitter body, not its mutable name property.
 pub(crate) fn is_builtin_stream_method(value: f64, name: &str) -> bool {
     if !is_callable_value(value) {
@@ -152,11 +155,18 @@ pub(crate) fn is_builtin_stream_method(value: f64, name: &str) -> bool {
         return false;
     }
     let info = unsafe { (*(raw as *const ClosureHeader)).info };
+    // The union of the readable, emitter and writable rows: every emitter row
+    // and the writable rows before `WRITABLE_OWN_ROWS` are readable rows
+    // (`stream_method_rows_cover_the_three_tables`), so 46 rows are compared,
+    // the identity first.
     super::readwrite::readable_methods()
         .into_iter()
-        .chain(super::readwrite::emitter_methods())
-        .chain(super::readwrite::writable_methods())
-        .any(|(key, intrinsic)| key == name && std::ptr::eq(intrinsic, info))
+        .chain(
+            super::readwrite::writable_methods()
+                .into_iter()
+                .skip(WRITABLE_OWN_ROWS),
+        )
+        .any(|(key, intrinsic)| std::ptr::eq(intrinsic, info) && key == name)
 }
 
 /// `value` when it is a callable that is not one of node's prototype hooks.
@@ -1304,4 +1314,30 @@ extern "C" fn ns_legacy_pipe2(
         &[pipe.get_nanbox_f64(), source.get_nanbox_f64()],
     );
     dest.get_nanbox_f64()
+}
+
+#[cfg(test)]
+mod stream_method_rows_tests {
+    /// `is_builtin_stream_method` compares the readable rows and the writable
+    /// rows from `WRITABLE_OWN_ROWS` on: that is the union of the readable,
+    /// emitter and writable tables.
+    #[test]
+    fn stream_method_rows_cover_the_three_tables() {
+        use super::super::readwrite::{emitter_methods, readable_methods, writable_methods};
+        let scanned: Vec<_> = readable_methods()
+            .into_iter()
+            .chain(
+                writable_methods()
+                    .into_iter()
+                    .skip(super::WRITABLE_OWN_ROWS),
+            )
+            .collect();
+        for row in readable_methods()
+            .into_iter()
+            .chain(emitter_methods())
+            .chain(writable_methods())
+        {
+            assert!(scanned.contains(&row), "row {} is not compared", row.0);
+        }
+    }
 }

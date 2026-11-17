@@ -384,6 +384,28 @@ impl<'a> Gen<'a> {
                 }
                 n
             }
+            // `process.env`: the one object the realm declares (`values =
+            // string`, `Model::process_arrays`), or what the program stored
+            // as `process.env`.
+            Expr::ProcessEnv
+                if self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .any(|a| self.m.atoms[a.0 as usize] == "env") =>
+            {
+                let n = self.m.node_l("process.env");
+                self.m.own(n);
+                let a = self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .find(|a| self.m.atoms[a.0 as usize] == "env")
+                    .expect("guarded")
+                    .1;
+                self.m.edge(a, n);
+                n
+            }
             Expr::ProcessEnv
             | Expr::ProcessMemoryUsage
             | Expr::ProcessVersions
@@ -437,7 +459,14 @@ impl<'a> Gen<'a> {
                 );
                 let (t, n) = self.bobj(mi, "arraybox");
                 let fa = self.m.field_any(t);
-                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
+                // Symbols; 28.1.11 Reflect.ownKeys: both.
+                let p = match e {
+                    Expr::ObjectGetOwnPropertySymbols(..) => prim::SYMBOL,
+                    Expr::ReflectOwnKeys(..) => prim::STR | prim::SYMBOL,
+                    _ => prim::STR,
+                };
+                self.m.add_prim(fa, p);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
@@ -518,7 +547,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
             | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
@@ -527,8 +555,6 @@ impl<'a> Gen<'a> {
             | Expr::RegExpExecIndex
             | Expr::JsonIsRawJson(..)
             | Expr::PerformanceNow
-            | Expr::Atob(..)
-            | Expr::Btoa(..)
             | Expr::IterResultGetDone
             | Expr::CryptoRandomUUID
             | Expr::CryptoRandomUUIDv7
@@ -556,8 +582,6 @@ impl<'a> Gen<'a> {
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
-            | Expr::StringFromCharCode(..)
-            | Expr::StringFromCodePoint(..)
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
             | Expr::ArrayIterationPatched
@@ -575,9 +599,49 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 )
             }
-            Expr::StringRaw { .. }
-            | Expr::StringFromCharCodeSpread(..)
-            | Expr::PathFormat(..)
+            // `Symbol(d)` is a Symbol (ECMA-262 20.4.1.1: ToString of `d`
+            // unless undefined).
+            Expr::SymbolNew(..) => self.prim_kids(
+                fx,
+                e,
+                prim::SYMBOL,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `atob` / `btoa` (HTML base64 utilities: a DOMString, ToString
+            // of the operand), `String.fromCharCode` / `fromCodePoint`
+            // (22.1.2.1, 22.1.2.2: ToNumber of each operand): a String.
+            Expr::Atob(..)
+            | Expr::Btoa(..)
+            | Expr::StringFromCharCode(..)
+            | Expr::StringFromCodePoint(..) => self.prim_kids(
+                fx,
+                e,
+                prim::STR,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `String.raw` (22.1.2.4): `string_methods::string_raw`, a String.
+            Expr::StringRaw {
+                call_site,
+                substitutions,
+            } => {
+                let template = self.expr(fx, call_site);
+                let subs = self.tmp("String.raw-substitution");
+                for x in substitutions {
+                    let v = self.expr(fx, x);
+                    self.m.edge(v, subs);
+                }
+                crate::builtins::string_methods::string_raw(&mut self.m, template, subs);
+                let out = self.tmp("primop");
+                self.m.add_prim(out, prim::STR);
+                out
+            }
+            // A spread `fromCharCode` iterates its operand: a String.
+            Expr::StringFromCharCodeSpread(..) => {
+                self.prim_kids(fx, e, prim::STR, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::PathFormat(..)
             | Expr::PathWin32 { .. }
             | Expr::FsReadFileSync(..)
             | Expr::FsWriteFileSync(..)
@@ -631,7 +695,7 @@ impl<'a> Gen<'a> {
                 self.prim_kids(
                     fx,
                     e,
-                    prim::ALL,
+                    prim::STR,
                     "URI operand ToString",
                     Protocol::ToPrimitive,
                 )
@@ -765,30 +829,89 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) => self.prim_kids(
+            // A template substitution `${ x }` (ECMA-262 13.2.8.6: ToString,
+            // 7.1.17): a String is itself, a Number its text, an object its
+            // ToPrimitive (hint string) result's ToString, a Symbol throws.
+            // Its Strings are those of `"" + x` (13.15.3, rule M3,
+            // `plus_strs`): the same for every primitive; for an object
+            // `"" + x` (hint default) holds every text hint string gives
+            // (`excl_parts`: any string, or a NativeFunction text whose
+            // valueOf / toString the program does not write). So
+            // `x '${ key }'` over constant keys is constants.
+            Expr::TemplateStringCoerce(x) => {
+                let v = self.expr(fx, x);
+                let r = self.m.reason("primitive builtin operand");
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let empty = self.str_literal("");
+                let out = self.tmp("template-str");
+                let (nl, nr) = (self.tmp("plus-num"), self.tmp("plus-num"));
+                self.m.cons(
+                    empty,
+                    Cons::Plus {
+                        str: out,
+                        num: nl,
+                        other: v,
+                        right: false,
+                    },
+                );
+                self.m.cons(
+                    v,
+                    Cons::Plus {
+                        str: out,
+                        num: nr,
+                        other: empty,
+                        right: true,
+                    },
+                );
+                out
+            }
+            Expr::StringCoerce(..) => self.prim_kids(
                 fx,
                 e,
                 prim::STR,
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::ObjectIs(a, b) => self.prim_op_identity(
-                fx,
-                &[a, b],
-                prim::BOOL,
-                "primitive builtin operand",
-                IdentityRoute::ObjectIs,
-            ),
-            Expr::ObjectHasOwn(..)
-            | Expr::ArrayIsArray(..)
+            // `Object.is(a, b)` is SameValue (ECMA-262 20.1.2.14, 7.2.10):
+            // it compares the operands as they are, by identity for objects,
+            // and converts nothing (no ToPrimitive, no valueOf/toString).
+            Expr::ObjectIs(a, b) => {
+                for o in [a, b] {
+                    let v = self.expr(fx, o);
+                    self.m.identity(v, IdentityRoute::ObjectIs);
+                }
+                self.prim_node(prim::BOOL)
+            }
+            // The predicates that convert nothing: `Array.isArray` reads only
+            // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
+            // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
+            // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`
+            // predicates test the operand's type (21.1.2.2-21.1.2.5) and the
+            // undefined-or-NaN test compares. No key is read on an object
+            // operand and nothing is called on it.
+            Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
-            | Expr::IsNaN(..)
             | Expr::IsUndefinedOrBareNan(..)
-            | Expr::IsFinite(..)
             | Expr::NumberIsNaN(..)
             | Expr::NumberIsFinite(..)
             | Expr::NumberIsInteger(..)
-            | Expr::NumberIsSafeInteger(..)
+            | Expr::NumberIsSafeInteger(..) => {
+                for k in kids(e) {
+                    self.expr(fx, k);
+                }
+                self.prim_node(prim::BOOL)
+            }
+            // `isNaN` / `isFinite` ToNumber their operand (19.2.2, 19.2.3);
+            // `Object.hasOwn` and `Reflect.has` ToPropertyKey their key.
+            Expr::ObjectHasOwn(..)
+            | Expr::IsNaN(..)
+            | Expr::IsFinite(..)
             | Expr::ReflectHas { .. } => self.prim_kids(
                 fx,
                 e,
@@ -947,10 +1070,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyGet { .. }
-            | Expr::ProxySet { .. }
-            | Expr::ProxyHas { .. }
-            | Expr::ProxyDelete { .. }
             | Expr::ProxyApply { .. }
             | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
@@ -1095,6 +1214,10 @@ impl<'a> Gen<'a> {
             | Expr::GetAsyncIterator { .. }
             | Expr::ObjectCoerce { .. } => self.expr_rest_collections(fx, e),
             Expr::ProxyNew { .. }
+            | Expr::ProxyGet { .. }
+            | Expr::ProxySet { .. }
+            | Expr::ProxyHas { .. }
+            | Expr::ProxyDelete { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

@@ -369,12 +369,10 @@ pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut Arr
         let prepared = conn.prepare(&sql).ok()?;
         let decl_types: Vec<Option<String>> = prepared
             .columns()
-            .iter()
             .map(|c| c.decl_type().map(str::to_string))
             .collect();
         let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
             .columns_with_metadata()
-            .iter()
             .map(|c| {
                 (
                     c.name().to_string(),
@@ -594,7 +592,6 @@ fn query_owned_rows(
         // SQLite can recompile cached SQL on step, even when it returns no rows.
         let names = prepared
             .column_names()
-            .iter()
             .map(|name| name.to_string())
             .collect();
         Some((names, result, raw, safe_ints))

@@ -64,6 +64,7 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(generator_stmt_uses_call_this)
                 || catch

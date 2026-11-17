@@ -294,6 +294,11 @@ static KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC: extern "C" fn(*const TypedArrayHea
 /// `ta.at(i)` with negative-index support.
 #[no_mangle]
 pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> f64 {
+    // 23.2.3.1 step 4: ToIntegerOrInfinity( index ) (an object operand runs its
+    // `valueOf`) with the receiver rooted; one tag test for a plain number.
+    let (index, ta) =
+        crate::array::index_operand_across(ta as *const crate::array::ArrayHeader, index);
+    let ta = ta as *const TypedArrayHeader;
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

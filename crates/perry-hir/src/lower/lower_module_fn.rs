@@ -117,6 +117,7 @@ fn reflect_script_var_initializers(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 *body = reflect_script_var_initializers(
                     std::mem::take(body),

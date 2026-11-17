@@ -383,6 +383,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);
     module.declare_function("js_iterator_step", I32, &[DOUBLE, DOUBLE, PTR]);
+    module.declare_function("js_iterator_step_inner_result", I32, &[DOUBLE, PTR]);
+    module.declare_function("js_generator_resume_executing", DOUBLE, &[]);
     module.declare_function(
         "js_iterator_step_rest_to_array",
         DOUBLE,

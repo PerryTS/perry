@@ -478,3 +478,8 @@ pub(crate) mod runtime_store_site;
 pub(crate) use ic_miss::{
     private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
 };
+
+/// The next class-template thread token (image run).
+pub(crate) fn snap_image_next_token() -> u64 {
+    class_object_template::snap_image_next_token()
+}

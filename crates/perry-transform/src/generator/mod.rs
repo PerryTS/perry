@@ -267,6 +267,24 @@ fn lower_generators(module: &mut Module) {
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
             m.body = b;
         }
+        // Field initializers and computed keys are evaluated outside any method
+        // body, so `static f = function* () {}` is only reachable from here.
+        for field in class
+            .fields
+            .iter_mut()
+            .chain(class.static_fields.iter_mut())
+        {
+            for e in field.init.iter_mut().chain(field.key_expr.iter_mut()) {
+                transform_generator_closures_in_expr(e, &mut next_local_id, &mut next_func_id);
+            }
+        }
+        for member in &mut class.computed_members {
+            transform_generator_closures_in_expr(
+                &mut member.key_expr,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+        }
     }
 
     // #3664: drain the async-generator func_ids collected above (named + closure
@@ -275,6 +293,18 @@ fn lower_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
+}
+
+fn transform_generator_closures_in_expr(
+    expr: &mut Expr,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    let mut stmts = [Stmt::Expr(std::mem::replace(expr, Expr::Undefined))];
+    transform_generator_closures_in_stmts(&mut stmts, next_local_id, next_func_id);
+    if let [Stmt::Expr(e)] = &mut stmts {
+        *expr = std::mem::replace(e, Expr::Undefined);
+    }
 }
 
 fn transform_generator_closures_in_stmts(
@@ -349,6 +379,7 @@ fn transform_generator_closures_in_stmts(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(f) = finally {
                             push_stmt_slice(&mut stack, f);

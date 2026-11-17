@@ -212,6 +212,7 @@ fn lower_array_assignment_from_expr(
             ],
         }),
         finally: None,
+        forof_completion: None,
     });
     result.push(close_stmt);
     result.extend(source.release(&[iter_id, next_id]));
@@ -349,10 +350,25 @@ fn lower_object_assignment_from_expr(
                 });
 
                 if let Some(id) = ctx.lookup_local(&name) {
-                    result.push(Stmt::Expr(Expr::LocalSet(
-                        id,
-                        Box::new(Expr::LocalGet(value_id)),
-                    )));
+                    // `{ name = init }` (#14732): as in the declaration form, the
+                    // initializer runs only when the read is `undefined` (a NaN keeps
+                    // its value), and an anonymous function takes `name`.
+                    let read = Expr::LocalGet(value_id);
+                    let assigned = match &assign.value {
+                        Some(init) => Expr::Conditional {
+                            condition: Box::new(super::pattern_binding::is_strictly_undefined(
+                                read.clone(),
+                            )),
+                            then_expr: Box::new(super::pattern_binding::lower_default_named(
+                                ctx,
+                                init,
+                                Some(name.as_str()),
+                            )?),
+                            else_expr: Box::new(read),
+                        },
+                        None => read,
+                    };
+                    result.push(Stmt::Expr(Expr::LocalSet(id, Box::new(assigned))));
                 } else {
                     return Err(anyhow!(
                         "Assignment to undeclared variable in destructuring: {}",
@@ -771,5 +787,84 @@ mod iterator_close_tests {
                 "rest must receive the saved pre-drain done bit"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod shorthand_default_tests {
+    use super::*;
+
+    fn lower(source: &str) -> Vec<Stmt> {
+        let parsed = perry_parser::parse_typescript(source, "shorthand_default.ts").unwrap();
+        crate::lower_module(&parsed, "shorthand_default", "shorthand_default.ts")
+            .unwrap()
+            .init
+    }
+
+    fn let_id(stmts: &[Stmt], wanted: &str) -> LocalId {
+        stmts
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Let { id, name, .. } if name == wanted => Some(*id),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    /// Every value stored into `target`, searching nested `if`/`try` bodies.
+    fn stores_into<'a>(stmts: &'a [Stmt], target: LocalId, out: &mut Vec<&'a Expr>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Expr(Expr::LocalSet(id, value)) if *id == target => out.push(value),
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    stores_into(then_branch, target, out);
+                    stores_into(else_branch.as_deref().unwrap_or(&[]), target, out);
+                }
+                Stmt::Try { body, .. } => stores_into(body, target, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// The store is `read === undefined ? <default> : read`, so the default is
+    /// evaluated only on the undefined arm and a NaN read keeps its value.
+    fn assert_defaulted(stmts: &[Stmt], name: &str, default: i64) {
+        let mut stores = Vec::new();
+        stores_into(stmts, let_id(stmts, name), &mut stores);
+        assert_eq!(stores.len(), 1, "`{name}` must be assigned exactly once");
+        let Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } = stores[0]
+        else {
+            panic!("`{name}` must be assigned through its default, got a bare read");
+        };
+        assert!(
+            matches!(&**condition, Expr::Compare { op: CompareOp::Eq, right, .. }
+                if matches!(**right, Expr::Undefined)),
+            "`{name}` default must be gated on `=== undefined`"
+        );
+        assert!(
+            matches!(**then_expr, Expr::Integer(n) if n == default),
+            "`{name}` default must be {default}"
+        );
+        assert!(matches!(**else_expr, Expr::LocalGet(_)));
+    }
+
+    #[test]
+    fn shorthand_default_is_applied() {
+        let stmts = lower("let o: any; ({ o = 7 } = {});");
+        assert_defaulted(&stmts, "o", 7);
+    }
+
+    #[test]
+    fn nested_shorthand_default_is_applied() {
+        let stmts = lower("let q: any, r: any; [[q = 1], { r = 2 }] = [[], {}];");
+        assert_defaulted(&stmts, "r", 2);
     }
 }

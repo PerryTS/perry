@@ -82,6 +82,11 @@ pub(super) struct Facts {
     /// `effects = { ... }`: what the body does to its inputs (realm_effects.rs).
     pub effects: Option<Value>,
     pub throws: Option<Value>,
+    /// `this = ignored`: the native's algorithm never reads its `this`
+    /// value (the specification clause takes only its arguments), so a call
+    /// through any reference to it, whatever `this` it passes, is the call
+    /// with `this` undefined. Declared where the native is defined.
+    pub this_ignored: bool,
 }
 
 impl Facts {
@@ -151,6 +156,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         family: None,
         effects: None,
         throws: None,
+        this_ignored: false,
     };
     let mut fields = BTreeSet::new();
     let mut member_tokens = None;
@@ -342,6 +348,12 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
             "value" => facts.value = Some(constant(&clause[2..])?),
             "throws" => facts.throws = Some(super::throws::operands(&clause[2..])?),
             "effects" => facts.effects = Some(super::effects::parse(&clause[2..])?),
+            "this" => {
+                if info::text(&clause[2..]) != "ignored" {
+                    return Err("`this` takes only `ignored`".into());
+                }
+                facts.this_ignored = true;
+            }
 
             "births" => {
                 if clause[2].text != "[" || clause.last().is_none_or(|t| t.text != "]") {
@@ -368,6 +380,19 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
     Ok(facts)
 }
 
+/// The one primitive type a runtime value is declared to have
+/// (`runtime(process.execPath, string)`): the provider returns only values of
+/// that type (ECMA-262 6.1: String, Number, Boolean).
+pub(super) fn runtime_type(ts: &[Token<'_>]) -> Option<&'static str> {
+    let n = ts.len();
+    if n < 7 || ts[0].text != "runtime" || ts[n - 3].text != "," {
+        return None;
+    }
+    ["string", "number", "boolean"]
+        .into_iter()
+        .find(|&k| ts[n - 2].text == k)
+}
+
 pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
     if ts
         .first()
@@ -376,7 +401,13 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
         if ts.len() < 4 || ts[1].text != "(" || ts.last().unwrap().text != ")" {
             return Err("runtime value requires its provider path".into());
         }
-        let binding = path(&ts[2..ts.len() - 1])?;
+        let inner = &ts[2..ts.len() - 1];
+        let inner = if runtime_type(ts).is_some() {
+            &inner[..inner.len() - 2]
+        } else {
+            inner
+        };
+        let binding = path(inner)?;
         if !binding.starts_with("process.") && !binding.starts_with("navigator.") {
             return Err("unknown runtime value provider".into());
         }
@@ -500,6 +531,7 @@ pub(super) fn logical(
             && !facts.native_method)
         || ((facts.instance.is_some() || facts.extends.is_some()) && !facts.native_method)
         || facts.family.is_some()
+        || facts.this_ignored
     {
         return Err("callable specialization requires a fn_info declaration".into());
     }
@@ -661,6 +693,7 @@ pub(super) fn callable(
 ) -> Result<Value, String> {
     let effects = facts.effects.take();
     let throws = facts.throws.take();
+    let this_ignored = facts.this_ignored;
     if facts.ansi_colors
         || facts.namespace_table.is_some()
         || facts.provider
@@ -698,6 +731,11 @@ pub(super) fn callable(
         "method" | "function" | "getter" | "setter" | "constructor"
     ) {
         return Err(format!("{kind} cannot annotate fn_info!"));
+    }
+    if this_ignored && !matches!(kind, "method" | "function") {
+        return Err(format!(
+            "{kind}: `this = ignored` declares a function's call"
+        ));
     }
     if (facts.instance_attrs.is_some() || facts.extends.is_some()) && kind != "constructor" {
         return Err("prototype attributes require a constructor birth".into());
@@ -1008,6 +1046,9 @@ pub(super) fn callable(
     if let Some(effects) = effects {
         declaration.insert("effects".into(), effects);
     }
+    if this_ignored {
+        declaration.insert("this_ignored".into(), Value::Bool(true));
+    }
     if let Some(constructor) = constructor {
         declaration.insert("constructor".into(), constructor);
     }
@@ -1024,6 +1065,13 @@ pub(super) fn callable(
 mod tests {
     use super::super::tokens;
     use super::*;
+    #[test]
+    fn this_takes_only_ignored() {
+        let facts = parse(&tokens("Math.cos, this = ignored").unwrap()).unwrap();
+        assert!(facts.this_ignored);
+        assert!(parse(&tokens("Math.cos, this = read").unwrap()).is_err());
+        assert!(!parse(&tokens("Math.cos").unwrap()).unwrap().this_ignored);
+    }
     #[test]
     fn integrity_is_only_frozen() {
         assert!(parse(&tokens("Example, integrity = sealed").unwrap()).is_err());

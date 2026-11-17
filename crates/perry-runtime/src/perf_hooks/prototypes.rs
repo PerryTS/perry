@@ -365,7 +365,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_method(proto, method, value, enumerable);
             }
             let getter = perf_method_value(
-                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::perf_hooks::prototypes::perf_time_origin_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::perf_hooks::prototypes::perf_time_origin_getter_thunk, 0; with_name("get timeOrigin"), with_declared(0)),
                 "get timeOrigin",
                 0,
             );
@@ -511,7 +511,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(
-            crate::fn_info!(#[realm("PerformanceObserver.supportedEntryTypes.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("PerformanceObserver.supportedEntryTypes.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_supported_entry_types_getter_thunk, 0; with_name("get supportedEntryTypes"), with_declared(0)),
             "get supportedEntryTypes",
             0,
         );

@@ -78,6 +78,18 @@ jobs:
   # Maintenance suites
   route:
     name: maintenance / suite routing
+    # On workflow_run, gate-failure-watch__observe is the only consumer of the
+    # plan, so this is the one place that decides which upstream runs it sees;
+    # any other run starts no runner.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.event == 'schedule' ||
+      ((github.event.workflow_run.event == 'workflow_dispatch' ||
+        github.event.workflow_run.event == 'repository_dispatch') &&
+       github.event.workflow_run.head_branch == 'main') ||
+      (github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'v')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -362,20 +374,8 @@ jobs:
       - route
     name: gate-failure-watch / validate
   gate-failure-watch__observe:
-    if: >-
-      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && (github.event_name == 'workflow_run' && (
-        github.event.workflow_run.event == 'schedule' ||
-        (
-          (github.event.workflow_run.event == 'workflow_dispatch' ||
-           github.event.workflow_run.event == 'repository_dispatch') &&
-          github.event.workflow_run.head_branch == 'main'
-        ) ||
-        (
-          github.event.workflow_run.event == 'push' &&
-          (github.event.workflow_run.head_branch == 'main' ||
-           startsWith(github.event.workflow_run.head_branch, 'v'))
-        )
-      )) }}
+    # route's job-level if decides which upstream runs are observed.
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && github.event_name == 'workflow_run' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -711,6 +711,8 @@ jobs:
   # Documentation suites
   route-documentation:
     name: documentation / suite routing
+    # No documentation suite runs on workflow_run.
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -810,7 +812,7 @@ jobs:
       - name: Validate gettext catalogs
         run: |
           # Translation updates require review. Regenerating here rewrites
-          # obsolete entries and can drop existing translations (#10955).
+          # obsolete entries and can drop existing translations.
           for catalog in docs/po/*.po; do
             msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
           done

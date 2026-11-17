@@ -1498,6 +1498,12 @@ pub fn run_with_parse_cache(
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
     // returned module's methods had no dispatch and all returned undefined.
     // The feature scan sees every spelling, so arm the hooks up front.
+    if !ctx.uses_get_builtin_module
+        && (ctx.uses_dynamic_native_constants
+            || ctx.native_addons_reach(perry_runtime_manifest::NodeApiReach::World))
+    {
+        native_provider_installs.push("js_nm_install_all_constants".to_string());
+    }
     if ctx.uses_get_builtin_module {
         native_provider_installs.push("js_nm_enable_install_all".to_string());
         native_provider_installs.push("js_node_submod_enable_install_all".to_string());
@@ -1919,6 +1925,61 @@ pub fn run_with_parse_cache(
     let need = super::source_need::compute(&ctx, args.output_type != "executable");
     let dropped_source = super::source_need::drop_unread_source(&mut ctx, &need);
     let source_need_seconds = source_need_started.elapsed().as_secs_f64();
+
+    // wpfacts: the whole-program facts run here, over the final HIR (the
+    // passes above are the last to change it; the class maps below borrow
+    // it until codegen). MATHC1/MATHC2: each namespace pair of the facts
+    // lowering then becomes the one arm its call site's verdict picks
+    // (`perry_hir::namespace_pairs`), before any analysis below reads the
+    // HIR: a proven call is the same HIR a build without the pair has, so
+    // class layouts, births, constructor contracts, providers and module
+    // options see what they see there.
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+        super::program_facts::native_externs(
+            ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
+        ),
+    );
+    // The optional-feature scan read each pair as its intrinsic arm
+    // (`feature_detect::detect_program_optional_feature_usage`); a module
+    // whose pick keeps a generic call, or whose pairs stay for codegen, is
+    // scanned again so its generic calls select their features.
+    let mut generic_kept = Vec::new();
+    if ctx.patched_builtins.namespace_pairs_by_verdict() {
+        for (path, module) in ctx.native_modules.iter_mut() {
+            let proven = super::program_facts::namespace_pair_proven(&program_facts, path);
+            let inactive = super::program_facts::namespace_pair_inactive(&program_facts, path);
+            let aliases = super::program_facts::alias_intrinsic_calls(&program_facts, path);
+            if perry_hir::namespace_pairs::pick_namespace_pair_arms(
+                module, &proven, &inactive, &aliases,
+            ) > 0
+            {
+                generic_kept.push(path.clone());
+            }
+        }
+    } else if ctx.patched_builtins.namespace_pairs {
+        generic_kept.extend(ctx.native_modules.keys().cloned());
+    }
+    collect_modules::feature_detect::detect_kept_generic_calls(&mut ctx, &generic_kept);
 
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
@@ -6648,32 +6709,33 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
+    // ACCBUILD3: a proven accessor site calls the holder's accessor by the
+    // symbol its own module emits, named from the holder's module and class.
+    // ONCHANGE3: the same for a proven method call's body entry.
+    let accessor_symbol = |holder: &str,
+                           class_id: u32,
+                           func: u32,
+                           key: &str,
+                           member: super::program_facts::Member| {
+        use super::program_facts::Member;
+        let hir = ctx.native_modules.get(&PathBuf::from(holder))?;
+        let prefix = compute_module_prefix(holder, &ctx.project_root, &ctx.module_prefix_overrides);
+        match member {
+            Member::Method => {
+                super::program_facts::method_symbol_in(hir, &prefix, class_id, func, key)
+            }
+            Member::Get | Member::Set => super::program_facts::accessor_symbol_in(
+                hir,
+                &prefix,
+                class_id,
+                func,
+                key,
+                member == Member::Set,
+            )
+            .map(|s| (s, perry_codegen::DirectAbi::default())),
+        }
+    };
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
         .install(|| {
@@ -6691,7 +6753,10 @@ pub fn run_with_parse_cache(
                         &mut opts,
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
-                    opts.program_facts = super::program_facts::view_for(&program_facts, path);
+                    opts.program_facts =
+                        super::program_facts::view_for(&program_facts, path, &accessor_symbol);
+                    std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                        ctx.patched_builtins.namespace_pairs_by_verdict();
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6912,11 +6977,14 @@ pub fn run_with_parse_cache(
                     hir_module,
                     &mut opts,
                 );
-                opts.program_facts = super::program_facts::view_for(&program_facts, path);
+                opts.program_facts =
+                    super::program_facts::view_for(&program_facts, path, &accessor_symbol);
                 opts.program_facts.dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
+                std::sync::Arc::make_mut(&mut opts.program_facts.elision).namespace_pair_arms =
+                    ctx.patched_builtins.namespace_pairs_by_verdict();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                 if opts.is_entry_module {
                     opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
@@ -8313,7 +8381,9 @@ pub fn run_with_parse_cache(
     // SNAP census compiles: the TLS anchors around the program objects (begin
     // first, end after every other compiled object, before the pads and the
     // runtime archive), so the program's TLS slots get pages of their own.
-    if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+    if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
+        || perry_codegen::stubs::snap_image_run()
+    {
         for end in [false, true] {
             let bytes =
                 perry_codegen::stubs::generate_snap_tls_anchor_object(end, target.as_deref())?;
@@ -8799,12 +8869,71 @@ pub fn run_with_parse_cache(
         report.check()?;
     }
 
+    // Image run (`PERRY_SNAP_IMAGE_RUN`): link B0, run it to the cut, then link
+    // B1 with the image section (see `snap_image_emit`).
+    let mut image_objs = obj_paths.clone();
+    let mut image_fps = obj_fingerprints.clone();
+    let mut image_prep = None;
+    let image_old_args = std::env::var("PERRY_EXTRA_LINK_ARGS").ok();
+    if perry_codegen::stubs::snap_image_run()
+        && target.is_none()
+        && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+    {
+        let b0 = PathBuf::from(format!("{}.b0", exe_path.display()));
+        let (hold_obj, hold_arg) =
+            super::snap_image_emit::placeholder(&object_output_dir, target.as_deref())
+                .map_err(|e| anyhow::anyhow!("snap image: {e}"))?;
+        let mut b0_objs = obj_paths.clone();
+        let mut b0_fps = obj_fingerprints.clone();
+        b0_objs.push(hold_obj);
+        b0_fps.push(None);
+        std::env::set_var(
+            "PERRY_EXTRA_LINK_ARGS",
+            format!("{} {hold_arg}", image_old_args.as_deref().unwrap_or("")),
+        );
+        let b0_link = build_and_run_link(
+            &args.input,
+            &ctx,
+            target.as_deref(),
+            &b0_objs,
+            &b0_fps,
+            &compiled_features,
+            &runtime_lib,
+            &stdlib_lib,
+            geisterhand_libs.as_ref(),
+            &optimized_libs.well_known_libs,
+            optimized_libs.prefer_well_known_before_stdlib,
+            &wasm_host_lib,
+            &b0,
+            format,
+            args.debug_symbols,
+            verbose,
+        );
+        match &image_old_args {
+            Some(v) => std::env::set_var("PERRY_EXTRA_LINK_ARGS", v),
+            None => std::env::remove_var("PERRY_EXTRA_LINK_ARGS"),
+        }
+        b0_link?;
+        match super::snap_image_emit::prepare(&b0, &object_output_dir, target.as_deref()) {
+            Ok(p) => {
+                image_objs.push(p.object.clone());
+                image_fps.push(None);
+                std::env::set_var(
+                    "PERRY_EXTRA_LINK_ARGS",
+                    format!("{} {hold_arg}", image_old_args.as_deref().unwrap_or("")),
+                );
+                image_prep = Some(p);
+            }
+            Err(why) => eprintln!("perry: snap image: no image: {why}"),
+        }
+    }
+
     let link_cache_status = build_and_run_link(
         &args.input,
         &ctx,
         target.as_deref(),
-        &obj_paths,
-        &obj_fingerprints,
+        &image_objs,
+        &image_fps,
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
@@ -8817,6 +8946,18 @@ pub fn run_with_parse_cache(
         args.debug_symbols,
         verbose,
     )?;
+    if let Some(p) = image_prep.take() {
+        match &image_old_args {
+            Some(v) => std::env::set_var("PERRY_EXTRA_LINK_ARGS", v),
+            None => std::env::remove_var("PERRY_EXTRA_LINK_ARGS"),
+        }
+        match super::snap_image_emit::verify(&exe_path, &p) {
+            Ok(report) => {
+                let _ = fs::write(format!("{}.snapimg.txt", exe_path.display()), report);
+            }
+            Err(why) => return Err(anyhow::anyhow!("snap image: {why}")),
+        }
+    }
 
     // Approved Node-API payloads are a relocatable authenticated sibling of
     // the executable. Run this even on a link-cache hit so a changed payload

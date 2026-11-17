@@ -9,9 +9,13 @@
 //! result, a coercion, a value of ⊤ or of another unit) is any string
 //! (`STRS_TOP`). An instantiated body's seeds carry their original node's
 //! constants (`summary.rs`, as they carry its interval): without that a
-//! selection of literals in a method solved per receiver is any string. So a node whose set is finite, and which holds no ⊤ and no
-//! bare marker, holds a String only by an unbroken chain of copies from a
-//! literal: at run time that String is the literal's own value, which is
+//! selection of literals in a method solved per receiver is any string.
+//! A finite set alone is not enough: a rule may fold a String born at run
+//! time to a constant (`"move " + 3`, `"q".toUpperCase()`); such a set
+//! carries `STRS_RUN` (provenance, not text: `"a" + ""` is a fresh String
+//! though `"a"` is also a literal). So a node whose set is finite and has
+//! no `STRS_RUN`, and which holds no ⊤ and no bare marker, holds a String
+//! only by an unbroken chain of copies from a literal: at run time that String is the literal's own value, which is
 //! born shared (`StringHeader::refcount == 0`: an image record or a pool
 //! atom) and which nothing appends to in place. A store or an alias of
 //! such a value therefore has no string to demote
@@ -27,10 +31,11 @@
 //! alias must catch. The dump (`PERRY_FACTS_DUMP`) prints one
 //! `# lit_strings` line per local and per field the fact holds for, with
 //! its constants, and one per other String field with what ends the fact
-//! (`refused=top:n<node>`, `any_string:n<node>`, `kind_top`, `accessor`).
+//! (`refused=top:n<node>`, `any_string:n<node>`: any string or a String a
+//! rule made, `kind_top`, `accessor`).
 
 use crate::gen::Gen;
-use crate::model::{prim, Atom, Model, NodeId, STRS_TOP, TOP};
+use crate::model::{prim, Atom, Model, NodeId, STRS_RUN, TOP};
 
 /// `PERRY_FACTS_LITERAL_STRINGS=0` turns the fact off.
 pub fn enabled() -> bool {
@@ -63,7 +68,7 @@ pub(crate) fn constants(m: &Model, nodes: &[NodeId]) -> Option<Vec<Atom>> {
         if m.literal_strings_sabotage {
             continue;
         }
-        if unknown || node.strs == STRS_TOP {
+        if unknown || m.strs_any(node.strs) || node.strs & STRS_RUN != 0 {
             return None;
         }
         atoms.extend_from_slice(m.str_atoms(node.strs));
@@ -93,7 +98,7 @@ pub(crate) fn refusal(m: &Model, nodes: &[NodeId]) -> Option<String> {
         {
             return Some(format!("top:n{n}"));
         }
-        if node.prim & prim::STR != 0 && node.strs == STRS_TOP {
+        if node.prim & prim::STR != 0 && (m.strs_any(node.strs) || node.strs & STRS_RUN != 0) {
             return Some(format!("any_string:n{n}"));
         }
     }

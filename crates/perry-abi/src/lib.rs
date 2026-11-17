@@ -27,6 +27,11 @@ pub use realm_cells::*;
 pub mod layouts;
 pub use layouts::*;
 pub mod realm_header;
+pub mod realm_phase;
+pub use realm_phase::{
+    realm_core_global, realm_rest_global, realm_value_global, REALM_CORE_GLOBALS,
+    REALM_REST_GLOBALS, REALM_REST_NAMES, REALM_UNBOUND_POISON, REALM_VALUE_GLOBALS,
+};
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;

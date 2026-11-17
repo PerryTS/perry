@@ -255,6 +255,7 @@ fn collect_instantiations_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_instantiations_in_stmts(body, ctx, module, idx);
             if let Some(c) = catch {

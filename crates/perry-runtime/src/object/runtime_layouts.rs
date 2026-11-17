@@ -808,7 +808,7 @@ runtime_layout!(
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
 mod global_atoms;
-pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
+pub(crate) use global_atoms::{builtin_global_atom, builtin_global_slot, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;

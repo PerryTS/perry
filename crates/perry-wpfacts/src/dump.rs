@@ -118,12 +118,6 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
-    if pf.rounds > 0 {
-        out.push_str(&format!(
-            "# rounds {} work_per_round={:?} broken={:?}\n",
-            pf.rounds, pf.round_work, pf.broken
-        ));
-    }
     for (mi, bindings) in pf.bindings.iter().enumerate() {
         for (id, b) in &bindings.locals {
             if let Some(o) = &b.indexed_owner {
@@ -252,16 +246,6 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# indexed_metadata_pristine {}\n",
         pf.indexed_metadata_pristine()
     ));
-    for (path, u) in &pf.units {
-        out.push_str(&format!(
-            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
-            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
-        ));
-    }
-    for l in &pf.unit_io {
-        out.push_str(l);
-        out.push('\n');
-    }
     // DESIGN-p4l4 §7: the value-record ledger (empty with the switch off).
     for l in crate::records::ledger_lines(&pf.templates, &pf.record_arrays) {
         out.push_str(&l);
@@ -274,7 +258,22 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     if let Some(a) = &pf.activation {
         out.push_str(&format!("# activation {a}\n"));
     }
+    if let Some(n) = pf.escaped_inactive {
+        out.push_str(&format!("# escaped-inactive={n}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
+    out.push_str(&format!(
+        "# field_truthy rules {} removing {}\n",
+        s.field_truthy.0, s.field_truthy.1
+    ));
+    for r in &s.solve_counters {
+        out.push_str(r);
+        out.push('\n');
+    }
+    for r in &s.field_truthy_rows {
+        out.push_str(r);
+        out.push('\n');
+    }
     for l in pf.family_reach.iter().flat_map(|f| f.dump_lines()) {
         out.push_str(&l);
         out.push('\n');
@@ -316,6 +315,20 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             out.push('\n');
         }
     }
+    // MATHB1: the intrinsic-callee verdicts (`I <module>@<start> .<key> …`).
+    for st in &pf.sites {
+        match &st.intrinsic_callee {
+            Some(crate::derive::IntrinsicCallee::Exact(n)) => out.push_str(&format!(
+                "I {}@{} .{} exact {n}\n",
+                st.module, st.byte_offset, st.key
+            )),
+            Some(crate::derive::IntrinsicCallee::No(why)) => out.push_str(&format!(
+                "I {}@{} .{} no {why}\n",
+                st.module, st.byte_offset, st.key
+            )),
+            None => {}
+        }
+    }
     for st in &pf.sites {
         let v = match &st.verdict {
             Verdict::OwnLength => "native:own-length".to_string(),
@@ -323,6 +336,17 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
+            Verdict::Dead => "dead".to_string(),
+            Verdict::OwnDataOrAbsent => "own-data-or-absent".to_string(),
+            Verdict::Throws => "throws".to_string(),
+            Verdict::PerKind => "per-kind".to_string(),
+            Verdict::NsExport => "ns-export".to_string(),
+            Verdict::AccessorGet => format!("accessor-get:{}", st.targets.join(",")),
+            Verdict::AccessorSet => format!("accessor-set:{}", st.targets.join(",")),
+            Verdict::AddsKey => "adds-key".to_string(),
+            Verdict::KnownObjectStore => "known-object-store".to_string(),
+            Verdict::ProxyTrap => "proxy-trap".to_string(),
+            Verdict::IntrinsicCall => "intrinsic-call".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(
@@ -502,7 +526,7 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
     // and a layout the census broke claims nothing (its readers hold TOP).
     let stable = pf.stable_classes();
     for t in &pf.templates {
-        if t.module != Some(module) || pf.broken.contains(&t.display) {
+        if t.module != Some(module) {
             continue;
         }
         let Some(cid) = t.class_id else {

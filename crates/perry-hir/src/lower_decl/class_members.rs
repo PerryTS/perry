@@ -379,6 +379,7 @@ pub fn collect_method_captures(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_let_ids(body, out);
                     if let Some(c) = catch {

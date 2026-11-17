@@ -57,6 +57,10 @@ pub struct RealmProperty {
     pub get: Option<String>,
     #[serde(default)]
     pub set: Option<String>,
+    /// The one primitive type a runtime-computed value always has
+    /// (`runtime(process.pid, number)`): `string`, `number` or `boolean`.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub value_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -192,6 +196,11 @@ pub struct RealmDeclaration {
     /// values in the array it makes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<String>,
+    /// What an exotic host object declares every own value to be
+    /// (`process.env, kind = exotic, …, values = string`): its hooks read and
+    /// store only such values (a [[Set]] stores ToString(v)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
     #[serde(default)]
@@ -208,6 +217,9 @@ pub struct RealmDeclaration {
     pub effects_body: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub throws: Vec<RealmThrowOperand>,
+    /// `this = ignored` at the definition: the body never reads its `this`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub this_ignored: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -1469,8 +1469,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
                 let r_d = vals.get(1).cloned().unwrap_or_else(|| "0.0".to_string());
                 let blk = ctx.block();
-                let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &vals[0])]);
-                Ok(blk.call(DOUBLE, "js_parse_int", &[(I64, &s_handle), (DOUBLE, &r_d)]))
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_parse_int_value",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &r_d)],
+                ))
             })
         }
         Expr::ParseFloat(string) => {

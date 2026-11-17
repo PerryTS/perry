@@ -729,6 +729,17 @@ fn number_index_switches_are_cache_inputs() {
     }
 }
 
+/// The two-phase realm switch decides which runtime entry a static global
+/// read calls and whether the entry announces the mode, so an object compiled
+/// with it must never be reused without it.
+#[test]
+fn realm_two_phase_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_REALM_TWO_PHASE"),
+        "PERRY_REALM_TWO_PHASE must key the compile caches"
+    );
+}
+
 /// The local-range switch decides whether codegen's range proofs read the
 /// facts' interval of an int32 local, so `=0` must never reuse an `=1`
 /// object.

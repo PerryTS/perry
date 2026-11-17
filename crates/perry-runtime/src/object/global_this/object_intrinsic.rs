@@ -126,6 +126,9 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
 /// `global`: this thread's own pair (see [`ensure_object_intrinsics`]) when
 /// `global` is the thread's realm global, a fresh pair for any other realm
 /// (a `vm` context or an eval realm), whose intrinsics are its own.
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 pub(crate) fn object_intrinsics_for_realm(global: *mut ObjectHeader) -> ObjectPair {
     if is_thread_realm_global(global) {
         return ensure_object_intrinsics();
@@ -237,7 +240,7 @@ mod tests {
             assert!(method.is_pointer(), "hasOwnProperty missing");
 
             crate::object::js_get_global_this();
-            let global_object = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+            let global_object = crate::object::builtin_value_core("Object");
             let (ctor_now, proto_now) = ensure_object_intrinsics();
             assert_eq!(
                 global_object.to_bits(),

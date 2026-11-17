@@ -1,0 +1,1 @@
+Execution-prefix image capture (build knob, off by default): the capture writes the shape records minted between the baseline and the cut as a mint record in mint order and verifies it against the live records; the stop names the record as written until restore replays it.

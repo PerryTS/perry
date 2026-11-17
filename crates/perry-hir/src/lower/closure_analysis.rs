@@ -101,6 +101,7 @@ fn widen_mutable_captures_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             widen_mutable_captures_stmts(body);
             if let Some(catch_clause) = catch {
@@ -428,6 +429,7 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_assigned_stmt(s, out);
@@ -735,6 +737,7 @@ fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_captures_stmt(s, out);
@@ -1030,6 +1033,7 @@ fn collect_scope_level_assigns_stmt(stmt: &Stmt, out: &mut std::collections::Has
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_scope_level_assigns_stmt(s, out);
@@ -1158,6 +1162,7 @@ fn collect_closure_assigned_in_closure_body_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_assigned_in_closure_body_stmt(s, out);

@@ -196,6 +196,7 @@ impl Analyzer<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.list(body);
                 if let Some(c) = catch {
@@ -285,6 +286,7 @@ pub(super) fn for_each_stmt_shallow(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for_each_stmt_shallow(body, f);
                 if let Some(c) = catch {
