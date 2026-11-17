@@ -1658,6 +1658,7 @@ mod getter_result_decls;
 mod given_proto_census;
 mod given_proto_members;
 mod gs1;
+mod gs2;
 mod held_realm_flow;
 mod held_realm_verdicts;
 mod in1;

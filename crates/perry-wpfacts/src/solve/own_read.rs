@@ -112,11 +112,12 @@ impl Model {
         }
         // An object's own fields: by the key's values (`IdxKey`: a number
         // key names only its numeric fields). A marker's fields are its
-        // reach markers under any key; another value (the global object, a
-        // namespace) keeps every field.
+        // reach markers under any key; another value (a namespace) keeps
+        // every field. The global object under a key of known shape keeps
+        // the fields the shape can spell (`global_read_split`).
         if self.index_needs_all_own_fields(t) {
-            let all = self.all_fields(t);
-            self.edge(all, dst);
+            let own = self.key_fields(t, Key::Any(shape));
+            self.edge(own, dst);
         }
         // PR-C1: a program Array with a length interval reads `undefined`
         // past its end only (`Cons::ElemUndef`, watching the key and the
