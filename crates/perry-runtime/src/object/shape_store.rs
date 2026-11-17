@@ -231,7 +231,7 @@ unsafe fn record_own_overwrite(
     if !record.object_kind().is_ordinary_layout() {
         return Some(false);
     }
-    if record.object_kind() == shapes::ShapeObjectKind::Ordinary {
+    if record.kind_is(shapes::ShapeObjectKind::Ordinary) {
         if let Some(slot) = record.own_store_slot(key) {
             let Some(slot) = slot else {
                 // Shape-proven absence cannot become an overwrite on another own-key lookup.
@@ -639,8 +639,7 @@ unsafe fn try_array_store(
     }
     // This internal holder has ordinary data/descriptor semantics; it is
     // not one of the runtime-born special objects the unmarked kind covers.
-    if shapes::object_shape_record(bag)?.object_kind() == shapes::ShapeObjectKind::OrdinaryUnmarked
-    {
+    if shapes::object_shape_record(bag)?.kind_is(shapes::ShapeObjectKind::OrdinaryUnmarked) {
         super::alloc_plain::mark_object_plain_ordinary(bag);
     }
     if !existing {
@@ -885,7 +884,7 @@ unsafe fn apply_proven_add(
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
     let record = shapes::object_shape_record(obj)?;
-    if record.object_kind() != shapes::ShapeObjectKind::Ordinary
+    if !record.kind_is(shapes::ShapeObjectKind::Ordinary)
         || record.summary() & super::key_attrs::SUMMARY_PRIVATE != 0
         || super::class_registry::is_class_object_ptr(obj.cast())
         || record.own_store_slot(key_ptr) != Some(None)
@@ -1072,8 +1071,7 @@ unsafe fn try_function_store(
     let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
     let bag = crate::closure::props::bag_ensure(ptr);
     let bag_root = scope.root_raw_mut_ptr(bag);
-    if shapes::object_shape_record(bag)?.object_kind() == shapes::ShapeObjectKind::OrdinaryUnmarked
-    {
+    if shapes::object_shape_record(bag)?.kind_is(shapes::ShapeObjectKind::OrdinaryUnmarked) {
         super::alloc_plain::mark_object_plain_ordinary(bag);
     }
     let key_ptr = key_root.get_raw_const_ptr::<crate::StringHeader>();

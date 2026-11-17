@@ -23,6 +23,9 @@ pub enum RealmKind {
     Setter,
     Constant,
     Alias,
+    /// A birth the runtime makes once per call (an arguments object), never
+    /// a realm singleton: reach edges to the layouts it births only, no cell.
+    BirthSite,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -464,6 +467,8 @@ mod schema_tests {
     fn dynamic_providers_cannot_freeze_sampled_storage() {
         let empty = r#"[{"name":"argv","kind":"exotic","value":{"kind":"dynamic","value":"process.argv"}}]"#;
         assert!(manifest(empty).validate().is_ok());
+        let site = r#"[{"name":"%ExampleBirth%","kind":"birth_site","births":[]}]"#;
+        assert!(manifest(site).validate().is_ok());
         let sampled = r#"[{"name":"argv","kind":"exotic","value":{"kind":"dynamic","value":"process.argv"},"properties":[{"key":"0","symbol":false,"attributes":7,"value":{"kind":"string","value":"/qualification-machine/app"}}]}]"#;
         assert!(manifest(sampled).validate().is_err());
     }

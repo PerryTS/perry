@@ -89,6 +89,15 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let obj = raw.cast::<ObjectHeader>();
+                    // An arguments object: its born elements answer here
+                    // from the object kind, like a dense array's.
+                    if header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0 {
+                        if let Some(value) = unsafe {
+                            crate::object::arguments_object_index_of_flagged(obj, index_u32)
+                        } {
+                            return value;
+                        }
+                    }
                     // Elements-backed instance: an in-bounds non-hole element
                     // answers directly; a hole continues to the complete
                     // dispatcher (prototype chain).

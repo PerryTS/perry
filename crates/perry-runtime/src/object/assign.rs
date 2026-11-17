@@ -929,9 +929,16 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     } else {
         PositionalPlan::Refused
     };
-    let strict_set_is_shape_equivalent =
-        !define && positional_assign_target_is_safe(target, target_is_array, positional_plan);
+    // An elements-backed source (an Array-subclass instance, an arguments
+    // object) keeps its indices outside its keys: the ownKeys-driven copy
+    // reads them, in order, with the rest.
+    let elements_backed = crate::gc_type_is_object!(source_obj_type)
+        && crate::array::subclass_elements::own_elements(src as usize).is_some();
+    let strict_set_is_shape_equivalent = !define
+        && !elements_backed
+        && positional_assign_target_is_safe(target, target_is_array, positional_plan);
     if (!define
+        || elements_backed
         || (crate::gc_type_is_object!(source_obj_type) && super::overflow::has_overflow(src)))
         && !strict_set_is_shape_equivalent
         && matches!(

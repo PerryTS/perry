@@ -546,10 +546,12 @@ fn get_field_by_name_past_data_probe(
     // An elements-backed Array-subclass instance answers its indices and
     // `length` from its store; an absent index falls through to the ordinary
     // lookup, which reaches the prototype chain (the shape has no index keys).
-    if let Some((_, elements)) = unsafe { crate::array::subclass_elements::backed(obj as usize) } {
-        if let Some(elements_key) = unsafe { crate::array::subclass_elements::key_of_header(key) } {
+    if let Some(view) = unsafe { crate::array::subclass_elements::own_elements(obj as usize) } {
+        if let Some(elements_key) = unsafe { crate::array::subclass_elements::key_of_header(key) }
+            .filter(|k| view.admits(*k))
+        {
             if let Some(value) =
-                unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
+                unsafe { crate::array::subclass_elements::get_by_key(view, elements_key) }
             {
                 return JSValue::from_bits(value.to_bits());
             }

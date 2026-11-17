@@ -44,7 +44,7 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
         let r = unsafe { *record };
         if r.has(RECORD_FLAG_EXTERNAL_CARRIER)
             && r.hole_count == 0
-            && r.object_kind() == ShapeObjectKind::Ordinary
+            && r.kind_is(ShapeObjectKind::Ordinary)
             && r.semantic_generation == 0
             && r.summary() == 0
             // A record whose identity names a prototype object holds a

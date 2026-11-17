@@ -132,20 +132,23 @@ pub(super) unsafe fn native_module_enum(
 /// dereferenced as an `ObjectHeader` → SIGSEGV.
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
+    // process.env is a plain object: its refresh runs first (one latch test
+    // when no env object exists).
     let value = crate::process::refresh_process_env(value);
+    let jv = JSValue::from_bits(value.to_bits());
+    // An ordinary object answers from its structure first (E2); every other
+    // receiver, deferred namespaces included (a synthetic class), declines.
+    if jv.is_pointer() {
+        if let Some(keys) = ordinary_keys::own_enumerable_keys_of_value(value.to_bits()) {
+            return keys;
+        }
+    }
     if let Some(result) = super::super::deferred_namespace::enumerable_keys(value) {
         return result;
     }
-    let jv = JSValue::from_bits(value.to_bits());
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
         super::super::has_own_helpers::throw_to_object_nullish_type_error();
-    }
-    // A tracked ordinary shape answers before the generic registry dispatch.
-    if jv.is_pointer() {
-        if let Some(keys) = ordinary_keys::try_keys(jv.as_pointer::<ObjectHeader>()) {
-            return keys;
-        }
     }
     // A Proxy is a small registered id — route through the `ownKeys` trap +
     // enumerability filter rather than the handle-dispatch fallback below.
@@ -299,7 +302,67 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
 /// non-enumerable) as "seen" after emitting that level's enumerable subset.
 #[no_mangle]
 pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
+    // process.env is a plain object: its refresh runs first, as in
+    // `js_object_keys_value` (one latch test when no env object exists).
+    let value = crate::process::refresh_process_env(value);
+    if let Some((keys, _)) = ordinary_keys::for_in_keys_of_value(value.to_bits()) {
+        return keys;
+    }
     for_in_keys_with(value, lazy_shadow_enabled())
+}
+
+/// `js_for_in_keys_value` plus the loop fact (`js_for_in_loop_fact`) of the
+/// snapshot, written to `fact_out` (the loop's own fact slot): the structural
+/// path reads it off its copy; the generic walk takes it from the receiver,
+/// rooted across the walk's allocations.
+#[no_mangle]
+pub extern "C" fn js_for_in_keys_fact(value: f64, fact_out: *mut i64) -> *mut ArrayHeader {
+    let value = crate::process::refresh_process_env(value);
+    if let Some((keys, fact)) = ordinary_keys::for_in_keys_of_value(value.to_bits()) {
+        unsafe { *fact_out = fact as i64 };
+        return keys;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    let keys = for_in_keys_with(value, lazy_shadow_enabled());
+    let fact =
+        unsafe { ordinary_keys::for_in_loop_fact(receiver.get_nanbox_f64().to_bits(), keys) };
+    unsafe { *fact_out = fact as i64 };
+    keys
+}
+
+/// The for-in loop fact (DYNP E3c), taken once at loop start beside the
+/// snapshot `keys`: see [`ordinary_keys::for_in_loop_fact`]. 0 = none.
+#[no_mangle]
+pub extern "C" fn js_for_in_loop_fact(obj: f64, keys: *const ArrayHeader) -> i64 {
+    unsafe { ordinary_keys::for_in_loop_fact(obj.to_bits(), keys) as i64 }
+}
+
+/// The for-in loop's deletion check `keys[idx] in obj` under the loop fact
+/// `fact` (DYNP E3c). `keys` is the loop's snapshot (an array only the loop
+/// holds) and `idx` the loop counter below its length, so the key is its
+/// element `idx`, read directly. The own key still at its place answers
+/// `true` from a few loads ([`ordinary_keys::key_live_by_fact`]); everything
+/// else is the complete `in` operator.
+#[no_mangle]
+pub extern "C" fn js_for_in_key_live(obj: f64, keys: f64, idx: f64, fact: i64) -> f64 {
+    let pos = idx as u32;
+    let arr = (keys.to_bits() & crate::value::POINTER_MASK) as *const ArrayHeader;
+    let in_range = pos as f64 == idx && !arr.is_null() && unsafe { pos < (*arr).length };
+    let key = if in_range {
+        unsafe { f64::from_bits(*crate::array::array_elements_ptr(arr).add(pos as usize)) }
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    if fact != 0
+        && in_range
+        && unsafe {
+            ordinary_keys::key_live_by_fact(obj.to_bits(), key.to_bits(), pos, fact as u64)
+        }
+    {
+        return f64::from_bits(JSValue::bool(true).bits());
+    }
+    crate::object::field_get_set::has_property::js_in_operator(obj, key)
 }
 
 /// The walk itself, with the shadow-set strategy as a parameter so a test can
@@ -1179,7 +1242,7 @@ pub(crate) use buffers::registered_buffer_own_keys;
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
-    if let Some(keys) = ordinary_keys::try_keys(obj) {
+    if let Some(keys) = ordinary_keys::own_enumerable_keys(obj) {
         return keys;
     }
     object_keys_fallback(obj)
@@ -1189,20 +1252,75 @@ fn object_keys_fallback(obj: *const ObjectHeader) -> *mut ArrayHeader {
     // An elements-backed Array-subclass instance: its present indices come
     // first (ascending, as strings), then the shape's own enumerable keys.
     // `length` is non-enumerable and not in the shape, so it never appears.
-    if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {
+    if unsafe { crate::array::subclass_elements::own_elements(obj as usize) }.is_some() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_h = scope.root_raw_const_ptr(obj);
         let (shape_keys, obj) = obj_h.across_const::<ObjectHeader, _>(|| js_object_keys_shape(obj));
-        if let Some((_, elements)) =
-            unsafe { crate::array::subclass_elements::backed(obj as usize) }
-        {
+        if let Some(view) = unsafe { crate::array::subclass_elements::own_elements(obj as usize) } {
             return unsafe {
-                crate::array::subclass_elements::prepend_index_keys(elements, shape_keys, false)
+                crate::array::subclass_elements::prepend_index_keys(view, shape_keys, false)
             };
         }
         return shape_keys;
     }
     js_object_keys_shape(obj)
+}
+
+/// `Object.values` / `Object.entries` of an elements-backed object (an
+/// Array-subclass instance, an arguments object): EnumerableOwnProperties over
+/// the own enumerable keys in [`js_object_keys`] order (indices ascending,
+/// then string keys in insertion order), each value read by [[Get]], which
+/// answers an element, a moved index's own key or a mapped cell alike.
+fn elements_backed_enum(obj: *const ObjectHeader, what: MapSetEnum) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let (keys, _) = obj_h.across_const::<ObjectHeader, _>(|| object_keys_fallback(obj));
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = keys_h.with_mut_ptr(|k: *mut ArrayHeader| crate::array::js_array_length(k));
+    let (result, _) = keys_h.across_mut::<ArrayHeader, _>(|| crate::array::js_array_alloc(count));
+    let out_h = scope.root_raw_mut_ptr(result);
+    let push = |value: f64| {
+        let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
+            let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
+            crate::array::js_array_push_f64(out, value)
+        });
+        out_h.set_raw_mut_ptr(grown);
+    };
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key = keys_h.with_mut_ptr(|k: *mut ArrayHeader| crate::array::js_array_get(k, i));
+        let key_h = iter_scope.root_nanbox_u64(key.bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) =
+            unsafe { crate::string::js_string_key_bytes(key, &mut sso) }.map(<[u8]>::to_vec)
+        else {
+            continue;
+        };
+        let receiver = obj_h
+            .with_const_ptr(|o: *const ObjectHeader| crate::value::js_nanbox_pointer(o as i64));
+        let value = unsafe {
+            crate::value::js_get_property(receiver, name.as_ptr() as i64, name.len() as i64)
+        };
+        let value_h = iter_scope.root_nanbox_f64(value);
+        match what {
+            MapSetEnum::Entries => {
+                let pair = crate::array::js_array_alloc(2);
+                let pair_h = iter_scope.root_raw_mut_ptr(pair);
+                for part in [key_h.get_nanbox_f64(), value_h.get_nanbox_f64()] {
+                    let (grown, _) = pair_h.across_mut::<ArrayHeader, _>(|| {
+                        let p: *mut ArrayHeader = pair_h.with_mut_ptr(|p| p);
+                        crate::array::js_array_push_f64(p, part)
+                    });
+                    pair_h.set_raw_mut_ptr(grown);
+                }
+                push(pair_h.with_mut_ptr(|p: *mut ArrayHeader| {
+                    f64::from_bits(JSValue::array_ptr(p).bits())
+                }));
+            }
+            _ => push(value_h.get_nanbox_f64()),
+        }
+    }
+    out_h.with_mut_ptr(|p| p)
 }
 
 fn refresh_env_receiver(obj: *const ObjectHeader) -> *const ObjectHeader {
@@ -1612,6 +1730,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
             | b"#<perry:pin-overflow>"
             | b"#<perry:prototype>"
     ) || b == crate::object::map_set_subclass::BACKING_KEY
+        || b == crate::promise::subclass::BACKING_KEY
         || b == crate::object::parent_static::CLASS_OBJECT_PARENT_KEY.as_bytes()
         || b == crate::object::class_registry::evaluation_heritage::INSTANCE_CONSTRUCTING_CLASS_KEY
             .as_bytes()
@@ -1676,21 +1795,8 @@ pub(crate) unsafe fn descriptor_marks_non_enumerable(
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
-    // An elements-backed Array-subclass instance: its present elements come
-    // first (ascending), then the shape's own enumerable properties.
-    if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_h = scope.root_raw_const_ptr(obj);
-        let (shape_part, obj) =
-            obj_h.across_const::<ObjectHeader, _>(|| js_object_values_shape(obj));
-        if let Some((_, elements)) =
-            unsafe { crate::array::subclass_elements::backed(obj as usize) }
-        {
-            return unsafe {
-                crate::array::subclass_elements::prepend_index_values(elements, shape_part)
-            };
-        }
-        return shape_part;
+    if unsafe { crate::array::subclass_elements::own_elements(obj as usize) }.is_some() {
+        return elements_backed_enum(obj, MapSetEnum::Values);
     }
     js_object_values_shape(obj)
 }
@@ -1855,21 +1961,8 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
-    // An elements-backed Array-subclass instance: its present elements come
-    // first (ascending), then the shape's own enumerable properties.
-    if unsafe { crate::array::subclass_elements::backed(obj as usize) }.is_some() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_h = scope.root_raw_const_ptr(obj);
-        let (shape_part, obj) =
-            obj_h.across_const::<ObjectHeader, _>(|| js_object_entries_shape(obj));
-        if let Some((_, elements)) =
-            unsafe { crate::array::subclass_elements::backed(obj as usize) }
-        {
-            return unsafe {
-                crate::array::subclass_elements::prepend_index_entries(elements, shape_part)
-            };
-        }
-        return shape_part;
+    if unsafe { crate::array::subclass_elements::own_elements(obj as usize) }.is_some() {
+        return elements_backed_enum(obj, MapSetEnum::Entries);
     }
     js_object_entries_shape(obj)
 }

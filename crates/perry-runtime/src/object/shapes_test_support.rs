@@ -163,10 +163,7 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
     // does before deciding that a handle is uncarried.
     crate::object::with_transition_cache(|table| unsafe {
         for entry in (*table).iter_mut() {
-            if stale.contains(&entry.prev_shape_id)
-                || stale.contains(&entry.target_shape_id)
-                || crate::object::spread::source_shape(entry).is_some_and(|w| stale.contains(&w))
-            {
+            if stale.contains(&entry.prev_shape_id) || stale.contains(&entry.target_shape_id) {
                 *entry = std::mem::zeroed();
             }
         }

@@ -272,6 +272,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
+        crate::object::arguments::arguments_object_unmap_all(obj);
         if shapes::transition_object_integrity(
             obj,
             crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND,

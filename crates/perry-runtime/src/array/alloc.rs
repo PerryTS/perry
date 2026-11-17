@@ -205,6 +205,69 @@ pub(crate) fn js_array_alloc_named_props_reserved(
     }
 }
 
+/// A fresh array whose element layout is born tag-scanned
+/// (`GC_LAYOUT_UNKNOWN`, the zero layout state of a fresh header): the caller
+/// writes value words of any kind into `[0, n)` with nothing allocating in
+/// between, then publishes `length = n`. No layout rebuild, no raw-f64 flag
+/// to revoke. Slack holds the hole.
+pub(crate) fn js_array_alloc_tag_scanned(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
+        fill_fresh_capacity_with_holes(ptr);
+    }
+    ptr
+}
+
+/// [`js_array_alloc_tag_scanned`] through the birth that cannot collect
+/// (`arena_alloc_gc_no_collect`): null on a refusal, and nothing has collected
+/// then either. The capacity is NOT filled: the caller writes its prefix and
+/// fills the rest with [`fill_capacity_with_holes_from`] before anything can
+/// allocate or collect.
+#[inline(always)]
+pub(crate) fn js_array_try_alloc_tag_scanned_unfilled(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
+    let ptr = crate::arena::arena_alloc_gc_no_collect(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    if ptr.is_null() {
+        return ptr;
+    }
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
+    }
+    ptr
+}
+
+/// Fills elements `from..capacity` of a just-born array with the hole.
+///
+/// # Safety
+/// `ptr` is a fresh array nothing else references yet.
+#[inline(always)]
+pub(crate) unsafe fn fill_capacity_with_holes_from(ptr: *mut ArrayHeader, from: u32) {
+    let elements = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
+    for i in from as usize..(*ptr).capacity as usize {
+        // GC_STORE_AUDIT(INIT): a just-allocated array nothing references yet,
+        // written with a non-pointer sentinel: no old value, no edge, no barrier.
+        std::ptr::write(elements.add(i), crate::value::TAG_HOLE);
+    }
+}
+
 /// Allocate a fresh array whose initialized prefix is known to contain only
 /// heap pointers. Runtime producers such as `String.prototype.split` use this
 /// instead of starting as a raw-f64 array and immediately invalidating that

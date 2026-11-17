@@ -642,6 +642,16 @@ pub(super) fn logical(
         }
         declaration.insert("attributes".into(), number(facts.attrs.unwrap_or(5)));
         "alias"
+    } else if facts.kind.as_deref() == Some("birth_site") {
+        // A per-call runtime birth: no object, header or cell of its own; its
+        // edges are the layouts naming it as owner (realm_layouts attach_births).
+        if facts.attrs.is_some() {
+            return Err(format!(
+                "{}: a birth site has no property facts",
+                facts.name
+            ));
+        }
+        "birth_site"
     } else {
         return Err(format!("{} needs an object birth or provider", facts.name));
     };

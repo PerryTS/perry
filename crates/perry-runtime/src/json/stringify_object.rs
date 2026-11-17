@@ -207,6 +207,14 @@ unsafe fn stringify_object_walk(
         write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
     }
+    // An elements-backed object keeps its indices outside its keys, so the
+    // slot walk below cannot see them: SerializeJSONObject over its
+    // EnumerableOwnProperties, the keys and [[Get]] that Object.values uses.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        *global_proof = false;
+        stringify_elements_backed_object(ptr, buf, depth, to_json_resolved);
+        return;
+    }
     // One shape-table probe answers both the keys and the live inline-slot
     // bound; the member loop below re-derives the keys only after a call that
     // can run user code or collect. Re-deriving them at every key access cost
@@ -778,4 +786,71 @@ unsafe fn stringify_object_walk(
     if depth > MAX_FAST_DEPTH {
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
     }
+}
+
+/// SerializeJSONObject for an elements-backed object: the own enumerable
+/// string keys in `Object.keys` order, each value read by [[Get]] (an
+/// element, a moved index's own key and a mapped cell answer alike).
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn stringify_elements_backed_object(
+    ptr: *const u8,
+    buf: &mut String,
+    depth: u32,
+    to_json_resolved: bool,
+) {
+    if !to_json_resolved {
+        if let Some(to_json_val) = object_get_to_json(ptr) {
+            arm_to_json_result_guard(to_json_val);
+            stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
+            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+            return;
+        }
+    }
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_u64(JSValue::pointer(ptr).bits());
+    let keys = crate::object::js_object_keys(ptr as *const crate::ObjectHeader);
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_length(k));
+    buf.push('{');
+    let mut first = true;
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_get(k, i));
+        let _key_h = iter_scope.root_nanbox_u64(key.bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) = crate::string::js_string_key_bytes(key, &mut sso).map(<[u8]>::to_vec)
+        else {
+            continue;
+        };
+        let value = crate::value::js_get_property(
+            obj_h.get_nanbox_f64(),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        );
+        let bits = value.to_bits();
+        if bits == TAG_UNDEFINED || is_closure_value(bits) || is_symbol_value(bits) {
+            continue;
+        }
+        let _value_h = iter_scope.root_nanbox_f64(value);
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        let name = String::from_utf8_lossy(&name);
+        write_escaped_string(buf, &name);
+        buf.push(':');
+        set_to_json_key_str(&name);
+        stringify_value_depth(value, TYPE_UNKNOWN, buf, depth + 1);
+    }
+    buf.push('}');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
