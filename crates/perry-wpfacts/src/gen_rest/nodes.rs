@@ -67,6 +67,7 @@ impl<'a> Gen<'a> {
     pub(super) fn folded_call(
         &mut self,
         fx: &Fx,
+        e: &Expr,
         call: &perry_hir::folded_call::FoldedCall<'_>,
     ) -> NodeId {
         let recv = match call.receiver {
@@ -78,7 +79,7 @@ impl<'a> Gen<'a> {
             self.list_push(recv, Some(args.len() as u32));
         }
         let a = self.m.atom(call.method);
-        self.folded_site(fx, &call.receiver, a, recv);
+        self.folded_site(fx, &crate::gen::variant_name(e), &call.receiver, a, recv);
         self.mcall(recv, Key::Named(a), args, vec![])
     }
 
@@ -87,10 +88,19 @@ impl<'a> Gen<'a> {
     pub(crate) fn folded_site(
         &mut self,
         fx: &Fx,
+        op: &str,
         receiver: &perry_hir::folded_call::Receiver<'_>,
         key: Atom,
         recv: NodeId,
     ) {
+        self.member_ops.push(crate::member_ops::MemberOp {
+            module: fx.module,
+            op: op.to_owned(),
+            key,
+            recv: Some(recv),
+            namespace: None,
+            folded: true,
+        });
         if let Some(site) = perry_hir::folded_call::receiver_site(receiver) {
             self.folded_sites.push(crate::gen::FoldedSite {
                 module: fx.module,
