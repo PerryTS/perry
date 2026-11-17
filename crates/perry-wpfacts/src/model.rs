@@ -1101,6 +1101,12 @@ pub enum Protocol {
     /// arguments). Every value it shows and what a hook returns is
     /// formatted the same way.
     InspectShown,
+    /// The formatter showing a Proxy's TARGET (`format_proxy_value`; Node
+    /// `formatValue` after `getProxyDetails`): its own values, each
+    /// `InspectShown`. No hook is looked up on it here: the Proxy's
+    /// `[util.inspect.custom]` is read off the target and called with
+    /// `this` = the Proxy (`Model::proxy_inspect_shown`).
+    InspectTarget,
     /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
     /// error's message runs on an object without a named constructor
     /// (lib/internal/errors.js `determineSpecificType`; node 26
@@ -1124,7 +1130,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    pub const ALL: [Protocol; 16] = [
+    pub const ALL: [Protocol; 17] = [
         Protocol::ToPrimitive,
         Protocol::Iterate,
         Protocol::IterNext,
@@ -1138,6 +1144,7 @@ impl Protocol {
         Protocol::OwnKeys,
         Protocol::Inspect,
         Protocol::InspectShown,
+        Protocol::InspectTarget,
         Protocol::ShallowInspect,
         Protocol::Clone,
         Protocol::Any,
@@ -1183,6 +1190,7 @@ impl Protocol {
             Protocol::IterResult
             | Protocol::AsyncIterResult
             | Protocol::OwnKeys
+            | Protocol::InspectTarget
             | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -1225,7 +1233,7 @@ impl Protocol {
         match self {
             Protocol::Json => &[Protocol::Json],
             Protocol::Inspect => &[Protocol::InspectShown],
-            Protocol::InspectShown => &[Protocol::InspectShown],
+            Protocol::InspectShown | Protocol::InspectTarget => &[Protocol::InspectShown],
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1242,6 +1250,7 @@ impl Protocol {
             Protocol::Json
                 | Protocol::Inspect
                 | Protocol::InspectShown
+                | Protocol::InspectTarget
                 | Protocol::Clone
                 | Protocol::BufferFrom
         )
@@ -1258,6 +1267,7 @@ impl Protocol {
             Protocol::Json
             | Protocol::Inspect
             | Protocol::InspectShown
+            | Protocol::InspectTarget
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
@@ -1301,6 +1311,7 @@ impl Protocol {
             | Protocol::AsyncIterResult
             | Protocol::HasInstance
             | Protocol::OwnKeys
+            | Protocol::InspectTarget
             | Protocol::Clone => None,
         }
     }
@@ -1326,6 +1337,7 @@ impl Protocol {
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
             Protocol::InspectShown => "inspectshown",
+            Protocol::InspectTarget => "inspecttarget",
             Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",

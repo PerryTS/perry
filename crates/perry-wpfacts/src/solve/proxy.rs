@@ -18,8 +18,9 @@
 //! ToBoolean, `??`, typeof, ToObject) runs no internal method: the token is
 //! an object there like any other. PROXY5: ToPrimitive (and so
 //! ToPropertyKey) reads and calls `@@toPrimitive`, `valueOf` and `toString`
-//! through [[Get]] with `this` = the Proxy (`proxy_to_primitive`). Every
-//! other operation on the token, and
+//! through [[Get]] with `this` = the Proxy (`proxy_to_primitive`). PROXY7:
+//! the runtime's formatter showing the Proxy runs no trap
+//! (`proxy_inspect_shown`). Every other operation on the token, and
 //! an escape of it, takes the path the solver had before (`degrade`): the
 //! target is hard E9 and goes to ⊤, the handler escapes, and the operation
 //! sees ⊤. The hold's reason names that first operation.
@@ -226,6 +227,63 @@ impl Model {
         }
     }
 
+    /// The runtime's formatter showing Proxy `p` (`InspectShown`: a console
+    /// argument or a value it shows; perry-runtime builtins/formatting.rs
+    /// `format_proxy_value`, Node lib/internal/util/inspect.js `formatValue`).
+    /// The Proxy is unwrapped first (`getProxyDetails`): no internal method
+    /// of the Proxy runs, so no trap. The `[util.inspect.custom]` hook is an
+    /// ordinary [[Get]] of the TARGET, called with `this` = the Proxy and
+    /// primitive arguments; what it returns is shown in turn. Without one the
+    /// target's own values are shown (`Protocol::InspectTarget`). Once per
+    /// Proxy.
+    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, reason: u32) {
+        let t = self.tok(TokKind::Proxy(p));
+        if !self.implicit_done.insert((t, Protocol::InspectShown)) {
+            return;
+        }
+        let target = self.proxies[p as usize].target;
+        let ret = self.node_l("implicit-ret");
+        self.nodes[ret as usize].sink = true;
+        let arg = self.node_l("implicit-arg");
+        self.add_prim(arg, prim::ALL);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Tok(t),
+            args: vec![arg; 4],
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.thrown,
+        });
+        self.protocol_calls.insert(call);
+        self.why_mint(call, Some(t), reason);
+        let hook = self.node_l("proxy-method");
+        let a = self.atom(crate::model::INSPECT_CUSTOM_METHOD);
+        self.cons(
+            target,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: hook,
+            },
+        );
+        self.cons(hook, Cons::Call { call });
+        self.cons(
+            ret,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::InspectShown,
+            },
+        );
+        self.cons(
+            target,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::InspectTarget,
+            },
+        );
+    }
+
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
@@ -295,7 +353,11 @@ impl Model {
             // gives any primitive its ToPrimitive may return, as for any
             // object; ToPrimitive itself is `Cons::Implicit`.
             | Cons::Plus { .. }
-            | Cons::Arith { .. } => {
+            | Cons::Arith { .. }
+            // Rule CONSOLE-PCT: specifiers are parsed only in a String
+            // first argument (`may_hold_percent` reads the node's strings);
+            // a Proxy is an object, never one, and runs no trap there.
+            | Cons::ConsoleFormat { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -304,6 +366,11 @@ impl Model {
                 reason,
                 proto: Protocol::ToPrimitive,
             } => self.proxy_to_primitive(p, reason),
+            // The formatter showing the Proxy (`proxy_inspect_shown`).
+            Cons::Implicit {
+                reason,
+                proto: Protocol::InspectShown,
+            } => self.proxy_inspect_shown(p, reason),
             _ => {
                 self.proxy_degrade(p, c.kind_name());
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);

@@ -328,3 +328,73 @@ console.log(String(f).startsWith("function"), typeof f);
         "only the opaque builtin's escape: {tops:?}"
     );
 }
+
+// PROXY7 R4: the runtime's formatter showing a Proxy (a console argument, or
+// an object's field it shows) unwraps it first: no trap runs (node
+// `getProxyDetails`), the target's own values are shown. The shape of a DOM
+// element whose lazy `style` field holds a Proxy, logged.
+const SHOWN: &str = r#"const N = String(process.argv[2]);
+class El {
+  _style: any = null;
+  get style(): any {
+    if (this._style === null) this._style = new Proxy({ color: N } as any, { get(o: any, k: any) { return k === "color" ? "c" + o.color : o[k]; } });
+    return this._style;
+  }
+}
+const e = new El();
+console.log(e.style.color);
+console.log(e, e.style);
+"#;
+
+#[test]
+fn px7_r4_the_formatter_shows_a_proxy() {
+    let (tops, held) = solve(SHOWN);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// R5: the `[util.inspect.custom]` hook is read off the target and called
+// with `this` = the Proxy: `this.a` in it runs the get trap.
+const HOOK: &str = r#"const N = String(process.argv[2]);
+const C = Symbol.for("nodejs.util.inspect.custom");
+const t: any = { a: N, [C](this: any): string { return "custom a=" + this.a; } };
+const p: any = new Proxy(t, { get(o: any, k: any) { return k === "a" ? "x" + o.a : o[k]; } });
+console.log(p);
+"#;
+
+#[test]
+fn px7_r5_inspect_hook_this_is_the_proxy() {
+    let (tops, held) = solve(HOOK);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+    let v = verdicts(HOOK, "a");
+    assert!(
+        v.iter().any(|s| s.contains("Proxy")),
+        "`this.a` in the hook sees the Proxy: {v:?}"
+    );
+}
+
+// K13: a get trap that throws: the formatter runs no trap (node prints the
+// target), so the log does not throw.
+#[test]
+fn px7_k13_throwing_get_trap_is_not_run() {
+    let src = r#"const N = String(process.argv[2]);
+const p: any = new Proxy({ a: N }, { get(): any { throw new Error("boom"); } });
+console.log(p);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// K14: a Proxy over an array: its elements are shown.
+#[test]
+fn px7_k14_proxy_over_an_array() {
+    let src = r#"const N = String(process.argv[2]);
+const p: any = new Proxy([N, N + "1"], {});
+console.log(p, p.length);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
