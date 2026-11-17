@@ -564,8 +564,8 @@ impl<'a> FuncEmitCtx<'a> {
             } => {
                 self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, home);
-                self.emit_store_arg(func, 1, key);
-                self.emit_store_arg(func, 2, receiver);
+                self.emit_store_arg(func, 1, receiver);
+                self.emit_store_arg(func, 2, key);
                 self.emit_memcall(func, "object_super_get", 3);
             }
             Expr::ClassRef(class_name) => {

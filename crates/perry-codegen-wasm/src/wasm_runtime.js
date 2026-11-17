@@ -2024,13 +2024,8 @@ const __memDispatch = {
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
-  // at call time. A home that is not an object is unbound, and reads undefined.
-  object_super_get: (home, receiver, key) => {
-    if (!home || typeof home !== 'object') return undefined;
-    const proto = Object.getPrototypeOf(home);
-    if (proto === null) throw new TypeError(`Cannot read properties of null (reading '${String(key)}')`);
-    return Reflect.get(proto, key, receiver);
-  },
+  // at call time (see __superGet, which also takes a class method's home).
+  object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!__holdsProperties(obj)) return undefined;
@@ -2415,7 +2410,6 @@ const __memDispatch = {
   },
   class_method_home: (className, isStatic) => __classHome(String(className), !!isStatic),
   class_extends_null: (className) => { __nullParentClasses.add(String(className)); },
-  object_super_get: (home, key, receiver) => __superGet(home, key, receiver),
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (!__holdsProperties(obj)) return undefined;
@@ -5562,9 +5556,11 @@ function __superGet(home, key, receiver) {
     const base = typeof host === 'function' ? host.prototype : Object.prototype;
     return Reflect.get(base, name, receiver);
   }
-  const proto = home === null || home === undefined ? null : Object.getPrototypeOf(home);
-  if (proto === null) __throwNullReceiver(proto, name);
-  return Reflect.get(proto, name, receiver);
+  // A home that is not an object is unbound, and reads undefined.
+  if (!home || typeof home !== 'object') return undefined;
+  const proto = Object.getPrototypeOf(home);
+  if (proto === null) __throwNullReceiver(proto, key);
+  return Reflect.get(proto, key, receiver);
 }
 
 // `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into

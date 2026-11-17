@@ -154,7 +154,6 @@ impl WasmModuleEmitter {
             "class_capture_value",
             "class_method_home",
             "class_extends_null",
-            "object_super_get",
             "class_instanceof_value",
             "reflect_apply",
             "class_set_method",
