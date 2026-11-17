@@ -792,6 +792,14 @@ pub struct DefineAny {
     pub accessor: bool,
 }
 
+impl DefineAny {
+    /// One define: its key node and its own `get` node (each define site
+    /// reads its descriptor's `get` into a node of its own).
+    pub fn id(&self) -> (NodeId, NodeId) {
+        (self.key, self.get)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ThisArg {
     Undef,
@@ -2897,13 +2905,16 @@ pub struct Model {
     pub global_def: Option<NodeId>,
     /// GLOBK3: the navigator reads made before `global_def` exists.
     pub global_def_navs: Vec<NodeId>,
-    /// GLOBK3: the computed-key defines taken onto the global object (by
-    /// key node), replayed onto the old path when G2 turns off.
+    /// GLOBK3: the computed-key defines taken onto the global object,
+    /// replayed onto the old path when G2 turns off.
     pub global_defs: Vec<(DefineAny, Tok)>,
-    pub global_def_done: crate::pts::FxHashSet<NodeId>,
+    /// GLOBK3: the defines already taken onto the global object, by
+    /// `DefineAny::id`.
+    pub global_def_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
     /// GLOBK3: the holder node of a computed-key define's old path (E5
-    /// HARD), by key node.
-    pub define_any_old: crate::pts::FxHashMap<NodeId, NodeId>,
+    /// HARD), by `DefineAny::id`: two defines under one key node (one local
+    /// key) each install their own descriptor.
+    pub define_any_old: crate::pts::FxHashMap<(NodeId, NodeId), NodeId>,
     /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
     /// (`implicit`); a computed key's object value stores under what its
     /// ToPrimitive returns (`Cons::StoreIndexed` on that node).
