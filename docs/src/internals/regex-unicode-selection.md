@@ -9,8 +9,8 @@ The compiler retains the installer for Unicode-mode literals, non-ASCII patterns
 property escapes, Unicode escapes and named-group syntax. Every dynamic RegExp
 construction retains it, including literal patterns whose flags are dynamic.
 Escaping regex values and subclasses retain it because they expose constructors
-and recompilation. String-to-RegExp coercion, exposed constructors, prototype `compile`, computed
-API members and escaped global objects also retain it. Native modules, IPC,
+and recompilation. String-to-RegExp coercion, exposed constructors, prototype `compile`, escaped global objects, reflective mutation, proxies and
+first-class functions also retain it. Native modules, IPC,
 workers, addons, plugins, UI and deferred dynamic code are open producers and
 retain the database conservatively. These are whole-program unions collected
 before code generation; the entry installer is part of the object cache input.
@@ -20,7 +20,9 @@ without those syntactic forms, consumed immediately by split, test or exec.
 Retaining or passing a literal as a value retains the tables. Prototype
 reflection and exposure also retain them, covering replacement of those methods. ASCII group validation returns before membership;
 ordinary character ranges, whitespace classes and case-fold tables do not access
-the property database. The selector deliberately over-includes some patterns.
+the property database. The selector deliberately over-includes some patterns. An opaque read of a data
+container alone does not create a regex capability: every producer and escape
+is scanned across the program, including native and dynamic code boundaries.
 For search/match/matchAll coercion, an immediate primitive literal or a fresh
 closed object with no conversion hooks can be checked structurally. An ordinary
 object converts to `[object Object]`; its data fields do not supply the pattern.

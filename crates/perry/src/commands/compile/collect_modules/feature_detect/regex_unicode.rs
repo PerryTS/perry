@@ -33,7 +33,7 @@ fn coercion_needs_properties(module: &Module, pattern: &Expr) -> bool {
     let conversion_key = |key: &str| matches!(key, "toString" | "valueOf" | "__proto__");
     match pattern {
         Expr::String(pattern) => pattern_needs_properties(pattern, ""),
-        Expr::Number(_) | Expr::Bool(_) | Expr::Null | Expr::Undefined => false,
+        Expr::Number(_) | Expr::Integer(_) | Expr::Bool(_) | Expr::Null | Expr::Undefined => false,
         // A fresh ordinary object's default conversion is "[object Object]".
         // Field values do not participate. Prototype exposure is a separate
         // conservative guard; spreads and computed keys cannot use this proof.
@@ -59,6 +59,12 @@ fn expression(module: &Module, expr: &Expr) -> bool {
             }
         }
         Expr::Call { callee, args, .. } => {
+            if matches!(
+                callee.as_ref(),
+                Expr::FuncRef(_) | Expr::ExternFuncRef { .. }
+            ) {
+                return args.iter().any(|e| expression(module, e));
+            }
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -83,6 +89,10 @@ fn expression(module: &Module, expr: &Expr) -> bool {
                             || args.iter().any(|e| expression(module, e));
                     }
                 }
+                if consumer_key(property) {
+                    return expression(module, object)
+                        || args.iter().any(|e| expression(module, e));
+                }
             }
         }
         // A retained regex value exposes its constructor and compile method,
@@ -91,7 +101,16 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         Expr::ObjectGetPrototypeOf(_)
         | Expr::ReflectGetPrototypeOf(_)
         | Expr::ObjectSetPrototypeOf(_, _)
-        | Expr::ReflectSetPrototypeOf { .. } => return true,
+        | Expr::ReflectSetPrototypeOf { .. }
+        | Expr::ObjectDefineProperty(_, _, _)
+        | Expr::ObjectDefineProperties(_, _)
+        | Expr::ReflectDefineProperty { .. }
+        | Expr::ReflectSet { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::ProxyNew { .. }
+        | Expr::Closure { .. }
+        | Expr::FuncRef(_)
+        | Expr::ExternFuncRef { .. } => return true,
         // Coercion, custom species and RegExp.prototype.compile can obtain a
         // pattern or flags from arbitrary user code. Do not infer string values
         // from annotations or a local binding's initializer.
@@ -100,6 +119,7 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         }
         Expr::PropertyGet { property, .. }
             if producer_key(property)
+                || consumer_key(property)
                 || matches!(property.as_str(), "search" | "match" | "matchAll") =>
         {
             return true
@@ -127,11 +147,6 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         {
             return true
         }
-        Expr::Closure { body, .. }
-            if super::stmts_any_expr(body, &mut |e| expression(module, e)) =>
-        {
-            return true
-        }
         _ => {}
     }
     let mut found = false;
@@ -140,6 +155,10 @@ fn expression(module: &Module, expr: &Expr) -> bool {
 }
 
 pub(super) fn needed(module: &Module) -> bool {
+    // An opaque read of a data container cannot create a RegExp. Keep the
+    // capabilities that can supply one: global/constructor access, escaping
+    // regexes, native producers, and user-defined consumers of a literal.
+    // The generic computed-member detector also covers non-regex APIs.
     // An inherited RegExp constructor accepts patterns without a dedicated
     // RegExpDynamic expression at its `new Subclass(...)` call sites.
     module.classes.iter().any(|class| {
@@ -185,6 +204,8 @@ mod tests {
             r"const r = /a/; function f(k: number) { return r[k]('\\p{L}', 'u'); } f('compile' as any);",
             r"function expose() { return /a/; }",
             r"const o = { split(r) { return r; } }; o.split(/a/);",
+            r"const o = {}; Object.defineProperty(o, 'split', { value(r) { return r; } }); o.split(/a/);",
+            r"const o = {}; const key = process.argv[2]; o[key] = r => r; o.split(/a/);",
             r"class C { split(r) { return r; } } new C().split(/a/);",
             r"const list = [/a/];",
             r"String.prototype.split = function(r) { return []; }; 'x'.split(/a/);",
@@ -211,6 +232,7 @@ mod tests {
             r"class C { search() { return 1; } } const c = new C(); c.search();",
             r"class C { x = 1; search(options) { return options.maxNodes; } } const c = new C(); c.search({level: 10, maxNodes: Number(process.argv[2])});",
             r"const a = [1, 2]; console.log(a[1]);",
+            r"function f(values: any, key: any) { return values[key]; } console.log(f([1, 2], 1)); 'a b'.split(/\s+/);",
             r"console.log('hello');",
         ] {
             assert!(!detect_for_source(source).uses_regex_unicode, "{source}");

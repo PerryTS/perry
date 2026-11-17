@@ -653,7 +653,7 @@ fn detect_optional_feature_usage_with_capabilities(
         hir_module.name,
         computed.opaque_members
     );
-    ctx.uses_regex_unicode |= unicode_producer || computed.opaque_members;
+    ctx.uses_regex_unicode |= unicode_producer;
     ctx.uses_temporal |= global_object::may_escape(hir_module);
     ctx.uses_diagnostics |= global_object::may_escape(hir_module);
     ctx.uses_typedarray |= global_object::may_escape(hir_module)
