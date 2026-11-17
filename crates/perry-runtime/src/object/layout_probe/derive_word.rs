@@ -77,7 +77,14 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         i as u32 >= rec.position_bound_raw()
             && (direct_position(rec, keys, i as u32) || slotted(i).is_some())
     };
-    if count <= SCAN_KEYS && !aliased && checked == 0 && !(0..count as usize).any(unbounded) {
+    // POSBOUND's raw loads cannot serve an encoded slot. The index already
+    // expresses which other slots can be loaded or written directly.
+    if count <= SCAN_KEYS
+        && !aliased
+        && checked == 0
+        && rec.i32_lanes() == 0
+        && !(0..count as usize).any(unbounded)
+    {
         return flags;
     }
     let buckets = (count as usize * 2).next_power_of_two();

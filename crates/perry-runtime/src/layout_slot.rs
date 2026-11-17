@@ -49,8 +49,9 @@
 //! of a class born keyless). [`slot_get`] / [`slot_set`] are the field
 //! accessor: the generic read funnel (`object_field_at_with_live`) decodes
 //! through [`slot_get`], the store funnel (`field_rep_store::checked_slot_bits`)
-//! encodes, the runtime's unknown-receiver probe declines every record with
-//! an I32 lane (no shape/slot memo of such a slot is ever made), and a
+//! encodes, the runtime's unknown-receiver probe reads I32 slots through
+//! this accessor while ordinary slots keep direct entries (no shape/slot
+//! memo of an I32 slot is ever made), and a
 //! codegen site that names a key some class stores at rest and that wpfacts
 //! does not prove reads and writes through [`js_object_rest_get`] /
 //! [`js_object_rest_set`]. Proven sites load the slot's low half as an i32

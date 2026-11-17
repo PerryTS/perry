@@ -327,15 +327,7 @@ unsafe fn key_word_hash(bits: u64) -> Option<u64> {
 #[cold]
 #[inline(never)]
 unsafe fn derive(r: *mut ShapeRecord) -> u64 {
-    // I32 at rest (PR C): the probe returns slot words as JS values and its
-    // site memos keep shape/slot pairs, so it declines every key of a record
-    // with an I32 lane; the complete read decodes through the layout
-    // accessor (`layout_slot::slot_get`).
-    let mut word = if (*r).i32_lanes() != 0 {
-        PROBE_READY | PROBE_DECLINE
-    } else {
-        derive_word(&*r)
-    };
+    let mut word = derive_word(&*r);
     // Verify mode sends every probe of the record through the cold path,
     // where its answer is held for the slow entry's check.
     if verify::on() {
@@ -574,7 +566,9 @@ unsafe fn direct_position(
     {
         return false;
     }
-    key_storage_slot(keys, pos) == pos && pos < rec.live_inline_slot_count
+    key_storage_slot(keys, pos) == pos
+        && pos < rec.live_inline_slot_count
+        && (rec.lane(pos) != crate::object::field_rep::REP_SPECIAL || rec.lane_is_constfn(pos))
 }
 
 /// The inline slot of a data key (no accessor, not private) at position
@@ -595,7 +589,11 @@ unsafe fn inline_slot(
         return None;
     }
     let slot = key_storage_slot(keys, pos);
-    (slot != pos && slot < rec.live_inline_slot_count && slot != NO_LOAD).then_some(slot)
+    (slot != pos
+        && slot < rec.live_inline_slot_count
+        && slot != NO_LOAD
+        && (rec.lane(slot) != crate::object::field_rep::REP_SPECIAL || rec.lane_is_constfn(slot)))
+    .then_some(slot)
 }
 
 /// A TEXT entry's word (a short or plain string no program atom named when
@@ -739,8 +737,9 @@ unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) ->
     // from storage (#12637); its position is its slot otherwise.
     let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
     if slot < (*r).live_inline_slot_count {
-        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-            as *const f64);
+        // Encoded slots carry no direct-load entry. Their existing layout
+        // accessor returns the JS value; ordinary indexed hits never get here.
+        return f64::from_bits(crate::layout_slot::slot_get(obj, slot));
     }
     crate::object::spill::spill_get_present(obj as usize, slot as usize)
         .map(f64::from_bits)
@@ -2699,6 +2698,10 @@ mod global_tests;
 #[cfg(test)]
 #[path = "layout_probe_symbol_store_tests.rs"]
 mod symbol_store_tests;
+
+#[cfg(test)]
+#[path = "layout_probe_i32_tests.rs"]
+mod i32_tests;
 
 /// The live inline slot count of record `r` (a live shape record).
 #[inline(always)]
