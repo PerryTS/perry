@@ -187,6 +187,44 @@ pub fn set_hidden(handle: i64, hidden: bool) {
     }
 }
 
+/// Reset every gesture recognizer in `view`'s subtree that is tracking a
+/// touch. Taking a view out of the window while one of its recognizers holds
+/// a touch leaves UIKit with a touch it can't deliver: on the next phase
+/// `-[UIGestureRecognizer _delayTouch:forEvent:]` inserts nil into an
+/// NSMutableArray and the app aborts. Toggling `enabled` cancels the
+/// recognizer and releases its touches before the view goes.
+fn cancel_active_gestures(view: *const AnyObject, depth: u32) {
+    if view.is_null() || depth > 64 {
+        return;
+    }
+    unsafe {
+        let recognizers: *mut AnyObject = objc2::msg_send![view, gestureRecognizers];
+        if !recognizers.is_null() {
+            let n: usize = objc2::msg_send![recognizers, count];
+            for i in 0..n {
+                let gr: *mut AnyObject = objc2::msg_send![recognizers, objectAtIndex: i];
+                let touches: usize = objc2::msg_send![gr, numberOfTouches];
+                if touches > 0 {
+                    let enabled: bool = objc2::msg_send![gr, isEnabled];
+                    if enabled {
+                        let _: () = objc2::msg_send![gr, setEnabled: false];
+                        let _: () = objc2::msg_send![gr, setEnabled: true];
+                    }
+                }
+            }
+        }
+        let subviews: *mut AnyObject = objc2::msg_send![view, subviews];
+        if subviews.is_null() {
+            return;
+        }
+        let n: usize = objc2::msg_send![subviews, count];
+        for i in 0..n {
+            let sv: *mut AnyObject = objc2::msg_send![subviews, objectAtIndex: i];
+            cancel_active_gestures(sv, depth + 1);
+        }
+    }
+}
+
 /// Remove all arranged subviews from a container (UIStackView).
 /// Safe implementation: snapshots subviews before mutation, removes in reverse
 /// order, and cleans up HEIGHT_CONSTRAINTS for removed widgets.
@@ -232,6 +270,7 @@ pub fn clear_children(handle: i64) {
 
             // Phase 3: Remove views in reverse order
             for sv in views.iter().rev() {
+                cancel_active_gestures(Retained::as_ptr(sv) as *const AnyObject, 0);
                 unsafe {
                     let _: () = objc2::msg_send![stack, removeArrangedSubview: &**sv];
                     sv.removeFromSuperview();
@@ -611,6 +650,7 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
             false
         };
 
+        cancel_active_gestures(Retained::as_ptr(&child) as *const AnyObject, 0);
         if is_stack {
             let stack: &UIStackView =
                 unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
@@ -826,6 +866,9 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
             let recognizer: *mut AnyObject = objc2::msg_send![gr_cls, alloc];
             let recognizer: *mut AnyObject = objc2::msg_send![recognizer, init];
             let _: () = objc2::msg_send![recognizer, setNumberOfTapsRequired: 2i64];
+            // See button::set_on_tap: delayed touchesEnded on a view that leaves
+            // the window mid-touch aborts in UIKit.
+            let _: () = objc2::msg_send![recognizer, setDelaysTouchesEnded: false];
             let _: () = objc2::msg_send![&*view, addGestureRecognizer: recognizer];
         }
     }

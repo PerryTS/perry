@@ -437,6 +437,11 @@ pub fn set_on_tap(handle: i64, callback: f64) {
                 recognizer, initWithTarget: &*target, action: sel
             ];
             let _: () = msg_send![recognizer, setNumberOfTapsRequired: 1i64];
+            // Don't hold back touchesEnded while the tap is being decided. If an
+            // async rebuild takes the view out of the window between touch down
+            // and up, UIKit's -[UIGestureRecognizer _delayTouch:forEvent:]
+            // inserts nil into its delayed-touch array and aborts the app.
+            let _: () = msg_send![recognizer, setDelaysTouchesEnded: false];
             let _: () = msg_send![&*view, setUserInteractionEnabled: true];
             let _: () = msg_send![&*view, addGestureRecognizer: recognizer];
 
