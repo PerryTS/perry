@@ -282,7 +282,11 @@ pub(crate) fn intrinsic_prototype_addr_in(
     realm: &RealmIntrinsics,
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(realm, &intrinsic_entry_in(realm, identity).prototype, Some(identity))
+    realm_intrinsic_addr(
+        realm,
+        &intrinsic_entry_in(realm, identity).prototype,
+        Some(identity),
+    )
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
@@ -324,7 +328,11 @@ pub(crate) fn intrinsic_constructor_addr_in(
     realm: &RealmIntrinsics,
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(realm, &intrinsic_entry_in(realm, identity).constructor, Some(identity))
+    realm_intrinsic_addr(
+        realm,
+        &intrinsic_entry_in(realm, identity).constructor,
+        Some(identity),
+    )
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -443,8 +451,8 @@ pub(crate) struct RealmRecord {
 /// Inside a no-move window; `global` is the realm global just born.
 pub(crate) unsafe fn alloc_realm_record(global: usize) -> *mut RealmRecord {
     let size = std::mem::size_of::<RealmRecord>();
-    let record = crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_REALM_RECORD)
-        as *mut RealmRecord;
+    let record =
+        crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_REALM_RECORD) as *mut RealmRecord;
     // GC_STORE_AUDIT(INIT): unpublished record; zero cells are unborn, and the
     // global is born in the same no-move window (no older-to-younger edge).
     std::ptr::write_bytes(record as *mut u8, 0, size);
@@ -458,7 +466,9 @@ pub(crate) unsafe fn alloc_realm_record(global: usize) -> *mut RealmRecord {
 /// `realm` is a `vm` realm's record intrinsics (not [`thread_realm`]).
 pub(crate) unsafe fn realm_record_global(realm: &RealmIntrinsics) -> usize {
     // `RealmRecord` is `repr(C)` with its intrinsics first.
-    (*(realm as *const RealmIntrinsics as *const RealmRecord)).global.get()
+    (*(realm as *const RealmIntrinsics as *const RealmRecord))
+        .global
+        .get()
 }
 
 /// The [[Intrinsics]] record at `record` (a `GC_TYPE_REALM_RECORD` payload).
@@ -478,7 +488,8 @@ pub(crate) unsafe fn realm_record_intrinsics<'a>(record: usize) -> &'a RealmIntr
 /// `user_ptr` is a live `GC_TYPE_REALM_RECORD` payload.
 unsafe fn realm_record_cell_words(user_ptr: usize) -> (*mut usize, usize) {
     const WORDS: usize = std::mem::size_of::<RealmRecord>() / std::mem::size_of::<usize>();
-    const _: () = assert!(WORDS * std::mem::size_of::<usize>() == std::mem::size_of::<RealmRecord>());
+    const _: () =
+        assert!(WORDS * std::mem::size_of::<usize>() == std::mem::size_of::<RealmRecord>());
     (user_ptr as *mut usize, WORDS)
 }
 
@@ -525,12 +536,17 @@ mod realm_record_tests {
         crate::object::js_nm_install_vm();
         let scope = crate::gc::RuntimeHandleScope::new();
         let global = crate::object::global_this::js_new_realm_global();
-        let global = scope.root_raw_mut_ptr((global.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader);
+        let global = scope.root_raw_mut_ptr(
+            (global.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader,
+        );
         let target = crate::object::js_object_alloc(0, 0);
         let target = scope.root_raw_mut_ptr(target);
         global.with_mut_ptr::<crate::object::ObjectHeader, _>(|g| unsafe {
             let realm = crate::object::global_this::realm_of(g);
-            assert!(!std::ptr::eq(realm, &crate::state::state().realm_intrinsics));
+            assert!(!std::ptr::eq(
+                realm,
+                &crate::state::state().realm_intrinsics
+            ));
             target.with_mut_ptr::<crate::object::ObjectHeader, _>(|t| {
                 realm.functions[0].set(t as usize);
             });
@@ -541,10 +557,18 @@ mod realm_record_tests {
         global.with_mut_ptr::<crate::object::ObjectHeader, _>(|g| unsafe {
             let realm = crate::object::global_this::realm_of(g);
             target.with_mut_ptr::<crate::object::ObjectHeader, _>(|t| {
-                assert_eq!(realm.functions[0].get(), t as usize, "the cell follows its object");
+                assert_eq!(
+                    realm.functions[0].get(),
+                    t as usize,
+                    "the cell follows its object"
+                );
             });
             let record = (realm as *const RealmIntrinsics) as *const RealmRecord;
-            assert_eq!((*record).global.get(), g as usize, "the global cell follows the global");
+            assert_eq!(
+                (*record).global.get(),
+                g as usize,
+                "the global cell follows the global"
+            );
             assert_eq!(realm.entries[0].prototype.get(), 0, "families stay unborn");
         });
     }

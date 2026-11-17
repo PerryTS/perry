@@ -3908,6 +3908,22 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds the code address of the one perry-stdlib router (JsNativeSubclassInitFn) installed at startup, or null; a function pointer, never a heap address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+   "names": [
+    "REALM_INTRINSICS_KEY"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Only persistent_symbol(\"[[Intrinsics]]\") is published by compare_exchange. persistent_symbol uses leak_symbol in the process-lifetime symbol space, with a null GC description and Rust-owned native description text; no agent Arena owns this SymbolHeader. The private key identity is shared across agents, while realm globals and records remain owned by their own realm."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_this/populate.rs",
+   "names": [
+    "GLOBAL_BINDING_ROWS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "GlobalBindingRow contains a static name, two boolean flags, and an AtomicUsize birth word. arm_global_binding is its only writer and stores a GlobalBirth fn pointer as usize; armed_global_binding_value casts that code address back to the same fn type. No row stores a realm, global, closure, or other arena address."
   }
  ]
 }

@@ -183,7 +183,11 @@ fn object_prototype_builtin_invokes_to_string_without_self_redispatch() {
 fn collection_prototypes_install_the_generic_locale_string_thunk() {
     for builtin in ["Map", "Set", "WeakMap", "WeakSet"] {
         let proto = crate::object::js_object_alloc(0, 0);
-        crate::object::global_this::populate_builtin_prototype_methods(crate::array::thread_realm(), builtin, proto);
+        crate::object::global_this::populate_builtin_prototype_methods(
+            crate::array::thread_realm(),
+            builtin,
+            proto,
+        );
         let key = crate::string::js_string_from_bytes(b"toLocaleString".as_ptr(), 14);
         let method = crate::object::js_object_get_field_by_name(proto, key);
         assert!(

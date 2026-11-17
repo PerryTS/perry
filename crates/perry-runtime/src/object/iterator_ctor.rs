@@ -50,9 +50,8 @@ pub(crate) fn note_birth_keys(proto: *mut ObjectHeader) {
 
 /// The main record's `%Iterator.prototype%`, born by its family on first use.
 pub(crate) fn iterator_prototype_object() -> *mut ObjectHeader {
-    crate::array::intrinsic_prototype_addr(
-        crate::object::BuiltinConstructorIdentity::Iterator,
-    ) as *mut ObjectHeader
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Iterator)
+        as *mut ObjectHeader
 }
 
 /// `Iterator()` and `new Iterator()`: only a subclass's `super()` constructs it.

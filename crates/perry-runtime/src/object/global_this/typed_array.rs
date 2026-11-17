@@ -711,7 +711,10 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// `testTypedArray.js`). Order is node's own-key order: the four accessors
 /// (#2060), the spec methods, `toString` (= `Array.prototype.toString`),
 /// `@@iterator` (= `values`, so after the methods) and `@@toStringTag`.
-pub(crate) fn install_typed_array_prototype_members(realm: &crate::array::RealmIntrinsics, proto: *mut ObjectHeader) {
+pub(crate) fn install_typed_array_prototype_members(
+    realm: &crate::array::RealmIntrinsics,
+    proto: *mut ObjectHeader,
+) {
     install_typed_array_proto_accessors(proto);
     install_typed_array_to_string_tag(proto);
     typed_array_proto_thunks::install_typed_array_proto_methods(proto);
@@ -724,8 +727,9 @@ pub(crate) fn install_typed_array_prototype_members(realm: &crate::array::RealmI
 /// initialised), else null. Used by `js_object_get_prototype_of` to resolve
 /// `Object.getPrototypeOf(Int8Array.prototype)` to the shared prototype.
 pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
-    crate::array::intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::TypedArray)
-        as *mut ObjectHeader
+    crate::array::intrinsic_prototype_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::TypedArray,
+    ) as *mut ObjectHeader
 }
 
 // ---------------------------------------------------------------------------

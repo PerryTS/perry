@@ -182,7 +182,10 @@ pub(crate) unsafe fn realm_of<'a>(global: *mut ObjectHeader) -> &'a crate::array
         return &crate::state::state().realm_intrinsics;
     }
     let key = REALM_INTRINSICS_KEY.load(std::sync::atomic::Ordering::Acquire);
-    assert!(key != 0, "a realm global other than the thread's is born by js_new_realm_global");
+    assert!(
+        key != 0,
+        "a realm global other than the thread's is born by js_new_realm_global"
+    );
     let word = crate::object::shaped_symbols::own_private(global, key)
         .expect("a realm global holds its [[Intrinsics]] record");
     crate::array::realm_record_intrinsics((word & crate::value::POINTER_MASK) as usize)
@@ -1545,11 +1548,8 @@ mod realm_intrinsics_slot_tests {
             .map(|i| {
                 let s = crate::builtins::js_string_coerce(crate::array::js_array_get_f64(arr, i));
                 unsafe {
-                    let bytes = std::slice::from_raw_parts(
-                        (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                        (*s).byte_len as usize,
-                    );
-                    String::from_utf8_lossy(bytes).into_owned()
+                    let bytes = crate::string::OwnedStringBytes::copy_from_header(s);
+                    String::from_utf8_lossy(bytes.as_bytes()).into_owned()
                 }
             })
             .collect()
@@ -1570,7 +1570,9 @@ mod realm_intrinsics_slot_tests {
             .find(|l| l.starts_with(&format!("const {name} = [")))
             .expect("fixture list");
         let body = &line[line.find('[').unwrap() + 1..line.rfind(']').unwrap()];
-        body.split(',').map(|s| s.trim().trim_matches('"').to_string()).collect()
+        body.split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .collect()
     }
 
     /// The fixture's relation: `actual` restricted to `expected` names, in
@@ -1595,9 +1597,15 @@ mod realm_intrinsics_slot_tests {
         let descriptors = crate::object::js_object_get_own_property_descriptors(global);
         Keys {
             own_keys_len: crate::array::js_array_length(own),
-            names: strings(array_of(crate::object::js_object_get_own_property_names(global))),
-            keys: strings(crate::object::field_get_set::enumeration::js_object_keys(obj)),
-            for_in: strings(crate::object::field_get_set::enumeration::js_for_in_keys_value(global)),
+            names: strings(array_of(crate::object::js_object_get_own_property_names(
+                global,
+            ))),
+            keys: strings(crate::object::field_get_set::enumeration::js_object_keys(
+                obj,
+            )),
+            for_in: strings(
+                crate::object::field_get_set::enumeration::js_for_in_keys_value(global),
+            ),
             descriptor_keys: strings(array_of(
                 crate::object::property_ops::reflect_misc::js_reflect_own_keys(descriptors),
             )),
@@ -1605,11 +1613,27 @@ mod realm_intrinsics_slot_tests {
     }
 
     fn assert_unobservable(what: &str, k: &Keys, names: &[String], enumerable: &[String]) {
-        assert_eq!(k.own_keys_len as usize, k.names.len(), "{what}: Reflect.ownKeys lists no symbol key");
-        assert_eq!(k.descriptor_keys, k.names, "{what}: getOwnPropertyDescriptors keys = names");
-        assert!(!k.names.iter().any(|n| n.contains("Intrinsics")), "{what}: no [[Intrinsics]] name");
-        assert!(in_fixture_order(&k.names, names), "{what}: getOwnPropertyNames in node order");
-        assert!(in_fixture_order(&k.keys, enumerable), "{what}: Object.keys in node order");
+        assert_eq!(
+            k.own_keys_len as usize,
+            k.names.len(),
+            "{what}: Reflect.ownKeys lists no symbol key"
+        );
+        assert_eq!(
+            k.descriptor_keys, k.names,
+            "{what}: getOwnPropertyDescriptors keys = names"
+        );
+        assert!(
+            !k.names.iter().any(|n| n.contains("Intrinsics")),
+            "{what}: no [[Intrinsics]] name"
+        );
+        assert!(
+            in_fixture_order(&k.names, names),
+            "{what}: getOwnPropertyNames in node order"
+        );
+        assert!(
+            in_fixture_order(&k.keys, enumerable),
+            "{what}: Object.keys in node order"
+        );
         assert_eq!(k.for_in, k.keys, "{what}: for-in = Object.keys");
     }
 
@@ -1642,9 +1666,15 @@ mod realm_intrinsics_slot_tests {
             );
         }
         let after = keys_of(main);
-        assert_eq!(after.names, before.names, "a vm realm leaves the main global's keys as they were");
+        assert_eq!(
+            after.names, before.names,
+            "a vm realm leaves the main global's keys as they were"
+        );
         assert_eq!(after.keys, before.keys);
-        assert_eq!(vm_keys.names, before.names, "both realms list the one %Global% layout's keys");
+        assert_eq!(
+            vm_keys.names, before.names,
+            "both realms list the one %Global% layout's keys"
+        );
     }
 
     /// Red until S4: a `vm` realm global's enumerable keys are the main
@@ -1655,6 +1685,9 @@ mod realm_intrinsics_slot_tests {
         let _gc = crate::gc::GcSuppressScope::new();
         let main = keys_of(js_get_global_this());
         let vm = keys_of(js_new_realm_global());
-        assert_eq!(vm.keys, main.keys, "a vm realm global enumerates the main global's keys");
+        assert_eq!(
+            vm.keys, main.keys,
+            "a vm realm global enumerates the main global's keys"
+        );
     }
 }

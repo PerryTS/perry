@@ -295,7 +295,9 @@ pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) ->
     // The layout's prototype family names `%URLSearchParams.prototype%`, which
     // its own family birth builds: observe it before the first instance
     // (#12697), or the instance's [[Prototype]] word would still be empty.
-    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::URLSearchParams);
+    crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::URLSearchParams,
+    );
     let obj = unsafe {
         crate::object::layout_desc::perry_alloc_layout(
             crate::object::runtime_layouts::URL_SEARCH_PARAMS::desc(),

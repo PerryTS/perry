@@ -109,7 +109,9 @@ pub(super) fn members_with_defaults(
             default_attrs = reference_attrs;
         } else if halves.len() == 2 {
             let value = halves[1];
-            if value.first().is_some_and(|t| matches!(t.text, "ref" | "observed"))
+            if value
+                .first()
+                .is_some_and(|t| matches!(t.text, "ref" | "observed"))
                 && value.get(1).is_some_and(|t| t.text == "(")
                 && value.last().is_some_and(|t| t.text == ")")
             {

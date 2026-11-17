@@ -399,7 +399,6 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "Temporal",
 ];
 
-
 pub(crate) fn is_web_fetch_constructor(name: &str) -> bool {
     matches!(
         name,
@@ -490,7 +489,9 @@ pub(crate) unsafe fn builtin_constructor_realm<'a>(
     if global == crate::value::TAG_UNDEFINED {
         crate::array::thread_realm()
     } else {
-        super::global_this::realm_of((global & crate::value::POINTER_MASK) as *mut super::ObjectHeader)
+        super::global_this::realm_of(
+            (global & crate::value::POINTER_MASK) as *mut super::ObjectHeader,
+        )
     }
 }
 

@@ -16,14 +16,19 @@ pub struct GlobalBinding {
 
 /// The body of the `get [Symbol.species]` accessor that a family's birth defines (returns
 /// `this`; perry-runtime install_static.rs `install_builtin_species_accessor`).
-const BIRTH_SPECIES_GETTER: &str = "crate::object::global_this::install_static::builtin_species_getter_thunk";
+const BIRTH_SPECIES_GETTER: &str =
+    "crate::object::global_this::install_static::builtin_species_getter_thunk";
 
 fn declarations(manifest: &Value) -> Result<&[Value], String> {
-    manifest.get("declarations").and_then(Value::array).ok_or_else(|| "realm manifest without declarations".into())
+    manifest
+        .get("declarations")
+        .and_then(Value::array)
+        .ok_or_else(|| "realm manifest without declarations".into())
 }
 
 fn find<'a>(ds: &'a [Value], name: &str) -> Option<&'a Value> {
-    ds.iter().find(|d| d.get("name").and_then(Value::string) == Some(name))
+    ds.iter()
+        .find(|d| d.get("name").and_then(Value::string) == Some(name))
 }
 
 fn properties(d: &Value) -> &[Value] {
@@ -35,13 +40,16 @@ fn properties(d: &Value) -> &[Value] {
 pub fn observed_global_bindings(manifest: &Value) -> Result<Vec<GlobalBinding>, String> {
     let ds = declarations(manifest)?;
     let global = find(ds, "%Global%").ok_or("no %Global% declaration")?;
-    let order = global.get("own_key_order").and_then(Value::array).ok_or("%Global% without own_key_order")?;
+    let order = global
+        .get("own_key_order")
+        .and_then(Value::array)
+        .ok_or("%Global% without own_key_order")?;
     let mut out = Vec::new();
     for key in order.iter().filter_map(Value::string) {
-        let Some(p) = properties(global)
-            .iter()
-            .find(|p| p.get("key").and_then(Value::string) == Some(key) && p.get("symbol") != Some(&Value::Bool(true)))
-        else {
+        let Some(p) = properties(global).iter().find(|p| {
+            p.get("key").and_then(Value::string) == Some(key)
+                && p.get("symbol") != Some(&Value::Bool(true))
+        }) else {
             return Err(format!("%Global% own key {key} has no member"));
         };
         if p.get("observed") != Some(&Value::Bool(true)) {
@@ -52,17 +60,28 @@ pub fn observed_global_bindings(manifest: &Value) -> Result<Vec<GlobalBinding>, 
             .and_then(|v| v.get("value"))
             .and_then(Value::string)
             .ok_or_else(|| format!("observed binding {key} without a target"))?;
-        let decl = find(ds, target).ok_or_else(|| format!("observed binding {key} names undeclared {target}"))?;
+        let decl = find(ds, target)
+            .ok_or_else(|| format!("observed binding {key} names undeclared {target}"))?;
         let namespace = match decl.get("kind").and_then(Value::string) {
             Some("namespace") => true,
             Some("function") => false,
-            k => return Err(format!("observed binding {key}: {target} is {k:?}, not a function or namespace")),
+            k => {
+                return Err(format!(
+                    "observed binding {key}: {target} is {k:?}, not a function or namespace"
+                ))
+            }
         };
         let attrs: u8 = match p.get("attributes") {
-            Some(Value::Number(n)) => n.parse().map_err(|_| format!("observed binding {key}: attributes {n}"))?,
+            Some(Value::Number(n)) => n
+                .parse()
+                .map_err(|_| format!("observed binding {key}: attributes {n}"))?,
             _ => return Err(format!("observed binding {key} without attributes")),
         };
-        out.push(GlobalBinding { name: key.into(), enumerable: attrs & 2 != 0, namespace });
+        out.push(GlobalBinding {
+            name: key.into(),
+            enumerable: attrs & 2 != 0,
+            namespace,
+        });
     }
     if out.is_empty() {
         return Err("%Global% declares no observed(X) member".into());
@@ -89,7 +108,8 @@ fn snake(name: &str) -> String {
 /// The family identity a realm name `name` declares: a constructor family row (its realm
 /// name; a row %Global% does not bind is `%Name%`), not one of the two root families.
 fn family<'a>(rows: &std::collections::BTreeMap<String, Value>, name: &'a str) -> Option<&'a str> {
-    (rows.contains_key(name) && name != "Object" && name != "Function").then(|| name.trim_matches('%'))
+    (rows.contains_key(name) && name != "Object" && name != "Function")
+        .then(|| name.trim_matches('%'))
 }
 
 /// perry-runtime's generated sources: `global_bindings.rs` (the `global_bindings!` rows; a row
@@ -103,7 +123,11 @@ pub fn write_runtime(manifest: &Value, out: &Path) -> Result<(), String> {
         writeln!(
             rows,
             "    {:?}, js_install_global_{}, namespace = {}, enumerable = {}, birth_global_{};",
-            b.name, b.name, b.namespace, b.enumerable, snake(&b.name)
+            b.name,
+            b.name,
+            b.namespace,
+            b.enumerable,
+            snake(&b.name)
         )
         .unwrap();
     }
@@ -116,11 +140,20 @@ pub fn write_runtime(manifest: &Value, out: &Path) -> Result<(), String> {
     ))?;
     let mut links = String::from("macro_rules! declared_family_links {\n");
     for d in ds {
-        let Some(name) = d.get("name").and_then(Value::string).and_then(|n| family(&rows, n)) else { continue };
+        let Some(name) = d
+            .get("name")
+            .and_then(Value::string)
+            .and_then(|n| family(&rows, n))
+        else {
+            continue;
+        };
         if d.get("kind").and_then(Value::string) != Some("constructor") {
             continue;
         }
-        let ctor = d.get("prototype").and_then(Value::string).and_then(|n| family(&rows, n));
+        let ctor = d
+            .get("prototype")
+            .and_then(Value::string)
+            .and_then(|n| family(&rows, n));
         let proto = find(ds, &format!("{name}.prototype"))
             .and_then(|p| p.get("prototype"))
             .and_then(Value::string)
@@ -128,14 +161,28 @@ pub fn write_runtime(manifest: &Value, out: &Path) -> Result<(), String> {
             .and_then(|n| family(&rows, n));
         let species = properties(d).iter().any(|p| {
             p.get("key").and_then(Value::string) == Some("@@species")
-                && p.get("get").and_then(Value::string).and_then(|g| find(ds, g)).and_then(|g| g.get("body")).and_then(Value::string)
+                && p.get("get")
+                    .and_then(Value::string)
+                    .and_then(|g| find(ds, g))
+                    .and_then(|g| g.get("body"))
+                    .and_then(Value::string)
                     == Some(BIRTH_SPECIES_GETTER)
         });
         if ctor.is_none() && proto.is_none() && !species {
             continue;
         }
-        let id = |f: Option<&str>| f.map_or("None::<BuiltinConstructorIdentity>".to_string(), |f| format!("Some(BuiltinConstructorIdentity::{f})"));
-        writeln!(links, "    ({name}) => {{ ({}, {}, {species}) }};", id(proto.or(ctor)), id(ctor)).unwrap();
+        let id = |f: Option<&str>| {
+            f.map_or("None::<BuiltinConstructorIdentity>".to_string(), |f| {
+                format!("Some(BuiltinConstructorIdentity::{f})")
+            })
+        };
+        writeln!(
+            links,
+            "    ({name}) => {{ ({}, {}, {species}) }};",
+            id(proto.or(ctor)),
+            id(ctor)
+        )
+        .unwrap();
     }
     links.push_str("    ($other:ident) => { (None::<BuiltinConstructorIdentity>, None::<BuiltinConstructorIdentity>, false) };\n}\n");
     std::fs::write(out.join("family_links.rs"), links).map_err(|e| e.to_string())

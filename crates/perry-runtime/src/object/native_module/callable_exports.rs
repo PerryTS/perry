@@ -3,9 +3,10 @@ use super::*;
 mod buffer_constructor;
 mod buffer_species;
 pub(crate) use buffer_constructor::{
-    buffer_constructor_value, buffer_constructor_statics, birth_buffer_own_parts, BUFFER_CONSTRUCTOR_INFO, buffer_intrinsic_prototype_value,
-    buffer_original_prototype_value, cached_buffer_intrinsic_prototype_value,
-    install_buffer_prototype_members, is_buffer_constructor_value,
+    birth_buffer_own_parts, buffer_constructor_statics, buffer_constructor_value,
+    buffer_intrinsic_prototype_value, buffer_original_prototype_value,
+    cached_buffer_intrinsic_prototype_value, install_buffer_prototype_members,
+    is_buffer_constructor_value, BUFFER_CONSTRUCTOR_INFO,
 };
 mod builtin_closure_metadata;
 mod module_cjs;
@@ -57,9 +58,9 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     // read through the family's one birth point.
     if module_name == "perf_hooks" {
         if let Some(identity) = crate::object::BuiltinConstructorIdentity::for_name(property_name) {
-            return crate::value::js_nanbox_pointer(
-                crate::array::intrinsic_constructor_addr(identity) as i64,
-            );
+            return crate::value::js_nanbox_pointer(crate::array::intrinsic_constructor_addr(
+                identity,
+            ) as i64);
         }
     }
     // Codegen can request a callable directly, bypassing namespace lookup.

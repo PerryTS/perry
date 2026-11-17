@@ -252,7 +252,7 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
 // The realm intrinsic %RegExp.prototype%, born with its own family: the
 // realm records it in [[Intrinsics]], and %Global% is not observed.
 pub(crate) fn intrinsic_prototype() -> f64 {
-    js_nanbox_pointer(
-        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::RegExp) as i64,
-    )
+    js_nanbox_pointer(crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::RegExp,
+    ) as i64)
 }

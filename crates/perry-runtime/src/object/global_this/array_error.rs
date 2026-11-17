@@ -242,8 +242,6 @@ pub(crate) extern "C" fn object_prototype_is_prototype_of_thunk(
     )
 }
 
-
-
 pub(crate) extern "C" fn date_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

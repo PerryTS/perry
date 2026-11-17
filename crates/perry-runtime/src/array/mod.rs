@@ -277,20 +277,22 @@ pub use self::numeric_range::{
 };
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
-    array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, intrinsic_constructor_addr,
-    intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
-    intrinsic_constructor_addr_if_bound_in, intrinsic_prototype_addr_if_bound_in, thread_realm,
-    intrinsic_constructor_addr_in, intrinsic_prototype_addr_in, is_thread_realm, realm_record_global,
-    note_realm_intrinsic, note_realm_intrinsic_in, object_prototype_addr, object_prototype_addr_if_resolved,
-    object_prototype_addr_matches, object_prototype_cell, function_prototype_addr_if_bound,
-    primitive_wrapper_prototype_addr, RealmIntrinsics, note_realm_function_intrinsic_in,
-    alloc_realm_record, install_realm_record_cells, realm_record_cell_is_born, realm_record_cells, realm_record_intrinsics,
-    realm_function_intrinsic_if_bound_in, RealmFunctionIntrinsic,
+    alloc_realm_record, array_prototype_addr, array_prototype_addr_if_resolved,
+    forget_object_prototype_intrinsic, function_prototype_addr, function_prototype_addr_if_bound,
+    install_realm_record_cells, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound_in,
+    intrinsic_constructor_addr_in, intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound,
+    intrinsic_prototype_addr_if_bound_in, intrinsic_prototype_addr_in, is_thread_realm,
+    note_object_prototype_intrinsic, note_realm_function_intrinsic_in, note_realm_intrinsic,
+    note_realm_intrinsic_in, object_prototype_addr, object_prototype_addr_if_resolved,
+    object_prototype_addr_matches, object_prototype_cell, primitive_wrapper_prototype_addr,
+    realm_function_intrinsic_if_bound_in, realm_record_cell_is_born, realm_record_cells,
+    realm_record_global, realm_record_intrinsics, thread_realm, RealmFunctionIntrinsic,
+    RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
-    intrinsic_constructor_addr_if_bound, test_memoized_prototype_addr, test_prototype_addr_cache_wiring, test_prototype_addr_cell_count,
+    intrinsic_constructor_addr_if_bound, test_memoized_prototype_addr,
+    test_prototype_addr_cache_wiring, test_prototype_addr_cell_count,
     test_rewrite_prototype_addr_slot,
 };
 pub(crate) use self::push_pop::throw_non_extensible_array_push;

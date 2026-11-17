@@ -300,7 +300,7 @@ def parse_matcher(ts):
             nodes.append(("rep", inner, sep, ts[k]))
             i = k + 1
         elif ts[i] == "$" and i + 3 < len(ts) and ts[i + 2] == ":":
-            if ts[i + 3] not in ("ident", "literal", "tt"):
+            if ts[i + 3] not in ("ident", "literal", "tt", "path"):
                 raise ValueError(f"unsupported macro fragment {ts[i + 3]}")
             nodes.append(("frag", ts[i + 1], ts[i + 3]))
             i += 4
@@ -312,6 +312,20 @@ def parse_matcher(ts):
             nodes.append(("lit", ts[i]))
             i += 1
     return nodes
+
+
+def path_end(ts, i, end):
+    """End of an identifier path; other path forms fail closed at expansion."""
+    if ts[i:i + 2] == [":", ":"]:
+        i += 2
+    while i < end:
+        if not re.fullmatch(r"[A-Za-z_]\w*", ts[i]):
+            return None
+        i += 1
+        if ts[i:i + 2] != [":", ":"]:
+            return i
+        i += 2
+    return None
 
 
 def match_nodes(nodes, ts, i, end, binds):
@@ -335,6 +349,12 @@ def match_nodes(nodes, ts, i, end, binds):
                     return None
                 binds.setdefault(node[1], []).append(ts[i])
                 i += 1
+            elif node[2] == "path":
+                k = path_end(ts, i, end)
+                if k is None:
+                    return None
+                binds.setdefault(node[1], []).append("".join(ts[i:k]))
+                i = k
             elif node[2] == "literal":
                 k = i + 1 if ts[i] == "-" else i
                 if k >= end or not (ts[k].startswith(('"', "'", "b\"", "r", "c\"")) or ts[k][0].isdigit()
@@ -616,6 +636,20 @@ def self_test():
     assert list(source_exports({"crates/a/src/lib.rs": prefixed})) == ["perry_atom_*"]
     named = 'macro_rules! img { ($n:ident, $e:literal) => { #[export_name = $e] static $n: u8 = 0; }; } img!(A, "perry_image_literal_0_61"); img!(B, "perry_image_literal_0_62");'
     assert sorted(source_exports({"crates/a/src/lib.rs": named})) == ["perry_image_literal_0_61", "perry_image_literal_0_62"]
+    paths = ('macro_rules! install { ($( $key:literal, $name:ident, $birth:path; )*) => '
+             '{ $( #[no_mangle] pub extern "C" fn $name() { $birth(); } )* }; } ')
+    entries = ('install! { "a", js_path, crate::owner::birth; '
+               '"b", js_plain, birth; "c", js_absolute, ::other::birth; }')
+    expanded = source_exports({"a": paths + entries, "b": plain.replace("js_collision", "js_path")})
+    assert set(expanded) == {"js_path", "js_plain", "js_absolute"}, expanded
+    assert expanded["js_path"] == {"a", "b"}, expanded
+    for unsupported in ("crate::", "crate::birth::<u8>"):
+        try:
+            source_exports({"a": paths + 'install! { "a", js_path, ' + unsupported + '; }'})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsupported declaration path went unnoticed")
     second = 'macro_rules! entry { ($first:ident, $second:ident) => { #[no_mangle] pub extern "C" fn $second() {} }; } entry!(a, b);'
     assert set(source_exports({"x": second})) == {"b"}
     try:

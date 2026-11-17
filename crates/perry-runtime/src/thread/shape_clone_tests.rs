@@ -176,22 +176,26 @@ fn frozen_array_records_keep_creation_order() {
     }
 }
 
-
 #[test]
 fn vm_constructor_clones_into_the_destination_threads_main_realm() {
     let _lock = crate::gc::global_side_table_test_lock();
     crate::object::js_nm_install_vm();
     let _no_move = crate::gc::GcSuppressScope::new();
     let global = crate::object::js_new_realm_global();
-    let realm = unsafe { crate::object::global_this::realm_of(
-        (global.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader,
-    ) };
+    let realm = unsafe {
+        crate::object::global_this::realm_of(
+            (global.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader,
+        )
+    };
     let identity = crate::object::BuiltinConstructorIdentity::Array;
     let ctor = crate::object::alloc_builtin_constructor(identity, realm);
-    assert_eq!(crate::closure::js_closure_get_capture_bits(ctor, 1), global.to_bits());
-    let serialized = unsafe { serialize_nanbox_for_thread(
-        crate::value::js_nanbox_pointer(ctor as i64).to_bits(),
-    ) };
+    assert_eq!(
+        crate::closure::js_closure_get_capture_bits(ctor, 1),
+        global.to_bits()
+    );
+    let serialized = unsafe {
+        serialize_nanbox_for_thread(crate::value::js_nanbox_pointer(ctor as i64).to_bits())
+    };
     let (slot, is_main, cloned_identity) = std::thread::spawn(move || unsafe {
         let _no_move = crate::gc::GcSuppressScope::new();
         let value = deserialize_nanbox_on_current_thread(&serialized);
@@ -201,7 +205,9 @@ fn vm_constructor_clones_into_the_destination_threads_main_realm() {
             crate::array::is_thread_realm(crate::object::builtin_constructor_realm(ctor)),
             crate::object::constructor_identity(f64::from_bits(value)),
         )
-    }).join().expect("clone worker");
+    })
+    .join()
+    .expect("clone worker");
     assert_eq!(slot, TAG_UNDEFINED);
     assert!(is_main);
     assert_eq!(cloned_identity, Some(identity));

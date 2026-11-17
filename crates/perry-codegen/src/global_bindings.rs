@@ -49,9 +49,9 @@ impl Observed {
             // A bare builtin global function identifier (`parseInt`, `setTimeout`) lowers to an
             // `ExternFuncRef` named after it; codegen reads its value from the global object.
             Expr::ExternFuncRef { name, .. } => self.name(name),
-            Expr::PropertyGet { object, property, .. } if matches!(**object, Expr::GlobalGet(_)) => {
-                self.name(property)
-            }
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(**object, Expr::GlobalGet(_)) => self.name(property),
             Expr::IndexGet { object, index, .. } if matches!(**object, Expr::GlobalGet(_)) => {
                 match &**index {
                     Expr::String(key) => self.name(key),
@@ -60,7 +60,9 @@ impl Observed {
             }
             Expr::Call { callee, args, .. } => {
                 if let Expr::ExternFuncRef { name, .. } = &**callee {
-                    if name == "js_global_get_optional" || name == "js_global_get_or_throw_unresolved" {
+                    if name == "js_global_get_optional"
+                        || name == "js_global_get_or_throw_unresolved"
+                    {
                         match args.as_slice() {
                             [Expr::String(key)] => self.name(key),
                             _ => self.all = true,
@@ -122,7 +124,13 @@ mod tests {
 
     #[test]
     fn the_global_object_as_a_value_arms_every_binding() {
-        assert_eq!(observed(&global_read("globalThis")).len(), LAZY_GLOBAL_BINDINGS.len());
-        assert_eq!(observed(&Expr::GlobalThisExpr).len(), LAZY_GLOBAL_BINDINGS.len());
+        assert_eq!(
+            observed(&global_read("globalThis")).len(),
+            LAZY_GLOBAL_BINDINGS.len()
+        );
+        assert_eq!(
+            observed(&Expr::GlobalThisExpr).len(),
+            LAZY_GLOBAL_BINDINGS.len()
+        );
     }
 }

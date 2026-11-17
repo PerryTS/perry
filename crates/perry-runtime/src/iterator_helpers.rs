@@ -25,11 +25,11 @@ use std::cell::Cell;
 
 mod proto_methods;
 mod statics;
-pub(crate) use proto_methods::{install_helper_prototype_methods, install_prototype_methods};
 pub use proto_methods::{
     dispatch_iterator_helper_method, is_iterator_helper_method,
     maybe_dispatch_helper_on_builtin_iterator, maybe_dispatch_helper_on_iterator,
 };
+pub(crate) use proto_methods::{install_helper_prototype_methods, install_prototype_methods};
 pub use statics::js_iterator_from;
 pub(crate) use statics::{
     install_dispose, install_iterator_statics, install_wrap_prototype_methods,

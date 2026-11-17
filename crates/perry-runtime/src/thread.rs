@@ -871,8 +871,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64, literal_prepare: i
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
-                    let c =
-                        allocate_thread_closure(fp, cc);
+                    let c = allocate_thread_closure(fp, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         if is_builtin_realm_capture(cc, i) {
@@ -1086,11 +1085,11 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
         let mut caps = Vec::with_capacity(actual);
         for i in 0..actual {
             let bits = if is_builtin_realm_capture(cc, i) {
-                    TAG_UNDEFINED
-                } else {
-                    (*base.add(i)).to_bits()
-                };
-                caps.push(serialize_capture_for_thread(bits));
+                TAG_UNDEFINED
+            } else {
+                (*base.add(i)).to_bits()
+            };
+            caps.push(serialize_capture_for_thread(bits));
         }
         guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
         Some((fp, cc, caps))
@@ -1160,8 +1159,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64, literal_prepare
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
-                    let c =
-                        allocate_thread_closure(fp, cc);
+                    let c = allocate_thread_closure(fp, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         if is_builtin_realm_capture(cc, i) {
@@ -1414,13 +1412,12 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
         // capture-deserialization allocations.
         let gc_scope = crate::gc::RuntimeHandleScope::new();
         let closure_handle = if let Some((cc, ref cap_vals)) = serialized_captures {
-            let c =
-                allocate_thread_closure(info_usize, cc);
+            let c = allocate_thread_closure(info_usize, cc);
             let h = gc_scope.root_raw_mut_ptr(c);
             for (i, cap) in cap_vals.iter().enumerate() {
-                        if is_builtin_realm_capture(cc, i) {
-                            continue;
-                        }
+                if is_builtin_realm_capture(cc, i) {
+                    continue;
+                }
                 unsafe {
                     let bits = deserialize_nanbox_on_current_thread(cap);
                     crate::closure::js_closure_set_capture_f64(

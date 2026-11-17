@@ -173,9 +173,10 @@ pub(crate) fn wire_function_intrinsic_parents() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
         let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-        let function_ctor = crate::value::js_nanbox_pointer(crate::array::intrinsic_constructor_addr(
-            crate::object::BuiltinConstructorIdentity::Function,
-        ) as i64);
+        let function_ctor =
+            crate::value::js_nanbox_pointer(crate::array::intrinsic_constructor_addr(
+                crate::object::BuiltinConstructorIdentity::Function,
+            ) as i64);
         if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
             let function_ctor = scope.root_nanbox_f64(function_ctor);
             ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {

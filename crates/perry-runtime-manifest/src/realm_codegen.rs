@@ -32,7 +32,12 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
     rust.push_str("];\n");
     let bindings = perry_runtime_manifest::realm_global_bindings::observed_global_bindings(&raw)?;
     writeln!(rust, "/// The lazily born global bindings (%Global%'s `observed(X)` members), in declaration order.").unwrap();
-    writeln!(rust, "pub const LAZY_GLOBAL_BINDINGS: &[&str] = &{:?};", bindings.iter().map(|b| b.name.as_str()).collect::<Vec<_>>()).unwrap();
+    writeln!(
+        rust,
+        "pub const LAZY_GLOBAL_BINDINGS: &[&str] = &{:?};",
+        bindings.iter().map(|b| b.name.as_str()).collect::<Vec<_>>()
+    )
+    .unwrap();
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;
     std::fs::write(
         out.join("realm-consume-time-ns"),

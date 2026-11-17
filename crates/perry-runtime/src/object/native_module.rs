@@ -64,9 +64,9 @@ pub(crate) use callable_exports::minted_native_callable_export;
 #[cfg(test)]
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
-    bound_native_callable_module_and_method, bound_native_callable_value_arity,
-    bound_native_parent, buffer_constructor_value, buffer_constructor_statics, birth_buffer_own_parts, BUFFER_CONSTRUCTOR_INFO,
-    buffer_intrinsic_prototype_value, buffer_original_prototype_value,
+    birth_buffer_own_parts, bound_native_callable_module_and_method,
+    bound_native_callable_value_arity, bound_native_parent, buffer_constructor_statics,
+    buffer_constructor_value, buffer_intrinsic_prototype_value, buffer_original_prototype_value,
     builtin_closure_is_non_constructable_value, builtin_closure_length,
     cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,
     fs_namespace_descriptor_setter_value, install_module_cjs_cache_value,
@@ -77,7 +77,7 @@ pub(crate) use callable_exports::{
     set_bound_native_closure_name, set_builtin_closure_length,
     set_builtin_closure_non_constructable, timers_promises_parent_namespace,
     tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
-    zlib_codes_object, BoundNativeParent,
+    zlib_codes_object, BoundNativeParent, BUFFER_CONSTRUCTOR_INFO,
 };
 pub(crate) use constants::{get_native_module_constant, native_module_constant_is_live};
 pub(crate) use constructor_exports::{

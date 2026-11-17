@@ -80,7 +80,8 @@ extern "C" fn value_of_test_function(
 fn borrowed_builtin_value_of_ignores_own_sentinels() {
     let _scope = Scope::new();
     unsafe {
-        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK)
+            as *mut ObjectHeader;
 
         let receivers = [
             (
@@ -120,7 +121,8 @@ fn borrowed_builtin_value_of_ignores_own_sentinels() {
 fn borrowed_builtin_value_of_boxes_number_and_rejects_nullish_receivers() {
     let _scope = Scope::new();
     unsafe {
-        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK)
+            as *mut ObjectHeader;
 
         let object_value_of = builtin_prototype_method(global, "Object", "valueOf");
 
@@ -150,7 +152,8 @@ fn borrowed_builtin_value_of_boxes_number_and_rejects_nullish_receivers() {
 fn borrowed_builtin_value_of_keeps_number_string_and_date_brand_checks() {
     let _scope = Scope::new();
     unsafe {
-        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK)
+            as *mut ObjectHeader;
 
         let number_value_of = builtin_prototype_method(global, "Number", "valueOf");
         let string_value_of = builtin_prototype_method(global, "String", "valueOf");

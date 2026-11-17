@@ -509,7 +509,6 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
         _ => {}
     }
 
-
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(
             crate::fn_info!(#[realm("PerformanceObserver.supportedEntryTypes.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_supported_entry_types_getter_thunk, 0; with_declared(0)),

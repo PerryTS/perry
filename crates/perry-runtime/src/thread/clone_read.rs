@@ -28,7 +28,8 @@ pub(super) fn allocate_thread_closure(
             crate::object::alloc_builtin_constructor(identity, crate::array::thread_realm())
         }
         None => crate::closure::js_closure_alloc(
-            info as *const crate::closure::JsFunctionInfo, capture_count,
+            info as *const crate::closure::JsFunctionInfo,
+            capture_count,
         ),
     }
 }
