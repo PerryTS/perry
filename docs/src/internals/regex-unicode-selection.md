@@ -1,7 +1,7 @@
 # Selecting RegExp Unicode membership
 
 Perex's `selectable-unicode` feature puts nontrivial Unicode property membership
-behind an install-once function slot. `js_runtime_install_regex_unicode` fills
+behind an install-once provider slot. `js_runtime_install_regex_unicode` fills
 that slot before module initialization. The default/full runtime installer also
 fills it. The engine installer does not retain this database on its own.
 
@@ -36,15 +36,19 @@ strings from annotations or mutable bindings.
 Membership callers in Perex include both executors, atom filtering, candidate
 construction, named-group parsing and binary-program validation. Compilation and
 validation resolve the slot once, when they first need membership. The validated
-Program view and binding witness retain the native function pointer; evaluator,
-atom and DFA queries call it directly without reading or checking the slot.
+Program view and binding witness retain the native membership function and DFA
+entry points. Evaluator and atom queries use the cached function. The single DFA
+implementation is generic over its zero-sized provider, so membership calls
+inline into character-class construction. Its cached entry selects the entire
+instantiation before the search loops. Neither executor reads or checks the slot.
 Property-free programs never resolve it. Property descriptors/name lookup, case-fold data and properties
 of strings have separate references and remain available. A missing installation
 panics during compilation/validation instead of returning an incorrect match;
 the compiler must therefore retain installation for every open producer.
 Native `perry-perex` clients accept arbitrary patterns and install unconditionally.
 
-The slot holds only an immutable native function pointer, never a GC value. It is
+The slot holds only immutable native functions and a static dispatch table, never
+a GC value. It is
 process-wide, idempotent, thread-safe and cannot be replaced after installation.
 
 Perex program words remain relocatable property IDs. The process-local witness
