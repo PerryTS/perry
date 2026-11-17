@@ -686,3 +686,41 @@ fn copied_form_data_does_not_inherit_bound_methods() {
         .unwrap()
         .remove(&source);
 }
+
+/// #12629: `Reflect.construct(Headers, [], newTarget)` gives an instance whose
+/// [[Prototype]] is `newTarget.prototype` and that still carries a Headers
+/// handle. A same-prototype `newTarget` keeps the bare handle.
+#[test]
+fn reflect_construct_with_new_target_links_its_prototype() {
+    use perry_runtime::object::{js_get_global_this, js_object_get_field_by_name};
+    let _band = crate::fetch::handle_band_test_lock();
+    unsafe { crate::common::dispatch::js_stdlib_init_dispatch() };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let get = |object: f64, name: &str| {
+        let key = perry_runtime::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let object = perry_runtime::value::js_nanbox_get_pointer(object) as *const _;
+        f64::from_bits(js_object_get_field_by_name(object, key).bits())
+    };
+    let global = scope.root_nanbox_f64(js_get_global_this());
+    let headers = scope.root_nanbox_f64(get(global.get_nanbox_f64(), "Headers"));
+    let map = scope.root_nanbox_f64(get(global.get_nanbox_f64(), "Map"));
+    let construct = |new_target: f64| {
+        let args = perry_runtime::array::js_array_alloc(0);
+        let args = perry_runtime::value::js_nanbox_pointer(args as i64);
+        perry_runtime::proxy::js_reflect_construct(headers.get_nanbox_f64(), args, new_target)
+    };
+    let instance = scope.root_nanbox_f64(construct(map.get_nanbox_f64()));
+    let map_prototype = get(map.get_nanbox_f64(), "prototype");
+    assert_eq!(
+        perry_runtime::object::js_object_get_prototype_of(instance.get_nanbox_f64()).to_bits(),
+        map_prototype.to_bits()
+    );
+    let backing = perry_runtime::object::js_fetch_unwrap_handle(instance.get_nanbox_f64());
+    assert_eq!(
+        dispatch::js_fetch_handle_kind(handle_id(backing)),
+        3,
+        "the instance keeps its Headers handle"
+    );
+    let bare = construct(headers.get_nanbox_f64());
+    assert!(perry_runtime::JSValue::from_bits(bare.to_bits()).is_handle());
+}

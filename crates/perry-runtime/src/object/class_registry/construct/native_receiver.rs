@@ -48,3 +48,46 @@ pub(super) unsafe fn apply_prototype(result: f64, proto: Option<crate::gc::Runti
         }
     }
 }
+
+/// `Reflect.construct(F, args, newTarget)` for a WHATWG Fetch base `F` whose
+/// constructor returned a registry handle (`result`), when
+/// `newTarget.prototype` is not `F.prototype`. A bare handle's [[Prototype]]
+/// is always its interface's, so the instance is instead an ordinary object
+/// born from `newTarget` that owns `proto` and keeps the handle in the private
+/// element a `class X extends F` instance uses, which also roots it. Reads,
+/// methods and brand checks reach the native state through that element.
+/// `None` leaves `result` as the instance.
+pub(super) unsafe fn fetch_backed_object(
+    scope: &crate::gc::RuntimeHandleScope,
+    result: f64,
+    nt: &crate::gc::RuntimeHandle<'_>,
+    proto: Option<crate::gc::RuntimeHandle<'_>>,
+) -> Option<f64> {
+    let proto = proto?;
+    let value = JSValue::from_bits(result.to_bits());
+    if !value.is_handle() {
+        return None;
+    }
+    let probe = crate::object::fetch_handle_kind_probe()?;
+    let name = match probe(value.as_handle()) {
+        1 => "Response",
+        2 => "Request",
+        3 => "Headers",
+        4 => "Blob",
+        5 => "File",
+        _ => return None,
+    };
+    let handle = scope.root_nanbox_f64(result);
+    if crate::object::builtin_prototype_value(name).to_bits() == proto.get_nanbox_u64() {
+        return None;
+    }
+    let receiver = scope.root_nanbox_f64(ordinary_object_from_new_target(
+        nt.get_nanbox_f64(),
+        Some(proto.get_nanbox_u64()),
+    ));
+    crate::object::global_this::attach_fetch_handle_to_this(
+        receiver.get_nanbox_f64(),
+        handle.get_nanbox_f64(),
+    );
+    Some(receiver.get_nanbox_f64())
+}
