@@ -1113,32 +1113,44 @@ pub(crate) fn lower(
                         let key = vals[1].clone();
                         let val = vals[2].clone();
                         let strict = if ctx.is_strict_fn { "1" } else { "0" };
-                        let blk = ctx.block();
-                        let handle = unbox_to_i64(blk, &a);
-                        Ok(if key_maybe_string {
-                            // `Uint8ArraySet` is an assignment expression: use
-                            // the canonical receiver-aware setter so expando
-                            // keys, numeric-looking runtime strings, Symbols,
-                            // strictness, and the expression result all match
-                            // ordinary JavaScript property assignment.
-                            blk.call(
-                                DOUBLE,
-                                "js_put_value_set",
-                                &[
-                                    (DOUBLE, &a),
-                                    (DOUBLE, &key),
-                                    (DOUBLE, &val),
-                                    (DOUBLE, &a),
-                                    (I32, strict),
-                                ],
-                            )
-                        } else {
-                            blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                            )
-                        })
+                        if !key_maybe_string {
+                            // A value that IS a Number at runtime needs no
+                            // conversion, so the guarded byte store answers it
+                            // first (#10515: nanoid's `b[i] = cc[b[i] & mask]`,
+                            // whose read may answer `undefined`).
+                            super::u8_buffer_read::emit_u8_cached_dyn_set(
+                                ctx,
+                                &a,
+                                &key,
+                                &val,
+                                |ctx| {
+                                    let blk = ctx.block();
+                                    let handle = unbox_to_i64(blk, &a);
+                                    blk.call(
+                                        DOUBLE,
+                                        "js_typed_array_index_set_dynamic",
+                                        &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                                    );
+                                },
+                            );
+                            return Ok(val);
+                        }
+                        // `Uint8ArraySet` is an assignment expression: use
+                        // the canonical receiver-aware setter so expando
+                        // keys, numeric-looking runtime strings, Symbols,
+                        // strictness, and the expression result all match
+                        // ordinary JavaScript property assignment.
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_put_value_set",
+                            &[
+                                (DOUBLE, &a),
+                                (DOUBLE, &key),
+                                (DOUBLE, &val),
+                                (DOUBLE, &a),
+                                (I32, strict),
+                            ],
+                        ))
                     })?;
                 if value_discarded {
                     return Ok(double_literal(0.0));
@@ -1573,6 +1585,10 @@ pub(crate) fn lower(
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "uint8array_set_tonumber_tests.rs"]
+mod uint8array_set_tonumber_tests;
 
 #[cfg(test)]
 mod map_header_layout_tests {
