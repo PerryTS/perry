@@ -1820,11 +1820,24 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             prim,
         )
     };
+    let mut ledger_refused: Vec<crate::hold_ledger::Refused> = Vec::new();
+    let mut ledger_totals = [[0usize; 3]; 2];
     for (i, recvs, funcs) in &groups {
         let s = all[*i];
         let key = m.atoms[s.key as usize].clone();
         let (receivers, top, verdict, fixed_shape, targets, receiver_values, receiver_prims) =
             verdict_of(s, recvs);
+        if m.ledger.is_some() {
+            let store = s.access.is_store();
+            let path = g.modules.get(s.module as usize).map_or("", |(p, _)| *p);
+            let part = crate::hold_ledger::part(path);
+            ledger_totals[store as usize][part] += 1;
+            if matches!(verdict, Verdict::No(_)) || (store && matches!(verdict, Verdict::AddsKey)) {
+                let set = receiver_set(m, &element::with_copies(&copies, recvs));
+                let roots = crate::hold_ledger::blame(m, &set.toks, set.top_recv);
+                ledger_refused.push(crate::hold_ledger::Refused { roots, part, store });
+            }
+        }
         let intrinsic_callee = if s.is_call && !matches!(s.access, Access::Set { .. }) {
             let all = element::with_copies(&copies, recvs);
             let set = receiver_set(m, &all);
@@ -1927,6 +1940,9 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             target_bodies,
             holder_class,
         });
+    }
+    if m.ledger.is_some() {
+        crate::hold_ledger::write(m, &ledger_refused, ledger_totals);
     }
     out
 }

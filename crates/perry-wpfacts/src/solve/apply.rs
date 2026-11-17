@@ -222,10 +222,14 @@ impl Model {
                 };
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
+                let root = self.ledger.as_mut().map(|l| l.enter_sink(n));
                 for &t in toks {
                     if retained != Some(t) {
                         self.escape(t, reason);
                     }
+                }
+                if let (Some(l), Some(r)) = (self.ledger.as_mut(), root) {
+                    l.cur = r;
                 }
                 self.chain_escape = saved;
             }

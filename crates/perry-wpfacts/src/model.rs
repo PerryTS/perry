@@ -2591,6 +2591,9 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// `PERRY_FACTS_LEDGER` only (`hold_ledger`): the realm is never held
+    /// and each hold's effects carry their root. `None` otherwise.
+    pub(crate) ledger: Option<Box<crate::hold_ledger::HoldLedger>>,
     /// `PERRY_WPF_KEYREAD=1` only (`diagnostics::keysnap_plan`): the nodes
     /// snapshotted when the realm is first held; `None` otherwise.
     pub keysnap: Option<Box<crate::diagnostics::KeySnap>>,

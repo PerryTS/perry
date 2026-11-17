@@ -379,6 +379,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_FACTS_ABORT_TOP", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_ARR_WHY", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_FORIN_PATH_COUNT", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
+    ("PERRY_FACTS_LEDGER", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_WHY", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_WHY_ARRIVE", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_WHY_AT", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
