@@ -21,7 +21,14 @@ Retaining or passing a literal as a value retains the tables. Prototype
 reflection and exposure also retain them, covering replacement of those methods. ASCII group validation returns before membership;
 ordinary character ranges, whitespace classes and case-fold tables do not access
 the property database. The selector deliberately over-includes some patterns.
-It does not infer runtime strings from TypeScript annotations or mutable bindings.
+For search/match/matchAll coercion, an immediate primitive literal or a fresh
+closed object with no conversion hooks can be checked structurally. An ordinary
+object converts to `[object Object]`; its data fields do not supply the pattern.
+Unknown arguments and conversion hooks retain the tables. This avoids treating
+a user method taking a plain options object as an unknown pattern producer.
+The rule uses actual HIR object construction and `Class::is_literal_shape`, not
+TypeScript annotations or an assumed class name. It does not infer runtime
+strings from annotations or mutable bindings.
 
 Membership callers in Perex include both executors, atom filtering, candidate
 construction, named-group parsing and binary-program validation. They all use

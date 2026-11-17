@@ -29,11 +29,33 @@ fn consumer_key(key: &str) -> bool {
     matches!(key, "split" | "test" | "exec")
 }
 
-fn expression(expr: &Expr) -> bool {
+fn coercion_needs_properties(module: &Module, pattern: &Expr) -> bool {
+    let conversion_key = |key: &str| matches!(key, "toString" | "valueOf" | "__proto__");
+    match pattern {
+        Expr::String(pattern) => pattern_needs_properties(pattern, ""),
+        Expr::Number(_) | Expr::Bool(_) | Expr::Null | Expr::Undefined => false,
+        // A fresh ordinary object's default conversion is "[object Object]".
+        // Field values do not participate. Prototype exposure is a separate
+        // conservative guard; spreads and computed keys cannot use this proof.
+        Expr::Object(fields) => fields.iter().any(|(key, _)| conversion_key(key)),
+        Expr::New { class_name, .. } => !module.classes.iter().any(|class| {
+            class.name == *class_name
+                && class.is_literal_shape()
+                && class.computed_members.is_empty()
+                && class
+                    .fields
+                    .iter()
+                    .all(|field| !conversion_key(&field.name))
+        }),
+        _ => true,
+    }
+}
+
+fn expression(module: &Module, expr: &Expr) -> bool {
     match expr {
         Expr::StringSplit(subject, delimiter) => {
             if let Expr::RegExp { pattern, flags } = delimiter.as_ref() {
-                return pattern_needs_properties(pattern, flags) || expression(subject);
+                return pattern_needs_properties(pattern, flags) || expression(module, subject);
             }
         }
         Expr::Call { callee, args, .. } => {
@@ -41,17 +63,24 @@ fn expression(expr: &Expr) -> bool {
                 object, property, ..
             } = callee.as_ref()
             {
+                if matches!(property.as_str(), "search" | "match" | "matchAll") {
+                    return args
+                        .first()
+                        .is_some_and(|pattern| coercion_needs_properties(module, pattern))
+                        || expression(module, object)
+                        || args.iter().any(|e| expression(module, e));
+                }
                 if property == "split" {
                     if let Some(Expr::RegExp { pattern, flags }) = args.first() {
                         return pattern_needs_properties(pattern, flags)
-                            || expression(object)
-                            || args[1..].iter().any(expression);
+                            || expression(module, object)
+                            || args[1..].iter().any(|e| expression(module, e));
                     }
                 }
                 if matches!(property.as_str(), "test" | "exec") {
                     if let Expr::RegExp { pattern, flags } = object.as_ref() {
                         return pattern_needs_properties(pattern, flags)
-                            || args.iter().any(expression);
+                            || args.iter().any(|e| expression(module, e));
                     }
                 }
             }
@@ -59,14 +88,22 @@ fn expression(expr: &Expr) -> bool {
         // A retained regex value exposes its constructor and compile method,
         // even through a computed key whose annotation claims to be numeric.
         Expr::RegExp { .. } => return true,
-        Expr::ObjectGetPrototypeOf(_) | Expr::ReflectGetPrototypeOf(_) => return true,
+        Expr::ObjectGetPrototypeOf(_)
+        | Expr::ReflectGetPrototypeOf(_)
+        | Expr::ObjectSetPrototypeOf(_, _)
+        | Expr::ReflectSetPrototypeOf { .. } => return true,
         // Coercion, custom species and RegExp.prototype.compile can obtain a
         // pattern or flags from arbitrary user code. Do not infer string values
         // from annotations or a local binding's initializer.
         Expr::RegExpDynamic { .. } | Expr::StringMatch { .. } | Expr::StringMatchAll { .. } => {
             return true;
         }
-        Expr::PropertyGet { property, .. } if producer_key(property) => return true,
+        Expr::PropertyGet { property, .. }
+            if producer_key(property)
+                || matches!(property.as_str(), "search" | "match" | "matchAll") =>
+        {
+            return true
+        }
         Expr::PropertySet { property, .. } | Expr::LiteralSlotInit { key: property, .. }
             if consumer_key(property) =>
         {
@@ -90,11 +127,15 @@ fn expression(expr: &Expr) -> bool {
         {
             return true
         }
-        Expr::Closure { body, .. } if super::stmts_any_expr(body, &mut expression) => return true,
+        Expr::Closure { body, .. }
+            if super::stmts_any_expr(body, &mut |e| expression(module, e)) =>
+        {
+            return true
+        }
         _ => {}
     }
     let mut found = false;
-    walk_expr_children(expr, &mut |child| found |= expression(child));
+    walk_expr_children(expr, &mut |child| found |= expression(module, child));
     found
 }
 
@@ -118,8 +159,7 @@ pub(super) fn needed(module: &Module) -> bool {
                 .chain(&class.static_fields)
                 .any(|field| consumer_key(&field.name))
     }) || super::global_object::may_escape(module)
-        || super::regex_members::needed(module)
-        || super::module_any_expr(module, &mut expression)
+        || super::module_any_expr(module, &mut |e| expression(module, e))
 }
 
 #[cfg(test)]
@@ -148,6 +188,7 @@ mod tests {
             r"const r = /a/; r[process.argv[2]]('\\p{L}', 'u');",
             r"const r = /a/; new r.constructor('\\p{L}', 'u');",
             r"'a'.match(process.argv[2]);",
+            r"'a'.search({ toString() { return process.argv[2]; } });",
             r"const g = globalThis; new g[process.argv[2]]('\\p{L}', 'u');",
             r"class C { static r = /\p{L}/u; f() { return /(?<α>a)/; } }",
             r"function f(r = /\p{L}/u) { return r; }",
@@ -162,6 +203,7 @@ mod tests {
             r"'a b'.split(/\s+/);",
             r"/^[a-z]+$/i.test('hello');",
             r"class C { search() { return 1; } } const c = new C(); c.search();",
+            r"class C { x = 1; search(options) { return options.maxNodes; } } const c = new C(); c.search({level: 10, maxNodes: Number(process.argv[2])});",
             r"const a = [1, 2]; console.log(a[1]);",
             r"console.log('hello');",
         ] {
