@@ -42,7 +42,14 @@ fn expression(expr: &Expr) -> bool {
 }
 
 pub(super) fn needed(module: &Module) -> bool {
-    super::global_object::may_escape(module)
+    // An inherited RegExp constructor accepts patterns without a dedicated
+    // RegExpDynamic expression at its `new Subclass(...)` call sites.
+    module.classes.iter().any(|class| {
+        class.native_extends.is_some()
+            || class.extends_name.is_some()
+            || class.extends_expr.is_some()
+            || class.extends.is_some()
+    }) || super::global_object::may_escape(module)
         || super::regex_members::needed(module)
         || super::module_any_expr(module, &mut expression)
 }
@@ -61,6 +68,7 @@ mod tests {
             r"/k/iu.test('K');",
             r"new RegExp(process.argv[2], 'u');",
             r"RegExp(process.argv[2]);",
+            r"class R extends RegExp {} new R(process.argv[2], 'u');",
             r"const C = RegExp; new C(process.argv[2], 'u');",
             r"const r = /a/; r.compile(process.argv[2], 'u');",
             r"const r = /a/; r[process.argv[2]]('\\p{L}', 'u');",
