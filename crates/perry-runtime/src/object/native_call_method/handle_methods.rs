@@ -513,10 +513,7 @@ pub(super) unsafe fn dispatch_handle(
                         // Spec §23.1.3.21: Set(O,"length",…) fires even with 0
                         // args, so frozen / non-writable-length must throw.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        if crate::array::array_is_frozen(arr) {
-                            crate::array::throw_non_extensible_array_push(arr);
-                        }
-                        crate::array::guard_writable_length(arr);
+                        crate::array::push_guard(arr, args_len as u32);
                         let mut a = arr;
                         for i in 0..args_len {
                             let v = if !args_ptr.is_null() {
