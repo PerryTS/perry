@@ -1,0 +1,1 @@
+Make bounded literal-capacity inference traverse bindings in a stable order. Repeated compilations of long alias chains now agree on added-key reservations and static layout identities, avoiding hash-seed-dependent allocation layouts and layout-plan assertion failures.
