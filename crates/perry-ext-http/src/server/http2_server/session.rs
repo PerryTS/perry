@@ -303,12 +303,17 @@ unsafe fn is_js_array(value: JsValue) -> bool {
 
 /// One PEM blob, from a string or a Buffer.
 ///
+/// Only a string takes the text path: `jsvalue_to_owned_string` answers any
+/// object with its JSON, so a Buffer read as text becomes
+/// `{"type":"Buffer","data":[…]}`, holds no PEM block, and leaves the session
+/// trusting nothing (#14680).
+///
 /// The Buffer read goes through the **canonical runtime registry**: this crate
 /// is a separately linked archive and cannot see a Buffer the program runtime
 /// allocated, which is exactly what `fs.readFileSync` returns.
 unsafe fn pem_bytes(value: JsValue) -> Option<Vec<u8>> {
-    if let Some(text) = jsvalue_to_owned_string(f64::from_bits(value.bits())) {
-        return Some(text.into_bytes());
+    if value.is_any_string() {
+        return jsvalue_to_owned_string(f64::from_bits(value.bits())).map(String::into_bytes);
     }
     perry_ffi::bytes::no_gc(|scope| {
         perry_ffi::bytes::borrow(value, scope)
@@ -480,6 +485,20 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `http2.connect(url, { ca: fs.readFileSync(path) })` hands over a Buffer,
+    /// and its bytes are the PEM — not the Buffer's JSON (#14680).
+    #[test]
+    fn a_buffer_ca_yields_its_bytes() {
+        let pem = b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        let buffer = perry_ffi::alloc_buffer(pem);
+        let value = JsValue::from_bits(0x7ffd_0000_0000_0000 | buffer as u64);
+        assert!(
+            !value.is_any_string(),
+            "fixture must be a Buffer, not a string"
+        );
+        assert_eq!(unsafe { pem_bytes(value) }, Some(pem.to_vec()));
+    }
 
     /// The events queued for one handle, without draining the global queue —
     /// these tests run in the same process as every other test in this crate
