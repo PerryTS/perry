@@ -4124,10 +4124,19 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
 /// `promise_constructor_call_thunk`). Not here: constructors with a call
 /// behaviour (`Array`, `Object`, `String`, `Number`, `Boolean`, `BigInt`,
 /// `Symbol`, `Date`, `RegExp`, `Error`s, `Function`).
+///
+/// The global object (ECMA-262 19), `Math` (21.3), `JSON` (25.5) and
+/// `Reflect` (28.1) are ordinary objects without a [[Call]] internal
+/// method: Call throws a TypeError at 7.3.14 step 2, before it uses the
+/// receiver or an argument.
 pub(crate) fn call_throws(ns: BuiltinNs) -> bool {
     matches!(
         ns,
-        BuiltinNs::TypedArray
+        BuiltinNs::GlobalThis
+            | BuiltinNs::Math
+            | BuiltinNs::Json
+            | BuiltinNs::Reflect
+            | BuiltinNs::TypedArray
             | BuiltinNs::TypedArrayKind(_)
             | BuiltinNs::ArrayBuffer
             | BuiltinNs::SharedArrayBuffer
