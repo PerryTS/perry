@@ -56,6 +56,16 @@ fn coercion_needs_properties(module: &Module, pattern: &Expr) -> bool {
 
 fn expression(module: &Module, expr: &Expr) -> bool {
     match expr {
+        // Lowering represents the built-in Map constructor dynamically even
+        // with no input. It cannot supply a regex; global replacement and
+        // constructor/prototype exposure are separate capability guards.
+        Expr::NewDynamic { callee, args, .. }
+            if args.is_empty()
+                && matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
+                    if matches!(object.as_ref(), Expr::GlobalGet(0)) && property == "Map") =>
+        {
+            return false
+        }
         Expr::StringSplit(subject, delimiter) => {
             if let Expr::RegExp { pattern, flags } = delimiter.as_ref() {
                 return pattern_needs_properties(pattern, flags) || expression(module, subject);
@@ -250,6 +260,7 @@ mod tests {
             r"class C { x = 1; search(options) { return options.maxNodes; } } const c = new C(); c.search({level: 10, maxNodes: Number(process.argv[2])});",
             r"const a = [1, 2]; console.log(a[1]);",
             r"function f(values: any, key: any) { return values[key]; } console.log(f([1, 2], 1)); 'a b'.split(/\s+/);",
+            r"class C { table = new Map<string, number>(); parse(fen: string) { return fen.trim().split(/\s+/); } } new C().parse('a b');",
             r"console.log('hello');",
         ] {
             assert!(!detect_for_source(source).uses_regex_unicode, "{source}");
