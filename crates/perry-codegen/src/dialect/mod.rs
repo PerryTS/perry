@@ -230,6 +230,10 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
                 linkage = Some(Linkage::WeakODR);
                 toks.next();
             }
+            "available_externally" => {
+                linkage = Some(Linkage::AvailableExternally);
+                toks.next();
+            }
             // Explicit default linkage (init_body functions carry it).
             "external" => {
                 toks.next();

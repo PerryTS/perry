@@ -406,21 +406,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //     the namespace-member class case `Lib.A`) lower as
             //     INT32-tagged class ids → typeof reads "number". Emit
             //     "function" to match JS spec for class objects.
-            if let Expr::PropertyGet {
-                object, property, ..
-            } = operand.as_ref()
-            {
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && super::is_global_this_builtin_name(property)
-                {
-                    super::property_get::globalget::emit_global_value_installs(ctx, property);
-                    let value =
-                        super::property_get::globalget::lower_optional_global_read(ctx, property)?;
-                    let handle = ctx
-                        .block()
-                        .call(I64, "js_value_typeof", &[(DOUBLE, &value)]);
-                    return Ok(nanbox_string_inline(ctx.block(), &handle));
-                }
+            if let Some(value) = lower_typeof_global_operand(ctx, operand)? {
+                let handle = ctx
+                    .block()
+                    .call(I64, "js_value_typeof", &[(DOUBLE, &value)]);
+                return Ok(nanbox_string_inline(ctx.block(), &handle));
             }
             let typeof_short_circuit = typeof_compile_time_answer(ctx, operand.as_ref());
             if let Some(s) = typeof_short_circuit {
@@ -1574,4 +1564,28 @@ pub(crate) fn bind_lowered_value_to_local(
     // Soft fallback: drop the store on the floor for missing
     // locals. See LocalGet for the rationale.
     Ok(())
+}
+
+/// The operand of `typeof` when it is a bare global name the runtime may
+/// install (`PropertyGet { GlobalGet, name }`): an optional read that never
+/// throws. `typeof` of an unresolvable reference is "undefined" (ECMA-262
+/// 13.5.3.1 step 2.a), so the fused `typeof x === "..."` compare lowers the
+/// operand through this too.
+pub(crate) fn lower_typeof_global_operand(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+) -> Result<Option<String>> {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = operand
+    else {
+        return Ok(None);
+    };
+    if !(matches!(object.as_ref(), Expr::GlobalGet(_))
+        && super::is_global_this_builtin_name(property))
+    {
+        return Ok(None);
+    }
+    super::property_get::globalget::emit_global_value_installs(ctx, property);
+    super::property_get::globalget::lower_optional_global_read(ctx, property).map(Some)
 }

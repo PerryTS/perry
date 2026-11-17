@@ -15,7 +15,9 @@ fn sites(pf: &ProgramFacts, key: &str, call: bool) -> Vec<Verdict> {
 }
 
 fn proven(v: &[Verdict]) -> bool {
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 fn open(v: &[Verdict]) -> bool {

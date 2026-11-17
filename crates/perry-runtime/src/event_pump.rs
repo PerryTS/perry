@@ -293,6 +293,19 @@ pub(crate) fn settle_loop_once() {
     loop_hooks::settle();
 }
 
+/// One non-blocking turn of this agent's loop plus dispatch, for a host that
+/// owns the run loop itself (perry/ui on macOS and iOS: `NSApp` / `UIApplication`
+/// never return to the generated event loop, so `js_wait_for_event` — the only
+/// other place the loop is turned — never runs). Without this, fetch, node:net
+/// and node:http submit their work and no completion is ever collected: the
+/// request is not even written to the socket. A no-op when this thread owns no
+/// loop, so a UI program that does no native I/O pays one thread-local read.
+#[no_mangle]
+pub extern "C" fn js_loop_settle_once() {
+    #[cfg(not(target_arch = "wasm32"))]
+    loop_hooks::settle();
+}
+
 /// turnloop P1: whether this thread can take the turnloop net path, asked
 /// without creating a loop.
 #[cfg(not(target_arch = "wasm32"))]

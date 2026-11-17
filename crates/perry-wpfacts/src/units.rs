@@ -2,8 +2,7 @@
 //! publishes to the other units of the program.
 
 use crate::pts::{FxHashMap, FxHashSet};
-use crate::{FactsConfig, ProgramFacts, SiteFacts, TemplateFacts};
-use perry_hir::{Export, Import, ImportSpecifier, Module};
+use crate::TemplateFacts;
 
 /// What a literal layout's own accessor key holds for the reader
 /// (`ClassContract::own_getters`).
@@ -12,8 +11,10 @@ pub(crate) enum OwnAccessor {
     /// One getter that is a contract function of the defining unit (no
     /// setter): its contract is published under this name, run with the
     /// literal as `this`, its result checked (`Gen::note_own_getters`).
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Getter(String),
     /// A setter only: a read finds `undefined`.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     SetterOnly,
     /// A getter the defining unit describes by no contract (no function of
     /// the unit, several getters, a getter beside a setter): the reader
@@ -383,108 +384,7 @@ pub(crate) struct FnContract {
     pub closed: Option<String>,
 }
 
-impl FnContract {
-    /// The function named, not described (DECISIONS 106): its identity,
-    /// and of its body only what makes no claim (every parameter, its
-    /// receiver and its result escape or are unknown). A reader holding it
-    /// calls the function through its owner's entry (`Gen::owner_fn`); with
-    /// no entry it runs this, which is sound.
-    pub(crate) fn named(&self) -> FnContract {
-        use crate::model::MARK_ESCAPE;
-        let n = self.params.len();
-        FnContract {
-            compiled_body: self.compiled_body.clone(),
-            name: self.name.clone(),
-            method: self.method,
-            callable: self.callable,
-            this_class: self.this_class.clone(),
-            params: vec![MARK_ESCAPE; n],
-            reach: vec![MARK_ESCAPE; n],
-            reach_keys: vec![Vec::new(); n],
-            variadic: self.variadic,
-            rest: self.rest,
-            ret: None,
-            ret_params: Vec::new(),
-            ret_reach: Vec::new(),
-            ret_reach_keys: Vec::new(),
-            ret_unknown: true,
-            ret_value: Default::default(),
-            ret_prim: crate::model::prim::ALL,
-            lexical_this: self.lexical_this,
-            this_use: MARK_ESCAPE,
-            this_reach: MARK_ESCAPE,
-            this_stores: None,
-            this_calls: Vec::new(),
-            param_stores: vec![None; n],
-            param_flows: Vec::new(),
-            param_calls: Vec::new(),
-            param_handovers: Vec::new(),
-            param_cells: Vec::new(),
-            param_defines: self.param_defines.clone(),
-            closed: self.closed.clone(),
-        }
-    }
-}
-
-/// DECISIONS 106 for what a forwarded copy of another unit's function
-/// holds: every function described inside it whose owner publishes an entry
-/// (`owned`) is named (`FnContract::named`), as the reader takes that entry
-/// by name in any case. Copied whole, a description held the copies its
-/// owner's description held, which held it again: two units whose functions
-/// pass each other's closures (zod's `emitOwnKeys` and the record check it
-/// calls back) nested one more level every round, the contracts grew 4x
-/// per two rounds and the fixpoint never came. Named, a description holds
-/// only its own unit's functions and one level of copies: its size is
-/// bounded by the program's, whatever the rounds.
-pub(crate) fn name_owned_in_fn(fc: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
-    name_owned_in_value(&mut fc.ret_value, owned);
-    for pc in &mut fc.param_calls {
-        for a in &mut pc.args {
-            name_owned_in_value(&mut a.value, owned);
-        }
-    }
-    for fl in &mut fc.param_flows {
-        if let Some(d) = &mut fl.value {
-            name_owned_in_value(&mut d.value, owned);
-        }
-    }
-}
-
-fn name_owned_fns(fns: &mut [FnContract], owned: &dyn Fn(&str) -> bool) {
-    for f in fns {
-        name_owned(f, owned);
-    }
-}
-
-fn name_owned(f: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
-    if owned(&f.name) {
-        *f = f.named();
-    } else {
-        name_owned_in_fn(f, owned);
-    }
-}
-
-fn name_owned_in_value(vc: &mut ValueContract, owned: &dyn Fn(&str) -> bool) {
-    name_owned_fns(&mut vc.fns, owned);
-    for c in vc.layouts.iter_mut().chain(vc.classes.iter_mut()) {
-        name_owned_in_class(c, owned);
-    }
-}
-
-fn name_owned_in_class(c: &mut ClassContract, owned: &dyn Fn(&str) -> bool) {
-    for (_, fs) in &mut c.field_fns {
-        name_owned_fns(fs, owned);
-    }
-    for (_, vc) in c.field_values.iter_mut().chain(c.static_values.iter_mut()) {
-        name_owned_in_value(vc, owned);
-    }
-    for (_, f) in c.static_fns.iter_mut().chain(c.method_fns.iter_mut()) {
-        name_owned(f, owned);
-    }
-    if let Some(f) = &mut c.ctor_fn {
-        name_owned(f, owned);
-    }
-}
+impl FnContract {}
 
 /// A published module-scope value binding as its readers see it (design
 /// §11.2 "an object contract", generalized to every binding another
@@ -597,46 +497,7 @@ pub(crate) struct FnStores {
     pub any: Option<ValueContract>,
 }
 
-impl FnStores {
-    /// The keyed join, then the subsumption (`subsume`). Monotone.
-    pub(crate) fn join(&mut self, o: &FnStores) {
-        for (k, vc) in &o.keys {
-            match self.keys.binary_search_by(|(x, _)| x.as_str().cmp(k)) {
-                Ok(i) => self.keys[i].1.join(vc),
-                Err(i) => self.keys.insert(i, (k.clone(), vc.clone())),
-            }
-        }
-        if let Some(a) = &o.any {
-            match &mut self.any {
-                Some(s) => s.join(a),
-                None => self.any = Some(a.clone()),
-            }
-        }
-        self.subsume();
-    }
-
-    /// A computed-key store may name any key, so a keyed read reads `any`
-    /// anyway: the keyed entries go into `any` (NSV: kept beside it, they
-    /// grow without bound). An unknown `any` is the top, a fixed point.
-    /// Once `any`, always `any`.
-    pub(crate) fn subsume(&mut self) {
-        let Some(any) = &mut self.any else {
-            return;
-        };
-        for (_, vc) in std::mem::take(&mut self.keys) {
-            any.join(&vc);
-        }
-        if any.unknown {
-            let why = any.why.clone();
-            *any = ValueContract {
-                prim: crate::model::prim::ALL,
-                unknown: true,
-                why,
-                ..Default::default()
-            };
-        }
-    }
-}
+impl FnStores {}
 
 /// Joins `b` into `a` as sets: what `b` holds that `a` lacks is appended,
 /// so `a ⊔ a = a` (the driver compares last round's value with the join).
@@ -1118,31 +979,6 @@ impl ClassContract {
 }
 
 impl ValueContract {
-    /// Unknown, for this reason unless it already has one.
-    pub(crate) fn unknown_because(&mut self, why: &'static str) {
-        self.unknown = true;
-        if self.why.0.is_none() {
-            self.why.0 = Some((why, None));
-        }
-    }
-
-    /// A contract that is unknown for this reason.
-    pub(crate) fn unknown_for(why: &'static str) -> ValueContract {
-        let mut vc = ValueContract {
-            prim: crate::model::prim::ALL,
-            ..Default::default()
-        };
-        vc.unknown_because(why);
-        vc
-    }
-
-    /// Names the publishing unit on a reason that has none yet.
-    pub(crate) fn stamp(&mut self, unit: &std::sync::Arc<str>) {
-        if let Some((_, u @ None)) = &mut self.why.0 {
-            *u = Some(unit.clone());
-        }
-    }
-
     /// The join of two value contracts: the layouts, classes and
     /// functions (each by identity, its description joined), an unknown
     /// value and the primitive kinds only grow.
@@ -1184,22 +1020,7 @@ impl ValueContract {
     }
 }
 
-impl ArgContract {
-    /// The lattice join (D16): `top`, the parameters and each parameter's
-    /// value contract (`ValueContract::join`, descriptions included) only
-    /// grow. Every component is a join in a finite lattice, so the driver's
-    /// argument contracts, last round's joined with what the latest solves
-    /// pass, ascend and stop changing.
-    fn join(&mut self, o: &ArgContract) {
-        self.top |= o.top;
-        if self.params.len() < o.params.len() {
-            self.params.resize(o.params.len(), ValueContract::default());
-        }
-        for (a, b) in self.params.iter_mut().zip(&o.params) {
-            a.join(b);
-        }
-    }
-}
+impl ArgContract {}
 
 /// What the other units can name of each module (§11.1): the export names
 /// some module imports or re-exports by name, or the whole namespace where
@@ -1398,163 +1219,21 @@ impl Published {
     }
 }
 
-/// The module an `export … from source` of module `path` reads: the
-/// driver's resolution (`FactsConfig::export_sources`), else an import of
-/// the same source, as `Gen::resolve_source`. A re-export declares no import
-/// of its source (`export * as X from "./self"`), so the imports alone miss
-/// it, and the surface, the namespace keys and the order must not.
-fn reexport_source<'i>(
-    es: &crate::ExportSources,
-    path: &str,
-    imports: impl IntoIterator<Item = &'i Import>,
-    source: &str,
-) -> Option<String> {
-    if let Some(p) = es.get(path).and_then(|m| m.get(source)) {
-        return Some(p.clone());
-    }
-    imports
-        .into_iter()
-        .find(|i| i.source == source)
-        .and_then(|i| i.resolved_path.clone())
-}
-
-pub(crate) fn published_surface(
-    sorted: &[(&str, Vec<&Import>, &[Export])],
-    cfg: &FactsConfig,
-    ex: &Exports,
-) -> Published {
-    let mut p = Published {
-        all: cfg.dynamic_code.is_some()
-            || cfg.dynamic_code_reach.globals
-            || !cfg.dynamic_code_reach.sites.is_empty(),
-        eval_scopes: !cfg.dynamic_code_reach.lexical_modules.is_empty(),
-        ..Default::default()
-    };
-    for (path, imports, exports) in sorted {
-        let resolve = |source: &str| {
-            reexport_source(&cfg.export_sources, path, imports.iter().copied(), source)
-        };
-        for imp in imports.iter().copied() {
-            if imp.source == "perry:cjs" {
-                if let Some(t) = &imp.resolved_path {
-                    p.cjs_support = Some(t.clone());
-                }
-            }
-            let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
-                continue;
-            };
-            // Another declaration unit of the same module: its names are
-            // the module's (§12.3).
-            let t = &crate::decl_units::module_of(t).to_string();
-            if imp.type_only || imp.runtime_erased {
-                continue;
-            }
-            // `import()` hands over the namespace object itself, also where
-            // the driver folds it into a static import of the same module.
-            if imp.is_dynamic || imp.is_dynamic_target {
-                p.whole.insert(t.clone());
-                p.ns_object.insert(t.clone());
-            }
-            for s in &imp.specifiers {
-                match s {
-                    ImportSpecifier::Named { imported, .. } => {
-                        p.names
-                            .entry(t.clone())
-                            .or_default()
-                            .insert(imported.clone());
-                    }
-                    ImportSpecifier::Default { .. } => {
-                        p.names
-                            .entry(t.clone())
-                            .or_default()
-                            .insert("default".into());
-                    }
-                    ImportSpecifier::Namespace { .. } => {
-                        p.whole.insert(t.clone());
-                    }
-                }
-            }
-        }
-        for e in exports.iter() {
-            match e {
-                Export::ReExport {
-                    source, imported, ..
-                } => {
-                    if let Some(t) = resolve(source) {
-                        p.names.entry(t).or_default().insert(imported.clone());
-                    }
-                }
-                Export::ExportAll { source } => {
-                    if let Some(t) = resolve(source) {
-                        p.whole.insert(t);
-                    }
-                }
-                Export::NamespaceReExport { source, .. } => {
-                    if let Some(t) = resolve(source) {
-                        p.whole.insert(t.clone());
-                        p.ns_object.insert(t);
-                    }
-                }
-                Export::Named { .. } => {}
-            }
-        }
-    }
-    // A name a module re-exports is named where it is declared (§18.14):
-    // published there, as the importer reads its contract there; a
-    // re-exported namespace is whole there.
-    let mut add: Vec<(String, String)> = Vec::new();
-    let mut whole: Vec<String> = p.whole.iter().cloned().collect();
-    for (t, names) in &p.names {
-        for n in names {
-            match ex.resolve(t, n) {
-                Some(Resolved::Binding(d, m)) if d != t || m != n => {
-                    add.push((d.to_string(), m.to_string()))
-                }
-                Some(Resolved::Namespace(d)) => whole.push(d.to_string()),
-                _ => {}
-            }
-        }
-    }
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    while let Some(t) = whole.pop() {
-        if !seen.insert(t.clone()) {
-            continue;
-        }
-        p.whole.insert(t.clone());
-        let Some(me) = ex.by_path.get(&t) else {
-            continue;
-        };
-        for (k, target) in &me.keys {
-            match target {
-                ExportTarget::Binding(d, m) => {
-                    let d = &ex.paths[*d as usize];
-                    if *d != t || m != k {
-                        add.push((d.clone(), m.clone()));
-                    }
-                }
-                ExportTarget::Namespace(d) => whole.push(ex.paths[*d as usize].clone()),
-                ExportTarget::Unknown => {}
-            }
-        }
-    }
-    for (d, m) in add {
-        p.names.entry(d).or_default().insert(m);
-    }
-    p
-}
-
 /// Where an export name of a module leads (ECMAScript ResolveExport, design
 /// §18.14): a binding some module declares, a module's namespace object
 /// (`export * as n from`, `import * as n; export { n }`), or unknown.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ExportTarget {
     /// Binding `.1` that module `.0` (an index into `Exports::paths`) declares.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Binding(u32, String),
     /// The namespace object of module `.0`.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Namespace(u32),
     /// A source outside the program, or a name two `export *` sources bind
     /// differently (the namespace leaves it out, a named import of it is a
     /// link error): nothing is known of it.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Unknown,
 }
 
@@ -1599,32 +1278,6 @@ pub(crate) enum Resolved<'a> {
 }
 
 impl Exports {
-    /// The other modules declaring a binding module `m`'s namespace holds,
-    /// through the namespaces it holds too (`m` itself left out).
-    pub(crate) fn reach(&self, m: usize) -> Vec<usize> {
-        let mut out: Vec<usize> = Vec::new();
-        let mut seen: FxHashSet<usize> = FxHashSet::default();
-        let mut todo = vec![m];
-        while let Some(x) = todo.pop() {
-            if !seen.insert(x) {
-                continue;
-            }
-            let Some(me) = self.by_path.get(&self.paths[x]) else {
-                continue;
-            };
-            for (_, t) in &me.keys {
-                match *t {
-                    ExportTarget::Binding(d, _) if d as usize != m => out.push(d as usize),
-                    ExportTarget::Namespace(d) => todo.push(d as usize),
-                    _ => {}
-                }
-            }
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
-    }
-
     /// Where `import { name } from path` leads: `None` when `path` has no
     /// such key (no export the declarations name: its contract, if any, is
     /// keyed by `path` itself).
@@ -1637,224 +1290,38 @@ impl Exports {
     }
 }
 
-/// One module's own export entries, as ResolveExport reads them.
-enum Own<'m> {
-    /// Declared by the module under its export name.
-    Here,
-    /// An indirect export: name `.1` of module `.0` (`export { a } from`,
-    /// `import { a }; export { a }`); `None`: a module outside the program.
-    Indirect(Option<usize>, &'m str),
-    /// The namespace of module `.0` (`None`: outside the program).
-    Ns(Option<usize>),
+/// A published contract and its digest (DECISIONS 114), taken once when
+/// it is published: its readers record the number (`Published::layout_seen`)
+/// and the round compares numbers, not contracts.
+#[derive(Clone, Debug)]
+pub(crate) struct Digested<T> {
+    pub c: T,
+    pub digest: u64,
 }
 
-struct Resolver<'m> {
-    own: Vec<FxHashMap<&'m str, Own<'m>>>,
-    stars: Vec<Vec<Option<usize>>>,
-    /// Resolutions reached without cutting a cycle: the same from every
-    /// resolve set.
-    memo: Vec<FxHashMap<&'m str, Option<ExportTarget>>>,
+impl<T: std::hash::Hash> Digested<T> {}
+
+/// One distinct write of a cell (design §17.16 (b)): its contract and the
+/// units writing it (their keys, sorted). DECISIONS 169: its digests are
+/// taken once, when the round groups the writes (`digest`; `top`: with
+/// the unknown value and the primitives dropped, as a reader whose view is
+/// ⊤ sees it), so a reader's view of the cell compares numbers, as a
+/// layout read does (DECISIONS 166).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CellWrite {
+    pub digest: u64,
+    pub top: u64,
+    pub writers: Vec<String>,
+    pub c: ValueContract,
 }
 
-impl<'m> Resolver<'m> {
-    /// ResolveExport(m, name) (ECMA-262 16.2.1.6.3): `None` when not
-    /// found; `.1` when a cycle was cut on the way (the result then
-    /// depends on the resolve set and is not memoized).
-    fn resolve(
-        &mut self,
-        m: usize,
-        name: &'m str,
-        set: &mut Vec<(usize, &'m str)>,
-    ) -> (Option<ExportTarget>, bool) {
-        if let Some(r) = self.memo[m].get(name) {
-            return (r.clone(), false);
-        }
-        if set.contains(&(m, name)) {
-            return (None, true);
-        }
-        set.push((m, name));
-        let mut cyc = false;
-        let r = match self.own[m].get(name) {
-            Some(Own::Here) => Some(ExportTarget::Binding(m as u32, name.to_string())),
-            Some(Own::Ns(Some(t))) => Some(ExportTarget::Namespace(*t as u32)),
-            Some(Own::Ns(None) | Own::Indirect(None, _)) => Some(ExportTarget::Unknown),
-            Some(&Own::Indirect(Some(t), imported)) => {
-                let (r, c) = self.resolve(t, imported, set);
-                cyc |= c;
-                // An indirect export that resolves nowhere is a link error.
-                Some(r.unwrap_or(ExportTarget::Unknown))
-            }
-            // `export *` never re-exports `default`.
-            None if name == "default" => None,
-            None => {
-                let mut acc: Option<ExportTarget> = None;
-                for i in 0..self.stars[m].len() {
-                    let r = match self.stars[m][i] {
-                        None => Some(ExportTarget::Unknown),
-                        Some(s) => {
-                            let (r, c) = self.resolve(s, name, set);
-                            cyc |= c;
-                            r
-                        }
-                    };
-                    acc = match (acc, r) {
-                        (a, None) => a,
-                        (None, b) => b,
-                        (Some(a), Some(b)) if a == b => Some(a),
-                        // Two different bindings (ambiguous), or a source
-                        // outside the program that may bind it too.
-                        _ => Some(ExportTarget::Unknown),
-                    };
-                }
-                acc
-            }
-        };
-        set.pop();
-        if !cyc {
-            self.memo[m].insert(name, r.clone());
-        }
-        (r, cyc)
-    }
-}
+impl CellWrite {}
 
-/// Each module's namespace (design §18.2, §18.14): its export names
-/// (GetExportedNames: its own, then every `export *` source's but
-/// `default`, a revisited module ending the walk) and where each resolves
-/// (ResolveExport), from the HIR's import and export declarations.
-/// Compiler-internal: nothing of it is emitted.
-pub(crate) fn module_exports(sorted: &[(&str, &Module)], es: &crate::ExportSources) -> Exports {
-    let index: FxHashMap<&str, usize> = sorted
-        .iter()
-        .enumerate()
-        .map(|(i, (p, _))| (*p, i))
-        .collect();
-    let mut own: Vec<FxHashMap<&str, Own>> = Vec::with_capacity(sorted.len());
-    let mut stars: Vec<Vec<Option<usize>>> = Vec::with_capacity(sorted.len());
-    for (path, m) in sorted {
-        let module_of = |p: Option<String>| p.and_then(|t| index.get(t.as_str()).copied());
-        // The module's import bindings: an export of one is indirect.
-        let mut imported: FxHashMap<&str, Own> = FxHashMap::default();
-        for imp in m.imports.iter().filter(|i| !i.type_only) {
-            let t = || module_of(imp.resolved_path.clone());
-            for sp in &imp.specifiers {
-                let (local, o) = match sp {
-                    ImportSpecifier::Named { imported, local } => {
-                        (local, Own::Indirect(t(), imported.as_str()))
-                    }
-                    ImportSpecifier::Default { local } => (local, Own::Indirect(t(), "default")),
-                    ImportSpecifier::Namespace { local } => (local, Own::Ns(t())),
-                };
-                imported.insert(local.as_str(), o);
-            }
-        }
-        let mut o: FxHashMap<&str, Own> = FxHashMap::default();
-        let mut st: Vec<Option<usize>> = Vec::new();
-        for e in &m.exports {
-            let src = |source: &str| module_of(reexport_source(es, path, &m.imports, source));
-            match e {
-                Export::Named { local, exported } => {
-                    let v = match imported.get(local.as_str()) {
-                        Some(&Own::Indirect(t, n)) => Own::Indirect(t, n),
-                        Some(&Own::Ns(t)) => Own::Ns(t),
-                        _ => Own::Here,
-                    };
-                    o.insert(exported.as_str(), v);
-                }
-                Export::ReExport {
-                    source,
-                    imported,
-                    exported,
-                } => {
-                    o.insert(
-                        exported.as_str(),
-                        Own::Indirect(src(source), imported.as_str()),
-                    );
-                }
-                Export::NamespaceReExport { source, name } => {
-                    o.insert(name.as_str(), Own::Ns(src(source)));
-                }
-                Export::ExportAll { source } => st.push(src(source)),
-            }
-        }
-        let decls = m
-            .exported_functions
-            .iter()
-            .map(|(n, _)| n)
-            .chain(
-                m.functions
-                    .iter()
-                    .filter(|f| f.is_exported)
-                    .map(|f| &f.name),
-            )
-            .chain(m.classes.iter().filter(|c| c.is_exported).map(|c| &c.name))
-            .chain(m.enums.iter().filter(|e| e.is_exported).map(|e| &e.name))
-            .chain(m.exported_objects.iter());
-        for n in decls {
-            o.entry(n.as_str()).or_insert(Own::Here);
-        }
-        own.push(o);
-        stars.push(st);
-    }
-    let mut r = Resolver {
-        own,
-        stars,
-        memo: (0..sorted.len()).map(|_| FxHashMap::default()).collect(),
-    };
-    let mut by_path = FxHashMap::default();
-    for (i, (path, _)) in sorted.iter().enumerate() {
-        // GetExportedNames.
-        let mut names: FxHashSet<&str> = r.own[i].keys().copied().collect();
-        let mut open = false;
-        let mut seen = vec![i];
-        let mut todo: Vec<Option<usize>> = r.stars[i].clone();
-        while let Some(s) = todo.pop() {
-            let Some(s) = s else {
-                open = true;
-                continue;
-            };
-            if seen.contains(&s) {
-                continue;
-            }
-            seen.push(s);
-            names.extend(r.own[s].keys().copied().filter(|k| *k != "default"));
-            todo.extend(r.stars[s].iter().copied());
-        }
-        let mut keys: Vec<(String, ExportTarget)> = names
-            .into_iter()
-            .filter_map(|k| {
-                let t = r.resolve(i, k, &mut Vec::new()).0?;
-                Some((k.to_string(), t))
-            })
-            .collect();
-        keys.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        by_path.insert(path.to_string(), ModExports { keys, open });
-    }
-    Exports {
-        paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
-        by_path,
-    }
-}
-
-#[path = "units/driver.rs"]
-pub(crate) mod driver;
-pub(crate) use driver::digest;
-pub(crate) use driver::run;
-#[cfg(test)]
-use driver::unique_bindings;
-pub(crate) use driver::CellWrite;
-pub(crate) use driver::Digested;
-
-#[cfg(test)]
-mod binding_collision_tests {
-    #[test]
-    #[should_panic(expected = "duplicate LocalId 7")]
-    fn duplicate_local_is_an_internal_compiler_error() {
-        super::unique_bindings(&mut [(7, ()), (7, ())], "clones.ts", "LocalId");
-    }
-
-    #[test]
-    #[should_panic(expected = "duplicate this-of FuncId 9")]
-    fn duplicate_this_is_an_internal_compiler_error() {
-        super::unique_bindings(&mut [(9, ()), (9, ())], "clones.ts", "this-of FuncId");
-    }
+/// What a reader saw of an entry read by name (a layout, a function
+/// contract, DECISIONS 103/106): it is solved again when the entry differs.
+pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
 }

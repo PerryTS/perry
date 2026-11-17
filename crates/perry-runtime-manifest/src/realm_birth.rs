@@ -141,6 +141,9 @@ pub(super) fn members_with_defaults(
                 default_attrs = 4;
             } else {
                 property.insert("value".into(), facts::constant(value)?);
+                if let Some(kind) = facts::runtime_type(value) {
+                    property.insert("type".into(), string(kind));
+                }
                 default_attrs = if symbol && label == "@@toStringTag" {
                     4
                 } else {
@@ -455,6 +458,7 @@ pub(super) fn birth_at(
     let mut extra = Vec::new();
     let mut declared = None;
     let mut never_move = false;
+    let mut values = None;
     let mut integrity = Integrity::Extensible;
     let mut native_namespace = None;
     let mut module = None;
@@ -487,6 +491,10 @@ pub(super) fn birth_at(
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            // The type every own value of an exotic host object has
+            // (`process.env, kind = exotic, …, values = string`): its hooks
+            // answer and keep only such values.
+            "values" if clause.len() == 3 && clause[2].text == "string" => values = Some("string"),
             "native_namespace" | "module" if clause.len() == 3 && native => {
                 let literal = clause[2]
                     .string
@@ -645,6 +653,12 @@ pub(super) fn birth_at(
     }
     if let Some(module) = module {
         map.insert("module".into(), string(module));
+    }
+    if let Some(values) = values {
+        if kind != "exotic" {
+            return Err("only an exotic object birth declares its values".into());
+        }
+        map.insert("values".into(), string(values));
     }
     if kind == "exotic" {
         map.insert(

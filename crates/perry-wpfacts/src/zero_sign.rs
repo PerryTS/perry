@@ -150,6 +150,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::IdxOwnKey { .. }
         | Cons::IdxKeyCall { .. }
         | Cons::AccessorKeyed { .. }
+        | Cons::DefineAnyKey { .. }
         | Cons::StoreKeyed { .. }
         | Cons::StoreIndexed { .. }
         | Cons::DefineKeyed { .. }
@@ -161,6 +162,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. }
         | Cons::Identity { .. }
+        | Cons::HasProp { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }

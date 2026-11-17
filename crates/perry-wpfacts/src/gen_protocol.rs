@@ -12,10 +12,41 @@ impl<'a> Gen<'a> {
     /// settled value of promise objects, and for thenables whatever their
     /// `then` passes to the resolve function.
     pub(crate) fn awaited(&mut self, v: NodeId) -> NodeId {
+        let (out, rj) = self.awaited_r(v);
+        let thrown = self.thrown;
+        if rj != thrown {
+            self.m.edge(rj, thrown);
+        }
+        out
+    }
+
+    /// `awaited`, plus what the await rejects with (R-JOBTHROW, 27.7.5.3
+    /// Await steps 5-6): the awaited promise's reason and what a
+    /// thenable's `then` rejects with; the rejections no promise holds
+    /// stay in `thrown`, which the caller reads beside it.
+    pub(crate) fn awaited_r(&mut self, v: NodeId) -> (NodeId, NodeId) {
         let out = self.tmp("awaited");
         if !self.m.reach_thenable {
-            return self.awaited_plain(v, out);
+            let ra = crate::builtins::promise_reason_atom(&mut self.m);
+            let thrown = self.thrown;
+            self.m.cons(
+                v,
+                Cons::Load {
+                    key: Key::Named(ra),
+                    dst: thrown,
+                },
+            );
+            return (self.awaited_plain(v, out), thrown);
         }
+        let rj = self.tmp("await-rejected");
+        let ra = crate::builtins::promise_reason_atom(&mut self.m);
+        self.m.cons(
+            v,
+            Cons::Load {
+                key: Key::Named(ra),
+                dst: rj,
+            },
+        );
         // One rule with `builtins::adopt`: a value fulfils as itself only
         // when its `then` read is not callable (`Cons::Fulfil`).
         self.m.cons(v, Cons::Fulfil { dst: out });
@@ -34,8 +65,7 @@ impl<'a> Gen<'a> {
         let (call, ret) = self.new_call(ThisArg::Node(v), vec![rn, jn], vec![]);
         let res = crate::builtins::resolver(&mut self.m, call, out);
         self.m.add_tok(rn, res);
-        let thrown = self.thrown;
-        let rej = crate::builtins::rejecter(&mut self.m, thrown);
+        let rej = crate::builtins::rejecter(&mut self.m, rj);
         self.m.add_tok(jn, rej);
         self.m.cons(
             v,
@@ -45,6 +75,28 @@ impl<'a> Gen<'a> {
             },
         );
         let _ = ret;
+        (out, rj)
+    }
+
+    /// The value an admitted settled resume yields (`AsyncStepResumeNow`):
+    /// a primitive as itself, a native promise's fulfilled value. Nothing
+    /// rejects and no `then` runs; an object fulfils as itself only through
+    /// `Cons::Fulfil` (a superset of the admitted primitives).
+    pub(crate) fn settled_now(&mut self, v: NodeId) -> NodeId {
+        let out = self.tmp("settled-now");
+        if self.m.reach_thenable {
+            self.m.cons(v, Cons::Fulfil { dst: out });
+        } else {
+            self.m.edge(v, out);
+        }
+        let pa = crate::builtins::promise_result_atom(&mut self.m);
+        self.m.cons(
+            v,
+            Cons::Load {
+                key: Key::Named(pa),
+                dst: out,
+            },
+        );
         out
     }
 
@@ -89,26 +141,36 @@ impl<'a> Gen<'a> {
     /// for the async-step driver's step closure, `async_callback`).
     pub(crate) fn async_body(&mut self, fx: &Fx) -> (Fx, NodeId) {
         let settled = self.tmp("async-settled");
-        let p = self.promise_of(fx.module, settled);
+        // R-JOBTHROW: the body throws into its own promise's reason
+        // (27.7.5.1 AsyncFunctionStart step 4.f-g).
+        let (p, rejected) = self.promise_of_r(fx.module, settled);
         self.m.edge(p, fx.ret);
         (
             Fx {
                 ret: settled,
                 ..fx.clone()
             },
-            self.thrown,
+            rejected,
         )
     }
 
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
+        self.promise_of_r(mi, value).0
+    }
+
+    /// `promise_of`, plus the promise's reason field: what a rejected
+    /// `value` (a promise or thenable it adopts) rejects it with.
+    pub(crate) fn promise_of_r(&mut self, mi: u32, value: NodeId) -> (NodeId, NodeId) {
         let tm = self.new_bobj_template(mi, "Promise");
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let a = crate::builtins::promise_result_atom(&mut self.m);
         let f = self.m.field(t, a);
-        let aw = self.awaited(value);
+        let (aw, rj) = self.awaited_r(value);
         self.m.edge(aw, f);
-        self.tok_node(t)
+        let r = crate::builtins::promise_reason(&mut self.m, t);
+        self.m.edge(rj, r);
+        (self.tok_node(t), r)
     }
 
     /// The values produced by iterating whatever `v` holds: elements of

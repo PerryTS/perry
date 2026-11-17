@@ -701,7 +701,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
         | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
@@ -719,7 +719,9 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// a Map, `Family::Collection`, not a box.)
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" | "stringrecord" => {
+            BoxChain::Object
+        }
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,
@@ -858,7 +860,9 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
 /// `RegExp.prototype`'s realm declaration when a RegExp's member `name` is
 /// not one of its own (22.2.6): the member is then its declared chain's
 /// (`Object.prototype`'s) or absent, never a RegExp method.
-pub(super) fn regexp_inherited(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+pub(super) fn regexp_inherited(
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     let p = realm_entry("RegExp.prototype").filter(|e| e.kind == RealmKind::Prototype)?;
     let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
     (!own).then_some(p)
@@ -1345,6 +1349,11 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     described_member(ns_statics(ns), name)
 }
 
+/// Does the realm declare `name` on namespace `ns` (MATHB1)?
+pub(crate) fn ns_declares(ns: BuiltinNs, name: &str) -> bool {
+    matches!(ns_member(ns, name), Some(Some(_)))
+}
+
 /// Is `name` an own static function of namespace `ns` (listed on the
 /// namespace itself, not found on its chain)?
 pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
@@ -1357,7 +1366,10 @@ pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
 /// Is `name` listed on namespace `ns` itself (an own static of any kind,
 /// not a member of its chain)?
 pub(super) fn ns_own_member(ns: BuiltinNs, name: &str) -> bool {
-    ns_statics(ns).members.and_then(|own| own.find(name)).is_some()
+    ns_statics(ns)
+        .members
+        .and_then(|own| own.find(name))
+        .is_some()
 }
 
 fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {

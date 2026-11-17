@@ -56,7 +56,9 @@ impl<'a> Gen<'a> {
             site: id,
             region: self.region(),
         });
-        self.m.call_place.insert(id, (self.m.cur_fn, self.loop_depth));
+        self.m
+            .call_place
+            .insert(id, (self.m.cur_fn, self.loop_depth));
         if let Some((f, m)) = self.m.clause {
             if self.m.cur_fn == f {
                 self.m.call_reach.insert(id, m);
@@ -94,13 +96,21 @@ impl<'a> Gen<'a> {
     /// runs.
     /// A member whose effects the runtime declares at its body
     /// (`builtins::declared_member`: `node:util/types.isArrayBufferView`)
-    /// is called the same way: the solver runs the declaration.
+    /// is called the same way: the solver runs the declaration. So is a
+    /// declared static the HIR folds to this form (`URL.createObjectURL`).
     pub(crate) fn namespace_member_callee(&mut self, module: &str, method: &str) -> Option<Tok> {
         let identity = crate::builtins::solved_namespace_call(module, method).or_else(|| {
             let bare = module.strip_prefix("node:").unwrap_or(module);
             crate::builtins::declared_member(&format!("node:{bare}.{method}"))
                 .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
                 .map(|e| e.name)
+                .or_else(|| {
+                    // The HIR's fold of a realm constructor's static call
+                    // (`URL.createObjectURL(blob)`): a call of that static,
+                    // whose declaration the solver runs.
+                    let owner = perry_hir::folded_call::native_static_fold(module, method)?;
+                    crate::builtins::declared_static(&format!("{owner}.{method}")).map(|e| e.name)
+                })
         })?;
         Some(self.m.tok(TokKind::BuiltinFn(Native::Member {
             identity,
@@ -189,6 +199,14 @@ impl<'a> Gen<'a> {
     /// its stores no object, so none of its effects apply. The gate opens
     /// once and stays open (values only grow), so the fixpoint is the same
     /// one. `PERRY_FACTS_GUARD_REGIONS=0` turns it off.
+    /// `__step_self(e, true)` in a plain-async step: its error carrier.
+    fn step_error_reentry(&self, mi: u32, callee: &Expr, args: &[Expr]) -> Option<NodeId> {
+        match (callee, args) {
+            (Expr::LocalGet(s), [_, Expr::Bool(true)]) => self.step.by_self.get(&(mi, *s)).copied(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
         use crate::model::guard::*;
         let Some((t, test)) = fx.guard else {
@@ -466,6 +484,7 @@ impl<'a> Gen<'a> {
         let pa = self.member_atom(inner, p);
         if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
+                global_get: false,
                 access: crate::derive::Access::Read,
                 module: mi,
                 byte_offset: *byte_offset,
@@ -622,11 +641,109 @@ impl<'a> Gen<'a> {
         (tm, t)
     }
 
+    /// MATHB1B R2: the namespace pair `NamespacePatched(N) ? N.m(…) :
+    /// <intrinsic>` is ONE call of `N.m` with the arguments evaluated once.
+    /// The intrinsic arm is walked as the call of the original member: its
+    /// node's model is the original's effect (ECMA-262: calling the realm's
+    /// own `N.m`), exactly what the call does while nothing replaced the
+    /// member. The generic arm is walked as the ordinary member call `N.m(…)`
+    /// (the member read, then the call) with the argument nodes the
+    /// intrinsic arm evaluated (no argument is walked twice); it binds every
+    /// callee the read yields except the original (`Model::call_tok`), so it
+    /// adds the ordinary call's effect for exactly the values a write of the
+    /// member, of the global binding `N` or of an unknown receiver brings to
+    /// the read (stored values, ⊤). The state only grows: the original's
+    /// effect is always there, another callee's is added when it arrives.
+    pub(crate) fn namespace_pair(
+        &mut self,
+        fx: &Fx,
+        ns: &str,
+        generic: &Expr,
+        intrinsic: &Expr,
+    ) -> NodeId {
+        let ns_tok = crate::builtins::ns_by_name(ns);
+        let (
+            Some(ns_b),
+            Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                byte_end,
+                ..
+            },
+        ) = (ns_tok, generic)
+        else {
+            return self.expr_zs(fx, generic);
+        };
+        let Expr::PropertyGet { property, .. } = callee.as_ref() else {
+            return self.expr_zs(fx, generic);
+        };
+        let prev = self
+            .pair_args
+            .replace(args.iter().map(|a| (a.clone(), None)).collect());
+        let ri = self.expr_zs(fx, intrinsic);
+        let got = std::mem::replace(&mut self.pair_args, prev).expect("pair args");
+        let a: Vec<NodeId> = got
+            .into_iter()
+            .zip(args.iter())
+            .map(|((_, n), x)| n.map_or_else(|| self.expr_zs(fx, x), |(n, _)| n))
+            .collect();
+        self.call_lit_arg = args
+            .first()
+            .and_then(|x| self.const_property_key(fx.module, x))
+            .map(|s| self.m.atom(&s));
+        let c0 = self.m.calls.len();
+        let key = self.m.atom(property);
+        // The generic call is registered before it is made: generation solves
+        // online, so `call_with` binds the callee read so far inside it, and
+        // the skip (`Model::ns_pair_of`) must already see the call there.
+        self.m.ns_pair_calls.insert(c0 as CallId, (ns_b, key));
+        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
+        let made: Vec<CallId> = (c0..self.m.calls.len())
+            .filter(|&c| self.m.calls[c].ret == rg && self.m.calls[c].args == a)
+            .map(|c| c as CallId)
+            .collect();
+        if !made.contains(&(c0 as CallId)) {
+            self.m.ns_pair_calls.remove(&(c0 as CallId));
+        }
+        for c in made {
+            self.m.ns_pair_calls.insert(c, (ns_b, key));
+        }
+        let out = self.tmp("nspair");
+        self.m.edge(ri, out);
+        self.m.edge(rg, out);
+        out
+    }
+
     /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let zs_ok = std::mem::take(&mut self.zs_ok);
+        let seq = self.expr_seq;
+        self.expr_seq += 1;
         let n = self.expr_inner(fx, e);
+        // A namespace pair's argument (`namespace_pair`): the pair is built
+        // from one argument list (perry-hir `try_patched_builtin_call`), so
+        // the intrinsic arm holds each argument once, as subtrees that do not
+        // nest (each is evaluated once, ECMA-262 13.3.8.1). A structural
+        // match found while this expression was walked (at or after `seq`)
+        // lies inside it: when this expression is itself an argument, that
+        // match is part of it, not another argument (`Math.max(h(f()), f())`:
+        // the inner `f()` is not the second argument), so it is dropped and
+        // the argument it took is matched again by what follows.
+        if let Some(pa) = self.pair_args.as_mut() {
+            if let Some(i) = pa
+                .iter()
+                .position(|(a, s)| s.is_none() && perry_hir::stable_hash::same_expr_structure(a, e))
+            {
+                for (_, s) in pa.iter_mut() {
+                    if s.is_some_and(|(_, q)| q >= seq) {
+                        *s = None;
+                    }
+                }
+                pa[i].1 = Some((n, seq));
+            }
+        }
         self.zs_mark(n, zs_ok);
         self.note_element_value(fx, e, n);
         if self.diagnostic.is_some() {
@@ -651,6 +768,11 @@ impl<'a> Gen<'a> {
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
+            }
+            // `__step_value` in its step's error arm: the throw completion.
+            Expr::LocalGet(id) if self.step.arms.last() == Some(&(mi, *id)) => {
+                let err = self.step.by_value[&(mi, *id)];
+                self.region_read(fx, err)
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
@@ -799,7 +921,13 @@ impl<'a> Gen<'a> {
                     perry_hir::UpdateOp::Decrement => -1,
                 };
                 self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
-                self.m.cons(l, Cons::Arith { dst: out, other: crate::model::NO_NODE });
+                self.m.cons(
+                    l,
+                    Cons::Arith {
+                        dst: out,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 self.narrowed_write(mi, *id, out);
@@ -919,7 +1047,13 @@ impl<'a> Gen<'a> {
                         _ => crate::model::RangeOp::BitNot,
                     };
                     self.range_rule(rop, v, None, out);
-                    self.m.cons(v, Cons::Arith { dst: out, other: crate::model::NO_NODE });
+                    self.m.cons(
+                        v,
+                        Cons::Arith {
+                            dst: out,
+                            other: crate::model::NO_NODE,
+                        },
+                    );
                     out
                 }
             },
@@ -970,6 +1104,17 @@ impl<'a> Gen<'a> {
                     },
                 );
                 out
+            }
+            // MATHB1B R2: the namespace pair (`namespace_pair`).
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
+                let Expr::NamespacePatched(ns) = condition.as_ref() else {
+                    unreachable!()
+                };
+                self.namespace_pair(fx, ns, then_expr, else_expr)
             }
             Expr::Conditional {
                 condition,
@@ -1050,12 +1195,24 @@ impl<'a> Gen<'a> {
                 self.to_property_key(p);
                 // HasProperty on a Proxy runs its `has` trap.
                 let o = self.expr(fx, object);
+                let (key, idx) = match property.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    _ => (Key::any(), p),
+                };
+                self.m.cons(o, Cons::HasProp { key, idx });
                 self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }
             Expr::Await(x) => {
+                // 27.7.5.3 Await: a rejection resumes the body with a throw
+                // completion at the await, into its region (R-JOBTHROW).
                 let v = self.expr(fx, x);
-                self.awaited(v)
+                let (out, rj) = self.awaited_r(v);
+                let r = self.region();
+                if rj != r {
+                    self.m.edge(rj, r);
+                }
+                out
             }
             Expr::Yield { value, .. } => {
                 if let Some(v) = value {
@@ -1078,6 +1235,7 @@ impl<'a> Gen<'a> {
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
                     if *byte_offset != 0 {
                         self.read_sites.push(ReadSite {
+                            global_get: false,
                             access: crate::derive::Access::Read,
                             module: mi,
                             byte_offset: *byte_offset,
@@ -1099,6 +1257,7 @@ impl<'a> Gen<'a> {
                 let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
+                        global_get: false,
                         access: crate::derive::Access::Read,
                         module: mi,
                         byte_offset: *byte_offset,
@@ -1116,6 +1275,16 @@ impl<'a> Gen<'a> {
                     return callee;
                 }
                 let dst = self.load(o, Key::Named(a));
+                // S8: on the global sentinel a name the main realm does not
+                // declare is [[Get]] on the global object (`loads::tok_load`);
+                // in a module a Worker may run, the Worker global's own
+                // native of that name (perry-stdlib worker_threads
+                // worker_surface.rs: `postMessage`, `addEventListener`, …)
+                // may be the value as well: unknown to the model.
+                if self.bare_user_global(mi, object, property) && self.m.worker_side_module(mi) {
+                    self.m.add_top(dst, |_| format!("Worker global {property}"));
+                    self.m.add_prim(dst, prim::ALL);
+                }
                 self.field_reads.push(dst);
                 if *byte_offset != 0 {
                     self.load_sites.push((mi, *byte_offset, a, dst));
@@ -1140,8 +1309,15 @@ impl<'a> Gen<'a> {
                     && matches!(value.as_ref(), Expr::Binary { left, .. }
                         if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
                 if compound {
-                    for access in [crate::derive::Access::UpdateGet, crate::derive::Access::Set { strict: false, uint_value: false }] {
+                    for access in [
+                        crate::derive::Access::UpdateGet,
+                        crate::derive::Access::Set {
+                            strict: false,
+                            uint_value: false,
+                        },
+                    ] {
                         self.store_sites.push(ReadSite {
+                            global_get: false,
                             module: mi,
                             byte_offset: *byte_offset,
                             key: a,
@@ -1193,17 +1369,26 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, receiver);
                 // ACCSITE1 P1: a named store `o.k = v` (13.15.2 PutValue,
                 // 10.1.9 [[Set]]) is a site at the member's offset.
-                if let (Expr::String(s), Expr::PutValueSet { element_offset, strict, .. }) =
-                    (key.as_ref(), e)
+                if let (
+                    Expr::String(s),
+                    Expr::PutValueSet {
+                        element_offset,
+                        strict,
+                        ..
+                    },
+                ) = (key.as_ref(), e)
                 {
                     if *element_offset != 0 && !s.starts_with('#') {
                         let a = self.m.atom(s);
                         let uint_value = match value.as_ref() {
                             Expr::Integer(n) => (0..=u32::MAX as i64).contains(n),
-                            Expr::Number(n) => n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n),
+                            Expr::Number(n) => {
+                                n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n)
+                            }
                             _ => false,
                         };
                         self.store_sites.push(ReadSite {
+                            global_get: false,
                             module: mi,
                             byte_offset: *element_offset,
                             key: a,
@@ -1211,7 +1396,10 @@ impl<'a> Gen<'a> {
                             is_call: false,
                             value_call: false,
                             func: fx.f,
-                            access: crate::derive::Access::Set { strict: *strict, uint_value },
+                            access: crate::derive::Access::Set {
+                                strict: *strict,
+                                uint_value,
+                            },
                         });
                     }
                 }
@@ -1224,14 +1412,35 @@ impl<'a> Gen<'a> {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
                         if let Some(nm) = named {
                             self.m.stores[site as usize].proto_named = true;
-                            let ps = self.store_site(fx.module, fx.f, format!("{what}-proto"), owner, false);
+                            let ps = self.store_site(
+                                fx.module,
+                                fx.f,
+                                format!("{what}-proto"),
+                                owner,
+                                false,
+                            );
                             self.m.stores[ps as usize].proto_of = Some(site);
                             self.mark_fn_phase(fx, e, target, ps);
                             let key = Key::Named(self.m.atom("__proto__"));
-                            self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                            self.m.cons(
+                                o,
+                                Cons::Store {
+                                    key,
+                                    src: nm,
+                                    site: ps,
+                                },
+                            );
                         }
                         self.mark_fn_phase(fx, e, target, site);
-                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
+                        self.m.cons(
+                            kp,
+                            Cons::StoreKeyed {
+                                o,
+                                src: v,
+                                site,
+                                subj,
+                            },
+                        );
                     }
                 } else if let Some(ks) = self.const_key_set(fx.module, key) {
                     // One of a few constant keys: a named store under each.
@@ -1297,7 +1506,10 @@ impl<'a> Gen<'a> {
                 v
             }
             Expr::PropertyUpdate {
-                object, property, op, ..
+                object,
+                property,
+                op,
+                ..
             } => {
                 let o = self.expr(fx, object);
                 let a = self.member_atom(object, property);
@@ -1312,10 +1524,20 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv2, other: crate::model::NO_NODE });
+                self.m.cons(
+                    cur,
+                    Cons::Arith {
+                        dst: nv2,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
                 // the hull of the old and the new value (prefix or postfix).
-                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                let step = if *op == perry_hir::BinaryOp::Sub {
+                    -1
+                } else {
+                    1
+                };
                 self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv2);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
@@ -1472,10 +1694,25 @@ impl<'a> Gen<'a> {
                         self.m.stores[ps as usize].proto_of = Some(site);
                         self.mark_rooted(e, ps);
                         let key = Key::Named(self.m.atom("__proto__"));
-                        self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                        self.m.cons(
+                            o,
+                            Cons::Store {
+                                key,
+                                src: nm,
+                                site: ps,
+                            },
+                        );
                     }
                     let subj = self.enum_key_subject(fx, index);
-                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
+                    self.m.cons(
+                        kp,
+                        Cons::StoreKeyed {
+                            o,
+                            src: v,
+                            site,
+                            subj,
+                        },
+                    );
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
                     // One of a few constant keys: a named store under each.
                     for s in ks {
@@ -1500,7 +1737,9 @@ impl<'a> Gen<'a> {
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
-            Expr::IndexUpdate { object, index, op, .. } => {
+            Expr::IndexUpdate {
+                object, index, op, ..
+            } => {
                 let o = self.expr(fx, object);
                 let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
@@ -1518,10 +1757,20 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv, other: crate::model::NO_NODE });
+                self.m.cons(
+                    cur,
+                    Cons::Arith {
+                        dst: nv,
+                        other: crate::model::NO_NODE,
+                    },
+                );
                 // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
                 // the hull of the old and the new value (prefix or postfix).
-                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                let step = if *op == perry_hir::BinaryOp::Sub {
+                    -1
+                } else {
+                    1
+                };
                 self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv);
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
@@ -1751,6 +2000,22 @@ impl<'a> Gen<'a> {
             }
 
             // ------------------------------------------------- calls
+            // A step's error re-entry `__step_self(e, true)`: `e` resumes the
+            // body as a throw completion only (`StepSplits`).
+            Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                byte_end,
+                ..
+            } if self.step_error_reentry(mi, callee, args).is_some() => {
+                let err = self.step_error_reentry(mi, callee, args).expect("guard");
+                let e = self.expr(fx, &args[0]);
+                self.m.edge(e, err);
+                let none = self.tmp("step-resume-none");
+                let b = self.prim_node(prim::BOOL);
+                self.call_with(fx, callee, vec![none, b], vec![], (*byte_offset, *byte_end))
+            }
             Expr::Call {
                 callee,
                 args,
@@ -1774,7 +2039,8 @@ impl<'a> Gen<'a> {
                 let (c0, spreads) = (self.m.calls.len(), s.clone());
                 // The call is fixed when it is made (`new_call`): a builtin
                 // model run for it then (the console formatter) reads it.
-                let prev = std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
+                let prev =
+                    std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
                 let ret = self.call_with(fx, callee, a, s, (0, 0));
                 self.fixed_spreads = prev;
                 if !lead {

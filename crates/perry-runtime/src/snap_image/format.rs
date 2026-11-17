@@ -128,6 +128,8 @@ pub struct Image {
     pub claims: Vec<Vec<u8>>,
     /// The module-path registry entries the module inits added, for replay.
     pub registry: Vec<RegRec>,
+    /// The shape records minted between the baseline and the cut, in mint order.
+    pub mint: Vec<MintRec>,
 }
 
 fn put_val(o: &mut Vec<u8>, v: &Val) {
@@ -201,6 +203,7 @@ pub fn encode(img: &Image) -> Vec<u8> {
     }
     o.extend(img.pending.to_le_bytes());
     o.extend(img.claims_from.to_le_bytes());
+    o.extend(mint_blob(&img.mint));
     o.extend(registry_blob(&img.registry));
     o.extend(claims_blob(&img.claims));
 
@@ -215,33 +218,6 @@ pub fn claims_blob(claims: &[Vec<u8>]) -> Vec<u8> {
         o.extend(k);
     }
     o
-}
-
-/// The names of a claim blob (bytes after it are ignored).
-pub fn parse_claims_blob(b: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let u32_at = |o: usize| -> Option<usize> {
-        b.get(o..o + 4)
-            .map(|s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])) as usize)
-    };
-    let n = u32_at(0)?;
-    let (mut o, mut v) = (4usize, Vec::new());
-    for _ in 0..n {
-        let l = u32_at(o)?;
-        v.push(b.get(o + 4..o + 4 + l)?.to_vec());
-        o += 4 + l;
-    }
-    Some(v)
-}
-
-/// Whether `claims` (claimed since index `from` in some process) are exactly
-/// what this process has claimed since `from`, with the same indices.
-pub fn claims_replay_matches(from: u32, claims: &[Vec<u8>], now: &[(Vec<u8>, u32)]) -> bool {
-    claims.len() == now.len()
-        && claims
-            .iter()
-            .zip(now)
-            .enumerate()
-            .all(|(i, (k, (nk, ni)))| k == nk && *ni == from + i as u32)
 }
 
 /// The `entries` word of a Map header: the store's inline entry payload.
@@ -306,3 +282,137 @@ pub fn registry_blob(recs: &[RegRec]) -> Vec<u8> {
 }
 /// The shape id or generation counters moved (`value` = ids drawn | generations << 32).
 pub const STOP_SHAPE_COUNTERS: u8 = 10;
+
+/// The shape records minted between the baseline and the cut are written, and a table
+/// rebuilt from them equals the live one (`value` = records | bytes << 32; `cell` =
+/// static | dictionary << 16 records, `off` = ordinary | exotic << 16 records).
+pub const STOP_MINT_RECORD: u8 = 11;
+/// A record of the mint record whose rebuilt form differs from the live one (`cell` = its
+/// index in mint order, `off` = what differs, `value` = its shape id).
+pub const STOP_MINT_MISMATCH: u8 = 12;
+/// Why a record fails: a dictionary-band record has no form.
+pub const MINT_BAD_DICTIONARY: u32 = 1;
+/// The facts do not reach the recorded word through the runtime's own lookup.
+pub const MINT_BAD_IDENTITY: u32 = 2;
+/// A recorded field differs from the live record.
+pub const MINT_BAD_FIELDS: u32 = 3;
+/// A row or an id is out of mint order, or the word does not carry the recorded row.
+pub const MINT_BAD_ORDER: u32 = 4;
+/// A lazy image row whose descriptor does not name the recorded word.
+pub const MINT_BAD_LAZY_ROW: u32 = 5;
+
+/// One shape record minted between the baseline and the cut, as the facts a replay hands
+/// the runtime's mint: the identity facts, the record's attached state and the layout
+/// word the mint must return. The id and the row to position the allocators at before
+/// the mint are `id` and the row of `word`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MintRec {
+    pub id: u32,
+    pub word: u32,
+    pub keys: u64,
+    pub logical: u32,
+    pub live: u32,
+    pub holes: u32,
+    pub generation: u64,
+    pub kind: u8,
+    pub summary: u8,
+    pub integrity: u16,
+    pub proto_id: u64,
+    pub proto_cell: u64,
+    pub rep: u64,
+    pub brands: Vec<u64>,
+    /// (slot, info) of each ConstFn lane.
+    pub constfn: Vec<(u32, u64)>,
+    /// Rollback parent, created birth shape, field define target, three integrity targets.
+    pub handles: [u32; 6],
+    /// The image descriptor a lazy-row record names (index + 1), or 0.
+    pub family_desc: u32,
+    /// The rep deprecation edges: to-nopointer, to-any, then the tail words.
+    pub edges: Vec<u32>,
+}
+
+/// The mint record as section bytes: count, then per record its fixed fields and its lists.
+pub fn mint_blob(recs: &[MintRec]) -> Vec<u8> {
+    let mut o = (recs.len() as u32).to_le_bytes().to_vec();
+    for r in recs {
+        o.extend(r.id.to_le_bytes());
+        o.extend(r.word.to_le_bytes());
+        o.extend(r.keys.to_le_bytes());
+        for n in [r.logical, r.live, r.holes] {
+            o.extend(n.to_le_bytes());
+        }
+        o.extend(r.generation.to_le_bytes());
+        o.push(r.kind);
+        o.push(r.summary);
+        o.extend(r.integrity.to_le_bytes());
+        for n in [r.proto_id, r.proto_cell, r.rep] {
+            o.extend(n.to_le_bytes());
+        }
+        o.extend((r.brands.len() as u32).to_le_bytes());
+        for b in &r.brands {
+            o.extend(b.to_le_bytes());
+        }
+        o.extend((r.constfn.len() as u32).to_le_bytes());
+        for (slot, info) in &r.constfn {
+            o.extend(slot.to_le_bytes());
+            o.extend(info.to_le_bytes());
+        }
+        for h in r.handles {
+            o.extend(h.to_le_bytes());
+        }
+        o.extend(r.family_desc.to_le_bytes());
+        o.extend((r.edges.len() as u32).to_le_bytes());
+        for e in &r.edges {
+            o.extend(e.to_le_bytes());
+        }
+    }
+    o
+}
+
+/// The records of a mint blob and the bytes it took (bytes after it are ignored).
+pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
+    let mut o = 0usize;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        let s = b.get(o..o.checked_add(n)?)?;
+        o += n;
+        Some(s)
+    };
+    let le32 = |s: &[u8]| u32::from_le_bytes(s.try_into().unwrap_or([0; 4]));
+    let le64 = |s: &[u8]| u64::from_le_bytes(s.try_into().unwrap_or([0; 8]));
+    let n = le32(take(4)?) as usize;
+    let mut v = Vec::new();
+    for _ in 0..n {
+        let mut r = MintRec {
+            id: le32(take(4)?),
+            word: le32(take(4)?),
+            keys: le64(take(8)?),
+            ..MintRec::default()
+        };
+        r.logical = le32(take(4)?);
+        r.live = le32(take(4)?);
+        r.holes = le32(take(4)?);
+        r.generation = le64(take(8)?);
+        r.kind = take(1)?[0];
+        r.summary = take(1)?[0];
+        r.integrity = u16::from_le_bytes(take(2)?.try_into().ok()?);
+        r.proto_id = le64(take(8)?);
+        r.proto_cell = le64(take(8)?);
+        r.rep = le64(take(8)?);
+        for _ in 0..le32(take(4)?) {
+            r.brands.push(le64(take(8)?));
+        }
+        for _ in 0..le32(take(4)?) {
+            let slot = le32(take(4)?);
+            r.constfn.push((slot, le64(take(8)?)));
+        }
+        for h in &mut r.handles {
+            *h = le32(take(4)?);
+        }
+        r.family_desc = le32(take(4)?);
+        for _ in 0..le32(take(4)?) {
+            r.edges.push(le32(take(4)?));
+        }
+        v.push(r);
+    }
+    Some((v, o))
+}

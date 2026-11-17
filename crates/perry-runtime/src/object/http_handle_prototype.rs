@@ -60,10 +60,7 @@ pub(crate) fn inherited_field(
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_root = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
     let name = unsafe {
-        std::slice::from_raw_parts(
-            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*key).byte_len as usize,
-        )
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
     }
     .to_vec();
     let mut proto = scope.root_nanbox_f64(of_handle(handle_id)?);
@@ -104,17 +101,14 @@ pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_root = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
     let name = unsafe {
-        std::slice::from_raw_parts(
-            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*key).byte_len as usize,
-        )
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
     };
     let name_owned = std::str::from_utf8(name).ok()?.to_owned();
     let name = name_owned.as_str();
     let native = || {
         let key =
             (key_root.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::StringHeader;
-        let ptr = unsafe { (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        let ptr = crate::string::string_data(key);
         let value = super::class_handles::handle_property_dispatch()
             .map(|dispatch| unsafe { dispatch(handle_id as i64, ptr, name.len()) })
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));

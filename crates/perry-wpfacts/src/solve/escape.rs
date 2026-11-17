@@ -49,7 +49,10 @@ impl Model {
         // A value reaches unknown code: unknown code exists and holds the
         // realm (`hold_realm`).
         if crate::unksrc::on() {
-            let why = format!("{} [tok {t} {:?}]", self.reasons[reason as usize], self.toks[t as usize]);
+            let why = format!(
+                "{} [tok {t} {:?}]",
+                self.reasons[reason as usize], self.toks[t as usize]
+            );
             crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
             if !self.realm_held {
                 crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
@@ -1136,6 +1139,32 @@ impl Model {
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
+        // An internal slot is no property (`Model::field`): no key reads it,
+        // but the built-in operations unknown code may run on `t` do (the
+        // settled value of a promise reaches its reactions, 27.2.5.4
+        // PerformPromiseThen, 27.2.1.4 FulfillPromise): its values leave.
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if builtins::is_internal_key(&self.atoms[a as usize]) {
+                let n = self.fields[&(t, a)];
+                self.cons(n, Cons::TopSink { reason });
+            }
+        }
+        // A rejected promise's reason is its [[PromiseResult]] too (27.2.1.7
+        // RejectPromise), handed to the reactions unknown code registers;
+        // the model keeps every rejection reason in `thrown` (a reject
+        // function's parameter, an async body's throw): those leave.
+        if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+            if matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::BObj {
+                    what: "Promise",
+                    ..
+                }
+            ) {
+                let thrown = self.thrown;
+                self.sink_node(thrown, reason);
+            }
+        }
         // A module namespace object is not writable: [[Set]] and
         // [[DefineOwnProperty]] fail, [[Delete]] of an export fails (ES
         // 10.4.6); its keys hold what its module's bindings hold.
@@ -1248,6 +1277,8 @@ impl Model {
                     self.escape(c, reason);
                 }
             }
+            // PROXY2: unknown code may run any operation on a Proxy.
+            TokKind::Proxy(p) => self.proxy_degrade(p, "escape"),
             TokKind::Bound(b) => {
                 let (target, bthis, bargs) = self.bound[b as usize].clone();
                 for n in [target, bthis].into_iter().chain(bargs) {

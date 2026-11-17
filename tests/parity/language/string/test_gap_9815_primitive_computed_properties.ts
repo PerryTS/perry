@@ -1,4 +1,7 @@
 // Dynamic value reads must return the original prototype method (#9815).
+// DEC 250: Object.prototype takes no new key in a compiled program, so the inherited accessor is refused; String.prototype still takes the added members.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function typed(s: string, key: any): any { return s[key]; }
 function unknown(s: any, key: any): any { return s[key]; }
 function named(s: any, key: string): any { return s[key]; }
@@ -30,10 +33,10 @@ Object.defineProperty(proto, "get9815", {
   configurable: true,
   get: function () { "use strict"; return typeof this + ":" + this; }
 });
-Object.defineProperty(Object.prototype, "inherited9815", {
+locked(() => { Object.defineProperty(Object.prototype, "inherited9815", {
   configurable: true,
   get: function () { "use strict"; return typeof this + ":" + this; }
-});
+}); });
 
 for (const key of ["custom9815", "get9815", "inherited9815", "01", "99", "1", sym]) {
   const value = typed("abc", key);
@@ -63,5 +66,5 @@ delete proto["01"];
 delete proto["99"];
 delete proto["1"];
 delete proto.get9815;
-delete Object.prototype.inherited9815;
+locked(() => { delete Object.prototype.inherited9815; });
 console.log("deleted", typed("abc", "custom9815"), typed("abc", "99"));

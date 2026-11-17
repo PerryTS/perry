@@ -44,6 +44,7 @@ pub fn is_typescript_source(path: &std::path::Path) -> bool {
         Some("ts" | "tsx" | "mts" | "cts")
     )
 }
+pub mod namespace_pairs;
 pub mod patched_builtins;
 pub mod private_names;
 pub mod solid_jsx;

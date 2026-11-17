@@ -296,10 +296,9 @@ impl InfoExports {
             let by_symbol = || {
                 let bare = bare_body(declaration)?;
                 let suffix = format!("::{bare}");
-                let mut hits = self
-                    .0
-                    .iter()
-                    .filter(|(k, _)| k.facts == key.facts && k.name == key.name && k.body.ends_with(&suffix));
+                let mut hits = self.0.iter().filter(|(k, _)| {
+                    k.facts == key.facts && k.name == key.name && k.body.ends_with(&suffix)
+                });
                 let hit = hits.next()?;
                 hits.next().is_none().then_some(hit.1)
             };

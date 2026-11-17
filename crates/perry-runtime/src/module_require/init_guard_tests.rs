@@ -19,6 +19,7 @@ fn folded_evaluation_bodies_keep_distinct_module_records() {
     // Their emitted mutable guard globals still identify separate modules.
     let guards = std::ptr::addr_of_mut!(GUARDS).cast::<u64>();
     unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): the emitted guard words are integers in a test static.
         guards.write(1);
         guards.add(1).write(1);
     }

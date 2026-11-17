@@ -145,6 +145,7 @@ impl RealmPlan {
                         value: Some(RealmValue::String(module.clone())),
                         get: None,
                         set: None,
+                        value_type: None,
                     },
                 );
             }
@@ -550,6 +551,7 @@ mod tests {
             value: Some(RealmValue::Undefined),
             get: None,
             set: None,
+            value_type: None,
         };
         assert_eq!(property_entry(&property), 2); // non-enumerable data
         property.attributes = 4;

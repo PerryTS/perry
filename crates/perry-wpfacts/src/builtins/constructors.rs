@@ -65,8 +65,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let v = promise_value(m, p);
             if let Some(ex) = arg(m, call, 0) {
                 let res = resolver(m, call, v);
-                let thrown = m.thrown;
-                let rej = rejecter(m, thrown);
+                // R-JOBTHROW: the reject function and an abrupt executor
+                // completion reject this promise (27.2.3.1 steps 9-10).
+                let pr = super::promise_reason(m, p);
+                let rej = rejecter(m, pr);
                 let rn = m.node_l("resolver");
                 m.add_tok(rn, res);
                 let jn = m.node_l("rejecter");
@@ -84,7 +86,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                         spread: vec![],
                         ret,
                         site: call2,
-                        region: m.thrown,
+                        region: pr,
                     },
                     move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
                 );
@@ -220,7 +222,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             if !buffer {
                 let fresh = (what == "TypedArray").then(|| site_tmpl(m, call, "ArrayBuffer"));
                 match m.calls[call as usize].arg(0).copied() {
-                    Some(src) => m.cons(src, Cons::ViewedBuffer { view: o, fresh, share: false }),
+                    Some(src) => m.cons(
+                        src,
+                        Cons::ViewedBuffer {
+                            view: o,
+                            fresh,
+                            share: false,
+                        },
+                    ),
                     None => {
                         if let Some(ab) = fresh {
                             let f = viewed_buffer(m, o);
@@ -299,6 +308,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
 
 /// `new Name(...)` where `Name` is not a program class: a builtin by name.
 pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
+    if matches!(name, "TextEncoderStream" | "TextDecoderStream") {
+        super::native_protocol::global_any_disable(m);
+    }
     crate::family_reach::global(m, name);
     m.diagnostic_builtin(call, |_| format!("new {name}"));
     if let Some(ns) = ns_by_name(name) {

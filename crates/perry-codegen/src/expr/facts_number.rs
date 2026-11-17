@@ -66,9 +66,10 @@ fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
         Num::Number => Operand::Number,
         Num::NumberOrUndefined => Operand::NumOrUndef,
     };
-    crate::verify_facts::consumed(crate::verify_facts::Fact::CanonicalNumber, || {
-        serde_json::json!({ "arith": "element operand" })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "arith": "element operand" }),
+    );
     crate::facts_consumed::used();
     Some(k)
 }
@@ -223,16 +224,126 @@ pub(crate) fn try_lower_arith(
     let (Some(lk), Some(rk)) = (operand(ctx, left), operand(ctx, right)) else {
         return Ok(None);
     };
+    if has_nan_leaf(ctx, left) || has_nan_leaf(ctx, right) {
+        return lower_nan_tree_root(ctx, op, left, right).map(Some);
+    }
     let l_raw = lower_expr(ctx, left)?;
     let l = arith_to_number(ctx, left, lk, &l_raw)?;
     let r_raw = lower_expr(ctx, right)?;
     let r = arith_to_number(ctx, right, rk, &r_raw)?;
+    Ok(Some(ieee(ctx, op, &l, &r)))
+}
+
+fn ieee(ctx: &mut FnCtx<'_>, op: BinaryOp, l: &str, r: &str) -> String {
     let blk = ctx.block();
-    Ok(Some(match op {
-        BinaryOp::Sub => blk.fsub(&l, &r),
-        BinaryOp::Mul => blk.fmul(&l, &r),
-        _ => blk.fdiv(&l, &r),
-    }))
+    match op {
+        BinaryOp::Add => blk.fadd(l, r),
+        BinaryOp::Sub => blk.fsub(l, r),
+        BinaryOp::Mul => blk.fmul(l, r),
+        _ => blk.fdiv(l, r),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Number-or-undefined trees
+// ---------------------------------------------------------------------------
+//
+// A tree of `+ - * /` whose every node lowers here to one IEEE operation on
+// the ToNumber values of its operands (`try_lower_arith`, `try_lower_add`:
+// both operands `operand`), with leaves that are Numbers or reads the facts
+// prove Number or `undefined`. ToNumber(undefined) is NaN (7.1.4), and
+// Number::add / subtract / multiply / divide (6.1.6.1.3-7) of a NaN operand
+// is NaN. `undefined` is the quiet-NaN word 0x7FFC_0000_0000_0001, and an
+// IEEE 754 operation with a NaN operand returns a NaN (IEEE 754-2019 6.2),
+// so a Number-or-undefined leaf enters the tree as it is: a value inside the
+// tree is the right Number, or some NaN whose payload may lie in the tag
+// band. No value inside the tree is observed: the root converts its result
+// once, with the same plain-number test the leaf conversion used
+// (`select(is_number(v), v, NaN)`): a word in the tag band is a NaN, the
+// canonical NaN is the same Number. The test is on the bits (an integer
+// compare), so it holds for whatever NaN payload LLVM gives the operation.
+// One conversion per tree instead of one per leaf; the operations, their
+// order and the evaluation order of the leaves (left to right; no
+// conversion here runs code) are those of the per-node lowering.
+
+/// The `+ - * /` node `e` this module lowers to one IEEE operation.
+fn nan_tree_node<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<(BinaryOp, &'e Expr, &'e Expr)> {
+    let Expr::Binary { op, left, right } = e else {
+        return None;
+    };
+    if !matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+    ) {
+        return None;
+    }
+    (operand(ctx, left).is_some() && operand(ctx, right).is_some()).then_some((
+        *op,
+        left.as_ref(),
+        right.as_ref(),
+    ))
+}
+
+/// The leaf `e` converts with the Number-or-undefined select of
+/// `arith_to_number`.
+fn nan_leaf(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match operand(ctx, e) {
+        Some(Operand::NumOrUndef) => true,
+        Some(Operand::Prim) => prim_read_mask(ctx, e).is_some_and(|m| m & !(K_NUM | K_UNDEF) == 0),
+        _ => false,
+    }
+}
+
+/// `e` is, or is a tree node over, a Number-or-undefined leaf.
+fn has_nan_leaf(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match nan_tree_node(ctx, e) {
+        Some((_, l, r)) => has_nan_leaf(ctx, l) || has_nan_leaf(ctx, r),
+        None => nan_leaf(ctx, e),
+    }
+}
+
+/// Lower `e` inside a tree (every node of it one IEEE operation, as the
+/// per-node lowering would emit for Numbers): its value, and whether it may be a NaN word in
+/// the tag band (a Number-or-undefined leaf reached it unconverted).
+fn lower_nan_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<(String, bool)> {
+    if let Some((op, l, r)) = nan_tree_node(ctx, e) {
+        let (lv, ln) = lower_nan_tree(ctx, l)?;
+        let (rv, rn) = lower_nan_tree(ctx, r)?;
+        return Ok((ieee(ctx, op, &lv, &rv), ln || rn));
+    }
+    if nan_leaf(ctx, e) {
+        let raw = lower_expr(ctx, e)?;
+        crate::expr::facts_canonical::witness(
+            ctx,
+            &raw,
+            crate::expr::facts_canonical::Num::NumberOrUndefined,
+            "arith tree operand",
+        )?;
+        return Ok((raw, true));
+    }
+    let k = operand(ctx, e).expect("a tree operand is classified");
+    let raw = lower_expr(ctx, e)?;
+    Ok((arith_to_number(ctx, e, k, &raw)?, false))
+}
+
+/// The root `left op right` of a tree with a Number-or-undefined leaf.
+fn lower_nan_tree_root(
+    ctx: &mut FnCtx<'_>,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<String> {
+    let (lv, ln) = lower_nan_tree(ctx, left)?;
+    let (rv, rn) = lower_nan_tree(ctx, right)?;
+    let v = ieee(ctx, op, &lv, &rv);
+    if !(ln || rn) {
+        return Ok(v);
+    }
+    let is_num = crate::stmt::emit_js_value_is_number(ctx, &v);
+    let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
+    Ok(ctx
+        .block()
+        .select(crate::types::I1, &is_num, DOUBLE, &v, &nan))
 }
 
 /// `ToNumber` of the operand `e` classified `k` (`operand`), whose lowered
@@ -262,7 +373,9 @@ pub(crate) fn arith_to_number(
         witness(ctx, raw, Num::NumberOrUndefined, "arith operand")?;
         let is_num = crate::stmt::emit_js_value_is_number(ctx, raw);
         let nan = crate::nanbox::double_literal(f64::from_bits(0x7FF8_0000_0000_0000));
-        return Ok(ctx.block().select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
+        return Ok(ctx
+            .block()
+            .select(crate::types::I1, &is_num, DOUBLE, raw, &nan));
     }
     Ok(emit_prim_to_number(ctx, raw))
 }
@@ -303,6 +416,9 @@ pub(crate) fn try_lower_add(
     let (Some(lk), Some(rk)) = (operand(ctx, left), operand(ctx, right)) else {
         return Ok(None);
     };
+    if has_nan_leaf(ctx, left) || has_nan_leaf(ctx, right) {
+        return lower_nan_tree_root(ctx, BinaryOp::Add, left, right).map(Some);
+    }
     // Number + Number is the existing numeric path.
     if lk == Operand::Number && rk == Operand::Number {
         return Ok(None);

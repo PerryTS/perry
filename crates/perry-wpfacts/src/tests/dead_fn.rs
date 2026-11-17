@@ -33,7 +33,7 @@ fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
         ..Default::default()
     };
     match unit {
-        true => crate::compute_units(&list, &cfg),
+        true => crate::compute(&list, &cfg),
         false => crate::compute(&list, &cfg),
     }
 }
@@ -71,7 +71,11 @@ console.warn('%j', a);
 fn verdict_of(src: &str) -> crate::Verdict {
     let h = hirs(&[("a", src)]);
     let pf = run(&h, false);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .find(|s| s.module == mi && s.key == "z" && !s.is_call)
@@ -107,7 +111,10 @@ warn('a: bad', new A());
 #[test]
 fn percent_s_calls_to_string() {
     // util_format.rs `%s`: an object with a user `toString` is String(v).
-    assert_ne!(verdict_with("console.warn('a %s b', new S());\n"), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_with("console.warn('a %s b', new S());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn unknown_format_string_keeps_inspect() {
@@ -120,7 +127,10 @@ console.warn(f, new A());
 fn object_first_argument_formats_nothing() {
     // util_format.rs: a first argument that is no String: every argument
     // is `format_jsvalue`d, no specifier runs.
-    assert_eq!(verdict_with("console.warn({ k: 1 }, new A());\n"), crate::Verdict::Dead);
+    assert_eq!(
+        verdict_with("console.warn({ k: 1 }, new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn leading_spread_with_percent_keeps_inspect() {
@@ -139,7 +149,10 @@ console.warn(...arr);
 #[test]
 fn other_console_methods_keep_inspect() {
     // `console.table` is not `js_util_format`: unchanged (Inspect).
-    assert_ne!(verdict_with("console.table('x', new A());\n"), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_with("console.table('x', new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 
 // Rule OBJECT-TO-STRING (ECMA-262 7.1.1.1, 20.1.3.6): the string of an
@@ -154,16 +167,23 @@ fn ots(body: &str) -> crate::Verdict {
 }
 #[test]
 fn object_literal_string_is_object_object() {
-    assert_eq!(ots("console.warn('' + { k: 1 }, new A());\n"), crate::Verdict::Dead);
+    assert_eq!(
+        ots("console.warn('' + { k: 1 }, new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn class_instance_without_to_string_is_object_object() {
-    assert_eq!(ots("console.warn('X.' + new B(), new A());\n"), crate::Verdict::Dead);
+    assert_eq!(
+        ots("console.warn('X.' + new B(), new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn to_string_tag_getter_runs() {
     // 20.1.3.6 step 15: Get(O, @@toStringTag) calls the getter.
-    let src = "class T { constructor() { this.v = 1; } get [Symbol.toStringTag]() { return this.w.z; } }
+    let src =
+        "class T { constructor() { this.v = 1; } get [Symbol.toStringTag]() { return this.w.z; } }
 console.log('X.' + new T());
 ";
     assert_ne!(verdict_of(src), crate::Verdict::Dead);
@@ -215,7 +235,10 @@ console.warn('X.' + b, new A());
 }
 #[test]
 fn top_value_is_any_string() {
-    assert_ne!(ots("console.warn('X.' + JSON.parse(process.env.J || '{}'), new A());\n"), crate::Verdict::Dead);
+    assert_ne!(
+        ots("console.warn('X.' + JSON.parse(process.env.J || '{}'), new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn later_written_to_string_is_its_string() {
@@ -244,11 +267,17 @@ fn funnel_any_tail_alone_and_literal_with_object_is_dead() {
 }
 #[test]
 fn funnel_percent_j_with_object_runs() {
-    assert_ne!(funnel("warn('a ' + process.env.H);\nwarn('x %j', new A());\n"), crate::Verdict::Dead);
+    assert_ne!(
+        funnel("warn('a ' + process.env.H);\nwarn('x %j', new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn funnel_any_tail_with_object_runs() {
-    assert_ne!(funnel("warn('literal no percent');\nwarn('a ' + process.env.H, new A());\n"), crate::Verdict::Dead);
+    assert_ne!(
+        funnel("warn('literal no percent');\nwarn('a ' + process.env.H, new A());\n"),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn funnel_spread_of_unknown_length_runs() {
@@ -310,7 +339,10 @@ function warn(...params) { params = enh(params); const message = 'P.' + params.s
 const TWO_CALLERS: &str = "warn('a ' + process.env.H);\nwarn('literal no percent', new A());\n";
 #[test]
 fn funnel_through_identity_enhancer_is_dead() {
-    assert_eq!(verdict_with(&format!("{ENH}{TWO_CALLERS}")), crate::Verdict::Dead);
+    assert_eq!(
+        verdict_with(&format!("{ENH}{TWO_CALLERS}")),
+        crate::Verdict::Dead
+    );
 }
 // DEADFN9: three.js calls `warn`/`error` from functions that a caller's
 // summary composes (`Object3D::add`, `Color::setStyle`, expanded one level
@@ -325,7 +357,12 @@ function parse(s) { setStyle(s); }
 ";
 #[test]
 fn funnel_nested_callers_is_dead() {
-    assert_eq!(verdict_with(&format!("{ENH}{NESTED}attach(new A());\nparse(process.env.H);\n")), crate::Verdict::Dead);
+    assert_eq!(
+        verdict_with(&format!(
+            "{ENH}{NESTED}attach(new A());\nparse(process.env.H);\n"
+        )),
+        crate::Verdict::Dead
+    );
 }
 // (i) Recursion: `f` calls itself from its own run; the recursive call
 // folds onto the run of its first occurrence on the chain, and the solve
@@ -337,7 +374,10 @@ function f(n, o) { w1(o); if (n) f(n - 1, o); }
 f(3, new A());
 parse(process.env.H);
 ";
-    assert_eq!(verdict_with(&format!("{ENH}{NESTED}{src}")), crate::Verdict::Dead);
+    assert_eq!(
+        verdict_with(&format!("{ENH}{NESTED}{src}")),
+        crate::Verdict::Dead
+    );
 }
 // (ii) A caller reached from unknown code runs `warn` with an unknown
 // message beside an object.
@@ -367,7 +407,10 @@ fn funnel_enhancer_returning_saved_array_runs() {
 function enh(p) { const r = saved; saved = p; return r; }
 function warn(...params) { params = enh(params); const message = 'P.' + params.shift(); console.warn(message, ...params); }
 ";
-    assert_ne!(verdict_with(&format!("{src}{TWO_CALLERS}")), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_with(&format!("{src}{TWO_CALLERS}")),
+        crate::Verdict::Dead
+    );
 }
 // (ii) The enhancer stores a string that may hold `%` into the first element.
 #[test]
@@ -375,7 +418,10 @@ fn funnel_enhancer_storing_unknown_string_runs() {
     let src = "function enh(p) { if (process.env.T) { p[0] = process.env.H; } return p; }
 function warn(...params) { params = enh(params); const message = 'P.' + params.shift(); console.warn(message, ...params); }
 ";
-    assert_ne!(verdict_with(&format!("{src}{TWO_CALLERS}")), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_with(&format!("{src}{TWO_CALLERS}")),
+        crate::Verdict::Dead
+    );
 }
 // DEADFN16: the r2 shape. A console request that may consume an object
 // (`Protocol::Inspect`/`Json`: toJSON among the keys) must activate the
@@ -385,7 +431,10 @@ class A extends B { constructor() { super(); this.v = 1; } }
 ";
 #[test]
 fn dfn16_inherited_to_json_under_percent_j_runs() {
-    assert_ne!(verdict_of(&format!("{INH}console.warn(\"%j\", new A());\n")), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_of(&format!("{INH}console.warn(\"%j\", new A());\n")),
+        crate::Verdict::Dead
+    );
 }
 const ENH16: &str = "function enh(params) { const m = params[0]; if (typeof m === \"string\" && m.startsWith(\"TSL:\")) { params[1] = \"no trace\"; } return params; }
 function warn(...params) { params = enh(params); const message = \"P.\" + params.shift(); console.warn(message, ...params); }
@@ -393,11 +442,21 @@ function error(...params) { params = enh(params); const message = \"P.\" + param
 ";
 #[test]
 fn dfn16_enhanced_funnel_any_tail_with_object_runs() {
-    assert_ne!(verdict_of(&format!("{INH}{ENH16}warn(\"literal\");\nerror(\"a \" + process.env.H, new A());\n")), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_of(&format!(
+            "{INH}{ENH16}warn(\"literal\");\nerror(\"a \" + process.env.H, new A());\n"
+        )),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn dfn16_enhanced_funnel_any_tail_with_object_in_warn_runs() {
-    assert_ne!(verdict_of(&format!("{INH}{ENH16}error(\"literal\", new A());\nwarn(\"a \" + process.env.H, new A());\n")), crate::Verdict::Dead);
+    assert_ne!(
+        verdict_of(&format!(
+            "{INH}{ENH16}error(\"literal\", new A());\nwarn(\"a \" + process.env.H, new A());\n"
+        )),
+        crate::Verdict::Dead
+    );
 }
 #[test]
 fn dfn16_enhanced_spread_percent_j_runs() {
@@ -412,7 +471,11 @@ fn dfn16_enhanced_spread_percent_j_runs() {
 fn site_verdict(src: &str, key: &str) -> Option<crate::Verdict> {
     let h = hirs(&[("a", src)]);
     let pf = run(&h, false);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .find(|s| s.module == mi && s.key == key && !s.is_call)

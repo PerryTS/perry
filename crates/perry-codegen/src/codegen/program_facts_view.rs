@@ -424,6 +424,10 @@ pub struct ElisionFacts {
     /// `BindingFacts::booleans`): the truthiness of a read is one compare
     /// (`expr::booleans`).
     pub boolean_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose every value is `true`, `false`, `undefined` or `null`
+    /// (wpfacts `BindingFacts::nullish_booleans`): the truthiness of a read
+    /// is one compare (`expr::booleans`).
+    pub nullish_boolean_locals: std::collections::BTreeSet<u32>,
     /// Locals whose Arrays keep their length while the function that
     /// declares them runs (wpfacts `BindingFacts::stable_length`), with
     /// `stable_front` (`expr::held_len`).
@@ -458,6 +462,9 @@ pub struct ElisionFacts {
     /// Booleans into (wpfacts `FieldFacts::booleans`,
     /// `FieldProof::booleans`).
     pub boolean_fields: std::collections::BTreeSet<(u32, String)>,
+    /// Class fields (class id, key) every store puts only `true`, `false`,
+    /// `undefined` or `null` into (wpfacts `FieldFacts::nullish_booleans`).
+    pub nullish_boolean_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -613,6 +620,11 @@ pub struct ElisionFacts {
     /// prototype) and takes the site's complete generic operation once it
     /// is set.
     pub interp_guard: bool,
+    /// MATHC1 (`PatchedBuiltins::namespace_pairs_by_verdict`): each
+    /// namespace pair `NamespacePatched(ns) ? generic : intrinsic` is lowered
+    /// as one arm, the intrinsic when `native_member_calls` proves the
+    /// generic call reads the original builtin, else the generic call.
+    pub namespace_pair_arms: bool,
     /// Compiled code never writes `%Function.prototype%.bind`, `.name` or
     /// `.length` (wpfacts `fnproto_bind_written`): a `bind` site on a
     /// base-shape function needs no `Pristine(Function)` test, only the
@@ -662,7 +674,14 @@ pub struct ElisionFacts {
     /// NULLCALL1: the last field says the receiver may also be `undefined` /
     /// `null` (never another primitive): the call tests it first, and the
     /// nullish edge is the complete member read, which throws.
-    pub method_calls: std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool)>,
+    pub method_calls:
+        std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool)>,
+    /// ONCHG2: this module's named method calls `o.k(args)` whose callee set
+    /// is proven to be these compiled closures / declarations of this module
+    /// (wpfacts `SiteFacts::target_bodies` of `T0Mono` / `T0Set`), every
+    /// receiver an object. Codegen calls the loaded value's body directly
+    /// (`proven_call::emit_proven_call`) where it has loaded the value.
+    pub late_call_bodies: std::collections::BTreeMap<(u32, String), Vec<FactsBody>>,
 }
 
 impl ElisionFacts {
@@ -676,6 +695,7 @@ impl ElisionFacts {
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
             && self.boolean_locals.is_empty()
+            && self.nullish_boolean_locals.is_empty()
             && self.stable_length_locals.is_empty()
             && self.named_length_locals.is_empty()
             && self.generator_sources.is_empty()
@@ -698,6 +718,7 @@ impl ElisionFacts {
             && self.accessor_sets.is_empty()
             && self.accessor_gets.is_empty()
             && self.method_calls.is_empty()
+            && self.late_call_bodies.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

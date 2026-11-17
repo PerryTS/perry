@@ -44,11 +44,36 @@ impl<'a> Gen<'a> {
         r: u32,
         accessor: bool,
         own: [Option<NodeId>; 2],
+        kn: Option<NodeId>,
     ) {
         // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
         // a given prototype holds (`settle_native_given`).
         let dk = self.m.atom(key.as_deref().unwrap_or(crate::STAR_KEY));
         self.m.define_on.insert((o, dk, !accessor));
+        // GLOBK3: a computed key `kn` decides at the solve, by receiver and
+        // key (`Cons::DefineAnyKey`, `Model::define_computed_key`).
+        if let (None, Some(kn)) = (&key, kn) {
+            let [v, dget, dset] = self.descriptor_reads(desc);
+            let [get, set] = [(dget, own[0]), (dset, own[1])].map(|(r, own)| own.unwrap_or(r));
+            let site = match accessor {
+                true => u32::MAX,
+                false => self.store_site(fx.module, fx.f, "defineProperty".into(), None, false),
+            };
+            let c = Cons::DefineAnyKey {
+                o,
+                key: kn,
+                value: v,
+                get,
+                set,
+                site,
+                reason: r,
+                accessor,
+            };
+            for n in [o, kn, set] {
+                self.m.cons(n, c);
+            }
+            return;
+        }
         match &key {
             Some(k) => {
                 let ka = self.m.atom(k);
@@ -128,7 +153,15 @@ impl<'a> Gen<'a> {
         let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site, subj: NO_NODE });
+            self.m.cons(
+                kn,
+                Cons::StoreKeyed {
+                    o,
+                    src: v,
+                    site,
+                    subj: NO_NODE,
+                },
+            );
         }
         for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             let f = own.unwrap_or(read);
@@ -180,14 +213,21 @@ impl<'a> Gen<'a> {
             self.m.add_prim(out, vals);
             return out;
         }
-        let fa = self.m.field_any(t);
-        self.m.add_prim(fa, vals);
-        self.m.add_tok(fa, t);
-        let afa = self.m.field_any(at);
-        self.m.add_prim(afa, vals);
-        self.m.add_tok(afa, t);
-        self.m.add_tok(afa, at);
-        self.m.add_tok(fa, at);
+        // Without a reviver the result `t` / `at` is no value inside its own
+        // tree (`Model::json_inner`): every nested object or array is `io` /
+        // `ia`. A reviver runs with every object of the tree as its `this`
+        // and its results replace values anywhere (25.5.1.1
+        // InternalizeJSONProperty): one token for the whole tree.
+        let (io, ia) = match reviver {
+            true => (t, at),
+            false => self.m.json_inner(t, at),
+        };
+        for o in [t, at, io, ia] {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, vals);
+            self.m.add_tok(fa, io);
+            self.m.add_tok(fa, ia);
+        }
         let out = self.tmp("json");
         self.m.edge(n, out);
         self.m.add_tok(out, at);
@@ -222,7 +262,12 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
+            // `arrayRecordCloseAbsent` (js_array_record_close_absent): a
+            // shape lookup of `return` on %ArrayIteratorPrototype%'s chain;
+            // an accessor answers false without being called, so no program
+            // code runs here; the close itself is `arrayRecordClose`'s model.
             "arrayRecordNeedsIterator"
+            | "arrayRecordCloseAbsent"
             | "arrayRecordForBound"
             | "hasPathModule"
             | "isBuiltin"

@@ -41,6 +41,7 @@ output.chmod(0o755)
 '''
 
 
+@unittest.skipIf(os.name == "nt", "the fake compiler and probes are shebang scripts")
 class MeasurementRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

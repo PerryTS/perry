@@ -142,6 +142,7 @@ _CODEGEN_SUITES = [
     "receiver_run_one_proof",
     "shadow_slot_hygiene",
     "size_function_attributes",
+    "snap_image_literal_order",
     "typed_collection_receiver_guard",
     "typed_feedback",
     # #7506/#7245: held out until its one failing test was triaged. The
@@ -169,6 +170,7 @@ _CODEGEN_SUITES = [
     "typed_shape_descriptor",
     "typed_shape_descriptors",
     "system_boolean_result",
+    "snap_image_literal_order",
     "ui_i64_boolean_args",
     "widget_max_width",
 ]

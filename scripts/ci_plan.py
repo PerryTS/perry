@@ -481,6 +481,10 @@ def _self_test() -> int:
         },
     )
     check("full: gap lane runs like the sweep", full["gap"] == sweep["gap"])
+    check("parity links gap-suite-build's artifact", set(JOBS["parity"]) <= set(JOBS["gap_suite"]))
+    check("gc-call-effects runs with the gap-suite builds it downloads", JOBS["gc_call_effects"] == JOBS["gap_suite"])
+    check("gc-stress links the gap-suite builds", JOBS["gc_stress"] == JOBS["gap_suite"])
+    check("test262 links gap-suite-build's artifact", set(JOBS["test262"]) <= set(JOBS["gap_suite"]))
     check("full: parity sharded", full["parity"]["shards"] == list(range(1, PARITY_SHARDS + 1)))
     check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 

@@ -801,6 +801,31 @@ pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Str
     }
 }
 
+/// The operands of a Math call that reads several of its arguments: every
+/// argument EXPRESSION is evaluated first, left to right (ECMA-262 13.3.6.1
+/// ArgumentListEvaluation), then the call coerces them in order (21.3.2.x:
+/// `Math.atan2( { valueOf() { … } }, log( 2 ) )` runs `log` before the
+/// `valueOf`). Lowering each operand together with its coercion would run an
+/// earlier operand's `valueOf` before a later operand's expression. When
+/// nothing can collect, the emitted IR is the one the interleaved lowering gave.
+pub(crate) fn with_math_operands<'f>(
+    ctx: &mut FnCtx<'f>,
+    exprs: &[&Expr],
+    body: impl FnOnce(&mut FnCtx<'f>, Vec<String>) -> Result<String>,
+) -> Result<String> {
+    crate::rooting::with_operands_rooted(ctx, exprs, |ctx, vals| {
+        let mut coerced = Vec::with_capacity(vals.len());
+        for (e, v) in exprs.iter().zip(vals.iter()) {
+            coerced.push(if math_operand_is_proven_number(ctx, e) {
+                v.clone()
+            } else {
+                emit_math_to_number(ctx, v)
+            });
+        }
+        body(ctx, coerced)
+    })
+}
+
 /// c1: the operands of a Math call that lowers to an LLVM intrinsic and
 /// nothing else, once every operand is a proven Number
 /// (`expr::math_simple` / `logical_collections`: `llvm.fabs`, `llvm.floor`,

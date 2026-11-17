@@ -389,6 +389,7 @@ impl Model {
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n, ..) => format!("native:{n}"),
+            TokKind::Proxy(p) => format!("proxy:{p}"),
         }
     }
 
@@ -494,6 +495,7 @@ impl Model {
                 TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n, ..) => format!("nativeproto {n}"),
+                TokKind::Proxy(p) => format!("proxy {p}"),
             };
             out.push(format!("M tok {i} {d}"));
         }
@@ -1770,10 +1772,12 @@ impl Model {
     }
 
     /// Per key of `process` the realm declares as a host array of strings
-    /// (`value = dynamic, elements = string`): the property's node, holding
-    /// the array the runtime makes once, its elements strings.
+    /// (`value = dynamic, elements = string`) or as a host object whose own
+    /// values are strings (`kind = exotic, values = string`: `env`): the
+    /// property's node, holding the one object the runtime makes, its
+    /// elements / own values strings.
     pub(crate) fn process_string_arrays(&mut self) -> Vec<(Atom, NodeId, Tok)> {
-        let declared: Vec<(&'static str, &'static str)> = self
+        let declared: Vec<(&'static str, &'static str, bool)> = self
             .declarations
             .namespace(BuiltinNs::Process, self)
             .map(|s| {
@@ -1781,14 +1785,21 @@ impl Model {
                     .shape(s)
                     .properties
                     .iter()
-                    .filter_map(|p| Some((p.key, p.strings?)))
+                    .filter_map(|p| match (p.strings, p.record) {
+                        (Some(d), _) => Some((p.key, d, false)),
+                        (None, Some(d)) => Some((p.key, d, true)),
+                        (None, None) => None,
+                    })
                     .collect()
             })
             .unwrap_or_default();
         declared
             .into_iter()
-            .map(|(key, display)| {
-                let t = self.host_string_array(display);
+            .map(|(key, display, record)| {
+                let t = match record {
+                    true => self.host_string_record(display),
+                    false => self.host_string_array(display),
+                };
                 let n = self.node_l(display);
                 self.add_tok(n, t);
                 (self.atom(key), n, t)
@@ -1797,12 +1808,26 @@ impl Model {
     }
 
     fn host_string_array(&mut self, display: &str) -> Tok {
+        self.host_strings(display, "arraybox")
+    }
+
+    /// The one host object of a `values = string` declaration
+    /// (`process.env`: perry-runtime process/env_misc.rs
+    /// `js_process_env_impl`, one per agent): an ordinary object
+    /// (`js_object_alloc`: [[Prototype]] %Object.prototype%) whose own
+    /// values are strings; a [[Set]] on it stores ToString(v)
+    /// (`Model::store_into`, `process_env_set_field` -> `js_setenv`).
+    fn host_string_record(&mut self, display: &str) -> Tok {
+        self.host_strings(display, "stringrecord")
+    }
+
+    fn host_strings(&mut self, display: &str, what: &'static str) -> Tok {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
             kind: TmplKind::BObj {
                 module: u32::MAX,
                 site: u32::MAX - 1,
-                what: "arraybox",
+                what,
             },
             display: display.into(),
             birth_keys: Vec::new(),
@@ -1982,6 +2007,10 @@ impl Model {
 /// the activation path of each matching function when it first activates.
 pub(crate) fn why_act() -> Option<&'static String> {
     static W: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    W.get_or_init(|| std::env::var("PERRY_FACTS_WHY_ACT").ok().filter(|v| !v.is_empty()))
-        .as_ref()
+    W.get_or_init(|| {
+        std::env::var("PERRY_FACTS_WHY_ACT")
+            .ok()
+            .filter(|v| !v.is_empty())
+    })
+    .as_ref()
 }

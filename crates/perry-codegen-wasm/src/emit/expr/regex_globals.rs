@@ -81,11 +81,18 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                 func.instruction(&Instruction::End);
             }
+            // Bit-exact, as `js_is_undefined_or_bare_nan` in perry-runtime: the value is
+            // `undefined` or the canonical NaN `0x7FF8_0000_0000_0000`. A NaN-boxed tag
+            // is never canonical NaN, so `null`, strings and objects all test false.
             Expr::IsUndefinedOrBareNan(val) => {
-                // WASM fallback: delegate to is_nan (close enough for most cases)
-                self.emit_frame_begin(func, 1);
-                self.emit_store_arg(func, 0, val);
-                self.emit_memcall_i32(func, "is_nan", 1);
+                self.emit_expr(func, val);
+                func.instruction(&Instruction::LocalTee(self.temp_local));
+                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                func.instruction(&Instruction::I64Eq);
+                func.instruction(&Instruction::LocalGet(self.temp_local));
+                func.instruction(&Instruction::I64Const(f64::NAN.to_bits() as i64));
+                func.instruction(&Instruction::I64Eq);
+                func.instruction(&Instruction::I32Or);
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
                 )));

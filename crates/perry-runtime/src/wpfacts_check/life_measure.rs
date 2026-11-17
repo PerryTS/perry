@@ -781,9 +781,12 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
             return None;
         }
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let bytes =
-            unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size }
-                as u64;
+        // A POINTER_TAG payload may be a handle-band id, which has no header.
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+            s.unborn += 1;
+            return None;
+        };
+        let bytes = header.size as u64;
         s.bytes += bytes;
         let own = if s.sampled < 32 {
             0
@@ -919,7 +922,8 @@ pub extern "C" fn perry_life_return() {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_depth() -> i64 {
-    table(|t| (t.measure.acts.len() | t.measure.loops.len() << 32) as i64).unwrap_or(0)
+    table(|t| (t.measure.acts.len() as u64 | (t.measure.loops.len() as u64) << 32) as i64)
+        .unwrap_or(0)
 }
 
 /// An iteration of the loop `id` begins (its body's statement list starts).

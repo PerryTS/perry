@@ -55,7 +55,10 @@ impl Prov {
     /// The provenance file next to the dump, when `PERRY_FACTS_PROVENANCE=1`
     /// (with relations); the in-memory record when `PERRY_FACTS_WHY=1` or
     /// `PERRY_FACTS_STOP=hold` (read once per solve, here).
-    pub(crate) fn from_env(relations: bool, mods: impl FnOnce() -> Vec<String>) -> Option<Box<Prov>> {
+    pub(crate) fn from_env(
+        relations: bool,
+        mods: impl FnOnce() -> Vec<String>,
+    ) -> Option<Box<Prov>> {
         let out = match std::env::var_os("PERRY_FACTS_DUMP") {
             Some(mut path)
                 if relations
@@ -78,7 +81,9 @@ impl Prov {
             Some("wide") => STOP_WIDE,
             _ => STOP_NONE,
         };
-        let why = (stop != STOP_NONE || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1")).then(|| {
+        let why = (stop != STOP_NONE
+            || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1"))
+        .then(|| {
             let solve = SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             let sel = parse_sel();
             let mut sel_nodes: crate::pts::FxHashMap<NodeId, usize> = Default::default();
@@ -109,7 +114,13 @@ impl Prov {
         if out.is_none() && why.is_none() {
             return None;
         }
-        Some(Box::new(Prov { out, why, edges: Default::default(), lines: 0, in_tok: 0 }))
+        Some(Box::new(Prov {
+            out,
+            why,
+            edges: Default::default(),
+            lines: 0,
+            in_tok: 0,
+        }))
     }
 }
 
@@ -123,7 +134,12 @@ impl Model {
         let (call, rule) = (self.prov_call, self.prov_rule);
         if let Some(p) = self.prov.as_mut() {
             let tok = p.in_tok;
-            p.edges.entry((a, b)).or_insert(EdgeOrigin { loc, call, rule, tok });
+            p.edges.entry((a, b)).or_insert(EdgeOrigin {
+                loc,
+                call,
+                rule,
+                tok,
+            });
         }
     }
 
@@ -152,7 +168,9 @@ impl Model {
     #[cold]
     #[inline(never)]
     pub(crate) fn prov_in_take(&mut self) -> u32 {
-        self.prov.as_mut().map_or(0, |p| std::mem::take(&mut p.in_tok))
+        self.prov
+            .as_mut()
+            .map_or(0, |p| std::mem::take(&mut p.in_tok))
     }
 
     /// Set the recorded input token. Called only while provenance is on.
@@ -183,7 +201,11 @@ impl Model {
     }
 
     fn prov_edge_text(&self, kind: &str, a: NodeId, b: NodeId) -> String {
-        let Some(o) = self.prov.as_ref().and_then(|p| p.edges.get(&(a, b)).copied()) else {
+        let Some(o) = self
+            .prov
+            .as_ref()
+            .and_then(|p| p.edges.get(&(a, b)).copied())
+        else {
             return format!("{kind}@?");
         };
         let mut s = format!("{kind}@{}:{}", short(o.loc.file()), o.loc.line());
@@ -230,7 +252,11 @@ impl Model {
                 _ => format!("add@{}:{}", short(loc.file()), loc.line()),
             }
         };
-        let from = if src == NO_NODE { "-".to_string() } else { src.to_string() };
+        let from = if src == NO_NODE {
+            "-".to_string()
+        } else {
+            src.to_string()
+        };
         let r = self.relations.as_ref().map_or(0, |r| r.len());
         let Some(p) = self.prov.as_mut() else {
             return;
@@ -269,17 +295,29 @@ impl Model {
         }
         for n in 0..self.nodes.len() {
             let f = self.node_fn.get(n).copied().unwrap_or(crate::model::NO_FN);
-            let f = if f == crate::model::NO_FN { "-".to_string() } else { f.to_string() };
+            let f = if f == crate::model::NO_FN {
+                "-".to_string()
+            } else {
+                f.to_string()
+            };
             let l = self.labels.get(n).copied().unwrap_or("?");
             let fr = self.nodes[n].frame;
-            let fr = if fr == 0 { "-".to_string() } else { (fr - 1).to_string() };
+            let fr = if fr == 0 {
+                "-".to_string()
+            } else {
+                (fr - 1).to_string()
+            };
             let o = orig
                 .get(&(n as NodeId))
                 .map_or("-".to_string(), |o| o.to_string());
             let _ = writeln!(out, "N {n} {f} {l} {fr} {o}");
         }
         let _ = out.flush();
-        eprintln!("perry: wpfacts provenance: {} first arrivals, {} edges", p.lines, p.edges.len());
+        eprintln!(
+            "perry: wpfacts provenance: {} first arrivals, {} edges",
+            p.lines,
+            p.edges.len()
+        );
     }
 }
 
@@ -353,12 +391,21 @@ fn parse_sel() -> Vec<Sel> {
                 Some(b) => (b, true),
                 None => (x, false),
             };
-            let node = body.strip_prefix('n').and_then(|d| d.parse::<NodeId>().ok());
+            let node = body
+                .strip_prefix('n')
+                .and_then(|d| d.parse::<NodeId>().ok());
             let (fnsub, what) = match body.split_once('#') {
                 Some((f, w)) => (f.to_string(), w.to_string()),
                 None => (String::new(), body.to_string()),
             };
-            Sel { raw: x.to_string(), node, fnsub, what, prim, undef }
+            Sel {
+                raw: x.to_string(),
+                node,
+                fnsub,
+                what,
+                prim,
+                undef,
+            }
         })
         .collect()
 }
@@ -452,7 +499,10 @@ impl Prov {
         if let Some(&i) = w.sel_nodes.get(&orig) {
             w.sel_nodes.insert(copy, i);
             w.sel_checked.insert(copy);
-            eprintln!("WHY select n{copy} solve={} copy-of=n{orig} sel={} by=instance", w.solve, w.sel[i].raw);
+            eprintln!(
+                "WHY select n{copy} solve={} copy-of=n{orig} sel={} by=instance",
+                w.solve, w.sel[i].raw
+            );
         }
     }
 }
@@ -485,7 +535,16 @@ impl std::fmt::Display for WhyHop {
         write!(
             f,
             "WHY solve={} {} n{} label={} fn={} value={} via={} site={} work={} at={}",
-            self.solve, self.depth, self.node, self.label, self.func, self.value, self.via, self.site, self.work, self.at
+            self.solve,
+            self.depth,
+            self.node,
+            self.label,
+            self.func,
+            self.value,
+            self.via,
+            self.site,
+            self.work,
+            self.at
         )?;
         if !self.end.is_empty() {
             write!(f, " END={}", self.end)?;
@@ -509,26 +568,52 @@ impl Model {
         adopted: bool,
         loc: &'static Location<'static>,
     ) {
-        let (mode, rule, call, work) = (self.prov_mode, self.prov_rule, self.prov_call, self.work.get());
+        let (mode, rule, call, work) = (
+            self.prov_mode,
+            self.prov_rule,
+            self.prov_call,
+            self.work.get(),
+        );
         let Some(p) = self.prov.as_mut() else {
             return;
         };
-        let cause = if mode == PM_RULE && !adopted { p.in_tok } else { 0 };
-        let edge = if src != NO_NODE { p.edges.get(&(src, n)).copied() } else { None };
+        let cause = if mode == PM_RULE && !adopted {
+            p.in_tok
+        } else {
+            0
+        };
+        let edge = if src != NO_NODE {
+            p.edges.get(&(src, n)).copied()
+        } else {
+            None
+        };
         let Some(w) = p.why.as_mut() else {
             return;
         };
         let mut check = false;
         let mut arrive = false;
         if let std::collections::hash_map::Entry::Vacant(e) = w.first.entry((n, v)) {
-            e.insert(Parent { src, mode, adopted, rule, edge, call, work, loc, cause });
+            e.insert(Parent {
+                src,
+                mode,
+                adopted,
+                rule,
+                edge,
+                call,
+                work,
+                loc,
+                cause,
+            });
             w.by_node.entry(n).or_default().push((work, v));
             check = w.stop == STOP_WIDE && !w.wide_done;
             arrive = w.arrive && w.sel_nodes.contains_key(&n);
         }
         if arrive {
             let solve = w.solve;
-            eprintln!("WHY ARRIVE solve={solve} n{n} value={} src=n{src} work={work} at={loc}", self.why_val(v));
+            eprintln!(
+                "WHY ARRIVE solve={solve} n{n} value={} src=n{src} work={work} at={loc}",
+                self.why_val(v)
+            );
         }
         if check {
             self.why_wide_check(n, v);
@@ -545,16 +630,19 @@ impl Model {
             return;
         }
         let pi = format!("p{idx}");
-        let Some(i) = w
-            .sel
-            .iter()
-            .position(|s| s.node.is_none() && fname.contains(s.fnsub.as_str()) && (s.what == pname || s.what == pi))
-        else {
+        let Some(i) = w.sel.iter().position(|s| {
+            s.node.is_none()
+                && fname.contains(s.fnsub.as_str())
+                && (s.what == pname || s.what == pi)
+        }) else {
             return;
         };
         w.sel_nodes.insert(n, i);
         w.sel_checked.insert(n);
-        eprintln!("WHY select n{n} solve={} fn={fname} label=param:{pname} sel={} by=param", w.solve, w.sel[i].raw);
+        eprintln!(
+            "WHY select n{n} solve={} fn={fname} label=param:{pname} sel={} by=param",
+            w.solve, w.sel[i].raw
+        );
     }
 
     /// `STOP=wide`: `v` is the first arrival of `v` at `n`. A selected node
@@ -566,7 +654,11 @@ impl Model {
         };
         if !w.sel_checked.contains(&n) && w.sel.iter().any(|s| s.node.is_none()) {
             let label = self.labels.get(n as usize).copied().unwrap_or("?");
-            let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
+            let f = self
+                .node_fn
+                .get(n as usize)
+                .copied()
+                .unwrap_or(crate::model::NO_FN);
             let fname = (f != crate::model::NO_FN)
                 .then(|| self.funcs.get(f as usize).map(|fi| fi.name.clone()))
                 .flatten();
@@ -574,11 +666,14 @@ impl Model {
             let w = self.prov.as_mut().and_then(|p| p.why.as_mut()).unwrap();
             w.sel_checked.insert(n);
             if let Some(fname) = fname {
-                if let Some(i) =
-                    w.sel.iter().position(|s| s.node.is_none() && fname.contains(s.fnsub.as_str()) && s.what == label)
-                {
+                if let Some(i) = w.sel.iter().position(|s| {
+                    s.node.is_none() && fname.contains(s.fnsub.as_str()) && s.what == label
+                }) {
                     w.sel_nodes.insert(n, i);
-                    eprintln!("WHY select n{n} solve={} fn={shown} label={label} sel={} by=label", w.solve, w.sel[i].raw);
+                    eprintln!(
+                        "WHY select n{n} solve={} fn={shown} label={label} sel={} by=label",
+                        w.solve, w.sel[i].raw
+                    );
                 }
             }
         }
@@ -625,7 +720,12 @@ impl Model {
     }
 
     /// `n`'s strings grew from `old`: one record per new entry.
-    pub(crate) fn why_strs(&mut self, n: NodeId, old: crate::model::StrSet, loc: &'static Location<'static>) {
+    pub(crate) fn why_strs(
+        &mut self,
+        n: NodeId,
+        old: crate::model::StrSet,
+        loc: &'static Location<'static>,
+    ) {
         if !self.prov.as_ref().is_some_and(|p| p.why.is_some()) {
             return;
         }
@@ -634,8 +734,17 @@ impl Model {
         if new == crate::model::STRS_TOP {
             return self.why_note(n, WVal::AnyStr, src, false, loc);
         }
-        let had: Vec<_> = if old == crate::model::STRS_NONE { Vec::new() } else { self.str_atoms(old).to_vec() };
-        let add: Vec<_> = self.str_atoms(new).iter().copied().filter(|a| !had.contains(a)).collect();
+        let had: Vec<_> = if old == crate::model::STRS_NONE {
+            Vec::new()
+        } else {
+            self.str_atoms(old).to_vec()
+        };
+        let add: Vec<_> = self
+            .str_atoms(new)
+            .iter()
+            .copied()
+            .filter(|a| !had.contains(a))
+            .collect();
         for a in add {
             self.why_note(n, WVal::Str(a as u32), src, false, loc);
         }
@@ -645,7 +754,11 @@ impl Model {
         let Some(w) = self.prov.as_ref().and_then(|p| p.why.as_ref()) else {
             return "-".into();
         };
-        let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
+        let f = self
+            .node_fn
+            .get(n as usize)
+            .copied()
+            .unwrap_or(crate::model::NO_FN);
         if f == crate::model::NO_FN {
             return "-".into();
         }
@@ -663,10 +776,17 @@ impl Model {
         let s = match v {
             WVal::Tok(t) => format!("t{t}:{:?}", self.toks[t as usize]),
             WVal::Prim(b) => format!("prim:{b:#x}"),
-            WVal::Str(a) => format!("str:{:?}", self.atoms.get(a as usize).map_or("?", |s| s.as_str())),
+            WVal::Str(a) => format!(
+                "str:{:?}",
+                self.atoms.get(a as usize).map_or("?", |s| s.as_str())
+            ),
             WVal::AnyStr => "any-string".into(),
         };
-        let s: String = s.chars().take(120).map(|c| if c.is_whitespace() { '_' } else { c }).collect();
+        let s: String = s
+            .chars()
+            .take(120)
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect();
         s
     }
 
@@ -677,7 +797,15 @@ impl Model {
         }
     }
 
-    fn why_hop(&self, solve: u32, depth: u32, n: NodeId, v: WVal, p: Option<&Parent>, end: &'static str) -> WhyHop {
+    fn why_hop(
+        &self,
+        solve: u32,
+        depth: u32,
+        n: NodeId,
+        v: WVal,
+        p: Option<&Parent>,
+        end: &'static str,
+    ) -> WhyHop {
         let (mut hcall, mut hrule, mut hrecv) = (u32::MAX, NO_NODE, None);
         if let Some(p) = p {
             hcall = if p.call != 0 { p.call - 1 } else { u32::MAX };
@@ -739,14 +867,24 @@ impl Model {
                         via.push_str(&format!("|recv=t{}", e.tok - 1));
                     }
                 }
-                (via, self.why_site(call), p.work, format!("{}:{}", short(p.loc.file()), p.loc.line()))
+                (
+                    via,
+                    self.why_site(call),
+                    p.work,
+                    format!("{}:{}", short(p.loc.file()), p.loc.line()),
+                )
             }
         };
         WhyHop {
             solve,
             depth,
             node: n,
-            label: self.labels.get(n as usize).copied().unwrap_or("?").replace(char::is_whitespace, "_"),
+            label: self
+                .labels
+                .get(n as usize)
+                .copied()
+                .unwrap_or("?")
+                .replace(char::is_whitespace, "_"),
             func: self.why_fn(n),
             value: self.why_val(v),
             via,
@@ -766,7 +904,17 @@ impl Model {
     pub(crate) fn why_mint(&mut self, call: u32, tok: Option<Tok>, reason: u32) {
         let (src, rule) = (self.cur_src, self.prov_rule);
         if let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) {
-            w.mints.insert(call, Mint { loc: Location::caller(), src, rule, tok, reason, by: u32::MAX });
+            w.mints.insert(
+                call,
+                Mint {
+                    loc: Location::caller(),
+                    src,
+                    rule,
+                    tok,
+                    reason,
+                    by: u32::MAX,
+                },
+            );
         }
     }
 
@@ -775,7 +923,17 @@ impl Model {
     pub(crate) fn why_mint_by(&mut self, call: u32, by: u32) {
         let (src, rule) = (self.cur_src, self.prov_rule);
         if let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) {
-            w.mints.insert(call, Mint { loc: Location::caller(), src, rule, tok: None, reason: u32::MAX, by });
+            w.mints.insert(
+                call,
+                Mint {
+                    loc: Location::caller(),
+                    src,
+                    rule,
+                    tok: None,
+                    reason: u32::MAX,
+                    by,
+                },
+            );
         }
     }
 
@@ -794,8 +952,17 @@ impl Model {
         }
         let vals = self.why_vals(n, None);
         let vs: Vec<String> = vals.iter().take(3).map(|&v| self.why_val(v)).collect();
-        let more = if vals.len() > 3 { format!(",+{}", vals.len() - 3) } else { String::new() };
-        let label = self.labels.get(n as usize).copied().unwrap_or("?").replace(char::is_whitespace, "_");
+        let more = if vals.len() > 3 {
+            format!(",+{}", vals.len() - 3)
+        } else {
+            String::new()
+        };
+        let label = self
+            .labels
+            .get(n as usize)
+            .copied()
+            .unwrap_or("?")
+            .replace(char::is_whitespace, "_");
         format!("n{n}[{label}|{}|{}{more}]", self.why_fn(n), vs.join(","))
     }
 
@@ -820,17 +987,25 @@ impl Model {
             }
             role.entry(c.ret).or_default().push((i, "ret"));
         }
-        let mut callee: crate::pts::FxHashMap<u32, Vec<(NodeId, &'static str)>> = Default::default();
+        let mut callee: crate::pts::FxHashMap<u32, Vec<(NodeId, &'static str)>> =
+            Default::default();
         for (n, node) in self.nodes.iter().enumerate() {
             for c in &node.cons {
                 if let Some(k) = cons_call(c) {
-                    callee.entry(k).or_default().push((n as NodeId, c.kind_name()));
+                    callee
+                        .entry(k)
+                        .or_default()
+                        .push((n as NodeId, c.kind_name()));
                 }
             }
         }
         let in_calls = |n: NodeId| -> String {
             role.get(&n).map_or("-".into(), |v| {
-                v.iter().take(4).map(|(c, r)| format!("c{c}:{r}")).collect::<Vec<_>>().join(",")
+                v.iter()
+                    .take(4)
+                    .map(|(c, r)| format!("c{c}:{r}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
             })
         };
         let mut queue: Vec<u32> = Vec::new();
@@ -839,12 +1014,21 @@ impl Model {
                 queue.push(h.call);
             }
             if h.rule_node != NO_NODE {
-                let recv = h.recv.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+                let recv = h
+                    .recv
+                    .map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
                 let back = h
                     .recv
                     .and_then(|t| w.first.get(&(h.rule_node, WVal::Tok(t))))
                     .map_or("-".to_string(), |p| {
-                        format!("n{}<-{} work={} at={}:{}", h.rule_node, self.why_node(p.src), p.work, short(p.loc.file()), p.loc.line())
+                        format!(
+                            "n{}<-{} work={} at={}:{}",
+                            h.rule_node,
+                            self.why_node(p.src),
+                            p.work,
+                            short(p.loc.file()),
+                            p.loc.line()
+                        )
                     });
                 eprintln!(
                     "WHY solve={solve} RULE hop={} node={} in={} recv={recv} recv-from={back}",
@@ -866,7 +1050,9 @@ impl Model {
             if !done.insert(id) {
                 continue;
             }
-            let Some(c) = self.calls.get(id as usize) else { continue };
+            let Some(c) = self.calls.get(id as usize) else {
+                continue;
+            };
             let this = match c.this {
                 crate::model::ThisArg::Undef => "undef".to_string(),
                 crate::model::ThisArg::Node(n) => self.why_node(n),
@@ -876,7 +1062,12 @@ impl Model {
             let spread: Vec<String> = c.spread.iter().take(2).map(|&a| self.why_node(a)).collect();
             let ce: Vec<String> = callee
                 .get(&id)
-                .map(|v| v.iter().take(3).map(|&(n, kn)| format!("{kn}@{}", self.why_node(n))).collect())
+                .map(|v| {
+                    v.iter()
+                        .take(3)
+                        .map(|&(n, kn)| format!("{kn}@{}", self.why_node(n)))
+                        .collect()
+                })
                 .unwrap_or_default();
             let kind = match w.mints.get(&id) {
                 Some(m) => format!("synth@{}:{}", short(m.loc.file()), m.loc.line()),
@@ -885,7 +1076,10 @@ impl Model {
                 None => format!("copy-of-site-c{}", c.site),
             };
             let owner = match self.call_place.get(&id) {
-                Some(&(f, _)) => self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone()),
+                Some(&(f, _)) => self
+                    .funcs
+                    .get(f as usize)
+                    .map_or("-".to_string(), |fi| fi.name.clone()),
                 None => self.why_fn(c.ret),
             };
             eprintln!(
@@ -897,11 +1091,26 @@ impl Model {
                 self.why_node(c.ret)
             );
             if let Some(m) = w.mints.get(&id) {
-                let tok = m.tok.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
-                let reason = self.reasons.get(m.reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_");
-                let rule = m.rule.map_or("-".to_string(), |(rn, rc)| format!("{}@{} in={}", rc.kind_name(), self.why_node(rn), in_calls(rn)));
+                let tok = m
+                    .tok
+                    .map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+                let reason = self
+                    .reasons
+                    .get(m.reason as usize)
+                    .map_or("-", |s| s.as_str())
+                    .replace(char::is_whitespace, "_");
+                let rule = m.rule.map_or("-".to_string(), |(rn, rc)| {
+                    format!(
+                        "{}@{} in={}",
+                        rc.kind_name(),
+                        self.why_node(rn),
+                        in_calls(rn)
+                    )
+                });
                 let from = match m.rule {
-                    Some((rn, Cons::Implicit { reason: r, .. })) => w.implicit_by.get(&(rn, r)).copied(),
+                    Some((rn, Cons::Implicit { reason: r, .. })) => {
+                        w.implicit_by.get(&(rn, r)).copied()
+                    }
                     _ => None,
                 };
                 if let Some(x) = from {
@@ -932,7 +1141,11 @@ impl Model {
             for &(n, kn) in callee.get(&x).into_iter().flatten().take(3) {
                 let vals = self.why_vals(n, None);
                 let vs: Vec<String> = vals.iter().take(16).map(|&v| self.why_val(v)).collect();
-                eprintln!("WHY solve={solve} FROM c{x} callee={kn}@n{n} values={} [{}]", vals.len(), vs.join(";"));
+                eprintln!(
+                    "WHY solve={solve} FROM c{x} callee={kn}@n{n} values={} [{}]",
+                    vals.len(),
+                    vs.join(";")
+                );
                 for &v in vals.iter().take(16) {
                     let mut h = Vec::new();
                     self.why_walk(solve, n, v, &mut h, &mut walked);
@@ -949,7 +1162,14 @@ impl Model {
     /// it (a constraint's output, a builtin model's new token) goes on with
     /// the source's latest first arrival at or before it (the delta being
     /// applied then).
-    fn why_walk(&self, solve: u32, n: NodeId, v: WVal, hops: &mut Vec<WhyHop>, seen: &mut crate::pts::FxHashSet<(NodeId, WVal)>) {
+    fn why_walk(
+        &self,
+        solve: u32,
+        n: NodeId,
+        v: WVal,
+        hops: &mut Vec<WhyHop>,
+        seen: &mut crate::pts::FxHashSet<(NodeId, WVal)>,
+    ) {
         let Some(w) = self.prov.as_ref().and_then(|p| p.why.as_ref()) else {
             return;
         };
@@ -1007,7 +1227,13 @@ impl Model {
     /// node) with the value given (the callee token; an escaping token) and,
     /// when the node holds ⊤ beside it, with ⊤ too; with no value given,
     /// with ⊤ when the node holds it, else with every token it holds.
-    pub(crate) fn why_hold_r(&mut self, kind: &'static str, call: u32, t: Option<Tok>, reason: u32) {
+    pub(crate) fn why_hold_r(
+        &mut self,
+        kind: &'static str,
+        call: u32,
+        t: Option<Tok>,
+        reason: u32,
+    ) {
         let start = self.prov_rule.map(|(n, _)| n).unwrap_or(self.cur_src);
         let (rule0, work) = (self.prov_rule, self.work.get());
         let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
@@ -1021,7 +1247,15 @@ impl Model {
             // its own `hold_realm` / `interp` record never replaces one.
             STOP_REALM => {
                 if w.pending.is_none() || !matches!(kind, "hold_realm" | "interp") {
-                    w.pending = Some(Pending { kind, call, t, reason, start, rule: rule0, work });
+                    w.pending = Some(Pending {
+                        kind,
+                        call,
+                        t,
+                        reason,
+                        start,
+                        rule: rule0,
+                        work,
+                    });
                 }
                 return;
             }
@@ -1031,9 +1265,14 @@ impl Model {
         w.held = true;
         let (solve, stop) = (w.solve, w.stop == STOP_HOLD);
         let vals = self.why_vals(start, t);
-        let rule = rule0.map_or("-".to_string(), |(rn, c)| format!("{}@n{rn}", c.kind_name()));
+        let rule = rule0.map_or("-".to_string(), |(rn, c)| {
+            format!("{}@n{rn}", c.kind_name())
+        });
         let f = crate::unksrc::call_fn(self, call);
-        let fname = self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone());
+        let fname = self
+            .funcs
+            .get(f as usize)
+            .map_or("-".to_string(), |fi| fi.name.clone());
         let header = format!(
             "WHY solve={solve} HOLD kind={kind} site={} fn={fname} start=n{start} rule={rule} work={work} values={} reason={}",
             self.why_site(call),
@@ -1093,9 +1332,14 @@ impl Model {
             work,
         });
         let vals = self.why_vals(p.start, p.t);
-        let rule = p.rule.map_or("-".to_string(), |(rn, c)| format!("{}@n{rn}", c.kind_name()));
+        let rule = p.rule.map_or("-".to_string(), |(rn, c)| {
+            format!("{}@n{rn}", c.kind_name())
+        });
         let f = crate::unksrc::call_fn(self, p.call);
-        let fname = self.funcs.get(f as usize).map_or("-".to_string(), |fi| fi.name.clone());
+        let fname = self
+            .funcs
+            .get(f as usize)
+            .map_or("-".to_string(), |fi| fi.name.clone());
         let tok = p.t.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
         let header = format!(
             "WHY solve={solve} REALM flip={flip} work={work} cause={} cause_work={} site={} fn={fname} start=n{} rule={rule} tok={tok} values={} reason={}",
@@ -1113,7 +1357,11 @@ impl Model {
     /// the rest; keep the chain for `take_chain`; exit 86 when `stop`
     /// (never in unit tests: they read the record).
     fn why_emit(&mut self, header: String, start: NodeId, vals: Vec<WVal>, stop: bool) {
-        let solve = self.prov.as_ref().and_then(|p| p.why.as_ref()).map_or(0, |w| w.solve);
+        let solve = self
+            .prov
+            .as_ref()
+            .and_then(|p| p.why.as_ref())
+            .map_or(0, |w| w.solve);
         eprintln!("{header}");
         let mut hops = Vec::new();
         let mut seen = crate::pts::FxHashSet::default();
@@ -1142,7 +1390,10 @@ impl Model {
             .as_ref()
             .and_then(|p| p.why.as_ref())
             .map_or((0, 0), |w| (w.first.len(), w.by_node.len()));
-        eprintln!("WHY solve={solve} END hops={} records={recs} nodes={nodes}", hops.len());
+        eprintln!(
+            "WHY solve={solve} END hops={} records={recs} nodes={nodes}",
+            hops.len()
+        );
         *LAST.lock().unwrap_or_else(|e| e.into_inner()) = hops;
         if stop && !cfg!(test) {
             use std::io::Write as _;

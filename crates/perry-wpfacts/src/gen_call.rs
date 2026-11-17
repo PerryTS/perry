@@ -206,6 +206,24 @@ impl<'a> Gen<'a> {
                 }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
+                // S8: a bare call of a name the main realm declares neither
+                // on the global object nor on its chain, in a module no
+                // Worker runs (`Model::worker_side`), calls the value of
+                // [[Get]](globalThis, name) (`loads::tok_load`, rule G) with
+                // `this` undefined (ECMA-262 13.3.6.1 EvaluateCall: the
+                // reference's base is an environment record, WithBaseObject
+                // undefined; 9.1.1.4.6 GetBindingValue): this call, bound to
+                // that value. Absent: the runtime's ReferenceError, nothing
+                // is called. A module a Worker may run keeps the member call:
+                // the Worker global's native of that name may be the callee.
+                let global_get = private.is_none()
+                    && self.bare_user_global(fx.module, object, property)
+                    && !self.m.worker_side_module(fx.module);
+                let callee_v = if global_get {
+                    Some(self.load(o, Key::Named(a)))
+                } else {
+                    private
+                };
                 let (off, end) = if *pb != 0 {
                     (*pb, *pe)
                 } else {
@@ -225,17 +243,23 @@ impl<'a> Gen<'a> {
                 }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
+                        global_get,
                         access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: private.unwrap_or(o),
+                        recv: callee_v.unwrap_or(o),
                         is_call: true,
-                        value_call: private.is_some(),
+                        value_call: callee_v.is_some(),
                         func: fx.f,
                     });
                 }
-                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                let this = if global_get {
+                    ThisArg::Undef
+                } else {
+                    ThisArg::Node(o)
+                };
+                let (call, ret) = self.new_call(this, args, spread);
                 if let Some(f) = self
                     .m
                     .rest_fills
@@ -251,7 +275,7 @@ impl<'a> Gen<'a> {
                     self.m.call_lit.insert(call, a);
                 }
                 self.str_index_bound(object, property, call);
-                match private {
+                match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
                         o,
@@ -316,6 +340,26 @@ impl<'a> Gen<'a> {
                 let key = self.m.atom(name);
                 self.mcall(recv, Key::Named(key), args, spread)
             }
+            // ASSUMED (owner 2026-11-16, "Assume it for now", interim): a
+            // native-library extern whose manifest signature is all
+            // primitives reaches no program object. Its arguments are
+            // checked, not converted (`js_native_abi_check_*`: a TypeError,
+            // which every catch already sees as the runtime error; `bool`
+            // is ToBoolean): no program code runs, nothing escapes, the
+            // realm is not held. The result is the descriptor's kind.
+            Expr::ExternFuncRef { name, .. } if self.native_extern(fx.module, name).is_some() => {
+                let r = self
+                    .native_extern(fx.module, name)
+                    .unwrap_or(crate::NativeResult::Undefined);
+                self.m.native_extern_fired.push((fx.module, byte_offset));
+                let _ = (args, spread, byte_end);
+                self.prim_node(match r {
+                    crate::NativeResult::Number => prim::NUM,
+                    crate::NativeResult::String => prim::STR,
+                    crate::NativeResult::Boolean => prim::BOOL,
+                    crate::NativeResult::Undefined => prim::UNDEF,
+                })
+            }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -346,6 +390,7 @@ impl<'a> Gen<'a> {
                 {
                     let key = self.m.atom("()");
                     self.read_sites.push(ReadSite {
+                        global_get: false,
                         access: crate::derive::Access::Read,
                         module: fx.module,
                         byte_offset,
@@ -370,6 +415,29 @@ impl<'a> Gen<'a> {
                 ret
             }
         }
+    }
+
+    /// The result kind of a call of `name` when it is a native-library
+    /// extern under the native-extern assumption (`FactsConfig::native_externs`):
+    /// a declared extern, not an import or module binding of that name.
+    fn native_extern(&self, mi: u32, name: &str) -> Option<crate::NativeResult> {
+        let r = *self.m.native_externs.get(name)?;
+        (!self.is_import(mi, name) && !self.mods[mi as usize].scope.contains_key(name)).then_some(r)
+    }
+
+    /// S8: `object.property` is a bare name on the global sentinel (the
+    /// module declares no global 0) that the sentinel does not route by
+    /// name and the main realm declares neither on the global object nor
+    /// on its chain (`sentinel_user_global`).
+    pub(crate) fn bare_user_global(&self, mi: u32, object: &Expr, property: &str) -> bool {
+        !self.m.unit_mode
+            && matches!(object, Expr::GlobalGet(0))
+            && !self.modules[mi as usize]
+                .1
+                .globals
+                .iter()
+                .any(|g| g.id == 0)
+            && crate::builtins::sentinel_user_global(&self.m, property)
     }
 
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
@@ -468,7 +536,7 @@ impl<'a> Gen<'a> {
         };
         if !self.walked.contains(&f) {
             if fn_ctor {
-                let ph = crate::ctor_phase::analyze_closure(params, body);
+                let ph = crate::ctor_phase::analyze_closure(params, body, self.m.ns_pairs);
                 self.note_fn_phase(f, ph);
             }
             // DECISIONS 225: its body is walked once the closure can run.
@@ -503,6 +571,27 @@ impl<'a> Gen<'a> {
     }
 
     /// The body of closure `e` in its context `cfx` (once per function).
+    /// The plain-async step closure (`build_async_step_driver_direct`): two
+    /// parameters, and a body that first binds `CurrentStepClosure` (which
+    /// only that driver emits). It gets its error carrier (`StepSplits`).
+    fn step_register(&mut self, mi: u32, params: &[perry_hir::Param], body: &[Stmt]) {
+        let (
+            [v, flag],
+            Some(Stmt::Let {
+                id: me,
+                init: Some(Expr::CurrentStepClosure),
+                ..
+            }),
+        ) = (params, body.first())
+        else {
+            return;
+        };
+        let err = self.tmp("step-error");
+        self.step.by_value.insert((mi, v.id), err);
+        self.step.by_flag.insert((mi, flag.id), v.id);
+        self.step.by_self.insert((mi, *me), err);
+    }
+
     pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
         if self.walked.contains(&cfx.f) {
             return;
@@ -575,6 +664,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
+        self.step_register(cfx.module, params, body);
         if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());

@@ -128,6 +128,7 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
+        home_class: Option<&str>,
     ) -> Function {
         // Closure parameters: captures first, then declared params
         let mut local_map = BTreeMap::new();
@@ -156,6 +157,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = home_class.map(str::to_string);
         ctx.emit_box_params(&mut func, params);
         // A captured cell already exists; a `let` of it in the body (a lowered
         // generator re-declares its locals per state) fills that cell.
@@ -293,7 +295,11 @@ impl WasmModuleEmitter {
         func
     }
 
-    pub(super) fn compile_class_method(&self, method: &perry_hir::ir::Function) -> Function {
+    pub(super) fn compile_class_method(
+        &self,
+        class_name: &str,
+        method: &perry_hir::ir::Function,
+    ) -> Function {
         // Local 0 = this, params start at 1
         let mut local_map = BTreeMap::new();
         for (i, param) in method.params.iter().enumerate() {
@@ -321,6 +327,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = Some(class_name.to_string());
         ctx.emit_box_params(&mut func, &method.params);
 
         for stmt in &method.body {
@@ -351,7 +358,13 @@ impl<'a> FuncEmitCtx<'a> {
     /// Compute memory address for a slot in the current frame.
     /// Address = sp - (current_frame_size - slot) * 8
     /// This works correctly across nested calls because sp was advanced by emit_frame_begin.
+    #[track_caller]
     pub(super) fn emit_slot_addr(&self, func: &mut Function, slot: u32) {
+        debug_assert!(
+            slot < self.current_frame_size,
+            "slot {slot} lies outside the open frame of {} slots",
+            self.current_frame_size
+        );
         let sp = self.emitter.nan_temp_global;
         let offset_from_sp = (self.current_frame_size - slot) * 8;
         func.instruction(&Instruction::GlobalGet(sp));
@@ -360,6 +373,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// Store an expression's result to memory at the current frame's slot.
+    #[track_caller]
     pub(super) fn emit_store_arg(&mut self, func: &mut Function, slot: u32, expr: &Expr) {
         match expr {
             Expr::String(s) => {
@@ -394,6 +408,7 @@ impl<'a> FuncEmitCtx<'a> {
         }
     }
 
+    #[track_caller]
     pub(super) fn emit_store_const(&self, func: &mut Function, slot: u32, val: f64) {
         let bits = val.to_bits();
         self.emit_slot_addr(func, slot);

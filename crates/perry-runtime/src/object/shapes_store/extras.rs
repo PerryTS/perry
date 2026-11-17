@@ -85,6 +85,45 @@ impl ShapeRecord {
             .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Image run: this record as one entry of the mint record: the facts the runtime's mint
+    /// takes and the state attached to the record.
+    pub(in crate::object) fn snap_image_mint(&self) -> crate::snap_image::format::MintRec {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut edges = Vec::new();
+        if self.has_boxed_extras() {
+            // SAFETY: a boxed extension is an owned, aligned `ShapeExtras`.
+            let x = unsafe { &*(self.extras as usize as *const super::ShapeExtras) };
+            edges.push(x.to_nopointer.load(Relaxed));
+            edges.push(x.to_any.load(Relaxed));
+            edges.extend(x.tail_to_any.iter().map(|w| w.load(Relaxed)));
+        }
+        crate::snap_image::format::MintRec {
+            id: self.shape_id.0,
+            word: self.layout_word.0,
+            keys: self.keys,
+            logical: self.logical_key_count,
+            live: self.live_inline_slot_count,
+            holes: self.hole_count,
+            generation: self.semantic_generation,
+            kind: ((self.flags_and_kind & super::RECORD_KIND_MASK) >> super::RECORD_KIND_SHIFT)
+                as u8,
+            summary: self.summary(),
+            integrity: self.integrity_flags(),
+            proto_id: self.proto_id,
+            proto_cell: self.proto_cell,
+            rep: self.rep,
+            brands: self.brands().to_vec(),
+            constfn: self
+                .constfn_infos()
+                .iter()
+                .map(|i| (i.slot, i.info))
+                .collect(),
+            handles: self.owned_handles().map(|w| w.0),
+            family_desc: self.family_desc_index_plus_one,
+            edges,
+        }
+    }
+
     /// Image run: this record's shape state as bytes, for a begin-to-cut diff. The words
     /// the collector and the lazy probes own (carrier epochs, the facts-indexed bit, the
     /// keys word, the key probe and colour masks) and the address of a boxed extension

@@ -45,6 +45,13 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "cluster*.rs", ("cluster",)),
     (RT + "builtins/console.rs", ("console",)),
     (RT + "object/native_module/constants*.rs", ("constants",)),
+    (RT + "object/native_module/constant_getters.rs", (
+        "assert", "async_hooks", "buffer", "constants", "crypto", "dns",
+        "domain", "events", "fs", "fs-promises", "module", "net",
+        "os", "path", "perf_hooks", "punycode", "querystring", "readline", "repl",
+        "sqlite", "stream", "timers", "url", "util", "v8", "vm", "wasi", "worker_threads",
+    )),
+    ("crates/perry/src/commands/compile/collect_modules/feature_detect/native_constants.rs", ("constants", "fs", "os", "crypto", "module", "process")),
     (RT + "dgram*", ("dgram",)),
     (RT + "node_submodules/diagnostics*", ("diagnostics_channel",)),
     (RT + "dns*", ("dns",)),

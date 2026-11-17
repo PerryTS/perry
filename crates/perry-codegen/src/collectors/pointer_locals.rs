@@ -871,12 +871,21 @@ pub fn collect_pointer_typed_locals(
     // that case every unproven binding keeps a conservative shadow slot.
     const MAX_FIXPOINT_ITERS: usize = 16;
     const MAX_FIXPOINT_LOCALS: usize = 8192;
+    // Refinements feed later bindings in the same pass. With a pass cap,
+    // hash order changes which bindings are proven before the cutoff and
+    // therefore changes the emitted GC roots.
+    let mut ordered_writes: Vec<_> = if writes.len() <= MAX_FIXPOINT_LOCALS {
+        writes.iter().collect()
+    } else {
+        Vec::new()
+    };
+    ordered_writes.sort_unstable_by_key(|(id, _)| **id);
     let mut iters = 0usize;
     let mut changed = writes.len() <= MAX_FIXPOINT_LOCALS;
     while changed && iters < MAX_FIXPOINT_ITERS {
         iters += 1;
         changed = false;
-        for (id, local_writes) in &writes {
+        for &(id, local_writes) in &ordered_writes {
             let mut inferred_ty: Option<Type> = None;
             // #7280: a PARAMETER has one definition this loop cannot see — the
             // INCOMING ARGUMENT. `writes` is collected by walking the body, so
@@ -1152,6 +1161,38 @@ mod tests {
     use super::*;
     use perry_hir::{Function, Param, Stmt};
 
+    #[test]
+    fn bounded_pointer_refinement_has_stable_root_slots() {
+        // Definitions precede their uses, but their IDs run backwards. A
+        // stable ascending sweep proves one more link per round, so this
+        // chain reaches the refinement cap with both rooted and scalar locals.
+        let body: Vec<Stmt> = (1..=65)
+            .rev()
+            .map(|id| Stmt::Let {
+                id,
+                name: format!("v{id}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(if id == 65 {
+                    Expr::Number(1.0)
+                } else {
+                    Expr::LocalGet(id + 1)
+                }),
+            })
+            .collect();
+        let expected: HashMap<u32, u32> = (1..=49)
+            .rev()
+            .enumerate()
+            .map(|(slot, id)| (id, slot as u32))
+            .collect();
+        for _ in 0..32 {
+            assert_eq!(
+                collect_pointer_typed_locals(&[], &body, &HashSet::new()),
+                expected,
+                "fresh hash seeds must not change the roots at the pass cap"
+            );
+        }
+    }
     #[test]
     fn declared_scalar_holding_pointer_keeps_shadow_slot() {
         let stmts = vec![Stmt::Let {

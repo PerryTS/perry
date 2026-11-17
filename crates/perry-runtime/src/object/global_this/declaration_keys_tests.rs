@@ -14,7 +14,7 @@ fn own_string_keys(proto: f64) -> std::collections::BTreeSet<String> {
             let s = crate::builtins::js_string_coerce(crate::array::js_array_get_f64(names, i));
             unsafe {
                 let bytes = std::slice::from_raw_parts(
-                    (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                    crate::string::string_data(s),
                     (*s).byte_len as usize,
                 );
                 String::from_utf8_lossy(bytes).into_owned()

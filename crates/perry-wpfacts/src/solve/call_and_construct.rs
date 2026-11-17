@@ -4,6 +4,18 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // MATHB1B: the generic-arm call of a namespace pair does not bind
+        // the original member: the pair's intrinsic arm is that call
+        // (`Gen::namespace_pair`).
+        if let Some((ns, key)) = self.ns_pair_of(call) {
+            if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+                if identity.rsplit_once('.').is_some_and(|(n, k)| {
+                    crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]
+                }) {
+                    return;
+                }
+            }
+        }
         self.diagnostic_callee(call, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
@@ -52,7 +64,10 @@ impl Model {
         // A builtin reads its arguments by position: with a spread, it
         // reads the positional view of the argument list (`with_native`
         // gives the same view to the models it runs).
-        let call = if matches!(self.toks[t as usize], TokKind::BuiltinFn(_) | TokKind::Builtin(_)) {
+        let call = if matches!(
+            self.toks[t as usize],
+            TokKind::BuiltinFn(_) | TokKind::Builtin(_)
+        ) {
             self.builtin_args_view(call)
         } else {
             call
@@ -107,6 +122,12 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
+            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
+            // a direct one takes today's path too.
+            TokKind::Proxy(p) => {
+                self.proxy_degrade(p, "call");
+                self.call_tok(call, TOP, this_tok);
+            }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -269,10 +290,22 @@ impl Model {
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
         if !self.realm_held && self.prov.is_some() {
-            self.why_hold(if t == TOP { "callee-top" } else { "callee-builtin" }, call, Some(t));
+            self.why_hold(
+                if t == TOP {
+                    "callee-top"
+                } else {
+                    "callee-builtin"
+                },
+                call,
+                Some(t),
+            );
         }
         if crate::unksrc::on() {
-            let kind = if t == TOP { "callee-top" } else { "callee-builtin" };
+            let kind = if t == TOP {
+                "callee-top"
+            } else {
+                "callee-builtin"
+            };
             let why = format!("{:?}", self.toks[t as usize]);
             let f = crate::unksrc::call_fn(self, call);
             crate::unksrc::note(kind, &why, call, f);
@@ -284,7 +317,13 @@ impl Model {
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             if self.keysnap.is_some() {
-                self.keysnap_at(true, "unknown callee (unknown_callee_args)", Some(call), r, Some(t));
+                self.keysnap_at(
+                    true,
+                    "unknown callee (unknown_callee_args)",
+                    Some(call),
+                    r,
+                    Some(t),
+                );
             }
             self.hold_realm(r);
         }
@@ -755,7 +794,24 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
+        let a = name;
         let name = self.atoms[name as usize].clone();
+        if name == proxy::PROXY_NEW {
+            return self.proxy_new(call);
+        }
+        // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
+        // what the program stored over it (`program_global_fn`) is
+        // constructed too. Perry lowers a literal builtin name to the
+        // intrinsic (below), node constructs the stored value: the union
+        // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, &name, call);
+        }
+        if builtins::program_global_fn(self, &name) {
+            let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let f = builtins::global_field(self, g, a);
+            self.cons(f, Cons::New { call });
+        }
         self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 
@@ -897,7 +953,11 @@ impl Model {
                     self.top_calls += 1;
                 }
                 if !self.realm_held && self.prov.is_some() {
-                    self.why_hold(if t == TOP { "new-top" } else { "new-builtin" }, call, Some(t));
+                    self.why_hold(
+                        if t == TOP { "new-top" } else { "new-builtin" },
+                        call,
+                        Some(t),
+                    );
                 }
                 if crate::unksrc::on() {
                     let kind = if t == TOP { "new-top" } else { "new-builtin" };
@@ -911,7 +971,13 @@ impl Model {
                 if !self.realm_held {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
                     if self.keysnap.is_some() {
-                        self.keysnap_at(true, "new of an unknown constructor (construct)", Some(call), r, Some(t));
+                        self.keysnap_at(
+                            true,
+                            "new of an unknown constructor (construct)",
+                            Some(call),
+                            r,
+                            Some(t),
+                        );
                     }
                     self.hold_realm(r);
                 }
@@ -1114,9 +1180,9 @@ impl Model {
                 self.cons(receiver, Cons::SuperCtor { class: tm, call });
                 self.add_tok(receiver, inst);
             }
-            (None, None, Some(_)) => {
-                self.with_native(call, |m, call| builtins::native_parent_ctor(m, tm, call, inst))
-            }
+            (None, None, Some(_)) => self.with_native(call, |m, call| {
+                builtins::native_parent_ctor(m, tm, call, inst)
+            }),
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
                 let receiver = self.node_l("implicit-super-this");
@@ -1364,11 +1430,33 @@ impl Model {
                 }
             }
         }
+        // The formatter's `[util.inspect.custom]` hook on a realm object
+        // (`format_jsvalue`, perry-runtime builtins/formatting.rs): an own
+        // entry under the `Symbol.for("nodejs.util.inspect.custom")` key, or
+        // the `__perry_inspect_custom__` method of the object's class. No
+        // realm object carries either, and the runtime declares no member
+        // under that name: the hook is what the program stored on the
+        // object under a key that may name it (a String key never does,
+        // `key_shape`), the ordinary read's values. With none, nothing runs:
+        // the runtime prints the object.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && self.atoms[a as usize] == crate::model::INSPECT_CUSTOM_METHOD
+                && matches!(self.toks[t as usize], TokKind::Builtin(_))
+            {
+                let callee = self.node_l("builtin-inspect-hook");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // A missing intrinsic member calls exactly the ordinary read's
         // values, including program fields, getters and reopened chains.
-        // No callable value means a TypeError, with no argument escape.
+        // No callable value means a TypeError, with no argument escape. The
+        // global object under a key the program owns is such a member too
+        // (`global_user_method`).
         if let Key::Named(a) = key {
-            if builtins::undeclared(self, t, a) {
+            if builtins::undeclared(self, t, a) || builtins::global_user_method(self, t, a) {
                 let callee = self.node_l("builtin-member-read");
                 self.load_from(t, t, key, callee);
                 self.bind_via(callee, call, t);
@@ -1427,4 +1515,3 @@ impl Model {
         self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 }
-

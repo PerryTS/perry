@@ -76,7 +76,8 @@ fn the_escaped_method_still_runs_on_an_unknown_receiver() {
     let dump = pf.dump_text();
     let line = format!("S 0 {} .tag ", s.byte_offset);
     assert!(
-        dump.lines().any(|l| l.starts_with(&line) && l.contains(" top=1 ")),
+        dump.lines()
+            .any(|l| l.starts_with(&line) && l.contains(" top=1 ")),
         "this of the escaped add holds no unknown receiver\n{dump}"
     );
 }

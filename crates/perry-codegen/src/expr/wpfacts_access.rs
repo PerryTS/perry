@@ -134,6 +134,10 @@ pub(crate) struct FieldProof {
     /// (`ElisionFacts::boolean_fields`): an unguarded read is `true` or
     /// `false` (`expr::booleans`).
     pub booleans: bool,
+    /// Every class's field holds only `true`, `false`, `undefined` or `null`
+    /// (`ElisionFacts::nullish_boolean_fields`): the truthiness of an
+    /// unguarded read is `word == TAG_TRUE` (`expr::booleans`).
+    pub nullish_booleans: bool,
 }
 
 impl FieldProof {
@@ -692,10 +696,11 @@ pub(crate) fn prove(
                             return None;
                         }
                     }
-                    if access != Access::Get
-                        && crate::codegen::key_may_be_constfn_at(property, idx)
+                    if access != Access::Get && crate::codegen::key_may_be_constfn_at(property, idx)
                     {
-                        crate::fallback_diag::refuse("constant-function lane requires checked store");
+                        crate::fallback_diag::refuse(
+                            "constant-function lane requires checked store",
+                        );
                         return None;
                     }
                     // Every family slot is a boxed word (the hole until a
@@ -785,7 +790,9 @@ pub(crate) fn prove(
         }
         if access != Access::Get {
             let Some(keys_global) = ctx.class_keys_globals.get(&name) else {
-                crate::fallback_diag::refuse("receiver class has no keys global for the constant-function lane");
+                crate::fallback_diag::refuse(
+                    "receiver class has no keys global for the constant-function lane",
+                );
                 return None;
             };
             if crate::codegen::slot_may_be_constfn(keys_global, idx) {
@@ -876,6 +883,14 @@ pub(crate) fn prove(
             && recv.class_ids.iter().all(|&c| {
                 ctx.wpfacts
                     .boolean_fields
+                    .contains(&(c, property.to_string()))
+            }),
+        nullish_booleans: !guarded
+            && !maybe_absent
+            && !ctx.wpfacts.nullish_boolean_fields.is_empty()
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .nullish_boolean_fields
                     .contains(&(c, property.to_string()))
             }),
     };
@@ -1331,7 +1346,14 @@ pub(crate) fn try_lower_get(
     let recv_box = lower_expr(ctx, object)?;
     if p.nullable {
         // The binding holds an object or null/undefined (F4).
-        emit_nullish_throw_test(ctx, object, &recv_box, property, byte_offset, Some((&p, site)));
+        emit_nullish_throw_test(
+            ctx,
+            object,
+            &recv_box,
+            property,
+            byte_offset,
+            Some((&p, site)),
+        );
     }
     let value = {
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
@@ -1716,7 +1738,11 @@ pub(crate) fn proven_accessor_fn(
         // the signature its module defines it with (`method_registry.rs`
         // imported getters / setters: `double (double this)` and
         // `double (double this, double value)`).
-        let params = if set { vec![DOUBLE, DOUBLE] } else { vec![DOUBLE] };
+        let params = if set {
+            vec![DOUBLE, DOUBLE]
+        } else {
+            vec![DOUBLE]
+        };
         ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
     }
     Some(symbol)
@@ -1759,8 +1785,11 @@ pub(crate) fn proven_method_fn(
     {
         return None;
     }
-    let (cid, fid, symbol, abi, nullable) =
-        ctx.wpfacts.method_calls.get(&(offset, property.to_string()))?.clone();
+    let (cid, fid, symbol, abi, nullable) = ctx
+        .wpfacts
+        .method_calls
+        .get(&(offset, property.to_string()))?
+        .clone();
     // NULLCALL1: a receiver a dominating access of the same binding has
     // tested already is an object here.
     let nullable = nullable && !tested_in_block(ctx, object);

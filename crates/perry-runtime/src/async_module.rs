@@ -41,7 +41,7 @@ struct AsyncModule {
     reserved: u64,
 }
 /// Size of the module record: the layout's owner states it for the census.
-#[cfg(perry_gc_instruments)]
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) const MODULE_RECORD_SIZE: usize = std::mem::size_of::<AsyncModule>();
 struct Parent {
     module: *mut AsyncModule,
@@ -55,6 +55,8 @@ struct Walk {
 
 unsafe fn store_root(slot: *mut f64, value: f64) {
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    // GC_STORE_AUDIT(ROOT): `js_async_module_configure` registers each JSValue
+    // field as a global root; the root barrier above runs first.
     slot.write(value);
 }
 

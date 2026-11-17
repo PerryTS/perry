@@ -112,11 +112,12 @@ impl Model {
         }
         // An object's own fields: by the key's values (`IdxKey`: a number
         // key names only its numeric fields). A marker's fields are its
-        // reach markers under any key; another value (the global object, a
-        // namespace) keeps every field.
+        // reach markers under any key; another value (a namespace) keeps
+        // every field. The global object under a key of known shape keeps
+        // the fields the shape can spell (`global_read_split`).
         if self.index_needs_all_own_fields(t) {
-            let all = self.all_fields(t);
-            self.edge(all, dst);
+            let own = self.key_fields(t, Key::Any(shape));
+            self.edge(own, dst);
         }
         // PR-C1: a program Array with a length interval reads `undefined`
         // past its end only (`Cons::ElemUndef`, watching the key and the
@@ -156,7 +157,15 @@ impl Model {
                 }
             }
             self.plain_key(t, ChainAct::Load(dst));
-            self.cons(idx, Cons::IdxKey { obj: t, prim: 0, dst, shape });
+            self.cons(
+                idx,
+                Cons::IdxKey {
+                    obj: t,
+                    prim: 0,
+                    dst,
+                    shape,
+                },
+            );
         }
     }
 
@@ -172,6 +181,43 @@ impl Model {
             None => Key::Any(shape),
         };
         self.enum_read_key(idx, t, key, dst);
+    }
+
+    /// F-A on a primitive subject: `s[k]` inside `for (k in s)` reads an
+    /// enumerable String key of ToObject(s) (ECMA-262 14.7.5.6
+    /// ForIn/OfHeadEvaluation step 6: `null` / `undefined` run no
+    /// iteration, any other value is ToObject'ed; 14.7.5.9
+    /// EnumerateObjectProperties: own, then inherited, enumerable String
+    /// keys). A String object's own enumerable keys are its indices, each
+    /// a one-character String (10.4.3.1, 10.4.3.5 StringGetOwnProperty);
+    /// its `length` is not enumerable (10.4.3.4 StringCreate). A Number,
+    /// Boolean, BigInt or Symbol wrapper has no own property (21.1.1.1,
+    /// 20.3.1.1, 21.2.1.1, 20.4.1.1). On the chain (the kind's prototype,
+    /// then Object.prototype) every built-in member is non-enumerable
+    /// (clause 18), so an inherited key is one the program made enumerable
+    /// there: the enumerable read of the kind's prototype (`enum_read_key`),
+    /// the rule of an object subject's inherited keys.
+    pub(super) fn enum_read_prim(&mut self, idx: NodeId, prim: u16, key: Key, dst: NodeId) {
+        let p = prim & !(prim::NULL | prim::UNDEF);
+        if p & prim::STR != 0 {
+            self.add_prim(dst, prim::STR);
+        }
+        for (b, ns) in [
+            (prim::STR, BuiltinNs::String),
+            (prim::NUM, BuiltinNs::Number),
+            (prim::BOOL, BuiltinNs::Boolean),
+            (prim::BIGINT, BuiltinNs::BigInt),
+            (prim::SYMBOL, BuiltinNs::Symbol),
+        ] {
+            if p & b == 0 {
+                continue;
+            }
+            let pt = match self.with_b(|m| builtins::builtin_proto_tok(m, ns)) {
+                Some(pt) => pt,
+                None => self.tok(TokKind::ObjectProto),
+            };
+            self.enum_read_key(idx, pt, key, dst);
+        }
     }
 
     /// The enumerable read of `key` on `t` (`enum_read_tok`, `Cons::EnumLoad`);
@@ -255,7 +301,11 @@ impl Model {
                 eprintln!(
                     "perry: wpfacts enumdiag site={site} reason={r} depth={} tok={}",
                     from.is_some() as u8,
-                    if t == TOP { "TOP".to_string() } else { self.tok_name(t) }
+                    if t == TOP {
+                        "TOP".to_string()
+                    } else {
+                        self.tok_name(t)
+                    }
                 );
             }
             if !covered {
@@ -265,9 +315,16 @@ impl Model {
             if !self.enum_key_done.insert((n, t, o, src)) {
                 continue;
             }
-            self.enum_key_stores.entry(t).or_default().push((o, src, site));
+            self.enum_key_stores
+                .entry(t)
+                .or_default()
+                .push((o, src, site));
             let star = self.atom(crate::STAR_KEY);
-            if self.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&star)) {
+            if self
+                .accessor_keys
+                .get(&t)
+                .is_some_and(|ks| ks.contains(&star))
+            {
                 self.enum_key_any(o, src, site);
             }
             let names = self.field_keys.get(&t).cloned().unwrap_or_default();
@@ -730,8 +787,12 @@ impl Model {
         eprintln!(
             "perry: wpfacts enumdiag-any site={site} via={} tok={}",
             self.labels[n as usize],
-            t.map(|t| if t == TOP { "TOP".to_string() } else { self.tok_name(t) })
-                .unwrap_or_else(|| "prim".into())
+            t.map(|t| if t == TOP {
+                "TOP".to_string()
+            } else {
+                self.tok_name(t)
+            })
+            .unwrap_or_else(|| "prim".into())
         );
     }
 }

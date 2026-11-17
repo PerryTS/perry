@@ -1214,7 +1214,10 @@ unsafe fn own_absent<const ABSENT: bool>(
 ///   delete or recorded [[Prototype]]) of a plain body: its own keys are its
 ///   layout's intrinsic `length`, `name` and (a constructor's) `prototype`
 ///   ([`function_own_intrinsic`]) and its bag; then it inherits from
-///   `%Function.prototype%`.
+///   `%Function.prototype%`;
+/// * a plain body on FunctionDictionary with no internal state record
+///   ([`dictionary_function_reads_through`]): its bag answers every own key
+///   but the intrinsic ones, then it inherits from `%Function.prototype%`.
 ///
 /// Everything else declines.
 #[cold]
@@ -1367,13 +1370,14 @@ unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
             // identity (`%Function.prototype%` until a link moves it).
             // A bound function's intrinsic `name` and `length` are its
             // target's, not static data of a body: those keys decline.
-            (
-                (*c).props as *const ObjectHeader,
-                plain
-                    .then(|| crate::object::shapes::shape_proto_id((*c).shape_id))
-                    .flatten(),
-                plain,
-            )
+            let proto = if plain {
+                crate::object::shapes::shape_proto_id((*c).shape_id)
+            } else if dictionary_function_reads_through(c, hash) {
+                Some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION)
+            } else {
+                None
+            };
+            ((*c).props as *const ObjectHeader, proto, plain)
         }
         _ => return hole(),
     };
@@ -1467,6 +1471,47 @@ unsafe fn bound_on_described_shape(c: *const crate::closure::ClosureHeader, hash
         && (*info).code == crate::closure::BOUND_FUNCTION_FUNC_PTR
         && (*c).shape_id != crate::closure::shape::function_dictionary_shape()
         && !matches!(hash, NAME | LENGTH | PROTOTYPE)
+}
+
+/// Does a read of `c` for the key hashed `hash`, once its bag proved the key
+/// absent, continue at `%Function.prototype%`? True for a plain function body
+/// on FunctionDictionary only because its bag holds an accessor
+/// (`Array[Symbol.species]`): its own string keys, accessors included, are
+/// its bag's, and with no internal state record it has no recorded
+/// [[Prototype]] and no deleted marker. The synthesized intrinsic `name`,
+/// `length` and `prototype`, and the perf_hooks `supportedEntryTypes`
+/// static the complete read synthesizes, decline (#12720).
+///
+/// # Safety
+/// `c` is a live closure cell.
+#[inline(never)]
+unsafe fn dictionary_function_reads_through(
+    c: *const crate::closure::ClosureHeader,
+    hash: u64,
+) -> bool {
+    use crate::object::runtime_layouts::atom_hash as h;
+    const NAME: u64 = h(b"name");
+    const LENGTH: u64 = h(b"length");
+    const PROTOTYPE: u64 = h(b"prototype");
+    const SUPPORTED_ENTRY_TYPES: u64 = h(b"supportedEntryTypes");
+    let info = (*c).info;
+    if info.is_null()
+        || (*c).props.is_null()
+        || (*c).shape_id != crate::closure::shape::function_dictionary_shape()
+        || crate::closure::shape::is_class_info(info)
+        || matches!(hash, NAME | LENGTH | PROTOTYPE | SUPPORTED_ENTRY_TYPES)
+    {
+        return false;
+    }
+    let code = (*info).code;
+    code != crate::closure::BOUND_FUNCTION_FUNC_PTR
+        && code != crate::closure::BOUND_METHOD_FUNC_PTR
+        && (*info).flags
+            & (crate::closure::FN_ASYNC
+                | crate::closure::FN_GENERATOR
+                | crate::closure::FN_ASYNC_GENERATOR)
+            == 0
+        && !crate::closure::props::has_state(c as usize)
 }
 
 /// [`chain_from`] from an exotic receiver's builtin prototype `next`: there
@@ -1976,188 +2021,10 @@ unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
     )
 }
 
-/// Whether `probe_has` must leave a layout accessor entry of `cur` to the
-/// overflow probe: only an object with an overflow keeps its attributes (and
-/// a deleted accessor's tombstone) there. The shadow bit's absence proves no
-/// overflow (`LAYOUT_SHADOW_BIT`); a shadowed object without a table still
-/// answers from the layout. Out of line so the data-entry path of
-/// `probe_has` keeps its register shape.
-#[cold]
-#[inline(never)]
-unsafe fn accessor_defers_to_overflow(cur: *const ObjectHeader) -> bool {
-    (*cur).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
-        && crate::object::overflow::has_overflow(cur)
-}
-
-/// The probe's presence mode (`in`, `Object.hasOwn`,
-/// `hasOwnProperty`): `1` when `key` is present on the object at `obj_bits`
-/// (own, or along its prototype chain unless `own_only`), `0` when the
-/// layouts prove it absent, `-1` when the probe cannot answer (an exotic
-/// receiver, an index-like or uninterned key, a builtin prototype's unlisted
-/// names, an unknown prototype). A hole slot is an absent key (the key view);
-/// an accessor is present. GC leaf.
-///
-/// # Safety
-/// `obj_bits` and `key_bits` any NaN-boxed values.
-pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> i32 {
-    if obj_bits & TAG_MASK != POINTER_TAG {
-        return -1;
-    }
-    let payload = (obj_bits & POINTER_MASK) as usize;
-    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return -1;
-    }
-    // A key with no property atom (its text was never interned as one) can
-    // still match a list word written as that very string: presence only,
-    // since a miss cannot prove absence for an uninterned key.
-    let (key, hash, exact) = match computed_key(key_bits) {
-        Some((k, h)) => (k, h, true),
-        None if key_bits & TAG_MASK == STRING_TAG => {
-            let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
-            let text =
-                std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
-            if index_like(text) {
-                return -1;
-            }
-            (
-                key_bits,
-                crate::object::key_bytes_hash(text.as_ptr(), text.len()),
-                false,
-            )
-        }
-        None => return -1,
-    };
-    let dir = super::ordinary_dir_addr();
-    // The keyed read's own-slot arm, asked for presence.
-    if exact && computed::own_slot_holds(dir, payload as *const ObjectHeader, key) {
-        return 1;
-    }
-    probe_has_walk(dir, payload, key, hash, exact, own_only)
-}
-
-/// [`probe_has`]'s presence walk for the resolved key `key` (its hash
-/// `hash`; `exact` when it is the key's atom or symbol, so that a miss
-/// proves absence) from the object at `payload`. Inlined into its two
-/// callers ([`probe_has`] and the `in` operator's miss arm), so a miss pays
-/// one frame, not two.
-#[inline(always)]
-pub(crate) unsafe fn probe_has_walk(
-    dir: *const u8,
-    payload: usize,
-    key: u64,
-    hash: u64,
-    exact: bool,
-    own_only: bool,
-) -> i32 {
-    let absent = if exact { 0 } else { -1 };
-    let mut cur = payload as *const ObjectHeader;
-    for _ in 0..MAX_HOPS {
-        if (*cur).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
-            return -1;
-        }
-        let w = (*cur).parent_class_id;
-        let r = record_of(dir, LayoutWord(w));
-        if r.is_null() {
-            return -1;
-        }
-        match own_position(r, key, hash) {
-            Ok(pos) => {
-                let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
-                let entry = crate::object::key_attrs::keys_entry(keys, pos);
-                // A private name shares its spelling with a public key; the
-                // complete operation tells them apart.
-                if entry & crate::object::key_attrs::ENTRY_PRIVATE != 0 {
-                    return -1;
-                }
-                // The attributes of an object with an overflow live in its
-                // entries, not in its layout (`overflow::set_entry_attrs`),
-                // and a deleted accessor leaves only its tombstone there: the
-                // layout's accessor entry answers only when there is no
-                // overflow, else the overflow probe below does.
-                if entry & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
-                    if !accessor_defers_to_overflow(cur) {
-                        return 1;
-                    }
-                } else {
-                    let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-                    let v = if slot < (*r).live_inline_slot_count {
-                        *((cur as *const u8)
-                            .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-                            as *const u64)
-                    } else {
-                        crate::object::spill::spill_get_present(cur as usize, slot as usize)
-                            .unwrap_or(TAG_HOLE)
-                    };
-                    if v != TAG_HOLE {
-                        return 1;
-                    }
-                }
-                // A hole slot: the key is absent here; a re-add lives in the
-                // overflow.
-            }
-            Err(false) => return -1,
-            // A class declaration's prototype holds its symbol-named
-            // declared methods as virtual own keys its list does not name:
-            // its list proves no symbol absent.
-            Err(true)
-                if key & TAG_MASK != STRING_TAG
-                    && (*cur).class_id != 0
-                    && class_prototype_object(cur) =>
-            {
-                return -1
-            }
-            Err(true) => {}
-        }
-        if w & crate::object::overflow::SHADOW_BIT != 0 {
-            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
-            if !meta.is_null() && (*meta).overflow != 0 {
-                let t = (*meta).overflow as usize as *const crate::object::overflow::Table;
-                if let Some(i) = crate::object::overflow::find_hashed(t, key, hash) {
-                    return if *crate::object::overflow::attrs_at(t, i) as u8
-                        & crate::object::key_attrs::ENTRY_PRIVATE
-                        != 0
-                    {
-                        -1
-                    } else {
-                        1
-                    };
-                }
-            }
-        }
-        // Absence on `cur` is proven only by a layout that lists every own
-        // key (the builtin prototypes are static layouts).
-        if !walks_from(cur, r) {
-            return -1;
-        }
-        if own_only {
-            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-            // An Array subclass's elements store holds its own index keys and
-            // `length`, which no key list names.
-            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
-            if !meta.is_null() && (*meta).elements != 0 {
-                return -1;
-            }
-            return absent;
-        }
-        cur = match prototype_of(dir, cur, r) {
-            Next::Object(p) => p,
-            Next::End => return absent,
-            Next::Unknown => return -1,
-        };
-    }
-    -1
-}
-
-/// Is `obj` (class id nonzero) a class declaration's or a class
-/// evaluation's prototype object?
-#[cold]
-#[optimize(size)]
-#[inline(never)]
-unsafe fn class_prototype_object(obj: *const ObjectHeader) -> bool {
-    crate::object::class_value::class_decl_prototype_link((*obj).class_id) as usize == obj as usize
-        || crate::object::field_get_set::class_evaluation_prototype_class_id(obj as usize).is_some()
-}
+#[path = "layout_probe/has.rs"]
+mod has;
+pub(crate) use has::probe_has;
+pub(crate) use has::probe_has_walk;
 
 /// The store twin of [`perry_probe_get`] (§3.7, the stores' probe path;
 /// DESIGN_R §3, frame-free: the hit is [`own_set`]'s inline store, every
@@ -2283,14 +2150,16 @@ unsafe fn probe_set_slot_any(
     core::hint::black_box(1)
 }
 
-/// [`perry_probe_set`]'s barrier for an overflow value word [`own_set`]
-/// wrote ([`OwnSet::Table`]).
+/// [`perry_probe_set`]'s barriered store into the overflow value word
+/// [`own_set`] found ([`OwnSet::Table`]).
 #[inline(never)]
 unsafe fn probe_set_table_barrier(
     t: *mut crate::object::overflow::Table,
     address: *mut u64,
     bits: u64,
 ) -> i32 {
+    // GC_STORE_AUDIT(BARRIERED): the table owns this value word.
+    *address = bits;
     crate::gc::runtime_write_barrier_slot(t as usize, address as usize, bits);
     // Opaque: a known constant return lets IPO take the call out of tail position.
     core::hint::black_box(1)
@@ -2323,7 +2192,8 @@ pub(crate) enum OwnSet {
     /// An own plain writable slot of lane ANY for a value that is no finite
     /// Number: the caller makes the barriered store ([`own_slot_store_any`]).
     Slot(*mut ObjectHeader, *mut u64, u32),
-    /// An overflow-owned plain value word, written: its barrier remains.
+    /// An overflow-owned plain writable value word: the caller makes the
+    /// barriered store.
     Table(*mut crate::object::overflow::Table, *mut u64),
     /// A hole in an own inline slot the record's list names by a plain
     /// writable entry (the key is absent): the caller asks whether the
@@ -2424,11 +2294,7 @@ pub(crate) unsafe fn own_set(
             if !crate::object::overflow::plain_writable_value(t, i) {
                 return OwnSet::Rest;
             }
-            let address = crate::object::overflow::value_at(t, i);
-            // GC_STORE_AUDIT(BARRIERED): the table owns this value word; the
-            // caller's tail call is its barrier.
-            *address = bits;
-            return OwnSet::Table(t, address);
+            return OwnSet::Table(t, crate::object::overflow::value_at(t, i));
         }
     }
     // The hit takes the receiver from its value bits and computes the

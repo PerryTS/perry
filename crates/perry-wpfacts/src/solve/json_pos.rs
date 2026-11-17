@@ -46,6 +46,25 @@ impl Model {
         self.json_pos.entry(arr).or_insert(pos);
     }
 
+    /// The tokens of the NESTED objects and arrays of one parse whose
+    /// result is `root` or `arr` (without position classes). ECMA-262
+    /// 25.5.1 ParseJSON makes every object and array of the tree fresh and
+    /// returns only the result: nothing nested in the tree is the result,
+    /// so the result keeps its own two tokens and every nested object (or
+    /// array) shares one. A program store still links any object anywhere,
+    /// through the ordinary edges.
+    pub(crate) fn json_inner(&mut self, root: Tok, arr: Tok) -> (Tok, Tok) {
+        let disp = |m: &Model, t: Tok| match m.toks[t as usize] {
+            TokKind::Obj(tm, c) => (c, m.tmpls[tm as usize].display.clone()),
+            _ => unreachable!("a JSON result is an object token"),
+        };
+        let (c, d) = disp(self, root);
+        let o = self.json_clone(root, c, format!("{d}~inner"));
+        let (c, d) = disp(self, arr);
+        let a = self.json_clone(arr, c, format!("{d}~inner"));
+        (o, a)
+    }
+
     /// Is `t` the object token of a JSON position class?
     pub(crate) fn is_json_obj_pos(&self, t: Tok) -> bool {
         self.json_pos.get(&t).is_some_and(|p| p.obj == t)

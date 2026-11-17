@@ -520,7 +520,14 @@ fn is_shadow_call_text(line: &str) -> bool {
     line.contains("@js_shadow_slot_bind(") || line.contains("@js_shadow_slot_set(")
 }
 
-fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
+/// What `function` can do to the heap, with the direct calls of `ignored`
+/// not counted as edges.
+fn effects_of_ignoring(
+    gc: &GcEffects,
+    function: &LlFunction,
+    defined: &HashSet<&str>,
+    ignored: Option<&str>,
+) -> FunctionEffects {
     let mut effects = FunctionEffects::default();
     // A body whose roots lower to native stack maps loses its shadow-slot
     // bookkeeping calls in that lowering (`lower_roots_for_rs4gc` drops every
@@ -537,6 +544,8 @@ fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) ->
                             callee.as_str(),
                             "js_shadow_slot_bind" | "js_shadow_slot_set"
                         ) => {}
+                FinalItem::Inst(LlInst::Call { callee, .. })
+                    if Some(callee.as_str()) == ignored => {}
                 FinalItem::Inst(LlInst::Call { callee, .. }) => {
                     note_direct_callee(gc, &mut effects, callee, defined)
                 }
@@ -579,10 +588,35 @@ pub(crate) fn transitive_leaf_functions(
     gc: &GcEffects,
     functions: &[&LlFunction],
 ) -> HashSet<String> {
+    leaf_closure(gc, functions, None)
+}
+
+/// The module-defined functions that, apart from their stack-limit checks,
+/// cannot reach the collector ([`transitive_leaf_functions`] with
+/// `js_stack_overflow` not counted as an edge). Such a body allocates
+/// nothing, so it creates and throws no error and nothing below it does: no
+/// call it makes can record the frame chain, and inlining it changes no
+/// stack an error records. Its stack-limit check (a RangeError at a depth
+/// ECMA-262 leaves to the implementation) stays in the inlined copy and
+/// tests the caller's frame (`inprocess/stack_checks.rs`).
+pub(crate) fn frame_silent_functions(gc: &GcEffects, functions: &[&LlFunction]) -> HashSet<String> {
+    leaf_closure(gc, functions, Some("js_stack_overflow"))
+}
+
+fn leaf_closure(
+    gc: &GcEffects,
+    functions: &[&LlFunction],
+    ignored: Option<&str>,
+) -> HashSet<String> {
     let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
     let effects: HashMap<&str, FunctionEffects> = functions
         .iter()
-        .map(|f| (f.name.as_str(), effects_of(gc, f, &defined)))
+        .map(|f| {
+            (
+                f.name.as_str(),
+                effects_of_ignoring(gc, f, &defined, ignored),
+            )
+        })
         .collect();
 
     let mut collecting: HashSet<&str> = effects
@@ -806,6 +840,33 @@ mod tests {
                 "{name} reaches Perry allocation and must remain a safepoint callee"
             );
         }
+    }
+
+    #[test]
+    fn frame_silent_closure_ignores_only_the_stack_limit_check() {
+        let leaf = void_function("leaf", &["js_nanbox_pointer"]);
+        let guarded = void_function("guarded", &["js_stack_overflow", "leaf"]);
+        let calls_guarded = void_function("calls_guarded", &["js_stack_overflow", "guarded"]);
+        let throwing = void_function("throwing", &["js_stack_overflow", "js_array_alloc"]);
+        let calls_throwing = void_function("calls_throwing", &["throwing"]);
+        let functions = [&leaf, &guarded, &calls_guarded, &throwing, &calls_throwing];
+
+        let silent = super::frame_silent_functions(&test_effects(), &functions);
+        for name in ["leaf", "guarded", "calls_guarded"] {
+            assert!(
+                silent.contains(name),
+                "{name} records no frame apart from its stack check"
+            );
+        }
+        for name in ["throwing", "calls_throwing"] {
+            assert!(
+                !silent.contains(name),
+                "{name} may allocate, so may throw and record frames"
+            );
+        }
+        // The stack check is still an edge for the statepoint question.
+        let leaves = transitive_leaf_functions(&functions);
+        assert!(leaves.contains("leaf") && !leaves.contains("guarded"));
     }
 
     #[test]

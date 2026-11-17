@@ -113,9 +113,9 @@ pub(crate) use shapes_slot_list::{
 pub(crate) use shapes_store::ConstFnSlotInfo;
 pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
-    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
-    RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
-    RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
+    IdList, ShapeRecord, ShapeSlab, DYNAMIC_BASE_ROWS, RECORD_FLAG_BIRTH_OWNER,
+    RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER,
+    RECORD_FLAG_FACTS_INDEXED, RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
 pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
 
@@ -891,130 +891,14 @@ pub(crate) fn test_positional_of_id(id: LayoutWord) -> Option<(u32, u32)> {
     })
 }
 
-/// The address of this thread's ordinary shape-directory mirror, which
-/// [`positional_key_words`] reads through (`agent_ptrs` slot
-/// `AGENT_PTR_SHAPE_DIR`).
-#[inline]
-pub(crate) fn ordinary_dir_addr() -> *const u8 {
-    ShapeSlab::ordinary_dir_addr()
-}
-
-/// The property-atom index (`string::intern`) the directory at `dir` names:
-/// null until the agent's first atom, and for `PERRY_EMPTY_SHAPE_DIR`. One
-/// load from the directory in hand; no thread-local is named, so the
-/// directory's static stays private to its module.
-///
-/// # Safety
-/// `dir` is an agent's ordinary directory or `PERRY_EMPTY_SHAPE_DIR`.
-#[inline(always)]
-pub(crate) unsafe fn dir_atoms(dir: *const u8) -> *const u8 {
-    *(dir.add(shapes_store::DIR_ATOMS_OFFSET) as *const *const u8)
-}
-
-/// `string::intern` publishes the agent's atom index when its slots move.
-pub(crate) fn publish_agent_atoms(table: *const u8) {
-    ShapeSlab::publish_agent_atoms(table);
-}
-
-/// `string::intern` retracts the agent's atom index when it is dropped.
-pub(crate) fn retract_agent_atoms(table: *const u8) {
-    ShapeSlab::retract_agent_atoms(table);
-}
-
-/// [`positional_key_words`] for the computed-key read
-/// (`object::dynamic_key_read`), which also refuses a shape whose
-/// [[Prototype]] identity is PER-OBJECT.
-///
-/// A read site's front is reached only past its own receiver tests; the
-/// computed-key read has no site, so it takes this exclusion from the shape
-/// itself. A per-object identity is how an exotic read receiver
-/// (`process.env`, an arguments object) and a module namespace project "its
-/// reads are not answered by its key list" into their shape
-/// ([`object_proto_id`]), so such a list naming the key proves nothing.
-///
-/// # Safety
-/// As [`positional_key_words`].
-#[inline]
-pub(crate) unsafe fn plain_positional_key_words(
-    dir: *const u8,
-    shape_id: LayoutWord,
-) -> Option<(PositionalKeys, usize)> {
-    // A shadowed receiver can have deleted or overridden inline properties;
-    // its record alone does not prove a present own data slot.
-    if shape_id.0 & super::overflow::SHADOW_BIT != 0 {
-        return None;
-    }
-    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
-    if r.proto_id == PROTO_ID_PER_OBJECT {
-        return None;
-    }
-    super::key_attrs::debug_assert_positional(
-        r.keys as usize as *const ArrayHeader,
-        r.position_bound_raw(),
-    );
-    Some((
-        PositionalKeys(r.keys as usize as *const ArrayHeader),
-        r.position_bound_raw() as usize,
-    ))
-}
-
-/// A record's canonical keys array, for [`positional_key_words`]: its words
-/// are asked only once POSBOUND is known to be nonzero, so the front-offset
-/// arithmetic runs only on the path that reads a key.
-pub(crate) struct PositionalKeys(*const ArrayHeader);
-
-impl PositionalKeys {
-    /// The first logical key word.
-    ///
-    /// # Safety
-    /// Only when the record's POSBOUND is nonzero: then `keys` names a live
-    /// keys array (the collector marks through and rewrites `keys`) holding
-    /// at least POSBOUND logical keys. Logical element `i` sits past the
-    /// array's FRONT OFFSET, which a canonical list can carry without ever
-    /// being shifted (a size-class round-up alone makes the physical capacity
-    /// exceed the logical one: `keys_front_offset_tests`), so the accessor is
-    /// asked, never `+8`.
-    #[inline(always)]
-    pub(crate) unsafe fn words(&self) -> *const u64 {
-        crate::array::array_elements_ptr(self.0) as *const u64
-    }
-}
-
-/// The keys of shape `shape_id` that are positional, and the position bound.
-///
-/// # Safety
-/// `dir` is this agent's ordinary directory.
+#[path = "shapes_ordinary_dir.rs"]
+mod shapes_ordinary_dir;
 #[cfg(test)]
-pub(crate) unsafe fn positional_key_words(
-    dir: *const u8,
-    shape_id: LayoutWord,
-) -> Option<(PositionalKeys, usize)> {
-    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
-    super::key_attrs::debug_assert_positional(
-        r.keys as usize as *const ArrayHeader,
-        r.position_bound_raw(),
-    );
-    Some((
-        PositionalKeys(r.keys as usize as *const ArrayHeader),
-        r.position_bound_raw() as usize,
-    ))
-}
-
-/// Does shape `shape_id` store the key whose NaN-boxed bits are `key_bits`
-/// at inline slot `guess`, by position? See [`positional_key_words`].
-///
-/// # Safety
-/// As [`positional_key_words`].
-#[cfg(test)]
-pub(crate) unsafe fn slot_guess_confirmed(
-    dir: *const u8,
-    shape_id: LayoutWord,
-    key_bits: u64,
-    guess: usize,
-) -> bool {
-    positional_key_words(dir, shape_id)
-        .is_some_and(|(keys, bound)| guess < bound && *keys.words().add(guess) == key_bits)
-}
+pub(crate) use shapes_ordinary_dir::slot_guess_confirmed;
+pub(crate) use shapes_ordinary_dir::{
+    dir_atoms, ordinary_dir_addr, plain_positional_key_words, publish_agent_atoms,
+    retract_agent_atoms,
+};
 
 /// Byte equality without a libc call for the short keys property names are.
 #[inline]
@@ -7027,230 +6911,11 @@ mod region_numeric_read_tests;
 #[path = "shapes_list_identity_tests.rs"]
 mod shapes_list_identity_tests;
 
-/// #9612: release the capacity that pruning left behind.
-///
-/// hashbrown never shrinks on `remove`/`retain`, so the shape tables keep the
-/// allocation of their startup PEAK for the life of the process. Measured on
-/// the compiled claude-code TUI at idle: `ids_by_facts` held 30.8 MB at 12.3%
-/// fill and `descriptors` 13.8 MB at 10.5% fill, i.e. sized for a peak that
-/// `prune_dead_shape_keys` had already discarded.
-///
-/// Called once per MAJOR collection, right after the prune, where a rehash is
-/// already amortized against a full heap walk. #9706: the by-id store is a
-/// slab now, so this also releases its all-dead chunks; the family and slot
-/// index maps are shrunk to `len + len / 4`, one growth step of headroom.
-pub(crate) fn shrink_shape_tables() {
-    fn worth_shrinking(len: usize, capacity: usize) -> bool {
-        // Only when the table is holding real slack and is less than half
-        // used; a small or well-packed table is left alone.
-        capacity > 4096 && capacity > len.saturating_mul(2)
-    }
-    let table = &crate::state::state().shapes;
-    let mut inner = table.inner.borrow_mut();
-    if worth_shrinking(inner.owned_indices.len(), inner.owned_indices.capacity()) {
-        let target = inner.owned_indices.len() + inner.owned_indices.len() / 4;
-        inner.owned_indices.shrink_to(target);
-    }
-    if worth_shrinking(inner.by_facts.len(), inner.by_facts.capacity()) {
-        let target = inner.by_facts.len() + inner.by_facts.len() / 4;
-        inner.by_facts.shrink_to(target);
-    }
-    if worth_shrinking(inner.owned_families.len(), inner.owned_families.capacity()) {
-        let target = inner.owned_families.len() + inner.owned_families.len() / 4;
-        inner.owned_families.shrink_to(target);
-    }
-    // SAFETY: the prune that precedes this call holds no slab reference, and
-    // neither does anything else while the major collection owns the agent.
-    unsafe { table.slab_mut().release_empty_chunks() };
-}
-
-/// `PERRY_GC_CENSUS`: the by-id slab, the per-shape key indices, the
-/// exact-facts accelerator and the keys-address family index.
-pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::map_bytes;
-    let table = &crate::state::state().shapes;
-    let inner = table.inner.borrow();
-    let slab = table.slab();
-    let mut rows = Vec::new();
-    rows.push(("shapes.descriptors", slab.len(), slab.estimated_bytes()));
-    let index_inner: usize = inner
-        .owned_indices
-        .values()
-        .map(|ix| ix.slots.heap_bytes())
-        .sum();
-    rows.push((
-        "shapes.owned_indices",
-        inner.owned_indices.len(),
-        map_bytes(&inner.owned_indices) + index_inner,
-    ));
-    // CKI S2: the families and slot indices canonical lists own on their
-    // trie nodes (no map; the bytes are the lists' and boxes' heap).
-    let (mut list_families, mut list_family_bytes, mut list_indices, mut list_index_bytes) =
-        (0usize, 0usize, 0usize, 0usize);
-    crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
-        if !list.family.is_empty() {
-            list_families += 1;
-            list_family_bytes += list.family.heap_bytes();
-        }
-        if let Some(index) = &list.index {
-            list_indices += 1;
-            list_index_bytes += std::mem::size_of::<ShapeIndex>() + index.slots.heap_bytes();
-        }
-    });
-    rows.push(("shapes.list_indices(node)", list_indices, list_index_bytes));
-    let facts_inner: usize = inner.by_facts.values().map(IdList::heap_bytes).sum();
-    rows.push((
-        "shapes.by_facts",
-        inner.by_facts.len(),
-        map_bytes(&inner.by_facts) + facts_inner,
-    ));
-    let families_inner: usize = inner.owned_families.values().map(IdList::heap_bytes).sum();
-    rows.push((
-        "shapes.owned_families",
-        inner.owned_families.len(),
-        map_bytes(&inner.owned_families) + families_inner,
-    ));
-    rows.push((
-        "shapes.list_families(node)",
-        list_families,
-        list_family_bytes,
-    ));
-    rows.push((
-        "shapes.keyless_family",
-        inner.keyless_family.len(),
-        inner.keyless_family.heap_bytes(),
-    ));
-    // Ids ever minted by this process: the slab is indexed by id, so the gap
-    // between this and `shapes.descriptors` is what chunk release reclaims.
-    let minted = SHAPE_ID_NEXT
-        .iter()
-        .map(|next| next.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END)
-        .sum::<u32>();
-    rows.push(("shapes.ids_minted(process)", minted as usize, 0));
-    // How the descriptor population splits by [[Prototype]] identity kind,
-    // and how many distinct prototype identities it names: what the
-    // prototype-in-shape rule costs in shapes.
-    let mut by_kind = [0usize; 6];
-    let mut extensions = (0, 0, 0, 0);
-    let mut distinct = std::collections::HashSet::new();
-    slab.for_each_handle(|_, record| {
-        // SAFETY: live slab record, read immediately under agent ownership.
-        let owned = unsafe { (*record).extension_census() };
-        extensions.0 += owned.0;
-        extensions.1 += owned.1;
-        extensions.2 += owned.2;
-        extensions.3 += owned.3;
-        let proto_id = unsafe { (*record).proto_id };
-        distinct.insert(proto_id);
-        let kind = match proto_id {
-            PROTO_ID_DEFAULT => 0,
-            PROTO_ID_NULL => 1,
-            id if id >> PROTO_ID_TAG_SHIFT == 0 => 2,
-            id if id & PROTO_ID_UNIQUE == PROTO_ID_CLASS => 3,
-            id if id & PROTO_ID_UNIQUE == PROTO_ID_MIXED => 4,
-            _ => 5,
-        };
-        by_kind[kind] += 1;
-    });
-    for (name, count) in [
-        "shapes.proto(object_prototype)",
-        "shapes.proto(null)",
-        "shapes.proto(object_serial)",
-        "shapes.proto(class_default)",
-        "shapes.proto(class_recorded)",
-        "shapes.proto(unique)",
-    ]
-    .into_iter()
-    .zip(by_kind)
-    {
-        rows.push((name, count, 0));
-    }
-    rows.push(("shapes.proto.distinct_identities", distinct.len(), 0));
-    rows.push((
-        "shapes.extensions(native owned)",
-        extensions.0,
-        extensions.1,
-    ));
-    // A subset of extension bytes, so this informational row adds no bytes
-    // to the census total a second time.
-    rows.push(("shapes.store_chain(facts)", extensions.2, 0));
-    rows.push((
-        "shapes.store_chain(bytes included in extensions)",
-        extensions.3,
-        0,
-    ));
-    rows
-}
-
-/// `PERRY_GC_CENSUS`: how the descriptor population relates to the live heap
-/// (#9706). `live_ids` is the sorted, deduplicated set of ShapeIds stamped on
-/// live shaped objects, collected by the census walk.
-///
-/// * `shapes.descriptors.carried` — descriptors some live object is stamped
-///   with: the population V8's "object shape" bucket corresponds to.
-/// * `shapes.descriptors.uncarried` — descriptors no live object carries:
-///   transition history a cache may reinstall (`cache_carrier`), versions
-///   kept for an old receiver since the last full trace, and shapes whose
-///   keys array is still alive on some other descriptor.
-/// * `shapes.families.multi` — keys arrays with more than one descriptor,
-///   and the descriptors they hold beyond the first: the duplication the
-///   family walk pays for.
-pub(crate) fn shape_table_liveness_census(
-    live_ids: &[LayoutWord],
-) -> Vec<crate::gc::census::SideTableRow> {
-    let table = &crate::state::state().shapes;
-    let inner = table.inner.borrow();
-    let slab = table.slab();
-    let mut carried = 0usize;
-    let mut uncarried = 0usize;
-    let mut uncarried_cache = 0usize;
-    let mut uncarried_old = 0usize;
-    slab.for_each_handle(|id, record| {
-        if live_ids.binary_search(&id).is_ok() {
-            carried += 1;
-            return;
-        }
-        uncarried += 1;
-        // SAFETY: live slab record, read immediately.
-        let record = unsafe { *record };
-        if record.cache_carrier() {
-            uncarried_cache += 1;
-        } else if record.has(RECORD_FLAG_OLD_CARRIER) {
-            uncarried_old += 1;
-        }
-    });
-    let mut multi_families = 0usize;
-    let mut multi_extra = 0usize;
-    let mut largest = 0usize;
-    let mut sizes: Vec<usize> = inner.owned_families.values().map(IdList::len).collect();
-    sizes.push(inner.keyless_family.len());
-    crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
-        sizes.push(list.family.len());
-    });
-    for n in sizes {
-        largest = largest.max(n);
-        if n > 1 {
-            multi_families += 1;
-            multi_extra += n - 1;
-        }
-    }
-    vec![
-        ("shapes.descriptors.carried(live objects)", carried, 0),
-        ("shapes.descriptors.uncarried", uncarried, 0),
-        (
-            "shapes.descriptors.uncarried.cache_carrier",
-            uncarried_cache,
-            0,
-        ),
-        ("shapes.descriptors.uncarried.old_carrier", uncarried_old, 0),
-        (
-            "shapes.families.multi(families,extra descriptors)",
-            multi_families,
-            multi_extra,
-        ),
-        ("shapes.families.largest", largest, 0),
-    ]
-}
+#[path = "shapes_census.rs"]
+mod census;
+pub(crate) use census::shape_table_census;
+pub(crate) use census::shape_table_liveness_census;
+pub(crate) use census::shrink_shape_tables;
 
 #[path = "shapes_integrity.rs"]
 mod integrity;
@@ -7552,7 +7217,13 @@ fn snap_image_id_steps(old: u32, new: u32) -> u32 {
 }
 
 pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
-    let mut d = SnapShapeDelta { minted: [0; 4], changed: 0, retired: 0, drawn: 0, generations: 0 };
+    let mut d = SnapShapeDelta {
+        minted: [0; 4],
+        changed: 0,
+        retired: 0,
+        drawn: 0,
+        generations: 0,
+    };
     let (mut i, mut j) = (0, 0);
     while i < a.records.len() || j < b.records.len() {
         let ka = a.records.get(i).map(|r| r.0);
@@ -7590,9 +7261,220 @@ pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> 
     d
 }
 
+/// The records minted since `a`, in mint order: dynamic rows by row (rows only grow, so row
+/// order is mint order), then static records by id.
+pub(crate) fn snap_image_mint_collect(
+    a: &SnapShapeState,
+) -> Vec<crate::snap_image::format::MintRec> {
+    let mut v = Vec::new();
+    crate::state::state().shapes.slab().for_each(|id, p| {
+        if a.records.binary_search_by_key(&id.0, |r| r.0).is_err() {
+            // SAFETY: a present record of this agent's slab.
+            v.push(unsafe { &*p }.snap_image_mint());
+        }
+    });
+    let mut keys: Vec<(u32, u32)> = Vec::new();
+    for m in &v {
+        keys.push((m.id, LayoutWord(m.word).row().0));
+    }
+    let order = snap_image_mint_order(&keys);
+    let mut slots: Vec<Option<crate::snap_image::format::MintRec>> =
+        v.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(order.len());
+    for i in order {
+        if let Some(m) = slots[i].take() {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// The counter family of a non-static id: the ordinary kinds, then the exotic kinds.
+fn snap_image_mint_family(id: u32) -> usize {
+    (id & SHAPE_ID_KIND_MASK) as usize >> SHAPE_ID_KIND_SHIFT
+        | usize::from(snap_image_id_band(id) == 3) << 2
+}
+
+/// Mint order of records given as (id, row). A record whose row comes from the dynamic
+/// allocator (row at or above the first dynamic row) is placed by row. A lazy image row
+/// (a lower row, taken from its descriptor) is placed by its draw: directly before the
+/// first dynamic record of its own counter family with a larger id, or at the end of the
+/// non-static records. Static-id records come last, by id.
+fn snap_image_mint_order(keys: &[(u32, u32)]) -> Vec<usize> {
+    let mut dynamic: Vec<usize> = Vec::new();
+    let mut lazy: [Vec<usize>; 8] = Default::default();
+    let mut statics: Vec<usize> = Vec::new();
+    for (i, &(id, row)) in keys.iter().enumerate() {
+        if snap_image_id_band(id) == 0 {
+            statics.push(i);
+        } else if row >= DYNAMIC_BASE_ROWS {
+            dynamic.push(i);
+        } else {
+            lazy[snap_image_mint_family(id)].push(i);
+        }
+    }
+    dynamic.sort_by_key(|&i| keys[i].1);
+    statics.sort_by_key(|&i| keys[i].0);
+    for l in lazy.iter_mut() {
+        l.sort_by_key(|&i| keys[i].0);
+    }
+    let mut cursor = [0usize; 8];
+    let mut out = Vec::with_capacity(keys.len());
+    for &d in &dynamic {
+        let f = snap_image_mint_family(keys[d].0);
+        while cursor[f] < lazy[f].len() && keys[lazy[f][cursor[f]]].0 < keys[d].0 {
+            out.push(lazy[f][cursor[f]]);
+            cursor[f] += 1;
+        }
+        out.push(d);
+    }
+    for f in 0..8 {
+        while cursor[f] < lazy[f].len() {
+            out.push(lazy[f][cursor[f]]);
+            cursor[f] += 1;
+        }
+    }
+    out.extend(statics);
+    out
+}
+
+/// The first (id, row, descriptor names its word) in record order that breaks the mint
+/// sequence: ids strictly increase within a counter family over every non-static record,
+/// rows strictly increase over the dynamic-row records only, and a lazy image row's
+/// descriptor must name its word. Returns the index and the reason.
+fn snap_image_mint_sequence_bad(seq: &[(u32, u32, bool)]) -> Option<(usize, u32)> {
+    use crate::snap_image::format as f;
+    let mut last_row = 0u32;
+    let mut last_id = [0u32; 8];
+    for (i, &(id, row, named)) in seq.iter().enumerate() {
+        let band = snap_image_id_band(id);
+        if band == 0 || band == 2 {
+            continue;
+        }
+        let family = snap_image_mint_family(id);
+        if id <= last_id[family] {
+            return Some((i, f::MINT_BAD_ORDER));
+        }
+        last_id[family] = id;
+        if row >= DYNAMIC_BASE_ROWS {
+            if row <= last_row {
+                return Some((i, f::MINT_BAD_ORDER));
+            }
+            last_row = row;
+        } else if !named {
+            return Some((i, f::MINT_BAD_LAZY_ROW));
+        }
+    }
+    None
+}
+
+/// Whether a table rebuilt from the mint record equals the live one: the first record that
+/// differs and why (`format::MINT_BAD_*`), or `None`. A record is rebuilt through the
+/// runtime's own identity lookup (the probe half of the mint: its facts reach the recorded
+/// word) and its recorded state is read against the live record's.
+pub(crate) fn snap_image_mint_check(
+    recs: &[crate::snap_image::format::MintRec],
+) -> Option<(usize, u32)> {
+    use crate::snap_image::format as f;
+    let slab = crate::state::state().shapes.slab();
+    let mut seq: Vec<(u32, u32, bool)> = Vec::with_capacity(recs.len());
+    for (i, r) in recs.iter().enumerate() {
+        let band = snap_image_id_band(r.id);
+        if band == 2 {
+            return Some((i, f::MINT_BAD_DICTIONARY));
+        }
+        // A ConstFn lane is part of the lookup key the probe does not take.
+        if r.constfn.is_empty() {
+            let found = shape_descriptor_find_with_rep(
+                r.keys as usize as *const ArrayHeader,
+                r.logical,
+                r.live,
+                r.generation,
+                shapes_store::snap_image_kind_of_code(r.kind),
+                r.holes,
+                r.proto_id,
+                r.summary,
+                r.rep,
+                &r.brands,
+                r.integrity,
+            );
+            if found != Some(LayoutWord(r.word)) {
+                return Some((i, f::MINT_BAD_IDENTITY));
+            }
+        }
+        let Some(p) = slab.record_ptr(ShapeId(r.id)) else {
+            return Some((i, f::MINT_BAD_FIELDS));
+        };
+        // SAFETY: a present record of this agent's slab.
+        let live = unsafe { &*p };
+        if live.snap_image_mint() != *r {
+            return Some((i, f::MINT_BAD_FIELDS));
+        }
+        let row = LayoutWord(r.word).row().0;
+        let named = row >= DYNAMIC_BASE_ROWS
+            || super::layout_desc::snap_image_static_row_names_word(r.word);
+        seq.push((r.id, row, named));
+    }
+    snap_image_mint_sequence_bad(&seq)
+}
+
 #[cfg(test)]
 mod snap_image_delta_tests {
     use super::*;
+
+    const DYN0: u32 = DYNAMIC_BASE_ROWS;
+    const ORD0: u32 = 0x8040_0000;
+
+    #[test]
+    fn snap_image_mint_order_places_a_lazy_row_by_its_draw() {
+        // dynamic ids 3 and 0x61 with a lazy row (low row) whose id lies between them.
+        let keys = [(ORD0 + 0x61, DYN0 + 1), (ORD0 + 3, DYN0), (ORD0 + 0x60, 12)];
+        assert_eq!(snap_image_mint_order(&keys), vec![1, 2, 0]);
+        // A lazy row above every dynamic id of its family goes last; another family does not move it.
+        let keys = [
+            (ORD0 + 3, DYN0),
+            (0x8020_0009, DYN0 + 1),
+            (ORD0 + 0x60, 12),
+            (0x0000_0005, 7),
+        ];
+        assert_eq!(snap_image_mint_order(&keys), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn snap_image_mint_check_exempts_lazy_rows_from_row_order() {
+        let seq = [
+            (ORD0 + 3, DYN0, true),
+            (ORD0 + 0x60, 12, true),
+            (ORD0 + 0x61, DYN0 + 1, true),
+        ];
+        assert_eq!(snap_image_mint_sequence_bad(&seq), None);
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_lazy_row_out_of_draw_order() {
+        let seq = [(ORD0 + 0xa4, 20, true), (ORD0 + 2, DYN0, true)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
+        // Dynamic rows still must grow.
+        let seq = [(ORD0 + 2, DYN0 + 1, true), (ORD0 + 3, DYN0, true)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_lazy_row_with_a_foreign_word() {
+        let seq = [(ORD0 + 2, DYN0, true), (ORD0 + 0x60, 12, false)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_LAZY_ROW))
+        );
+        // No descriptor at all names no word.
+        assert!(!super::super::layout_desc::snap_image_static_row_names_word(0x7fff_ffff));
+    }
 
     fn st(recs: &[(u32, u8)]) -> SnapShapeState {
         SnapShapeState {
@@ -7610,7 +7492,15 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_counts_records_per_band() {
         let a = st(&[(S, 0)]);
-        let b = st(&[(S, 0), (S + 1, 0), (O, 0), (O + 1, 0), (O + 2, 0), (D, 0), (X, 0)]);
+        let b = st(&[
+            (S, 0),
+            (S + 1, 0),
+            (O, 0),
+            (O + 1, 0),
+            (O + 2, 0),
+            (D, 0),
+            (X, 0),
+        ]);
         let d = snap_image_shape_delta(&a, &b);
         assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
         assert_eq!(snap_image_delta_minted_total(&d), 6);
@@ -7621,14 +7511,20 @@ mod snap_image_delta_tests {
     #[test]
     fn snap_image_delta_sees_a_changed_pre_existing_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 1, 0));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 1, 0)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
     #[test]
     fn snap_image_delta_sees_a_retired_record() {
         let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
-        assert_eq!((snap_image_delta_minted_total(&d), d.changed, d.retired), (0, 0, 1));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 0, 1)
+        );
         assert!(snap_image_delta_any(&d));
     }
 
@@ -7675,7 +7571,12 @@ mod snap_image_delta_tests {
         let before = snap_image_shape_state();
         crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
-        assert!(snap_image_delta_any(&d) && snap_image_delta_minted_total(&d) >= 1 && snap_image_delta_minted_total(&d) < 8, "{d:?}");
+        assert!(
+            snap_image_delta_any(&d)
+                && snap_image_delta_minted_total(&d) >= 1
+                && snap_image_delta_minted_total(&d) < 8,
+            "{d:?}"
+        );
         assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
     }
 
@@ -7687,5 +7588,103 @@ mod snap_image_delta_tests {
         crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
         let d = snap_image_shape_delta(&before, &snap_image_shape_state());
         assert!(d.changed >= 1, "{d:?}");
+    }
+
+    /// Live shapes minted after a baseline, one of them with attached state (a freeze
+    /// leaves integrity targets in its extension).
+    fn live_mints(tag: &str) -> (SnapShapeState, Vec<crate::snap_image::format::MintRec>) {
+        let before = snap_image_shape_state();
+        let o = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 1.0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 2.0);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
+        let recs = snap_image_mint_collect(&before);
+        (before, recs)
+    }
+
+    fn through_the_file(
+        recs: &[crate::snap_image::format::MintRec],
+    ) -> Vec<crate::snap_image::format::MintRec> {
+        let blob = crate::snap_image::format::mint_blob(recs);
+        let (back, used) = crate::snap_image::format::parse_mint_blob(&blob).expect("parses");
+        assert_eq!(used, blob.len());
+        back
+    }
+
+    #[test]
+    fn snap_image_mint_record_holds_only_the_new_records_and_rebuilds_equal() {
+        let (before, recs) = live_mints("snapmintrec");
+        assert!(recs.len() >= 2, "{}", recs.len());
+        assert!(recs
+            .iter()
+            .all(|r| before.records.binary_search_by_key(&r.id, |x| x.0).is_err()));
+        let back = through_the_file(&recs);
+        assert_eq!(back, recs);
+        assert_eq!(snap_image_mint_check(&back), None);
+    }
+
+    #[test]
+    fn snap_image_mint_record_carries_the_attached_state_of_a_record() {
+        let (_, recs) = live_mints("snapmintext");
+        assert!(
+            recs.iter().any(|r| r.handles.iter().any(|&h| h != 0)),
+            "{recs:?}"
+        );
+        assert!(recs.iter().any(|r| !r.edges.is_empty()), "{recs:?}");
+        // The state read back from the file is what the live record holds.
+        assert_eq!(snap_image_mint_check(&through_the_file(&recs)), None);
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_recorded_field_differs() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintfld");
+        let mut back = through_the_file(&recs);
+        let i = back
+            .iter()
+            .position(|r| r.handles.iter().any(|&h| h != 0))
+            .expect("a record with a handle");
+        let h = back[i].handles.iter().position(|&h| h != 0).unwrap_or(0);
+        back[i].handles[h] ^= 1 << 8;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_descriptor_index_differs() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintdesc");
+        let mut back = through_the_file(&recs);
+        back[0].family_desc += 1;
+        assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_facts_do_not_reach_its_word() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintid");
+        let mut back = through_the_file(&recs);
+        let i = back.len() - 1;
+        back[i].proto_cell ^= 8;
+        back[i].generation += 1;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_IDENTITY)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_records_out_of_mint_order() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintord");
+        let mut back = through_the_file(&recs);
+        back.reverse();
+        let got = snap_image_mint_check(&back);
+        assert!(matches!(got, Some((_, MINT_BAD_ORDER))), "{got:?}");
+    }
+
+    #[test]
+    fn snap_image_mint_check_refuses_a_dictionary_band_record() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintdict");
+        let mut back = through_the_file(&recs);
+        back[0].id = SITE_SHAPE_ID_END + 1;
+        assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_DICTIONARY)));
     }
 }

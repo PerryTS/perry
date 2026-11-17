@@ -143,7 +143,6 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_SUPPRESS_BIRTH",
     "PERRY_FACTS_TYPED_ARRAY_SITES",
     "PERRY_FACTS_TYPED_SIGNATURES",
-    "PERRY_FACTS_UNITS",
     "PERRY_FACTS_VALUE_RECORDS",
     "PERRY_FACTS_WALK_INDEXED",
     "PERRY_FACTS_WIDEN",
@@ -936,10 +935,6 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_REST_DIAG",
         "Prints the at-rest element lowering form per site to stderr; no emitted instructions depend on the report.",
-    ),
-    (
-        "PERRY_SNAP_FACTS",
-        "Writes the snap census facts dump file only; no fact or emitted code depends on it.",
     ),
     (
         "PERRY_TEST_IR_OUT",

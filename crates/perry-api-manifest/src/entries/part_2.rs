@@ -382,6 +382,14 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     ),
     method_sig(
         "perry/tui",
+        "useInputBytes",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Void,
+    ),
+    method_sig(
+        "perry/tui",
         "run",
         false,
         None,

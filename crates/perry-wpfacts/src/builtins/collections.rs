@@ -314,6 +314,21 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
+    let thrown = m.thrown;
+    cb_call_in(m, by, cb, this, args, thrown)
+}
+
+/// `cb_call` whose callback throws into `region` (a job's own promise, or
+/// the host for a callback the event loop calls; R-JOBTHROW).
+#[track_caller]
+pub(super) fn cb_call_in(
+    m: &mut Model,
+    by: CallId,
+    cb: NodeId,
+    this: ThisArg,
+    args: Vec<NodeId>,
+    region: NodeId,
+) -> NodeId {
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let site = m.calls.len() as CallId;
@@ -329,7 +344,7 @@ pub(super) fn cb_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region,
         },
         |m, tg, c| m.cons(tg, Cons::Call { call: c }),
     );
@@ -710,7 +725,12 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
 /// per call site, CreateArrayFromList(« key, value ») (ECMA-262 23.1.5.1,
 /// 24.1.5.1, 24.2.5.1): index 0 holds `keys`, index 1 `values`, each its own
 /// slot (`Model::index_slot`); `keys` = None: the index, a Number.
-pub(super) fn entry_pairs(m: &mut Model, call: CallId, keys: Option<NodeId>, values: NodeId) -> NodeId {
+pub(super) fn entry_pairs(
+    m: &mut Model,
+    call: CallId,
+    keys: Option<NodeId>,
+    values: NodeId,
+) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
     let k = m.index_slot(pair, 0);
     match keys {
@@ -998,10 +1018,6 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
 /// elements the call already takes).
 pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
     if !m.is_arr(t) {
-        let own = m.num_fields(t);
-        let elems = m.field_any(t);
-        m.edge(own, elems);
-        m.plain_key(t, ChainAct::Load(elems));
         non_array_this(m, t, name, call);
     }
     array_method(m, t, Some(name), call);
@@ -1019,7 +1035,59 @@ pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// of an index (the program's `delete o[i]`: E7), `toString`'s Invoke of
 /// `join`, `concat`'s Get of `@@isConcatSpreadable`. HasProperty runs
 /// program code only as a Proxy's `has` trap, and a Proxy is ⊤.
+///
+/// Everything but `toString`'s `join` call reads `t` and `name` only, never
+/// the call: it is made once per (receiver, method) (`array_like_model`,
+/// `Model::array_like_this`) and serves every call site that applies the
+/// method to `t`. The same constraints on the same nodes once instead of
+/// once per site: the same facts.
 fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    let a = m.atom(name);
+    let recv = match m.array_like_this.get(&(t, a)) {
+        Some(&r) => r,
+        None => {
+            let r = array_like_model(m, t, name);
+            m.array_like_this.insert((t, a), r);
+            r
+        }
+    };
+    if name == "toString" {
+        let ja = m.atom("join");
+        let jc = recv_call(
+            m,
+            call,
+            t,
+            ja,
+            ThisArg::Tok(t),
+            0,
+            recv,
+            move |m, tg, jc| {
+                let f = m.node_l("array-like-join");
+                m.cons(
+                    tg,
+                    Cons::Load {
+                        key: Key::Named(ja),
+                        dst: f,
+                    },
+                );
+                m.tostring_join_calls.insert(jc);
+                m.cons(f, Cons::Call { call: jc });
+            },
+        );
+        let r = m.calls[jc as usize].ret;
+        let ret = m.calls[call as usize].ret;
+        m.edge(r, ret);
+    }
+}
+
+/// The call-free part of `non_array_this` for (`t`, `name`): the index
+/// reads (`num_fields` into the any-field, the plain-key chain read), the
+/// receiver node and what the method does to it. Returns the receiver node.
+fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
+    let own = m.num_fields(t);
+    let elems = m.field_any(t);
+    m.edge(own, elems);
+    m.plain_key(t, ChainAct::Load(elems));
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1058,32 +1126,12 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
             },
         );
     }
-    match name {
-        "toString" => {
-            let ja = m.atom("join");
-            let jc = recv_call(m, call, t, ja, ThisArg::Tok(t), 0, recv, move |m, tg, jc| {
-                let f = m.node_l("array-like-join");
-                m.cons(
-                    tg,
-                    Cons::Load {
-                        key: Key::Named(ja),
-                        dst: f,
-                    },
-                );
-                m.tostring_join_calls.insert(jc);
-                m.cons(f, Cons::Call { call: jc });
-            });
-            let r = m.calls[jc as usize].ret;
-            let ret = m.calls[call as usize].ret;
-            m.edge(r, ret);
-        }
-        "concat" => {
-            let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
-            let v = m.node_l("array-like-spreadable");
-            m.cons(recv, Cons::Load { key: k, dst: v });
-        }
-        _ => {}
+    if name == "concat" {
+        let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
+        let v = m.node_l("array-like-spreadable");
+        m.cons(recv, Cons::Load { key: k, dst: v });
     }
+    recv
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
@@ -1109,7 +1157,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if m.is_rest_arr(t) && !crate::const_arrays::method_reads_only(name) {
         let site = m.calls[call as usize].site;
         let own = name == Some("shift")
-            && m.rest_owner_of(t).is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
+            && m.rest_owner_of(t)
+                .is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
         if !own || *m.rest_front_site.entry(t).or_insert(site) != site {
             m.rest_front_widen(t);
         }
@@ -1426,24 +1475,33 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let nested = recv_call(m, call, t, a, ThisArg::Node(elems), 2, elems, move |m, tg, nested| {
-                m.cons(
-                    tg,
-                    Cons::MCall {
-                        key: Key::Named(a),
-                        call: nested,
-                    },
-                );
-                let r = m.calls[nested as usize].ret;
-                let why = m.reason("array join (locale element ToString)");
-                m.cons(
-                    r,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-            });
+            let nested = recv_call(
+                m,
+                call,
+                t,
+                a,
+                ThisArg::Node(elems),
+                2,
+                elems,
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    );
+                    let r = m.calls[nested as usize].ret;
+                    let why = m.reason("array join (locale element ToString)");
+                    m.cons(
+                        r,
+                        Cons::Implicit {
+                            reason: why,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                },
+            );
             let params = m.calls[nested as usize].args.clone();
             for (&x, p) in c.args.iter().zip(params) {
                 m.edge(x, p);
@@ -1660,6 +1718,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let exec = capability_executor(m, call, ov, name == Some("finally"));
             promise_species(m, t, call, exec);
             let thrown = m.thrown;
+            // R-JOBTHROW (27.2.5.4, 27.2.2.1 NewPromiseReactionJob): the
+            // rejection handler reads this promise's reason (and `thrown`,
+            // the rejections no promise holds); a handler's abrupt
+            // completion rejects the derived promise `out`.
+            let tr = super::promise_reason(m, t);
+            let or = super::promise_reason(m, out);
             let (on_ok, on_err) = match name {
                 Some("then") => (c.arg(0).copied(), c.arg(1).copied()),
                 Some("catch") => (None, c.arg(0).copied()),
@@ -1673,19 +1737,36 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 } else {
                     v
                 };
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![arg]);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![arg], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
+                } else {
+                    // thenFinally / catchFinally (27.2.5.3.1-2): a rejected
+                    // result of the handler rejects the derived promise.
+                    let ra = super::promise_reason_atom(m);
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::Named(ra),
+                            dst: or,
+                        },
+                    );
                 }
             }
             if let Some(f) = on_err {
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![thrown]);
+                let ej = m.node_l("rejection");
+                m.edge(thrown, ej);
+                m.edge(tr, ej);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![ej], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
                 }
             }
             if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
                 m.edge(v, ov);
+            }
+            if name == Some("finally") || on_err.is_none() || !c.spread.is_empty() {
+                m.edge(tr, or);
             }
             ret_tok(m, call, out);
         }
@@ -1753,10 +1834,15 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     site: nested,
                     region: m.thrown,
                 },
-                move |m, tg, nested| m.cons(tg, Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                }),
+                move |m, tg, nested| {
+                    m.cons(
+                        tg,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call: nested,
+                        },
+                    )
+                },
             );
             ret_prim(m, call, prim::NULL);
         }
@@ -1862,9 +1948,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         (
             "BoxedNumber" | "BoxedString" | "BoxedBoolean" | "BoxedSymbol" | "BoxedBigInt",
             Some(n),
-        ) => {
-            wrapper_method(m, t, &what, n, call)
-        }
+        ) => wrapper_method(m, t, &what, n, call),
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
@@ -2008,7 +2092,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "hostrecord",
+            | "fromEntries" | "hostrecord" | "stringrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

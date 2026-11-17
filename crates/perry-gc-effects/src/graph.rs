@@ -53,7 +53,7 @@ pub(crate) fn temp_label(name: &str) -> bool {
     crate::instructions::starts(
         name,
         &["ltmp", "Ltmp", ".L", "L_", "l_", "lCPI", "LCPI", "$"],
-    ) || rx!(r"^\.[A-Za-z_]+(\$[A-Za-z0-9_.]*)?$").is_match(name)
+    ) || rx!(r"^\.[A-Za-z_]+(\$[A-Za-z0-9_.]*)?(#\d+)?$").is_match(name)
 }
 pub(crate) fn crate_of(obj: &str) -> Option<&str> {
     let member = obj.rsplit(['/', '\\']).next()?;
@@ -1052,7 +1052,14 @@ mod tests {
         assert!(admitted(&graph));
         graph.nodes[0].names.push("unrelated_initializer".into());
         assert!(!admitted(&graph));
-        for sec in [".text$unlikely", ".text", ".rdata$zzz", ".xdata$x"] {
+        for sec in [
+            ".text$unlikely",
+            ".text",
+            ".rdata$zzz",
+            ".xdata$x",
+            ".rdata#12",
+            ".text$mn#7",
+        ] {
             graph.nodes[0].names = vec!["audited_initializer".into(), sec.into()];
             assert!(admitted(&graph));
             assert!(temp_label(sec));

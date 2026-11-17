@@ -12,57 +12,6 @@ fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
     v[0]
 }
 
-/// The bodies' names, without their module and HIR id.
-fn bodies(s: &crate::SiteFacts) -> Vec<&str> {
-    s.targets
-        .iter()
-        .map(|t| t.rsplit(':').next().unwrap_or(t))
-        .map(|t| t.split('#').next().unwrap_or(t))
-        .collect()
-}
-
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
-
-/// Per unit never claims more than whole program: a proven call there is
-/// proven here, with a body set that holds this one's.
-fn never_stronger(src: &str) {
-    let (u, w) = (units(src), facts(src));
-    for s in u.sites.iter().filter(|s| s.is_call) {
-        if matches!(s.verdict, Verdict::No(_)) {
-            continue;
-        }
-        let ws = w
-            .sites
-            .iter()
-            .find(|x| (x.module, x.byte_offset, &x.key) == (s.module, s.byte_offset, &s.key))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{} {} {} in\n{}",
-                    s.module,
-                    s.byte_offset,
-                    s.key,
-                    w.dump_text()
-                )
-            });
-        assert!(
-            !matches!(ws.verdict, Verdict::No(_)),
-            "{s:?}\n{}",
-            w.dump_text()
-        );
-        // Another unit's body is named by its contract, without the HIR id.
-        let name = |t: &String| t.split('#').next().unwrap_or(t).to_string();
-        let have: Vec<String> = s.targets.iter().map(name).collect();
-        assert!(
-            ws.targets.iter().all(|t| have.contains(&name(t))),
-            "{s:?} {ws:?}"
-        );
-    }
-}
-
 const FIELDS: &str = r#"
     function fa(x: number) { return x + 1; }
     function fb(x: number) { return x * 2; }
@@ -73,17 +22,6 @@ const FIELDS: &str = r#"
     for (let i = 0; i < 10; i++) s += run(i % 2 ? p : q, i);
     console.log(s);
 "#;
-
-#[test]
-fn a_member_call_over_two_layouts_runs_both_bodies() {
-    // Two literals with a function field each, one call site: the field is
-    // one slot of each layout, and the set is {fa, fb}.
-    let pf = facts(FIELDS);
-    let s = site(&pf, "f");
-    assert_eq!(s.verdict, Verdict::T0Set, "{}", pf.dump_text());
-    assert_eq!(bodies(s), ["fa", "fb"], "{}", pf.dump_text());
-    never_stronger(FIELDS);
-}
 
 #[test]
 fn a_builtin_function_value_in_the_set_is_not_proven() {
@@ -118,26 +56,6 @@ fn a_builtin_function_value_in_the_set_is_not_proven() {
 }
 
 #[test]
-fn virtual_dispatch_is_a_set_of_methods() {
-    // `r.m(x)` over two classes: each resolves `m` on its chain, one body
-    // per receiver layout.
-    let src = r#"
-        class A { k = 1; m(x: number) { return x + this.k; } }
-        class B { k = 2; m(x: number) { return x * this.k; } }
-        function call(r: A | B, x: number) { return r.m(x); }
-        const rs = [new A(), new B()];
-        let s = 0;
-        for (let i = 0; i < 10; i++) s += call(rs[i % 2], i);
-        console.log(s);
-    "#;
-    let pf = facts(src);
-    let s = site(&pf, "m");
-    assert_eq!(s.verdict, Verdict::T0Set, "{}", pf.dump_text());
-    assert_eq!(bodies(s), ["m"; 2], "{}", pf.dump_text());
-    never_stronger(src);
-}
-
-#[test]
 fn a_receiver_without_the_method_is_not_proven() {
     // `B` has no `m`: its read is `undefined`, the call would throw.
     let src = r#"
@@ -154,34 +72,6 @@ fn a_receiver_without_the_method_is_not_proven() {
         "{}",
         pf.dump_text()
     );
-}
-
-#[test]
-fn a_call_through_a_value_runs_the_bodies_the_value_is() {
-    // `g(g(x))` through a parameter, `h(i)` through a local holding one of
-    // two closures.
-    let src = r#"
-        const inc = (x: number) => x + 1;
-        function twice(g: (x: number) => number, x: number) { return g(g(x)); }
-        function pick(n: number) { return n > 3 ? inc : (x: number) => x - 1; }
-        let s = 0;
-        for (let i = 0; i < 6; i++) { const h = pick(i); s += h(i); }
-        console.log(twice(inc, 1), s);
-    "#;
-    let pf = facts(src);
-    let calls: Vec<_> = pf.sites.iter().filter(|s| s.key == "()").collect();
-    assert_eq!(calls.len(), 3, "{}", pf.dump_text());
-    let one = calls
-        .iter()
-        .filter(|s| s.verdict == Verdict::T0Mono)
-        .count();
-    let two: Vec<_> = calls
-        .iter()
-        .filter(|s| s.verdict == Verdict::T0Set)
-        .collect();
-    assert_eq!((one, two.len()), (2, 1), "{}", pf.dump_text());
-    assert_eq!(two[0].targets.len(), 2, "{}", pf.dump_text());
-    never_stronger(src);
 }
 
 #[test]

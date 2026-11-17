@@ -253,9 +253,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "path_basename", 2);
             }
             Expr::PathSep => {
+                self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "path_sep", 0);
             }
             Expr::PathDelimiter => {
+                self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "path_delimiter", 0);
             }
             Expr::PathToNamespacedPath(p) => {

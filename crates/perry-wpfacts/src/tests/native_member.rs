@@ -11,29 +11,6 @@
 //! same function without the write is a NativeMember.
 use super::*;
 
-fn modules(mods: &[(&str, &str)], per_unit: bool, cfg: &FactsConfig) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    match per_unit {
-        true => crate::compute_units(&list, cfg),
-        false => crate::compute(&list, cfg),
-    }
-}
-
 fn one(src: &str, units: bool) -> ProgramFacts {
     modules(&[("t", src)], units, &FactsConfig::default())
 }
@@ -361,7 +338,10 @@ fn an_object_prototype_accessor_is_no_native_member() {
     for units in [false, true] {
         for (define, kill) in [
             ("", false),
-            (r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#, true),
+            (
+                r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#,
+                true,
+            ),
             (
                 r#"Object.defineProperty(Object.prototype, "constructor", { get() { return 1; } });"#,
                 true,
@@ -596,5 +576,28 @@ fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
                 assert!(none_native(&v), "units={units} {}: {v:?}", src(&write));
             }
         }
+    }
+}
+
+fn modules(mods: &[(&str, &str)], per_unit: bool, cfg: &FactsConfig) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    match per_unit {
+        true => crate::compute(&list, cfg),
+        false => crate::compute(&list, cfg),
     }
 }

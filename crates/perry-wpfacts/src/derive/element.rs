@@ -63,14 +63,19 @@ pub(crate) struct ReceiverSet {
 pub(super) fn run_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
     let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
     for inst in 0..m.sum.insts.len() as u32 {
-        m.inst_copies(inst, |orig, copy| copies.entry(orig).or_default().push(copy));
+        m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
     }
     copies
 }
 
 /// The nodes `recvs` and every run's copy of them: the receiver of one
 /// site in every run of its body.
-pub(super) fn with_copies(copies: &FxHashMap<NodeId, Vec<NodeId>>, recvs: &[NodeId]) -> Vec<NodeId> {
+pub(super) fn with_copies(
+    copies: &FxHashMap<NodeId, Vec<NodeId>>,
+    recvs: &[NodeId],
+) -> Vec<NodeId> {
     let mut all = recvs.to_vec();
     for r in recvs {
         all.extend(copies.get(r).into_iter().flatten().copied());

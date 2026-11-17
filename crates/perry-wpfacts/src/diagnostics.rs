@@ -376,7 +376,9 @@ impl Model {
         };
         let reason = self.reasons.get(e.reason as usize).map_or("", |s| s);
         let tops = |n: NodeId| {
-            n != NO_NODE && (n as usize) < self.nodes.len() && self.nodes[n as usize].pts.contains_tok(TOP)
+            n != NO_NODE
+                && (n as usize) < self.nodes.len()
+                && self.nodes[n as usize].pts.contains_tok(TOP)
         };
         // The deciding node: the rule that sank the escape's node, the node
         // itself, the unknown callee of its call; the first holding ⊤.
@@ -416,7 +418,9 @@ impl Model {
             [
                 e.node.and_then(|n| d.store_top.get(&n).copied()),
                 e.node,
-                e.call.and_then(|c| d.unknown_calls.get(&c)).and_then(|(n, _)| *n),
+                e.call
+                    .and_then(|c| d.unknown_calls.get(&c))
+                    .and_then(|(n, _)| *n),
             ]
             .into_iter()
             .flatten()
@@ -775,7 +779,8 @@ impl Model {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0)
             });
-            if stop != 0 && d.esc_first.len() >= stop && self.act.as_ref().is_some_and(|a| a.fixed) {
+            if stop != 0 && d.esc_first.len() >= stop && self.act.as_ref().is_some_and(|a| a.fixed)
+            {
                 self.aborted = true;
             }
         }
@@ -1291,6 +1296,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             TokKind::Obj(l, c) => ("object", Some(*l), None, Some(*c)),
             TokKind::Func(f, c) => ("function", None, Some(*f), Some(*c)),
             TokKind::Bound(_) => ("bound", None, None, None),
+            TokKind::Proxy(_) => ("proxy", None, None, None),
             TokKind::ClassObj(l) => ("class", Some(*l), None, None),
             TokKind::Proto(l) => ("prototype", Some(*l), None, None),
             TokKind::Builtin(_) | TokKind::BuiltinFn(_) => ("builtin", None, None, None),
@@ -1601,24 +1607,6 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     out
 }
 
-/// Existing contract summary, observed only after fact derivation.
-pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
-    format!(
-        "{{\"unknown\":{},\"why\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
-        c.unknown,
-        why_json(c),
-        c.prim,
-        strings(c.fns.iter().map(|f| f.name.clone())),
-        strings(
-            c.arrays
-                .iter()
-                .chain(&c.made_arrays)
-                .chain(&c.arrayboxes)
-                .cloned()
-        )
-    )
-}
-
 /// The reason an unknown value contract is unknown and the unit that
 /// published it, as JSON (`null` when it is known or has no recorded reason).
 pub(crate) fn why_json(c: &crate::units::ValueContract) -> String {
@@ -1666,18 +1654,38 @@ pub(crate) fn keyread(g: &Gen) {
         want[i] = true;
         let src = module.and_then(|(_, m)| m.closure_source_text.get(&f.func_id));
         let span = src.and_then(|s| s.source_span).unwrap_or((0, 0));
-        eprintln!("KF {i} {} {file} {} {} params={:?} this={} ret={}", f.name, span.0, span.1, f.params, f.this, f.ret);
+        eprintln!(
+            "KF {i} {} {file} {} {} params={:?} this={} ret={}",
+            f.name, span.0, span.1, f.params, f.this, f.ret
+        );
     }
     let dec = |a: Atom| -> String {
         let s = &m.atoms[a as usize];
-        let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
+        let esc = |t: &str| {
+            t.chars()
+                .take(60)
+                .map(|c| {
+                    if (c as u32) < 32 || c == ' ' {
+                        format!("\\x{:02x}", c as u32)
+                    } else {
+                        c.to_string()
+                    }
+                })
+                .collect::<String>()
+        };
         if let Some((p, e, t)) = m.atom_pfx_excl(a) {
-            let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+            let cs: String = (0..128u32)
+                .filter(|b| e >> b & 1 == 1)
+                .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+                .collect();
             format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
         } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
             let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
             let e = u128::from_str_radix(h, 16).unwrap_or(0);
-            let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+            let cs: String = (0..128u32)
+                .filter(|b| e >> b & 1 == 1)
+                .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+                .collect();
             format!("excl[{cs}]+{:?}", esc(t))
         } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
             format!("prefix({:?})", esc(r))
@@ -1699,17 +1707,44 @@ pub(crate) fn keyread(g: &Gen) {
         let strs = match nd.strs {
             0 => "-".to_string(),
             STRS_TOP => "ANY".to_string(),
-            s => m.str_atoms(s).iter().map(|&a| dec(a)).collect::<Vec<_>>().join(" | "),
+            s => m
+                .str_atoms(s)
+                .iter()
+                .map(|&a| dec(a))
+                .collect::<Vec<_>>()
+                .join(" | "),
         };
-        eprintln!("KR {n} f{f} {l} prim={:#x} top={} ntok={} strs={strs}", nd.prim, nd.pts.contains_tok(TOP), nd.pts.len());
+        eprintln!(
+            "KR {n} f{f} {l} prim={:#x} top={} ntok={} strs={strs}",
+            nd.prim,
+            nd.pts.contains_tok(TOP),
+            nd.pts.len()
+        );
     }
 }
 
 const KEYREAD_NAMES: &[&str] = &[
-    "sanitizeNodeName", "createUniqueName", "_createAnimationTracks", "loadAnimation",
-    "parseTrackName", "bind", "findNode", "Composite", "create", "parse", "toJSON",
-    "clone", "CreateFromMorphTargetSequence", "parseAnimation", "_getTrackTypeForValueTypeName",
-    "getValueSize", "validate", "_bindTrack", "_lendBinding", "clipAction", "subclip",
+    "sanitizeNodeName",
+    "createUniqueName",
+    "_createAnimationTracks",
+    "loadAnimation",
+    "parseTrackName",
+    "bind",
+    "findNode",
+    "Composite",
+    "create",
+    "parse",
+    "toJSON",
+    "clone",
+    "CreateFromMorphTargetSequence",
+    "parseAnimation",
+    "_getTrackTypeForValueTypeName",
+    "getValueSize",
+    "validate",
+    "_bindTrack",
+    "_lendBinding",
+    "clipAction",
+    "subclip",
 ];
 
 /// The functions of the track-name chain (`keyread`, `keysnap_plan`).
@@ -1725,14 +1760,31 @@ fn keyread_fn(names: &[&str], name: &str, file: &str) -> bool {
 /// exclusion entries with their character sets).
 fn key_dec(m: &Model, a: Atom) -> String {
     let s = &m.atoms[a as usize];
-    let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
+    let esc = |t: &str| {
+        t.chars()
+            .take(60)
+            .map(|c| {
+                if (c as u32) < 32 || c == ' ' {
+                    format!("\\x{:02x}", c as u32)
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect::<String>()
+    };
     if let Some((p, e, t)) = m.atom_pfx_excl(a) {
-        let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+        let cs: String = (0..128u32)
+            .filter(|b| e >> b & 1 == 1)
+            .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+            .collect();
         format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
     } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
         let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
         let e = u128::from_str_radix(h, 16).unwrap_or(0);
-        let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+        let cs: String = (0..128u32)
+            .filter(|b| e >> b & 1 == 1)
+            .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+            .collect();
         format!("excl[{cs}]+{:?}", esc(t))
     } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
         format!("prefix({:?})", esc(r))
@@ -1765,7 +1817,12 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
     if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
         return;
     }
-    let file_of = |mi: u32| g.modules.get(mi as usize).map_or("", |(p, _)| *p).to_string();
+    let file_of = |mi: u32| {
+        g.modules
+            .get(mi as usize)
+            .map_or("", |(p, _)| *p)
+            .to_string()
+    };
     let mut want = vec![false; g.m.funcs.len()];
     let mut fn_file = FxHashMap::default();
     for (i, f) in g.m.funcs.iter().enumerate() {
@@ -1780,16 +1837,33 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
         }
     }
     let of = |n: NodeId| g.m.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
-    let is = |n: NodeId| { let f = of(n); f != NO_FN && want.get(f as usize).copied().unwrap_or(false) };
+    let is = |n: NodeId| {
+        let f = of(n);
+        f != NO_FN && want.get(f as usize).copied().unwrap_or(false)
+    };
     let nodes: Vec<NodeId> = (0..g.m.nodes.len() as NodeId).filter(|&n| is(n)).collect();
     for s in &g.element_sites {
         if is(s.recv) || is(s.idx) {
-            eprintln!("KP elem {} {} {:?} recv={} idx={} key={:?} f{}", file_of(s.module), s.byte_offset, s.op, s.recv, s.idx, s.key, of(s.recv));
+            eprintln!(
+                "KP elem {} {} {:?} recv={} idx={} key={:?} f{}",
+                file_of(s.module),
+                s.byte_offset,
+                s.op,
+                s.recv,
+                s.idx,
+                s.key,
+                of(s.recv)
+            );
         }
     }
     for &(mi, off, a, dst) in &g.load_sites {
         if is(dst) {
-            eprintln!("KP load {} {off} .{} dst={dst} f{}", file_of(mi), g.m.atoms[a as usize], of(dst));
+            eprintln!(
+                "KP load {} {off} .{} dst={dst} f{}",
+                file_of(mi),
+                g.m.atoms[a as usize],
+                of(dst)
+            );
         }
     }
     let mut call_pos = FxHashMap::default();
@@ -1805,40 +1879,90 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
             loads.push((file, off, k, dst));
         }
     }
-    g.m.keysnap = Some(Box::new(KeySnap { nodes, fn_file, call_pos, at_hold: false, at_esc: false, mod_file, loads, unk: None }));
+    g.m.keysnap = Some(Box::new(KeySnap {
+        nodes,
+        fn_file,
+        call_pos,
+        at_hold: false,
+        at_esc: false,
+        mod_file,
+        loads,
+        unk: None,
+    }));
 }
 
 impl Model {
     /// Print the KEYSNAP block once per occasion (`hold`: the realm is
     /// first held; else: the first escape while it is not).
-    pub(crate) fn keysnap_at(&mut self, hold: bool, producer: &str, call: Option<CallId>, reason: u32, tok: Option<Tok>) {
-        let Some(ks) = self.keysnap.as_mut() else { return };
-        let done = if hold { &mut ks.at_hold } else { &mut ks.at_esc };
+    pub(crate) fn keysnap_at(
+        &mut self,
+        hold: bool,
+        producer: &str,
+        call: Option<CallId>,
+        reason: u32,
+        tok: Option<Tok>,
+    ) {
+        let Some(ks) = self.keysnap.as_mut() else {
+            return;
+        };
+        let done = if hold {
+            &mut ks.at_hold
+        } else {
+            &mut ks.at_esc
+        };
         if *done {
             return;
         }
         *done = true;
         let ks = self.keysnap.take().expect("checked");
-        let what = if hold { "KEYSNAP at realm hold" } else { "KEYSNAP at first escape" };
+        let what = if hold {
+            "KEYSNAP at realm hold"
+        } else {
+            "KEYSNAP at first escape"
+        };
         let kind = |m: &Model, t: Tok| -> String {
             let k = format!("{:?}", m.toks[t as usize]);
             let k: String = k.chars().take(48).collect();
-            if crate::builtins::builtin_function(m, t) { format!("{k}[bfn]") } else { k }
+            if crate::builtins::builtin_function(m, t) {
+                format!("{k}[bfn]")
+            } else {
+                k
+            }
         };
         eprintln!("{what}");
         eprintln!("KS producer {producer}");
-        let rs = self.reasons.get(reason as usize).cloned().unwrap_or_else(|| "-".into());
+        let rs = self
+            .reasons
+            .get(reason as usize)
+            .cloned()
+            .unwrap_or_else(|| "-".into());
         eprintln!("KS reason {reason} {rs:?}");
-        let calls: Vec<CallId> = call.into_iter().chain(if reason == u32::MAX { vec![] } else { self.reason_calls(reason) }).collect();
+        let calls: Vec<CallId> = call
+            .into_iter()
+            .chain(if reason == u32::MAX {
+                vec![]
+            } else {
+                self.reason_calls(reason)
+            })
+            .collect();
         for c in calls.iter().take(4) {
             let ret = self.calls.get(*c as usize).map_or(NO_NODE, |cs| cs.ret);
-            let pos = ks.call_pos.get(&ret).map_or(("?".to_string(), 0), |p| p.clone());
+            let pos = ks
+                .call_pos
+                .get(&ret)
+                .map_or(("?".to_string(), 0), |p| p.clone());
             eprintln!("KS call c{c} ret={ret} at {} {}", pos.0, pos.1);
         }
         if let Some(t) = tok {
             eprintln!("KS tok {t} {}", kind(self, t));
         }
-        eprintln!("KS progress pops={} work={} escaped={} nodes={}", self.pops, self.work.get(), self.escaped.len(), self.nodes.len());
+        eprintln!(
+            "KS progress pops={} work={} escaped={} nodes={}",
+            self.pops,
+            self.work.get(),
+            self.escaped.len(),
+            self.nodes.len()
+        );
         for &n in &ks.nodes {
             let nd = &self.nodes[n as usize];
             let f = self.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
@@ -1846,16 +1970,26 @@ impl Model {
             let strs = match nd.strs {
                 0 => "-".to_string(),
                 STRS_TOP => "ANY".to_string(),
-                s => self.str_atoms(s).iter().map(|&a| key_dec(self, a)).collect::<Vec<_>>().join(" | "),
+                s => self
+                    .str_atoms(s)
+                    .iter()
+                    .map(|&a| key_dec(self, a))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
             };
             let toks: Vec<Tok> = nd.pts.to_sorted();
             let mut hist: BTreeMap<String, usize> = BTreeMap::new();
             for &t in &toks {
                 let k = kind(self, t);
-                let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string() + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+                let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string()
+                    + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
                 *hist.entry(k).or_default() += 1;
             }
-            let first: Vec<String> = toks.iter().take(12).map(|&t| format!("{t}:{}", kind(self, t))).collect();
+            let first: Vec<String> = toks
+                .iter()
+                .take(12)
+                .map(|&t| format!("{t}:{}", kind(self, t)))
+                .collect();
             let file = ks.fn_file.get(&f).map_or("", |s| s.as_str());
             eprintln!(
                 "KS {n} f{f} {file} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={strs} toks=[{}]",
@@ -1878,13 +2012,26 @@ impl Model {
     }
 
     fn ks2_kind(&self, t: Tok) -> String {
-        let k: String = format!("{:?}", self.toks[t as usize]).chars().take(48).collect();
-        if crate::builtins::builtin_function(self, t) { format!("{k}[bfn]") } else { k }
+        let k: String = format!("{:?}", self.toks[t as usize])
+            .chars()
+            .take(48)
+            .collect();
+        if crate::builtins::builtin_function(self, t) {
+            format!("{k}[bfn]")
+        } else {
+            k
+        }
     }
 
     fn ks2_fn(&self, ks: &KeySnap, f: FnIdx) -> String {
         match self.funcs.get(f as usize) {
-            Some(fi) => format!("{}@{}", fi.name, ks.mod_file.get(fi.module as usize).map_or("?", |s| s.as_str())),
+            Some(fi) => format!(
+                "{}@{}",
+                fi.name,
+                ks.mod_file
+                    .get(fi.module as usize)
+                    .map_or("?", |s| s.as_str())
+            ),
             None => "-".into(),
         }
     }
@@ -1893,7 +2040,13 @@ impl Model {
         match self.nodes[n as usize].strs {
             0 => "-".to_string(),
             STRS_TOP => "ANY".to_string(),
-            s => self.str_atoms(s).iter().take(24).map(|&a| key_dec(self, a)).collect::<Vec<_>>().join(" | "),
+            s => self
+                .str_atoms(s)
+                .iter()
+                .take(24)
+                .map(|&a| key_dec(self, a))
+                .collect::<Vec<_>>()
+                .join(" | "),
         }
     }
 
@@ -1906,7 +2059,9 @@ impl Model {
             s => {
                 let ok = self.str_atoms(s).iter().all(|&a| {
                     let t = &self.atoms[a as usize];
-                    if t.starts_with(crate::solve::strs::EXCL_MARK) || t.starts_with(crate::solve::strs::PFXEXCL_MARK) {
+                    if t.starts_with(crate::solve::strs::EXCL_MARK)
+                        || t.starts_with(crate::solve::strs::PFXEXCL_MARK)
+                    {
                         true
                     } else if t.starts_with(crate::solve::strs::PREFIX_MARK)
                         || t.starts_with(crate::solve::strs::INFIX_MARK)
@@ -1917,7 +2072,11 @@ impl Model {
                         !t.chars().any(|c| matches!(c, '.' | '[' | ']' | ':' | '/'))
                     }
                 });
-                if ok { "EXCL-OK" } else { "OPEN" }
+                if ok {
+                    "EXCL-OK"
+                } else {
+                    "OPEN"
+                }
             }
         }
     }
@@ -1930,18 +2089,32 @@ impl Model {
         let mut hist: BTreeMap<String, usize> = BTreeMap::new();
         for &t in &toks {
             let k = self.ks2_kind(t);
-            let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string() + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+            let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string()
+                + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
             *hist.entry(k).or_default() += 1;
         }
-        let first: Vec<String> = toks.iter().take(16).map(|&t| format!("{t}:{}", self.ks2_kind(t))).collect();
+        let first: Vec<String> = toks
+            .iter()
+            .take(16)
+            .map(|&t| format!("{t}:{}", self.ks2_kind(t)))
+            .collect();
         format!(
             "n{n} {} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={} toks=[{}]",
-            self.ks2_fn(ks, f), nd.prim, nd.pts.contains_tok(TOP), toks.len(), self.ks2_strs(n), first.join(", ")
+            self.ks2_fn(ks, f),
+            nd.prim,
+            nd.pts.contains_tok(TOP),
+            toks.len(),
+            self.ks2_strs(n),
+            first.join(", ")
         )
     }
 
     fn keysnap2(&self, ks: &KeySnap) {
-        let name_a = self.atoms.iter().position(|s| &**s == "name").map(|a| a as Atom);
+        let name_a = self
+            .atoms
+            .iter()
+            .position(|s| &**s == "name")
+            .map(|a| a as Atom);
         let want: crate::pts::FxHashSet<NodeId> = ks.loads.iter().map(|l| l.3).collect();
         let uc = ks.unk.map(|u| u.0);
         let mut recv_of: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
@@ -1951,12 +2124,24 @@ impl Model {
             let n = n as NodeId;
             for c in nd.cons.iter() {
                 match c {
-                    Cons::Load { dst, .. } if want.contains(dst) => recv_of.entry(*dst).or_default().push(n),
-                    Cons::Store { key: Key::Named(a), src, site } if Some(*a) == name_a => stores.push((n, *src, *site)),
+                    Cons::Load { dst, .. } if want.contains(dst) => {
+                        recv_of.entry(*dst).or_default().push(n)
+                    }
+                    Cons::Store {
+                        key: Key::Named(a),
+                        src,
+                        site,
+                    } if Some(*a) == name_a => stores.push((n, *src, *site)),
                     Cons::Call { call } if Some(*call) == uc => callee.push((n, "Call".into())),
-                    Cons::New { call } | Cons::NewProgram { call } if Some(*call) == uc => callee.push((n, "New".into())),
-                    Cons::CallThis { call, this } if Some(*call) == uc => callee.push((n, format!("CallThis this={this}"))),
-                    Cons::MCall { key, call } if Some(*call) == uc => callee.push((n, format!("MCall(receiver) key={key:?}"))),
+                    Cons::New { call } | Cons::NewProgram { call } if Some(*call) == uc => {
+                        callee.push((n, "New".into()))
+                    }
+                    Cons::CallThis { call, this } if Some(*call) == uc => {
+                        callee.push((n, format!("CallThis this={this}")))
+                    }
+                    Cons::MCall { key, call } if Some(*call) == uc => {
+                        callee.push((n, format!("MCall(receiver) key={key:?}")))
+                    }
                     _ => {}
                 }
             }
@@ -1968,7 +2153,11 @@ impl Model {
             for &r in recv_of.get(dst).map_or(&[][..], |v| v.as_slice()) {
                 eprintln!("KS2   recv {}", self.ks2_node(ks, r));
                 let toks = self.nodes[r as usize].pts.to_sorted();
-                let ka = self.atoms.iter().position(|s| &**s == k.as_str()).map(|a| a as Atom);
+                let ka = self
+                    .atoms
+                    .iter()
+                    .position(|s| &**s == k.as_str())
+                    .map(|a| a as Atom);
                 let mut seen: crate::pts::FxHashSet<NodeId> = crate::pts::FxHashSet::default();
                 for &t in &toks {
                     if k == "name" {
@@ -1976,7 +2165,11 @@ impl Model {
                     }
                     if let Some(fnode) = ka.and_then(|a| self.fields.get(&(t, a)).copied()) {
                         if seen.insert(fnode) && seen.len() <= 24 {
-                            eprintln!("KS2   field tok {t}:{} -> {}", self.ks2_kind(t), self.ks2_node(ks, fnode));
+                            eprintln!(
+                                "KS2   field tok {t}:{} -> {}",
+                                self.ks2_kind(t),
+                                self.ks2_node(ks, fnode)
+                            );
                         }
                     }
                 }
@@ -1986,12 +2179,22 @@ impl Model {
         // A2: every `name` store whose receiver meets the `node.name` receivers.
         let mut by_site: BTreeMap<SiteId, (NodeId, NodeId, usize)> = BTreeMap::new();
         for &(s, v, site) in &stores {
-            let k = self.nodes[s as usize].pts.to_sorted().iter().filter(|t| rset.contains(t)).count();
+            let k = self.nodes[s as usize]
+                .pts
+                .to_sorted()
+                .iter()
+                .filter(|t| rset.contains(t))
+                .count();
             if k > 0 {
                 by_site.entry(site).or_insert((s, v, k));
             }
         }
-        eprintln!("KS2 name-stores total={} meeting={} rset={}", stores.len(), by_site.len(), rset.len());
+        eprintln!(
+            "KS2 name-stores total={} meeting={} rset={}",
+            stores.len(),
+            by_site.len(),
+            rset.len()
+        );
         for (site, (s, v, k)) in &by_site {
             let st = self.stores.get(*site as usize);
             eprintln!(
@@ -2005,7 +2208,11 @@ impl Model {
         // B1/B2: the unknown call.
         if let Some((c, t, x)) = ks.unk {
             if let Some(cs) = self.calls.get(c as usize) {
-                let pos = |r: NodeId| ks.call_pos.get(&r).map_or("? 0".to_string(), |p| format!("{} {}", p.0, p.1));
+                let pos = |r: NodeId| {
+                    ks.call_pos
+                        .get(&r)
+                        .map_or("? 0".to_string(), |p| format!("{} {}", p.0, p.1))
+                };
                 eprintln!(
                     "KS2 call c{c} this={:?} nargs={} nspread={} ret=n{} at {} site={} region=n{} fn={}",
                     cs.this, cs.args.len(), cs.spread.len(), cs.ret, pos(cs.ret), cs.site, cs.region,
@@ -2013,7 +2220,12 @@ impl Model {
                 );
                 let site_ret = self.calls.get(cs.site as usize).map(|s| s.ret);
                 if let Some(sr) = site_ret {
-                    eprintln!("KS2   site-call c{} ret=n{sr} at {} fn={}", cs.site, pos(sr), self.ks2_fn(ks, self.node_fn.get(sr as usize).copied().unwrap_or(NO_FN)));
+                    eprintln!(
+                        "KS2   site-call c{} ret=n{sr} at {} fn={}",
+                        cs.site,
+                        pos(sr),
+                        self.ks2_fn(ks, self.node_fn.get(sr as usize).copied().unwrap_or(NO_FN))
+                    );
                 }
                 eprintln!(
                     "KS2   made_root={:?} keyed={:?} bound_synth={} protocol={} contract_new={} ctor={}",
@@ -2028,11 +2240,22 @@ impl Model {
                     eprintln!("KS2   arg {}", self.ks2_node(ks, a));
                 }
             }
-            eprintln!("KS2 callee tok {t} {} name={}", self.ks2_kind(t), self.callee_name(t));
-            eprintln!("KS2 recv tok {x} {} name={}", self.ks2_kind(x), self.tok_name(x));
+            eprintln!(
+                "KS2 callee tok {t} {} name={}",
+                self.ks2_kind(t),
+                self.callee_name(t)
+            );
+            eprintln!(
+                "KS2 recv tok {x} {} name={}",
+                self.ks2_kind(x),
+                self.tok_name(x)
+            );
             if let TokKind::Obj(tm, ctx) = self.toks[x as usize] {
                 if let Some(tp) = self.tmpls.get(tm as usize) {
-                    eprintln!("KS2 tmpl {tm} ctx={ctx} display={:?} kind={:?}", tp.display, tp.kind);
+                    eprintln!(
+                        "KS2 tmpl {tm} ctx={ctx} display={:?} kind={:?}",
+                        tp.display, tp.kind
+                    );
                 }
             }
             for (n, how) in &callee {
@@ -2045,8 +2268,14 @@ impl Model {
                     if let Cons::Load { key, dst } = c {
                         if cn.contains(dst) && k < 8 {
                             k += 1;
-                            let kk = match key { Key::Named(a) => self.atoms[*a as usize].to_string(), Key::Any(_) => "any".into() };
-                            eprintln!("KS2 callee-from n{dst} <- load .{kk} recv {}", self.ks2_node(ks, n as NodeId));
+                            let kk = match key {
+                                Key::Named(a) => self.atoms[*a as usize].to_string(),
+                                Key::Any(_) => "any".into(),
+                            };
+                            eprintln!(
+                                "KS2 callee-from n{dst} <- load .{kk} recv {}",
+                                self.ks2_node(ks, n as NodeId)
+                            );
                         }
                     }
                 }

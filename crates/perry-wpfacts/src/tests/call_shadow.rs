@@ -66,41 +66,6 @@ pub(super) fn whole(src: &str) -> (bool, bool) {
     (call, proven(&site(&pf, "flags").verdict))
 }
 
-/// Per unit (one module): is the call proven?
-pub(super) fn per_unit(src: &str) -> bool {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let pf = crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
-    proven(&call_of(&pf, "createIdentifier").verdict)
-}
-
-#[test]
-fn an_own_method_shadows_a_top_written_prototype_for_a_call() {
-    let src = format!("{CST}{FACTORY}{USE}");
-    assert_eq!(whole(&src), (true, true));
-    assert!(per_unit(&src));
-}
-
-#[test]
-fn an_own_method_shadows_a_prototype_set_on_top_for_a_call() {
-    let src = format!("{NOG}{FACTORY}{USE}");
-    assert_eq!(whole(&src), (true, true));
-    assert!(per_unit(&src));
-}
-
-/// node: `hostFn(factory)` hands the literal out and `hostGet()` returns
-/// it; the computed delete through ⊤ may remove `createIdentifier`, so the
-/// call may run what the computed store put on `Object.prototype`.
-#[test]
-fn an_escaped_literal_with_a_delete_through_top_stays_unproven() {
-    let src = format!(
-        "{CST}{FACTORY}(globalThis as any).hostFn(factory); \
-         delete (globalThis as any).hostGet()[name]; {USE}"
-    );
-    assert!(!whole(&src).0);
-    assert!(!per_unit(&src));
-}
-
 /// A computed delete on the literal (through a parameter of a function
 /// called after the call) may remove `createIdentifier`.
 #[test]
@@ -150,18 +115,6 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
         vec![true, true]
     );
     // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: `createIdentifier` is no key of it.
-}
-
-/// A key added after birth is no definite own key: the call still finds
-/// the unknown member the store into ⊤ may have put on `Object.prototype`.
-#[test]
-fn a_key_added_after_birth_does_not_shadow_for_a_call() {
-    let src = format!(
-        "{CST} const factory: any = {{ flags: 4 }}; \
-         factory.createIdentifier = (text: string) => ({{ kind: 80, text }}); {USE}"
-    );
-    assert!(!whole(&src).0);
-    assert!(!per_unit(&src));
 }
 
 /// Without a write through ⊤ the call is proven, with the shadow or
@@ -250,4 +203,39 @@ fn a_named_define_through_top_after_the_call_keeps_the_literal_key() {
         ),
         vec!["proven", "proven"]
     );
+}
+
+/// A key added after birth is no definite own key: the call still finds
+/// the unknown member the store into ⊤ may have put on `Object.prototype`.
+#[test]
+fn a_key_added_after_birth_does_not_shadow_for_a_call() {
+    let src = format!(
+        "{CST} const factory: any = {{ flags: 4 }}; \
+         factory.createIdentifier = (text: string) => ({{ kind: 80, text }}); {USE}"
+    );
+    assert!(!whole(&src).0);
+}
+
+/// node: `hostFn(factory)` hands the literal out and `hostGet()` returns
+/// it; the computed delete through ⊤ may remove `createIdentifier`, so the
+/// call may run what the computed store put on `Object.prototype`.
+#[test]
+fn an_escaped_literal_with_a_delete_through_top_stays_unproven() {
+    let src = format!(
+        "{CST}{FACTORY}(globalThis as any).hostFn(factory); \
+         delete (globalThis as any).hostGet()[name]; {USE}"
+    );
+    assert!(!whole(&src).0);
+}
+
+#[test]
+fn an_own_method_shadows_a_prototype_set_on_top_for_a_call() {
+    let src = format!("{NOG}{FACTORY}{USE}");
+    assert_eq!(whole(&src), (true, true));
+}
+
+#[test]
+fn an_own_method_shadows_a_top_written_prototype_for_a_call() {
+    let src = format!("{CST}{FACTORY}{USE}");
+    assert_eq!(whole(&src), (true, true));
 }

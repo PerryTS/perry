@@ -194,7 +194,10 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
     assert!(
         pf.sites
             .iter()
-            .filter(|s| s.module != support && s.key == "exports" && !s.is_call && !s.access.is_store())
+            .filter(|s| s.module != support
+                && s.key == "exports"
+                && !s.is_call
+                && !s.access.is_store())
             .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
             .all(|s| proven(&s.verdict)),
         "{dump}"

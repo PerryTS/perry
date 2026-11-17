@@ -29,3 +29,30 @@ The HIR module names its resumable body with `async_init_function: FuncId`.
 Activation follows that explicit execution edge when the owning module runs,
 so dynamic imports in the body remain reachable without exporting the body or
 recognizing its generated name. Modules without top-level await carry no edge.
+
+## Native module value exports
+
+Dynamic constant and namespace reads use per-module getter slots in
+`object/native_module/constant_getters.rs`. The existing `js_nm_install_*`
+entry points register these alongside method dispatch. An unknown dynamic
+module specifier uses the compiler's install-all path, including the legacy
+`node:constants` aggregate. The dynamic-code installer retains every constant
+getter because interpreted code can obtain modules by runtime name. Materialized
+process, module-loader and global objects, and open native addons, also retain
+all getters: a computed property can obtain a loader without naming it in the
+source. Dedicated process intrinsics such as `process.argv` expose no loader. Computed
+property names do not narrow selection:
+the installed getter covers its module's complete constant surface.
+Alias normalization runs before getter dispatch. Each getter passes a literal
+normalized module name to the shared resolver, so an opaque alias lookup cannot
+keep unrelated module arms reachable through that getter.
+
+Statically selected value exports register their module's getter before
+reading the export cache, so a returned constants object remains readable through
+dynamic paths even when no whole-module installer runs. The `fs/promises`
+and global WebCrypto installers and namespace factories register their own
+getters, including when a namespace is already cached. WebCrypto has a separate slot from Node crypto's constant table.
+Slots contain only function pointers and use process-wide atomic publication;
+workers share the installed code, while namespace values retain their existing
+per-thread caches and GC roots. The same runtime getters serve native and WASI
+builds; the constants-only installer is included in the WASI ABI inventory.

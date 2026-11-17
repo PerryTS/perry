@@ -27,7 +27,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts of the non-store sites of `key` in a.ts.
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -62,14 +66,18 @@ fn r9read11_s1_slice_call_proven() {
 /// KEEP s2: `Array.prototype.slice` is replaced somewhere.
 #[test]
 fn r9read11_s2_slice_written_kept() {
-    let pf = facts(&format!("{SLICE}(Array.prototype as any).slice = function () {{ return [n]; }};\n{USE}"));
+    let pf = facts(&format!(
+        "{SLICE}(Array.prototype as any).slice = function () {{ return [n]; }};\n{USE}"
+    ));
     assert!(!proven(&sites(&pf, "slice")), "slice");
 }
 
 /// KEEP s3: `Function.prototype.call` is replaced somewhere.
 #[test]
 fn r9read11_s3_call_written_kept() {
-    let pf = facts(&format!("{SLICE}(Function.prototype as any).call = function () {{ return [n]; }};\n{USE}"));
+    let pf = facts(&format!(
+        "{SLICE}(Function.prototype as any).call = function () {{ return [n]; }};\n{USE}"
+    ));
     assert!(!proven(&sites(&pf, "call")), "call");
 }
 
@@ -81,7 +89,10 @@ fn r9read11_s4_store_through_array_prototype_seen() {
         "{SLICE}(Array.prototype as any).zz = function () {{ return n; }};\nconsole.log(a.zz(), ([n] as any).zz(), ({{}} as any).zz);\n"
     ));
     let v = sites(&pf, "zz");
-    assert!(!v.iter().any(|x| x.contains("Absent") || x.contains("Dead")), "{v:?}");
+    assert!(
+        !v.iter().any(|x| x.contains("Absent") || x.contains("Dead")),
+        "{v:?}"
+    );
 }
 
 /// KEEP s5: an accessor defined through `Array.prototype` is seen.
@@ -91,7 +102,10 @@ fn r9read11_s5_define_through_array_prototype_seen() {
         "{SLICE}Object.defineProperty(Array.prototype, \"zz\", {{ get() {{ return n; }} }});\nconsole.log(([n] as any).zz, ({{}} as any).zz);\n"
     ));
     let v = sites(&pf, "zz");
-    assert!(!v.iter().any(|x| x.contains("Absent") || x.contains("Dead")), "{v:?}");
+    assert!(
+        !v.iter().any(|x| x.contains("Absent") || x.contains("Dead")),
+        "{v:?}"
+    );
 }
 
 /// KEEP s6: `delete Array.prototype.slice`: `slice` is a locked member
@@ -100,8 +114,15 @@ fn r9read11_s5_define_through_array_prototype_seen() {
 /// (NativeMember): the site stays the generic read.
 #[test]
 fn r9read11_s6_delete_slice_kept() {
-    let pf = facts(&format!("{SLICE}delete (Array.prototype as any).slice;\n{USE}"));
-    assert!(!sites(&pf, "slice").iter().any(|v| v.starts_with("NativeMember")), "slice");
+    let pf = facts(&format!(
+        "{SLICE}delete (Array.prototype as any).slice;\n{USE}"
+    ));
+    assert!(
+        !sites(&pf, "slice")
+            .iter()
+            .any(|v| v.starts_with("NativeMember")),
+        "slice"
+    );
 }
 
 /// KEEP s7: `Array.prototype` escapes to unknown code (a callback the
@@ -113,7 +134,10 @@ fn r9read11_s7_escape_kept() {
         "{SLICE}(globalThis as any)[String(n)] = Array.prototype;\n((globalThis as any)[process.argv[3] ?? \"x\"] as any).zz = 1;\nconsole.log(({{}} as any).zz);\n"
     ));
     let v = sites(&pf, "zz");
-    assert!(!v.iter().any(|x| x.contains("Absent") || x.contains("Dead")), "{v:?}");
+    assert!(
+        !v.iter().any(|x| x.contains("Absent") || x.contains("Dead")),
+        "{v:?}"
+    );
 }
 
 /// KEEP s8: a read of a key through the value sees a method stored on
@@ -126,7 +150,10 @@ fn r9read11_s8_reads_through_value_see_writes() {
     ));
     for k in ["yy", "zz"] {
         let v = sites(&pf, k);
-        assert!(!v.iter().any(|x| x.contains("Absent") || x.contains("Dead")), "{k} {v:?}");
+        assert!(
+            !v.iter().any(|x| x.contains("Absent") || x.contains("Dead")),
+            "{k} {v:?}"
+        );
     }
     let v = sites(&pf, "hasOwnProperty");
     assert!(!v.is_empty(), "{v:?}");
@@ -143,7 +170,9 @@ fn r9read11_s9_computed_store_kept() {
 /// KEEP s10: a method value called through `.call` after `F.call = g` on it.
 #[test]
 fn r9read11_s10_own_call_on_fn_kept() {
-    let pf = facts(&format!("{SLICE}(Array.prototype.slice as any).call = function () {{ return [n]; }};\n{USE}"));
+    let pf = facts(&format!(
+        "{SLICE}(Array.prototype.slice as any).call = function () {{ return [n]; }};\n{USE}"
+    ));
     assert!(!proven(&sites(&pf, "call")), "call");
 }
 
@@ -163,7 +192,8 @@ class U extends T {}
 const n = Number(process.argv[2] ?? \"1\");
 const ts: any[] = [new T(n), new U(n), new T(n).copy()];
 ";
-const CI: &str = "for (const t of ts) { try { console.log(t.ci(null)); } catch (e) { console.log(\"TE\"); } }\n";
+const CI: &str =
+    "for (const t of ts) { try { console.log(t.ci(null)); } catch (e) { console.log(\"TE\"); } }\n";
 
 /// c1 (RED before): `t.ci( … )` where `ci` is an own key a conditional
 /// store in a method (and a copy) gives, the chain lacks it: the callees
@@ -177,21 +207,47 @@ fn r9read11_c1_own_late_key_call() {
 /// KEEP c2: the class prototype has a `ci` method too (the chain holds it).
 #[test]
 fn r9read11_c2_chain_has_key_kept() {
-    let pf = facts(&format!("{TRACK}(T.prototype as any).ci = function () {{ return 3; }};\n{CI}"));
+    let pf = facts(&format!(
+        "{TRACK}(T.prototype as any).ci = function () {{ return 3; }};\n{CI}"
+    ));
     assert!(!proven(&sites(&pf, "ci")), "ci");
 }
 
-/// KEEP c3: a computed-key store may write `ci` with another value.
+/// c3: a computed-key store may write `ci` with another value, a known
+/// function. The key is an unknown string: it may name `ci` (OrdinarySet,
+/// 10.1.9.2: an own data property on the ordinary instance), but it is
+/// never `__proto__` (OPTIMISTIC, owner 2026-11-16), so the instance's
+/// [[Prototype]] stays its class prototype. [[Get]] of `ci` then finds
+/// the own data property, whose values are every store of `ci` on the
+/// token (A, B, and the stored function), or nothing: the callee set
+/// {T::A, T::B, the stored function} is closed, beside the TypeError
+/// arm. (Before the owner rule the unknown key might be `__proto__`, so
+/// the instance was relinked and the site refused.) c3b guards that the
+/// stored value is in the set.
 #[test]
-fn r9read11_c3_computed_store_kept() {
-    let pf = facts(&format!("{TRACK}ts[0][process.argv[3] ?? \"z\"] = function () {{ return 4; }};\n{CI}"));
+fn r9read11_c3_computed_store_known_fn() {
+    let pf = facts(&format!(
+        "{TRACK}ts[0][process.argv[3] ?? \"z\"] = function () {{ return 4; }};\n{CI}"
+    ));
+    assert!(proven(&sites(&pf, "ci")), "ci");
+}
+
+/// KEEP c3b: the computed-key store's value is unknown (a global read under
+/// an unknown key): the callee set holds it, so it is not closed.
+#[test]
+fn r9read11_c3b_computed_store_unknown_value_kept() {
+    let pf = facts(&format!(
+        "{TRACK}ts[0][process.argv[3] ?? \"z\"] = (globalThis as any)[process.argv[4]];\n{CI}"
+    ));
     assert!(!proven(&sites(&pf, "ci")), "ci");
 }
 
 /// KEEP c4: `Object.prototype.ci` written.
 #[test]
 fn r9read11_c4_object_prototype_kept() {
-    let pf = facts(&format!("{TRACK}(Object.prototype as any).ci = function () {{ return 5; }};\n{CI}"));
+    let pf = facts(&format!(
+        "{TRACK}(Object.prototype as any).ci = function () {{ return 5; }};\n{CI}"
+    ));
     assert!(!proven(&sites(&pf, "ci")), "ci");
 }
 

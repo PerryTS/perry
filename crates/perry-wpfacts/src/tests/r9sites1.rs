@@ -18,7 +18,11 @@ fn recv_p(pf: &ProgramFacts, key: &str) -> Vec<String> {
         .flat_map(|s| s.receivers.iter())
         .map(|r| {
             let last = r.rsplit(':').next().unwrap_or(r).to_string();
-            if r.starts_with("proto:") { format!("proto:{last}") } else { last }
+            if r.starts_with("proto:") {
+                format!("proto:{last}")
+            } else {
+                last
+            }
         })
         .collect();
     r.sort();
@@ -36,7 +40,9 @@ class B { tb: any; constructor() { this.tb = String( Math.random() ); } n() { re
 // never on `A.prototype` (reached through `constructor.prototype`).
 #[test]
 fn r9sites1_j1_tojson_this_is_the_value() {
-    let pf = facts(&format!("{CLS}const a = new A();\nconsole.log( String( Math.random() ), a.m(), {{ a: a }} );\n"));
+    let pf = facts(&format!(
+        "{CLS}const a = new A();\nconsole.log( String( Math.random() ), a.m(), {{ a: a }} );\n"
+    ));
     let r = recv_p(&pf, "tj");
     eprintln!("R9SITES1 J1 tj recv={r:?}");
     assert_eq!(r, vec!["A".to_string()], "J1 toJSON this: {r:?}");
@@ -49,7 +55,10 @@ fn r9sites1_j2_callable_not_descended() {
     let pf = facts(&format!("{CLS}const a = new A();\nconsole.log( String( Math.random() ), a.m(), {{ k: A, n: 1 }} );\n"));
     let r = recv_p(&pf, "tj");
     eprintln!("R9SITES1 J2 tj recv={r:?}");
-    assert!(!r.iter().any(|x| x.starts_with("proto:")), "J2 class value descended: {r:?}");
+    assert!(
+        !r.iter().any(|x| x.starts_with("proto:")),
+        "J2 class value descended: {r:?}"
+    );
 }
 
 // K1 KEEP: an own value (nested, array element) is serialized: its toJSON runs.
@@ -74,10 +83,15 @@ fn r9sites1_k2_own_getter_runs() {
 // K3 KEEP: a console argument is serialized by `%j`: a nested own value runs its toJSON.
 #[test]
 fn r9sites1_k3_console_json_nested() {
-    let pf = facts(&format!("{CLS}const b = new B();\nconsole.log( String( Math.random() ), b.n(), {{ o: [ b ] }} );\n"));
+    let pf = facts(&format!(
+        "{CLS}const b = new B();\nconsole.log( String( Math.random() ), b.n(), {{ o: [ b ] }} );\n"
+    ));
     let r = recv_p(&pf, "tb");
     eprintln!("R9SITES1 K3 tb recv={r:?}");
-    assert!(r.contains(&"B".to_string()), "K3 console nested toJSON lost: {r:?}");
+    assert!(
+        r.contains(&"B".to_string()),
+        "K3 console nested toJSON lost: {r:?}"
+    );
 }
 
 // J3 RED (r9 shape: three.core.js Object3D.toJSON, Mesh extends Object3D,
@@ -85,7 +99,9 @@ fn r9sites1_k3_console_json_nested() {
 // argument; the inherited toJSON runs on the instance only.
 #[test]
 fn r9sites1_j3_inherited_tojson_console_instance() {
-    let pf = facts(&format!("{CLS}const s = new Sub();\nconsole.log( String( Math.random() ), s );\n"));
+    let pf = facts(&format!(
+        "{CLS}const s = new Sub();\nconsole.log( String( Math.random() ), s );\n"
+    ));
     let r = recv_p(&pf, "tk");
     eprintln!("R9SITES1 J3 tk recv={r:?}");
     assert_eq!(r, vec!["Sub".to_string()], "J3 toJSON this: {r:?}");

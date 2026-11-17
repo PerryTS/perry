@@ -1,0 +1,1 @@
+Codegen tests: the capacity-default and constructor-completion tests build their object from an argument nothing proves a Number again, and a new test pins the proven-Number birth (P3 B4b) with that fixture as its negative control. No product change.

@@ -106,9 +106,13 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
     img.pending = r.u32()?;
     img.claims_from = r.u32()?;
     let rest = r.take(r.left())?;
+    let (mint, mint_used) = parse_mint_blob(rest).ok_or("bad mint record")?;
+    img.mint = mint;
+    let rest = rest.get(mint_used..).ok_or("bad registry record")?;
     let (registry, used) = parse_registry_blob(rest).ok_or("bad registry record")?;
     img.registry = registry;
-    img.claims = parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
+    img.claims =
+        parse_claims_blob(rest.get(used..).ok_or("bad claim record")?).ok_or("bad claim record")?;
     Ok(img)
 }
 
@@ -148,9 +152,14 @@ pub fn dump(img: &Image) -> String {
         );
     }
     s += &format!("words={}\n", img.words.len());
+    s += &format!("mint-records={}\n", img.mint.len());
     s += &format!("registry={}\n", img.registry.len());
     for r in &img.registry {
-        s += &format!("registry-entry key={} status={}\n", String::from_utf8_lossy(&r.key).escape_debug(), r.status);
+        s += &format!(
+            "registry-entry key={} status={}\n",
+            String::from_utf8_lossy(&r.key).escape_debug(),
+            r.status
+        );
     }
     for t in &img.stops {
         s += &format!(
@@ -176,7 +185,7 @@ pub fn parse_registry_blob(b: &[u8]) -> Option<(Vec<RegRec>, usize)> {
         let key = r.take(l).ok()?.to_vec();
         let init_off = r.u64().ok()?;
         let status = r.u8().ok()?;
-        let mut opt = |r: &mut Rd| -> Option<Option<Val>> {
+        let opt = |r: &mut Rd| -> Option<Option<Val>> {
             match r.u8().ok()? {
                 0 => Some(None),
                 _ => Some(Some(r.val().ok()?)),
@@ -184,7 +193,40 @@ pub fn parse_registry_blob(b: &[u8]) -> Option<(Vec<RegRec>, usize)> {
         };
         let exports = opt(&mut r)?;
         let factory = opt(&mut r)?;
-        v.push(RegRec { key, init_off, status, exports, factory });
+        v.push(RegRec {
+            key,
+            init_off,
+            status,
+            exports,
+            factory,
+        });
     }
     Some((v, r.1))
+}
+
+/// The names of a claim blob (bytes after it are ignored).
+pub fn parse_claims_blob(b: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let u32_at = |o: usize| -> Option<usize> {
+        b.get(o..o + 4)
+            .map(|s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])) as usize)
+    };
+    let n = u32_at(0)?;
+    let (mut o, mut v) = (4usize, Vec::new());
+    for _ in 0..n {
+        let l = u32_at(o)?;
+        v.push(b.get(o + 4..o + 4 + l)?.to_vec());
+        o += 4 + l;
+    }
+    Some(v)
+}
+
+/// Whether `claims` (claimed since index `from` in some process) are exactly
+/// what this process has claimed since `from`, with the same indices.
+pub fn claims_replay_matches(from: u32, claims: &[Vec<u8>], now: &[(Vec<u8>, u32)]) -> bool {
+    claims.len() == now.len()
+        && claims
+            .iter()
+            .zip(now)
+            .enumerate()
+            .all(|(i, (k, (nk, ni)))| k == nk && *ni == from + i as u32)
 }

@@ -336,6 +336,10 @@ pub enum Cons {
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
     /// builtin prototype) a write of `key` only.
     DeleteKey { key: Atom, reason: u32 },
+    /// `key in o` (ECMA-262 13.10.1 HasProperty): no flow on an ordinary
+    /// object; a Proxy runs its `has` trap (`solve/proxy.rs`). `idx`: the
+    /// key value, or `NO_NODE` for a named key.
+    HasProp { key: Key, idx: NodeId },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -645,6 +649,25 @@ pub enum Cons {
         reason: u32,
         accessor: bool,
     },
+    /// GLOBK3: `Object.defineProperty(o, k, d)` under a computed key `key`,
+    /// on the nodes `o`, `key` and `set` (any of them growing decides
+    /// again, `Model::define_computed_key`). The global object under a key
+    /// proven never a Symbol, with no setter, defines one string-named
+    /// global binding (ECMA-262 20.1.2.4, 10.1.6.3, 9.1.1.4): the
+    /// descriptor's `value` and what a call of its `get` with `this` = the
+    /// global object returns join the global's any-key field. Any other
+    /// receiver or key: E5 HARD, a store of `value` under any key and the
+    /// computed-key accessors, as before.
+    DefineAnyKey {
+        o: NodeId,
+        key: NodeId,
+        value: NodeId,
+        get: NodeId,
+        set: NodeId,
+        site: SiteId,
+        reason: u32,
+        accessor: bool,
+    },
     /// The node is the key of a store into `o` in a for-in body: a run's one
     /// key stores under that key; any other under the keys the loop's
     /// subject enumerates when `subj` is that subject's node (ENUM3,
@@ -809,7 +832,11 @@ pub enum Cons {
     /// Buffer `slice`): the source view's buffer. Otherwise a constructor
     /// argument: an ArrayBuffer is the buffer (23.2.5.1.3, 25.3.2.1), any
     /// other value makes `fresh` (`None`: the birth throws).
-    ViewedBuffer { view: Tok, fresh: Option<Tok>, share: bool },
+    ViewedBuffer {
+        view: Tok,
+        fresh: Option<Tok>,
+        share: bool,
+    },
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
@@ -848,7 +875,11 @@ pub enum Cons {
     /// "__proto__", v, true) runs the Object.prototype setter (20.1.2.1
     /// step 3.a.iii.2.b, B.2.2.1.2): `val`'s objects (or null) become
     /// prototypes of `target`, as a `__proto__` store gives them.
-    ProtoKeySet { target: Tok, val: NodeId, site: SiteId },
+    ProtoKeySet {
+        target: Tok,
+        val: NodeId,
+        site: SiteId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -990,6 +1021,7 @@ impl Cons {
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
+            Cons::HasProp { .. } => "hasprop",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
@@ -1048,6 +1080,7 @@ impl Cons {
             Cons::ForInBody { .. } => "forinbody",
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
+            Cons::DefineAnyKey { .. } => "defineanykey",
             Cons::StoreKeyed { .. } => "storekeyed",
             Cons::EnumKeyStore { .. } => "enumkeystore",
             Cons::EnumKeyAny { .. } => "enumkeyany",

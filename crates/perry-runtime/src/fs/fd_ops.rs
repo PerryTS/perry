@@ -222,6 +222,15 @@ pub extern "C" fn js_fs_close_sync(fd_value: f64) -> i32 {
     })
 }
 
+// `readSync(fd, buffer, offset, length, position)` and the options form
+// `readSync(fd, buffer, { offset, length, position })`
+// (`js_fs_read_sync_options`, whose fields are [[Get]]): the numbers are
+// read as they are (`number_arg`, `position_arg`: a non-Number is absent, a
+// bigint position is read too; no ToNumber, so no `valueOf` runs); the fd is
+// a number (`validate_fd_open`). The bytes go into the buffer's backing
+// store (`bytes_mut`); a value that is no byte view gets nothing. The result
+// is the byte count.
+crate::realm_decl! { "node:fs.readSync", effects = { reads(field(arg(2), offset)); reads(field(arg(2), length)); reads(field(arg(2), position)); stores_bytes(arg(1)); returns(prim(num)) } }
 /// `fs.readSync(fd, buffer, offset, length, position)` — Buffer subset.
 #[no_mangle]
 pub extern "C" fn js_fs_read_sync(

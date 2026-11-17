@@ -17,15 +17,15 @@ pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
-pub(crate) mod settled;
 mod own_guard;
 mod own_store;
-pub(crate) mod ret_param;
 mod param_key;
+pub(crate) mod ret_param;
+pub(crate) mod settled;
 pub(crate) use own_guard::Region;
 mod primitives;
-mod proto_first;
 mod private_methods;
+mod proto_first;
 mod shared_closures;
 mod view;
 mod walk;
@@ -44,6 +44,13 @@ pub struct ReadSite {
     /// A call through a value (`f(x)`): `recv` is the callee node, `key`
     /// the atom `()`.
     pub value_call: bool,
+    /// S8: a bare call of a name the main realm declares neither on the
+    /// global object nor on its chain (`Gen::bare_user_global`), outside a
+    /// module a Worker may run: `recv` is [[Get]](globalThis, name), the
+    /// callee (`value_call`). An `undefined` / `null` there is the absent
+    /// name's ReferenceError (9.1.1.4.6, 9.1.1.2.6) or Call's TypeError
+    /// (7.3.14): nothing is called, the site's throw arm.
+    pub global_get: bool,
     pub func: FnIdx,
     /// ACCSITE1 D2: the access the record names (a read or call, a store,
     /// a compound's GetValue).
@@ -164,6 +171,8 @@ pub struct Gen<'a> {
     /// literal's computed own key (`Cons::OwnComputedKey`).
     pub(crate) prop_key_of: FxHashMap<NodeId, NodeId>,
     pub thrown: NodeId,
+    /// The plain-async step closures and their error carriers (`StepSplits`).
+    pub(crate) step: StepSplits,
     /// The realm error a failed runtime operation throws (`Model::runtime_error`,
     /// held by `thrown`), for a site that throws it into its own region.
     pub runtime_error: Tok,
@@ -227,11 +236,6 @@ pub struct Gen<'a> {
     /// element kind, the primitives beside them). `ta_reported`: the fields
     /// a reader's census reported (`ta <key> of <display>`): sunk.
     pub field_tas: FxHashMap<(TmplId, Atom), (Option<u8>, u16)>,
-    /// DECISIONS 208: while a value contract is built
-    /// (`lib::value_contract_of_toks`), the layouts of this unit it
-    /// describes: each stands in `layouts_out` until the outermost one is
-    /// built.
-    pub(crate) describing: std::cell::RefCell<Option<Vec<String>>>,
     pub ta_reported: crate::pts::FxHashSet<(String, String)>,
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
@@ -510,6 +514,15 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
+    /// MATHB1B: while a namespace pair's intrinsic arm is walked, the
+    /// generic arm's arguments and the node each one evaluated to there
+    /// (`Gen::namespace_pair`).
+    /// Each slot holds the node and the walk position (`expr_seq`) of the
+    /// match.
+    pub(crate) pair_args: Option<Vec<(perry_hir::Expr, Option<(NodeId, usize)>)>>,
+    /// The number of expressions `Gen::expr` has entered: orders a namespace
+    /// pair's argument matches (`Gen::expr`).
+    pub(crate) expr_seq: usize,
     /// Reads guarded by an own-property test (the `IndexGet`'s address)
     /// and the invalidation node watched by `Cons::OwnGate`.
     pub(crate) own_reads: FxHashMap<usize, NodeId>,
@@ -546,6 +559,26 @@ pub struct Gen<'a> {
     /// Per module: its call-only functions' parameters and calls
     /// (`Gen::key_shape_of`).
     pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
+}
+
+/// A plain-async step closure `(__step_value, __step_is_error)` resumes its
+/// body with a normal completion (`__step_is_error` false: the awaited value,
+/// 27.7.5.3 Await step 3, `gen.next(v)`) or with a throw completion (true: the
+/// awaited promise's reason, step 5, `gen.throw(e)`). One parameter carries
+/// both at run time; the solve keeps them apart: the value carrier is the
+/// parameter, the error carrier is one node per step, read wherever
+/// `__step_value` is read under `if (__step_is_error)` and written by every
+/// resume with `true` (`AsyncStepChain`'s reason, `__step_self(e, true)`).
+#[derive(Default)]
+pub(crate) struct StepSplits {
+    /// (module, `__step_value`) -> the step's error carrier.
+    pub(crate) by_value: FxHashMap<(u32, u32), NodeId>,
+    /// (module, `__step_is_error`) -> its `__step_value`.
+    pub(crate) by_flag: FxHashMap<(u32, u32), u32>,
+    /// (module, `__step_self`) -> the step's error carrier.
+    pub(crate) by_self: FxHashMap<(u32, u32), NodeId>,
+    /// The error arms being walked, innermost last: (module, `__step_value`).
+    pub(crate) arms: Vec<(u32, u32)>,
 }
 
 /// Per-function walking context.
@@ -690,6 +723,9 @@ impl<'a> Gen<'a> {
         let r = m.reason("thrown into unknown code");
         m.sink_node(esc, r);
         m.esc_raise = esc;
+        let host = m.node_l("HOSTREPORT");
+        crate::builtins::host_report_readers(&mut m, host);
+        m.host_report = host;
         let acc = m.node_l("ESCACCESSORS");
         let r = m.reason("accessor function of a value unknown code holds");
         m.sink_node(acc, r);
@@ -721,6 +757,7 @@ impl<'a> Gen<'a> {
             export_resolving: Default::default(),
             prop_key_of: FxHashMap::default(),
             thrown,
+            step: StepSplits::default(),
             runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
@@ -743,7 +780,6 @@ impl<'a> Gen<'a> {
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
             field_tas: FxHashMap::default(),
-            describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
             indexed_allocation_sites: FxHashMap::default(),
@@ -852,6 +888,8 @@ impl<'a> Gen<'a> {
             lit_births: FxHashMap::default(),
             default_args: FxHashMap::default(),
             call_lit_arg: None,
+            pair_args: None,
+            expr_seq: 0,
             own_reads: FxHashMap::default(),
             own_store_reads: Default::default(),
             own_test_recv: None,
@@ -902,7 +940,8 @@ impl<'a> Gen<'a> {
                 ));
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 let suspends = f.is_async || f.is_generator || f.was_plain_async;
-                self.m.funcs[fx as usize].ret_param = ret_param::ret_param(&f.params, &f.body, suspends);
+                self.m.funcs[fx as usize].ret_param =
+                    ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1048,245 +1087,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// After the solve: the other units' classes this unit used beyond their
-    /// contract (census reports, design §11.3), by template display. An
-    /// aborted unit reports every contract it consumed, but an open contract
-    /// function: an aborted unit is unknown code holding it, as for one that
-    /// escapes (`open_fn`).
-    ///
-    /// An aborted unit is unknown code holding everything its code names,
-    /// not only what its walk reached before the node bound stopped it: the
-    /// imports it names (its unit imports, the module imports among its
-    /// names) still unnamed are made first (their stand-ins, the layouts
-    /// their contracts reach, every key of a namespace), so each is
-    /// reported. A module import the unit never names is not its to hold.
-    pub(crate) fn reports(&mut self) -> Vec<String> {
-        if self.m.aborted {
-            let view = self.view;
-            let mut rest: Vec<(u32, String)> = self
-                .unnamed_imports
-                .iter()
-                .filter(|((_, local), (imp, _))| {
-                    view.is_none_or(|v| {
-                        v.ext_names.contains(local)
-                            || crate::decl_units::module_of(&imp.source) != imp.source
-                    })
-                })
-                .map(|(k, _)| k.clone())
-                .collect();
-            rest.sort_unstable();
-            for (mi, name) in rest {
-                self.import_value(mi, &name);
-            }
-        }
-        let mut out: Vec<String> = self
-            .stand_ins
-            .iter()
-            .filter(|(_, (_, tm, toks))| {
-                self.m.aborted
-                    || self.m.foreign_written.contains(tm)
-                    || self.m.adds_keys.get(tm).is_some_and(|&k| k > 0)
-                    || toks
-                        .iter()
-                        .any(|&t| self.m.is_escaped(t) || self.m.hard.contains_key(&t))
-            })
-            .map(|(d, _)| d.clone())
-            .collect();
-        // Explain: why this unit reports each contract it consumed.
-        if self.m.explain && !self.m.aborted {
-            let mut why: Vec<String> = Vec::new();
-            for (d, (_, tm, toks)) in &self.stand_ins {
-                if !out.contains(d) {
-                    continue;
-                }
-                let mut rs: Vec<String> = Vec::new();
-                if self.m.foreign_written.contains(tm) {
-                    rs.push("written".into());
-                }
-                if self.m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
-                    rs.push("adds keys".into());
-                }
-                for &t in toks {
-                    if let Some(&r) = self.m.escaped.get(&t) {
-                        rs.push(format!("escaped: {}", self.m.reasons[r as usize]));
-                    }
-                    if let Some(&(_, r)) = self.m.hard.get(&t) {
-                        rs.push(format!("hard: {}", self.m.reasons[r as usize]));
-                    }
-                }
-                why.push(format!("{d}: {}", rs.join("; ")));
-            }
-            why.sort();
-            let unit = self.view.map_or("", |v| v.key.as_str());
-            for w in why {
-                eprintln!("perry: wpfacts explain: unit {unit} reports {w}");
-            }
-        }
-        for ((name, _), &(_, t)) in &self.stand_in_fns {
-            // An aborted unit is unknown code holding everything it names
-            // (ALI cause 4). It reports what no contract grants unknown code:
-            // the layouts and classes it holds (it may store into them,
-            // above) and a function it may call on a receiver of its own.
-            // A call with ⊤ arguments of a function whose receiver is
-            // unused is granted: an open function runs for any caller
-            // (`open_fn`), a closed one's argument contract is ⊤ for an
-            // aborted caller (the driver's `closed_refs`).
-            let escaped = match self.m.aborted {
-                true => !self.receiver_unused(t),
-                false => self.m.is_escaped(t) && !self.open_fn(t),
-            };
-            // DECISIONS 210: used as an object beyond the contract.
-            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
-                out.push(format!("fn:{name}"));
-            }
-        }
-        // A value stored under a named key of it is one the owner does not
-        // see (an element store is the typed array's own data).
-        for (rep, t) in &self.stand_in_tas {
-            let written = self
-                .m
-                .tmpl_of(*t)
-                .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
-            if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
-                if self.m.explain {
-                    let esc = self
-                        .m
-                        .escaped
-                        .get(t)
-                        .map(|&r| self.m.reasons[r as usize].clone());
-                    let hard = self
-                        .m
-                        .hard
-                        .get(t)
-                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
-                    eprintln!(
-                        "perry: wpfacts explain: unit {} reports {rep}: written {written} escaped {esc:?} hard {hard:?}",
-                        self.view.map_or("", |v| v.key.as_str())
-                    );
-                }
-                out.push(rep.clone());
-            }
-        }
-        out.extend(self.override_reports());
-        // A class of another unit this unit gave as a class object's parent
-        // (`Object.setPrototypeOf(B, A)`, `B.__proto__ = A`): a `super()`
-        // runs its constructor on a receiver its unit does not see, as for
-        // a class whose `extends` names it (DECISIONS 57). Not a break: its
-        // unit publishes the constructor contract.
-        for (d, (_, tm, _)) in &self.stand_ins {
-            if self.m.relinked_parents.contains(tm) {
-                out.push(format!("extends {d}"));
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
-    }
-
-    /// A class of this unit with another unit's class `A` as an ancestor
-    /// and the keys it defines (on its prototype, as a birth key or a key
-    /// its instances hold; `*` with computed members or stores): `A`'s unit
-    /// reads `this.k` on its receivers through `A`'s chain only while no
-    /// unit reports `override k of <A>` (DECISIONS 59).
-    fn override_reports(&self) -> Vec<String> {
-        let m = &self.m;
-        let disp: FxHashMap<TmplId, &str> = self
-            .stand_ins
-            .iter()
-            .map(|(d, (_, tm, _))| (*tm, d.as_str()))
-            .collect();
-        if disp.is_empty() {
-            return Vec::new();
-        }
-        let open_node = |n: Option<&NodeId>| {
-            n.is_some_and(|&n| !m.nodes[n as usize].pts.is_empty() || m.nodes[n as usize].prim != 0)
-        };
-        // The keys `t` holds a value under (a load makes an empty field).
-        let held = |t: Tok| -> Vec<Atom> {
-            m.field_keys
-                .get(&t)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&a| open_node(m.fields.get(&(t, a))))
-                .collect()
-        };
-        // Own keys of each class's instances.
-        let mut inst: FxHashMap<TmplId, (Vec<Atom>, bool)> = FxHashMap::default();
-        for (t, k) in m.toks.iter().enumerate() {
-            let TokKind::Obj(tm, _) = *k else { continue };
-            if !matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
-                continue;
-            }
-            let t = t as Tok;
-            let e = inst.entry(tm).or_default();
-            e.0.extend(held(t));
-            e.1 |= open_node(m.field_any.get(&t));
-        }
-        let mut out = Vec::new();
-        for (c, tp) in m.tmpls.iter().enumerate() {
-            let c = c as TmplId;
-            if !matches!(tp.kind, TmplKind::Class { .. })
-                || disp.contains_key(&c)
-                || m.foreign.contains_key(&c)
-            {
-                continue;
-            }
-            // Its other-unit ancestors, through this unit's parents.
-            let mut anc: Vec<TmplId> = Vec::new();
-            let mut work: Vec<TmplId> = tp
-                .parent
-                .into_iter()
-                .chain(tp.parent_links.iter().copied())
-                .collect();
-            let mut seen: Vec<TmplId> = Vec::new();
-            while let Some(p) = work.pop() {
-                if seen.contains(&p) {
-                    continue;
-                }
-                seen.push(p);
-                if disp.contains_key(&p) {
-                    anc.push(p);
-                    continue;
-                }
-                let pp = &m.tmpls[p as usize];
-                work.extend(pp.parent);
-                work.extend(pp.parent_links.iter().copied());
-            }
-            if anc.is_empty() {
-                continue;
-            }
-            let proto = m.tok_index.get(&TokKind::Proto(c)).copied();
-            let mut keys: Vec<Atom> = tp.proto_members.clone();
-            keys.extend(tp.birth_keys.iter().copied());
-            // DECISIONS 234: a key of its instances may disappear or be
-            // redefined (delete, defineProperty): no key of theirs is sure.
-            let mut open = tp.has_computed_members || m.keys_unsure.contains(&c);
-            if let Some(pt) = proto {
-                keys.extend(held(pt));
-                open |= open_node(m.field_any.get(&pt));
-            }
-            if let Some((ks, o)) = inst.get(&c) {
-                keys.extend(ks.iter().copied());
-                open |= *o;
-            }
-            keys.sort_unstable();
-            keys.dedup();
-            for a in anc {
-                if open {
-                    out.push(format!("override * of {}", disp[&a]));
-                }
-                for &k in &keys {
-                    let name = &m.atoms[k as usize];
-                    if name != "constructor" {
-                        out.push(format!("override {name} of {}", disp[&a]));
-                    }
-                }
-            }
-        }
-        out
-    }
-
     /// A stand-in of another unit's function that unknown code may hold
     /// (design §18.9, DECISIONS 67): an open contract function (no
     /// argument contract, decision 19) whose receiver is unused. Its
@@ -1301,12 +1101,6 @@ impl<'a> Gen<'a> {
         self.stand_in_fc
             .get(&t)
             .is_some_and(|c| c.closed.is_none() && !c.callable && c.lexical_this)
-    }
-
-    /// A stand-in of another unit's function whose contract uses no
-    /// receiver.
-    fn receiver_unused(&self, t: Tok) -> bool {
-        self.stand_in_fc.get(&t).is_some_and(|c| c.lexical_this)
     }
 
     /// Resolve the typed parameters' entry-guard candidates (every class and
@@ -1805,12 +1599,7 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for ((cm, named), method_key) in c
-            .computed_members
-            .iter()
-            .zip(named)
-            .zip(method_named)
-        {
+        for ((cm, named), method_key) in c.computed_members.iter().zip(named).zip(method_named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -2336,27 +2125,6 @@ impl<'a> Gen<'a> {
             let w = self.at_module_scope(|g| g.stand_in_value(0, name, c));
             self.m.edge(w, n);
         }
-    }
-
-    /// The other units' bindings this unit writes (`local_write`), each by
-    /// its HIR id with its key: its unit's path and its name there.
-    pub(crate) fn written_keys(&self) -> Vec<(u32, (String, String))> {
-        let Some(v) = self.view else {
-            return Vec::new();
-        };
-        v.written
-            .iter()
-            .filter_map(|(id, local)| {
-                v.imports.iter().find_map(|imp| {
-                    imp.specifiers.iter().find_map(|s| match s {
-                        ImportSpecifier::Named { imported, local: l } if l == local => {
-                            Some((*id, (imp.source.clone(), imported.clone())))
-                        }
-                        _ => None,
-                    })
-                })
-            })
-            .collect()
     }
 
     pub(crate) fn global(&mut self, mi: u32, id: u32) -> NodeId {

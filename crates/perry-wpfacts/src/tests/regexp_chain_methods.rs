@@ -41,16 +41,30 @@ fn src(tail: &str) -> String {
 /// GLTF json keys (`weights`, `stride`, `indexOf`) read on RegExp literals.
 #[test]
 fn an_absent_regexp_key_reads_undefined() {
-    let pf = whole(&src("const f: any = re.weights; if (typeof f === \"function\") f(cb);"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "const f: any = re.weights; if (typeof f === \"function\") f(cb);",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// `indexOf` is `Array.prototype`'s and `String.prototype`'s, not on a
 /// RegExp's chain: the value read is `undefined`, its call throws.
 #[test]
 fn an_absent_regexp_method_value_takes_no_argument() {
-    let pf = whole(&src("const g: any = re.indexOf; try { g(cb); } catch (e) { console.log(\"t\"); }"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "const g: any = re.indexOf; try { g(cb); } catch (e) { console.log(\"t\"); }",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a key written onto the chain through ⊤ reads what was stored.
@@ -59,37 +73,64 @@ fn a_chain_key_written_through_top_reads_the_store() {
     let pf = whole(&src(
         "(Object.prototype as any).weights = unknown; const f: any = re.weights; f(cb);",
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the absent key's value handed to unknown code with the argument.
 #[test]
 fn an_absent_key_value_given_to_unknown_code_with_the_argument_escapes() {
     let pf = whole(&src("new Function(process.argv[4])()(re.weights, cb);"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// `Object.prototype.toLocaleString` on a RegExp: the arguments are unused.
 #[test]
 fn regexp_tolocalestring_uses_no_argument() {
     let pf = whole(&src("console.log(re.toLocaleString(cb, cb));"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// skinbench: an array holding a RegExp, `toLocaleString`'d with arguments
 /// (each element's `toLocaleString(locales, options)` is invoked).
 #[test]
 fn array_tolocalestring_of_a_regexp_element_uses_no_argument() {
-    let pf = whole(&src("const xs: any = [re, 1]; console.log(xs.toLocaleString(cb, cb));"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "const xs: any = [re, 1]; console.log(xs.toLocaleString(cb, cb));",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A method on neither `RegExp.prototype` nor `Object.prototype`: the call
 /// throws a TypeError, its argument is never used.
 #[test]
 fn an_absent_regexp_method_uses_no_argument() {
-    let pf = whole(&src("try { re.nosuchmethod(cb); } catch (e) { console.log(\"t\"); }"));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    let pf = whole(&src(
+        "try { re.nosuchmethod(cb); } catch (e) { console.log(\"t\"); }",
+    ));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: `hasOwnProperty` ToPropertyKey's its argument, so its own
@@ -100,23 +141,35 @@ fn regexp_hasownproperty_runs_the_key_tostring() {
         "const k = { toString() { unknown.keep(kept); return \"k\"; } };
          console.log(re.hasOwnProperty(k));",
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a method unknown code may have written onto the chain runs
 /// with the argument.
 #[test]
 fn a_written_chain_method_gets_the_argument() {
-    let pf = whole(&src(
-        "(Object.prototype as any)[process.argv[3]] = unknown;
-         console.log(re.nosuchmethod(cb));",
-    ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    let pf = whole(&src("(Object.prototype as any)[process.argv[3]] = unknown;
+         console.log(re.nosuchmethod(cb));"));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the argument really handed to unknown code escapes.
 #[test]
 fn an_argument_given_to_unknown_code_escapes() {
-    let pf = whole(&src("new Function(process.argv[4])()(cb); console.log(re.toLocaleString());"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    let pf = whole(&src(
+        "new Function(process.argv[4])()(cb); console.log(re.toLocaleString());",
+    ));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

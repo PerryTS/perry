@@ -471,6 +471,10 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     if obj_ptr < 0x1000 {
         return value;
     }
+    // A Proxy: every lookup is its [[Get]], every call has this = the Proxy.
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return crate::proxy_hooks::proxy_to_primitive(value, hint);
+    }
     // Skip symbols / buffers / arrays — they have their own coercion rules.
     if is_registered_symbol(obj_ptr) {
         return value;

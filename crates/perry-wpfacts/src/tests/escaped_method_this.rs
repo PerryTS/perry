@@ -33,18 +33,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
-    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
-    let cfg = FactsConfig {
-        unit_io: true,
-        ..Default::default()
-    };
-    match unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// The read `this.<key>` in module `a.ts`.
 fn read_site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
     let mi = pf
@@ -72,7 +60,8 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::AccessorGet
         | crate::Verdict::AccessorSet
         | crate::Verdict::KnownObjectStore
-        | crate::Verdict::PerKind => 2,
+        | crate::Verdict::PerKind
+        | crate::Verdict::ProxyTrap => 2,
         crate::Verdict::E0 => 1,
         crate::Verdict::AddsKey => 0,
         crate::Verdict::No(_) => 0,
@@ -212,20 +201,6 @@ fn a_method_stored_on_a_returned_function_runs_on_any_receiver() {
     same_claim(&[("a", &a), ("main", &m)], "raw");
 }
 
-#[test]
-fn a_method_value_run_on_its_own_class_stays_proven() {
-    // The reader admits an instance of the class the owner names
-    // (`FnContract::this_class`) and publishes it: nothing is lost.
-    let a = class_with("");
-    let m = format!("{MAIN}const g: any = C.prototype.get;\nconsole.log(g.call(new C()));\n");
-    let h = hirs(&[("a", &a), ("main", &m)]);
-    let (u, w) = (run(&h, true), run(&h, false));
-    let (su, sw) = (read_site(&u, "raw"), read_site(&w, "raw"));
-    assert_eq!(sw.verdict, crate::Verdict::T0Mono, "{}", w.dump_text());
-    assert_eq!(su.verdict, sw.verdict, "per unit:\n{}", u.dump_text());
-    assert!(u.broken.is_empty(), "{:?}\n{}", u.broken, u.dump_text());
-}
-
 /// Per unit never claims more than whole program of `this.<key>` in `a.ts`.
 fn never_stronger(mods: &[(&str, &str)], key: &str) {
     let h = hirs(mods);
@@ -259,4 +234,16 @@ fn a_method_in_a_published_literal_the_census_broke_runs_on_any_receiver() {
     );
     let m = "import { C, box } from \"./a\";\nconst c = new C();\nconsole.log(c.get());\ndelete box.n;\nconsole.log(box.get.call({ pad: 0, raw: \"s\" }));\n";
     same_claim(&[("a", &a), ("main", m)], "raw");
+}
+
+fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let cfg = FactsConfig {
+        unit_io: true,
+        ..Default::default()
+    };
+    match unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

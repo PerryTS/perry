@@ -776,7 +776,9 @@ fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
 
     // String / array / class / Map / Set / Promise / fetch / static /
     // instance method dispatch — the big PropertyGet branch.
-    if let Some(v) = property_get::try_lower_property_get_method_call(ctx, callee, args)? {
+    if let Some(v) = crate::codegen::signature_entry::with_method_site(callee, || {
+        property_get::try_lower_property_get_method_call(ctx, callee, args)
+    })? {
         return Ok(v);
     }
 

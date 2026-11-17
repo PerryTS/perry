@@ -44,7 +44,14 @@ impl<'a> Gen<'a> {
             for c in self.classes_of(mi) {
                 let tm = self.mods[mi].classes[&c.name];
                 let setters = self.chain_setters(tm);
-                let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &Default::default(), true, &setters);
+                let ph = crate::ctor_phase::analyze_in_present_ms(
+                    c,
+                    &shapes,
+                    &Default::default(),
+                    true,
+                    &setters,
+                    self.m.ns_pairs,
+                );
                 self.ctor_phase.insert(tm, ph);
             }
         }
@@ -116,6 +123,7 @@ impl<'a> Gen<'a> {
         if self.m.act.is_some() {
             self.dynamic_only = self.dynamic_only_modules();
         }
+        self.m.worker_side = self.worker_side();
         if !self.dynamic_only.is_empty() {
             for mi in 0..modules.len() as u32 {
                 let f = self.synthetic_fn(mi, "<init>");
@@ -165,6 +173,92 @@ impl<'a> Gen<'a> {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Per module: may a Worker of the program run it? A Worker runs the
+    /// compiled entry module its filename names (perry-stdlib
+    /// worker_threads entry table: the driver registers each entry
+    /// `new Worker(<literal>)` / `new URL(<literal>, import.meta.url)`
+    /// names, `FactsConfig::roots`) and every module that entry loads, by
+    /// any import edge or re-export. A Worker whose filename names no entry
+    /// (`paths` empty or partial; eval mode) may run any module: then every
+    /// module is one.
+    fn worker_side(&self) -> Vec<bool> {
+        let n = self.modules.len();
+        let mut unnamed = false;
+        // The Worker entries: each `new Worker( spec )` names its module
+        // through the import the driver resolved for that specifier (as
+        // the driver's `module_roots` does). `FactsConfig::roots` holds the
+        // program entry too, so it does not name them. A specifier with no
+        // such module: unnamed.
+        let mut entries: Vec<u32> = Vec::new();
+        for (_, module) in &self.modules {
+            perry_hir::for_each_worker_new(module, &mut |e| {
+                if let perry_hir::Expr::WorkerNew {
+                    paths,
+                    partial,
+                    is_eval,
+                    ..
+                } = e
+                {
+                    unnamed |= *is_eval || *partial || paths.is_empty();
+                    for p in paths {
+                        let t = module
+                            .imports
+                            .iter()
+                            .filter(|i| &i.source == p)
+                            .find_map(|i| i.resolved_path.as_ref())
+                            .and_then(|r| self.path_index.get(r).copied());
+                        match t {
+                            Some(t) => entries.push(t),
+                            None => unnamed = true,
+                        }
+                    }
+                }
+            });
+        }
+        if unnamed || self.m.unit_mode {
+            return vec![true; n];
+        }
+        let mut side = vec![false; n];
+        entries.sort_unstable();
+        entries.dedup();
+        let mut work = entries;
+        for &m in &work {
+            side[m as usize] = true;
+        }
+        while let Some(mi) = work.pop() {
+            let mut next: Vec<u32> = self
+                .imports_of(mi as usize)
+                .iter()
+                .filter(|i| !i.type_only && !i.runtime_erased)
+                .filter_map(|i| i.resolved_path.as_ref())
+                .filter_map(|r| self.path_index.get(r).copied())
+                .collect();
+            for e in &self.modules[mi as usize].1.exports {
+                let source = match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                    perry_hir::Export::Named { .. } => continue,
+                };
+                match self.reexport_target(mi, source) {
+                    Some(t) => next.push(t),
+                    // An unresolved re-export: any module may load.
+                    None if source.starts_with('.') || source.starts_with('/') => {
+                        return vec![true; n];
+                    }
+                    None => {}
+                }
+            }
+            for t in next {
+                if !side[t as usize] {
+                    side[t as usize] = true;
+                    work.push(t);
+                }
+            }
+        }
+        side
     }
 
     /// The modules that load only through `import()`: no static import or
@@ -267,6 +361,11 @@ impl<'a> Gen<'a> {
         let r = self.m.raise_of(init_fn);
         if self.dynamic_only.contains(&mi) {
             self.m.edge(r, self.thrown);
+        } else {
+            // R-HOSTREPORT: the runtime reports it (exception.rs
+            // `exit_on_uncaught`).
+            let h = self.m.host_report;
+            self.m.edge(r, h);
         }
         // A target this module requires lazily (a deferred CommonJS require)
         // runs its body when the require runs, through the path registry.
@@ -564,7 +663,11 @@ impl<'a> Gen<'a> {
         let TmplKind::Class { module, name, .. } = &self.m.tmpls[tm as usize].kind else {
             return None;
         };
-        self.modules[*module as usize].1.classes.iter().find(|c| &c.name == name)
+        self.modules[*module as usize]
+            .1
+            .classes
+            .iter()
+            .find(|c| &c.name == name)
     }
 
     /// R9STORE3 rule S: the key -> setter map of `tm`'s chain: for each key
@@ -574,7 +677,10 @@ impl<'a> Gen<'a> {
     /// under it, no method or field (a field is an own key at construction)
     /// and the setter body has no `return` (it would end the walk's
     /// constructor). The walk stops at a class this program does not show.
-    pub(crate) fn chain_setters(&self, tm: TmplId) -> std::collections::BTreeMap<String, &'a perry_hir::Function> {
+    pub(crate) fn chain_setters(
+        &self,
+        tm: TmplId,
+    ) -> std::collections::BTreeMap<String, &'a perry_hir::Function> {
         let mut out = std::collections::BTreeMap::new();
         let mut named = std::collections::BTreeSet::new();
         let mut cur = Some(tm);
@@ -772,7 +878,14 @@ impl<'a> Gen<'a> {
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
             let setters = self.chain_setters(tm);
-            let ph = crate::ctor_phase::analyze_in_present_ms(c, &shapes, &present, true, &setters);
+            let ph = crate::ctor_phase::analyze_in_present_ms(
+                c,
+                &shapes,
+                &present,
+                true,
+                &setters,
+                self.m.ns_pairs,
+            );
             let followed = !ph.m_calls.is_empty() || !ph.s_calls.is_empty();
             self.ctor_phase.insert(tm, ph);
             if followed {
@@ -816,9 +929,11 @@ impl<'a> Gen<'a> {
         };
         for (tm, present) in todo {
             let calls = match self.ctor_phase.get(&tm) {
-                Some(ph) if !ph.m_calls.is_empty() || !ph.s_calls.is_empty() => {
-                    ph.m_calls.union(&ph.s_calls).cloned().collect::<std::collections::BTreeSet<String>>()
-                }
+                Some(ph) if !ph.m_calls.is_empty() || !ph.s_calls.is_empty() => ph
+                    .m_calls
+                    .union(&ph.s_calls)
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<String>>(),
                 _ => continue,
             };
             // Some class below `tm` defines a followed method.
@@ -828,7 +943,9 @@ impl<'a> Gen<'a> {
                 while let Some(x) = cur {
                     if x == tm {
                         return between.iter().any(|b: &TmplId| {
-                            by_tm.get(b).is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
+                            by_tm
+                                .get(b)
+                                .is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
                         });
                     }
                     between.push(x);
@@ -841,7 +958,13 @@ impl<'a> Gen<'a> {
             }
             let (mi, c) = by_tm[&tm];
             let shapes = crate::ctor_phase::plain_shapes(&modules[mi].1.classes);
-            let off = crate::ctor_phase::analyze_in_present_m(c, &shapes, present, false);
+            let off = crate::ctor_phase::analyze_in_present_m(
+                c,
+                &shapes,
+                present,
+                false,
+                self.m.ns_pairs,
+            );
             if !self.ctor_phase[&tm].same_birth(&off) {
                 self.ctor_phase.insert(tm, off);
             }
@@ -854,7 +977,8 @@ impl<'a> Gen<'a> {
             while let Some(p) = cur {
                 if let Some(ph) = self.ctor_phase.get(&p) {
                     if ph.m_calls.iter().chain(&ph.s_calls).any(|k| {
-                        seen.iter().any(|s| by_tm.get(s).is_some_and(|(_, sc)| defines(sc, k)))
+                        seen.iter()
+                            .any(|s| by_tm.get(s).is_some_and(|(_, sc)| defines(sc, k)))
                     }) {
                         leaks.insert(c);
                         break;
@@ -875,7 +999,11 @@ impl<'a> Gen<'a> {
         // constructor, whose read hands out a closure that holds `this`.
         let mut up = self.m.tmpls[tm as usize].parent;
         while let Some(p) = up {
-            if self.ctor_phase.get(&p).is_some_and(|ph| !ph.closure_keys.is_empty()) {
+            if self
+                .ctor_phase
+                .get(&p)
+                .is_some_and(|ph| !ph.closure_keys.is_empty())
+            {
                 return true;
             }
             up = self.m.tmpls[p as usize].parent;
@@ -938,7 +1066,7 @@ impl<'a> Gen<'a> {
             self.m.store_only.insert(fxi, ks);
         }
         if fn_ctor {
-            self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
+            self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f, self.m.ns_pairs));
         }
         self.rooted_stores.extend(crate::rooted::stores(&f.body));
         // DECISIONS 225: a body generation walks once it can run.
@@ -1068,7 +1196,9 @@ impl<'a> Gen<'a> {
             self.m.cur_fn = prev;
         }
         if f.is_async && !f.is_generator {
-            fx = self.async_body(&fx).0;
+            let (afx, rejected) = self.async_body(&fx);
+            fx = afx;
+            self.m.gen_region = Some(rejected);
         }
         self.params(&fx, &f.params);
         if f.is_generator {
@@ -1503,9 +1633,18 @@ impl<'a> Gen<'a> {
         for r in crate::born_with::runs(ss) {
             let e = self.local(fx.module, r.e);
             let news = r.news.iter().map(|&x| self.local(fx.module, x)).collect();
-            let calls = r.calls.iter().map(|(o, k, on_e)| (*o, self.m.atom(k), *on_e)).collect();
+            let calls = r
+                .calls
+                .iter()
+                .map(|(o, k, on_e)| (*o, self.m.atom(k), *on_e))
+                .collect();
             let module = fx.module;
-            self.m.born_recs.push(crate::born_with::BornRec { module, e, news, calls });
+            self.m.born_recs.push(crate::born_with::BornRec {
+                module,
+                e,
+                news,
+                calls,
+            });
         }
         let mut pushed = 0;
         let mut i = 0;
@@ -1562,7 +1701,11 @@ impl<'a> Gen<'a> {
             self.for_of_walks.insert((fx.module, array, counter));
         }
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
-        let first = self.m.proto_first_stmts.get(&(s as *const Stmt as usize)).copied();
+        let first = self
+            .m
+            .proto_first_stmts
+            .get(&(s as *const Stmt as usize))
+            .copied();
         let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
         self.stmt_inner(fx, s);
         self.m.proto_first_cur = prev_first;
@@ -1613,15 +1756,22 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let n = self.local(fx.module, *id);
-                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) = (*mutable, init) {
+                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) =
+                    (*mutable, init)
+                {
                     if let perry_hir::Expr::LocalGet(k) = index.as_ref() {
                         self.same_key_reads
                             .insert((fx.module, *id), (*k, object.as_ref().clone(), fx.f));
                     }
                 }
-                if ["__forof_lit_src_", "__forof_lit_arr_", "__iterator_record_", "__arr_"]
-                    .iter()
-                    .any(|p| name.starts_with(p))
+                if [
+                    "__forof_lit_src_",
+                    "__forof_lit_arr_",
+                    "__iterator_record_",
+                    "__arr_",
+                ]
+                .iter()
+                .any(|p| name.starts_with(p))
                 {
                     self.m.for_of_relays.insert(n);
                 }
@@ -1702,7 +1852,18 @@ impl<'a> Gen<'a> {
                 // it jumps to (`narrow_leave`).
                 let pre = self.narrow_snapshot();
                 let k = self.narrow_guard(fx, condition, true);
+                // `if (__step_is_error)`: a plain-async step's error arm.
+                let arm = match condition {
+                    Expr::LocalGet(id) => self.step.by_flag.get(&(fx.module, *id)).copied(),
+                    _ => None,
+                };
+                if let Some(v) = arm {
+                    self.step.arms.push((fx.module, v));
+                }
                 self.stmts(&then_fx, then_branch);
+                if arm.is_some() {
+                    self.step.arms.pop();
+                }
                 self.narrow_pop(k);
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
@@ -1865,7 +2026,10 @@ impl<'a> Gen<'a> {
                             && !self.written_locals(fx.module).contains(id) =>
                     {
                         let pn = self.local(fx.module, *id);
-                        self.m.funcs[f as usize].params.iter().position(|&q| q == pn)
+                        self.m.funcs[f as usize]
+                            .params
+                            .iter()
+                            .position(|&q| q == pn)
                     }
                     _ => None,
                 };

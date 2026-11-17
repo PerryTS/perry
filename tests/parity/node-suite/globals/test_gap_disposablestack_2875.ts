@@ -52,3 +52,26 @@ console.log(Object.getPrototypeOf(TypeError.prototype) === Error.prototype);
 console.log(Object.prototype.toString.call(err));
 console.log(String(err));
 console.log(JSON.stringify(new SuppressedError(new Error("a"), new Error("b")).message));
+
+// 6) #12629: every stack inherits its constructor's prototype — through
+// `new`, an aliased constructor and `move()` — so `instanceof`, a method read
+// as a value and the `@@toStringTag` answer like node.
+const DS: any = DisposableStack;
+const ADS: any = AsyncDisposableStack;
+for (const [label, s, C] of [
+  ["new", new DisposableStack(), DisposableStack],
+  ["alias", new DS(), DisposableStack],
+  ["move", new DisposableStack().move(), DisposableStack],
+  ["async new", new AsyncDisposableStack(), AsyncDisposableStack],
+  ["async alias", new ADS(), AsyncDisposableStack],
+] as [string, any, any][]) {
+  console.log(label, Object.getPrototypeOf(s) === C.prototype, s instanceof C,
+    typeof s.use, typeof s.defer, Object.prototype.toString.call(s));
+}
+const deferred: string[] = [];
+const viaProto = new DisposableStack();
+DisposableStack.prototype.defer.call(viaProto, () => deferred.push("proto-defer"));
+const extracted = viaProto.defer;
+extracted.call(viaProto, () => deferred.push("extracted"));
+viaProto.dispose();
+console.log(deferred.join(","), viaProto.disposed);

@@ -8,6 +8,49 @@ fn run_web_source(source: &str) -> String {
 /// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, STUB_DOM, after_boot)
+}
+
+/// The runtime injects a `<style>` at load, so `document` must exist even for
+/// programs that never build a widget.
+const STUB_DOM: &str = r#"
+const stub = {appendChild() {}, style: {}};
+globalThis.document = {createElement: () => ({...stub}), getElementById: () => null, head: stub, body: stub};
+"#;
+
+/// Enough of the DOM for a perry/ui widget to be built, inspected and sent an
+/// event: an element tree with text, attributes as properties, listeners that
+/// `dispatch(type)` fires, and descendant tag selectors for `querySelector`.
+const WIDGET_DOM: &str = r#"
+class FakeElement {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
+  get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
+  set textContent(value) { this.text = String(value); this.children = []; }
+  set innerHTML(value) { this.text = ""; this.children = []; }
+  setAttribute(name, value) { this[name] = String(value); }
+  descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
+  querySelector(selector) {
+    let found = this;
+    for (const tag of selector.toUpperCase().split(" ")) {
+      found = found.descendants().find(e => e.tagName === tag);
+      if (!found) return null;
+    }
+    return found;
+  }
+}
+globalThis.document = {createElement: tag => new FakeElement(tag), getElementById: () => null, head: new FakeElement("head"), body: new FakeElement("body")};
+"#;
+
+/// `run_web_source_then` against `WIDGET_DOM`; `after_boot` finds the widgets in
+/// the runtime's `uiHandles`.
+fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, WIDGET_DOM, after_boot)
+}
+
+fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     // The HIR transforms `perry --target web` runs before wasm emission.
@@ -32,8 +75,7 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let script = format!(
         r#"
 globalThis.window = globalThis;
-const stub = {{appendChild() {{}}, style: {{}}}};
-globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () => null, head: stub, body: stub}};
+{dom}
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
@@ -578,6 +620,28 @@ try {
     );
 }
 
+// An async body is emitted as JavaScript, and every `JSON.stringify` reaches it as
+// `JsonStringifyFull`: a request body built there must be the JSON text, and the
+// replacer and space arguments must apply.
+#[test]
+fn async_body_json_stringify_feeds_a_request_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function tok(): string { return "Bearer " + String(6 * 7); }
+async function f(obj: any): Promise<string> {
+  const req = new Request("http://127.0.0.1/x", { method: "POST", body: JSON.stringify(obj) });
+  const pretty = JSON.stringify([1], null, 2);
+  const keys = JSON.stringify(obj, ["a", "t"]);
+  return (await req.text()) + " " + pretty.length + " " + keys;
+}
+f({ a: 1, b: [2, 3], t: tok() }).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        r#"{"a":1,"b":[2,3],"t":"Bearer 42"} 7 {"a":1,"t":"Bearer 42"}"#
+    );
+}
+
 // `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
 // user instance throws TypeError instead of reaching the bridge fallback.
 #[test]
@@ -597,6 +661,43 @@ proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto 
     );
 }
 
+// A bare read of a host getter (`res.status`) reaches an async body as a native call
+// with no arguments, as `res.text()` does: the getter yields its value and the method
+// is still called.
+#[test]
+fn async_body_reads_host_getters_and_calls_host_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  const head = r.status + " " + r.ok + " " + r.statusText + " " + r.headers.get("content-type");
+  return head + " " + (await r.text());
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "200 true OK text/plain hi"
+    );
+}
+
+// A zero-argument native method the object lacks still throws, as the call would.
+#[test]
+fn async_body_call_of_a_missing_host_method_throws() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const r = await fetch("data:text/plain,hi");
+  return r.missing();
+}
+f().then((v) => console.log("value " + v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "threw TypeError: missing is not a function"
+    );
+}
+
 // A method name is any string (`q["it's"]()`); the async JS emitter quotes it as a literal.
 #[test]
 fn an_async_body_calls_a_method_whose_name_needs_escaping() {
@@ -609,6 +710,28 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
         "quoted"
+    );
+}
+
+// `fetchWithAuth` / `fetchPostWithAuth` in an async body send the request the WASM arms
+// send: the auth header as `Authorization`, POST with the body. A stub `fetch` echoes
+// what it received; the timer lets it be installed after boot.
+#[test]
+fn async_body_fetch_with_auth_sends_the_auth_header() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+async function f(): Promise<string> {
+  const g = await fetchWithAuth("http://h/g", "Bearer a");
+  const p = await fetchPostWithAuth("http://h/p", "Bearer b", '{"x":1}');
+  return (await g.text()) + " " + (await p.text());
+}
+setTimeout(() => { f().then((v) => console.log(v)).catch((e) => console.log("threw " + e)); }, 0);
+"#,
+            r#"globalThis.fetch = async (url, init) => new Response(
+  [url, init.method ?? "GET", init.body ?? "-", init.headers.Authorization].join("|"));"#
+        ),
+        r#"http://h/g|GET|-|Bearer a http://h/p|POST|{"x":1}|Bearer b"#
     );
 }
 
@@ -627,6 +750,26 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
         "11 2"
+    );
+}
+
+#[test]
+fn table_update_row_count_renders_the_new_rows() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Table, Text, tableSetColumnHeader, tableUpdateRowCount } from "perry/ui";
+const table = Table(3, 1, (row: number, col: number) => Text("r" + row));
+tableSetColumnHeader(table, 0, "Name");
+tableUpdateRowCount(table, 4);
+"#,
+            r#"
+const table = [...uiHandles.values()].find(e => e.tagName === "TABLE");
+const rows = table.querySelector("tbody").children;
+console.log(table.querySelector("thead tr").textContent + " " + rows.length + " " + rows[rows.length - 1].textContent);
+"#
+        ),
+        "Name 4 r3"
     );
 }
 
@@ -658,6 +801,26 @@ console.log(bump(5) + " " + total);
     );
 }
 
+// `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
+// is a symbol, as `ImageSymbol(name)` is.
+#[test]
+fn image_keeps_alt_text_in_both_forms() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+import { Image } from "perry/ui";
+Image("x.png", "photo");
+Image({ url: "y.png", alt: "avatar" });
+Image({ systemName: "gear" });
+"#,
+            r#"
+for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.textContent);
+"#
+        ),
+        "x.png photo\ny.png avatar\n\u{2b1c} gear"
+    );
+}
+
 #[test]
 fn a_generator_resumes_returns_and_throws_like_node() {
     assert_eq!(
@@ -680,6 +843,23 @@ console.log(d.next("hi").value);
 "#
         ),
         "fin\n{\"value\":1,\"done\":false}{\"value\":2,\"done\":false}{\"done\":true}\nfin\n{\"value\":7,\"done\":true}\nthrew boom\n{\"done\":true}\ngot hi"
+    );
+}
+
+#[test]
+fn section_renders_its_children_after_the_legend() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Section, Text } from "perry/ui";
+Section("Contact", [Text("phone"), Text("email")]);
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+console.log(fieldset.children.map(c => c.tagName + ":" + c.textContent).join(" "));
+"#
+        ),
+        "LEGEND:Contact SPAN:phone SPAN:email"
     );
 }
 
@@ -711,6 +891,27 @@ console.log(p + q);
     );
 }
 
+// perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
+#[test]
+fn picker_on_change_is_called_with_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Picker, pickerAddItem } from "perry/ui";
+const picker = Picker((index: number) => { console.log("picker " + index); });
+pickerAddItem(picker, "first");
+pickerAddItem(picker, "second");
+"#,
+            r#"
+const select = [...uiHandles.values()].find(e => e.tagName === "SELECT");
+select.selectedIndex = 1;
+select.dispatch("change");
+"#
+        ),
+        "picker 1"
+    );
+}
+
 #[test]
 fn a_generator_keeps_its_locals_across_resumes() {
     assert_eq!(
@@ -723,5 +924,751 @@ console.log(first.join(","));
 "#
         ),
         "0,1,2,3"
+    );
+}
+
+// `super.m()` runs the parent's `m` on the same receiver, even when the receiver's
+// class overrides `m`, and skips a parent that does not define it.
+#[test]
+fn a_super_method_call_runs_the_parent_implementation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { k = "a"; who(n: number): string { return "A" + n + this.k; } }
+class B extends A { who(n: number): string { return "B>" + super.who(n + 1); } }
+class C extends B { k = "c"; }
+class D extends C { who(n: number): string { return "D>" + super.who(n * 10); } }
+console.log(new B().who(1));
+console.log(new D().who(2));
+class E extends A { r: string; constructor() { super(); this.r = super.who(5); } who(n: number): string { return "E"; } }
+console.log(new E().r);
+"#
+        ),
+        "B>A2a\nD>B>A21c\nA5a"
+    );
+}
+
+// An accessor on a class in the walk shadows an ancestor's method of that name:
+// `super.m()` calls what B's `get m` returns, not A's `m`.
+#[test]
+fn a_super_method_call_reads_a_shadowing_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { get m(): any { return () => "B.get"; } }
+class C extends B { m(): string { return "C>" + super.m(); } }
+console.log(new C().m());
+"#
+        ),
+        "C>B.get"
+    );
+}
+
+// An arrow inside a class method resolves `super` from the method's class.
+#[test]
+fn a_super_method_call_in_an_arrow_starts_at_the_enclosing_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A2 { m(): string { return "A2"; } }
+class B2 extends A2 { m(): string { const f = () => super.m(); return "B2>" + f(); } }
+console.log(new B2().m());
+"#
+        ),
+        "B2>A2"
+    );
+}
+
+// A setter-only accessor on a class in the walk ends the lookup: its read value is
+// undefined, so `super.m()` throws a TypeError instead of reaching an ancestor's `m`.
+#[test]
+fn a_super_method_call_stops_at_a_setter_only_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { m(): string { return "A.m"; } }
+class B extends A { set m(v: any) { } }
+class C extends B { m(): string { try { return "C>" + super.m(); } catch (e) { return (e instanceof TypeError) + ""; } } }
+console.log(new C().m());
+"#
+        ),
+        "true"
+    );
+}
+
+// `super.m(args)` reads `super.m` before it evaluates the arguments, as `o.m(args)` does.
+#[test]
+fn a_super_method_call_reads_the_property_before_the_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let state = 0;
+class A { get m(): any { const seen = state; return (x: number) => seen + ":" + x; } }
+class B extends A { m(): any { return super.m(state = 1); } }
+console.log(new B().m());
+"#
+        ),
+        "0:1"
+    );
+}
+
+// A getter that returns a non-callable makes `super.m()` throw a TypeError.
+#[test]
+fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { get n(): any { return null; } get k(): any { return 42; } }
+class B extends A {
+  t(f: () => any): string { try { f(); return "no throw"; } catch (e) { return (e instanceof TypeError) + ""; } }
+  run(): string { return this.t(() => super.n()) + " " + this.t(() => super.k()); }
+}
+console.log(new B().run());
+"#
+        ),
+        "true true"
+    );
+}
+
+// An assignment-pattern default applies to `undefined` (a missing element, a
+// missing property) and never to `null` or a falsy value.
+#[test]
+fn assignment_pattern_defaults_apply_to_undefined() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let x: any, y: any, p: any;
+[x = 5] = [];
+console.log(x);
+[x = 5, y = 6] = [undefined, null];
+console.log(x, y);
+[x = 5] = [0];
+console.log(x);
+({ a: p = 8 } = {} as any);
+console.log(p);
+[[x = 1], { b: y = 2 }] = [[], {}] as any;
+console.log(x, y);
+for ([x = 10] of [[], [7]] as any[]) console.log(x);
+"#
+        ),
+        "5\n5 null\n0\n8\n1 2\n10\n7"
+    );
+}
+
+/// #14734: a bridge call stores its arguments only into the frame it opened.
+/// A slot above the open frame is where the next nested frame is written, so
+/// the calls overwrote each other's arguments (`join` on an `any` receiver, and
+/// the `class_call_method` fallback that a value-position `o.list.push(v)` takes).
+#[test]
+fn bridge_calls_store_only_into_the_frame_they_open() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function f(s: any) { return s.join(","); }
+function g(s: any, t: any) { return s.join("-") + "|" + t.join("+"); }
+console.log(f([1, 2]));
+console.log("pair", g([1, 2], [3, 4]), g(["a"], ["b", "c"]));
+const o = { list: [] as number[] };
+console.log("push", o.list.push(7), o.list.push(8), o.list.join(","));
+"#
+        ),
+        "1,2\npair 1-2|3+4 a|b+c\npush 1 2 7,8"
+    );
+}
+
+// A tagged template calls its tag with the call site's strings array, whose `raw`
+// holds the unescaped text and which is the same object on every evaluation, through
+// a static method, an instance method or a function.
+#[test]
+fn a_tagged_template_passes_its_strings_array_to_any_tag() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { static tag(s: string[], a: any, b: any) { return s.join("|") + "/" + a + "," + b; } }
+console.log(T.tag`a${1}b${2}c`);
+class K { m = "M"; tag(s: any, v: any) { return this.m + s[0] + v + s[1]; } }
+console.log(new K().tag`v=${3}!`);
+function raw(s: TemplateStringsArray) { return s.raw[0] + "|" + s.raw.length + "|" + s[0]; }
+console.log(raw`a\nb`);
+function anyRaw(s: any) { return s.raw[0] + "," + s.raw[1]; }
+console.log(anyRaw`x\ty${0}z`);
+function id(s: any) { return s; }
+function site() { return id`q`; }
+const a = site();
+console.log(a === site(), a === id`q`, Array.isArray(a), a.length);
+"#
+        ),
+        "a|b|c/1,2\nMv=3!\na\\nb|1|a\nb\nx\\ty,z\ntrue false true 1"
+    );
+}
+
+/// #14733: every object pattern opens with RequireObjectCoercible on its
+/// source, which hands the source through or throws a TypeError for a nullish one.
+#[test]
+fn object_patterns_bind_from_their_source_and_reject_nullish() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const arr = [{ k: 1 }, { k: 2 }];
+for (const { k } of arr) console.log("k", k);
+const v: any = { a: 3, b: { c: 4 } };
+const { a, b: { c } } = v;
+console.log("decl", a, c);
+let reads = 0;
+function src(): any { reads++; return { x: 5 }; }
+const { x } = src();
+console.log("once", x, reads);
+function nullish(o: any): string {
+  try { const { y } = o; return "no throw " + y; } catch (e) { return "caught " + (e instanceof TypeError); }
+}
+console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
+"#
+        ),
+        "k 1\nk 2\ndecl 3 4\nonce 5 1\ncaught true caught true no throw 6"
+    );
+}
+
+// `.message` is an ordinary property read: only an Error's message comes from the
+// Error itself.
+#[test]
+fn message_reads_the_property_of_any_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = JSON.parse('{"message":"hi","phone":"p"}');
+const lit: any = { message: "lit" };
+class G { get message(): string { return "getter"; } }
+class F { message: string; constructor() { this.message = "field"; } }
+const none: any = {};
+console.log(o.message + " " + o.phone + " " + lit.message + " " + new G().message + " " + new F().message + " " + none.message);
+try { throw { message: "thrown" }; } catch (e: any) { console.log(e.message); }
+const err = new Error("boom");
+const empty = new Error();
+console.log(err.message + " [" + empty.message + "]");
+try { JSON.parse("{bad"); } catch (e: any) { console.log(e.message.length > 0); }
+"#
+        ),
+        "hi p lit getter field undefined\nthrown\nboom []\ntrue"
+    );
+}
+
+#[test]
+fn an_error_subclass_takes_its_message_from_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class MyErr extends Error { constructor(m?: string) { super(m); this.name = "MyErr"; } }
+class Coded extends Error { code: number; constructor(m: string, c: number) { super(m); this.code = c; } }
+class Bare extends Error {}
+class Deep extends Bare { constructor() { super("deep"); } }
+class Ranged extends RangeError { constructor(m: string) { super(m); } }
+class Fielded extends Error { code = 5; }
+const c = new Coded("coded", 7);
+console.log(new MyErr("sub").message + " [" + new MyErr().message + "] " + c.message + " " + c.code);
+console.log(new Bare("bare").message + " " + new Deep().message + " " + new Ranged("ranged").message + " [" + new Fielded().message + "]");
+try { throw new MyErr("caught"); } catch (e: any) { console.log(e.message + " " + (e instanceof Error)); }
+console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k")).length);
+"#
+        ),
+        "sub [] coded 7\nbare deep ranged []\ncaught true\n{\"name\":\"MyErr\"} 0"
+    );
+}
+
+// `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
+// 0..1 scale, mapped onto CSS 100..900 and clamped.
+#[test]
+fn text_set_font_weight_applies_the_size_and_the_weight() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text, textSetFontWeight } from "perry/ui";
+const a = Text("A");
+textSetFontWeight(a, 28, 1.0);
+const b = Text("B");
+textSetFontWeight(b, 16, 0.5);
+const c = Text("C");
+textSetFontWeight(c, 12, 700);
+"#,
+            r#"
+for (const label of ["A", "B", "C"]) {
+  const el = [...uiHandles.values()].find(e => e.textContent === label);
+  console.log(label + " " + el.style.fontSize + " " + el.style.fontWeight);
+}
+"#
+        ),
+        "A 28px 900\nB 16px 500\nC 12px 900"
+    );
+}
+
+// A class used as a value is a constructor: `new` on it runs the class's constructor
+// and field initializers, and the instance keeps its methods and its class.
+#[test]
+fn a_class_used_as_a_value_constructs_its_instances() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { v = 3; constructor(x?: number) { if (x !== undefined) this.v = x; } twice() { return this.v * 2; } }
+class Bare { w = 4; }
+const KK: any = K;
+const kk = new KK(7);
+console.log(typeof KK + " " + kk.v + " " + kk.twice() + " " + (kk instanceof K) + " " + new KK().v);
+const r = { K, Bare };
+console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " + (KK === r.K));
+"#
+        ),
+        "function 7 14 true 3\nfunction 18 4 true"
+    );
+}
+
+// `new` on a class value hands its arguments to the compiled constructor as Perry
+// values: a closure argument stays a closure the array bridges can call.
+#[test]
+fn a_class_value_constructor_receives_a_closure_argument() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
+const MM: any = M;
+console.log(new MM((n: number) => n * 10).out.join(","));
+"#
+        ),
+        "10,20"
+    );
+}
+
+// Instances are `{__class__}` objects, so host `instanceof` on a class value walks
+// the class table, as compiled `instanceof` does.
+#[test]
+fn host_instanceof_on_a_class_value_walks_the_class_chain() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class P { }
+class Q extends P { }
+const refs: any[] = [P, Q];
+console.log(refs.length);
+"#,
+            r#"
+const P = __classRef("P", -1), Q = __classRef("Q", -1);
+console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
+  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
+"#
+        ),
+        "2\ntrue true false false false"
+    );
+}
+
+// `new` on a class value yields what [[Construct]] yields: the instance, unless the
+// constructor returns an object. A bare `return;` keeps the initialized instance.
+#[test]
+fn a_class_value_constructor_returning_no_object_yields_the_instance() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
+class O { v = 1; constructor() { return { v: 5 } as any; } }
+const EE: any = E, OO: any = O;
+const e = new EE(1);
+console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
+"#
+        ),
+        "1 1 true 2 5 false"
+    );
+}
+
+// `fetchWithAuth` / `fetchPostWithAuth` build their headers object between
+// evaluating their arguments; the bridge must receive each argument in its own
+// slot, evaluated in source order, and the module must validate at all.
+#[test]
+fn fetch_with_auth_passes_url_method_body_and_authorization() {
+    assert_eq!(
+        run_web_source_around(
+            r#"globalThis.fetch = (url, opts) => {
+  console.log(JSON.stringify([url, opts]));
+  return Promise.resolve({ text: () => Promise.resolve("ok") });
+};"#,
+            r#"
+function base(): string { return "http://h/" + String(6 * 7); }
+function tok(): string { return "Bearer " + base().length; }
+function arg(label: string, v: string): string { console.log(label); return v; }
+fetchWithAuth(arg("url", base() + "/g"), arg("auth", `${tok()}-g`))
+  .then(() => fetchPostWithAuth(arg("url", base() + "/p"), arg("auth", tok()), arg("body", JSON.stringify({ n: tok() }))))
+  .then(() => console.log("done"));
+"#,
+            ""
+        ),
+        concat!(
+            "url\nauth\n",
+            r#"["http://h/42/g",{"headers":{"Authorization":"Bearer 11-g"}}]"#,
+            "\nurl\nauth\nbody\n",
+            r#"["http://h/42/p",{"method":"POST","body":"{\"n\":\"Bearer 11\"}","headers":{"Authorization":"Bearer 11"}}]"#,
+            "\ndone"
+        )
+    );
+}
+
+#[test]
+fn property_update_stores_and_returns_the_old_or_new_value() {
+    assert_eq!(
+        run_web_source(
+            "class P { x: number; constructor(x: number) { this.x = x } }
+             const r = new P(5); const a = r.x++; console.log(a, r.x);
+             const o: any = { x: 5 };
+             const b = o.x++; console.log(b, o.x);
+             const d = ++o.x; console.log(d, o.x);
+             o.x--; console.log(o.x);
+             const e = --o.x; console.log(e, o.x);
+             o.x++; console.log(o.x);"
+        ),
+        "5 6\n5 6\n7 7\n6\n5 5\n6"
+    );
+}
+
+#[test]
+fn member_update_on_this_computed_keys_and_elements() {
+    assert_eq!(
+        run_web_source(
+            "class C {
+               n = 0; items: number[] = [0, 0];
+               inc(): number { return this.n++; }
+               pre(): number { return ++this.n; }
+               bump(): number { this.n++; return this.items[1]++; }
+             }
+             const c = new C();
+             console.log(c.inc(), c.n); console.log(c.pre(), c.n);
+             console.log(c.bump(), c.n);
+             console.log(c.items.join(','));
+             const o: any = { y: 10 }; const k = 'y';
+             const a = o[k]++; console.log(a, o.y);
+             const b = ++o[k]; console.log(b, o.y);"
+        ),
+        "0 1\n2 2\n0 3\n0,1\n10 11\n12 12"
+    );
+}
+
+#[test]
+fn member_update_evaluates_base_and_key_once() {
+    assert_eq!(
+        run_web_source(
+            "let calls = 0; const o: any = { x: 1 };
+             function get(): any { calls++; return o; }
+             const a = get().x++; console.log(a, o.x, calls);
+             const b = ++get().x; console.log(b, o.x, calls);
+             const arr = [5, 6]; let i = 0;
+             const c = arr[i++]++; console.log(c, arr.join(','), i);"
+        ),
+        "1 2 1\n3 3 2\n5 6,6 1"
+    );
+}
+
+#[test]
+fn member_update_converts_the_old_value_to_a_number() {
+    assert_eq!(
+        run_web_source(
+            "const o: any = { x: null, b: true, s: '5' };
+             const a = o.x++; console.log(a, o.x);
+             const b = o.b++; console.log(b, o.b);
+             const c = ++o.s; console.log(c, o.s);
+             const arr: any[] = [null]; const d = arr[0]--; console.log(d, arr[0]);"
+        ),
+        "0 1\n1 2\n6 6\n0 -1"
+    );
+}
+
+// An async body is emitted as JS, which must lower `Object.keys/values/entries` itself
+// rather than read them as undefined (#14633).
+#[test]
+fn async_body_lists_an_objects_keys_values_and_entries() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const o: any = { a: 1, b: 2 };
+  return Object.keys(o).join("|") + " " + Object.values(o).join("|") + " " + Object.entries(o).join("|");
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "a|b 1|2 a,1|b,2"
+    );
+}
+
+// `for...of` over an array and `i++` / `k--` in an async body: the array check of the
+// for-of lowering and the update expression both reach the JS emitter (#14595).
+#[test]
+fn async_body_runs_for_of_over_an_array_and_update_expressions() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(xs: string[]): Promise<string> {
+  let s = "";
+  for (const p of xs) s = s + p;
+  let n = 0;
+  // The `n < 100` bound ends the loop even where `i++` does nothing.
+  for (let i = 0; i < 3 && n < 100; i++) n = n + i + 1;
+  let k = 5;
+  const before = k--;
+  return s + " " + n + " " + before + " " + k + " " + (++k);
+}
+f(["a", "b"]).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "ab 6 5 4 5"
+    );
+}
+
+// The `try` lowering declares a flag inside the `try` block and reads it in the `catch`;
+// the JS body must declare it where both can see it (#14595).
+#[test]
+fn async_body_catch_reads_a_local_the_try_block_declared() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  try {
+    throw new Error("boom");
+  } catch (e) {
+    return "caught " + (e as Error).message;
+  }
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "caught boom"
+    );
+}
+
+// Iterating a non-array and destructuring are not emitted in an async body; they reject
+// with a TypeError instead of running on with undefined values.
+#[test]
+fn async_body_rejects_iteration_it_cannot_emit() {
+    let out = run_web_source(
+        r#"
+async function each(): Promise<string> {
+  let s = "";
+  for (const v of new Set(["x", "y"])) s = s + v;
+  return s;
+}
+async function pick(xs: number[]): Promise<string> {
+  const [a, b] = xs;
+  return a + "," + b;
+}
+each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
+pick([1, 2]).then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
+"#,
+    );
+    assert_eq!(out, "threw TypeError\nthrew TypeError");
+}
+
+// A logical operator in an async body evaluates its left operand once, and an `await`
+// in its right operand still runs in the async body.
+#[test]
+fn async_body_logical_operators_evaluate_the_left_operand_once() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  let i = 1;
+  const a = i++ || 0;
+  let j = 0;
+  const b = j++ && 9;
+  let k: any = 4;
+  const c = k ?? 0;
+  const d = (i > 100) || (await Promise.resolve(7));
+  return i + "," + a + " " + j + "," + b + " " + c + " " + d;
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "2,1 1,0 4 7"
+    );
+}
+
+#[test]
+fn a_join_inside_a_call_argument_keeps_the_other_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Box { items: number[] = [1, 2, 3]; }
+const inst = new Box();
+const n = 7;
+console.log(n, inst.items.join(","));
+console.log(inst.items.join("-"), inst instanceof Box);
+console.log(n, inst.items.join());
+const lit = { out: ["x", "y"] };
+console.log(lit.out.join(","), lit instanceof Object);
+"#
+        ),
+        "7 1,2,3\n1-2-3 true\n7 1,2,3\nx,y true"
+    );
+}
+
+#[test]
+fn an_array_bridge_call_opens_its_own_argument_frame() {
+    // Only the neighbours are asserted: what these calls return is a separate matter.
+    // Writing into the enclosing call's frame replaced them.
+    let out = run_web_source(
+        r#"
+const n = 7;
+const a = [3, 1, 2];
+console.log(n, a.toReversed(), n);
+console.log(n, a.toSorted(), n);
+console.log(n, a.toSorted((x, y) => y - x), n);
+console.log(n, a.with(0, 9), n);
+console.log(n, a.toSpliced(1, 1), n);
+console.log(n, a.keys(), n);
+console.log(n, a.values(), n);
+console.log(n, a.entries(), n);
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 8, "{out}");
+    for line in lines {
+        assert!(line.starts_with("7 ") && line.ends_with(" 7"), "{out}");
+    }
+}
+
+// `Toggle(label, onChange: (value: boolean) => void)` hands the callback a boolean.
+#[test]
+fn toggle_on_change_receives_a_boolean() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Toggle } from "perry/ui";
+Toggle("Notify", (value: boolean) => { console.log("toggle " + (value === true) + " " + typeof value); });
+"#,
+            r#"
+const toggle = [...uiHandles.values()].find(e => e.tagName === "LABEL");
+toggle._inp.checked = true;
+toggle._inp.dispatch("change");
+"#
+        ),
+        "toggle true boolean"
+    );
+}
+
+#[test]
+fn a_class_declared_in_a_function_keeps_its_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(): any {
+  class Local extends Error {
+    who() { return "local"; }
+  }
+  return new Local("m");
+}
+const b = make();
+console.log(typeof b.who);
+console.log(b.who());
+function plain(n: number): any {
+  class P { v: number; constructor(v: number) { this.v = v; } twice() { return this.v * 2; } }
+  return new P(n);
+}
+console.log(plain(4).twice());
+"#
+        ),
+        "function\nlocal\n8"
+    );
+}
+
+// A closure created before a class declaration it reads shares that binding's cell, so
+// it sees the class once the declaration has run.
+#[test]
+fn a_closure_reads_a_class_declared_after_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) {
+  const read = () => C;
+  class C { t() { return tag; } }
+  return read() === C;
+}
+function makeError() {
+  const read = () => E;
+  class E extends Error {}
+  return typeof read() + " " + (read() === E);
+}
+console.log(make("a") + " " + make("b") + " " + makeError());
+"#
+        ),
+        "true true function true"
+    );
+}
+
+#[test]
+fn an_object_literal_super_call_starts_at_the_literals_prototype() {
+    // The methods are read off the object before the call, so the test does not
+    // depend on how `o.m()` dispatches a closure property.
+    assert_eq!(
+        run_web_source(
+            r#"
+const base = { hi() { return "base"; }, greet(x: string) { return "hello " + x; } };
+const o = { __proto__: base, hi() { return "o>" + super.hi(); }, greet(x: string) { return super.greet(x) + "!"; } };
+const hi = o.hi;
+const greet = o.greet;
+console.log(hi());
+console.log(greet("w"));
+const k = "hi";
+const p = { __proto__: o, hi() { return "p>" + super[k](); } };
+const phi = p.hi;
+console.log(phi());
+const q = { __proto__: base, x: 1 };
+const qhi = q.hi;
+console.log(q.x, qhi());
+"#
+        ),
+        "o>base\nhello w!\np>o>base\n1 base"
+    );
+}
+
+// The lookup reads the literal's [[Prototype]] when the call runs, and before the
+// arguments are evaluated; a null prototype or a non-callable property throws.
+#[test]
+fn an_object_literal_super_call_resolves_at_call_time() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a = { m() { return "a"; } };
+const b = { m() { return "b"; } };
+const o = { __proto__: a, m(x: string) { return super.m() + x; }, n() { return super.m(Object.setPrototypeOf(o, b)); } };
+const om = o.m;
+console.log(om("!"));
+Object.setPrototypeOf(o, b);
+console.log(om("!"));
+Object.setPrototypeOf(o, a);
+const on = o.n;
+console.log(on());
+const z = { __proto__: null, m() { return super.m(); } };
+const zm = z.m;
+try { zm(); console.log("null: no throw"); } catch (e) { console.log("null: " + e.name); }
+const c = { __proto__: { m: 1 }, m() { return super.m(); } };
+const cm = c.m;
+try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name); }
+"#
+        ),
+        "a!\nb!\na\nnull: TypeError\n1: TypeError"
+    );
+}
+
+#[test]
+fn a_class_value_holds_static_side_properties_and_a_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T {}
+(T as any).key = "class";
+console.log((T as any).key);
+const k = "dyn";
+(T as any)[k] = 2;
+console.log((T as any)[k]);
+const base = { tag: "base" };
+class U {}
+Object.setPrototypeOf(U, base);
+console.log((U as any).tag);
+"#
+        ),
+        "class\n2\nbase"
     );
 }

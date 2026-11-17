@@ -554,6 +554,10 @@ pub extern "C" fn js_process_uptime() -> f64 {
     get_process_start().elapsed().as_secs_f64()
 }
 
+// `process.cwd` (dispatch ("process", "cwd")): reads the host's working
+// directory, an empty string when it is gone; no argument and no `this`
+// is read, nothing is thrown.
+crate::realm_decl! { "process.cwd", effects = { returns(prim(str)) } }
 /// Get the current working directory
 #[no_mangle]
 pub extern "C" fn js_process_cwd() -> *mut StringHeader {

@@ -1011,6 +1011,7 @@ fn native_addons_install_what_their_imports_reach() {
         "perry-runtime/proxy",
         "perry-runtime/proc-ipc",
         "perry-runtime/diagnostics",
+        "perry-runtime/global-json",
     ];
     let values = [
         "perry-runtime/bigint",
@@ -1124,5 +1125,27 @@ fn reaches_tls_is_the_tls_family_or_upgrade_to_tls() {
     assert!(program(&["net"], true));
     for module in ["tls", "node:https", "http2", "http"] {
         assert!(program(&[module], false), "{module} reaches TLS");
+    }
+}
+
+#[test]
+fn json_install_selection_keeps_native_producers_and_formatting_roots() {
+    if ran_in_isolated_child("json_install_selection_keeps_native_producers_and_formatting_roots") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected = |ctx: &CompilationContext| {
+        auto_optimized_cross_features(ctx, &BTreeSet::new(), &[])
+    };
+    let engine = "perry-runtime/json-engine".to_string();
+    let format = "perry-runtime/json-format".to_string();
+    assert!(!selected(&ctx).contains(&engine));
+    ctx.uses_json_format = true;
+    assert!(selected(&ctx).contains(&format));
+    assert!(!selected(&ctx).contains(&engine));
+    for producer in ["tls", "http2", "stream/consumers", "worker_threads", "bun", "module"] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx).contains(&engine), "{producer}");
+        assert!(!selected(&ctx).contains(&format), "engine includes formatting");
     }
 }

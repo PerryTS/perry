@@ -117,6 +117,12 @@ pub(crate) fn js_jsvalue_to_string_impl(
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
         if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            // ToString(p) is ToString(ToPrimitive(p, string)) (7.1.17, 7.1.1):
+            // the lookups run the Proxy's get trap, the call has this = p.
+            if !skip_to_primitive {
+                let primitive = crate::proxy_hooks::proxy_to_primitive(value, 2);
+                return js_jsvalue_to_string_impl(primitive, reject_symbol);
+            }
             if crate::proxy_hooks::proxy_wraps_callable(value) {
                 let s = "function () { [native code] }";
                 return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);

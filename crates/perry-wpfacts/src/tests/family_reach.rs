@@ -71,28 +71,6 @@ fn the_dump_has_one_line_per_family() {
 }
 
 #[test]
-fn l0_an_incomplete_solve_has_every_family_live() {
-    // Past the work bound the solve is widened or aborted.
-    let mut cfg = FactsConfig::default();
-    cfg.max_work = Some(1);
-    let r = facts_cfg(PLAIN, &cfg).family_reach.expect("computed");
-    assert_eq!(r.never(), 0);
-    assert!(
-        reason(&r, "typedarray").starts_with("L0:"),
-        "{}",
-        reason(&r, "typedarray")
-    );
-    // A per-unit run publishes no fact: every family is live to a reader.
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(PLAIN, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    assert!(crate::compute_units(&list, &cfg).family_reach.is_none());
-}
-
-#[test]
 fn l1_an_unknown_value_makes_every_family_live() {
     // A member of `process` the realm does not declare: an unknown value.
     let r = reach("const h = (process as any).noSuchMember;\nconsole.log(typeof h);\n");

@@ -160,7 +160,11 @@ impl Model {
         }
         let h = self.hole(t);
         if self.idx_done.insert((key, t, h, crate::model::IDX_HOLE_IN)) {
-            let c = Cons::ElemUndef { obj: t, key, dst: h };
+            let c = Cons::ElemUndef {
+                obj: t,
+                key,
+                dst: h,
+            };
             self.cons(key, c);
             let len = self.arr_len(t);
             self.cons(len, c);
@@ -367,11 +371,7 @@ impl Model {
     /// (`kept_reads`). Not with `PERRY_FACTS_ELEM_UNDEF=0`: every computed
     /// read then yields `undefined`.
     pub(crate) fn kept_read(&self, t: Tok) -> bool {
-        self.inbounds_read
-            && self.elem_undef
-            && t != TOP
-            && self.is_arr(t)
-            && self.arr_grow_only(t)
+        self.inbounds_read && self.elem_undef && t != TOP && self.is_arr(t) && self.arr_grow_only(t)
     }
 
     /// The read of `t` under `key` into `dst` is a kept in-bounds read.

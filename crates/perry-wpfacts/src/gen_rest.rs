@@ -384,6 +384,28 @@ impl<'a> Gen<'a> {
                 }
                 n
             }
+            // `process.env`: the one object the realm declares (`values =
+            // string`, `Model::process_arrays`), or what the program stored
+            // as `process.env`.
+            Expr::ProcessEnv
+                if self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .any(|a| self.m.atoms[a.0 as usize] == "env") =>
+            {
+                let n = self.m.node_l("process.env");
+                self.m.own(n);
+                let a = self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .find(|a| self.m.atoms[a.0 as usize] == "env")
+                    .expect("guarded")
+                    .1;
+                self.m.edge(a, n);
+                n
+            }
             Expr::ProcessEnv
             | Expr::ProcessMemoryUsage
             | Expr::ProcessVersions
@@ -866,7 +888,7 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::BOOL)
             }
-                        // The predicates that convert nothing: `Array.isArray` reads only
+            // The predicates that convert nothing: `Array.isArray` reads only
             // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
             // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
             // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`
@@ -1048,10 +1070,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyGet { .. }
-            | Expr::ProxySet { .. }
-            | Expr::ProxyHas { .. }
-            | Expr::ProxyDelete { .. }
             | Expr::ProxyApply { .. }
             | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
@@ -1196,6 +1214,10 @@ impl<'a> Gen<'a> {
             | Expr::GetAsyncIterator { .. }
             | Expr::ObjectCoerce { .. } => self.expr_rest_collections(fx, e),
             Expr::ProxyNew { .. }
+            | Expr::ProxyGet { .. }
+            | Expr::ProxySet { .. }
+            | Expr::ProxyHas { .. }
+            | Expr::ProxyDelete { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

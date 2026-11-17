@@ -42,7 +42,8 @@ fn src(headers: &str, body: &str) -> String {
     )
 }
 
-const QUIET: &str = "h.forEach(function (this: any, v: any, k: any, hh: any) { console.log(v, k, this.a); }, a);";
+const QUIET: &str =
+    "h.forEach(function (this: any, v: any, k: any, hh: any) { console.log(v, k, this.a); }, a);";
 
 #[test]
 fn file_loader_header_reads_hand_nothing_to_unknown_code() {

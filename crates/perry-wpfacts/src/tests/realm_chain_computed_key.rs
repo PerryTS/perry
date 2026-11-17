@@ -54,7 +54,10 @@ fn a_computed_key_on_a_wrapper_reads_its_realm_chain() {
 /// Control: a value of the host stored on the wrapper under a computed key.
 #[test]
 fn an_own_value_is_read() {
-    let pf = read("Object(1)", "w[String((globalThis as any).hostKey())] = (globalThis as any).hostFn();");
+    let pf = read(
+        "Object(1)",
+        "w[String((globalThis as any).hostKey())] = (globalThis as any).hostFn();",
+    );
     assert!(tmpl(&pf, "R").escape.is_some(), "{}", pf.dump_text());
 }
 

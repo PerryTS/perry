@@ -138,8 +138,14 @@ fn argv_or_undefined_key_reads_builtin_members() {
 fn literal_lut_prog(lut: &str, key: &str) -> String {
     let p = prog(key);
     let q = p
-        .replace("const lut: string[] = [];", &format!("const lut: string[] = [{lut}];"))
-        .replace("for (let i = 0; i < 256; i++) lut[i] = (i < 16 ? '0' : '') + i.toString(16);", "")
+        .replace(
+            "const lut: string[] = [];",
+            &format!("const lut: string[] = [{lut}];"),
+        )
+        .replace(
+            "for (let i = 0; i < 256; i++) lut[i] = (i < 16 ? '0' : '') + i.toString(16);",
+            "",
+        )
         .replace("& 0xff]", "& 3]");
     assert!(!q.contains("i.toString(16)") && !q.contains("0xff]"), "{q}");
     q
@@ -147,27 +153,39 @@ fn literal_lut_prog(lut: &str, key: &str) -> String {
 
 #[test]
 fn literal_lut_prefix_key_reads_no_builtin_member() {
-    let v = recv(&facts(&literal_lut_prog("'bc', 'cd', 'db', 'bd'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'bc', 'cd', 'db', 'bd'",
+        "root.uuid",
+    )));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
 #[test]
 fn literal_lut_prefix_upper_key_reads_no_builtin_member() {
-    let v = recv(&facts(&literal_lut_prog("'bc', 'cd', 'db', 'bd'", "root.uuid.toUpperCase()")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'bc', 'cd', 'db', 'bd'",
+        "root.uuid.toUpperCase()",
+    )));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
 #[test]
 fn literal_lut_member_prefix_key_reads_builtin_members() {
     // `'co' + 'ns' + ...` may spell `constructor`.
-    let v = recv(&facts(&literal_lut_prog("'co', 'ns', 'co', 'ns'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'co', 'ns', 'co', 'ns'",
+        "root.uuid",
+    )));
     assert!(v.len() > 1, "{v:?}");
 }
 
 #[test]
 fn literal_lut_upper_member_prefix_key_reads_builtin_members() {
     // `'CO' + 'NS' + ...` lower-cased may spell `constructor`.
-    let v = recv(&facts(&literal_lut_prog("'CO', 'NS', 'CO', 'NS'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'CO', 'NS', 'CO', 'NS'",
+        "root.uuid",
+    )));
     assert!(v.len() > 1, "{v:?}");
 }
 
@@ -183,7 +201,10 @@ fn literal_lut_arr_prog(lut: &str, key: &str) -> String {
         "const byRoot: any = {};",
         "class B { p = 2; }\n         const byRoot: any = [];\n         byRoot[Math.random() * 99 | 0] = new B();",
     );
-    assert!(q.contains("byRoot[Math.random() * 99 | 0] = new B();"), "{q}");
+    assert!(
+        q.contains("byRoot[Math.random() * 99 | 0] = new B();"),
+        "{q}"
+    );
     q
 }
 
@@ -191,28 +212,42 @@ fn literal_lut_arr_prog(lut: &str, key: &str) -> String {
 fn glob_number_prefix_is_exact() {
     let numeric = |p: &str| {
         crate::model::KeyShape {
-            globs: vec![vec![p.to_string(), String::new()]], free: Vec::new()
+            globs: vec![vec![p.to_string(), String::new()]],
+            free: Vec::new(),
+            except: Vec::new(),
         }
         .may_be_numeric()
     };
-    for p in ["", "1", "10", "1e", "1e+", "1.5e-", "0", "0.", "0.00", "-0", "-", "-1.", "N", "NaN", "-I", "Inf", "9e+2"] {
+    for p in [
+        "", "1", "10", "1e", "1e+", "1.5e-", "0", "0.", "0.00", "-0", "-", "-1.", "N", "NaN", "-I",
+        "Inf", "9e+2",
+    ] {
         assert!(numeric(p), "{p} may begin a Number string");
     }
-    for p in ["00", "0a", "ff", "a", "1a", "0e", "10e", "1.e", "1.50e", "1e0", "1e+0", "inf", "nan", "-N", "--", "1-"] {
+    for p in [
+        "00", "0a", "ff", "a", "1a", "0e", "10e", "1.e", "1.50e", "1e0", "1e+0", "inf", "nan",
+        "-N", "--", "1-",
+    ] {
         assert!(!numeric(p), "{p} begins no Number string");
     }
 }
 
 #[test]
 fn hex_prefix_key_reads_no_builtin_member() {
-    let v = recv(&facts(&literal_lut_prog("'0a', 'ff', '00', '09'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'0a', 'ff', '00', '09'",
+        "root.uuid",
+    )));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
 #[test]
 fn digit_prefix_key_reads_no_builtin_member() {
     // `10*`.. may spell an index, never an Object.prototype member.
-    let v = recv(&facts(&literal_lut_prog("'10', '12', '13', '1e'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'10', '12', '13', '1e'",
+        "root.uuid",
+    )));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
@@ -225,14 +260,20 @@ fn literal_lut_num_prog(lut: &str, key: &str) -> String {
         "const byRoot: any = {};",
         "class B { p = 2; }\n         const byRoot: any = {};\n         byRoot[Math.random() * 99 | 0] = new B();",
     );
-    assert!(q.contains("byRoot[Math.random() * 99 | 0] = new B();"), "{q}");
+    assert!(
+        q.contains("byRoot[Math.random() * 99 | 0] = new B();"),
+        "{q}"
+    );
     q
 }
 
 #[test]
 fn hex_prefix_key_reads_no_numeric_key() {
     // `0a*`, `ff*`, `00*`, `09*` begin no ToString of a Number.
-    let v = recv(&facts(&literal_lut_num_prog("'0a', 'ff', '00', '09'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_num_prog(
+        "'0a', 'ff', '00', '09'",
+        "root.uuid",
+    )));
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 
@@ -240,21 +281,30 @@ fn hex_prefix_key_reads_no_numeric_key() {
 fn digit_prefix_key_reads_numeric_key() {
     // `10*` may spell a Number key: the numeric keys (`numeric_field`, one
     // field for every Number key, `byRoot[Math.random() * 99 | 0]` among them) are read.
-    let v = recv(&facts(&literal_lut_num_prog("'10', '12', '13', '14'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_num_prog(
+        "'10', '12', '13', '14'",
+        "root.uuid",
+    )));
     assert!(v.contains(&"B".to_string()), "{v:?}");
 }
 
 #[test]
 fn digit_prefix_key_reads_elements() {
     // `10*` may spell an index: the element `byRoot[0]` wrote is read.
-    let v = recv(&facts(&literal_lut_arr_prog("'10', '12', '13', '14'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_arr_prog(
+        "'10', '12', '13', '14'",
+        "root.uuid",
+    )));
     assert!(v.contains(&"B".to_string()), "{v:?}");
 }
 
 #[test]
 fn literal_lut_to_va_prefix_key_reads_builtin_members() {
     // `'to' + 'St'` may spell `toString`, `'va' + 'lu'` `valueOf`.
-    let v = recv(&facts(&literal_lut_prog("'to', 'St', 'va', 'lu'", "root.uuid")));
+    let v = recv(&facts(&literal_lut_prog(
+        "'to', 'St', 'va', 'lu'",
+        "root.uuid",
+    )));
     assert!(v.len() > 1, "{v:?}");
 }
 
