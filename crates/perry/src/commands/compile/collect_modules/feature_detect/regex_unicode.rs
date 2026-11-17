@@ -25,6 +25,10 @@ fn producer_key(key: &str) -> bool {
     )
 }
 
+fn consumer_key(key: &str) -> bool {
+    matches!(key, "split" | "test" | "exec")
+}
+
 fn expression(expr: &Expr) -> bool {
     match expr {
         Expr::StringSplit(subject, delimiter) => {
@@ -37,6 +41,13 @@ fn expression(expr: &Expr) -> bool {
                 object, property, ..
             } = callee.as_ref()
             {
+                if property == "split" {
+                    if let Some(Expr::RegExp { pattern, flags }) = args.first() {
+                        return pattern_needs_properties(pattern, flags)
+                            || expression(object)
+                            || args[1..].iter().any(expression);
+                    }
+                }
                 if matches!(property.as_str(), "test" | "exec") {
                     if let Expr::RegExp { pattern, flags } = object.as_ref() {
                         return pattern_needs_properties(pattern, flags)
@@ -56,6 +67,21 @@ fn expression(expr: &Expr) -> bool {
             return true;
         }
         Expr::PropertyGet { property, .. } if producer_key(property) => return true,
+        Expr::PropertySet { property, .. } | Expr::LiteralSlotInit { key: property, .. }
+            if consumer_key(property) =>
+        {
+            return true
+        }
+        Expr::Object(properties) if properties.iter().any(|(key, _)| consumer_key(key)) => {
+            return true
+        }
+        Expr::ObjectSpread { parts }
+            if parts
+                .iter()
+                .any(|(key, _)| key.as_deref().is_some_and(consumer_key)) =>
+        {
+            return true
+        }
         Expr::IndexGet { index, .. }
         | Expr::ReflectGet { key: index, .. }
         | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
@@ -80,6 +106,17 @@ pub(super) fn needed(module: &Module) -> bool {
             || class.extends_name.is_some()
             || class.extends_expr.is_some()
             || class.extends.is_some()
+            || !class.computed_members.is_empty()
+            || class
+                .methods
+                .iter()
+                .chain(&class.static_methods)
+                .any(|method| consumer_key(&method.name))
+            || class
+                .fields
+                .iter()
+                .chain(&class.static_fields)
+                .any(|field| consumer_key(&field.name))
     }) || super::global_object::may_escape(module)
         || super::regex_members::needed(module)
         || super::module_any_expr(module, &mut expression)
@@ -101,6 +138,8 @@ mod tests {
             r"RegExp(process.argv[2]);",
             r"const r = /a/; function f(k: number) { return r[k]('\\p{L}', 'u'); } f('compile' as any);",
             r"function expose() { return /a/; }",
+            r"const o = { split(r) { return r; } }; o.split(/a/);",
+            r"class C { split(r) { return r; } } new C().split(/a/);",
             r"const list = [/a/];",
             r"String.prototype.split = function(r) { return []; }; 'x'.split(/a/);",
             r"class R extends RegExp {} new R(process.argv[2], 'u');",
