@@ -933,7 +933,7 @@ pub(super) fn build_summaries(m: &mut Model) {
                 refused: &refused,
             },
         );
-        let s = encode_body(input);
+        let s = encode_body(input, &m.binding_reads);
         obs_toks.extend(observations);
         let e = &entries[&f];
         let of = &outer[&f];

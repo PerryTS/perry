@@ -8,7 +8,7 @@
 
 use crate::gen::Gen;
 use crate::model::{Model, NodeId, TmplId, TmplKind, Tok, TokKind, TOP};
-use crate::pts::FxHashMap;
+use crate::pts::{FxHashMap, FxHashSet};
 
 /// `PERRY_FACTS_INSTANCE_NODES=0`: a binding's facts are read off its
 /// shared node alone (`BindingNodes`), as before the join.
@@ -34,17 +34,46 @@ pub fn instance_nodes_enabled() -> bool {
 /// node alone. The copies of a body without births add nothing the shared
 /// node lacks, and their intervals are coarser (an instance's loop counter
 /// widens past the bound the shared body's narrowing keeps), so they are
-/// left out.
-pub(crate) struct BindingNodes {
+/// left out. A binding has a copy only if its slot survives
+/// `summary::compress`, which keeps the slot of every node in
+/// `binding_reads` in a body with births; `of` serves no other node.
+pub(crate) struct BindingNodes<'m> {
     copies: FxHashMap<NodeId, Vec<NodeId>>,
     live: usize,
+    reads: &'m FxHashSet<NodeId>,
 }
 
-impl BindingNodes {
+/// Every node a per-binding fact reads through `BindingNodes::of`: each
+/// module's locals, each function's `this`, the arguments of the calls
+/// `collect` gives ranges for, and the receiver and index of each element
+/// site. `Model::binding_reads` holds them while the summaries are built.
+pub(crate) fn binding_reads(g: &Gen) -> FxHashSet<NodeId> {
+    let mut s: FxHashSet<NodeId> = FxHashSet::default();
+    for info in &g.mods {
+        s.extend(info.locals.values().copied());
+    }
+    s.extend(
+        g.m.funcs
+            .iter()
+            .filter(|f| f.func_id != u32::MAX)
+            .map(|f| f.this),
+    );
+    for (_, _, args) in &g.call_args_at {
+        s.extend(args.iter().copied());
+    }
+    for site in &g.element_sites {
+        s.extend([site.recv, site.idx]);
+    }
+    s.remove(&crate::model::NO_NODE);
+    s
+}
+
+impl<'m> BindingNodes<'m> {
     /// With `Model::instance_nodes` off (the switch, or the negative
     /// control `instlit`) a binding is its shared node.
-    pub(crate) fn new(m: &Model) -> Self {
+    pub(crate) fn new(m: &'m Model) -> Self {
         BindingNodes {
+            reads: &m.binding_reads,
             copies: if m.instance_nodes {
                 let mut copies = instance_born_copies(m);
                 // A read of a local after an assignment sees a version node
@@ -68,6 +97,10 @@ impl BindingNodes {
 
     /// Node `n` and its instance copies, `n` first.
     pub(crate) fn of(&self, n: NodeId) -> Vec<NodeId> {
+        debug_assert!(
+            (n as usize) >= self.live || self.reads.contains(&n),
+            "node {n} is read as a binding but is not in `binding_reads`"
+        );
         std::iter::once(n)
             .chain(self.copies.get(&n).into_iter().flatten().copied())
             .filter(|&c| (c as usize) < self.live)
@@ -775,7 +808,7 @@ pub struct ElementRead {
 /// over their nodes (`BindingNodes`).
 fn element_read(
     m: &Model,
-    nodes: &BindingNodes,
+    nodes: &BindingNodes<'_>,
     site: &crate::gen::ElementSite,
 ) -> Option<ElementRead> {
     // A computed key, or a literal one that is a canonical array index (a
@@ -864,7 +897,7 @@ pub(crate) fn rep_of_node(g: &Gen, n: u32) -> Rep {
 
 /// The facts of the binding whose shared node is `n`: `facts_of` over its
 /// nodes (`BindingNodes::of`).
-pub(crate) fn facts_of_binding(g: &Gen, nodes: &BindingNodes, n: NodeId) -> BindingFacts {
+pub(crate) fn facts_of_binding(g: &Gen, nodes: &BindingNodes<'_>, n: NodeId) -> BindingFacts {
     facts_of(g, &nodes.of(n))
 }
 

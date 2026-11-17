@@ -194,3 +194,64 @@ fn a_guard_that_no_value_of_an_instance_passes_adds_nothing() {
     let pf = facts_with(src, FactsConfig::default());
     assert_eq!(local_in(&pf, src, "a").int_range, Some((0, 127)));
 }
+
+// The S0 control `instance-literal-negative`: no later expression reads
+// `other` directly, so its slot reached nothing and `summary::compress`
+// dropped it; without an instance copy the binding read the template token
+// alone and claimed the constant length 3. `viaId` holds the keep cases: a
+// binding that receives the instance's Array through a call (`o`), and a
+// local derived from the length (`n`).
+const DROPPED: &str = r#"
+function fill(out: number[], n: number): void {
+  for (let i = 0; i < n; i++) out.push(out.length * 2);
+}
+function id<T>(x: T): T {
+  return x;
+}
+function walk(xs: number[]): number {
+  let s = 0;
+  const other: number[] = [5, 6, 7];
+  for (const v of xs) {
+    s += v + other.length;
+    fill(other, 1);
+  }
+  return s + other.length;
+}
+function viaId(xs: number[]): number {
+  let s = 0;
+  const other: number[] = [5, 6, 7];
+  const o = id(other);
+  for (const v of xs) {
+    s += v + o.length;
+    fill(o, 1);
+  }
+  const n = other.length;
+  return s + n;
+}
+console.log(walk([1, 4, 7, 10, 13]), walk([]));
+console.log(viaId([1, 4, 7, 10, 13]), viaId([]));
+"#;
+
+#[test]
+fn a_literal_whose_slot_reaches_nothing_keeps_its_instance_copy() {
+    let pf = facts_with(DROPPED, FactsConfig::default());
+    let b = local(&pf, DROPPED, "walk", "other");
+    assert_eq!(b.const_length, None, "{b:?}");
+    if let Rep::Arr(r) = b.rep {
+        assert!(!r.fixed && !r.im, "{r:?}");
+    }
+    // The negative control reads the shared node alone and claims 3.
+    let pf = facts_with(DROPPED, off());
+    assert_eq!(local(&pf, DROPPED, "walk", "other").const_length, Some(3));
+}
+
+#[test]
+fn a_copy_through_a_call_and_a_length_local_see_the_grown_literal() {
+    let pf = facts_with(DROPPED, FactsConfig::default());
+    for name in ["other", "o"] {
+        let b = local(&pf, DROPPED, "viaId", name);
+        assert_eq!(b.const_length, None, "{name}: {b:?}");
+    }
+    let n = local(&pf, DROPPED, "viaId", "n");
+    assert_ne!(n.int_range, Some((3, 3)), "{n:?}");
+}
