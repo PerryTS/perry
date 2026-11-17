@@ -110,3 +110,19 @@ console.log(callable.call({ x: 7 }, 2));\n";
     assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the apply trap runs");
     assert!(!pf.body_reach.inactive(&ident(id_of(src, "method"))), "the target runs");
 }
+
+#[test]
+fn a_second_define_under_one_computed_key_installs_its_accessor() {
+    // Two defines under one local Symbol key: the data define, then the
+    // accessor define that replaces it. The getter runs on the read; `mark`
+    // runs exactly when it does.
+    let src = "function mark() { return 0; }\n\
+const o: any = {};\n\
+const key = Symbol(\"k\");\n\
+Object.defineProperty(o, key, { value: 11, writable: true, configurable: true });\n\
+Object.defineProperty(o, key, { get: function () { mark(); return 22; } });\n\
+console.log(o[key]);\n";
+    let pf = facts(src);
+    assert!(pf.body_reach.complete);
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the getter runs");
+}
