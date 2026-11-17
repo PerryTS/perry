@@ -54,6 +54,8 @@ mod worker_metadata_tests;
 mod worker_options;
 use worker_error::{plain_error_message, worker_error_message};
 #[cfg(test)]
+mod to_string_tag_tests;
+#[cfg(test)]
 mod worker_owner_tests;
 mod worker_pump;
 mod worker_surface;
