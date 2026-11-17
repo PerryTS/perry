@@ -20,7 +20,7 @@ const CLASSIFIED: &[(&str, &str, usize, &str)] = &[
     (
         "array/alloc.rs",
         "(*ptr).capacity = actual_capacity;",
-        4,
+        6,
         "allocation",
     ),
     (

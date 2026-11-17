@@ -818,6 +818,22 @@ impl Drop for TemporaryCopyOnlyRootScanner {
     }
 }
 
+/// Placement changes can make a subject fit inside the current block. Start it
+/// at a nearly full block so its first allocation must reach the slow
+/// allocation path (and its trigger check), independently of its footprint.
+pub(super) fn prime_current_block_near_full() {
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    for _ in 0..100_000 {
+        let _ = young_leaf();
+        let state = crate::arena::js_inline_arena_state();
+        let remaining = unsafe { (*state).size.saturating_sub((*state).offset) };
+        if remaining < 256 {
+            return;
+        }
+    }
+    panic!("fixture could not position the current block near its end");
+}
+
 pub(super) fn young_leaf() -> usize {
     let id = YOUNG_LEAF_COUNTER.fetch_add(1, Ordering::Relaxed);
     let bytes = format!("young_leaf_{id:x}");

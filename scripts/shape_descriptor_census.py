@@ -359,7 +359,7 @@ DISPATCH_CHECKS = (
      r"Err\(true\)\s*=>\s*array_named_get_past_bag::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),\s*Err\(false\)\s*=>\s*array_named_get::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),",
      "a bag decline routes to the checked array path"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "set_front",
-     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+Stored\(0\);",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*!\(\*r\)\.kind_is\(super::ShapeObjectKind::Ordinary\)\s*\{\s*return\s+Stored\(0\);",
      "store probe rejects a missing or nonordinary receiver record"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "record_plan",
      r"key_storage_slot\(keys,\s*pos\)",

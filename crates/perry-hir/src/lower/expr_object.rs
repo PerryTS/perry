@@ -326,7 +326,7 @@ fn lower_method_prop(
     if needs_arguments_synth {
         let mapped = !method_strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(&params, method.function.body.as_ref())
         } else {
             Vec::new()
         };
@@ -627,7 +627,13 @@ fn lower_accessor_prop(
     if !user_has_arguments_param && body.is_some_and(|b| body_uses_arguments(&b.stmts)) {
         let mapped = !accessor_strict;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(
+                &params,
+                body.map(|b| {
+                    let b: &ast::FunctionBody = b;
+                    b
+                }),
+            )
         } else {
             Vec::new()
         };

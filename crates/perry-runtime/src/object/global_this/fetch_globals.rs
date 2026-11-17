@@ -60,7 +60,7 @@ crate::perry_thread_local! {
 }
 
 // The two link-time hooks of the two-phase realm. The runtime defines both
-// WEAK; a program compiled with `PERRY_REALM_TWO_PHASE=1` defines both strong
+// WEAK; a program compiled for a two-phase realm (the default) defines both strong
 // in its entry module (`perry-codegen`, `codegen/entry.rs`), so which entry a
 // runtime reader of a phase-A intrinsic calls is decided by the LINK: no mode
 // is loaded and nothing is tested on any call, and a program that is not
@@ -108,6 +108,24 @@ pub extern "C" fn perry_realm_family_phase(_identity: u32) {}
 /// runtime's internal births of a phase-B family (a `WeakMap`'s inherited
 /// read, a typed array's prototype) complete the realm. Phase A's own asks
 /// get the realm as it is (`js_realm_complete`).
+// `.perry_tail.<name>` (Linux): the input sections, one per function, of the
+// two-phase population: the phased copy of the rows, the core entry's first
+// touch, the phase-B driver and their helpers. `.perry_tail_head.<name>`: the
+// two small functions EVERY two-phase program runs once (the mode call, the
+// core entry's slow half), placed first in the tail, in the window the end of
+// the program's own text already maps. Nothing a program compiled with
+// the two-phase realm off links may carry one (the link check asserts that
+// such a program has no tail section). The ELF link gathers it into one output section behind
+// the program's own text (`perry_codegen::function_order::JS_TEXT_LINK_RULE`),
+// so the runtime text and the program text of a program whose realm is
+// populated in one pass lie where they lie in a program compiled without
+// the two-phase realm. A
+// program compiled with the two-phase realm off references none of them and
+// the link drops the section. Other object formats keep them in the text.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.js_realm_family_phase"
+)]
 #[no_mangle]
 pub extern "C" fn js_realm_family_phase(identity: u32) {
     if identity == REALM_TYPED_ARRAY_BUILT_LATE {
@@ -165,11 +183,15 @@ pub(crate) fn realm_core() -> f64 {
     perry_realm_core_entry()
 }
 
-/// A program compiled with `PERRY_REALM_TWO_PHASE=1` calls this once from its
+/// A program compiled for a two-phase realm (the default) calls this once from its
 /// entry, before its first module init: its compiled static reads of
 /// phase-A names use the core entry, so the runtime may leave phase B for
 /// later. `poison != 0` (check mode, `PERRY_VERIFY_FACTS=1`): a phase-B slot
 /// holds `REALM_UNBOUND_POISON` until phase B binds it.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail_head.js_realm_two_phase"
+)]
 #[no_mangle]
 pub extern "C" fn js_realm_two_phase(poison: i32) {
     let mode = REALM_MODE_TWO_PHASE | if poison != 0 { REALM_MODE_POISON } else { 0 };
@@ -325,6 +347,7 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
 /// runs inside it and no collection moves anything (a no-move window, as for
 /// phase A), so no reference to a phase-B object exists before every one of
 /// them is born, linked and sealed.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.complete_realm")]
 #[cold]
 #[inline(never)]
 fn complete_realm() {
@@ -350,6 +373,7 @@ fn complete_realm() {
 /// filling: it gets the realm as it is). Reached only through
 /// [`perry_realm_complete`], which a two-phase program defines as a jump
 /// here.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.js_realm_complete")]
 #[no_mangle]
 pub extern "C" fn js_realm_complete() -> f64 {
     if !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()) {
@@ -415,10 +439,13 @@ pub extern "C" fn js_get_global_core() -> f64 {
     realm_core_slow()
 }
 
-/// The cold half of the core entry: this thread's first touch of the realm
-/// (phase A alone), or a realm that was populated in one pass because its
-/// first touch was the full entry: it serves both entries, and the core cell
-/// gets its own registered copy of the word here, once.
+/// The slow half of the core entry: a realm that was populated in one pass
+/// because its first touch was the full entry serves both entries, and the
+/// core cell gets its own registered copy of the word here, once. Small, and in
+/// the head of the tail section: a program that starts one-pass runs it once.
+/// The other case, this thread's first touch of the realm, is
+/// [`realm_core_first_touch`].
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail_head.realm_core_slow")]
 #[inline(never)]
 fn realm_core_slow() -> f64 {
     let whole = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
@@ -435,13 +462,31 @@ fn realm_core_slow() -> f64 {
         return js_get_global_this();
     }
     if whole != 0 {
+        // A second copy of the realm's word, and a root of its own: the
+        // global is promoted (moved once) at the first minor collection, and
+        // every registered copy is rewritten then. An unregistered copy would
+        // name the old address
+        // (`test_gap_realm_two_phase_global_first_gc.ts`).
         THREAD_GLOBAL_THIS.with(|c| {
             c.core.set(whole);
             crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
         });
         return f64::from_bits(whole);
     }
-    realm_setup(RealmPhases::Core, mode & REALM_MODE_POISON != 0)
+    realm_core_first_touch(mode & REALM_MODE_POISON != 0)
+}
+
+/// This thread's first touch of the realm through the core entry: phase A
+/// alone. Out of line and in the tail section (`.perry_tail`), so the
+/// allocation and the population's driver are not in the text a program that
+/// starts one-pass maps.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.realm_core_first_touch"
+)]
+#[inline(never)]
+fn realm_core_first_touch(poison: bool) -> f64 {
+    realm_setup(RealmPhases::Core, poison)
 }
 
 /// Keepalive anchor: `js_get_global_core`, `js_realm_two_phase` and

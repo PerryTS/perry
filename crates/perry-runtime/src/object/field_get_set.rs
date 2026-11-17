@@ -230,7 +230,6 @@ mod exotic_named_read;
 #[cfg(test)]
 mod exotic_named_read_tests;
 pub(crate) mod field_ops;
-mod for_in_stable;
 mod get_field_by_name;
 mod get_slow;
 pub(crate) use get_slow::get_field_by_name_of_value;
@@ -323,15 +322,15 @@ pub(crate) use enumeration::{
     keys_contain_array_index, own_key_hidden_bytes, own_keys_may_hide, own_slot_hidden,
 };
 pub use enumeration::{
-    js_for_in_keys_value, js_object_entries, js_object_entries_value, js_object_keys,
-    js_object_keys_value, js_object_values, js_object_values_value,
+    js_for_in_key_live, js_for_in_keys_fact, js_for_in_keys_value, js_for_in_loop_fact,
+    js_object_entries, js_object_entries_value, js_object_keys, js_object_keys_value,
+    js_object_values, js_object_values_value,
 };
 pub use field_ops::{
     js_object_free, js_object_get_class_id, js_object_get_field_f64, js_object_set_field,
     js_object_set_field_by_index, js_object_set_field_f64, js_object_set_keys, js_object_to_value,
     js_value_to_object,
 };
-pub use for_in_stable::js_for_in_keys_stable_value;
 pub(crate) use get_field_by_name::class_value_get_field;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name::primitive_number_get;

@@ -92,6 +92,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
 /// Linked only into a program compiled for a two-phase realm.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.populate_realm_core")]
 #[inline(never)]
 pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     super::super::own_override::as_builtin_definition(|| {
@@ -104,6 +105,7 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
 /// layout is static, so no key is added and none moves) and its family's
 /// declaration order (the same `birth_family`). Runs inside the caller's
 /// no-move window, and no program code runs inside it.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.populate_realm_rest")]
 #[cold]
 #[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
@@ -156,6 +158,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
 /// One phase of a two-phase realm: the same rows, each behind its phase test
 /// (`RealmPhases::binds`). A second copy of the population, linked only into
 /// a program compiled for a two-phase realm.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.populate_realm_phase")]
 #[optimize(size)]
 #[inline(never)]
 fn populate_realm_phase(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {

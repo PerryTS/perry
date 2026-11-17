@@ -85,8 +85,10 @@ pub(crate) unsafe fn receiver_admits_plain_store(obj: *const ObjectHeader) -> bo
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) -> bool {
-    super::shape_object_kind_of_receiver((object_shape_stamp(obj)).0)
-        == Some(ShapeObjectKind::OrdinaryNumericProof)
+    super::shape_kind_of_receiver_is(
+        (object_shape_stamp(obj)).0,
+        ShapeObjectKind::OrdinaryNumericProof,
+    )
 }
 
 /// R1: the ordinary-family kind a NEW shape of `obj` must have. Never the
@@ -320,8 +322,7 @@ pub(crate) unsafe fn premark_plain_ordinary(obj: *mut ObjectHeader) {
 #[inline]
 pub(crate) fn shape_proves_ordinary_null_proto(shape_id: LayoutWord) -> bool {
     super::shape_record_of_receiver((shape_id).0).is_some_and(|record| {
-        record.object_kind() == ShapeObjectKind::Ordinary
-            && record.proto_id() == super::PROTO_ID_NULL
+        record.kind_is(ShapeObjectKind::Ordinary) && record.proto_id() == super::PROTO_ID_NULL
     })
 }
 
@@ -349,7 +350,7 @@ pub(crate) unsafe fn null_shape_proven(obj: *const ObjectHeader, reserved: u16) 
 /// `obj` is a live shaped `GC_TYPE_OBJECT` `ObjectHeader`.
 pub(crate) unsafe fn stamp_numeric_proof_twin(obj: *mut ObjectHeader) -> Option<LayoutWord> {
     let unproven = object_shape_stamp(obj);
-    if super::shape_object_kind_of_receiver((unproven).0) != Some(ShapeObjectKind::Ordinary) {
+    if !super::shape_kind_of_receiver_is((unproven).0, ShapeObjectKind::Ordinary) {
         return None;
     }
     let proven = twin_of(unproven, ShapeObjectKind::OrdinaryNumericProof)?;
@@ -421,9 +422,7 @@ unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutW
     if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type) {
         return;
     }
-    if super::shape_object_kind_of_receiver((new_id).0)
-        == Some(ShapeObjectKind::OrdinaryNumericProof)
-    {
+    if super::shape_kind_of_receiver_is((new_id).0, ShapeObjectKind::OrdinaryNumericProof) {
         return;
     }
     let _ = crate::array::drop_packed_subclass_numeric_proof_record(obj);

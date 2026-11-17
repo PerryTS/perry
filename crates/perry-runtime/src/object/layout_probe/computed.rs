@@ -950,7 +950,7 @@ unsafe fn overflowed_append(
         return None;
     }
     let r = record_of(dir, LayoutWord(word));
-    if r.is_null() || (*r).object_kind() != super::super::ShapeObjectKind::Ordinary {
+    if r.is_null() || !(*r).kind_is(super::super::ShapeObjectKind::Ordinary) {
         return None;
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).

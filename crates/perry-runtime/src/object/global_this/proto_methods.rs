@@ -438,6 +438,9 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
             super::super::native_module::set_bound_native_closure_name(values, "values");
             let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(values as i64));
+            crate::array::note_realm_array_values(
+                crate::value::js_nanbox_get_pointer(values.get_nanbox_f64()) as usize,
+            );
             install_builtin_iterator_symbol(proto_obj, values.get_nanbox_f64());
             install_proto_method(
                 proto_obj,

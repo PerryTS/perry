@@ -29,3 +29,28 @@ entire process, including memory managed by other allocators. Embedders that
 share mimalloc with a host must configure it before the host's first allocation;
 loading Perry later cannot retroactively change the initial heap policy. Setting
 `MIMALLOC_ALLOW_THP=0` at host process launch makes that intent explicit.
+
+## Realm population
+
+Native compilation enables two-phase realm population by default. A static read
+of a core global initializes the core builtins; observing the global object or
+a builtin outside the core completes the realm. If the first access requires
+the complete realm, the runtime populates it in one pass. Both entries refer to
+the same global object, and each retained copy is registered as a GC root.
+
+To compile with one-pass population throughout, set the compiler environment:
+
+```sh
+PERRY_REALM_TWO_PHASE=0 perry compile app.ts -o app
+```
+
+`off` and `false` also disable two-phase population. This is a compile-time
+setting and participates in the compilation cache key; setting it when launching
+an already compiled executable does not select another population strategy.
+The one-pass executable omits the two-phase runtime path.
+
+On Linux, the two-phase population occupies a separate tail section after the
+program's generated text. This keeps that code out of the common runtime text
+layout. It adds executable bytes, so memory gains depend on which builtins the
+program observes. Compare warm peak RSS and startup instructions on the same
+workload when assessing the tradeoff.

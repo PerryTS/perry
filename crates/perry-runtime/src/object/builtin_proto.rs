@@ -257,6 +257,7 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
 /// phase B of a two-phase realm has born it and before the realm global's
 /// slot names its constructor: the realm seal ran at the end of phase A and
 /// skipped it (its slot was unbound). No-op for any other family.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.seal_realm_family_of")]
 #[cold]
 #[inline(never)]
 pub(crate) fn seal_realm_family_of(

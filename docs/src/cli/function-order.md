@@ -95,6 +95,13 @@ sections, so the data pages a program touches are packed as well.
   (`.rodata.str1.1`, `.rodata.cst16`) are pooled by the linker and not
   ordered.
 
+Linux links place the two-phase realm population in `.perry_tail`, after
+`perry_js_text`, independently of the hot-text order switch. Each tail function
+has its own input section so unused functions can be discarded. A program
+compiled with `PERRY_REALM_TWO_PHASE=0` links no tail section. See
+[realm population](../runtime/small-process-memory.md#realm-population) for the
+default and its compile-time override.
+
 ## Platforms
 
 | Platform | How the order is applied |

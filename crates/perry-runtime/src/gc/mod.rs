@@ -1208,7 +1208,6 @@ pub fn gc_init() {
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
-    reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
     // Optional features' scanners, on every thread after the feature's

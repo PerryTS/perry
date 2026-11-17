@@ -141,7 +141,7 @@ pub(super) fn lower_nested_fn_decl(
     if needs_arguments_synth {
         let mapped = !is_strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(&params, fn_decl.function.body.as_ref())
         } else {
             Vec::new()
         };

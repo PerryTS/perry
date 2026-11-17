@@ -28,7 +28,7 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn spread_data(self) -> bool {
         let r = unsafe { &*self.0.as_ptr() };
-        r.object_kind() == ShapeObjectKind::Ordinary
+        r.kind_is(ShapeObjectKind::Ordinary)
             && r.hole_count == 0
             && r.summary()
                 & (crate::object::key_attrs::SUMMARY_ACCESSOR
@@ -37,5 +37,37 @@ impl ShapeRecordRef {
                     | crate::object::key_attrs::SUMMARY_HOLES)
                 == 0
             && r.proves_no_symbols()
+    }
+
+    /// E4 same-layout spread source: an ordinary default-prototype record
+    /// with no holes, no attribute summary, no symbols and no runtime-internal
+    /// key name (the birth facts cover exactly the record's logical keys,
+    /// the keys the copy carries on this layout word), so a result born on
+    /// this very layout word owns exactly the keys the source's enumeration
+    /// lists.
+    #[inline]
+    pub(crate) fn spread_same_layout(self) -> bool {
+        let r = unsafe { &*self.0.as_ptr() };
+        r.kind_is(ShapeObjectKind::Ordinary)
+            && r.hole_count == 0
+            && r.summary() == 0
+            && r.proves_no_symbols()
+            && r.proto_id == super::PROTO_ID_DEFAULT
+            && self.enum_bits() & crate::object::key_attrs::ENUM_INTERNAL_KEY == 0
+    }
+
+    /// E4 table-born spread source: ordinary, any prototype, holes allowed
+    /// (skipped per slot), otherwise only plain enumerable string data keys
+    /// with no index or internal key (layout order is then key order).
+    #[inline]
+    pub(crate) fn spread_plain_slots(self) -> bool {
+        let r = unsafe { &*self.0.as_ptr() };
+        r.kind_is(ShapeObjectKind::Ordinary)
+            && r.summary() & !crate::object::key_attrs::SUMMARY_HOLES == 0
+            && r.proves_no_symbols()
+            && self.enum_bits()
+                & (crate::object::key_attrs::ENUM_INDEX_KEY
+                    | crate::object::key_attrs::ENUM_INTERNAL_KEY)
+                == 0
     }
 }

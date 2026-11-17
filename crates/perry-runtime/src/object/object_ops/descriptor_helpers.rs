@@ -972,7 +972,18 @@ pub(crate) unsafe fn define_property_force_store_value(
             {
                 let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
                 let inline_limit = crate::object::object_inline_capacity(obj) as usize;
-                if i < inline_limit {
+                let current = if i < inline_limit {
+                    crate::object::js_object_get_field(obj, i as u32).bits()
+                } else {
+                    crate::object::overflow_get(obj as usize, i).unwrap_or(0)
+                };
+                if crate::object::arguments_store_through_cell(
+                    obj,
+                    current,
+                    value_handle.get_nanbox_f64(),
+                ) {
+                    // A mapped arguments key keeps its cell.
+                } else if i < inline_limit {
                     js_object_set_field(
                         obj,
                         i as u32,

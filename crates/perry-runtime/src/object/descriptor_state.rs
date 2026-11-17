@@ -579,7 +579,7 @@ pub(crate) unsafe fn layout_store_may_intercept(
     obj: *const ObjectHeader,
     name: &[u8],
 ) -> Option<bool> {
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary {
+    if !record.kind_is(super::shapes::ShapeObjectKind::Ordinary) {
         return None;
     }
     if super::key_attrs::object_key_blocks_plain_store_from_record(obj, record, name) {
@@ -823,7 +823,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // A live ordinary layout already proves receiver admission. Consume
     // that proof before the general typed/exotic admission and key walk.
     if let Some(record) = super::shapes::object_shape_record(addr as *const ObjectHeader) {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary {
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary) {
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             if let Some(name) = crate::string::js_string_key_bytes(
                 crate::JSValue::from_bits(key.to_bits()),
