@@ -662,7 +662,7 @@ fn mint_desc_matches(was: &[u8], now: &[u8], id: u32, word: u32) -> (u32, u64) {
     let (mut n, mut at) = (0u32, 0u64);
     let words = now.len().min(was.len()) / 8;
     for i in 0..words {
-        if now[i * 8..i * 8 + 8] == was[i * 8..i * 8 + 8] {
+        if now.get(i * 8..i * 8 + 8) == was.get(i * 8..i * 8 + 8) {
             continue;
         }
         for half in 0..2usize {
@@ -678,6 +678,18 @@ fn mint_desc_matches(was: &[u8], now: &[u8], id: u32, word: u32) -> (u32, u64) {
         }
     }
     (n, at)
+}
+
+fn mint_bump(c: &mut [u64], k: usize) {
+    if let Some(x) = c.get_mut(k) {
+        *x += 1;
+    }
+}
+
+fn mint_set(c: &mut [u64], k: usize, v: u64) {
+    if let Some(x) = c.get_mut(k) {
+        *x = v;
+    }
 }
 
 fn mint_note(n: &mut [u32], first: &mut [usize], k: usize, i: usize) {
@@ -724,8 +736,8 @@ fn mint_capture(
         }
         r.keys_ref = mint_ref(w, r.keys, false);
         match &r.keys_ref {
-            Some(Val::Cell { .. }) => c[14] += 1,
-            Some(Val::Ext { .. }) => c[15] += 1,
+            Some(Val::Cell { .. }) => mint_bump(&mut c, 14),
+            Some(Val::Ext { .. }) => mint_bump(&mut c, 15),
             Some(_) => {}
             None => mint_note(&mut n, &mut first, 0, i),
         }
@@ -741,22 +753,22 @@ fn mint_capture(
             let (m, off) = mint_desc_matches(was, now, r.id, r.word);
             if m == 1 {
                 r.desc_off = Some(off);
-                c[16] += 1;
+                mint_bump(&mut c, 16);
             } else {
                 mint_note(&mut n, &mut first, 3, i);
             }
         }
         let fl = flags.get(i).copied().unwrap_or(0);
         if fl & f::MINT_FLAG_CANONICAL != 0 {
-            c[4] += 1;
+            mint_bump(&mut c, 4);
             mint_note(&mut n, &mut first, 1, i);
         }
         if fl & f::MINT_FLAG_SUCCESSOR != 0 {
-            c[5] += 1;
+            mint_bump(&mut c, 5);
             mint_note(&mut n, &mut first, 5, i);
         }
         if fl & f::MINT_FLAG_ROW_GAP != 0 {
-            c[6] += 1;
+            mint_bump(&mut c, 6);
             mint_note(&mut n, &mut first, 4, i);
         }
         let p = r.proto_id;
@@ -771,11 +783,11 @@ fn mint_capture(
         } else {
             11
         };
-        c[k] += 1;
+        mint_bump(&mut c, k);
     }
     let (unique, serial) = sh::snap_image_mint_counters_moved(begin);
-    c[12] = unique;
-    c[13] = serial;
+    mint_set(&mut c, 12, unique);
+    mint_set(&mut c, 13, serial);
     let kinds = [
         f::STOP_MINT_KEYS,
         f::STOP_MINT_CANONICAL,
@@ -784,10 +796,10 @@ fn mint_capture(
         f::STOP_MINT_ROW_GAP,
         f::STOP_MINT_SUCCESSOR,
     ];
-    for (k, kind) in kinds.iter().enumerate() {
-        if n[k] > 0 {
-            let id = recs.get(first[k]).map_or(0, |r| r.id);
-            stops.push(Stop { cell: first[k] as u32, obj_type: 0, kind: *kind, off: n[k], value: u64::from(id) });
+    for (kind, (cnt, at)) in kinds.iter().zip(n.iter().zip(first.iter())) {
+        if *cnt > 0 {
+            let id = recs.get(*at).map_or(0, |r| r.id);
+            stops.push(Stop { cell: *at as u32, obj_type: 0, kind: *kind, off: *cnt, value: u64::from(id) });
         }
     }
     for (item, value) in c.iter().enumerate() {
