@@ -5382,6 +5382,8 @@ jobs:
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: WASI native EH toolchain and codegen regression
       run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
+    - name: Component-model unit tests
+      run: ./scripts/component_unit_tests.sh
     - name: Link-argument and flavour unit tests (feature-enabled)
       shell: bash
       run: |
@@ -5559,6 +5561,9 @@ jobs:
           printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
         done
     - name: Typed components, resources, moving GC and cross-language composition
+      # wasi-native runs component_unit_tests.sh in parallel.
+      env:
+        COMPONENT_CHECK_UNIT_TESTS: '0'
       run: ./scripts/component_check.sh
     - name: Retain component execution evidence
       uses: ./.github/actions/perry/actions/upload-artifact
