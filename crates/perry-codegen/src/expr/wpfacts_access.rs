@@ -1774,8 +1774,7 @@ pub(crate) fn proven_method_fn(
 ) -> Option<(Option<String>, String, crate::DirectAbi, bool)> {
     if ctx.wpfacts_off
         || ctx.wpfacts.interp_guard
-        || offset == 0
-        || property.starts_with('#')
+        || !perry_hir::method_call::named_site(property, offset)
         || ctx.is_static_class_this(object)
         // A scalar-replaced receiver is no object: the escape pass kept it in
         // frame slots only because `simple_scalar_method_summary` inlines this
@@ -1825,12 +1824,8 @@ pub(crate) fn proven_method_fn(
             stub_named = true;
             continue;
         }
-        if method.id != fid
-            || method.is_generator
-            || method.is_async
-            || crate::codegen::helpers::body_has_fixed_generator_state(&method.body)
+        if perry_hir::method_call::target_in_class(c, fid, property).is_none()
             || super::property_get::class_has_evaluated_accessor(ctx, &class)
-            || c.static_accessor_names.iter().any(|n| n == property)
         {
             return None;
         }

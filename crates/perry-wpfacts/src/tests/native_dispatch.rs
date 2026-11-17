@@ -239,7 +239,7 @@ fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
     );
     // The same lookup verdict, without the route certificate, is no proof.
     let mut missing = s.clone();
-    missing.dispatch_certificate = None;
+    missing.method_call.as_mut().unwrap().dispatch = None;
     assert!(missing.dispatch_obligation().unwrap().redispatch);
     let (native, _) = dispatch("const s = 'abc'; console.log(s.charCodeAt(0));");
     let s = native
@@ -341,4 +341,25 @@ fn native_dispatch_check_mode_retains_witness_routes() {
         .find(|s| s.is_call && s.key == "m")
         .expect("live call");
     assert!(s.dispatch_obligation().unwrap().redispatch);
+}
+
+#[test]
+fn native_dispatch_refused_twin_clears_every_certificate() {
+    let (pf, _) = dispatch(
+        "class P { m() { return 7; } run() { return this.m(); } } console.log(new P().run());",
+    );
+    let proven = pf.sites.iter().find(|s| s.is_call && s.key == "m").unwrap();
+    assert!(!proven.dispatch_obligation().unwrap().redispatch);
+    let mut refused = proven.clone();
+    refused.method_call = None;
+    for mut twins in [
+        vec![proven.clone(), refused.clone()],
+        vec![refused, proven.clone()],
+    ] {
+        crate::derive::dispatch::agree(&mut twins);
+        assert!(twins.iter().all(|s| s.method_call_certificate().is_none()));
+        assert!(twins
+            .iter()
+            .all(|s| s.dispatch_obligation().unwrap().redispatch));
+    }
 }
