@@ -243,11 +243,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name = b"globalThis";
         let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             key,
             value,
-            "globalThis".to_string(),
+            b"globalThis",
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
@@ -259,11 +259,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name = b"global";
         let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             key,
             value,
-            "global".to_string(),
+            b"global",
             super::super::PropertyAttrs::new(true, true, true),
         );
     }
@@ -341,11 +341,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
                     );
                 }
             }
-            super::super::define_builtin_data_property(
+            super::super::descriptor_state::define_builtin_data_property_bytes(
                 singleton(),
                 name_key,
                 ctor_value,
-                name.to_string(),
+                name.as_bytes(),
                 super::super::PropertyAttrs::new(true, false, true),
             );
             continue;
@@ -357,11 +357,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             let (object_ctor, _) = object_intrinsics_for_realm(singleton());
             if !object_ctor.is_null() {
                 let name_key = super::global_name_key(b"Object");
-                super::super::define_builtin_data_property(
+                super::super::descriptor_state::define_builtin_data_property_bytes(
                     singleton(),
                     name_key,
                     crate::value::js_nanbox_pointer(object_ctor as i64),
-                    name.to_string(),
+                    name.as_bytes(),
                     super::super::PropertyAttrs::new(true, false, true),
                 );
             }
@@ -411,11 +411,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         }
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             ctor_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, false, true),
         );
         super::super::native_module::publish_worker_messaging_constructor(
@@ -611,11 +611,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             fn_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, enumerable, true),
         );
     }
@@ -692,11 +692,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             // slot can name it.
             super::super::builtin_namespace::seal_namespace_value(name, ns_value.to_bits());
         }
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             ns_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
@@ -822,21 +822,21 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             let non_writable = super::super::PropertyAttrs::new(false, false, false);
             for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
                 let key = super::global_name_key(name);
-                super::super::define_builtin_data_property(
+                super::super::descriptor_state::define_builtin_data_property_bytes(
                     singleton(),
                     key,
                     value,
-                    name.to_string(),
+                    name.as_bytes(),
                     non_writable,
                 );
             }
             let undef_key = super::global_name_key(b"undefined");
             let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
-            super::super::define_builtin_data_property(
+            super::super::descriptor_state::define_builtin_data_property_bytes(
                 singleton(),
                 undef_key,
                 undef_val,
-                "undefined".to_string(),
+                b"undefined",
                 super::super::PropertyAttrs::new(false, false, false),
             );
         }
