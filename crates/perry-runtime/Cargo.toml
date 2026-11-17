@@ -366,6 +366,7 @@ unicode-normalization = { version = "0.1" }
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
 # so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
 unicode-segmentation = { version = "1" }
+unicode-width = "0.2.2"
 # #5298/#5896: BCP-47 (UTS #35) structural locale-tag canonicalization, CLDR
 # aliases, and likely-subtag expansion for the Intl locale APIs. Both crates and
 # their compiled data are already in the default lock graph via icu_datetime.
