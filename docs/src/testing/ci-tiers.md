@@ -328,21 +328,25 @@ After a consolidation lands, Repository automatically deletes completed runs who
 ### Required WASI command and component execution
 
 The `wasi_execution` plan entry joins the core PR, sweep and full tiers and
-starts three Linux jobs in parallel, so the gate waits for the longest of them
+starts four Linux jobs in parallel, so the gate waits for the longest of them
 rather than their sum:
 
 - `wasi-native` runs the `target-wasi` codegen and link-argument unit tests.
-- `wasi-execution` builds Perry with `target-wasi` and matching wasm32-wasip2
-  and wasip1 runtimes, checks the IR ABI, then runs all six smoke cases, twenty
-  acceptance cases, ten pinned-Node comparisons and the preview 1 host suite.
+- `wasi-execution` builds Perry with `target-wasi` and a matching wasm32-wasip2
+  runtime, checks the IR ABI, then runs all six smoke cases, twenty acceptance
+  cases and ten pinned-Node comparisons.
+- `wasi-execution-p1` builds the same compiler and a wasm32-wasip1 runtime,
+  checks its imports, then runs the preview 1 smoke, acceptance and gap suites
+  and the preview 1 host suite.
 - `wasi-components` builds matching native component tools and instrumented
   runtimes and runs both component harnesses: native hosting, Perry-authored
   guests, resource lifetimes, forced moving GC and direct Rust/Perry
   composition.
 
 Per-case logs, component phase verdicts, source revision and artifacts are
-retained (`wasi-required-<sha>` and `wasi-components-<sha>`). The required
+retained (`wasi-required-<sha>`, `wasi-required-p1-<sha>` and
+`wasi-components-<sha>`). The required
 `pr-gate` rejects a skipped or missing planned WASI job as well as failures and
-cancellation, for each of the three. Docs-only PRs skip this build. The wider Windows/macOS matrix
+cancellation, for each of the four. Docs-only PRs skip this build. The wider Windows/macOS matrix
 remains in the extended suite. Native component execution is currently
 qualified on Linux.

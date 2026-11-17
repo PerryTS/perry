@@ -338,7 +338,8 @@ missing, cancelled or failed makes that gate fail. Docs-only PRs skip execution.
 A parallel `wasi-components` job runs both typed-component harnesses,
 including resource lifetimes, moving GC and Rust/Perry composition, and
 retains their execution evidence; `wasi-native` runs the `target-wasi` unit
-tests. The gate requires all three. The command-profile promotion uses the demonstrated Linux baseline
+tests, and `wasi-execution-p1` runs the preview 1 suites. The gate requires
+all four. The command-profile promotion uses the demonstrated Linux baseline
 in run39574495557; component qualification is recorded separately in
 [WASI_COMPONENTS.md](WASI_COMPONENTS.md).
 The baseline repair landed in [PR #12931](https://github.com/PerryTS/perry/pull/12931);

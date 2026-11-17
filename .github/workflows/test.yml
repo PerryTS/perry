@@ -5333,8 +5333,8 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
-  # The `wasi_execution` plan entry starts three parallel WASI jobs
-  # (wasi-native, wasi-execution, wasi-components) so the PR gate waits for the
+  # The `wasi_execution` plan entry starts four parallel WASI jobs (wasi-native,
+  # wasi-execution, wasi-execution-p1, wasi-components) so the PR gate waits for the
   # longest one, not their sum; `gate` requires each planned one. Each keeps
   # its own rust-cache key: they compile different units, and one shared key
   # would hold whichever job saved first.
@@ -5455,17 +5455,6 @@ jobs:
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python tests/integration/harnesses/wasi_image_selftest.py target/perry-dev/perry
-    - name: Build the bundled runtime for wasm32-wasip1 and check its imports
-      shell: bash
-      run: |
-        python scripts/wasi_imports_check.py --self-test
-        archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
-        # The archive carries the opt-in perry_net and perry_host imports in their
-        # own members; a linked module has them only when built with
-        # PERRY_WASM_NET=1 or PERRY_WASM_DISCARD=1.
-        python scripts/wasi_imports_check.py "$archive" --allow-perry-net --allow-perry-host
-    - name: Image classifier checks as a wasip1 program
-      run: python tests/integration/harnesses/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
       shell: bash
       run: |
@@ -5477,6 +5466,84 @@ jobs:
       run: |
         compiler=target/perry-dev/perry
         python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+    - name: Retain WASI execution evidence
+      uses: ./.github/actions/perry/actions/upload-artifact
+      with:
+        name: wasi-required-${{ github.sha }}
+        retention-days: '7'
+        path: target/wasi-validation/
+      if: always()
+
+
+  # The preview 1 flavour of wasi-execution: its own runtime build and suites,
+  # on its own runner beside the preview 2 ones.
+  wasi-execution-p1:
+    name: wasi-execution-p1
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-p1
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Install pinned Node oracle for WASI compatibility tests
+      uses: ./.github/actions/perry/actions/setup-node
+      with:
+        node-version-file: .node-version
+    - name: Build perry with the WASI target
+      run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+    - name: Install the WASI toolchain
+      shell: bash
+      run: |
+        toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+        eval "$toolchain_env"
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+        done
+    - name: Build the bundled runtime for wasm32-wasip1 and check its imports
+      shell: bash
+      run: |
+        python scripts/wasi_imports_check.py --self-test
+        archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
+        # The archive carries the opt-in perry_net and perry_host imports in their
+        # own members; a linked module has them only when built with
+        # PERRY_WASM_NET=1 or PERRY_WASM_DISCARD=1.
+        python scripts/wasi_imports_check.py "$archive" --allow-perry-net --allow-perry-host
+    - name: Image classifier checks as a wasip1 program
+      run: python tests/integration/harnesses/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: wasip1 smoke, acceptance and gap probes (core module, preview 1 imports only)
       shell: bash
       run: |
@@ -5498,10 +5565,10 @@ jobs:
         python tests/integration/wasi/p1-host/suite.py target/perry-dev/perry \
           --host tests/integration/wasi/p1-host/target/debug/perry-p1-host \
           --output target/wasi-validation/p1-host --min-cases 26
-    - name: Retain WASI execution evidence
+    - name: Retain WASI preview 1 execution evidence
       uses: ./.github/actions/perry/actions/upload-artifact
       with:
-        name: wasi-required-${{ github.sha }}
+        name: wasi-required-p1-${{ github.sha }}
         retention-days: '7'
         path: target/wasi-validation/
       if: always()
@@ -5612,6 +5679,7 @@ jobs:
       - security-audit
       - wasi-native
       - wasi-execution
+      - wasi-execution-p1
       - wasi-components
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -5640,7 +5708,7 @@ jobs:
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
-          for wasi_job in wasi-native wasi-execution wasi-components; do
+          for wasi_job in wasi-native wasi-execution wasi-execution-p1 wasi-components; do
             wasi_result="$(echo "$NEEDS" | jq -r --arg j "$wasi_job" '.[$j].result')"
             if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
               echo "::error::planned $wasi_job did not pass ($wasi_result)."
