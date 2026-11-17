@@ -76,3 +76,22 @@ fn the_exported_classification_is_the_reach_predicate() {
     }
     assert_eq!(map.get(&ident(id_of(SRC, "dead"))), Some(&false));
 }
+
+#[test]
+fn an_async_generator_return_reads_the_promise_constructor() {
+    // AsyncGenerator.prototype.return runs PromiseResolve(%Promise%, value),
+    // which calls a `constructor` getter on a promise argument; `mark` runs
+    // exactly when the getter does.
+    let src = "async function* rows() { yield 1; }\n\
+function mark() { return 0; }\n\
+const value = Promise.resolve(3);\n\
+Object.defineProperty(value, \"constructor\", { get() { mark(); return Promise; } });\n\
+rows().return(value).then((r) => console.log(r.done));\n";
+    let ast = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").expect("lowers");
+    perry_transform::transform_generators(&mut hir);
+    let mark = hir.functions.iter().find(|f| f.name == "mark").expect("mark").id;
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
+    assert!(pf.body_reach.complete);
+    assert!(!pf.body_reach.inactive(&ident(mark)), "the getter runs, so mark does");
+}
