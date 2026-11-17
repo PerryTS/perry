@@ -150,7 +150,26 @@ impl<'a> Gen<'a> {
                 });
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
-                self.member_op(mi, e, method, o, o.is_none().then_some(m0), false);
+                let key = if m0 == "array"
+                    && matches!(method.as_str(), "push_single" | "push_field_single")
+                {
+                    "push"
+                } else {
+                    method
+                };
+                let guarded_push = module == "array"
+                    && o.is_some()
+                    && (method == "push_field_single"
+                        || (matches!(method.as_str(), "push_single" | "push")
+                            && push_method_tiers()
+                            && !self
+                                .push_fill
+                                .pushes
+                                .contains_key(&(e as *const Expr as usize))));
+                // A guarded push publishes its one route at folded_site below.
+                if !guarded_push || perry_hir::folded_call::native_array_push(e).is_none() {
+                    self.member_op(mi, e, key, o, o.is_none().then_some(m0), false);
+                }
                 if module == "__perry_borrowed_proof" {
                     self.prim_node(prim::BOOL)
                 } else if module == "__perry_runtime" {

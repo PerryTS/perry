@@ -1396,7 +1396,7 @@ fn compute_act<'a>(
         .is_some()
         .then(|| family_reach::derive_dispatch(&g, cfg));
     let member_ops = match native_dispatch {
-        Some(_) => derive::member_op_facts(&g),
+        Some(_) => derive::member_op_facts(&g, &bindings, interp_guard.is_some()),
         None => Vec::new(),
     };
     let mut pf = ProgramFacts {
@@ -1437,6 +1437,7 @@ fn compute_act<'a>(
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         module_digests: Vec::new(),
     };
+    derive::dispatch::certify(&mut pf, &g, cfg.unit);
     pf.module_digests = dump::module_digests(&pf);
     pf
 }

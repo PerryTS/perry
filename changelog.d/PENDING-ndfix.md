@@ -1,0 +1,1 @@
+Fix native-dispatch fact precision: numeric literals no longer create member obligations, native pushes publish one correctly named route with its lowering certificate, and proven ordinary same-class `this` calls can discharge their dispatcher obligation. Generic and guarded routes remain conservative; executable code and linking are unchanged.

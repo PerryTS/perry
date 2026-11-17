@@ -209,3 +209,108 @@ fn static_member_op_keys_are_the_real_js_names() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn numeric_literals_are_core_operations_without_dispatch_obligations() {
+    assert_eq!(
+        crate::member_ops::class(&perry_hir::Expr::Number(1.5)),
+        crate::member_ops::Op::Core,
+    );
+    let (pf, d) = dispatch("console.log(1.5);\n");
+    assert!(d.complete(), "{:?}\n{}", d.open, pf.dump_text());
+    assert!(pf.member_ops.iter().all(|o| o.op != "Number"));
+}
+
+#[test]
+fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
+    let (pf, _) = dispatch(
+        "class P { m() { return 7; } run() { return this.m(); } }\nconsole.log(new P().run());",
+    );
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.is_call && s.key == "m")
+        .expect("live call");
+    assert!(matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set));
+    assert!(
+        !s.dispatch_obligation().unwrap().redispatch,
+        "{}",
+        pf.dump_text()
+    );
+    // The same lookup verdict, without the route certificate, is no proof.
+    let mut missing = s.clone();
+    missing.dispatch_certificate = None;
+    assert!(missing.dispatch_obligation().unwrap().redispatch);
+}
+
+#[test]
+fn native_dispatch_named_negative_controls_keep_the_generic_route() {
+    for (key, src) in [
+        ("m", "const x = (globalThis as any).hostValue; x.m();"),
+        ("get", "const x: any = new Map(); x.get = function() { return 7; }; console.log(x.get('a'));"),
+        ("get", "(Map.prototype as any).get = function() { return 7; }; const x: any = new Map(); console.log(x.get('a'));"),
+        ("call", "const f = 'abc'.charCodeAt; console.log(f.call('abc', 0));"),
+        ("apply", "const f = 'abc'.charCodeAt; console.log(f.apply('abc', [0]));"),
+        ("charCodeAt", "const x: any = process.argv.length > 9 ? 'abc' : { charCodeAt(i: number) { return 7; } }; console.log(x.charCodeAt(0));"),
+        ("log", "console.log = function(x: any) {}; console.log(7);"),
+    ] {
+        let (pf, _) = dispatch(src);
+        let calls: Vec<_> = pf.sites.iter().filter(|s| s.is_call && s.key == key).collect();
+        assert!(!calls.is_empty(), "missing {key}: {src}\n{}", pf.dump_text());
+        for s in calls {
+            assert!(s.dispatch_obligation().unwrap().redispatch, "{src}\n{}", pf.dump_text());
+        }
+    }
+}
+
+#[test]
+fn native_dispatch_computed_and_spread_calls_have_no_direct_this_certificate() {
+    for src in [
+        "class P { m() { return 7; } run(k: string) { return (this as any)[k](); } } console.log(new P().run(process.argv[2]));",
+        "class P { m(...a: number[]) { return a.length; } run() { return this.m(...[1, 2]); } } console.log(new P().run());",
+    ] {
+        let (pf, _) = dispatch(src);
+        assert!(pf.sites.iter().filter(|s| s.is_call).all(|s| s.dispatch_obligation().unwrap().redispatch), "{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn native_dispatch_push_has_one_record_and_the_js_key() {
+    let (pf, _) = dispatch("class Bag { items: number[] = []; add() { return this.items.push(7); } } const b = new Bag(); console.log(b.add());");
+    let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+    assert_eq!(pushes.len(), 1, "{}", pf.dump_text());
+    assert_eq!(pushes[0].op, "NativeMethodCall");
+    assert!(!pushes[0].redispatch, "{}", pf.dump_text());
+    assert!(!pf
+        .member_ops
+        .iter()
+        .any(|o| o.key == "push_single" || o.key == "push_field_single"));
+}
+
+#[test]
+fn native_dispatch_push_receiver_and_override_controls_remain_open() {
+    for update in [
+        "b.items = { push(x: number) { return 9; } } as any;",
+        "(b.items as any).push = function(x: number) { return 9; };",
+        "(Array.prototype as any).push = function(x: number) { return 9; };",
+    ] {
+        let (pf, _) = dispatch(&format!("class Bag {{ items: number[] = []; add() {{ return this.items.push(7); }} }} const b = new Bag(); {update} console.log(b.add());"));
+        let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+        assert_eq!(pushes.len(), 1, "{update}\n{}", pf.dump_text());
+        assert!(pushes[0].redispatch, "{update}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn native_dispatch_fill_push_uses_the_fill_certificate() {
+    let (pf, _) = dispatch("class T { private tab: number[] = []; constructor() { for (let i = 0; i < 16; i++) this.tab.push(i | 0); } get(k: number) { return this.tab[k & 15] | 0; } } console.log(new T().get(7));");
+    let bindings = pf.bindings_for("main.ts").unwrap();
+    assert!(
+        !bindings.rest_pushes.is_empty(),
+        "fill route must be live\n{}",
+        pf.dump_text()
+    );
+    let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+    assert_eq!(pushes.len(), 1, "{}", pf.dump_text());
+    assert!(!pushes[0].redispatch, "{}", pf.dump_text());
+}
