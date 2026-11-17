@@ -213,6 +213,14 @@ impl Model {
             if name == "__proto__" || star(a) {
                 return None;
             }
+            // A key whose text a solver rule made (`spelled_atoms`): the
+            // run of such a key may write a key made from it in turn
+            // (`o[k + "x"] = v` in the body: "a", "ax", "axx", ...), so per-
+            // key runs need not end. The keys a program can spell are
+            // finitely many; past them the body runs once with every key.
+            if self.spelled_atoms.is_some_and(|n| a as usize >= n) {
+                return None;
+            }
             // A symbol is no for-in key.
             if !name.starts_with(crate::builtins::WK_PREFIX)
                 && self.enum_string_key(a)

@@ -1059,6 +1059,7 @@ impl Model {
 
     fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
+        self.spelled_atoms.get_or_insert(self.atoms.len());
         self.mark_params();
         self.members_settled.get_mut().clear();
         let mut delta = crate::delta::Delta::default();

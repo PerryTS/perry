@@ -2768,6 +2768,12 @@ pub struct Model {
     pub val_runs: Vec<(CallId, Tok, Option<Tok>, u16, u32)>,
     /// (call, body token) run once with every key.
     pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// The atom count when the fixpoint started (`solve_fixpoint`): the
+    /// atoms below it are the names the program and the realm spell
+    /// (finitely many); an atom at or past it is a text a solver rule made
+    /// (a concatenation, a case mapping, a for-in key folded into one).
+    /// `None` before the first solve: every atom is a spelled name.
+    pub spelled_atoms: Option<usize>,
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
     pub for_in_named: Vec<(CallId, Tok, Tok)>,
