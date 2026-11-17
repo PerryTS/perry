@@ -1191,8 +1191,15 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::BOOL)
             }
             Expr::Await(x) => {
+                // 27.7.5.3 Await: a rejection resumes the body with a throw
+                // completion at the await, into its region (R-JOBTHROW).
                 let v = self.expr(fx, x);
-                self.awaited(v)
+                let (out, rj) = self.awaited_r(v);
+                let r = self.region();
+                if rj != r {
+                    self.m.edge(rj, r);
+                }
+                out
             }
             Expr::Yield { value, .. } => {
                 if let Some(v) = value {

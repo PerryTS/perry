@@ -361,6 +361,11 @@ impl<'a> Gen<'a> {
         let r = self.m.raise_of(init_fn);
         if self.dynamic_only.contains(&mi) {
             self.m.edge(r, self.thrown);
+        } else {
+            // R-HOSTREPORT: the runtime reports it (exception.rs
+            // `exit_on_uncaught`).
+            let h = self.m.host_report;
+            self.m.edge(r, h);
         }
         // A target this module requires lazily (a deferred CommonJS require)
         // runs its body when the require runs, through the path registry.
@@ -1191,7 +1196,9 @@ impl<'a> Gen<'a> {
             self.m.cur_fn = prev;
         }
         if f.is_async && !f.is_generator {
-            fx = self.async_body(&fx).0;
+            let (afx, rejected) = self.async_body(&fx);
+            fx = afx;
+            self.m.gen_region = Some(rejected);
         }
         self.params(&fx, &f.params);
         if f.is_generator {

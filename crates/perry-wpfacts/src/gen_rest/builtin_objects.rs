@@ -666,9 +666,13 @@ impl<'a> Gen<'a> {
             } => {
                 let v = self.expr(fx, value);
                 let s = self.expr(fx, step_closure);
-                let aw = self.awaited(v);
+                // R-JOBTHROW: the error resume carries the awaited
+                // promise's reason (and `thrown`, the rejections no promise
+                // holds), not an unrelated promise's.
+                let (aw, rj) = self.awaited_r(v);
                 let arg = self.tmp("step-arg");
                 self.m.edge(aw, arg);
+                self.m.edge(rj, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
                 self.async_callback(s, vec![arg, b])
