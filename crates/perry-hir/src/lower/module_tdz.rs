@@ -32,6 +32,12 @@
 //!
 //! The check reads the binding's slot, which a backend seeds with the TDZ
 //! sentinel; nothing else changes for a binding no check names.
+//!
+//! A module-level `var` has no dead zone: by the same reach rule, a read
+//! that can run before its declarator sees `undefined`. Such a `var` gets
+//! the hoisted `let v = undefined` a function body's `var` has, at the
+//! module's start, so later passes see that value; a `var` read only after
+//! its declarator is left as it was.
 
 use std::collections::{HashMap, HashSet};
 
@@ -61,11 +67,22 @@ pub(crate) fn apply(module: &mut Module, facts: &ModuleTdzFacts<'_>) {
             }
         }
     }
+    let reach = function_positions(module, facts);
+    let early_vars = early_read_vars(module, facts, &reach);
+    apply_lexical(module, facts, decl, &reach);
+    hoist_vars(module, early_vars);
+}
+
+fn apply_lexical(
+    module: &mut Module,
+    facts: &ModuleTdzFacts<'_>,
+    decl: HashMap<LocalId, (usize, String)>,
+    reach: &HashMap<FuncId, usize>,
+) {
     if decl.is_empty() {
         return;
     }
     let last_decl = decl.values().map(|(index, _)| *index).max().unwrap_or(0);
-    let reach = function_positions(module, facts);
 
     for (index, stmt) in module.init.iter_mut().enumerate() {
         if index > last_decl {
@@ -151,6 +168,160 @@ pub(crate) fn apply(module: &mut Module, facts: &ModuleTdzFacts<'_>) {
         if let Stmt::Let { id, init, .. } = stmt {
             if init.is_none() && checked.contains(id) && decl.contains_key(id) {
                 *init = Some(Expr::Undefined);
+            }
+        }
+    }
+}
+
+// ─── Module-level `var` ─────────────────────────────────────────────────────
+
+/// The module-level `var`s a read can reach before their declarator: they
+/// hold `undefined` until it runs (a `var` has no dead zone). Reach is the
+/// lexical rule's: a top-level statement at an index `<= d(X)`, or a
+/// function or class body whose reach position is `<= d(X)`.
+fn early_read_vars(
+    module: &Module,
+    facts: &ModuleTdzFacts<'_>,
+    reach: &HashMap<FuncId, usize>,
+) -> Vec<(usize, Stmt)> {
+    let mut decl: HashMap<LocalId, (usize, Stmt)> = HashMap::new();
+    for (index, stmt) in module.init.iter().enumerate() {
+        if let Stmt::Let {
+            id,
+            name,
+            ty,
+            mutable: true,
+            ..
+        } = stmt
+        {
+            if !facts.lexical_ids.contains(id) {
+                decl.entry(*id).or_insert_with(|| {
+                    let placeholder = Stmt::Let {
+                        id: *id,
+                        name: name.clone(),
+                        ty: ty.clone(),
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    };
+                    (index, placeholder)
+                });
+            }
+        }
+    }
+    if decl.is_empty() {
+        return Vec::new();
+    }
+    let mut early: HashSet<LocalId> = HashSet::new();
+    let mut note = |accessed: &mut Accessed, position: usize| {
+        for id in accessed.out.drain(..) {
+            if decl.get(&id).is_some_and(|(index, _)| position <= *index) {
+                early.insert(id);
+            }
+        }
+    };
+    let mut accessed = Accessed::default();
+    for (index, stmt) in module.init.iter().enumerate() {
+        accessed.stmt(stmt);
+        note(&mut accessed, index);
+    }
+    for function in &module.functions {
+        if let Some(&position) = reach.get(&function.id) {
+            accessed.function(function);
+            note(&mut accessed, position);
+        }
+    }
+    for class in &module.classes {
+        let position = facts.class_positions.get(&class.name).copied().unwrap_or(0);
+        accessed.class(class);
+        note(&mut accessed, position);
+    }
+    let mut out: Vec<(usize, Stmt)> = decl
+        .into_iter()
+        .filter(|(id, _)| early.contains(id))
+        .map(|(_, entry)| entry)
+        .collect();
+    out.sort_by_key(|(index, _)| *index);
+    out
+}
+
+/// A function body's `var` gets a hoisted `let v = undefined` before its
+/// declarator; a module-level one a read can reach early gets the same at the
+/// module's start, so every later pass sees the `undefined` it holds.
+fn hoist_vars(module: &mut Module, vars: Vec<(usize, Stmt)>) {
+    for (at, (_, placeholder)) in vars.into_iter().enumerate() {
+        module.init.insert(at, placeholder);
+    }
+}
+
+/// Every binding a piece of HIR accesses (`accessed_binding`), including in
+/// the bodies of the closures it creates.
+#[derive(Default)]
+struct Accessed {
+    out: Vec<LocalId>,
+}
+
+impl Accessed {
+    fn expr(&mut self, expr: &Expr) {
+        if let Some(id) = accessed_binding(expr) {
+            self.out.push(id);
+        }
+        if let Expr::Closure { params, body, .. } = expr {
+            for param in params {
+                if let Some(default) = &param.default {
+                    self.expr(default);
+                }
+            }
+            self.stmts(body);
+        }
+        walk_expr_children(expr, &mut |child| self.expr(child));
+    }
+
+    fn stmts(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            self.stmt(stmt);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        for_each_stmt_part(stmt, &mut |part| match part {
+            Part::Expr(expr) => self.expr(expr),
+            Part::Stmts(stmts) => self.stmts(stmts),
+        });
+    }
+
+    fn function(&mut self, function: &Function) {
+        for param in &function.params {
+            if let Some(default) = &param.default {
+                self.expr(default);
+            }
+        }
+        self.stmts(&function.body);
+    }
+
+    fn class(&mut self, class: &Class) {
+        if let Some(extends) = &class.extends_expr {
+            self.expr(extends);
+        }
+        let bodies = class
+            .constructor
+            .iter()
+            .chain(&class.methods)
+            .chain(&class.static_methods)
+            .chain(class.getters.iter().map(|(_, f)| f))
+            .chain(class.setters.iter().map(|(_, f)| f))
+            .chain(class.computed_members.iter().map(|m| &m.function));
+        for function in bodies {
+            self.function(function);
+        }
+        for member in &class.computed_members {
+            self.expr(&member.key_expr);
+        }
+        for field in class.fields.iter().chain(&class.static_fields) {
+            if let Some(key) = &field.key_expr {
+                self.expr(key);
+            }
+            if let Some(init) = &field.init {
+                self.expr(init);
             }
         }
     }
