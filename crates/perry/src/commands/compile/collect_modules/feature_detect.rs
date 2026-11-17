@@ -11,6 +11,7 @@ mod global_object;
 mod native_constants;
 mod process_ipc;
 mod regex_members;
+mod regex_unicode;
 mod usage;
 
 #[cfg(test)]
@@ -646,6 +647,7 @@ fn detect_optional_feature_usage_with_capabilities(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_regex_unicode |= regex_unicode::needed(hir_module) || computed.opaque_members;
     ctx.uses_temporal |= global_object::may_escape(hir_module);
     ctx.uses_diagnostics |= global_object::may_escape(hir_module);
     ctx.uses_typedarray |= global_object::may_escape(hir_module)
@@ -1042,7 +1044,7 @@ fn detect_optional_feature_usage_with_capabilities(
     }
 
     // Detect whether this module needs the regex engine. The engine
-    // (`regex`/`fancy-regex`, ~1.2 MB) is gated behind `perry-runtime/
+    // (Perex) is gated behind `perry-runtime/
     // regex-engine` and the RegExp object's identity/display layer stays
     // always-compiled, so a program that can never produce a RegExp at
     // runtime links none of the matching machinery. A regex value can only
@@ -1052,8 +1054,8 @@ fn detect_optional_feature_usage_with_capabilities(
     // compiles globs to regexes internally). We grep the serialized Debug form
     // for the unambiguous HIR variant tokens and inspect receivers for
     // generic string-method property reads. Over-matching only over-includes
-    // the engine (a size, not a correctness, cost); the goal is zero false negatives. `eval` is
-    // non-functional in Perry so it can't create a regex at runtime.
+    // the engine (a size, not a correctness, cost). Deferred dynamic code
+    // separately retains the engine and Unicode tables in optimized_libs.
     {
         // Class methods and static initializers live under `classes`, not in
         // `functions`; `hir_debug` includes them so a regex/glob use there

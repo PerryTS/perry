@@ -437,7 +437,7 @@ memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
 # 0.1.18 walks one-pass captures off the lazy automaton in fewer instructions.
 # It retains format 16, complete captures and exact work charging.
-perex = "0.1.20"
+perex = { version = "0.1.20", features = ["selectable-unicode"] }
 # The per-agent event-loop driver. beta.2 carries every provider API Perry uses
 # (owned TCP connect, live socket controls, cancellation-safe shutdown, the h2
 # unsolicited-PING-ack switch, strict RFC 7932 Brotli, no epoll_pwait2 probe on

@@ -3689,6 +3689,7 @@ js_runtime_install_os	void
 js_runtime_install_perf_hooks	void	
 js_runtime_install_proc_ipc	void	
 js_runtime_install_proxy	void	
+js_runtime_install_regex_unicode	void	
 js_runtime_install_regex_engine	void	
 js_runtime_install_string_normalize	void	
 js_runtime_install_temporal	void	

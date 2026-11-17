@@ -968,6 +968,8 @@ pub struct CompilationContext {
     /// identity/display layer stays compiled, so non-regex programs still
     /// format/compare values correctly.
     pub uses_regex: bool,
+    /// A regex producer can query Unicode property membership.
+    pub uses_regex_unicode: bool,
     /// Whether any TS module uses the TC39 `Temporal.*` API. Gates
     /// `perry-runtime/temporal` (the `temporal_rs` engine + its transitive
     /// tz/calendar deps, ~580 KB). Independent of JS `Date`, which has its own
@@ -1530,6 +1532,7 @@ impl CompilationContext {
             uses_zlib_zstd: false,
             uses_web_compression_stream: false,
             uses_regex: false,
+            uses_regex_unicode: false,
             uses_temporal: false,
             uses_event_emitter: false,
             uses_url: false,

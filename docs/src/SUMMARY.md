@@ -197,6 +197,7 @@
 - [JSON PropertyList reads](internals/json-property-list.md)
 - [Retained function source](internals/retained-function-source.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
+- [RegExp Unicode membership selection](internals/regex-unicode-selection.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
   - [Implementation validation](internals/weakmap-owned-index-validation.md)
 - [Garbage Collector](internals/garbage-collector.md)
