@@ -53,6 +53,7 @@ fn sample() -> Image {
         claims: vec![b"a::B@1:2".to_vec(), b"anonymous:4096".to_vec()],
         registry: Vec::new(),
         mint: Vec::new(),
+        canon: None,
     }
 }
 
@@ -180,6 +181,7 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
+        canon: crate::object::canonical_keys::snap_image::snap_image_canon_baseline(),
     };
     let probe = std::ptr::addr_of_mut!(PROBE);
     // SAFETY: a test-owned static, written by this one test.
@@ -287,6 +289,7 @@ fn probe_baseline() -> (Baseline, usize) {
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
+        canon: crate::object::canonical_keys::snap_image::snap_image_canon_baseline(),
     };
     (b, tls_lo)
 }
@@ -878,4 +881,51 @@ fn mint_stop_verifies_records_that_carry_references() {
     }
     let s = mint_stop(&delta, &recs).expect("a stop");
     assert_eq!(s.kind, STOP_MINT_RECORD);
+}
+
+fn full_canon_node(id: u32) -> CanonNode {
+    CanonNode {
+        id,
+        parent: id - 1,
+        edge_hash: 0x1234_5678_9abc_def0 + u64::from(id),
+        len: id + 1,
+        all_ptr: true,
+        published: true,
+        addr: Val::Cell { hi: 0, bare: true, index: 40 + id },
+        backing_slots: 8,
+        run: 3,
+        backing_owner: id - 1,
+    }
+}
+
+#[test]
+fn canon_record_round_trips_every_field() {
+    let changed = CanonNode {
+        parent: 0,
+        edge_hash: 0,
+        len: 0,
+        all_ptr: false,
+        addr: Val::Opaque(0x5000),
+        run: 2,
+        ..full_canon_node(1)
+    };
+    let c = CanonRec {
+        begin_len: 3,
+        cut_len: 5,
+        new: vec![full_canon_node(3), full_canon_node(4)],
+        changed: vec![changed],
+        last_addr: Val::Ext { hi: 0, bare: true, region: REGION_LAYOUTS, off: 64 },
+        last_len: 5,
+        last_node: 4,
+        minted: 9,
+        reaped: 2,
+    };
+    let blob = canon_blob(&c);
+    assert_eq!(parse_canon_blob(&blob), Some((c.clone(), blob.len())));
+    assert_eq!(parse_canon_blob(&blob[..blob.len() - 1]), None);
+    let mut img = sample();
+    img.canon = Some(c);
+    assert_eq!(decode(&encode(&img)).expect("parses"), img);
+    img.canon = None;
+    assert_eq!(decode(&encode(&img)).expect("parses"), img);
 }
