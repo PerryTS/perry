@@ -238,11 +238,11 @@ pub(crate) fn call_url_create_object_url(blob: f64) -> f64 {
     f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
 }
 
+crate::realm_decl! { "node:buffer.resolveObjectURL", effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(undefined) | fresh(Blob.prototype)) } }
 /// `resolveObjectURL(url)` through the registered stdlib native: a new Blob
 /// or `undefined`.
 /// The stdlib body (`js_buffer_resolve_object_url`) runs ToString on `url`
 /// and returns `undefined` or a Blob it allocates, holding only bytes.
-crate::realm_decl! { "node:buffer.resolveObjectURL", effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(undefined) | fresh(Blob.prototype)) } }
 pub(crate) fn call_buffer_resolve_object_url(url: f64) -> f64 {
     let f = OBJECT_URL_RESOLVE.load(Ordering::Acquire);
     if f.is_null() {
