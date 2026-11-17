@@ -326,6 +326,40 @@ fn web_family_keys() -> Vec<(Vec<String>, Vec<String>)> {
 }
 
 #[test]
+fn population_row_flags_match_the_abi_sets() {
+    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
+        let name = declaration.name;
+        assert_eq!(
+            declaration.phase_b,
+            crate::codegen_abi::realm_rest_global(name),
+            "{name}"
+        );
+        assert_eq!(
+            declaration.realm_seals_prototype,
+            crate::codegen_abi::BuiltinProto::REALM
+                .iter()
+                .any(|(_, listed)| *listed == name),
+            "{name} prototype seal"
+        );
+        assert_eq!(
+            declaration.realm_seals_namespace,
+            crate::codegen_abi::BUILTIN_NAMESPACES.contains(&name),
+            "{name} namespace seal"
+        );
+    }
+    for names in [GLOBAL_THIS_BUILTIN_FUNCTIONS, GLOBAL_THIS_BUILTIN_NAMESPACES] {
+        let mask = super::phase_rows::rest_mask(names);
+        for (index, name) in names.iter().enumerate() {
+            assert_eq!(
+                mask & (1 << index) != 0,
+                crate::codegen_abi::realm_rest_global(name),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn web_family_births_preserve_keys_and_parent_links() {
     let _lock = crate::gc::global_side_table_test_lock();
     let reference = std::thread::Builder::new()
