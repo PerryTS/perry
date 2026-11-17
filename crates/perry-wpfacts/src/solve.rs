@@ -245,8 +245,7 @@ impl Model {
             node.pts = self.sets.extend(old, &fresh);
         }
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
-        // now, and leaves (the set is rebuilt). One still in the node's
-        // delta leaves at the node's pop, which follows (top_new queued it).
+        // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
             let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
@@ -254,6 +253,8 @@ impl Model {
             node.pts = self
                 .sets
                 .retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
+            self.pending
+                .retain(&mut node.delta, |t| !escaped_beside_top(esc, pm, ab, t));
             if node.pts.len() != before {
                 node.dropped = true;
                 self.charge_work(before as u64);
@@ -1011,6 +1012,48 @@ impl Model {
         self.sets.clear();
     }
 
+    /// R-ESCLATE (DECISIONS 42, `Model::top_beside`): an escaped value
+    /// beside ⊤ is that ⊤. A node that held ⊤ and a value before the value
+    /// escaped drops the value, as it does when ⊤ arrives after the escape
+    /// (`add_tokens_s`) or the escaped value after ⊤. The prune visits every
+    /// node, so it runs once the work since the last one reaches the node
+    /// count: it costs at most the work it follows. A dropped member leaves
+    /// the node's delta too. One that escapes between two prunes may still
+    /// be delivered: the node delivered ⊤ beside it, so the receiver holds
+    /// ⊤ and drops it on arrival (`add_tokens_s`).
+    fn prune_late_escaped(&mut self) {
+        let late = std::mem::take(&mut self.late_esc);
+        self.late_esc_at = self.work.get();
+        let mut members = Vec::new();
+        for n in 0..self.nodes.len() {
+            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
+            let node = &mut self.nodes[n];
+            if !node.pts.contains_tok(TOP) {
+                continue;
+            }
+            // Every other member that escaped before this prune left at an
+            // earlier one, or when it or ⊤ arrived.
+            let holds = if late.len() < node.pts.len() {
+                late.iter().any(|&t| cover(t) && node.pts.contains_tok(t))
+            } else {
+                members.clear();
+                node.pts.sorted_into(&mut members);
+                members.iter().any(|&t| cover(t))
+            };
+            if !holds {
+                continue;
+            }
+            let old = std::mem::take(&mut node.pts);
+            let before = old.len() as u64;
+            node.pts = self.sets.retain(old, |t| !cover(t));
+            let pending = node.delta.len() as u64;
+            self.pending.retain(&mut node.delta, |t| !cover(t));
+            node.dropped = true;
+            self.charge_work(before + pending);
+        }
+    }
+
     fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();
@@ -1022,6 +1065,12 @@ impl Model {
             self.prof_mark(NO_NODE, "marker links");
             self.replay_marker_links();
             self.prof_mark(NO_NODE, "settle");
+            if !self.late_esc.is_empty()
+                && self.work.get() >= self.late_esc_at.saturating_add(self.nodes.len() as u64)
+            {
+                self.prof_mark(NO_NODE, "late escapes");
+                self.prune_late_escaped();
+            }
             let Some(n) = self.wl.pop_front() else {
                 if self.sum.pending.is_empty()
                     && self.marker_links.is_empty()
@@ -1069,23 +1118,6 @@ impl Model {
                     std::mem::take(&mut node.drange) && node.prim & (prim::NUM | prim::STR) != 0,
                 )
             };
-            // A node that holds ⊤ delivers no member that escaped after it
-            // was listed: beside ⊤ it is that ⊤, which the node delivered.
-            // It leaves the delta and the set (both rebuilt, not changed in
-            // shared storage).
-            if !delta.is_empty() && self.nodes[n as usize].pts.contains_tok(TOP) {
-                let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
-                let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
-                if delta.iter().any(|&t| cover(t)) {
-                    delta.retain(|t| !cover(t));
-                    let node = &mut self.nodes[n as usize];
-                    let old = std::mem::take(&mut node.pts);
-                    let before = old.len() as u64;
-                    node.pts = self.sets.retain(old, |t| !cover(t));
-                    node.dropped = true;
-                    self.charge_work(before);
-                }
-            }
             if delta.is_empty() && dprim == 0 && !dstrs && !drange {
                 continue;
             }
