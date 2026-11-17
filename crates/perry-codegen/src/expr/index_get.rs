@@ -955,6 +955,9 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    if let Some(v) = lower_for_in_key(ctx, expr)? {
+        return Ok(v);
+    }
     if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
         let value = super::rest_elems::Want::Value;
         return super::rest_elems::lower_read(ctx, expr, floor, value);
@@ -2057,4 +2060,49 @@ fn packed_read_receiver_box(
         )));
     }
     lower_expr(ctx, object)
+}
+
+/// The for-in binding read `key = keys[i]` (DYNP E3d) of a loop whose deletion
+/// check this function lowered (`FnCtx::for_in_snapshots`): one load of element
+/// `i`. No guard is needed by structure: `keys` is the loop's snapshot, born for
+/// the loop and held only by its internal immutable local (no user code names
+/// it), and `i` is the loop counter, below the snapshot's length by the loop
+/// condition and changed only by the loop's own update.
+fn lower_for_in_key(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
+    let Expr::IndexGet {
+        object,
+        index,
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
+    } = expr
+    else {
+        return Ok(None);
+    };
+    let (Expr::LocalGet(k), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
+        return Ok(None);
+    };
+    if !ctx.for_in_snapshots.contains(k) {
+        return Ok(None);
+    }
+    let keys_v = lower_expr(ctx, object)?;
+    let i = if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+        let n = ctx.block().load(crate::types::I32, &i32_slot);
+        ctx.block().sext(crate::types::I32, &n, I64)
+    } else {
+        let d = lower_expr(ctx, index)?;
+        ctx.block().fptosi(DOUBLE, &d, I64)
+    };
+    let arr = crate::expr::helpers::unbox_to_i64(ctx.block(), &keys_v);
+    let arr_p = ctx.block().inttoptr(I64, &arr);
+    let elems = ctx.block().gep(
+        I8,
+        &arr_p,
+        &[(
+            I64,
+            &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
+        )],
+    );
+    let p = ctx.block().gep(DOUBLE, &elems, &[(I64, &i)]);
+    Ok(Some(ctx.block().load(DOUBLE, &p)))
 }

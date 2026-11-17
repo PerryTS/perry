@@ -719,8 +719,10 @@ unsafe fn record_class_object_template(
         || count >= 1 << 16
         || W_FILLS + 2 * count > cell.len()
         || static_field_mask > 0xff
-        || crate::object::shapes::shape_object_kind_of_receiver((final_shape).0)
-            != Some(crate::object::shapes::ShapeObjectKind::Class)
+        || !crate::object::shapes::shape_kind_of_receiver_is(
+            (final_shape).0,
+            crate::object::shapes::ShapeObjectKind::Class,
+        )
     {
         return;
     }

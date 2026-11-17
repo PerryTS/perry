@@ -73,7 +73,7 @@ fn rollback_pair_matches(child: &ShapeRecord, parent: &ShapeRecord) -> bool {
     child.logical_key_count > 0
         && parent.logical_key_count + 1 == child.logical_key_count
         && child.object_kind().is_ordinary_layout()
-        && child.object_kind() == parent.object_kind()
+        && child.same_kind_as(&parent)
         && child.proto_id == parent.proto_id
         && child.semantic_generation == parent.semantic_generation
         && child.summary() == 0

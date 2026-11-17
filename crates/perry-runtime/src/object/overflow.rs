@@ -163,7 +163,10 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         fixed_prefix: 0,
         deleted: 0,
         index_capacity,
-        summary: 0,
+        // E2: a table is born "may have an enumerable key" (ENUM_ANY), so no
+        // append writes an enumeration bit. Its name facts are read from its
+        // keys (`key_attrs::key_name_bits`), never from the summary.
+        summary: super::key_attrs::ENUM_ANY,
     });
     if index_capacity == SMALLEST_INDEX / 2 {
         // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-4 table, EMPTY=u32::MAX, in one fixed-size store.
@@ -901,6 +904,18 @@ pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u3
     *attrs_at(t, entry) |= SLOT_REF;
 }
 
+/// Case 2c for an arguments layout (kinds 13/14): the inline slots past its
+/// three named ones are elements, so the added `key` holds its value in its
+/// own entry (attributes `entry`), never a fixed slot.
+pub(crate) unsafe fn append_unfixed(obj: *mut ObjectHeader, key: u64, entry: u8) {
+    let key = if crate::JSValue::from_bits(key).is_any_string() {
+        crate::string::property_atom_from_value(key)
+    } else {
+        key
+    };
+    insert_key_bits(obj, key, crate::value::TAG_UNDEFINED, entry.into());
+}
+
 /// A table key's positional field is its value or its fixed-slot reference.
 pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) -> bool {
     let t = table(obj);
@@ -923,6 +938,11 @@ pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) 
 
 /// Delete keeps fixed slot numbers intact. Re-add appends a reference to the
 /// fixed binding, so subsequent static and dynamic writes meet at that slot.
+///
+/// An elements key (an Array-subclass index, an arguments element) is never
+/// a named entry: an index the elements do not hold is keyed (moved to its
+/// own key) and found by the lookup. So the elements answer `delete` only
+/// where the named lookup misses, and a present named key never tests them.
 pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
     let hash = super::key_bytes_hash(key.as_ptr(), key.len());
     if table(obj).is_null() {
@@ -967,31 +987,67 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                     super::layout_desc::install_cause::DELETE
                 });
                 ensure(obj);
-            } else if super::layout_desc::is_family_object(obj) {
-                // An absent family spelling has no order entry to retire.
-                return true;
+            } else {
+                // Absent from the record, which holds every named key while
+                // there is no overflow: the elements answer before an
+                // overflow is established for a miss.
+                if let Some(result) = delete_elements_miss(obj, key) {
+                    return result;
+                }
+                if super::layout_desc::is_family_object(obj) {
+                    // An absent family spelling has no order entry to retire.
+                    return true;
+                }
             }
         }
     }
     // A key that was never interned names no entry and no fixed slot.
     let Some(atom) = crate::string::atom_lookup(key, hash) else {
-        return true;
+        return delete_elements_miss(obj, key).unwrap_or(true);
     };
-    delete_key_bits(obj, crate::JSValue::string_ptr(atom as *mut _).bits())
+    match delete_present_key_bits(obj, crate::JSValue::string_ptr(atom as *mut _).bits()) {
+        Some(result) => result,
+        None => delete_elements_miss(obj, key).unwrap_or(true),
+    }
+}
+
+/// `delete obj[index]` of an elements key where it lives, for a key the
+/// named lookup missed; `None` when `obj` holds no such element.
+#[inline]
+unsafe fn delete_elements_miss(obj: *mut ObjectHeader, key: &[u8]) -> Option<bool> {
+    if !key.first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    delete_elements_index(obj, key)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn delete_elements_index(obj: *mut ObjectHeader, key: &[u8]) -> Option<bool> {
+    use crate::array::subclass_elements as elements;
+    let view = elements::own_elements(obj as usize)?;
+    let index = crate::object::canonical_array_index(std::str::from_utf8(key).ok()?)?;
+    let elements_key =
+        Some(elements::ElementsKey::Index(index)).filter(|k| view.admits(*k) && !view.keyed(*k))?;
+    Some(elements::delete_key(view, elements_key) != 0)
 }
 
 /// Delete the entry keyed `key` (an atom or a symbol). A fixed-slot entry's
 /// slot becomes the hole marker. False only for a non-configurable key.
 pub(crate) unsafe fn delete_key_bits(obj: *mut ObjectHeader, key: u64) -> bool {
+    delete_present_key_bits(obj, key).unwrap_or(true)
+}
+
+/// [`delete_key_bits`] that tells a miss (`None`: no entry keyed `key`) from
+/// a delete of a present entry.
+unsafe fn delete_present_key_bits(obj: *mut ObjectHeader, key: u64) -> Option<bool> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
     let key = scope.root_nanbox_u64(key);
     let t = ensure(obj);
-    let Some(slot) = find(t, key.get_nanbox_u64()) else {
-        return true;
-    };
+    let slot = find(t, key.get_nanbox_u64())?;
     if *attrs_at(t, slot) as u8 & super::key_attrs::ENTRY_NON_CONFIGURABLE != 0 {
-        return false;
+        return Some(false);
     }
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
@@ -1006,7 +1062,7 @@ pub(crate) unsafe fn delete_key_bits(obj: *mut ObjectHeader, key: u64) -> bool {
     super::proto_validity::note_object_own_keys_changed(
         owner.get_raw_mut_ptr::<ObjectHeader>() as usize
     );
-    true
+    Some(true)
 }
 
 /// Record entry `i`'s key attributes. An accessor never stays a fixed-slot
@@ -1395,6 +1451,100 @@ static KEEP_PERRY_OVERFLOW_DELETE: unsafe extern "C" fn(
 pub(crate) unsafe fn establish_order(obj: *mut ObjectHeader) -> bool {
     ensure(obj);
     true
+}
+
+/// E4 spread: whether every present entry of `t` is plain enumerable
+/// string-keyed data (attributes 0, or a default-attribute slot reference),
+/// with no symbol and no internal runtime key, and its index has the
+/// standard size for its capacity: a verbatim copy is then the spread's own
+/// key copy. Tombstones (and their probe chains) are copied verbatim and
+/// skipped here, like keyless prefix slots. Answers the
+/// number of inline slots the table's slot references reach (at least the
+/// fixed prefix): the clone must copy that many inline slots.
+#[inline(always)]
+pub(crate) unsafe fn plain_enumerable_strings(t: *const Table) -> Option<u32> {
+    if (*t).index_capacity != (*t).capacity * 2 {
+        return None;
+    }
+    let mut reach = (*t).fixed_prefix;
+    for i in 0..(*t).length {
+        let key = *key_at(t, i);
+        let attrs = *attrs_at(t, i);
+        if attrs == SLOT_REF {
+            reach = reach.max((*value_at(t, i) & 0xffff_ffff) as u32 + 1);
+        }
+        if key == TAG_HOLE {
+            continue;
+        }
+        if (attrs != 0 && attrs != SLOT_REF)
+            || crate::symbol::js_is_symbol(f64::from_bits(key)) != 0
+            || super::key_attrs::key_name_bits(key) & super::key_attrs::ENUM_INTERNAL_KEY != 0
+        {
+            return None;
+        }
+    }
+    Some(reach)
+}
+
+/// E4 spread: give the fresh `obj` (born on the source's layout word) a
+/// verbatim copy of `src` (see [`plain_enumerable_strings`]): columns and
+/// hash index copied, no re-hash. The caller suppresses collection.
+pub(crate) unsafe fn clone_plain_into(obj: *mut ObjectHeader, src: *const Table) {
+    super::layout_desc::diag_note_install(obj);
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let t = allocate((*src).capacity);
+    let bytes = 3 * (*src).capacity as usize * 8 + (*src).index_capacity as usize * 4;
+    std::ptr::copy_nonoverlapping(values(src).cast::<u8>(), values(t).cast::<u8>(), bytes);
+    (*t).length = (*src).length;
+    (*t).fixed_prefix = (*src).fixed_prefix;
+    (*t).deleted = (*src).deleted;
+    (*t).summary = (*src).summary;
+    // A young table owes no remembered-set entry: one header test for the
+    // whole run (`newborn_parent_needs_barrier`, as bulk births do), then
+    // the per-slot barrier only for an old birth or an active mark.
+    if crate::gc::newborn_parent_needs_barrier(t as usize) {
+        for i in 0..(*t).length {
+            let key = *key_at(t, i);
+            if key == TAG_HOLE {
+                continue;
+            }
+            crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, i) as usize, key);
+            let value = *value_at(t, i);
+            crate::gc::runtime_write_barrier_resolved_slot(
+                t as usize,
+                value_at(t, i) as usize,
+                value,
+            );
+        }
+    }
+    install(obj, t);
+}
+
+/// [`start_empty`] sized once for `entries` appended entries (E4 spread).
+pub(crate) unsafe fn start_sized(obj: *mut ObjectHeader, live: u32, entries: u32) -> *mut Table {
+    super::layout_desc::diag_note_install(obj);
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let prefix = live.max(super::INLINE_SLOT_FLOOR as u32);
+    let t = allocate(prefix.saturating_add(entries).next_power_of_two().max(4));
+    for i in 0..prefix {
+        *key_at(t, i) = TAG_HOLE;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
+        *attrs_at(t, i) = SLOT_REF;
+    }
+    (*t).length = prefix;
+    (*t).fixed_prefix = prefix;
+    t
+}
+
+/// Append a property atom with its stored hash (E4 spread; room is sized).
+pub(crate) unsafe fn append_atom(t: *mut Table, key: u64, value: u64) {
+    append_plain(t, key, key_hash(key), value);
 }
 
 #[cfg(test)]

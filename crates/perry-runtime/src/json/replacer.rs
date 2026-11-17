@@ -398,6 +398,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+    // An elements-backed object keeps its indices outside its keys: the
+    // keys and [[Get]] walk, as the plain walk does.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        stringify_elements_backed_pretty(ptr, Some(replacer), buf, indent, depth);
+        return;
+    }
 
     // GC-safety: same rooting discipline as the array variant above — the
     // replacer / toJSON / getter callbacks can trigger a moving GC, so every
@@ -1044,6 +1050,12 @@ pub(crate) unsafe fn stringify_object_pretty(
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         return;
     }
+    // An elements-backed object keeps its indices outside its keys: the
+    // keys and [[Get]] walk, as the plain walk does.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        stringify_elements_backed_pretty(ptr, None, buf, indent, depth);
+        return;
+    }
 
     let obj = ptr as *const crate::ObjectHeader;
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
@@ -1170,6 +1182,102 @@ pub(crate) unsafe fn stringify_object_pretty(
     }
     for _ in 0..depth {
         buf.push_str(indent);
+    }
+    buf.push('}');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+}
+
+/// SerializeJSONObject for an elements-backed object on the pretty and
+/// function-replacer walks: the own enumerable string keys in `Object.keys`
+/// order, each value read by [[Get]] (the plain walk's
+/// `stringify_elements_backed_object`). The caller pushed `ptr` on the
+/// stringify stack; this pops it.
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn stringify_elements_backed_pretty(
+    ptr: *const u8,
+    replacer: Option<*const crate::ClosureHeader>,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_u64(JSValue::pointer(ptr).bits());
+    let replacer_h = replacer.map(|r| scope.root_raw_const_ptr(r));
+    let keys = crate::object::js_object_keys(ptr as *const crate::ObjectHeader);
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_length(k));
+    let use_pretty = !indent.is_empty();
+    let inner_depth = depth + 1;
+    buf.push('{');
+    let mut first = true;
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_get(k, i));
+        let key_h = iter_scope.root_nanbox_u64(key.bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) = crate::string::js_string_key_bytes(key, &mut sso).map(<[u8]>::to_vec)
+        else {
+            continue;
+        };
+        let mut value = crate::value::js_get_property(
+            obj_h.get_nanbox_f64(),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        );
+        if let Some(r) = &replacer_h {
+            let after_to_json = apply_to_json_keyed(value, key_h.get_nanbox_f64());
+            value = call_replacer(
+                r.get_raw_const_ptr::<crate::ClosureHeader>(),
+                key_h.get_nanbox_f64(),
+                after_to_json,
+                obj_h.get_nanbox_f64(),
+            );
+        }
+        let bits = value.to_bits();
+        if bits == TAG_UNDEFINED
+            || is_closure_value(bits)
+            || super::stringify::is_symbol_value(bits)
+        {
+            continue;
+        }
+        let _value_h = iter_scope.root_nanbox_f64(value);
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        if use_pretty {
+            buf.push('\n');
+            for _ in 0..inner_depth {
+                buf.push_str(indent);
+            }
+        }
+        write_escaped_string(buf, &String::from_utf8_lossy(&name));
+        buf.push_str(if use_pretty { ": " } else { ":" });
+        match &replacer_h {
+            None => stringify_value_pretty(value, TYPE_UNKNOWN, buf, indent, inner_depth),
+            Some(r) => {
+                if !write_replaced_scalar(buf, value) {
+                    let inner_ptr = extract_pointer(bits).unwrap();
+                    dispatch_pointer_with_replacer(
+                        inner_ptr,
+                        value,
+                        r.get_raw_const_ptr::<crate::ClosureHeader>(),
+                        buf,
+                        indent,
+                        inner_depth,
+                    );
+                }
+            }
+        }
+    }
+    if use_pretty && !first {
+        buf.push('\n');
+        for _ in 0..depth {
+            buf.push_str(indent);
+        }
     }
     buf.push('}');
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());

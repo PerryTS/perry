@@ -857,6 +857,7 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// `Array`: alias its `toString` now. Its own copy of the alias, out of line,
 /// so the population keeps the inlined one it always had. Called from
 /// `js_realm_family_phase` only (a two-phase program).
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.alias_to_string_late")]
 #[cold]
 #[inline(never)]
 pub(super) fn alias_to_string_late() {

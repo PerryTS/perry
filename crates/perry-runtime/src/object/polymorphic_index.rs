@@ -287,12 +287,13 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let gc_type = unsafe {
+    let (gc_type, header_flags) = unsafe {
         let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
         if gc_header_addr < 0x1000 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        *(gc_header_addr as *const u8)
+        let header = &*(gc_header_addr as *const crate::gc::GcHeader);
+        (header.obj_type, header._reserved)
     };
 
     if gc_type == crate::gc::GC_TYPE_STRING {
@@ -302,7 +303,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         );
     }
 
-    if let Some(index) = numeric_key_u32_index(idx) {
+    // OBJ_FLAG_ARGUMENTS is set at an arguments object's birth: a header
+    // without it is no arguments object, so the full admission is skipped.
+    if let Some(index) = (header_flags & crate::gc::OBJ_FLAG_ARGUMENTS != 0)
+        .then(|| numeric_key_u32_index(idx))
+        .flatten()
+    {
         if let Some(value) =
             unsafe { arguments_object_get_index(raw as *const ObjectHeader, index) }
         {

@@ -108,7 +108,7 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: HOLEY::SLOT_COUNT as u32,
-    layout_id: 0x80000089,
+    layout_id: crate::object::runtime_layouts::test_layout_word(12),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: HOLEY::KEYS.as_ptr(),

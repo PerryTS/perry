@@ -138,10 +138,20 @@ pub(crate) unsafe fn register_namespace_layout(desc: *const PerryLayoutDesc) -> 
 /// whose stores must reach their funnel, `OrdinaryUnmarked` or
 /// `CallableOrdinary`.
 pub(super) fn declared_kind(code: u8) -> Option<super::super::shapes::ShapeObjectKind> {
-    use super::super::shapes::ShapeObjectKind::{CallableOrdinary, Ordinary, OrdinaryUnmarked};
-    [Ordinary, OrdinaryUnmarked, CallableOrdinary]
-        .into_iter()
-        .find(|k| k.code() == code as u64)
+    use super::super::shapes::ShapeObjectKind::{
+        Arguments, ArgumentsStrict, CallableOrdinary, Ordinary, OrdinaryUnmarked,
+    };
+    // An arguments layout (kinds 13/14) is a runtime layout born by its own
+    // funnel (`alloc_arguments_layout`); its record carries the kind.
+    [
+        Ordinary,
+        OrdinaryUnmarked,
+        CallableOrdinary,
+        Arguments,
+        ArgumentsStrict,
+    ]
+    .into_iter()
+    .find(|k| k.code() == code as u64)
 }
 
 /// Register one descriptor under `requested`; the id it resolved to, or 0

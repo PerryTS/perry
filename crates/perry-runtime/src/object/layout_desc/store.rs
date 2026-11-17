@@ -20,6 +20,7 @@ pub(crate) unsafe fn later_late_key_present(
     keys: *const crate::array::ArrayHeader,
     count: u32,
     pos: u32,
+    cap: u32,
 ) -> bool {
     // The object's own slots after the hole, through the list's storage
     // slots (its attribute words, read once): a word that is not the hole is
@@ -28,7 +29,6 @@ pub(crate) unsafe fn later_late_key_present(
     if first >= count {
         return false;
     }
-    let cap = super::super::object_inline_capacity(obj);
     let base = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     let (words, len) = super::super::key_attrs::storage_slot_words(keys);
     (first..count).any(|p| {
@@ -480,7 +480,13 @@ pub(super) unsafe fn fill_in_order(
     }
     let record = super::super::shapes::object_shape_record(obj).unwrap();
     let keys = record.keys() as usize as *const crate::array::ArrayHeader;
-    let out_of_order = later_late_key_present(obj, keys, record.logical_key_count(), pos);
+    let out_of_order = later_late_key_present(
+        obj,
+        keys,
+        record.logical_key_count(),
+        pos,
+        super::super::object_inline_capacity(obj),
+    );
     if out_of_order && family_diag_pairs_on() {
         note_out_of_order_pair(obj, pos);
     }

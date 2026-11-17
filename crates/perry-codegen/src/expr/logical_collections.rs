@@ -1151,9 +1151,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // nullish/prototype-aware enumerator for every other receiver.
         Expr::ForInKeys(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
-            let blk = ctx.block();
-            let arr_handle = blk.call(I64, "js_for_in_keys_stable_value", &[(DOUBLE, &obj_box)]);
-            Ok(nanbox_pointer_inline(blk, &arr_handle))
+            // The loop fact of the receiver and its just-born snapshot (DYNP
+            // E3c): what makes the per-key deletion check a few loads. It
+            // lives in an entry slot born zero per invocation and written by
+            // the snapshot's own entry (E3f: read off the copy), so it
+            // belongs to this one loop execution.
+            if let Expr::LocalGet(obj_id) = obj.as_ref() {
+                let slot = match ctx.for_in_facts.get(obj_id) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s = ctx.func.alloca_entry(I64);
+                        ctx.func.entry_allocas_push_store(I64, "0", &s);
+                        ctx.for_in_facts.insert(*obj_id, s.clone());
+                        s
+                    }
+                };
+                let arr_handle = ctx.block().call(
+                    I64,
+                    "js_for_in_keys_fact",
+                    &[(DOUBLE, &obj_box), (PTR, &slot)],
+                );
+                return Ok(nanbox_pointer_inline(ctx.block(), &arr_handle));
+            }
+            let arr_handle = ctx
+                .block()
+                .call(I64, "js_for_in_keys_value", &[(DOUBLE, &obj_box)]);
+            Ok(nanbox_pointer_inline(ctx.block(), &arr_handle))
         }
 
         // -------- isFinite(x) — global, coerces to Number first --------
@@ -1331,6 +1354,95 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // traps / `with` / rest-destructuring), the `in`-operator entry point
         // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
         // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
+        // The for-in deletion check `keys[i] in obj` of a loop whose fact
+        // this function took (`Expr::ForInKeys` above): the runtime answers
+        // the own key still at its place from the fact with a few loads, else
+        // the complete `in`. The key is read by the runtime from the
+        // snapshot itself: the loop's own just-born array, reachable from no
+        // other code, indexed by the loop counter below its length.
+        Expr::In { property, object }
+            if matches!(
+                (property.as_ref(), object.as_ref()),
+                (Expr::IndexGet { element_offset: 0, byte_offset: 0, byte_end: 0, index, object: keys }, Expr::LocalGet(o))
+                    if matches!(index.as_ref(), Expr::LocalGet(_))
+                        && matches!(keys.as_ref(), Expr::LocalGet(_))
+                        && ctx.for_in_facts.contains_key(o)
+            ) =>
+        {
+            let (
+                Expr::IndexGet {
+                    index,
+                    object: keys,
+                    ..
+                },
+                Expr::LocalGet(o),
+            ) = (property.as_ref(), object.as_ref())
+            else {
+                unreachable!()
+            };
+            let slot = ctx.for_in_facts[o].clone();
+            if let Expr::LocalGet(k) = keys.as_ref() {
+                ctx.for_in_snapshots.insert(*k);
+            }
+            // Three local reads and a load: nothing allocates before the call.
+            let obj_v = lower_expr(ctx, object)?;
+            let keys_v = lower_expr(ctx, keys)?;
+            let idx = lower_expr(ctx, index)?;
+            let fact = ctx.block().load(I64, &slot);
+            // A layout fact answers in compiled code (DYNP E3d): for `i < n`
+            // (fact bits 32..62, no table bit) the key is the layout's key `i`,
+            // live while the receiver's layout word is still the fact's word
+            // `W0` (see `key_live_by_fact`). Everything else calls.
+            let i = ctx.block().fptosi(DOUBLE, &idx, I64);
+            let hi = ctx.block().lshr(I64, &fact, "32");
+            // Bits 32..62 hold n; bit 62 (table) lands in bit 30 of `hi`.
+            let n_tbl = ctx.block().and(I64, &hi, "2147483647");
+            // A table fact has bit 30 of `n_tbl` set, so `i < n_tbl` only for
+            // a layout fact masked separately below.
+            let n = ctx.block().and(I64, &hi, "1073741823");
+            let is_tbl = ctx.block().icmp_ne(I64, &n_tbl, &n);
+            let in_prefix = ctx.block().icmp_ult(I64, &i, &n);
+            let not_tbl = ctx.block().xor(crate::types::I1, &is_tbl, "true");
+            let layout_hit = ctx.block().and(crate::types::I1, &in_prefix, &not_tbl);
+            let word_b = ctx.new_block("forin.live.word");
+            let call_b = ctx.new_block("forin.live.call");
+            let join_b = ctx.new_block("forin.live.join");
+            let word_l = ctx.block_label(word_b);
+            let call_l = ctx.block_label(call_b);
+            let join_l = ctx.block_label(join_b);
+            ctx.block().cond_br(&layout_hit, &word_l, &call_l);
+            ctx.current_block = word_b;
+            let obj_i = crate::expr::helpers::unbox_to_i64(ctx.block(), &obj_v);
+            let obj_p = ctx.block().inttoptr(I64, &obj_i);
+            let word_p = ctx.block().gep(crate::types::I8, &obj_p, &[(I64, "4")]);
+            let word = ctx.block().load(crate::types::I32, &word_p);
+            let w0 = ctx.block().trunc(I64, &fact, crate::types::I32);
+            let same = ctx.block().icmp_eq(crate::types::I32, &word, &w0);
+            let word_end = ctx.block().label.clone();
+            ctx.block().cond_br(&same, &join_l, &call_l);
+            ctx.current_block = call_b;
+            let called = ctx.block().call(
+                DOUBLE,
+                "js_for_in_key_live",
+                &[
+                    (DOUBLE, &obj_v),
+                    (DOUBLE, &keys_v),
+                    (DOUBLE, &idx),
+                    (I64, &fact),
+                ],
+            );
+            let call_end = ctx.block().label.clone();
+            ctx.block().br(&join_l);
+            ctx.current_block = join_b;
+            let t = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_TRUE));
+            Ok(ctx.block().phi(
+                DOUBLE,
+                &[
+                    (t.as_str(), word_end.as_str()),
+                    (called.as_str(), call_end.as_str()),
+                ],
+            ))
+        }
         Expr::In { property, object } => {
             // HasProperty through the object's own layout (the shape
             // presence answer), then the complete operation; no site state.

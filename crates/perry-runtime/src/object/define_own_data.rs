@@ -63,7 +63,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
         None
     };
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -98,7 +98,7 @@ unsafe fn define_other(
     }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -407,7 +407,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let obj = addr as *const ObjectHeader;
     let record = super::shapes::object_shape_record(obj)?;
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
+    if !record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {
         return None;

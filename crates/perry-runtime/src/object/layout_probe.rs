@@ -845,8 +845,16 @@ pub unsafe extern "C" fn perry_probe_get_length(
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     // Only an ordinary layout's receiver is an `ObjectHeader` to look into.
-    if record_of(dir, LayoutWord((*obj).parent_class_id)).is_null() {
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
+    if r.is_null() {
         return hole();
+    }
+    // An arguments object (kinds 13/14) on its birth layout holds `length`
+    // as own data in its first named slot: a fixed-slot read.
+    if (*r).kind_is(super::ShapeObjectKind::Arguments)
+        || (*r).kind_is(super::ShapeObjectKind::ArgumentsStrict)
+    {
+        return crate::object::arguments::arguments_born_length(obj).unwrap_or_else(|| hole());
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
@@ -1044,7 +1052,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     // its existing index first avoids deriving a second record-key index.
     if word & crate::object::overflow::SHADOW_BIT != 0
         && (*r).present()
-        && (*r).object_kind() == super::ShapeObjectKind::Ordinary
+        && (*r).kind_is(super::ShapeObjectKind::Ordinary)
     {
         // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
@@ -1797,7 +1805,7 @@ pub(crate) unsafe fn probe_accessor_slot(
     }
     for hop in 0..=MAX_HOPS {
         if hop > 0
-            || (*rc).object_kind() == super::ShapeObjectKind::Ordinary
+            || (*rc).kind_is(super::ShapeObjectKind::Ordinary)
             || listed(cur, (*rc).object_kind())
         {
             match own_entry(rc as *mut ShapeRecord, key_bits, hash) {
@@ -2249,7 +2257,7 @@ pub(crate) unsafe fn own_set(
     let obj = payload as *mut ObjectHeader;
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
-    if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
+    if r.is_null() || !(*r).kind_is(super::ShapeObjectKind::Ordinary) {
         return OwnSet::Rest;
     }
     let gc = crate::value::addr_class::honest_header(payload);
@@ -2506,7 +2514,7 @@ unsafe fn set_front(
     let obj = payload as *mut ObjectHeader;
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
-    if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
+    if r.is_null() || !(*r).kind_is(super::ShapeObjectKind::Ordinary) {
         return Stored(0);
     }
     let gc = crate::value::addr_class::honest_header(payload);
