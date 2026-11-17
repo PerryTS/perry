@@ -1920,3 +1920,30 @@ console.log(new B().m());
         "true\ng1 function undefined"
     );
 }
+
+// An instance inherits its evaluation from a prototype per evaluation, so it gains no
+// own key: neither through the class value's constructor nor through a `new K()` that
+// the class's own member runs on a later evaluation.
+#[test]
+fn an_evaluation_instance_keeps_only_its_declared_own_keys() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+function make(tag: string) { return class { x = 1; who() { return tag; } }; }
+function declared(t: string) { class K { v = 2; who() { return t; } again() { return new K(); } } return new K().again(); }
+const g: any = globalThis;
+g.a = new (make("A"))();
+g.b = new (make("B"))();
+declared("j");
+g.k = declared("k");
+console.log(g.a.who() + g.b.who() + g.k.who());
+"#,
+            r#"
+for (const o of [a, b, k]) {
+  console.log(Reflect.ownKeys(o).filter((key) => key !== "__class__").map(String).join(","));
+}
+"#
+        ),
+        "ABk\nx\nx\nv"
+    );
+}

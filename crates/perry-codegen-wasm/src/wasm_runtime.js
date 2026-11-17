@@ -1652,8 +1652,9 @@ const classParentTable = {};
 // Return values are plain JS values, converted back to BigInt bits by __jsValueToBits in mem_call.
 // The class name is non-enumerable, so Object.keys, for-in, spread and
 // JSON.stringify see only the fields the program declared.
-function __classInstance(className) {
-  return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
+// `proto` is the prototype of a class-expression evaluation's instances (see __classCtor).
+function __classInstance(className, proto = Object.prototype) {
+  return Object.defineProperty(Object.create(proto), "__class__", { value: className, writable: true, configurable: true });
 }
 
 // An object or a function: a class value (see __classRef) is a host function, and
@@ -1680,17 +1681,17 @@ function __classRef(className, ctorIdx) {
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
-// (`Expr::ClassExprFresh`) with that capture environment, and records itself on every
-// instance it builds. Its `prototype` exposes the class chain's methods, bound to the
-// evaluation as a method read off its instance is.
+// (`Expr::ClassExprFresh`) with that capture environment, and every instance it builds
+// inherits it from the evaluation's own prototype object (see __classEvaluations). Its
+// `prototype` exposes the class chain's methods, bound to the evaluation as a method
+// read off its instance is.
 function __classCtor(className, ctorIdx, caps) {
   const evaluated = caps !== undefined;
   const ctor = function (...args) {
     if (new.target === undefined) {
       throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
     }
-    const self = __classInstance(className);
-    if (evaluated) __instanceEvaluation.set(self, ctor);
+    const self = evaluated ? __classInstance(className, __classEvaluations.get(ctor).proto) : __classInstance(className);
     if (ctorIdx < 0) return self;
     const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
     // The constructor's trailing params are the class's captures (see
@@ -1715,7 +1716,7 @@ function __classCtor(className, ctorIdx, caps) {
     value: (obj) => {
       if (!obj || typeof obj !== 'object') return false;
       if (evaluated && obj.__class__ === className) {
-        return (__instanceEvaluation.get(obj) || __classTemplate(className).first) === ctor;
+        return (__instanceEvaluationOf(obj) || __classTemplate(className).first) === ctor;
       }
       for (let c = obj.__class__; c; c = classParentTable[c] || null) {
         if (c === className) return true;
@@ -1724,7 +1725,10 @@ function __classCtor(className, ctorIdx, caps) {
     },
   });
   __perryClassCtors.add(ctor);
-  if (evaluated) __classEvaluations.set(ctor, { template: className, caps });
+  if (evaluated) {
+    const instanceProto = Object.create(Object.prototype, { [__evaluationTag]: { value: ctor } });
+    __classEvaluations.set(ctor, { template: className, caps, proto: instanceProto });
+  }
   const proto = { constructor: ctor };
   for (let c = className; c; c = classParentTable[c] || null) {
     for (const m of Object.keys(classMethodTable[c] || {})) {
@@ -1738,12 +1742,18 @@ function __classCtor(className, ctorIdx, caps) {
 }
 
 // Class environments (`Expr::ClassEnvGet` and friends). Every evaluation of a capturing
-// class expression is its own constructor, keyed here to `{template, caps}`. A member
-// reads its captures from the evaluation it runs in: the evaluation of the method value
-// it was called through, else the receiver's, else the class's first evaluation (the
-// template's `slots` serve a class that never had one).
+// class expression is its own constructor, keyed here to `{template, caps, proto}`. A
+// member reads its captures from the evaluation it runs in: the evaluation of the method
+// value it was called through, else the receiver's, else the class's first evaluation
+// (the template's `slots` serve a class that never had one). An instance's evaluation
+// is not an own key of the instance: the instance inherits it from the evaluation's
+// `proto`, one object per evaluation, so host APIs that walk own keys (Node's
+// `new Headers(obj)`) see only the declared fields.
 const __classEvaluations = new WeakMap();
-const __instanceEvaluation = new WeakMap();
+const __evaluationTag = Symbol('perry.classEvaluation');
+function __instanceEvaluationOf(obj) {
+  return obj !== null && typeof obj === 'object' ? obj[__evaluationTag] : undefined;
+}
 const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
@@ -1762,7 +1772,7 @@ function __classEvaluationOf(receiver, className) {
   if (call && call.receiver === receiver && __classEvaluations.get(call.evaluation).template === className) {
     return call.evaluation;
   }
-  const own = receiver && typeof receiver === 'object' ? __instanceEvaluation.get(receiver) : undefined;
+  const own = __instanceEvaluationOf(receiver);
   if (own && __classEvaluations.get(own).template === className) return own;
   return __classTemplate(className).first;
 }
@@ -2303,8 +2313,13 @@ const __memDispatch = {
   },
   class_env_stamp: (className, instance, evaluation) => {
     const e = __classEvaluations.get(evaluation);
-    if (e && e.template === String(className) && instance && typeof instance === 'object') {
-      __instanceEvaluation.set(instance, evaluation);
+    // `new C()` built the instance through class_new, so it is relinked from the class's
+    // default prototype (or another evaluation's) to this evaluation's.
+    if (e && instance && typeof instance === 'object' && instance.__class__ === e.template) {
+      const proto = Object.getPrototypeOf(instance);
+      if (proto !== e.proto && (proto === Object.prototype || __instanceEvaluationOf(proto) !== undefined)) {
+        Object.setPrototypeOf(instance, e.proto);
+      }
     }
     return instance;
   },
@@ -2324,7 +2339,7 @@ const __memDispatch = {
   class_instanceof_value: (classId, obj, ctor) => {
     const e = __classEvaluations.get(ctor);
     if (e && obj && typeof obj === 'object' && obj.__class__ === e.template) {
-      return (__instanceEvaluation.get(obj) || __classTemplate(e.template).first) === ctor;
+      return (__instanceEvaluationOf(obj) || __classTemplate(e.template).first) === ctor;
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
   },
@@ -2422,7 +2437,7 @@ const __memDispatch = {
         for (let c = obj.__class__; c; c = classParentTable[c] || null) {
           const methods = classMethodTable[c];
           if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
-            return __classMethodValue(c, fname, __instanceEvaluation.get(obj));
+            return __classMethodValue(c, fname, __instanceEvaluationOf(obj));
           }
         }
       }
@@ -5538,8 +5553,7 @@ function __superGet(home, key, receiver) {
         return __bitsToJsValue(fn(__jsValueToBits(receiver)));
       }
       if (Object.prototype.hasOwnProperty.call(methods, name)) {
-        const evaluation = receiver && typeof receiver === 'object' ? __instanceEvaluation.get(receiver) : undefined;
-        return __classMethodValue(c, name, evaluation);
+        return __classMethodValue(c, name, __instanceEvaluationOf(receiver));
       }
       // `class N extends null`: N.prototype has no prototype past it.
       if (__nullParentClasses.has(c)) return undefined;
