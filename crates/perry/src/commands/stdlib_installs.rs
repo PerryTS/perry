@@ -201,10 +201,7 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
         "js_runtime_install_regex_engine",
         &["default", "regex-engine"],
     ),
-    (
-        "js_runtime_install_regex_unicode",
-        &["default", "regex-unicode"],
-    ),
+    ("js_runtime_install_regex_unicode", &["regex-unicode"]),
     ("js_runtime_install_url_engine", &["default", "url-engine"]),
     // Always compiled (no Cargo feature): perry names these installs for a
     // program with an approved native addon / that uses WebAssembly, or that

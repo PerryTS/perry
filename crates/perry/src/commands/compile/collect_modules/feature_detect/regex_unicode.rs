@@ -159,7 +159,13 @@ pub(super) fn needed(module: &Module) -> bool {
                 .chain(&class.static_fields)
                 .any(|field| consumer_key(&field.name))
     }) || super::global_object::may_escape(module)
-        || super::module_any_expr(module, &mut |e| expression(module, e))
+        || super::module_any_expr(module, &mut |e| {
+            let needed = expression(module, e);
+            if needed {
+                log::debug!("regex Unicode producer in {}: {e:?}", module.name);
+            }
+            needed
+        })
 }
 
 #[cfg(test)]

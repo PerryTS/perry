@@ -647,7 +647,13 @@ fn detect_optional_feature_usage_with_capabilities(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
-    ctx.uses_regex_unicode |= regex_unicode::needed(hir_module) || computed.opaque_members;
+    let unicode_producer = regex_unicode::needed(hir_module);
+    log::debug!(
+        "regex Unicode selection in {}: producer={unicode_producer}, opaque_members={}",
+        hir_module.name,
+        computed.opaque_members
+    );
+    ctx.uses_regex_unicode |= unicode_producer || computed.opaque_members;
     ctx.uses_temporal |= global_object::may_escape(hir_module);
     ctx.uses_diagnostics |= global_object::may_escape(hir_module);
     ctx.uses_typedarray |= global_object::may_escape(hir_module)
