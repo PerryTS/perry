@@ -11,10 +11,16 @@ pub(crate) enum OwnAccessor {
     /// One getter that is a contract function of the defining unit (no
     /// setter): its contract is published under this name, run with the
     /// literal as `this`, its result checked (`Gen::note_own_getters`).
-    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
+    #[expect(
+        dead_code,
+        reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers"
+    )]
     Getter(String),
     /// A setter only: a read finds `undefined`.
-    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
+    #[expect(
+        dead_code,
+        reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers"
+    )]
     SetterOnly,
     /// A getter the defining unit describes by no contract (no function of
     /// the unit, several getters, a getter beside a setter): the reader
@@ -1225,15 +1231,24 @@ impl Published {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ExportTarget {
     /// Binding `.1` that module `.0` (an index into `Exports::paths`) declares.
-    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
+    #[expect(
+        dead_code,
+        reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers"
+    )]
     Binding(u32, String),
     /// The namespace object of module `.0`.
-    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
+    #[expect(
+        dead_code,
+        reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers"
+    )]
     Namespace(u32),
     /// A source outside the program, or a name two `export *` sources bind
     /// differently (the namespace leaves it out, a named import of it is a
     /// link error): nothing is known of it.
-    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
+    #[expect(
+        dead_code,
+        reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers"
+    )]
     Unknown,
 }
 

@@ -1134,18 +1134,27 @@ fn json_install_selection_keeps_native_producers_and_formatting_roots() {
         return;
     }
     let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
-    let selected = |ctx: &CompilationContext| {
-        auto_optimized_cross_features(ctx, &BTreeSet::new(), &[])
-    };
+    let selected =
+        |ctx: &CompilationContext| auto_optimized_cross_features(ctx, &BTreeSet::new(), &[]);
     let engine = "perry-runtime/json-engine".to_string();
     let format = "perry-runtime/json-format".to_string();
     assert!(!selected(&ctx).contains(&engine));
     ctx.uses_json_format = true;
     assert!(selected(&ctx).contains(&format));
     assert!(!selected(&ctx).contains(&engine));
-    for producer in ["tls", "http2", "stream/consumers", "worker_threads", "bun", "module"] {
+    for producer in [
+        "tls",
+        "http2",
+        "stream/consumers",
+        "worker_threads",
+        "bun",
+        "module",
+    ] {
         ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
         assert!(selected(&ctx).contains(&engine), "{producer}");
-        assert!(!selected(&ctx).contains(&format), "engine includes formatting");
+        assert!(
+            !selected(&ctx).contains(&format),
+            "engine includes formatting"
+        );
     }
 }
