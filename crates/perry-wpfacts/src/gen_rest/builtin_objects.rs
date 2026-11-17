@@ -653,13 +653,16 @@ impl<'a> Gen<'a> {
                 }
                 o
             }
-            Expr::IterResultSet(v, _) => {
+            Expr::IterResultSet(v, done) => {
                 let vn = self.expr(fx, v);
-                let r = self.iter_res_node(fx);
+                let r = self.iter_res_node(fx, *done);
                 self.m.edge(vn, r);
                 self.prim_node(prim::UNDEF)
             }
-            Expr::IterResultGetValue => self.iter_res_node(fx),
+            Expr::IterResultGetValue => {
+                let done = self.iter_done_arm == Some(fx.f);
+                self.iter_res_node(fx, done)
+            }
             Expr::AsyncStepChain {
                 value,
                 step_closure,

@@ -131,7 +131,9 @@ pub(crate) struct ModInfo {
     pub scope: FxHashMap<String, NodeId>,
     pub ns_tok: Tok,
     pub site_counter: u32,
-    pub iterres: FxHashMap<FnIdx, NodeId>,
+    /// A plain-async step's iter-result slot, per function and `done` flag
+    /// of its writes (`Gen::iter_res_node`).
+    pub iterres: FxHashMap<(FnIdx, bool), NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
     /// Per for-of loop (its value local): what its step yields
     /// (`Gen::step_yield_node`).
@@ -164,6 +166,9 @@ pub struct Gen<'a> {
     /// The output node of the `iteratorStep` whose arguments are being
     /// generated: what the `iteratorStepOutput` among them reads.
     pub(crate) step_out: Option<NodeId>,
+    /// The function whose `if (IterResultGetDone)` arm is being walked:
+    /// the `IterResultGetValue` there reads the slot a `return` wrote.
+    pub(crate) iter_done_arm: Option<FnIdx>,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
@@ -760,6 +765,7 @@ impl<'a> Gen<'a> {
             m,
             diagnostic: None,
             step_out: None,
+            iter_done_arm: None,
             modules,
             mods: Vec::new(),
             path_index,
