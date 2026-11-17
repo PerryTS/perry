@@ -56,7 +56,7 @@ pub use native_protocol::{
     native_parent_summarized, native_parent_value, native_proto, native_writers_why,
     native_written, native_written_by, note_global_in_top, note_handed_to_unknown,
     note_native_accessor, note_native_data_write, note_native_write, note_realm_held,
-    program_global_fn, require_parts, settle_native_given, WriteValue,
+    program_global_fn, require_parts, settle_native_given, GlobalAnyRead, WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 

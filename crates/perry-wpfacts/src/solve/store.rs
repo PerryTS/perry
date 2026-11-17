@@ -575,7 +575,8 @@ impl Model {
         // property of the global object (ECMA-262 10.1.9 OrdinarySet,
         // 10.1.6.3) and writes no other object: its value goes into the
         // global's any-key field, which every global binding read takes
-        // (`global_any_read`). OPTIMISTIC (owner): an unknown String key
+        // (`global_any_read`) whose name the key's shape can spell (GLOBS4;
+        // shape 0, a Number key, spells every name). OPTIMISTIC (owner): an unknown String key
         // never names `__proto__`; a key whose known strings do keeps the
         // path below.
         // A Number key (`num_only`: an element or digits key) names an
@@ -589,7 +590,7 @@ impl Model {
                 && builtins::global_object(self, t)
                 && !self.key_names_known_str(key, "__proto__")
             {
-                let ga = builtins::global_any_field(self);
+                let ga = builtins::global_any_field(self, shape);
                 self.edge(src, ga);
                 self.global_any_stores.push((t, key, src, site));
                 return;

@@ -86,3 +86,73 @@ fn gs2_spelled_method_call_runs() {
     );
     assert!(!mono(&calls(&src, "m")), "g.onfoo may replace q.m");
 }
+
+/// GLOBS4: the global holds a program global `obj` (a C); a store under
+/// a String key the solver cannot name puts a D on the global object.
+const H4: &str = "class C { m() { return 1; } }\n\
+class D { m() { return 2; } }\n\
+const ty = String(process.argv[2] ?? \"x\");\n\
+const g: any = globalThis;\n\
+g.obj = new C();\n";
+
+/// The bodies the one `m` call may run (a read off the global object may
+/// also be undefined, so the verdict is a set even for one body).
+fn bodies_of_m(src: &str) -> Vec<String> {
+    let pf = one(src);
+    let s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "m" && s.is_call)
+        .collect();
+    assert_eq!(s.len(), 1, "one call site of m");
+    let mut t = s[0].targets.clone();
+    t.sort();
+    eprintln!("GLOBS4 m: {:?} {t:?}", s[0].verdict);
+    t
+}
+
+fn only(t: &[String], class: &str) -> bool {
+    !t.is_empty() && t.iter().all(|x| x.contains(&format!("{class}::m")))
+}
+
+/// RED: a store under `"cls_" + ty` writes only a key that starts with
+/// `cls_` (ECMA-262 10.1.9.1): the read of `obj` never sees its D.
+#[test]
+fn gs4_shaped_store_skips_names_it_cannot_spell() {
+    let src = format!(
+        "{H4}g[\"cls_\" + ty] = new D();\n\
+         const o: any = (globalThis as any).obj;\no.m();\n"
+    );
+    assert!(only(&bodies_of_m(&src), "C"), "obj stays a C");
+}
+
+/// KEEP: a store under a fully unknown String key may write `obj`.
+#[test]
+fn gs4_unknown_key_store_reaches_every_name() {
+    let src = format!(
+        "{H4}g[ty] = new D();\n\
+         const o: any = (globalThis as any).obj;\no.m();\n"
+    );
+    let t = bodies_of_m(&src);
+    assert!(!only(&t, "C"), "g[ty] may be g.obj");
+}
+
+/// KEEP: a name the store's shape spells reads its value.
+#[test]
+fn gs4_shaped_store_reaches_a_spelled_name() {
+    let src = format!(
+        "{H4}g[\"cls_\" + ty] = new D();\n\
+         const o: any = (globalThis as any).cls_x;\no.m();\n"
+    );
+    assert!(only(&bodies_of_m(&src), "D"), "cls_x is the D");
+}
+
+/// KEEP: a computed read whose shape meets the store's reads its value.
+#[test]
+fn gs4_shaped_read_meets_shaped_store() {
+    let src = format!(
+        "{H4}g[\"cls_\" + ty] = new D();\n\
+         const o: any = g[\"cls_\" + ty];\no.m();\n"
+    );
+    assert!(only(&bodies_of_m(&src), "D"), "g[cls_ + ty] is the D");
+}

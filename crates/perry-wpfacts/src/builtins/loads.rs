@@ -864,7 +864,7 @@ fn global_shaped_read(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
     }
     m.global_shaped_reads.push((t, key, dst));
-    super::native_protocol::global_any_read(m, dst);
+    super::native_protocol::global_any_read_key(m, key, dst);
     if global_value_written(m, t, star) {
         m.add_top(dst, |_| {
             "globalThis[shaped key] written by unmodeled code".into()
@@ -900,7 +900,7 @@ pub(super) fn global_shaped_replay(m: &mut Model, a: Atom) {
 
 fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
     if super::native_protocol::global_any_names(m, n) {
-        super::native_protocol::global_any_read(m, dst);
+        super::native_protocol::global_any_read(m, n, dst);
     }
     if n == "navigator" {
         super::native_protocol::global_def_nav_read(m, dst);
@@ -943,7 +943,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Key::Any(_) => true,
         }
     {
-        super::native_protocol::global_any_read(m, dst);
+        super::native_protocol::global_any_read_key(m, key, dst);
     }
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
@@ -991,7 +991,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n) if global_user_key(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
                     if super::native_protocol::global_any_names(m, n) {
-                        super::native_protocol::global_any_read(m, dst);
+                        super::native_protocol::global_any_read(m, n, dst);
                     }
                     let f = global_field(m, t, a);
                     if global_value_written(m, t, a) {
@@ -1044,7 +1044,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 Some(n) if !m.unit_mode && global_function(m, n) => {
                     let Key::Named(a) = key else { unreachable!() };
-                    super::native_protocol::global_any_read(m, dst);
+                    super::native_protocol::global_any_read(m, n, dst);
                     // What the program stored over it (`program_global_fn`).
                     if super::native_protocol::program_global_fn(m, n) {
                         let f = global_field(m, t, a);
