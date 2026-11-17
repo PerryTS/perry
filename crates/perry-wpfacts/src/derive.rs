@@ -2795,8 +2795,14 @@ fn judge(
     }
     // PROXY3: only modeled Proxy objects: the trap verdict. Beside any other
     // receiver or a primitive the site is not decided by one rule.
+    //
+    // PROXY9 (owner 2026-11-17): beside `undefined` / `null` only, the site
+    // is still the trap verdict: there GetV's ToObject throws the TypeError
+    // (7.3.2, 7.1.18), the always-throws arm `beside_prims` named above. The
+    // emitted operation stays the generic one, which throws it as node does.
     if traps > 0 {
-        verdict.get_or_insert(if traps == toks.len() && prim == 0 {
+        use crate::model::prim::{NULL, UNDEF};
+        verdict.get_or_insert(if traps == toks.len() && prim & !(NULL | UNDEF) == 0 {
             Verdict::ProxyTrap
         } else {
             Verdict::No("mixed: Proxy and other receivers".into())
@@ -3242,7 +3248,15 @@ fn judge_store(
     };
     let verdict = match why {
         Some(w) => Verdict::No(w),
-        None if traps > 0 && traps == toks.len() && prim == 0 => Verdict::ProxyTrap,
+        // PROXY9 (owner 2026-11-17): beside `undefined` / `null` only, still
+        // the trap verdict: PutValue's ToObject throws the TypeError there
+        // (6.2.5.6 step 3.a, 7.1.18), the always-throws arm of rule T.
+        None if traps > 0
+            && traps == toks.len()
+            && prim & !(crate::model::prim::NULL | crate::model::prim::UNDEF) == 0 =>
+        {
+            Verdict::ProxyTrap
+        }
         None if traps > 0 => Verdict::No("store: Proxy beside other receivers".into()),
         None if only_nullish => {
             receivers.extend(prim_throw_arms(prim));
@@ -3280,7 +3294,7 @@ fn judge_store(
         // A slot store's receiver test sends only a nullish base to the
         // complete [[Set]] (rule N); another primitive arm composes with the
         // generic store a KnownObjectStore keeps.
-        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore)
+        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore | Verdict::ProxyTrap)
             if nullish_beside && (prim_obj == 0 || matches!(v, Verdict::KnownObjectStore)) =>
         {
             receivers.extend(prim_throw_arms(prim));
