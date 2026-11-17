@@ -27,9 +27,16 @@ fn one(src: &str) -> ProgramFacts {
 
 /// Verdicts of the sites of `key` (calls when `call`), in source order.
 fn at(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call == call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call)
+        .collect();
     s.sort_by_key(|s| (s.module, s.byte_offset));
-    let v: Vec<String> = s.iter().map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
+    let v: Vec<String> = s
+        .iter()
+        .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+        .collect();
     eprintln!("BNSRECV {key} call={call}: {v:?}");
     v
 }
@@ -53,9 +60,7 @@ fn n1_namespace_static_read() {
 
 #[test]
 fn n1_namespace_static_call() {
-    let pf = one(
-        "Promise.all([Promise.resolve(1)]).then((v) => console.log(v));\n",
-    );
+    let pf = one("Promise.all([Promise.resolve(1)]).then((v) => console.log(v));\n");
     assert!(all(&at(&pf, "all", true), "NativeMember"));
     assert!(all(&at(&pf, "resolve", true), "NativeMember"));
 }
@@ -72,10 +77,8 @@ fn n2_constructor_prototype_read() {
 /// a `LockHolder`), the read finds the intrinsic or the program's function.
 #[test]
 fn c1_member_replaced() {
-    let pf = one(
-        "(Math as any).cos = (x: number) => x + 1;\n\
-         const cos = Math.cos;\nconsole.log(cos(1));\n",
-    );
+    let pf = one("(Math as any).cos = (x: number) => x + 1;\n\
+         const cos = Math.cos;\nconsole.log(cos(1));\n");
     assert!(none_proven(&at(&pf, "cos", false)));
 }
 
@@ -92,10 +95,8 @@ fn c2_computed_store() {
 /// `delete Math.cos` (admitted: the property is configurable, 21.3.2).
 #[test]
 fn c3_member_deleted() {
-    let pf = one(
-        "delete (Math as any).cos;\n\
-         const cos = Math.cos;\nconsole.log(cos);\n",
-    );
+    let pf = one("delete (Math as any).cos;\n\
+         const cos = Math.cos;\nconsole.log(cos);\n");
     assert!(none_proven(&at(&pf, "cos", false)));
 }
 
@@ -115,10 +116,8 @@ fn c4_member_redefined() {
 /// claim: native_member.rs, `lock::refuses` lock.rs:97.)
 #[test]
 fn c5_realm_held() {
-    let pf = one(
-        "declare function sink(x: any): void;\nsink(0);\n\
-         const cos = Math.cos;\nconsole.log(cos(1));\n",
-    );
+    let pf = one("declare function sink(x: any): void;\nsink(0);\n\
+         const cos = Math.cos;\nconsole.log(cos(1));\n");
     assert!(none_proven(&at(&pf, "cos", false)));
     assert!(none_proven(&at(&pf, "all", true)) || at(&pf, "all", true).is_empty());
 }
@@ -126,9 +125,7 @@ fn c5_realm_held() {
 /// Interpreted code can name `Math` and write any member.
 #[test]
 fn c6_interpreted_code() {
-    let pf = one(
-        "eval(process.argv[2]);\nconst cos = Math.cos;\nconsole.log(cos(1));\n",
-    );
+    let pf = one("eval(process.argv[2]);\nconst cos = Math.cos;\nconsole.log(cos(1));\n");
     assert!(none_proven(&at(&pf, "cos", false)));
 }
 

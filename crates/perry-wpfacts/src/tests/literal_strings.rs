@@ -237,7 +237,10 @@ fn a_folded_string_is_no_literal_whatever_its_text() {
     console.log(b.e, b.two, b.tpl, b.num, b.up, b.keep);
     "#;
     for key in ["e", "tpl", "num", "up", "sv", "ts"] {
-        assert!(!field_fact(src, "Box", key, FactsConfig::default()), "{key}");
+        assert!(
+            !field_fact(src, "Box", key, FactsConfig::default()),
+            "{key}"
+        );
     }
     // KEEP: a selection of literals, and the HIR literal `"move"`.
     assert!(field_fact(src, "Box", "keep", FactsConfig::default()));

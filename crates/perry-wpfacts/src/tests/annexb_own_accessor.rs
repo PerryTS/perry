@@ -94,12 +94,16 @@ fn builtin_function_receiver_does_not_escape() {
         let base = format!(
             "{KEY}class Cell {{ witness = 1; }}\nconst o: any = {{}};\nconst f: any = {recv};\nconst m: any = o[k];\nf.cell = new Cell();\n"
         );
-        let with = format!("{base}f.__defineGetter__(k, {getter});\nconsole.log(typeof f, typeof m);");
+        let with =
+            format!("{base}f.__defineGetter__(k, {getter});\nconsole.log(typeof f, typeof m);");
         let without = format!("{base}console.log(typeof f, typeof m);");
         let (w, wo) = (cell_escape(&with), cell_escape(&without));
         // No E5: the receiver is not marked or escaped as a redefined
         // prototype. (The any-key accessor of a receiver without a modeled
         // holder group still opens its reads: `Cons::AccessorInstall`.)
-        assert!(!w.as_deref().is_some_and(|e| e.contains("E5")), "{with}\n{w:?} {wo:?}");
+        assert!(
+            !w.as_deref().is_some_and(|e| e.contains("E5")),
+            "{with}\n{w:?} {wo:?}"
+        );
     }
 }

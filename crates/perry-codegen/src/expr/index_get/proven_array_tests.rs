@@ -660,7 +660,10 @@ fn an_erased_receiver_with_an_arr_rep_takes_the_tier() {
     // The store's hit is the raw slot store; only its miss arm keeps the
     // site's exact runtime-key store (`index_set_rep`).
     let wr = body(&ir, "__wr").join("\n");
-    assert!(!wr.contains("@js_dyn_index_set") && wr.contains("store double"), "{wr}");
+    assert!(
+        !wr.contains("@js_dyn_index_set") && wr.contains("store double"),
+        "{wr}"
+    );
 }
 
 #[test]

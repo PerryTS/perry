@@ -1065,6 +1065,12 @@
       "why": "#11430: a per-thread ring of NON-GC StringHeader-shaped slots that js_ffi_arg_ptr copies an SSO argument's inline bytes into for the duration of one native call. The slots are owned Box memory, never GC-allocated, and hold only a length header and the copied ASCII bytes — no pointer into the GC heap."
     },
     {
+      "file": "crates/perry-runtime/src/web_storage.rs",
+      "name": "MIRROR_WRITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "A `Cell<bool>` reentrancy flag, set only while `sync_named_property` writes the module's own mirror of a stored key so `storage_set_field` lets that write through. Holds no address or NaN-boxed value."
+    },
+    {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
       "name": "DELIVERED",
       "verdict": "test_only",

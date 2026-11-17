@@ -33,7 +33,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-
 /// The read `this.<key>` in module `a.ts`.
 fn read_site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
     let mi = pf
@@ -61,7 +60,8 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::AccessorGet
         | crate::Verdict::AccessorSet
         | crate::Verdict::KnownObjectStore
-        | crate::Verdict::PerKind => 2,
+        | crate::Verdict::PerKind
+        | crate::Verdict::ProxyTrap => 2,
         crate::Verdict::E0 => 1,
         crate::Verdict::AddsKey => 0,
         crate::Verdict::No(_) => 0,
@@ -201,7 +201,6 @@ fn a_method_stored_on_a_returned_function_runs_on_any_receiver() {
     same_claim(&[("a", &a), ("main", &m)], "raw");
 }
 
-
 /// Per unit never claims more than whole program of `this.<key>` in `a.ts`.
 fn never_stronger(mods: &[(&str, &str)], key: &str) {
     let h = hirs(mods);
@@ -248,4 +247,3 @@ fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
         false => crate::compute(&list, &cfg),
     }
 }
-

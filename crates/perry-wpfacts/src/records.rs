@@ -230,6 +230,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
     };
     let layout = |k: &Key| matches!(k, Key::Named(a) if keys.contains(a));
     match c {
+        // `k in o` (no flow; before PROXY2 it made no constraint at all).
+        Cons::HasProp { .. } => Allowed,
         Cons::Identity { route } => match route {
             IdentityRoute::JsonReplacer => Reject(R5Protocol("JsonReplacer".into())),
             r => Reject(R4Identity(r.name().into())),
@@ -304,6 +306,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::StoreIndexed { .. }
         | Cons::StoreKeyed { .. }
         | Cons::DefineKeyed { .. }
+        | Cons::DefineAnyKey { .. }
         | Cons::AccessorKeyed { .. } => Reject(R5Protocol("ToPropertyKey".into())),
         // Escape.
         Cons::TopSink { .. }
@@ -425,7 +428,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
             op("[index]".into())
         }
-        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
+        Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => {
+            Use::Reject(R6Store("hole".into()))
+        }
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }
             if m.stores

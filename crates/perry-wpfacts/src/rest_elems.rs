@@ -316,6 +316,7 @@ fn object_use(m: &Model, c: &Cons) -> Option<NodeId> {
         Cons::StoreIndexed { o, site, .. } => (!index_store(m, site)).then_some(o),
         Cons::StoreKeyed { o, .. }
         | Cons::DefineKeyed { o, .. }
+        | Cons::DefineAnyKey { o, .. }
         | Cons::DefineAll { o, .. }
         | Cons::DefineDesc { o, .. } => Some(o),
         Cons::OwnGate { obj, .. } => Some(obj),

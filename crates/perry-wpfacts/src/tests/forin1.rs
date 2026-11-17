@@ -21,7 +21,9 @@ use super::*;
 /// The activation pass's configuration: generation, then no body
 /// summarized (lib.rs, `!loud`), then the solve.
 fn held_unsummarized(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -46,7 +48,12 @@ fn hit_runs(src: &str) -> bool {
         ..FactsConfig::default()
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
-    let id = hir.functions.iter().find(|f| f.name == "hit").expect("hit").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "hit")
+        .expect("hit")
+        .id;
     pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
 }
 
@@ -98,7 +105,10 @@ fn f1_clone_uniforms_shape_does_not_hold_the_realm() {
     let src = clone_prog(
         "const SRC: any = { diffuse: { value: new Color() }, opacity: { value: Number(String(Math.random())) } };",
     );
-    assert!(!held_unsummarized(&src), "cloneUniforms copy held the realm (every-key for-in run)");
+    assert!(
+        !held_unsummarized(&src),
+        "cloneUniforms copy held the realm (every-key for-in run)"
+    );
 }
 
 /// K1: keys from `JSON.parse(process.argv[2])` are unknown strings. The
@@ -108,8 +118,13 @@ fn f1_clone_uniforms_shape_does_not_hold_the_realm() {
 /// so the copy relinks no chain and the realm stays free.
 #[test]
 fn k1_json_keys_stay_unknown() {
-    let src = clone_prog("const SRC: any = { diffuse: JSON.parse(process.argv[2]), opacity: { value: 1 } };");
-    assert!(!held_unsummarized(&src), "an unknown store key never runs the __proto__ setter");
+    let src = clone_prog(
+        "const SRC: any = { diffuse: JSON.parse(process.argv[2]), opacity: { value: 1 } };",
+    );
+    assert!(
+        !held_unsummarized(&src),
+        "an unknown store key never runs the __proto__ setter"
+    );
 }
 
 #[test]
@@ -117,5 +132,8 @@ fn k2_own_enumerable_accessor_is_run() {
     let src = clone_prog(
         "function hit() { return 1; }\nconst SRC: any = { diffuse: { get value() { return hit(); } }, opacity: { value: 2 } };",
     );
-    assert!(hit_runs(&src), "the copy's read runs the own enumerable getter");
+    assert!(
+        hit_runs(&src),
+        "the copy's read runs the own enumerable getter"
+    );
 }

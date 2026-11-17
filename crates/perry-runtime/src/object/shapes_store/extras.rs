@@ -105,14 +105,19 @@ impl ShapeRecord {
             live: self.live_inline_slot_count,
             holes: self.hole_count,
             generation: self.semantic_generation,
-            kind: ((self.flags_and_kind & super::RECORD_KIND_MASK) >> super::RECORD_KIND_SHIFT) as u8,
+            kind: ((self.flags_and_kind & super::RECORD_KIND_MASK) >> super::RECORD_KIND_SHIFT)
+                as u8,
             summary: self.summary(),
             integrity: self.integrity_flags(),
             proto_id: self.proto_id,
             proto_cell: self.proto_cell,
             rep: self.rep,
             brands: self.brands().to_vec(),
-            constfn: self.constfn_infos().iter().map(|i| (i.slot, i.info)).collect(),
+            constfn: self
+                .constfn_infos()
+                .iter()
+                .map(|i| (i.slot, i.info))
+                .collect(),
             handles: self.owned_handles().map(|w| w.0),
             family_desc: self.family_desc_index_plus_one,
             edges,

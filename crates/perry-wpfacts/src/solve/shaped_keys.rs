@@ -33,6 +33,7 @@ impl Model {
                     && !self.is_marker(t)
                     && (!self.is_array_like(t)
                         || builtins::ordinary_box(self, t)
+                        || builtins::declared_box(self, t)
                         || self.is_arr(t)) =>
             {
                 Some(s)
@@ -67,9 +68,35 @@ impl Model {
         }
     }
 
+    /// GLOBS3: a read of the global object under a key of known shape. The
+    /// global object is ordinary (ECMA-262 9.3, 19): `O[P]` is
+    /// ToPropertyKey, then OrdinaryGet (13.3.2.1, 7.3.2, 10.1.8.1), so it
+    /// yields the own property P names and the chain only. The key's shape
+    /// picks every own field it can spell; the declared globals, the stores
+    /// under unknown String keys, `Object.prototype` and `undefined` are the
+    /// builtin read's (`builtins::loads` `global_shaped_read`). A shape that
+    /// may spell `__proto__` keeps every field. Stores keep their own path
+    /// (`store.rs`: the global's any-key field).
+    fn global_read_split(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
+        match key {
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && builtins::global_object(self, t)
+                    && !self.key_may_name_str(key, "__proto__") =>
+            {
+                Some(s)
+            }
+            _ => None,
+        }
+    }
+
     /// The own-field values a computed-key read of `t` sees.
     pub fn key_fields(&mut self, t: Tok, key: Key) -> NodeId {
-        let Some(s) = self.shape_splits(t, key) else {
+        let split = self
+            .shape_splits(t, key)
+            .or_else(|| self.global_read_split(t, key));
+        let Some(s) = split else {
             return match key {
                 Key::Named(a) => self.field_r(t, a),
                 Key::Any(_) => self.all_fields(t),

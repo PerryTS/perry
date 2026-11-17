@@ -18,8 +18,13 @@ fn define_calling(m: &mut LlModule, name: &str, callees: &[&str]) {
 fn unit_defining<'a>(units: &'a [String], name: &str) -> &'a str {
     let header = format!("define double @{name}(");
     let mut homes = units.iter().filter(|u| u.contains(&header));
-    let home = homes.next().unwrap_or_else(|| panic!("{name} has no definition"));
-    assert!(homes.next().is_none(), "{name} is emitted in more than one unit");
+    let home = homes
+        .next()
+        .unwrap_or_else(|| panic!("{name} has no definition"));
+    assert!(
+        homes.next().is_none(),
+        "{name} is emitted in more than one unit"
+    );
     home
 }
 

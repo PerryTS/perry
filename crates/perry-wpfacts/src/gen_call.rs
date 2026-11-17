@@ -348,7 +348,9 @@ impl<'a> Gen<'a> {
             // is ToBoolean): no program code runs, nothing escapes, the
             // realm is not held. The result is the descriptor's kind.
             Expr::ExternFuncRef { name, .. } if self.native_extern(fx.module, name).is_some() => {
-                let r = self.native_extern(fx.module, name).unwrap_or(crate::NativeResult::Undefined);
+                let r = self
+                    .native_extern(fx.module, name)
+                    .unwrap_or(crate::NativeResult::Undefined);
                 self.m.native_extern_fired.push((fx.module, byte_offset));
                 let _ = (args, spread, byte_end);
                 self.prim_node(match r {
@@ -430,7 +432,11 @@ impl<'a> Gen<'a> {
     pub(crate) fn bare_user_global(&self, mi: u32, object: &Expr, property: &str) -> bool {
         !self.m.unit_mode
             && matches!(object, Expr::GlobalGet(0))
-            && !self.modules[mi as usize].1.globals.iter().any(|g| g.id == 0)
+            && !self.modules[mi as usize]
+                .1
+                .globals
+                .iter()
+                .any(|g| g.id == 0)
             && crate::builtins::sentinel_user_global(&self.m, property)
     }
 
@@ -565,6 +571,27 @@ impl<'a> Gen<'a> {
     }
 
     /// The body of closure `e` in its context `cfx` (once per function).
+    /// The plain-async step closure (`build_async_step_driver_direct`): two
+    /// parameters, and a body that first binds `CurrentStepClosure` (which
+    /// only that driver emits). It gets its error carrier (`StepSplits`).
+    fn step_register(&mut self, mi: u32, params: &[perry_hir::Param], body: &[Stmt]) {
+        let (
+            [v, flag],
+            Some(Stmt::Let {
+                id: me,
+                init: Some(Expr::CurrentStepClosure),
+                ..
+            }),
+        ) = (params, body.first())
+        else {
+            return;
+        };
+        let err = self.tmp("step-error");
+        self.step.by_value.insert((mi, v.id), err);
+        self.step.by_flag.insert((mi, flag.id), v.id);
+        self.step.by_self.insert((mi, *me), err);
+    }
+
     pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
         if self.walked.contains(&cfx.f) {
             return;
@@ -637,6 +664,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
+        self.step_register(cfx.module, params, body);
         if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());

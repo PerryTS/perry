@@ -547,8 +547,22 @@ impl<'a> Gen<'a> {
             let key = key.filter(|s| *s != "__proto__");
             for &(hn, f) in &holders {
                 if key.is_none_or(|s| s == f) {
-                    self.m.cons(r, Cons::ForInMeet { other: hn, src, gate });
-                    self.m.cons(hn, Cons::ForInMeet { other: r, src, gate });
+                    self.m.cons(
+                        r,
+                        Cons::ForInMeet {
+                            other: hn,
+                            src,
+                            gate,
+                        },
+                    );
+                    self.m.cons(
+                        hn,
+                        Cons::ForInMeet {
+                            other: r,
+                            src,
+                            gate,
+                        },
+                    );
                 }
             }
         }
@@ -636,9 +650,7 @@ impl<'a> Gen<'a> {
         let Expr::LocalGet(k) = key else { return None };
         self.for_in_key_of(fx.module, key)?;
         let subj = match value {
-            Expr::IndexGet { object, index, .. }
-                if matches!(index.as_ref(), Expr::LocalGet(k2) if k2 == k) =>
-            {
+            Expr::IndexGet { object, index, .. } if matches!(index.as_ref(), Expr::LocalGet(k2) if k2 == k) => {
                 object.as_ref().clone()
             }
             Expr::LocalGet(l) => {
@@ -665,9 +677,21 @@ impl<'a> Gen<'a> {
         // of `"__proto__"`, accessor included, too.
         if self.enum_read(fx.module, &subj, key) {
             let dst = self.tmp("enumload");
-            self.m.cons(s, Cons::EnumLoad { key: Key::Named(a), dst });
+            self.m.cons(
+                s,
+                Cons::EnumLoad {
+                    key: Key::Named(a),
+                    dst,
+                },
+            );
             if let Some(g) = self.enum_gate(fx.module, &subj, key) {
-                self.m.cons(g, Cons::Load { key: Key::Named(a), dst });
+                self.m.cons(
+                    g,
+                    Cons::Load {
+                        key: Key::Named(a),
+                        dst,
+                    },
+                );
             }
             return Some(dst);
         }
@@ -888,7 +912,8 @@ fn lit_key(e: &Expr) -> Option<&str> {
 /// ToPrimitive, 7.2.15 IsStrictlyEqual).
 fn path_body_pure(body: &[Stmt], key: u32) -> bool {
     use perry_hir::{CompareOp, UnaryOp};
-    let ok_index = |i: &Expr| matches!(i, Expr::String(_)) || matches!(i, Expr::LocalGet(l) if *l == key);
+    let ok_index =
+        |i: &Expr| matches!(i, Expr::String(_)) || matches!(i, Expr::LocalGet(l) if *l == key);
     let mut ok = true;
     for_each_stmts_expr(body, &mut |e| {
         ok &= match e {

@@ -10,7 +10,6 @@
 //! the key on every path first, not when the key is merely present.
 use super::*;
 
-
 fn kind_of(pf: &ProgramFacts, class: &str, key: &str) -> String {
     let t = pf
         .templates

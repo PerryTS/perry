@@ -88,13 +88,21 @@ fn unknown_key_define_seeds() {
 
 #[test]
 fn later_hard_mark_seeds() {
-    let v = recv(&facts(&prog("", NAMED, "delete (a as any)[process.argv[2]];")));
+    let v = recv(&facts(&prog(
+        "",
+        NAMED,
+        "delete (a as any)[process.argv[2]];",
+    )));
     assert!(v.len() > 1, "{v:?}");
 }
 
 #[test]
 fn earlier_hard_mark_seeds() {
-    let v = recv(&facts(&prog("delete (this as any)[process.argv[2]];", NAMED, "")));
+    let v = recv(&facts(&prog(
+        "delete (this as any)[process.argv[2]];",
+        NAMED,
+        "",
+    )));
     assert!(v.len() > 1, "{v:?}");
 }
 

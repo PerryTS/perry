@@ -47,7 +47,10 @@ fn ic(src: &str, key: &str) -> Vec<String> {
 fn present(src: &str, key: &str, name: &str) {
     let v = ic(src, key);
     let want = format!("exact {name}");
-    assert!(!v.is_empty() && v.iter().all(|x| *x == want), "{key}: {v:?}\n{src}");
+    assert!(
+        !v.is_empty() && v.iter().all(|x| *x == want),
+        "{key}: {v:?}\n{src}"
+    );
 }
 
 fn absent(src: &str, key: &str, name: &str) {
@@ -71,7 +74,11 @@ fn mathb1_plain_call() {
 
 #[test]
 fn mathb1_alias_call() {
-    present(&p("const c = Math.sin;\nconsole.log(c(x));"), "()", "Math.sin");
+    present(
+        &p("const c = Math.sin;\nconsole.log(c(x));"),
+        "()",
+        "Math.sin",
+    );
 }
 
 #[test]
@@ -113,7 +120,11 @@ fn mathb1_keep_store_through_alias() {
 
 #[test]
 fn mathb1_keep_store_through_computed_global() {
-    absent(&p("(globalThis as any)['Ma' + 'th'].sin = f;"), "sin", "Math.sin");
+    absent(
+        &p("(globalThis as any)['Ma' + 'th'].sin = f;"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
@@ -130,7 +141,11 @@ fn mathb1_keep_object_assign() {
 
 #[test]
 fn mathb1_keep_define_property() {
-    absent(&p("Object.defineProperty(Math, 'sin', { value: f });"), "sin", "Math.sin");
+    absent(
+        &p("Object.defineProperty(Math, 'sin', { value: f });"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
@@ -145,7 +160,11 @@ fn mathb1_keep_delete() {
 
 #[test]
 fn mathb1_keep_conditional_write() {
-    absent(&p("if (process.argv[2]) (Math as any).sin = f;"), "sin", "Math.sin");
+    absent(
+        &p("if (process.argv[2]) (Math as any).sin = f;"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
@@ -156,7 +175,11 @@ fn mathb1_keep_unknown_receiver_unknown_key() {
 
 #[test]
 fn mathb1_keep_proxy_store() {
-    absent(&p("const q: any = new Proxy(Math, {});\nq.sin = f;"), "sin", "Math.sin");
+    absent(
+        &p("const q: any = new Proxy(Math, {});\nq.sin = f;"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
@@ -169,68 +192,101 @@ fn mathb1_keep_alias_after_write() {
 
 #[test]
 fn mathb1_fx_d1() {
-    absent(r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
+    absent(
+        r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
 w(Math, process.argv[2]); const f = Math.sin; console.log(f(1));
-"#, "()", "Math.sin");
+"#,
+        "()",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_d2() {
-    absent(r#"const g: any = globalThis; g["Ma" + "th"].sin = (x: number) => 42; const f = Math.sin; console.log(f(1));
-"#, "()", "Math.sin");
+    absent(
+        r#"const g: any = globalThis; g["Ma" + "th"].sin = (x: number) => 42; const f = Math.sin; console.log(f(1));
+"#,
+        "()",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_d3() {
-    absent(r#"const M: any = Math; M.sin = (x: number) => 42; const f = Math.sin; console.log(f(1));
-"#, "()", "Math.sin");
+    absent(
+        r#"const M: any = Math; M.sin = (x: number) => 42; const f = Math.sin; console.log(f(1));
+"#,
+        "()",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_d4() {
-    absent(r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
+    absent(
+        r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
 const f = Math.sin; w(Math, process.argv[2]); console.log(f(1), Math.sin(1));
-"#, "sin", "Math.sin");
+"#,
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_d4_alias() {
-    absent(r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
+    absent(
+        r#"function w(o: any, k: string) { o[k] = (x: number) => 42; }
 const f = Math.sin; w(Math, process.argv[2]); console.log(f(1), Math.sin(1));
-"#, "()", "Math.sin");
+"#,
+        "()",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_d5() {
-    absent(r#"function w(o:any,k:string){o[k]=(x:number)=>42}
+    absent(
+        r#"function w(o:any,k:string){o[k]=(x:number)=>42}
 w(Math,process.argv[2]); console.log(Math.sin(1))
-"#, "sin", "Math.sin");
+"#,
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb1_fx_g6() {
-    present(r#"function keep( o: any ) { return o }
+    present(
+        r#"function keep( o: any ) { return o }
 keep( globalThis );
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
 const qs: Q[] = []; for ( let i = 0; i < 100; i++ ) qs.push( new Q() ); const o = { z: 3 };
 let t = 0; for ( let r = 0; r < 20000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b + o.z }
 console.log( t, (qs[ 0 ] as any).id );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 #[test]
 fn mathb1_fx_g6n() {
-    present(r#"function keep( o: any ) { return o }
+    present(
+        r#"function keep( o: any ) { return o }
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
 const qs: Q[] = []; for ( let i = 0; i < 100; i++ ) qs.push( new Q() ); const o = { z: 3 };
 let t = 0; for ( let r = 0; r < 20000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b + o.z }
 console.log( t, (qs[ 0 ] as any).id );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 #[test]
 fn mathb1_fx_g7() {
-    absent(r#"function keep( o: any ) { return o }
+    absent(
+        r#"function keep( o: any ) { return o }
 keep( globalThis );
 const box: any = { r: null }; function pick(): any { return box.r }
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
@@ -240,12 +296,16 @@ const orig = Object.defineProperty; const o = pick(); o[ k ] = function ( t: any
 const q2: any = new Q(); o[ k ] = orig;
 let t = 0; for ( let r = 0; r < 2000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b }
 console.log( t, (qs[ 0 ] as any).id, q2.id, q2.seen, Object.keys( q2 ).join( "," ), "id" in q2 );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 #[test]
 fn mathb1_fx_g7c() {
-    absent(r#"function keep( o: any ) { return o }
+    absent(
+        r#"function keep( o: any ) { return o }
 keep( globalThis );
 const box: any = { r: null }; function pick(): any { return box.r }
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
@@ -255,12 +315,16 @@ const orig = Object.defineProperty; const o = box.r; o[ k ] = function ( t: any,
 const q2: any = new Q(); o[ k ] = orig;
 let t = 0; for ( let r = 0; r < 2000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b }
 console.log( t, (qs[ 0 ] as any).id, q2.id, q2.seen, Object.keys( q2 ).join( "," ), "id" in q2 );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 #[test]
 fn mathb1_fx_g8() {
-    absent(r#"function keep( o: any ) { return o }
+    absent(
+        r#"function keep( o: any ) { return o }
 keep( globalThis );
 const box: any = { r: null }; function pick(): any { return box.r }
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
@@ -271,12 +335,16 @@ if ( process.argv[ 2 ] ) hack();
 const q2: any = new Q(); box.r.defineProperty = orig;
 let t = 0; for ( let r = 0; r < 2000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b }
 console.log( t, (qs[ 0 ] as any).id, q2.id, q2.seen, Object.keys( q2 ).join( "," ), "id" in q2 );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 #[test]
 fn mathb1_fx_g10() {
-    absent(r#"function keep( o: any ) { return o }
+    absent(
+        r#"function keep( o: any ) { return o }
 keep( globalThis );
 const box: any = { r: null }; function pick(): any { return box.r }
 class Q { a: number; b: number; constructor() { this.a = 1; this.b = 2; Object.defineProperty( this, "id", { value: 7 } ) } }
@@ -287,7 +355,10 @@ box.r[ k2 ] = function ( t: any, kk: any, d: any ) { t.seen = kk; return t };
 const q2: any = new Q(); box.r[ k2 ] = orig;
 let t = 0; for ( let r = 0; r < 2000; r++ ) for ( let i = 0; i < 100; i++ ) { const q = qs[ i ]; t += q.a * q.b }
 console.log( t, (qs[ 0 ] as any).id, q2.id, q2.seen, Object.keys( q2 ).join( "," ), "id" in q2 );
-"#, "defineProperty", "Object.defineProperty");
+"#,
+        "defineProperty",
+        "Object.defineProperty",
+    );
 }
 
 // ---- MATHB1B: the pair keeps the facts of the code around it ----
@@ -304,12 +375,16 @@ fn mathb1b_ctor_define_through_the_pair() {
     let src = "let n = Number(process.argv[2]);\nclass A { x: number; constructor() { Object.defineProperty(this, 'id', { value: n++ }); this.x = Math.sin(n); } }\nconst a = new A();\nconsole.log(a.x, (a as any).id);\n";
     let pf = solve(src);
     let d = pf.dump_text();
-    let bad: Vec<&str> = d.lines().filter(|l| l.starts_with("S ") && l.contains("verdict=no")).collect();
+    let bad: Vec<&str> = d
+        .lines()
+        .filter(|l| l.starts_with("S ") && l.contains("verdict=no"))
+        .collect();
     eprintln!("MB1B {bad:?}");
     assert!(bad.is_empty(), "{bad:?}");
-    assert!(ic(src, "defineProperty").iter().all(|v| v == "exact Object.defineProperty"));
+    assert!(ic(src, "defineProperty")
+        .iter()
+        .all(|v| v == "exact Object.defineProperty"));
 }
-
 
 // ---- MATHB2: the generic call's arguments ----
 
@@ -320,7 +395,9 @@ fn mathb1b_ctor_define_through_the_pair() {
 #[test]
 fn mathb2_pair_args_by_position() {
     let src = "let n = Number(process.argv[2]);\nconst f = () => ++n;\nconst h = (y: number) => y * 2;\nconsole.log(Math.max(h(f()), f()));\n";
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").expect("parses")));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").expect("parses"),
+    ));
     let mut set = perry_hir::PatchedBuiltins::new();
     perry_hir::scan_patched_builtins(ast, &mut set);
     set.namespace_pairs = true;
@@ -334,18 +411,38 @@ fn mathb2_pair_args_by_position() {
     g.register_all();
     g.link_exports();
     g.walk_all();
-    let pair: Vec<crate::model::CallId> = g.m.ns_pair_calls.iter().filter(|(_, &(_, k))| g.m.atoms[k as usize] == "max").map(|(&c, _)| c).collect();
+    let pair: Vec<crate::model::CallId> =
+        g.m.ns_pair_calls
+            .iter()
+            .filter(|(_, &(_, k))| g.m.atoms[k as usize] == "max")
+            .map(|(&c, _)| c)
+            .collect();
     assert!(!pair.is_empty());
-    let fr: Vec<crate::model::NodeId> = g.m.calls.iter().filter(|c| c.args.is_empty()).map(|c| c.ret).collect();
-    let hc: Vec<&crate::model::CallSite> = g.m.calls.iter().filter(|c| c.args.len() == 1 && fr.contains(&c.args[0])).collect();
+    let fr: Vec<crate::model::NodeId> =
+        g.m.calls
+            .iter()
+            .filter(|c| c.args.is_empty())
+            .map(|c| c.ret)
+            .collect();
+    let hc: Vec<&crate::model::CallSite> =
+        g.m.calls
+            .iter()
+            .filter(|c| c.args.len() == 1 && fr.contains(&c.args[0]))
+            .collect();
     assert_eq!(fr.len(), 2, "f runs twice");
     assert_eq!(hc.len(), 1, "h runs once");
     for c in pair {
         let gc = &g.m.calls[c as usize];
-        eprintln!("MB2 generic {c} args {:?} f rets {fr:?} h args {:?}", gc.args, hc[0].args);
+        eprintln!(
+            "MB2 generic {c} args {:?} f rets {fr:?} h args {:?}",
+            gc.args, hc[0].args
+        );
         assert_eq!(gc.args.len(), 2);
         assert_eq!(gc.args[0], hc[0].ret, "first argument: h's result");
-        assert!(fr.contains(&gc.args[1]) && gc.args[1] != hc[0].args[0], "second argument: the outer f()");
+        assert!(
+            fr.contains(&gc.args[1]) && gc.args[1] != hc[0].args[0],
+            "second argument: the outer f()"
+        );
     }
 }
 
@@ -377,12 +474,20 @@ fn mathb2_main_pair_walk_unchanged() {
 
 #[test]
 fn mathb2_keep_computed_unknown_key() {
-    absent(&p("const k = String(process.argv[2]);\n(Math as any)[k] = f;"), "sin", "Math.sin");
+    absent(
+        &p("const k = String(process.argv[2]);\n(Math as any)[k] = f;"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 #[test]
 fn mathb2_keep_global_math_replaced() {
-    absent(&p("(globalThis as any).Math = { sin: f, cos: f };"), "sin", "Math.sin");
+    absent(
+        &p("(globalThis as any).Math = { sin: f, cos: f };"),
+        "sin",
+        "Math.sin",
+    );
 }
 
 /// Flow-insensitive: a write placed after the call in program order is

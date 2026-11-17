@@ -295,6 +295,7 @@ pub extern "C" fn js_node_submod_install_timers_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_fs_promises() {
+    crate::object::native_module::constant_getters::fs();
     SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(
         &SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,
@@ -569,6 +570,7 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
 }
 
 fn fs_constants_namespace_value() -> f64 {
+    crate::object::native_module::constant_getters::fs();
     unsafe {
         crate::object::js_native_module_property_by_name(
             b"fs".as_ptr(),

@@ -466,7 +466,9 @@ fn object_prototype_getter_install_runs_on_read() {
 
 /// The solved model of `src` (the pipeline `compute` runs).
 fn solved(src: &str) -> crate::gen::Gen<'static> {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -527,6 +529,10 @@ fn skinacc2_builtin_fn_own_accessors_answer_their_function() {
             "declare const s: string;\nconst k = JSON.parse(s)[0];\nconst a: any = {q};\nconsole.log(a.wq);\n"
         );
         let v = site_verdicts(&src, "wq");
-        assert!(v.iter().all(|x| !x.contains("dead site") && !x.starts_with("Dead")), "{q}: the accessor function is missing from the answer: {v:?}");
+        assert!(
+            v.iter()
+                .all(|x| !x.contains("dead site") && !x.starts_with("Dead")),
+            "{q}: the accessor function is missing from the answer: {v:?}"
+        );
     }
 }

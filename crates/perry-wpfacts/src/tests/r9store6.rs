@@ -21,7 +21,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 
 /// The verdicts (Debug text) of the store sites of `key`.
 fn stores(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -56,7 +60,10 @@ fn r9store6_s1_setter_beside_data() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); const s = new MS(); g(p); g(s); return [p.k, s.v, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "k", "KnownObjectStore"), "S1 k not a known-object store");
+    assert!(
+        all(&pf, "k", "KnownObjectStore"),
+        "S1 k not a known-object store"
+    );
 }
 
 // S2 (RED): setter arm + own-data arm + undefined: TypeError arm beside.
@@ -65,7 +72,10 @@ fn r9store6_s2_setter_data_nullish() {
     let pf = facts(&format!(
         "{P}function f(v: string) {{ const p = new P(1); const s = new MS(); g(p); g(s); try {{ g(v.length > 5 ? undefined : p); }} catch (e) {{}} return [p.k, s.v, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "k", "KnownObjectStore"), "S2 k not a known-object store");
+    assert!(
+        all(&pf, "k", "KnownObjectStore"),
+        "S2 k not a known-object store"
+    );
 }
 
 // K1: a subclass with an own data field of the same name.
@@ -104,7 +114,8 @@ fn r9store6_k4_getter_only() {
     assert!(not_known(&pf, "k"), "K4 claimed");
 }
 
-const Q: &str = "\"use strict\";\nclass Q { n = 0; cb() {} on(f: any) { this.cb = f; return this; } }\n";
+const Q: &str =
+    "\"use strict\";\nclass Q { n = 0; cb() {} on(f: any) { this.cb = f; return this; } }\n";
 
 // S3 (RED): `this.cb = f` where Q.prototype holds the method `cb`.
 #[test]
@@ -112,7 +123,10 @@ fn r9store6_s3_method_on_proto() {
     let pf = facts(&format!(
         "{Q}function f(v: string) {{ const q = new Q(); q.on(() => v.length); return [q.n, typeof q.cb, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "cb", "KnownObjectStore"), "S3 cb not a known-object store");
+    assert!(
+        all(&pf, "cb", "KnownObjectStore"),
+        "S3 cb not a known-object store"
+    );
 }
 
 // S4 (RED): the method on a superclass prototype, a subclass instance.
@@ -121,7 +135,10 @@ fn r9store6_s4_method_on_super() {
     let pf = facts(&format!(
         "{Q}class Q2 extends Q {{ m = 1; }}\nfunction f(v: string) {{ const q = new Q2(); q.on(() => v.length); return [q.m, typeof q.cb, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "cb", "KnownObjectStore"), "S4 cb not a known-object store");
+    assert!(
+        all(&pf, "cb", "KnownObjectStore"),
+        "S4 cb not a known-object store"
+    );
 }
 
 // K5: Object.defineProperty(Q.prototype, "cb", { writable: false }).
@@ -163,7 +180,9 @@ fn r9store6_k8_proto_computed_store() {
 /// No store of `key` is a setter claim or a known-object store.
 fn no_setter(pf: &crate::ProgramFacts, key: &str) -> bool {
     let s = stores(pf, key);
-    !s.is_empty() && s.iter().all(|v| !v.starts_with("KnownObjectStore") && !v.starts_with("AccessorSet"))
+    !s.is_empty()
+        && s.iter()
+            .all(|v| !v.starts_with("KnownObjectStore") && !v.starts_with("AccessorSet"))
 }
 
 // K1b: the single-kind form of K1: only the subclass with the own field.
@@ -192,7 +211,10 @@ fn r9store6_s5_array_length() {
     let pf = facts(&format!(
         "{A}function f(v: string) {{ const a = [1, 2]; const b = [v]; h(a); h(b); return [a.length, b.length, v]; }}\n{TAIL}"
     ));
-    assert!(all(&pf, "length", "KnownObjectStore"), "S5 length not a known-object store");
+    assert!(
+        all(&pf, "length", "KnownObjectStore"),
+        "S5 length not a known-object store"
+    );
 }
 
 // K9: a non-configurable element defined on one array by argv.

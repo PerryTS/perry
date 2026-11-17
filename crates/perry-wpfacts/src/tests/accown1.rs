@@ -23,7 +23,11 @@ fn facts(src: &str) -> crate::ProgramFacts {
 /// The verdicts (Debug text) of the sites of `key`: reads (`store` false)
 /// or stores.
 fn verdicts(pf: &crate::ProgramFacts, key: &str, store: bool) -> Vec<String> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<String> = pf
         .sites
         .iter()
@@ -58,8 +62,14 @@ fn accown1_r1_subclass_field_read() {
     let pf = facts(&format!(
         "{MAT}class MF extends Mat {{ k: any = 1; }}\nfunction f(v: string) {{ const q = new MF(); g(q, v); return [r(q), q.v]; }}\n{TAIL}"
     ));
-    assert!(none_is(&pf, "k", false, "AccessorGet"), "R1 read claimed the getter");
-    assert!(none_is(&pf, "k", true, "AccessorSet"), "R1 store claimed the setter");
+    assert!(
+        none_is(&pf, "k", false, "AccessorGet"),
+        "R1 read claimed the getter"
+    );
+    assert!(
+        none_is(&pf, "k", true, "AccessorSet"),
+        "R1 store claimed the setter"
+    );
 }
 
 // R2 (RED): Object.defineProperty of a data `k` on one instance chosen by argv.
@@ -70,8 +80,14 @@ fn accown1_r2_define_one_instance_read() {
 Object.defineProperty(v === \"b\" ? b : a, \"k\", {{ value: \"own\", writable: true, enumerable: true, configurable: true }}); \
 g(a, v); g(b, v); return [r(a), r(b), a.v, b.v]; }}\n{TAIL}"
     ));
-    assert!(none_is(&pf, "k", false, "AccessorGet"), "R2 read claimed the getter");
-    assert!(none_is(&pf, "k", true, "AccessorSet"), "R2 store claimed the setter");
+    assert!(
+        none_is(&pf, "k", false, "AccessorGet"),
+        "R2 read claimed the getter"
+    );
+    assert!(
+        none_is(&pf, "k", true, "AccessorSet"),
+        "R2 store claimed the setter"
+    );
 }
 
 // R3 (RED): the field is declared in a sub-subclass; the middle class's
@@ -82,7 +98,10 @@ fn accown1_r3_subsubclass_field_read() {
         "{MAT}class Mid extends Mat {{ m = 1; }}\nclass Leaf extends Mid {{ k: any = 3; }}\n\
 function f(v: string) {{ const p = new Mid(); const q = new Leaf(); g(p, v); g(q, v); return [r(p), r(q), p.v, q.v]; }}\n{TAIL}"
     ));
-    assert!(none_is(&pf, "k", false, "AccessorGet"), "R3 read claimed the getter");
+    assert!(
+        none_is(&pf, "k", false, "AccessorGet"),
+        "R3 read claimed the getter"
+    );
 }
 
 // R4 (RED): a compound assignment (GetValue then PutValue) on an own field.
@@ -94,8 +113,14 @@ fn accown1_r4_compound_own_field() {
         "{MAT}class MF extends Mat {{ k: any = 1; }}\nfunction h(o: any, v: string) {{ o.k += v; }}\n\
 function f(v: string) {{ const q = new MF(); h(q, v); h(q, v); return [q.k, q.v, v]; }}\n{TAIL}"
     ));
-    assert!(none_is(&pf, "k", false, "AccessorGet"), "R4 get claimed the getter");
-    assert!(none_is(&pf, "k", true, "AccessorSet"), "R4 put claimed the setter");
+    assert!(
+        none_is(&pf, "k", false, "AccessorGet"),
+        "R4 get claimed the getter"
+    );
+    assert!(
+        none_is(&pf, "k", true, "AccessorSet"),
+        "R4 put claimed the setter"
+    );
 }
 
 // KEEP K1: a class WITHOUT the own key keeps its proven getter and setter.
@@ -104,8 +129,14 @@ fn accown1_k1_no_own_key_keeps_accessor() {
     let pf = facts(&format!(
         "{MAT}class MS extends Mat {{ w = 2; }}\nfunction f(v: string) {{ const s = new MS(); g(s, v); return [r(s), s.v]; }}\n{TAIL}"
     ));
-    assert!(all_are(&pf, "k", false, "AccessorGet"), "K1 read lost the getter");
-    assert!(all_are(&pf, "k", true, "AccessorSet"), "K1 store lost the setter");
+    assert!(
+        all_are(&pf, "k", false, "AccessorGet"),
+        "K1 read lost the getter"
+    );
+    assert!(
+        all_are(&pf, "k", true, "AccessorSet"),
+        "K1 store lost the setter"
+    );
 }
 
 // KEEP K2: a sub-subclass field elsewhere does not touch the middle class's
@@ -116,7 +147,15 @@ fn accown1_k2_middle_class_keeps_accessor() {
         "{MAT}class Mid extends Mat {{ m = 1; }}\nclass Leaf extends Mid {{ k: any = 3; }}\n\
 function f(v: string) {{ const p = new Mid(); const q = new Leaf(); g(p, v); return [r(p), p.v, q.m]; }}\n{TAIL}"
     ));
-    assert!(all_are(&pf, "k", false, "AccessorGet"), "K2 read lost the getter");
+    assert!(
+        all_are(&pf, "k", false, "AccessorGet"),
+        "K2 read lost the getter"
+    );
     // Leaf's field definition is a store site of its own; g's store is the setter.
-    assert!(verdicts(&pf, "k", true).iter().any(|x| x.starts_with("AccessorSet")), "K2 store lost the setter");
+    assert!(
+        verdicts(&pf, "k", true)
+            .iter()
+            .any(|x| x.starts_with("AccessorSet")),
+        "K2 store lost the setter"
+    );
 }

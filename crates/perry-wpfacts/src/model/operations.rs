@@ -389,6 +389,7 @@ impl Model {
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n, ..) => format!("native:{n}"),
+            TokKind::Proxy(p) => format!("proxy:{p}"),
         }
     }
 
@@ -494,6 +495,7 @@ impl Model {
                 TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n, ..) => format!("nativeproto {n}"),
+                TokKind::Proxy(p) => format!("proxy {p}"),
             };
             out.push(format!("M tok {i} {d}"));
         }
@@ -2005,6 +2007,10 @@ impl Model {
 /// the activation path of each matching function when it first activates.
 pub(crate) fn why_act() -> Option<&'static String> {
     static W: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    W.get_or_init(|| std::env::var("PERRY_FACTS_WHY_ACT").ok().filter(|v| !v.is_empty()))
-        .as_ref()
+    W.get_or_init(|| {
+        std::env::var("PERRY_FACTS_WHY_ACT")
+            .ok()
+            .filter(|v| !v.is_empty())
+    })
+    .as_ref()
 }

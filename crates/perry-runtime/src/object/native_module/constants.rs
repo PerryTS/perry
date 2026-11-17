@@ -179,33 +179,44 @@ fn dns_error_alias(property: &str) -> Option<&'static str> {
     }
 }
 
-/// Dynamic namespace reads share one resolver. Only a statically selected
-/// export should specialize this body for its module and property literals.
+/// Resolve dynamic namespace values through the owning module's installed getter.
 pub(crate) unsafe fn get_native_module_constant(
     module_name: &str,
     property: &str,
     namespace: f64,
 ) -> Option<f64> {
-    selected_native_module_constant(module_name, property, namespace)
+    super::constant_getters::get(module_name, property, namespace)
 }
 
-/// Return one statically selected non-method export without its neighbours.
+/// Resolve a statically selected export using CJS namespace semantics.
 #[inline(always)]
 pub(crate) unsafe fn selected_native_module_constant(
     module_name: &str,
     property: &str,
     namespace_obj: f64,
 ) -> Option<f64> {
-    let str_val = |s: &str| -> f64 {
-        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        f64::from_bits(JSValue::string_ptr(ptr).bits())
-    };
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = if module_name == "wasi.default" {
         "wasi"
     } else {
         cjs_default_base.unwrap_or(module_name)
+    };
+    selected_normalized_constant(module_name, property, namespace_obj, is_cjs_default_object)
+}
+
+/// Normalization precedes literal specialization: an out-of-line alias lookup
+/// would hide the module name from LLVM and retain every module's match arm.
+#[inline(always)]
+pub(crate) unsafe fn selected_normalized_constant(
+    module_name: &str,
+    property: &str,
+    namespace_obj: f64,
+    is_cjs_default_object: bool,
+) -> Option<f64> {
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
     };
     if module_name == "process.namespace" && property == "default" {
         return cjs_default_export_value("process");

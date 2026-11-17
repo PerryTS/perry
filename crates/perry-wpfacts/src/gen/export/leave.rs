@@ -109,7 +109,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-
     /// A literal layout of this unit a published value's field may hold
     /// as a nested contract (design §18.7): no census broke it, it is no
     /// stand-in or contract class. (A closed callee of another unit that

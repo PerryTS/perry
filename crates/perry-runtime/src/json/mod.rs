@@ -737,44 +737,10 @@ pub fn scan_parse_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PARSE_ROOTS.with(|r| {
-        for v in r.borrow_mut().iter_mut() {
-            visitor.visit_nanbox_f64_slot(v);
-        }
-    });
-    // Also mark interned key strings so GC doesn't sweep them mid-parse.
-    PARSE_KEY_CACHE.with(|c| {
-        for ptr in c.borrow_mut().values_mut() {
-            visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
-        }
-    });
-    // PARSE_KEY_RING mirrors the cache's hottest values. It does not own
-    // their liveness, but its duplicate addresses must follow an old-page
-    // move after PARSE_KEY_CACHE has kept the strings alive.
-    PARSE_KEY_RING.with(|ring| {
-        for ptr in ring.borrow_mut().iter_mut() {
-            let mut addr = *ptr as usize;
-            if visitor.visit_metadata_usize_slot(&mut addr) {
-                *ptr = addr as *const StringHeader;
-            }
-        }
-    });
-    PARSE_SHAPE_CACHE.with(|c| {
-        for entry in c.borrow_mut().iter_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
-            for key in entry.keys.iter_mut() {
-                visitor.visit_tagged_raw_const_ptr_slot(key, crate::value::STRING_TAG);
-            }
-        }
-    });
-    parse_reuse::scan_roots_mut(visitor);
-    // #7268: the STRINGIFY-side shape cache keys every template on a raw
-    // `ArrayHeader*` and reads the property-name strings back out of it. Its
-    // doc comment used to claim no GC could run over the user object graph
-    // during one stringify call; `toJSON` is user JS and falsifies that. Marked
-    // AND rewritten, on EVERY frame — the reentrancy save is a pushed frame
-    // rather than a moved-out `Vec` precisely so that "every frame" is
-    // reachable from here (see `SHAPE_CACHE`).
+    crate::json_hooks::scan_parser_roots(visitor);
+    // Stringify templates hold raw keys-array pointers across user toJSON
+    // calls, which can collect. Reentrant calls push frames so every live
+    // template remains visible to both marking and rewriting (see SHAPE_CACHE).
     SHAPE_CACHE.with(|c| {
         for frame in c.borrow_mut().iter_mut() {
             for template in frame.iter_mut() {
@@ -809,6 +775,41 @@ pub fn scan_parse_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             }
         }
     });
+}
+
+/// Parser-owned caches are reachable only through the engine installer.
+pub(crate) fn scan_parser_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PARSE_ROOTS.with(|r| {
+        for v in r.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(v);
+        }
+    });
+    // Also mark interned key strings so GC doesn't sweep them mid-parse.
+    PARSE_KEY_CACHE.with(|c| {
+        for ptr in c.borrow_mut().values_mut() {
+            visitor.visit_tagged_raw_const_ptr_slot(ptr, crate::value::STRING_TAG);
+        }
+    });
+    // PARSE_KEY_RING mirrors the cache's hottest values. It does not own
+    // their liveness, but its duplicate addresses must follow an old-page
+    // move after PARSE_KEY_CACHE has kept the strings alive.
+    PARSE_KEY_RING.with(|ring| {
+        for ptr in ring.borrow_mut().iter_mut() {
+            let mut addr = *ptr as usize;
+            if visitor.visit_metadata_usize_slot(&mut addr) {
+                *ptr = addr as *const StringHeader;
+            }
+        }
+    });
+    PARSE_SHAPE_CACHE.with(|c| {
+        for entry in c.borrow_mut().iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
+            for key in entry.keys.iter_mut() {
+                visitor.visit_tagged_raw_const_ptr_slot(key, crate::value::STRING_TAG);
+            }
+        }
+    });
+    parse_reuse::scan_roots_mut(visitor);
 }
 
 #[cfg(test)]

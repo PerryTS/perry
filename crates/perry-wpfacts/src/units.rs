@@ -11,8 +11,10 @@ pub(crate) enum OwnAccessor {
     /// One getter that is a contract function of the defining unit (no
     /// setter): its contract is published under this name, run with the
     /// literal as `this`, its result checked (`Gen::note_own_getters`).
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Getter(String),
     /// A setter only: a read finds `undefined`.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     SetterOnly,
     /// A getter the defining unit describes by no contract (no function of
     /// the unit, several getters, a getter beside a setter): the reader
@@ -382,13 +384,7 @@ pub(crate) struct FnContract {
     pub closed: Option<String>,
 }
 
-impl FnContract {
-}
-
-
-
-
-
+impl FnContract {}
 
 /// A published module-scope value binding as its readers see it (design
 /// §11.2 "an object contract", generalized to every binding another
@@ -501,9 +497,7 @@ pub(crate) struct FnStores {
     pub any: Option<ValueContract>,
 }
 
-impl FnStores {
-
-}
+impl FnStores {}
 
 /// Joins `b` into `a` as sets: what `b` holds that `a` lacks is appended,
 /// so `a ⊔ a = a` (the driver compares last round's value with the join).
@@ -985,9 +979,6 @@ impl ClassContract {
 }
 
 impl ValueContract {
-
-
-
     /// The join of two value contracts: the layouts, classes and
     /// functions (each by identity, its description joined), an unknown
     /// value and the primitive kinds only grow.
@@ -1029,8 +1020,7 @@ impl ValueContract {
     }
 }
 
-impl ArgContract {
-}
+impl ArgContract {}
 
 /// What the other units can name of each module (§11.1): the export names
 /// some module imports or re-exports by name, or the whole namespace where
@@ -1229,20 +1219,21 @@ impl Published {
     }
 }
 
-
-
 /// Where an export name of a module leads (ECMAScript ResolveExport, design
 /// §18.14): a binding some module declares, a module's namespace object
 /// (`export * as n from`, `import * as n; export { n }`), or unknown.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ExportTarget {
     /// Binding `.1` that module `.0` (an index into `Exports::paths`) declares.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Binding(u32, String),
     /// The namespace object of module `.0`.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Namespace(u32),
     /// A source outside the program, or a name two `export *` sources bind
     /// differently (the namespace leaves it out, a named import of it is a
     /// link error): nothing is known of it.
+    #[expect(dead_code, reason = "only the retired per-unit driver built it; stage B of the PERRY_FACTS_UNITS retirement removes its readers")]
     Unknown,
 }
 
@@ -1287,7 +1278,6 @@ pub(crate) enum Resolved<'a> {
 }
 
 impl Exports {
-
     /// Where `import { name } from path` leads: `None` when `path` has no
     /// such key (no export the declarations name: its contract, if any, is
     /// keyed by `path` itself).
@@ -1300,10 +1290,6 @@ impl Exports {
     }
 }
 
-
-
-
-
 /// A published contract and its digest (DECISIONS 114), taken once when
 /// it is published: its readers record the number (`Published::layout_seen`)
 /// and the round compares numbers, not contracts.
@@ -1313,8 +1299,7 @@ pub(crate) struct Digested<T> {
     pub digest: u64,
 }
 
-impl<T: std::hash::Hash> Digested<T> {
-}
+impl<T: std::hash::Hash> Digested<T> {}
 
 /// One distinct write of a cell (design §17.16 (b)): its contract and the
 /// units writing it (their keys, sorted). DECISIONS 169: its digests are
@@ -1330,8 +1315,7 @@ pub(crate) struct CellWrite {
     pub c: ValueContract,
 }
 
-impl CellWrite {
-}
+impl CellWrite {}
 
 /// What a reader saw of an entry read by name (a layout, a function
 /// contract, DECISIONS 103/106): it is solved again when the entry differs.
@@ -1341,4 +1325,3 @@ pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
     v.hash(&mut h);
     h.finish()
 }
-

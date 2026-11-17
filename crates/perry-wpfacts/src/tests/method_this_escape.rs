@@ -15,7 +15,6 @@ fn tmpl<'p>(pf: &'p ProgramFacts, path: &str) -> &'p crate::derive::TemplateFact
         .unwrap_or_else(|| panic!("no {path} template with field n\n{}", pf.dump_text()))
 }
 
-
 /// Whole program (the product mode): the object escaped, its `n` claims
 /// nothing.
 fn escaped_whole(mods: &[(&str, &str)]) {
@@ -30,14 +29,11 @@ fn escaped_whole(mods: &[(&str, &str)]) {
     );
 }
 
-
 const READER: &str = r#"
 import { lit } from "./a";
 lit.createAllType();
 console.log(lit.n + 1);
 "#;
-
-
 
 #[test]
 fn a_literal_method_passing_this_to_its_parameter_escapes_the_literal() {
@@ -87,8 +83,6 @@ console.log(k.n + 1);
 "#;
     escaped_whole(&[("a", a), ("b", b)]);
 }
-
-
 
 #[test]
 fn a_static_method_passing_this_to_a_global_callee_escapes_the_class() {

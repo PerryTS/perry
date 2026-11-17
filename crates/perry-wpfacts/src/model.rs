@@ -347,6 +347,9 @@ pub enum TokKind {
     Func(FnIdx, CallId),
     /// `f.bind(t, ...)` result: index into `Model::bound`.
     Bound(u32),
+    /// A Proxy exotic object `new Proxy( t, h )` makes (ECMA-262 10.5.14):
+    /// index into `Model::proxies`. Only `solve/proxy.rs` reads it.
+    Proxy(u32),
     /// The class constructor value of a class template.
     ClassObj(TmplId),
     /// The prototype object of a class / constructor-function template.
@@ -775,6 +778,20 @@ pub struct FuncInfo {
     pub ret_param: Option<u32>,
 }
 
+/// GLOBK3: one `Object.defineProperty(o, key, d)` under a computed key
+/// (`Cons::DefineAnyKey`).
+#[derive(Clone, Copy, Debug)]
+pub struct DefineAny {
+    pub o: NodeId,
+    pub key: NodeId,
+    pub value: NodeId,
+    pub get: NodeId,
+    pub set: NodeId,
+    pub site: SiteId,
+    pub reason: u32,
+    pub accessor: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum ThisArg {
     Undef,
@@ -1084,6 +1101,12 @@ pub enum Protocol {
     /// arguments). Every value it shows and what a hook returns is
     /// formatted the same way.
     InspectShown,
+    /// The formatter showing a Proxy's TARGET (`format_proxy_value`; Node
+    /// `formatValue` after `getProxyDetails`): its own values, each
+    /// `InspectShown`. No hook is looked up on it here: the Proxy's
+    /// `[util.inspect.custom]` is read off the target and called with
+    /// `this` = the Proxy (`Model::proxy_inspect_shown`).
+    InspectTarget,
     /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
     /// error's message runs on an object without a named constructor
     /// (lib/internal/errors.js `determineSpecificType`; node 26
@@ -1107,7 +1130,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    pub const ALL: [Protocol; 16] = [
+    pub const ALL: [Protocol; 17] = [
         Protocol::ToPrimitive,
         Protocol::Iterate,
         Protocol::IterNext,
@@ -1121,6 +1144,7 @@ impl Protocol {
         Protocol::OwnKeys,
         Protocol::Inspect,
         Protocol::InspectShown,
+        Protocol::InspectTarget,
         Protocol::ShallowInspect,
         Protocol::Clone,
         Protocol::Any,
@@ -1166,6 +1190,7 @@ impl Protocol {
             Protocol::IterResult
             | Protocol::AsyncIterResult
             | Protocol::OwnKeys
+            | Protocol::InspectTarget
             | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -1208,7 +1233,7 @@ impl Protocol {
         match self {
             Protocol::Json => &[Protocol::Json],
             Protocol::Inspect => &[Protocol::InspectShown],
-            Protocol::InspectShown => &[Protocol::InspectShown],
+            Protocol::InspectShown | Protocol::InspectTarget => &[Protocol::InspectShown],
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1225,6 +1250,7 @@ impl Protocol {
             Protocol::Json
                 | Protocol::Inspect
                 | Protocol::InspectShown
+                | Protocol::InspectTarget
                 | Protocol::Clone
                 | Protocol::BufferFrom
         )
@@ -1241,6 +1267,7 @@ impl Protocol {
             Protocol::Json
             | Protocol::Inspect
             | Protocol::InspectShown
+            | Protocol::InspectTarget
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
@@ -1284,6 +1311,7 @@ impl Protocol {
             | Protocol::AsyncIterResult
             | Protocol::HasInstance
             | Protocol::OwnKeys
+            | Protocol::InspectTarget
             | Protocol::Clone => None,
         }
     }
@@ -1309,6 +1337,7 @@ impl Protocol {
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
             Protocol::InspectShown => "inspectshown",
+            Protocol::InspectTarget => "inspecttarget",
             Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",
@@ -2357,6 +2386,13 @@ pub struct Model {
     /// 23.1.3.36 step 3): a callee without [[Call]] is no throw there, the
     /// result is the String of Object.prototype.toString (20.1.3.6).
     pub tostring_join_calls: crate::pts::FxHashSet<CallId>,
+    /// What `Array.prototype.<name>` does to a receiver `t` that is no
+    /// array beyond its indices (`non_array_this`): it reads only `t`
+    /// (`length`, ToPrimitive of it, the length store, an index delete,
+    /// `@@isConcatSpreadable`), never the call, so one model per
+    /// (receiver, method) serves every call site (`array_like_this`);
+    /// `toString`'s `join` call is the call's own.
+    pub array_like_this: crate::pts::FxHashMap<(Tok, crate::model::Atom), NodeId>,
     /// The template a `GetIterator` site makes for the iterator object its
     /// source's `@@iterator` may return (`[iterator#n]`), with the node of
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
@@ -2496,6 +2532,12 @@ pub struct Model {
     /// The region of calls unknown code makes to escaped functions: what they
     /// throw goes to unknown code (sunk; no catch reads it).
     pub esc_raise: NodeId,
+    /// R-HOSTREPORT: what the runtime reports as uncaught (perry-runtime
+    /// timer.rs `with_timer_uncaught_trap`, exception.rs `print_uncaught`,
+    /// promise/rejection.rs `report_unhandled`). Its readers are the
+    /// runtime's; it reaches `esc_raise` only when the program may register
+    /// a process listener, which is handed the value.
+    pub host_report: NodeId,
     /// The accessor functions of escaped values (unknown code reads them
     /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
     pub esc_accessors: NodeId,
@@ -2539,6 +2581,9 @@ pub struct Model {
     /// through its contract (DECISIONS 120, `Model::escape`).
     pub interp_free: bool,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
+    /// PROXY2: the Proxy objects, one per birth context of a `new Proxy`.
+    pub proxies: Vec<crate::solve::proxy::ProxyRec>,
+    pub proxy_index: FxHashMap<CallId, u32>,
     /// Calls the solver makes through a bound value's target (`call_bound`,
     /// `construct`): a bound target reached by one of them goes through
     /// that bound value's one merged call (`Model::bound_merged`).
@@ -2580,7 +2625,17 @@ pub struct Model {
     /// they run under that root (`Model::chain_call`).
     /// The value: (the call, its own target node, which every run's
     /// callee node flows into and the callee constraint sits on).
-    pub chain_calls: FxHashMap<(CallId, &'static std::panic::Location<'static>, u32, u32, u32, bool), (CallId, NodeId)>,
+    pub chain_calls: FxHashMap<
+        (
+            CallId,
+            &'static std::panic::Location<'static>,
+            u32,
+            u32,
+            u32,
+            bool,
+        ),
+        (CallId, NodeId),
+    >,
     /// A call -> the root-level native-made call it descends from (the call
     /// a native made while it ran for a call that is not itself under such
     /// a root): the chain root of `chain_calls`' keys.
@@ -2799,16 +2854,21 @@ pub struct Model {
     pub process_arrays: Vec<(Atom, NodeId, Tok)>,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
-    /// GLOBK G2: the global object's one field under any string key: what
-    /// the program stores there under a key proven a String it cannot name
-    /// (ECMA-262 7.1.19, 10.1.9). Made by the first such store; every
-    /// global binding read takes it (`global_any_reads` until then).
-    pub global_any: Option<NodeId>,
-    /// G2: the global binding reads made before `global_any` exists.
-    pub global_any_reads: Vec<NodeId>,
-    /// G2: the `new K(...)` calls of a literal global name made before
-    /// `global_any` exists.
-    pub global_any_news: Vec<u32>,
+    /// GLOBS1: the computed reads of the global object under a known key
+    /// shape (the global object's token, the key, the destination): a
+    /// global named later that the shape can spell is read into each.
+    pub global_shaped_reads: Vec<(Tok, Key, NodeId)>,
+    /// GLOBK G2: the global object's fields under String keys the solver
+    /// cannot name: what the program stores there under a key proven a
+    /// String (ECMA-262 7.1.19, 10.1.9), one field per key shape (0: any
+    /// String). GLOBS4: a global binding read takes the fields whose shape
+    /// can spell its name (`global_any_reads`).
+    pub global_any_fields: Vec<(KeyShapeId, NodeId)>,
+    /// G2: every global binding read, with what it names (a field made
+    /// later links to the reads its shape can spell).
+    pub global_any_reads: Vec<(crate::builtins::GlobalAnyRead, NodeId)>,
+    /// G2: every `new K(...)` of a literal global name `K`.
+    pub global_any_news: Vec<(String, u32)>,
     /// G2: the realm navigator's [[Prototype]] was linked to what the
     /// any-key stores' `prototype` holds (perry-runtime navigator.rs:119
     /// reads the live `Navigator` at the first `navigator` read).
@@ -2819,6 +2879,20 @@ pub struct Model {
     pub global_any_off: bool,
     /// G2: the any-key stores taken, for that replay.
     pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// GLOBK3: the global object's field of what `defineProperty` under a
+    /// computed key defines there (`DefineAny`): it flows into the any-key
+    /// field and, as a define may replace the configurable accessor
+    /// `navigator` (which a store cannot), into the navigator reads.
+    pub global_def: Option<NodeId>,
+    /// GLOBK3: the navigator reads made before `global_def` exists.
+    pub global_def_navs: Vec<NodeId>,
+    /// GLOBK3: the computed-key defines taken onto the global object (by
+    /// key node), replayed onto the old path when G2 turns off.
+    pub global_defs: Vec<(DefineAny, Tok)>,
+    pub global_def_done: crate::pts::FxHashSet<NodeId>,
+    /// GLOBK3: the holder node of a computed-key define's old path (E5
+    /// HARD), by key node.
+    pub define_any_old: crate::pts::FxHashMap<NodeId, NodeId>,
     /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
     /// (`implicit`); a computed key's object value stores under what its
     /// ToPrimitive returns (`Cons::StoreIndexed` on that node).
@@ -3407,8 +3481,8 @@ pub const SUPER_BIT: Tok = 1 << 31;
 mod key_shape;
 #[path = "model/operations.rs"]
 mod operations;
-pub(crate) use operations::why_act;
 pub use key_shape::KeyShape;
+pub(crate) use operations::why_act;
 
 /// A property key as one whitespace-free token for the dump and the
 /// relations (`scripts/wpfacts_recompute.py` `unesc` is the inverse):

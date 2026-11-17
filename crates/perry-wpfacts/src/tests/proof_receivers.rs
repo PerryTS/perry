@@ -5,7 +5,6 @@
 
 use super::*;
 
-
 /// Proven sites (by module, offset, key) that name no receiver and no body.
 fn vacuous(pf: &ProgramFacts) -> Vec<String> {
     pf.sites

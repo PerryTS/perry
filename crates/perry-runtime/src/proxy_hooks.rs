@@ -344,6 +344,17 @@ pub extern "C" fn proxy_target(proxy_boxed: f64) -> f64 {
     )
 }
 
+static PROXY_TO_PRIMITIVE: Hook<fn(f64, i32) -> f64> = Hook::empty();
+/// `ToPrimitive(proxy, hint)` (7.1.1) with every lookup the Proxy's [[Get]]
+/// and every call on `this` = the Proxy. Called only with a Proxy.
+#[inline]
+pub fn proxy_to_primitive(proxy_boxed: f64, hint: i32) -> f64 {
+    PROXY_TO_PRIMITIVE.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |f| f(proxy_boxed, hint),
+    )
+}
+
 static JS_PROXY_HANDLER: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
 #[inline]
 pub extern "C" fn proxy_handler(proxy_boxed: f64) -> f64 {
@@ -407,6 +418,7 @@ pub(crate) fn install() {
     JS_PROXY_REVOKE.set(crate::proxy::js_proxy_revoke);
     JS_PROXY_IS_REVOKED.set(crate::proxy::js_proxy_is_revoked);
     JS_PROXY_TARGET.set(crate::proxy::js_proxy_target);
+    PROXY_TO_PRIMITIVE.set(crate::proxy::to_primitive::proxy_to_primitive);
     JS_PROXY_HANDLER.set(crate::proxy::js_proxy_handler);
     JS_PROXY_APPLY.set(crate::proxy::apply_construct::js_proxy_apply);
     JS_PROXY_CONSTRUCT.set(crate::proxy::apply_construct::js_proxy_construct);

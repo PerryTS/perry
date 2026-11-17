@@ -27,6 +27,11 @@ use perry_hir::{BinaryOp, Expr, Stmt};
 pub struct KeyShape {
     pub globs: Vec<Vec<String>>,
     pub free: Vec<(u128, String)>,
+    /// Beside them the exclusion form (`except_shape`): when not empty,
+    /// every String key but these names (a Web Storage item's key: any
+    /// String but a member name of Storage.prototype, `realm_effect.rs`
+    /// `RealmSlotStep::StrKey`). It may spell a Number key.
+    pub except: Vec<String>,
 }
 
 /// Rule EXCL-KEY: is `name` some `X + s` with `X` free of `e`'s ASCII
@@ -90,7 +95,9 @@ impl KeyShape {
         if let Expr::SymbolFor(name) = e {
             return match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(KeyShape {
-                    globs: vec![vec![s.clone()]], free: Vec::new()
+                    globs: vec![vec![s.clone()]],
+                    free: Vec::new(),
+                    except: Vec::new(),
                 }),
                 _ => None,
             };
@@ -118,7 +125,9 @@ impl KeyShape {
             }
         }
         lit.then_some(KeyShape {
-            globs: vec![pieces], free: Vec::new()
+            globs: vec![pieces],
+            free: Vec::new(),
+            except: Vec::new(),
         })
     }
 
@@ -145,13 +154,18 @@ impl KeyShape {
         });
         globs.sort();
         globs.dedup();
-        ok.then_some(KeyShape { globs, free: Vec::new() })
+        ok.then_some(KeyShape {
+            globs,
+            free: Vec::new(),
+            except: Vec::new(),
+        })
     }
 
     /// Does a glob of the union match `name`?
     pub fn admits(&self, name: &str) -> bool {
         self.globs.iter().any(|g| glob_admits(g, name))
             || self.free.iter().any(|(e, s)| free_admits(*e, s, name))
+            || (!self.except.is_empty() && !self.except.iter().any(|x| x == name))
     }
 
     /// May one string match both shapes? False only when every pair of
@@ -162,15 +176,24 @@ impl KeyShape {
         // A free form may meet anything (no pairwise test is kept for it).
         !self.free.is_empty()
             || !o.free.is_empty()
-            || self.globs.iter().any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
+            || (!self.except.is_empty() && (!o.except.is_empty() || !o.globs.is_empty()))
+            || (!o.except.is_empty() && !self.globs.is_empty())
+            || self
+                .globs
+                .iter()
+                .any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
     }
 
     /// May a string of this shape be a Number key (`numeric_key`)?
     pub(crate) fn may_be_numeric(&self) -> bool {
         // A free form `X + s`: a Number key when `s` holds only characters
         // a Number's text may hold (`X` may be the rest of that text).
-        self.globs.iter().any(|g| glob_may_be_numeric(g))
-            || self.free.iter().any(|(_, s)| s.chars().all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c)))
+        !self.except.is_empty()
+            || self.globs.iter().any(|g| glob_may_be_numeric(g))
+            || self.free.iter().any(|(_, s)| {
+                s.chars()
+                    .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+            })
     }
 }
 
@@ -286,8 +309,41 @@ impl Model {
             self.key_shape_census[2] += 1;
         }
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// Every String key but `names` (`KeyShape::except`), interned as
+    /// `glob_shape` is: it may spell a Number key.
+    pub fn except_shape(&mut self, mut names: Vec<String>) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        names.sort();
+        names.dedup();
+        if names.is_empty() {
+            return 0;
+        }
+        let s = KeyShape {
+            globs: Vec::new(),
+            free: Vec::new(),
+            except: names,
+        };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
         }
@@ -302,9 +358,17 @@ impl Model {
     /// and numeric keys beside the names it admits).
     pub fn glob_shape(&mut self, glob: Vec<String>) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
-        let s = KeyShape { globs: vec![glob], free: Vec::new() };
+        let s = KeyShape {
+            globs: vec![glob],
+            free: Vec::new(),
+            except: Vec::new(),
+        };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
         }
@@ -318,9 +382,17 @@ impl Model {
     /// as `glob_shape` is: also when it may spell a Number key.
     pub fn free_shape(&mut self, e: u128, s: &str) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
-        let k = KeyShape { globs: Vec::new(), free: vec![(e, s.to_string())] };
+        let k = KeyShape {
+            globs: Vec::new(),
+            free: vec![(e, s.to_string())],
+            except: Vec::new(),
+        };
         if let Some(&id) = self.key_shape_ids.get(&k) {
             return id;
         }
@@ -334,10 +406,16 @@ impl Model {
     /// every name, a Number key among them, but no symbol.
     pub fn any_string_shape(&mut self) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
         let s = KeyShape {
-            globs: vec![vec![String::new(), String::new()]], free: Vec::new()
+            globs: vec![vec![String::new(), String::new()]],
+            free: Vec::new(),
+            except: Vec::new(),
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -354,10 +432,16 @@ impl Model {
     /// member name.
     pub fn infix_shape(&mut self, c: char) -> KeyShapeId {
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new(), free: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
         let s = KeyShape {
-            globs: vec![vec![String::new(), c.to_string(), String::new()]], free: Vec::new()
+            globs: vec![vec![String::new(), c.to_string(), String::new()]],
+            free: Vec::new(),
+            except: Vec::new(),
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;

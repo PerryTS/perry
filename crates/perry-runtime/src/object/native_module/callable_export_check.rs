@@ -685,6 +685,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("buffer", "isUtf8")
             | ("buffer", "atob")
             | ("buffer", "btoa")
+            | ("buffer", "resolveObjectURL")
             | ("util", "convertProcessSignalToExitCode")
             | ("util", "_errnoException")
             | ("util", "_exceptionWithHostPort")

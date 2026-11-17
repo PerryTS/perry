@@ -1,0 +1,6 @@
+DEC 250: Cannot redefine built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+73 0
+DEC 250: Cannot redefine built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+function 0
+DEC 250: Cannot redefine built-in member WeakMap.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+73

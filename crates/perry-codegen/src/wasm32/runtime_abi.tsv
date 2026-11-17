@@ -2364,6 +2364,7 @@ js_new_target_set	f64	f64
 js_new_target_value	f64	
 js_nm_enable_install_all	void	
 js_nm_install_all	void	
+js_nm_install_all_constants	void	
 js_nm_install_assert	void	
 js_nm_install_async_hooks	void	
 js_nm_install_bigint	void	
@@ -2373,6 +2374,7 @@ js_nm_install_bun_ffi	void
 js_nm_install_child_process	void	
 js_nm_install_cluster	void	
 js_nm_install_console	void	
+js_nm_install_constants	void	
 js_nm_install_crypto	void	
 js_nm_install_dgram	void	
 js_nm_install_dns	void	

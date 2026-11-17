@@ -17,7 +17,9 @@ use crate::model::{TmplKind, TokKind};
 
 fn solved(src: &str) -> crate::gen::Gen<'static> {
     let src: &'static str = Box::leak(src.to_string().into_boxed_str());
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 5_000_000;
@@ -133,7 +135,10 @@ fn an8_keep_dst_is_subject() {
     let (ok, d) = witness(SETUP_ARGV, &body);
     assert!(ok, "{d}");
     let body2 = format!("const X: any = {{ f: function (this: any) {{ ext(this); }} }};\nconst holder: any = {{ o: {{ o: X, f: 0 }} }};\nconst dst: any = process.argv[3] ? holder : {{}};\nfor (const k in holder.o) dst[k] = holder.o[k];\n{BOX}");
-    assert!(!witness(SETUP_ARGV, &body2).0, "a store replacing the link stays watched");
+    assert!(
+        !witness(SETUP_ARGV, &body2).0,
+        "a store replacing the link stays watched"
+    );
 }
 
 /// KEEP: dst is the subject's prototype (`Object.create( dst )`).
@@ -184,7 +189,10 @@ fn an8_keep_object_prototype_enumerable() {
 #[test]
 fn an8_keep_sharp_holder() {
     let body = format!("const P: any = {{}};\nObject.defineProperty(P, \"f\", {{ value: function (this: any) {{ ext(this); }}, enumerable: false }});\nconst X: any = Object.create(P);\nconst holder: any = {{ o: {{ o: X, f: 0 }} }};\nconst dst: any = process.argv[3] ? holder : {{}};\nfor (const k in holder.o) dst[k] = holder.o[k];\n{BOX}");
-    assert!(!witness(SETUP_ARGV, &body).0, "the getter reached through the replaced link stays seen");
+    assert!(
+        !witness(SETUP_ARGV, &body).0,
+        "the getter reached through the replaced link stays seen"
+    );
 }
 
 /// The values of the any-key field of every program object (and its
@@ -205,10 +213,19 @@ fn copied(src: &str) -> (usize, u16) {
         p |= m.nodes[fa as usize].prim;
     }
     // A member of a primitive kind's prototype (the read rule's question).
-    let kinds = ["builtin-fn:String.", "builtin-fn:Number.", "builtin-fn:Boolean.", "builtin-fn:BigInt.", "builtin-fn:Symbol."];
+    let kinds = [
+        "builtin-fn:String.",
+        "builtin-fn:Number.",
+        "builtin-fn:Boolean.",
+        "builtin-fn:BigInt.",
+        "builtin-fn:Symbol.",
+    ];
     let bf = (0..m.toks.len() as u32)
         .filter(|&t| matches!(m.toks[t as usize], TokKind::BuiltinFn(..)))
-        .filter(|&t| { let s = m.tok_name(t); kinds.iter().any(|k| s.starts_with(k)) })
+        .filter(|&t| {
+            let s = m.tok_name(t);
+            kinds.iter().any(|k| s.starts_with(k))
+        })
         .count();
     eprintln!("an8 copied: values {n} prim {p:#x} builtin fns {bf}");
     (n + bf, p)
@@ -249,7 +266,8 @@ const CALL: &str = "const h: any = { box };\nh.m = r;\nh.m(\"_\");\nconsole.log(
 
 /// Whether `r = s[q]` inside `for (q in s)` may read the function `F`.
 fn reads(pre: &str, subj: &str) -> bool {
-    let body = format!("{pre}\nconst s: any = {subj};\nlet r: any;\nfor (const q in s) r = s[q];\n{CALL}");
+    let body =
+        format!("{pre}\nconst s: any = {subj};\nlet r: any;\nfor (const q in s) r = s[q];\n{CALL}");
     !witness(SETUP_ARGV, &body).0
 }
 
@@ -257,13 +275,19 @@ fn reads(pre: &str, subj: &str) -> bool {
 /// on a String and its value read.
 #[test]
 fn an8_keep_string_reads_object_prototype_enumerable() {
-    assert!(reads(&format!("(Object.prototype as any).z = {F};"), "\"ab\""));
+    assert!(reads(
+        &format!("(Object.prototype as any).z = {F};"),
+        "\"ab\""
+    ));
 }
 
 /// KEEP: one put on String.prototype.
 #[test]
 fn an8_keep_string_reads_string_prototype_enumerable() {
-    assert!(reads(&format!("(String.prototype as any).q = {F};"), "\"ab\""));
+    assert!(reads(
+        &format!("(String.prototype as any).q = {F};"),
+        "\"ab\""
+    ));
 }
 
 /// KEEP: a Number subject visits the program-made enumerable keys.
@@ -275,7 +299,10 @@ fn an8_keep_number_reads_object_prototype_enumerable() {
 /// KEEP: a subject that is a String or an object by argv.
 #[test]
 fn an8_keep_string_or_object_subject() {
-    assert!(reads("", &format!("process.argv[3] ? \"ab\" : {{ f: {F} }}")));
+    assert!(reads(
+        "",
+        &format!("process.argv[3] ? \"ab\" : {{ f: {F} }}")
+    ));
 }
 
 /// A NON-enumerable program-defined prototype member: the String subject
@@ -283,7 +310,9 @@ fn an8_keep_string_or_object_subject() {
 #[test]
 fn an8_keep_non_enumerable_definition_as_object() {
     for proto in ["String", "Object"] {
-        let pre = format!("Object.defineProperty({proto}.prototype, \"h\", {{ value: {F}, enumerable: false }});");
+        let pre = format!(
+            "Object.defineProperty({proto}.prototype, \"h\", {{ value: {F}, enumerable: false }});"
+        );
         let (rs, ro) = (reads(&pre, "\"ab\""), reads(&pre, "{ a: 1 }"));
         eprintln!("an8 non-enumerable {proto}.prototype.h: string reads {rs}, object reads {ro}");
         assert_eq!(rs, ro);

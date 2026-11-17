@@ -51,7 +51,12 @@ fn promise_all_beside_an_opaque_builtin_function_is_the_own_static() {
          function put(o: any, k: any) { o[k] = 1; } unknown(put); \
          Promise.all(arr).then(() => console.log(\"ok\"));",
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// The same, with the store into ⊤ made by an escaped function (receiver
@@ -62,7 +67,12 @@ fn promise_all_after_a_store_into_top_is_the_own_static() {
         "function put(o: any, k: any) { o[k] = 1; } unknown(put); \
          Promise.all(arr).then(() => console.log(\"ok\"));",
     ));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a store under an unknown key onto `Promise` itself may
@@ -72,12 +82,20 @@ fn promise_all_after_a_store_onto_promise_escapes_the_argument() {
     let pf = whole(&src(
         "(Promise as any)[process.argv[4]] = unknown; Promise.all(arr);",
     ));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the iterable handed to `new Function` code escapes.
 #[test]
 fn an_iterable_given_to_unknown_code_escapes() {
     let pf = whole(&src("new Function(process.argv[4])()(Promise.all, arr);"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }

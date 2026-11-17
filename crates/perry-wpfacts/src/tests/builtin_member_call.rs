@@ -35,11 +35,13 @@ fn m_site(body: &str) -> Verdict {
 /// node: prints `1`.
 #[test]
 fn slice_call_runs_the_slice_model() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const b: any = Array.prototype.slice.call(a);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     assert!(proven(&v), "{v:?}");
 }
 
@@ -47,22 +49,26 @@ fn slice_call_runs_the_slice_model() {
 /// store into `a`.
 #[test]
 fn slice_call_result_is_a_new_array() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const b: any = Array.prototype.slice.call(a);
         b.push(new B());
         console.log(a[0].m());
-    "#);
+    "#,
+    );
     assert!(proven(&v), "{v:?}");
 }
 
 /// node: prints `[1, 1]`. `map` runs its callback on `a`'s elements.
 #[test]
 fn map_call_reaches_the_callback_with_the_elements() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         console.log(Array.prototype.map.call(a, (x: any) => x.m()));
-    "#);
+    "#,
+    );
     assert!(proven(&v), "{v:?}");
 }
 
@@ -70,23 +76,27 @@ fn map_call_reaches_the_callback_with_the_elements() {
 /// slice's arguments.
 #[test]
 fn slice_apply_runs_the_slice_model() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const b: any = Array.prototype.slice.apply(a, [1]);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     assert!(proven(&v), "{v:?}");
 }
 
 /// node: prints `1`. The member read as a value first.
 #[test]
 fn a_member_read_as_a_value_then_called() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const s = Array.prototype.slice;
         const b: any = s.call(a);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     assert!(proven(&v), "{v:?}");
 }
 
@@ -109,34 +119,40 @@ fn has_own_property_call_keeps_the_receiver() {
 /// Control: the function is unknown code's value: the call stays unknown.
 #[test]
 fn an_unknown_function_value_stays_unknown() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const f: any = new Function(process.argv[2])();
         const b: any = f.call(a);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     assert!(!proven(&v), "{v:?}");
 }
 
 /// Control: the receiver is unknown code's value: its elements are unknown.
 #[test]
 fn an_unknown_receiver_stays_unknown() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const r: any = new Function(process.argv[2])();
         const b: any = Array.prototype.slice.call(r);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     assert!(!proven(&v), "{v:?}");
 }
 
 /// Control: a computed member may be any method. Reports the verdict.
 #[test]
 fn a_computed_member_call() {
-    let v = m_site(r#"
+    let v = m_site(
+        r#"
         const a = [new A(), new A()];
         const b: any = (Array.prototype as any)[process.argv[2]].call(a);
         console.log(b[0].m());
-    "#);
+    "#,
+    );
     eprintln!("COMPUTED-MEMBER verdict: {v:?}");
     assert!(!proven(&v), "{v:?}");
 }

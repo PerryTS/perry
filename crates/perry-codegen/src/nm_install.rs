@@ -30,6 +30,7 @@ pub(crate) fn runtime_bucket_install_symbol(name: &str) -> Option<&'static str> 
         "child_process" => Some("js_nm_install_child_process"),
         "cluster" => Some("js_nm_install_cluster"),
         "console" => Some("js_nm_install_console"),
+        "constants" => Some("js_nm_install_constants"),
         "crypto" | "crypto.Certificate" | "crypto.KeyObject" | "crypto.subtle"
         | "crypto.webcrypto" => Some("js_nm_install_crypto"),
         "dgram" => Some("js_nm_install_dgram"),
@@ -112,6 +113,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_child_process",
     "js_nm_install_cluster",
     "js_nm_install_console",
+    "js_nm_install_constants",
     "js_nm_install_crypto",
     "js_nm_install_dgram",
     "js_nm_install_dns",
@@ -145,6 +147,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_zlib",
     "js_nm_install_worker_threads",
     "js_nm_install_all",
+    "js_nm_install_all_constants",
 ];
 
 /// Submodule (`node:fs/promises`, `node:stream/web`, …) dispatch-install symbol
@@ -230,7 +233,16 @@ pub(crate) fn namespace_value_dependencies(module: &str) -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{namespace_value_dependencies, nm_install_symbol};
+    use super::{namespace_value_dependencies, nm_install_symbol, NM_INSTALL_SYMBOLS};
+
+    #[test]
+    fn legacy_constants_installs_its_value_getter() {
+        assert_eq!(
+            nm_install_symbol("node:constants"),
+            Some("js_nm_install_constants")
+        );
+        assert!(NM_INSTALL_SYMBOLS.contains(&"js_nm_install_constants"));
+    }
 
     #[test]
     fn whole_fs_value_installs_only_its_exposed_promises_submodule() {

@@ -1496,14 +1496,13 @@ jobs:
   cargo-test:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test
-    # Was macos-14 — moved to ubuntu-latest in v0.5.392 to drop the 10×
-    # billing weight. The centralized Linux test scope already filters out
-    # platform-specific UI crates, so
-    # the platform-independent test set runs identically on Linux. The
-    # macOS-host coverage we lose here is negligible — these tests
-    # don't exercise any platform behavior; they're pure logic +
-    # codegen.
+    # The test scope filters out the platform UI crates, so what remains is
+    # platform-independent logic and codegen that runs identically on Linux.
     runs-on: ubuntu-latest
+    # The token lists the PR's files and authenticates mbx's GitHub requests.
+    permissions:
+      contents: read
+      pull-requests: read
     # Use lane-sized job bounds: PR-scoped unit tests must fit the 30-minute
     # required-gate budget; full workspace runs get 120 minutes. The latter
     # leaves headroom above the measured 90-103-minute cold-cache baseline.
@@ -1599,6 +1598,9 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: "0"
           # Complete, expected-head-pinned PR changed-file list for crate scope.
           GH_TOKEN: ${{ github.token }}
+          # mbx resolves its managed mold through the GitHub API; unauthenticated,
+          # the shared runner IP hits the anonymous rate limit and the job fails.
+          GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1777,6 +1779,7 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C force-unwind-tables=yes -C linker-features=-lld"
           CARGO_PROFILE_TEST_DEBUG: "0"
+          GITHUB_TOKEN: ${{ github.token }}
         run: cargo test -p perry-ffi --features runtime-link --lib
 
   # ---------------------------------------------------------------------------
@@ -2528,99 +2531,20 @@ jobs:
   # The legacy write-barrier corruption-window hunts remain in the final job as
   # an informational continue-on-error step. Only that nondeterministic step is
   # soft; matrix coverage, parity, liveness, and the GC instrument smoke gate.
-  # ---------------------------------------------------------------------------
-  # Build the base compiler/runtime once and share it with every matrix shard.
-  # Release run 33123474583 spent 11m41s here before the unsharded matrix even
-  # started; repeating that fixed cost in each worker would erase much of the
-  # sharding win (#8915).
-  gc-stress-build:
-    needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "true"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install clang
-        run: |
-          # Third-party sources we never install from can fail `apt-get update`,
-          # which exits non-zero if ANY source fails -- a broken Chrome index has
-          # now reddened jobs that only want clang in three separate runs
-          # (34383689667, 34384580491, 34386043331). Two lessons are baked in here:
-          #
-          #   1. Match by CONTENT, not filename. The ubuntu24/20260907.300 image
-          #      moved these to deb822 `.sources` files, so removing
-          #      `google-chrome.list` removed nothing and the job still failed.
-          #   2. Let the INSTALL be the gate. `apt-get update`'s exit status
-          #      aggregates sources we care about with sources we do not; if the
-          #      packages we came for resolve, the update did its job.
-          if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
-            printf '%s\n' "$_bad" | sudo xargs -r rm -f
-          fi
-          sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
-          sudo apt-get install -y clang
-      - name: Build perry + runtime staticlibs (release)
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
-        run: |
-          cargo build-perry --release
-          scripts/gc_call_effects/sidecars.sh target/release
-          scripts/build_instr_runtime.sh
-      - name: Upload shared GC matrix build
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: gc-repsel-release-build
-          path: |
-            target/release/perry
-            target/release/libperry_runtime.a
-            target/release/libperry_stdlib.a
-            target/release/libperry_runtime.a.gc-effects
-            target/release/libperry_runtime_instr.a
-            target/release/libperry_stdlib_instr.a
-            target/release/libperry_runtime_instr.a.gc-effects
-            target/release/libperry_wasm_host.a
-            target/release/libperry_ext_*.a
-          if-no-files-found: error
-          retention-days: 1
-
   # Stable round-robin slices of tests/parity/gc_repsel_corpus.txt. Full/sweep
   # tiers use four shards; the PR subset uses one (scripts/ci_plan.py). Every
   # shard still runs every selected arm, so the complete cross-product remains
   # covered. fail-fast:false preserves evidence from all shards after a red.
   gc-stress-shard:
     name: gc-stress matrix (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }})
-    needs: [plan, gc-stress-build]
+    # The gap-suite builds are this matrix's compiler and archives
+    # (ci_plan.py self-test: gc_stress runs on the gap_suite tiers).
+    needs: [plan, gap-suite-build, gap-suite-build-instr]
     if: >-
       always() &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_stress &&
-      needs.gc-stress-build.result == 'success'
+      needs.gap-suite-build.result == 'success' &&
+      needs.gap-suite-build-instr.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -2681,10 +2605,15 @@ jobs:
           # Node is the byte-exact oracle; the script refuses a version that
           # differs from the repository's single source of truth.
           node-version-file: .node-version
-      - name: Download shared GC matrix build
+      - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
-          name: gc-repsel-release-build
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded compiler is executable
         run: chmod +x target/release/perry
@@ -2719,7 +2648,7 @@ jobs:
   # It rejects missing/duplicate/interrupted shards, proves every expected cell
   # appears exactly once, then applies liveness to the reconstructed corpus.
   gc-stress:
-    needs: [plan, gc-stress-build, gc-stress-shard]
+    needs: [plan, gap-suite-build, gap-suite-build-instr, gc-stress-shard]
     if: ${{ always() && fromJSON(needs.plan.outputs.plan).jobs.gc_stress }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -2792,10 +2721,15 @@ jobs:
           fi
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
-      - name: Download shared GC matrix build
+      - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
-          name: gc-repsel-release-build
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded compiler is executable
         run: chmod +x target/release/perry
@@ -3470,7 +3404,6 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
-          scripts/build_instr_runtime.sh
 
       # Only what the harness links (PERRY_BIN / PERRY_RUNTIME_DIR), not the
       # rest of target/release.
@@ -3483,16 +3416,74 @@ jobs:
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
             target/release/libperry_runtime.a.gc-effects
-            target/release/libperry_runtime_instr.a
-            target/release/libperry_stdlib_instr.a
-            target/release/libperry_runtime_instr.a.gc-effects
             target/release/libperry_wasm_host.a
             target/release/libperry_ext_*.a
           if-no-files-found: error
           retention-days: 1
 
+  # The instrumented archives `parity-env` knobs link: a second Cargo graph
+  # (PERRY_RUNTIME_INSTRUMENTS=1), built beside gap-suite-build on its own
+  # runner so the shards wait for the longer of the two builds, not their sum.
+  gap-suite-build-instr:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
+    runs-on: ubuntu-latest
+    # A hang bound well above a cold build of the instrumented graph.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry-instr"
+          # The instrumented graph builds in target-instr; sidecars.sh builds
+          # the gc-effects analyzer in target/ when the cache lacks it.
+          workspaces: |
+            . -> target
+            . -> target-instr
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the instrumented runtime archives
+        run: scripts/build_instr_runtime.sh
+
+      - name: Upload the instrumented build
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: gap-suite-instr-build
+          path: |
+            target/release/libperry_runtime_instr.a
+            target/release/libperry_stdlib_instr.a
+            target/release/libperry_runtime_instr.a.gc-effects
+            target/release/libperry_ext_*_instr.a
+          if-no-files-found: error
+          retention-days: 1
+
   gap-suite:
-    needs: [plan, gap-suite-build]
+    needs: [plan, gap-suite-build, gap-suite-build-instr]
     if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     # Diffs compiled programs against Node on every core PR: every
     # test_gap_* case in tests/fixtures/programs/ and the subject trees, judged
@@ -3566,6 +3557,11 @@ jobs:
         with:
           name: gap-suite-fast-build
           path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
+          path: target/release
 
       # The artifact round-trip does not preserve the executable bit.
       - name: Ensure the downloaded perry binary is executable
@@ -3613,7 +3609,7 @@ jobs:
   #
   # Linux reuses gap-suite-build's archives.
   gc-call-effects-linux:
-    needs: [plan, gap-suite-build, lint]
+    needs: [plan, gap-suite-build, gap-suite-build-instr, lint]
     if: >-
       always() && needs.plan.result == 'success' &&
       (needs.lint.result == 'success' ||
@@ -3622,7 +3618,8 @@ jobs:
         fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
         needs.lint.outputs.formatting == 'failure')) &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
-      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
+      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped') &&
+      (needs.gap-suite-build-instr.result == 'success' || needs.gap-suite-build-instr.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -3654,6 +3651,12 @@ jobs:
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' && needs.lint.result == 'success'
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       # With lint failed there is no shared build to download, so build here.
       - name: Install Rust toolchain
@@ -3888,7 +3891,7 @@ jobs:
     # Chained behind `check` so a full run's fan-out does not take every runner
     # slot at once; PR gates share the same 20-slot pool. Every tier that runs
     # parity runs gap-suite-build (ci_plan.py self-test), whose build it links.
-    needs: [plan, check, gap-suite-build]
+    needs: [plan, check, gap-suite-build, gap-suite-build-instr]
     if: fromJSON(needs.plan.outputs.plan).jobs.parity
     strategy:
       fail-fast: false
@@ -3949,6 +3952,11 @@ jobs:
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
+          path: target/release
+      - name: Download the instrumented build
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: gap-suite-instr-build
           path: target/release
       - name: Ensure the downloaded perry binary is executable
         run: chmod +x target/release/perry
@@ -5325,7 +5333,64 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
-  # Linux command profile has a demonstrated green baseline (run39574495557).
+  # The `wasi_execution` plan entry starts three parallel WASI jobs
+  # (wasi-native, wasi-execution, wasi-components) so the PR gate waits for the
+  # longest one, not their sum; `gate` requires each planned one. Each keeps
+  # its own rust-cache key: they compile different units, and one shared key
+  # would hold whichever job saved first.
+  wasi-native:
+    name: wasi-native
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-native
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: WASI native EH toolchain and codegen regression
+      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
+    - name: Link-argument and flavour unit tests (feature-enabled)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
+        # A filter that matches nothing also exits 0: require the tests ran.
+        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
+        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
+
   wasi-execution:
     name: wasi-execution
     permissions:
@@ -5335,7 +5400,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      CARGO_BUILD_JOBS: '2'
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
       CARGO_INCREMENTAL: '0'
     steps:
     - name: Checkout repository (inline git)
@@ -5371,18 +5437,8 @@ jobs:
       uses: ./.github/actions/perry/actions/setup-node
       with:
         node-version-file: .node-version
-    - name: WASI native EH toolchain and codegen regression
-      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
     - name: Build perry with the WASI target
       run: cargo build --locked --profile perry-dev -p perry --features target-wasi
-    - name: Link-argument and flavour unit tests (feature-enabled)
-      shell: bash
-      run: |
-        set -euo pipefail
-        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
-        # A filter that matches nothing also exits 0: require the tests ran.
-        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
-        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
     - name: wasm32 IR matches the runtime ABI
       run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
     - name: Install the WASI toolchain
@@ -5440,15 +5496,76 @@ jobs:
         python tests/integration/wasi/p1-host/suite.py target/perry-dev/perry \
           --host tests/integration/wasi/p1-host/target/debug/perry-p1-host \
           --output target/wasi-validation/p1-host --min-cases 26
-    - name: Typed components, resources, moving GC and cross-language composition
-      run: ./scripts/component_check.sh
-    - name: Retain WASI and component execution evidence
+    - name: Retain WASI execution evidence
       uses: ./.github/actions/perry/actions/upload-artifact
       with:
         name: wasi-required-${{ github.sha }}
         retention-days: '7'
+        path: target/wasi-validation/
+      if: always()
+
+  wasi-components:
+    name: wasi-components
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-components
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Install pinned Node oracle for WASI compatibility tests
+      uses: ./.github/actions/perry/actions/setup-node
+      with:
+        node-version-file: .node-version
+    - name: Install the WASI toolchain
+      shell: bash
+      run: |
+        toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+        eval "$toolchain_env"
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+        done
+    - name: Typed components, resources, moving GC and cross-language composition
+      run: ./scripts/component_check.sh
+    - name: Retain component execution evidence
+      uses: ./.github/actions/perry/actions/upload-artifact
+      with:
+        name: wasi-components-${{ github.sha }}
+        retention-days: '7'
         path: |
-          target/wasi-validation/
           target/component-validation/**/*.log
           target/component-validation/**/results.json
           target/component-validation/**/*.component.wasm
@@ -5475,6 +5592,7 @@ jobs:
       - repsel-census
       - native-abi-evidence-packet
       - gap-suite-build
+      - gap-suite-build-instr
       - gap-suite
       - gc-call-effects-linux
       - gc-call-effects
@@ -5487,7 +5605,9 @@ jobs:
       - doc-tests
       - binary-size
       - security-audit
+      - wasi-native
       - wasi-execution
+      - wasi-components
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -5515,11 +5635,13 @@ jobs:
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
-          wasi_result="$(echo "$NEEDS" | jq -r '.["wasi-execution"].result')"
-          if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
-            echo "::error::planned WASI execution did not pass ($wasi_result)."
-            exit 1
-          fi
+          for wasi_job in wasi-native wasi-execution wasi-components; do
+            wasi_result="$(echo "$NEEDS" | jq -r --arg j "$wasi_job" '.[$j].result')"
+            if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
+              echo "::error::planned $wasi_job did not pass ($wasi_result)."
+              exit 1
+            fi
+          done
           bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"
           if [ -n "$bad" ]; then
             echo "::error::failed or cancelled: $(echo "$bad" | tr '\n' ' ')"

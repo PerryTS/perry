@@ -91,7 +91,10 @@ fn closure_registry_beside_bare_type_keys() {
 /// parameter): its two calls share one key `a:*|b:*`; still no member.
 #[test]
 fn shared_helper_with_unknown_reader_reads_no_member() {
-    let v = a_only(CLASS_REG, "reg.get(process.argv[2]); const x: any = dep('a', n); console.log(x.p);");
+    let v = a_only(
+        CLASS_REG,
+        "reg.get(process.argv[2]); const x: any = dep('a', n); console.log(x.p);",
+    );
     assert!(no_member(&v), "{v:?}");
 }
 
@@ -146,7 +149,10 @@ fn closure_registry_helper_site_run_reads_its_own_prefix() {
 
 #[test]
 fn closure_registry_bare_key_entry_stays_apart() {
-    let v = read_only(CLOSURE_REG, "class S { p = 4; } reg.add('scene', new S()); reg.get('scene');");
+    let v = read_only(
+        CLOSURE_REG,
+        "class S { p = 4; } reg.add('scene', new S()); reg.get('scene');",
+    );
     assert_eq!(v, vec!["A"], "{v:?}");
 }
 

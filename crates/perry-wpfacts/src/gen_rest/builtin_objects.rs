@@ -152,7 +152,7 @@ impl<'a> Gen<'a> {
                 };
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
                     Some(kp) => self.define_keyed(fx, on, kp, dn, r, accessor, own),
-                    None => self.define_property(fx, on, key, dn, r, accessor, own),
+                    None => self.define_property(fx, on, key, dn, r, accessor, own, Some(kn)),
                 }
                 on
             }
@@ -174,7 +174,15 @@ impl<'a> Gen<'a> {
                 let descs = self.tmp("own-descriptors");
                 let reads = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-                crate::builtins::object_statics::define_all(&mut self.m, on, pn, descs, reads, site, r);
+                crate::builtins::object_statics::define_all(
+                    &mut self.m,
+                    on,
+                    pn,
+                    descs,
+                    reads,
+                    site,
+                    r,
+                );
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -234,7 +242,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::any());
-                    self.define_property(fx, n, None, descs, r, false, [None, None]);
+                    self.define_property(fx, n, None, descs, r, false, [None, None], None);
                 }
                 n
             }
@@ -658,10 +666,23 @@ impl<'a> Gen<'a> {
             } => {
                 let v = self.expr(fx, value);
                 let s = self.expr(fx, step_closure);
-                let aw = self.awaited(v);
+                // R-JOBTHROW: the error resume carries the awaited
+                // promise's reason (and `thrown`, the rejections no promise
+                // holds), not an unrelated promise's.
+                let (aw, rj) = self.awaited_r(v);
                 let arg = self.tmp("step-arg");
                 self.m.edge(aw, arg);
-                self.m.edge(self.thrown, arg);
+                // A plain-async step resumes with the value as a normal
+                // completion and the reason as a throw completion, each
+                // through its own carrier (`StepSplits`); any other step
+                // takes both through its value parameter.
+                let err = match step_closure.as_ref() {
+                    Expr::LocalGet(id) => self.step.by_self.get(&(mi, *id)).copied(),
+                    _ => None,
+                };
+                let err = err.unwrap_or(arg);
+                self.m.edge(rj, err);
+                self.m.edge(self.thrown, err);
                 let b = self.prim_node(prim::BOOL);
                 self.async_callback(s, vec![arg, b])
             }
@@ -672,9 +693,13 @@ impl<'a> Gen<'a> {
                 // On admission the awaited value (promise unwrapped) is the
                 // expression's result, which the step uses as its next resume
                 // value; a decline yields the TDZ sentinel, never observed.
+                // It admits only a primitive or a fulfilled native promise
+                // (`js_async_step_resume_now`, P4), so it never rejects and
+                // calls no `then`: a rejected or pending promise declines to
+                // the `AsyncStepChain`, which carries its reason.
                 let v = self.expr(fx, value);
                 let _ = self.expr(fx, step_closure);
-                self.awaited(v)
+                self.settled_now(v)
             }
             Expr::AsyncStepDeclined(e) => {
                 let _ = self.expr(fx, e);
@@ -864,9 +889,10 @@ impl<'a> Gen<'a> {
                         self.m.regexp_class_of.insert(tm, mk);
                     }
                 }
-                if let (&TokKind::Obj(tm, _), Some(tail)) =
-                    (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
-                {
+                if let (&TokKind::Obj(tm, _), Some(tail)) = (
+                    &self.m.toks[t as usize],
+                    crate::builtins::regex_tail::analyse(pattern, flags),
+                ) {
                     let i = self.m.regexp_tails.len() as u32;
                     self.m.regexp_tails.push(tail);
                     self.m.regexp_tail_of.insert(tm, i);
@@ -1016,7 +1042,11 @@ impl<'a> Gen<'a> {
     /// define handles that as before).
     fn birth_define_owner(&self, fx: &Fx, e: &Expr, o: &Expr) -> Option<TmplId> {
         let tm = self.phase_owner(fx, e, o)?;
-        let ks = self.ctor_phase.get(&tm)?.birth_defines.get(&(e as *const Expr as usize))?;
+        let ks = self
+            .ctor_phase
+            .get(&tm)?
+            .birth_defines
+            .get(&(e as *const Expr as usize))?;
         let mut cur = Some(tm);
         let mut own = true;
         while let Some(c) = cur {

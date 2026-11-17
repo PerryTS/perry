@@ -27,11 +27,22 @@ fn facts(src: &str) -> crate::ProgramFacts {
 }
 
 fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Verdict)> {
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     pf.sites
         .iter()
         .filter(|s| s.module == mi && s.key == key)
-        .map(|s| (s.byte_offset, s.is_call, s.access.is_store(), s.verdict.clone()))
+        .map(|s| {
+            (
+                s.byte_offset,
+                s.is_call,
+                s.access.is_store(),
+                s.verdict.clone(),
+            )
+        })
         .collect()
 }
 
@@ -39,13 +50,19 @@ fn sites(pf: &crate::ProgramFacts, key: &str) -> Vec<(u32, bool, bool, crate::Ve
 /// store (rule A: the store adds or sets an own data property, exact for
 /// any layout) is no layout claim, so these KEEP tests do not count it.
 fn proven(v: &crate::Verdict) -> bool {
-    !matches!(v, crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore)
+    !matches!(
+        v,
+        crate::Verdict::No(_) | crate::Verdict::Throws | crate::Verdict::KnownObjectStore
+    )
 }
 
 fn show(tag: &str, pf: &crate::ProgramFacts, keys: &[&str]) {
     for k in keys {
         for s in sites(pf, k) {
-            eprintln!("RB3 {tag} .{k} @{} call={} store={} verdict={:?}", s.0, s.1, s.2, s.3);
+            eprintln!(
+                "RB3 {tag} .{k} @{} call={} store={} verdict={:?}",
+                s.0, s.1, s.2, s.3
+            );
         }
     }
 }
@@ -113,15 +130,24 @@ fn r9birth3_m2_through_super_inherited() {
 fn r9birth3_m3_subclass_override_leaks() {
     let pf = facts(S_SRC);
     show("M3", &pf, &["cnt"]);
-    assert!(stores(&pf, "cnt", false), "M3 store .cnt proven after I.upd passed this out");
+    assert!(
+        stores(&pf, "cnt", false),
+        "M3 store .cnt proven after I.upd passed this out"
+    );
 }
 
 // K1 KEEP: the prototype member is reassigned before the `new`.
 #[test]
 fn r9birth3_k1_prototype_member_reassigned() {
-    let pf = facts(&m_src(M_INIT, "(A.prototype as any).init = function (this: any) { reg(this); };\n"));
+    let pf = facts(&m_src(
+        M_INIT,
+        "(A.prototype as any).init = function (this: any) { reg(this); };\n",
+    ));
     show("K1", &pf, &["b", "c"]);
-    assert!(stores(&pf, "c", false), "K1 store .c proven though A.prototype.init was replaced");
+    assert!(
+        stores(&pf, "c", false),
+        "K1 store .c proven though A.prototype.init was replaced"
+    );
 }
 
 // K2 KEEP: the callee passes `this` to an unknown function before its stores.
@@ -129,14 +155,23 @@ fn r9birth3_k1_prototype_member_reassigned() {
 fn r9birth3_k2_callee_passes_this_out() {
     let pf = facts(&m_src(&format!("reg(this); {M_INIT}"), ""));
     show("K2", &pf, &["b", "c"]);
-    assert!(stores(&pf, "b", false), "K2 store .b proven after reg(this)");
-    assert!(stores(&pf, "c", false), "K2 store .c proven after reg(this)");
+    assert!(
+        stores(&pf, "b", false),
+        "K2 store .b proven after reg(this)"
+    );
+    assert!(
+        stores(&pf, "c", false),
+        "K2 store .c proven after reg(this)"
+    );
 }
 
 // K3 KEEP: a store under `if` in the callee is no definite key.
 #[test]
 fn r9birth3_k3_conditional_store_in_callee() {
-    let pf = facts(&m_src("if (Math.random() > 2) { this.b = 2; } this.d = [];", ""));
+    let pf = facts(&m_src(
+        "if (Math.random() > 2) { this.b = 2; } this.d = [];",
+        "",
+    ));
     show("K3", &pf, &["b", "d"]);
     assert!(stores(&pf, "b", false), "K3 store .b under if proven");
 }
@@ -145,9 +180,15 @@ fn r9birth3_k3_conditional_store_in_callee() {
 // `b`) before storing `b`.
 #[test]
 fn r9birth3_k4_closure_reads_before_store() {
-    let pf = facts(&m_src(&format!("const f = () => this.b; reg(f()); {M_INIT}"), ""));
+    let pf = facts(&m_src(
+        &format!("const f = () => this.b; reg(f()); {M_INIT}"),
+        "",
+    ));
     show("K4", &pf, &["b", "c"]);
-    assert!(stores(&pf, "b", false), "K4 store .b proven after a closure read it");
+    assert!(
+        stores(&pf, "b", false),
+        "K4 store .b proven after a closure read it"
+    );
 }
 
 // K5 KEEP: `Reflect.construct(A, args, F)` makes an A instance whose
@@ -161,7 +202,10 @@ fn r9birth3_k5_reflect_construct_other_new_target() {
     );
     let pf = facts(&src);
     show("K5", &pf, &["b", "c"]);
-    assert!(stores(&pf, "c", false), "K5 store .c proven though a Reflect.construct instance runs F's init");
+    assert!(
+        stores(&pf, "c", false),
+        "K5 store .c proven though a Reflect.construct instance runs F's init"
+    );
 }
 
 // K (rule K): the LoadingManager shape: closures over the alias stored
@@ -202,7 +246,10 @@ fn r9birth3_c1_closure_stored_into_this() {
 fn r9birth3_c2_closure_called_in_ctor() {
     let pf = facts(&k_src("    this.itemEnd(\"x\");\n", ""));
     show("C2", &pf, &["after", "last"]);
-    assert!(stores(&pf, "after", false), "C2 store .after proven after the closure ran");
+    assert!(
+        stores(&pf, "after", false),
+        "C2 store .after proven after the closure ran"
+    );
 }
 
 // C3 KEEP: the closure is passed to an unknown function.
@@ -210,14 +257,23 @@ fn r9birth3_c2_closure_called_in_ctor() {
 fn r9birth3_c3_closure_passed_out() {
     let pf = facts(&k_src("    reg(this.itemEnd);\n", ""));
     show("C3", &pf, &["after", "last"]);
-    assert!(stores(&pf, "after", false), "C3 store .after proven after the closure was passed out");
+    assert!(
+        stores(&pf, "after", false),
+        "C3 store .after proven after the closure was passed out"
+    );
 }
 
 // C4 KEEP: a getter of the class hands the closure out, read in the
 // constructor.
 #[test]
 fn r9birth3_c4_getter_returns_closure() {
-    let pf = facts(&k_src("    reg(this.h);\n", "  get h() { return this.itemEnd; }"));
+    let pf = facts(&k_src(
+        "    reg(this.h);\n",
+        "  get h() { return this.itemEnd; }",
+    ));
     show("C4", &pf, &["after", "last"]);
-    assert!(stores(&pf, "after", false), "C4 store .after proven after a getter handed the closure out");
+    assert!(
+        stores(&pf, "after", false),
+        "C4 store .after proven after a getter handed the closure out"
+    );
 }

@@ -22,7 +22,7 @@ use crate::fetch::{
 
 // Object URLs: `URL.createObjectURL(blob)` returns a
 // `blob:nodedata:<uuid-shaped-id>` URL and `URL.revokeObjectURL(url)` removes it.
-// `resolveObjectURL(url)` returns the same blob handle (or undefined
+// `resolveObjectURL(url)` returns a new Blob of the same bytes (or undefined
 // after revoke).  The registry is process-global; entries live until
 // `revokeObjectURL` clears them.
 //
@@ -350,24 +350,42 @@ pub unsafe extern "C" fn js_url_revoke_object_url(url: f64) {
     OBJECT_URL_REGISTRY.lock().unwrap().remove(&s);
 }
 
-/// `import { resolveObjectURL } from "node:buffer"` — return the
-/// registered Blob handle for `url`, or `undefined` after revoke.
+/// `import { resolveObjectURL } from "node:buffer"` (node lib/internal/blob.js
+/// `resolveObjectURL`): `url` goes through ToString (`${url}`, so a program
+/// `toString` runs), then a `blob:nodedata:<id>` URL whose id is registered
+/// gives a NEW Blob of the registered bytes and type each call; anything else
+/// (a revoked or unknown id, another scheme) gives `undefined`. The new Blob
+/// shares no identity and no own properties with the registered one.
 #[no_mangle]
 pub unsafe extern "C" fn js_buffer_resolve_object_url(url: f64) -> f64 {
-    let bits = url.to_bits();
-    if (bits >> 48) != 0x7FFF {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-    let s = match string_from_header(p) {
-        Some(s) => s,
-        None => return f64::from_bits(TAG_UNDEFINED),
+    let str_ptr = perry_runtime::value::js_jsvalue_to_string(url) as *const StringHeader;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let Some(s) = string_from_header(str_ptr) else {
+        return undefined;
     };
-    let id = OBJECT_URL_REGISTRY.lock().unwrap().get(&s).copied();
+    // node parses the URL and splits its pathname at ':' into `nodedata`
+    // and the id: a query or fragment is not part of the pathname.
+    let Some(path) = s.strip_prefix("blob:") else {
+        return undefined;
+    };
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let mut parts = path.split(':');
+    let (Some("nodedata"), Some(id), None) = (parts.next(), parts.next(), parts.next()) else {
+        return undefined;
+    };
+    let key = format!("blob:nodedata:{id}");
+    let id = OBJECT_URL_REGISTRY.lock().unwrap().get(&key).copied();
     // The id is rooted until revoke, so it cannot have been recycled; check the
-    // kind anyway rather than hand back whatever handle now owns the number.
-    match id {
-        Some(id) if BLOB_REGISTRY.lock().unwrap().contains_key(&id) => handle_to_f64(id),
-        _ => f64::from_bits(TAG_UNDEFINED),
+    // kind anyway rather than copy whatever handle now owns the number.
+    let data = id.and_then(|id| {
+        BLOB_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|b| BlobData::blob(b.body.clone(), b.content_type.clone()))
+    });
+    match data {
+        Some(data) => handle_to_f64(alloc_blob(data)),
+        None => undefined,
     }
 }

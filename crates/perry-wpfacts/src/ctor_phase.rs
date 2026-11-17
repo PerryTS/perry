@@ -122,7 +122,11 @@ impl CtorPhase {
     /// a subclass whose instances run another method there leaks at it
     /// (`Gen::m_override_leaks`) with the same birth keys as this class.
     pub fn same_birth(&self, off: &CtorPhase) -> bool {
-        let outside: BTreeSet<usize> = self.phase_stores.difference(&self.m_stores).copied().collect();
+        let outside: BTreeSet<usize> = self
+            .phase_stores
+            .difference(&self.m_stores)
+            .copied()
+            .collect();
         self.assigned_order == off.assigned_order
             && self.definite == off.definite
             && self.stored == off.stored
@@ -238,7 +242,9 @@ pub(crate) fn has_return(ss: &[Stmt]) -> bool {
             else_branch,
             ..
         } => has_return(then_branch) || else_branch.as_ref().is_some_and(|e| has_return(e)),
-        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => has_return(body),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            has_return(body)
+        }
         Stmt::Labeled { body, .. } => has_return(std::slice::from_ref(body.as_ref())),
         Stmt::Try {
             body,
@@ -271,9 +277,16 @@ pub fn plain_shapes(classes: &[Class]) -> BTreeMap<String, Vec<String>> {
                 && c.extends_name.is_none()
                 && c.extends_expr.is_none()
                 && c.native_extends.is_none()
-                && c.fields.iter().all(|f| !f.is_private && f.key_expr.is_none())
+                && c.fields
+                    .iter()
+                    .all(|f| !f.is_private && f.key_expr.is_none())
         })
-        .map(|c| (c.name.clone(), c.fields.iter().map(|f| f.name.clone()).collect()))
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.fields.iter().map(|f| f.name.clone()).collect(),
+            )
+        })
         .collect()
 }
 
@@ -304,7 +317,11 @@ pub fn analyze_in_present_ms(
     setters: &BTreeMap<String, &perry_hir::Function>,
     pairs: bool,
 ) -> CtorPhase {
-    let callees = if rule_m { own_callees(c) } else { BTreeMap::new() };
+    let callees = if rule_m {
+        own_callees(c)
+    } else {
+        BTreeMap::new()
+    };
     let fields: Vec<(&Option<Expr>, Option<&str>)> = c
         .fields
         .iter()
@@ -335,11 +352,37 @@ pub fn analyze_in_present_ms(
         m
     });
     let ss = (!setters.is_empty()).then_some(setters);
-    let mut ph = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &callees, false, ss, pairs);
+    let mut ph = analyze_body_i(
+        shapes,
+        &fields,
+        methods.clone(),
+        params,
+        body,
+        order.clone(),
+        true,
+        present,
+        &callees,
+        false,
+        ss,
+        pairs,
+    );
     // Rule I: the same walk with chain reads inert (rule M off: a followed
     // call keeps its own exactness argument, `settle_rule_m`).
     let none = BTreeMap::new();
-    let inert = analyze_body_i(shapes, &fields, methods.clone(), params, body, order.clone(), true, present, &none, true, None, pairs);
+    let inert = analyze_body_i(
+        shapes,
+        &fields,
+        methods.clone(),
+        params,
+        body,
+        order.clone(),
+        true,
+        present,
+        &none,
+        true,
+        None,
+        pairs,
+    );
     // The same walk with only initialized fields holding a value: a key a
     // path leaves at its declared `undefined` is no `stored` key (a read of
     // it before the store closes the phase there: fewer keys, never more).
@@ -347,10 +390,17 @@ pub fn analyze_in_present_ms(
         .iter()
         .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
         .collect();
-    ph.stored = analyze_body_i(shapes, &valued, methods, params, body, order, true, present, &callees, false, ss, pairs).definite;
+    ph.stored = analyze_body_i(
+        shapes, &valued, methods, params, body, order, true, present, &callees, false, ss, pairs,
+    )
+    .definite;
     ph.stored.retain(|k| !ph.out_of_order.contains(k));
     if !inert.inert_reads.is_empty() {
-        ph.inert_definite = inert.definite.into_iter().filter(|k| !ph.definite.contains(k)).collect();
+        ph.inert_definite = inert
+            .definite
+            .into_iter()
+            .filter(|k| !ph.definite.contains(k))
+            .collect();
         if !ph.inert_definite.is_empty() {
             ph.inert_reads = inert.inert_reads;
         }
@@ -371,7 +421,18 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt], pairs: bool) 
     // (`plain_shapes`).
     let shapes = BTreeMap::new();
     let none = BTreeMap::new();
-    let ph = analyze_body(&shapes, &[], BTreeSet::new(), params, body, None, false, &BTreeSet::new(), &none, pairs);
+    let ph = analyze_body(
+        &shapes,
+        &[],
+        BTreeSet::new(),
+        params,
+        body,
+        None,
+        false,
+        &BTreeSet::new(),
+        &none,
+        pairs,
+    );
     if !ctor_order() || ph.assigned_order.is_empty() {
         return ph;
     }
@@ -381,7 +442,18 @@ pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt], pairs: bool) 
         .enumerate()
         .map(|(i, k)| (k.clone(), i))
         .collect();
-    analyze_body(&shapes, &[], BTreeSet::new(), params, body, Some(order), false, &BTreeSet::new(), &none, pairs)
+    analyze_body(
+        &shapes,
+        &[],
+        BTreeSet::new(),
+        params,
+        body,
+        Some(order),
+        false,
+        &BTreeSet::new(),
+        &none,
+        pairs,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -397,7 +469,10 @@ fn analyze_body<'a>(
     callees: &'a BTreeMap<String, &'a perry_hir::Function>,
     pairs: bool,
 ) -> CtorPhase {
-    analyze_body_i(shapes, fields, methods, params, body, order, class_ctor, present, callees, false, None, pairs)
+    analyze_body_i(
+        shapes, fields, methods, params, body, order, class_ctor, present, callees, false, None,
+        pairs,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -492,17 +567,17 @@ fn analyze_body_i<'a>(
     // BD-A holds only for a define whose keys are all definite: one some run
     // skips (a branch, a loop body) or that runs after an observation is a
     // define on an object that may lack the key, as before (a post-birth add).
-    let dropped: Vec<usize> = w
-        .ph
-        .birth_defines
-        .iter()
-        .filter(|(_, ks)| !ks.iter().all(|(k, _)| w.ph.definite.contains(k)))
-        .map(|(&id, _)| id)
-        .collect();
+    let dropped: Vec<usize> =
+        w.ph.birth_defines
+            .iter()
+            .filter(|(_, ks)| !ks.iter().all(|(k, _)| w.ph.definite.contains(k)))
+            .map(|(&id, _)| id)
+            .collect();
     for id in dropped {
         let ks = w.ph.birth_defines.remove(&id).unwrap_or_default();
         w.ph.phase_stores.remove(&id);
-        w.ph.assigned_order.retain(|k| !ks.iter().any(|(x, _)| x == k));
+        w.ph.assigned_order
+            .retain(|k| !ks.iter().any(|(x, _)| x == k));
     }
     w.ph
 }
@@ -512,7 +587,9 @@ impl<'a> W<'a> {
     /// (not stored on this path, not a present parent key): `this.key = v`
     /// is a setter call, not an add.
     fn setter_key(&self, st: &St, key: &str) -> bool {
-        self.setters.is_some_and(|s| s.contains_key(key)) && !st.assigned.contains(key) && !self.is_present(st, key)
+        self.setters.is_some_and(|s| s.contains_key(key))
+            && !st.assigned.contains(key)
+            && !self.is_present(st, key)
     }
 
     /// Rule S: the setter `this.key = v` calls, when the walk may follow it:
@@ -594,16 +671,14 @@ impl<'a> W<'a> {
             && !self.methods.contains(k)
     }
 
-
     /// An object literal of only the data-descriptor fields `value`,
     /// `writable`, `enumerable`, `configurable` (ECMA-262 6.2.6.5): no
     /// spread, no computed key, no `__proto__` (it would set the literal's
     /// prototype), no `get` / `set` of its own.
     fn data_descriptor(&self, d: &Expr) -> bool {
         self.literal_parts(d).is_some_and(|ps| {
-            ps.iter().all(|(k, _)| {
-                matches!(*k, "value" | "writable" | "enumerable" | "configurable")
-            })
+            ps.iter()
+                .all(|(k, _)| matches!(*k, "value" | "writable" | "enumerable" | "configurable"))
         })
     }
     /// An inherited key that is an own data property on this run (rule C).
@@ -856,7 +931,8 @@ impl<'a> W<'a> {
                 if let Some(e) = exits {
                     let mut it = e.into_iter();
                     if let Some(first) = it.next() {
-                        st.assigned = it.fold(first, |acc, s| acc.intersection(&s).cloned().collect());
+                        st.assigned =
+                            it.fold(first, |acc, s| acc.intersection(&s).cloned().collect());
                     }
                 }
             }
@@ -921,7 +997,9 @@ impl<'a> W<'a> {
                 condition,
                 else_expr,
                 ..
-            } if self.pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => self.expr(st, else_expr),
+            } if self.pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
+                self.expr(st, else_expr)
+            }
             // R9BIRTH3 rule M: `this.m(args)` with `m` the class's own method
             // (`followable`). The call reads `this.m` (the prototype's
             // method: no code runs), evaluates the arguments, then runs the
@@ -1141,7 +1219,8 @@ impl<'a> W<'a> {
             Expr::ObjectDefineProperties(t, ds)
                 if matches!(t.as_ref(), Expr::This)
                     && self.literal_parts(ds).is_some_and(|ps| {
-                        ps.iter().all(|(k, d)| *k != "__proto__" && self.data_descriptor(d))
+                        ps.iter()
+                            .all(|(k, d)| *k != "__proto__" && self.data_descriptor(d))
                     }) =>
             {
                 self.expr(st, ds);
@@ -1226,7 +1305,12 @@ pub(crate) fn literal_defines<'e>(
             return None;
         }
         let value = fields.iter().find(|(n, _)| *n == "value").map(|(_, v)| *v);
-        Some((k, attrs, value, fields.into_iter().map(|(_, v)| v).collect()))
+        Some((
+            k,
+            attrs,
+            value,
+            fields.into_iter().map(|(_, v)| v).collect(),
+        ))
     };
     match e {
         Expr::ObjectDefineProperty(t, k, d) if matches!(t.as_ref(), Expr::This) => {
@@ -1302,7 +1386,9 @@ fn case_exit(ss: &[Stmt]) -> Option<CaseEnd> {
     }
     Some(match last {
         Stmt::Break | Stmt::LabeledBreak(_) => CaseEnd::Exits,
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => CaseEnd::Leaves,
+        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => {
+            CaseEnd::Leaves
+        }
         s if jumps(std::slice::from_ref(s)) => return None,
         _ => CaseEnd::Falls,
     })

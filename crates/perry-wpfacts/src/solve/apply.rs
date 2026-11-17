@@ -6,6 +6,9 @@ impl Model {
         match *c {
             // An observation for the value-record derive: no flow.
             Cons::Identity { .. } => {}
+            // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
+            // `solve/proxy.rs`).
+            Cons::HasProp { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being
@@ -90,13 +93,21 @@ impl Model {
                     self.own_values_of(t, dst);
                     let fun = matches!(
                         self.toks[t as usize],
-                        TokKind::Func(..) | TokKind::ClassObj(_) | TokKind::Bound(_) | TokKind::BuiltinFn(_)
+                        TokKind::Func(..)
+                            | TokKind::ClassObj(_)
+                            | TokKind::Bound(_)
+                            | TokKind::BuiltinFn(_)
                     );
                     if fun {
                         // `name` (a String) and `length` (a Number).
                         self.add_prim(dst, prim::STR | prim::NUM);
                     }
-                    if fun || matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::Builtin(_)) {
+                    if fun
+                        || matches!(
+                            self.toks[t as usize],
+                            TokKind::ObjectProto | TokKind::Builtin(_)
+                        )
+                    {
                         self.load_from(t, t, Key::any(), dst);
                     }
                     // A RegExp's own data property `lastIndex` (22.2.3.1
@@ -658,11 +669,23 @@ impl Model {
                         // (a stored `undefined` among them) count as they are.
                         let chain = self.node_l("fulfil-then-chain");
                         self.cons(chain, Cons::Defined { dst: read });
-                        self.cons(one, Cons::Load { key: then, dst: chain });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: chain,
+                            },
+                        );
                         let own = self.field_r(t, then_a);
                         self.edge(own, read);
                     } else {
-                        self.cons(one, Cons::Load { key: then, dst: read });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: read,
+                            },
+                        );
                     }
                 }
             }
@@ -1124,7 +1147,9 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(..)
                     ) {
-                        self.with_native(call, |m, call| builtins::proto_method(m, q, origin, key, call));
+                        self.with_native(call, |m, call| {
+                            builtins::proto_method(m, q, origin, key, call)
+                        });
                     }
                 }
             }
@@ -1225,7 +1250,10 @@ impl Model {
                                 call,
                                 key,
                                 None,
-                                CallSite { ret: made, ..c.clone() },
+                                CallSite {
+                                    ret: made,
+                                    ..c.clone()
+                                },
                             ) {
                                 self.construct(call2, parent);
                                 let r = self.reason(
@@ -1297,10 +1325,14 @@ impl Model {
             }
             Cons::AnnexBLookup { call, setter } => {
                 for &t in toks {
-                    self.with_native(call, |m, call| builtins::annexb_lookup(m, Some(t), call, setter));
+                    self.with_native(call, |m, call| {
+                        builtins::annexb_lookup(m, Some(t), call, setter)
+                    });
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.with_native(call, |m, call| builtins::annexb_lookup_prim(m, prim, call, setter));
+                    self.with_native(call, |m, call| {
+                        builtins::annexb_lookup_prim(m, prim, call, setter)
+                    });
                 }
             }
             Cons::AccessorInstall {
@@ -1627,11 +1659,18 @@ impl Model {
                     self.enum_read_prim(idx, prim, key, dst);
                 } else if prim != 0 {
                     match self.key_nodes.get(&idx) {
-                        Some(&a) => self.with_b(|m| builtins::prim_load(m, prim, Key::Named(a), dst)),
+                        Some(&a) => {
+                            self.with_b(|m| builtins::prim_load(m, prim, Key::Named(a), dst))
+                        }
                         None => {
                             let p = prim & !(prim::NULL | prim::UNDEF);
                             if p != 0
-                                && self.idx_done.insert((idx, TOP, dst, crate::model::IDX_PRIM_KEY | p))
+                                && self.idx_done.insert((
+                                    idx,
+                                    TOP,
+                                    dst,
+                                    crate::model::IDX_PRIM_KEY | p,
+                                ))
                             {
                                 self.cons(
                                     idx,
@@ -1809,12 +1848,16 @@ impl Model {
                 // as `Cons::IdxMCall`'s `prim_plain_key`). `true`, `false`,
                 // `null`, `undefined` are their names (rule K8).
                 if index_needs_general_key(toks, prim)
-                    && self.idx_done.insert((n, TOP, dst, crate::model::IDX_PRIM_GENERAL | recv))
+                    && self
+                        .idx_done
+                        .insert((n, TOP, dst, crate::model::IDX_PRIM_GENERAL | recv))
                 {
                     self.with_b(|m| builtins::prim_load(m, recv, Key::Any(shape), dst));
                 }
                 if index_has_numeric_key(prim)
-                    && self.idx_done.insert((n, TOP, dst, crate::model::IDX_PRIM_NUM | recv))
+                    && self
+                        .idx_done
+                        .insert((n, TOP, dst, crate::model::IDX_PRIM_NUM | recv))
                 {
                     // A String's index is one of its characters (10.4.3.5).
                     if recv & prim::STR != 0 {
@@ -1836,7 +1879,9 @@ impl Model {
                     }
                 }
             }
-            Cons::IdxKey { obj, dst, shape, .. } => {
+            Cons::IdxKey {
+                obj, dst, shape, ..
+            } => {
                 let named = index_needs_general_key(toks, prim);
                 // Rule M3: a key of string constants and known prefixes
                 // reads, per entry, the names that entry admits; any other
@@ -1862,8 +1907,11 @@ impl Model {
                                     // internal entries) a constant that
                                     // spells a Number key reads as that
                                     // Number does: the element read.
-                                    false if self.is_array_like(obj)
-                                        && crate::solve::numeric_key(&self.atoms[a as usize]) =>
+                                    false
+                                        if self.is_array_like(obj)
+                                            && crate::solve::numeric_key(
+                                                &self.atoms[a as usize],
+                                            ) =>
                                     {
                                         self.elem_key()
                                     }
@@ -1897,7 +1945,10 @@ impl Model {
                 if let Some(slot) = exact {
                     // An index-exact object read under the constant key `i`:
                     // its index `i` (`Model::index_slot`) and the chain's.
-                    if self.idx_done.insert((n, obj, dst, crate::model::IDX_NUM_EXACT)) {
+                    if self
+                        .idx_done
+                        .insert((n, obj, dst, crate::model::IDX_NUM_EXACT))
+                    {
                         let key = self.elem_key();
                         self.builtin_field_use(obj, key, ChainAct::Load(dst));
                         self.edge(slot, dst);
@@ -2051,6 +2102,28 @@ impl Model {
                     self.for_in_tok(call, ft, t);
                 }
             }
+            Cons::DefineAnyKey {
+                o,
+                key,
+                value,
+                get,
+                set,
+                site,
+                reason,
+                accessor,
+            } => {
+                let d = crate::model::DefineAny {
+                    o,
+                    key,
+                    value,
+                    get,
+                    set,
+                    site,
+                    reason,
+                    accessor,
+                };
+                self.define_computed_key(d);
+            }
             Cons::DefineKeyed {
                 o,
                 reason,
@@ -2085,7 +2158,10 @@ impl Model {
                 // constant, made as constants arrive. A key that turns any
                 // String later takes the rule below.
                 let (kp, ks) = (self.nodes[n as usize].prim, self.nodes[n as usize].strs);
-                if !self.key_nodes.contains_key(&n) && kp == prim::STR && ks >= crate::model::STRS_SET0 {
+                if !self.key_nodes.contains_key(&n)
+                    && kp == prim::STR
+                    && ks >= crate::model::STRS_SET0
+                {
                     for i in 0..self.str_atoms(ks).len() {
                         let a = self.str_atoms(ks)[i];
                         if self.keyed_named.insert((n, src, a)) {
@@ -2214,7 +2290,9 @@ impl Model {
                     // A key that is one numeric literal and nothing else
                     // writes that index alone: a rest array's index slot
                     // (`store_into`), any other holder's elements.
-                    let one = self.num_literal_index(n).filter(|_| prim == prim::NUM && index_strs.is_empty());
+                    let one = self
+                        .num_literal_index(n)
+                        .filter(|_| prim == prim::NUM && index_strs.is_empty());
                     let ek = match one {
                         Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
                         None => self.elem_key(),
@@ -2235,7 +2313,8 @@ impl Model {
                         && index_strs.is_empty();
                     // A key of Numbers only: its interval against the
                     // length decides the hole (`index_hole_in`).
-                    let num = node.prim == prim::NUM && node.pts.is_empty() && index_strs.is_empty();
+                    let num =
+                        node.prim == prim::NUM && node.pts.is_empty() && index_strs.is_empty();
                     let (kind, c) = match (kept, num) {
                         (true, _) => (3, Cons::IndexKept),
                         (false, true) => (5, Cons::IndexHoleIn { key: n }),
@@ -2284,7 +2363,15 @@ impl Model {
                         match ret {
                             Some(ret) => {
                                 if self.to_prim_key_done.insert((ret, o, site)) {
-                                    self.cons(ret, Cons::StoreIndexed { o, src, site, shape });
+                                    self.cons(
+                                        ret,
+                                        Cons::StoreIndexed {
+                                            o,
+                                            src,
+                                            site,
+                                            shape,
+                                        },
+                                    );
                                 }
                             }
                             None => obj_key = true,
@@ -2347,7 +2434,11 @@ impl Model {
                 } else if any && self.index_store_done.insert((n, o, src, site, kind)) {
                     // Diagnostic (off: one flag read): why a store keeps the any key.
                     if shape == 0 && crate::derive::why_indexed() {
-                        let f = self.stores.get(site as usize).and_then(|x| self.funcs.get(x.func as usize)).map_or("?", |f| f.name.as_str());
+                        let f = self
+                            .stores
+                            .get(site as usize)
+                            .and_then(|x| self.funcs.get(x.func as usize))
+                            .map_or("?", |f| f.name.as_str());
                         let nd = &self.nodes[n as usize];
                         eprintln!(
                             "WHY_ANYKEY {f} site={site} key={n} prim={:#x} strs_top={} dropped={} toks={:?}",
@@ -2464,7 +2555,9 @@ impl Model {
                             let (a, b) = if right { (other, n) } else { (n, other) };
                             let (ia, ib) = (self.range_input(a), self.range_input(b));
                             !((ib.within(one) && self.no_frac_number(a, true))
-                                || (op == RangeOp::Add && ia.within(one) && self.no_frac_number(b, true)))
+                                || (op == RangeOp::Add
+                                    && ia.within(one)
+                                    && self.no_frac_number(b, true)))
                         }
                         _ => true,
                     };
@@ -2492,7 +2585,11 @@ impl Model {
                 // Objects go through ToPrimitive (user valueOf/toString).
                 // ECMA-262 13.15.3: a BigInt beside a Number throws, so the
                 // BigInt reaches the result only when `other` may be one.
-                let big = if self.may_be_bigint(other) { prim::BIGINT } else { 0 };
+                let big = if self.may_be_bigint(other) {
+                    prim::BIGINT
+                } else {
+                    0
+                };
                 let objs = prim::NUM | big;
                 // A described parameter's marker is no value (DECISIONS 74);
                 // an argument marker is none while it stands for such
@@ -2520,17 +2617,28 @@ impl Model {
             // Rule CONSOLE-PCT: a first argument that may hold `%` lets the
             // specifiers consume the later arguments.
             Cons::ConsoleFormat { reason, agg } => {
-                let fired = self.nodes[agg as usize]
-                    .cons
-                    .iter()
-                    .any(|c| matches!(c, Cons::Implicit { proto: Protocol::Inspect, .. }));
+                let fired = self.nodes[agg as usize].cons.iter().any(|c| {
+                    matches!(
+                        c,
+                        Cons::Implicit {
+                            proto: Protocol::Inspect,
+                            ..
+                        }
+                    )
+                });
                 if !fired && self.may_hold_percent(n) {
                     // `PERRY_WPF_IMPLSRC=1`: the first argument that lets
                     // the specifiers consume (its tokens and String entries).
                     if crate::solve::implsrc_on() {
                         self.console_pct_why(n);
                     }
-                    self.cons(agg, Cons::Implicit { reason, proto: Protocol::Inspect });
+                    self.cons(
+                        agg,
+                        Cons::Implicit {
+                            reason,
+                            proto: Protocol::Inspect,
+                        },
+                    );
                 }
             }
             Cons::ObjTagProbe { t, key } => {
@@ -2550,7 +2658,9 @@ impl Model {
                 };
                 let name = if key == 1 { "toString" } else { "valueOf" };
                 let ok = prim & !prim_ok == 0
-                    && toks.iter().all(|&f| (key == 1 || key == 2) && self.object_proto_native(f, name));
+                    && toks
+                        .iter()
+                        .all(|&f| (key == 1 || key == 2) && self.object_proto_native(f, name));
                 if !ok {
                     self.objtag_widen(t);
                 }
@@ -2571,7 +2681,11 @@ impl Model {
                 // Objects go through ToPrimitive (user valueOf/toString): a
                 // String or a numeric value. Markers as in `Arith`; a BigInt
                 // sum needs both operands to be BigInts (as in `Arith`).
-                let big = if self.may_be_bigint(other) { prim::BIGINT } else { 0 };
+                let big = if self.may_be_bigint(other) {
+                    prim::BIGINT
+                } else {
+                    0
+                };
                 if toks.iter().any(|&t| !self.beside_values(t)) {
                     s |= prim::STR;
                     k |= prim::NUM | big;
@@ -2633,7 +2747,9 @@ impl Model {
                 let mut made = prim != 0;
                 for &t in toks {
                     if t == TOP {
-                        self.add_top(f, |_| "buffer of a view over a value of unknown code".into());
+                        self.add_top(f, |_| {
+                            "buffer of a view over a value of unknown code".into()
+                        });
                         continue;
                     }
                     let what = match self.toks[t as usize] {
@@ -2796,7 +2912,14 @@ impl Model {
                     }
                     e.push((key, val));
                     for (d, site) in self.assign_into.get(&t).cloned().unwrap_or_default() {
-                        self.cons(key, Cons::ProtoKeySet { target: d, val, site });
+                        self.cons(
+                            key,
+                            Cons::ProtoKeySet {
+                                target: d,
+                                val,
+                                site,
+                            },
+                        );
                     }
                 }
             }

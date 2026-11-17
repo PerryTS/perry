@@ -35,7 +35,9 @@ fn verdict(src: &str, key: &str, marker: &str) -> (Verdict, String) {
 }
 
 fn top_origins(src: &str) -> (Vec<String>, bool) {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, true);
     g.m.max_work = 50_000_000;
@@ -85,7 +87,10 @@ fn env1_keep_store_object_then_read() {
     let (v, dump) = verdict(&src, "v", "r.v");
     // A String or undefined receiver: never the stored object.
     assert!(!matches!(v, Verdict::No(_)), "r.v proven: {v:?}\n{dump}");
-    assert!(dump.contains(".v call=0 fixed=1 recv={primitive:string,primitive:undefined"), "r is no object\n{dump}");
+    assert!(
+        dump.contains(".v call=0 fixed=1 recv={primitive:string,primitive:undefined"),
+        "r is no object\n{dump}"
+    );
     // The coercion calls the object's toString: its body runs.
     let (v, dump) = verdict(&src, "v", "n.v; }");
     assert_ne!(v, Verdict::Dead, "toString runs on the store\n{dump}");
@@ -105,7 +110,11 @@ fn env1_keep_env_escapes_to_unknown_code() {
     let (tops, held) = top_origins(&src);
     let (v, dump) = verdict(&src, "v", "r.v");
     assert!(held || !tops.is_empty(), "unknown code: visible {tops:?}");
-    assert_ne!(format!("{v:?}"), "No(\"primitive receiver\")", "unknown code may store anything\n{dump}");
+    assert_ne!(
+        format!("{v:?}"),
+        "No(\"primitive receiver\")",
+        "unknown code may store anything\n{dump}"
+    );
 }
 
 // KEEP: a key from argv: a String or undefined or what %Object.prototype%

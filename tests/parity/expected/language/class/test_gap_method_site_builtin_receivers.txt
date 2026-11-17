@@ -1,0 +1,66 @@
+warm 100 7 0
+map warm 42
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched 3 3
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored 6 6
+push split warm 7
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+push split replace 8 11
+push split next 9
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+own 902 9
+subclass 801
+proxy 3 5,5,5 3
+frozen true 1
+frozen pop true 1
+frozen apply 0 Cannot assign to read only property 'length' of object '[object Array]'
+frozen apply 2 Cannot add property 1, object is not extensible
+holey undefined 1 false
+sparse 10002 5 10001 false
+legacy warm 102 10 20
+legacy override 333 102
+legacy restored 105 105
+legacy getter 108 6 108
+described warm 102 10 20
+described override 444 102
+described restored 105 105
+described slice 105 1 5 undefined
+map subclass 104
+map inherited 5
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map patched 42
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map restored 42
+split warm 42
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+split replace 42
+split next 42
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map own 555
+custom prototype 325
+set warm true
+set own false
+search warm true
+DEC 250: Cannot replace built-in member Array.prototype.includes: built-in objects are read-only in a compiled program (adding a new member is allowed)
+search patched true
+DEC 250: Cannot replace built-in member Array.prototype.includes: built-in objects are read-only in a compiled program (adding a new member is allowed)
+search restored true
+borrowed map 2,,6
+borrowed filter 1,3
+borrowed some every true true
+borrowed find undefined 1
+borrowed last 3 2
+borrowed forEach 4
+reduce omitted 3
+reduce undefined 13
+reduce right 7
+search omitted 2
+search undefined 0
+indexOf hole -1
+unshift 4 9,8,1,2
+splice 8,1 9,7,6,2
+concat 9,7,6,2,4,5,6
+fill 9,3,3,3
+copyWithin 3,3,3,3
+lengths 1 2 1 1

@@ -42,7 +42,10 @@ fn a_composed_spread_entry_supplies_its_elements_only() {
 #[test]
 fn a_composed_spread_of_an_unknown_value_still_supplies_unknown_functions() {
     let src = SRC
-        .replace("return inner(...q);", "return inner(...(globalThis as any)[String(q.length)]);")
+        .replace(
+            "return inner(...q);",
+            "return inner(...(globalThis as any)[String(q.length)]);",
+        )
         .replace("ARGS", "\"a\", 1");
     let pf = facts(&src);
     assert!(

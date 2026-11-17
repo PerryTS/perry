@@ -105,7 +105,11 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
         for f in tf.fields.iter().filter(|f| f.booleans) {
             out.push(format!("# booleans field {}.{}", tf.display, f.key));
         }
-        for f in tf.fields.iter().filter(|f| f.nullish_booleans && !f.booleans) {
+        for f in tf
+            .fields
+            .iter()
+            .filter(|f| f.nullish_booleans && !f.booleans)
+        {
             out.push(format!("# nullish_booleans field {}.{}", tf.display, f.key));
         }
     }

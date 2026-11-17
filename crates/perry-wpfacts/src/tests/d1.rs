@@ -22,7 +22,11 @@ fn verdicts(src: &str, key: &str) -> Vec<crate::Verdict> {
         ..Default::default()
     };
     let pf = crate::compute(&list, &cfg);
-    let mi = pf.module_paths.iter().position(|p| p == "a.ts").expect("a.ts") as u32;
+    let mi = pf
+        .module_paths
+        .iter()
+        .position(|p| p == "a.ts")
+        .expect("a.ts") as u32;
     let v: Vec<_> = pf
         .sites
         .iter()
@@ -44,7 +48,10 @@ fn all_proven(src: &str, key: &str) {
 }
 fn some_unproven(src: &str, key: &str) {
     let v = verdicts(src, key);
-    assert!(v.iter().any(|v| !proven(v)), ".{key} must stay unproven: {v:?}");
+    assert!(
+        v.iter().any(|v| !proven(v)),
+        ".{key} must stay unproven: {v:?}"
+    );
 }
 
 /// The constructor with statement `def` first, then the plain stores; a
@@ -104,14 +111,20 @@ fn d1_define_properties_literal_is_no_leak() {
 // KEEP: the descriptor is not a literal.
 #[test]
 fn d1_keep_descriptor_variable() {
-    let p = prog("const d = { value: 1 }; Object.defineProperty(this, 'id', d);", "");
+    let p = prog(
+        "const d = { value: 1 }; Object.defineProperty(this, 'id', d);",
+        "",
+    );
     some_unproven(&p, "x");
 }
 
 // KEEP: an accessor descriptor.
 #[test]
 fn d1_keep_accessor_descriptor() {
-    let p = prog("Object.defineProperty(this, 'id', { get() { return 1; } });", "");
+    let p = prog(
+        "Object.defineProperty(this, 'id', { get() { return 1; } });",
+        "",
+    );
     some_unproven(&p, "x");
     let p = prog("Object.defineProperty(this, 'id', { set(v: any) {} });", "");
     some_unproven(&p, "x");
@@ -120,21 +133,30 @@ fn d1_keep_accessor_descriptor() {
 // KEEP: a spread in the descriptor.
 #[test]
 fn d1_keep_descriptor_spread() {
-    let p = prog("Object.defineProperty(this, 'id', { ...ex, value: 1 });", "const ex: any = { enumerable: true };");
+    let p = prog(
+        "Object.defineProperty(this, 'id', { ...ex, value: 1 });",
+        "const ex: any = { enumerable: true };",
+    );
     some_unproven(&p, "x");
 }
 
 // KEEP: a computed descriptor key.
 #[test]
 fn d1_keep_descriptor_computed_key() {
-    let p = prog("Object.defineProperty(this, 'id', { [dk]: 1 });", "let dk = 'va' + 'lue';");
+    let p = prog(
+        "Object.defineProperty(this, 'id', { [dk]: 1 });",
+        "let dk = 'va' + 'lue';",
+    );
     some_unproven(&p, "x");
 }
 
 // KEEP: the key is not a constant string.
 #[test]
 fn d1_keep_key_not_constant() {
-    let p = prog("Object.defineProperty(this, kk, { value: 1 });", "let kk = 'i' + 'd';");
+    let p = prog(
+        "Object.defineProperty(this, kk, { value: 1 });",
+        "let kk = 'i' + 'd';",
+    );
     some_unproven(&p, "x");
 }
 
@@ -157,6 +179,9 @@ fn d1_keep_value_holds_this() {
 // KEEP: `__proto__` in the descriptor literal gives it another prototype.
 #[test]
 fn d1_keep_descriptor_proto() {
-    let p = prog("Object.defineProperty(this, 'id', { __proto__: pp, value: 1 });", "const pp: any = {};");
+    let p = prog(
+        "Object.defineProperty(this, 'id', { __proto__: pp, value: 1 });",
+        "const pp: any = {};",
+    );
     some_unproven(&p, "x");
 }

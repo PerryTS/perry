@@ -7,7 +7,6 @@
 //! runs that value's method: both stay unknown.
 use super::*;
 
-
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;

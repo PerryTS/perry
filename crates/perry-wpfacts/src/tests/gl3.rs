@@ -72,14 +72,21 @@ fn gl3_s1_keep_subclass_reject() {
         p.catch((e: N) => console.log(/*C*/ e.v));";
     let pf = facts_of(src);
     let at = src.find("/*C*/").unwrap() as u32;
-    let s = pf.sites.iter().find(|s| s.key == "v" && s.byte_offset >= at);
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v" && s.byte_offset >= at);
     // Either proven with the argument as the rejection value, or refused:
     // never a verdict whose receiver set lacks N.
     if let Some(s) = s {
         if let Verdict::No(_) = s.verdict {
         } else {
             let d = format!("{:?}", s.verdict);
-            assert!(!d.contains("Dead"), "the handler is live: {d}\n{}", pf.dump_text());
+            assert!(
+                !d.contains("Dead"),
+                "the handler is live: {d}\n{}",
+                pf.dump_text()
+            );
         }
     }
 }
@@ -95,7 +102,10 @@ fn gl3_s1_keep_unhandled_rejection() {
         f();
         console.log(/*D*/ n.v);";
     let (v, dump) = verdict(src, "v", "/*D*/");
-    assert!(!format!("{v:?}").contains("Dead"), "n is live, got {v:?}\n{dump}");
+    assert!(
+        !format!("{v:?}").contains("Dead"),
+        "n is live, got {v:?}\n{dump}"
+    );
 }
 
 /// KEEP: the rejection handler is program code and is called with the
@@ -107,5 +117,8 @@ fn gl3_s1_keep_handler_sees_argument() {
         Promise.reject(n).catch((e: N) => { e.w = Number(process.argv[2]); });
         setTimeout(() => console.log(/*E*/ n.w), 0);";
     let (v, dump) = verdict(src, "w", "/*E*/");
-    assert!(!format!("{v:?}").contains("Dead"), "n.w live, got {v:?}\n{dump}");
+    assert!(
+        !format!("{v:?}").contains("Dead"),
+        "n.w live, got {v:?}\n{dump}"
+    );
 }

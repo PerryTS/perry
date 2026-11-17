@@ -1,0 +1,1 @@
+Native-module constant getters are selected through their module installers, allowing unused constant tables to be removed from native executables while preserving computed module/property access and dynamic loading.

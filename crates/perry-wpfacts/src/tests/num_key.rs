@@ -37,7 +37,6 @@ fn proven(v: &Verdict) -> bool {
     !matches!(v, Verdict::No(_))
 }
 
-
 /// `concatenateDiagnosticMessageChains` (TypeScript compiler/utilities.ts):
 /// a linked-list walk through an element of a field, `x = x.next[0]`, on a
 /// parameter; whole has concrete, finite chain objects.
@@ -60,7 +59,6 @@ const CHAIN_WALK: &str = "interface Chain { text: string; next?: Chain[] }\n\
 /// (`max_pts / 8` nodes): a marker per iteration runs past it.
 const WALK_BUDGET: u64 = 8 * 5_000;
 
-
 /// `x = x[0]` on a parameter: a number key read on the parameter marker
 /// itself. Its any-key field holds its reach marker, and a marker arriving
 /// at a field node that is not the marker's own (`Model::crosses`) becomes
@@ -72,8 +70,6 @@ const SELF_WALK: &str = "function innermost(p: any, depth: number): any {\n\
          return x;\n\
      }\n\
      console.log(innermost([[[\"a\"]]], 3), innermost([\"b\"], 1));\n";
-
-
 
 /// Per unit never claims a site whole does not: the marker's `[]` step is
 /// unknown, whole's concrete chain is not.

@@ -112,11 +112,12 @@ impl Model {
         }
         // An object's own fields: by the key's values (`IdxKey`: a number
         // key names only its numeric fields). A marker's fields are its
-        // reach markers under any key; another value (the global object, a
-        // namespace) keeps every field.
+        // reach markers under any key; another value (a namespace) keeps
+        // every field. The global object under a key of known shape keeps
+        // the fields the shape can spell (`global_read_split`).
         if self.index_needs_all_own_fields(t) {
-            let all = self.all_fields(t);
-            self.edge(all, dst);
+            let own = self.key_fields(t, Key::Any(shape));
+            self.edge(own, dst);
         }
         // PR-C1: a program Array with a length interval reads `undefined`
         // past its end only (`Cons::ElemUndef`, watching the key and the
@@ -156,7 +157,15 @@ impl Model {
                 }
             }
             self.plain_key(t, ChainAct::Load(dst));
-            self.cons(idx, Cons::IdxKey { obj: t, prim: 0, dst, shape });
+            self.cons(
+                idx,
+                Cons::IdxKey {
+                    obj: t,
+                    prim: 0,
+                    dst,
+                    shape,
+                },
+            );
         }
     }
 
@@ -292,7 +301,11 @@ impl Model {
                 eprintln!(
                     "perry: wpfacts enumdiag site={site} reason={r} depth={} tok={}",
                     from.is_some() as u8,
-                    if t == TOP { "TOP".to_string() } else { self.tok_name(t) }
+                    if t == TOP {
+                        "TOP".to_string()
+                    } else {
+                        self.tok_name(t)
+                    }
                 );
             }
             if !covered {
@@ -302,9 +315,16 @@ impl Model {
             if !self.enum_key_done.insert((n, t, o, src)) {
                 continue;
             }
-            self.enum_key_stores.entry(t).or_default().push((o, src, site));
+            self.enum_key_stores
+                .entry(t)
+                .or_default()
+                .push((o, src, site));
             let star = self.atom(crate::STAR_KEY);
-            if self.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&star)) {
+            if self
+                .accessor_keys
+                .get(&t)
+                .is_some_and(|ks| ks.contains(&star))
+            {
                 self.enum_key_any(o, src, site);
             }
             let names = self.field_keys.get(&t).cloned().unwrap_or_default();
@@ -767,8 +787,12 @@ impl Model {
         eprintln!(
             "perry: wpfacts enumdiag-any site={site} via={} tok={}",
             self.labels[n as usize],
-            t.map(|t| if t == TOP { "TOP".to_string() } else { self.tok_name(t) })
-                .unwrap_or_else(|| "prim".into())
+            t.map(|t| if t == TOP {
+                "TOP".to_string()
+            } else {
+                self.tok_name(t)
+            })
+            .unwrap_or_else(|| "prim".into())
         );
     }
 }

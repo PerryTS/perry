@@ -1,4 +1,7 @@
 // Indirect calls keep these sites untyped even after argument inlining.
+// DEC 250: Array.prototype and Map.prototype are locked in a compiled program, so the patches are refused and the method sites run the builtins.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function pushOne(q: any, value: number) { return q.push(value); }
 function popOne(q: any) { return q.pop(); }
 function getOne(m: any, key: string) { return m.get(key); }
@@ -17,19 +20,19 @@ console.log("map warm", drive(getOne, map, "x", 100));
 const arrayPrototype: any = Object.getPrototypeOf(q);
 const mapPrototype: any = Object.getPrototypeOf(map);
 const originalPush = arrayPrototype.push;
-arrayPrototype.push = function (...items: any[]) { return 700 + items.length; };
+locked(() => { arrayPrototype.push = function (...items: any[]) { return 700 + items.length; }; });
 console.log("patched", drive(pushOne, q, 9, 3), q.length);
-arrayPrototype.push = originalPush;
+locked(() => { arrayPrototype.push = originalPush; });
 console.log("restored", drive(pushOne, q, 8, 3), q.length);
 function pushWithArgument(a: any, argument: any) { return a.push(argument()); }
 function invokePush(fn: any, a: any, argument: any) { return fn(a, argument); }
 console.log("push split warm", invokePush(pushWithArgument, q, () => 10));
 console.log("push split replace", invokePush(pushWithArgument, q, () => {
-  arrayPrototype.push = function () { return 1111; };
+  locked(() => { arrayPrototype.push = function () { return 1111; }; });
   return 11;
 }), q[q.length - 1]);
 console.log("push split next", invokePush(pushWithArgument, q, () => 12));
-arrayPrototype.push = originalPush;
+locked(() => { arrayPrototype.push = originalPush; });
 q.push = function (v: number) { return v + 900; };
 console.log("own", drive(pushOne, q, 2, 3), q.length);
 delete q.push;
@@ -89,20 +92,20 @@ console.log("map subclass", drive(getOne, new MapChild([["x", 4]]), "x", 3));
 class PlainMapChild extends Map {}
 console.log("map inherited", drive(getOne, new PlainMapChild([["x", 5]]), "x", 3));
 const originalGet = mapPrototype.get;
-mapPrototype.get = function () { return 600; };
+locked(() => { mapPrototype.get = function () { return 600; }; });
 console.log("map patched", drive(getOne, map, "x", 3));
-mapPrototype.get = originalGet;
+locked(() => { mapPrototype.get = originalGet; });
 console.log("map restored", drive(getOne, map, "x", 3));
 // The method read precedes an argument that replaces it.
 function getWithArgument(m: any, argument: any) { return m.get(argument()); }
 function invokeGet(fn: any, m: any, argument: any) { return fn(m, argument); }
 console.log("split warm", invokeGet(getWithArgument, map, () => "x"));
 console.log("split replace", invokeGet(getWithArgument, map, () => {
-  mapPrototype.get = function () { return 999; };
+  locked(() => { mapPrototype.get = function () { return 999; }; });
   return "x";
 }));
 console.log("split next", drive(getOne, map, "x", 1));
-mapPrototype.get = originalGet;
+locked(() => { mapPrototype.get = originalGet; });
 map.get = function () { return 555; };
 console.log("map own", drive(getOne, map, "x", 3));
 delete (map as any).get;
@@ -120,9 +123,9 @@ function includesOne(a: any, value: any) { return a.includes(value); }
 const searched: any = [1, , 3];
 console.log("search warm", drive(includesOne, searched, undefined, 100));
 const originalIncludes = arrayPrototype.includes;
-arrayPrototype.includes = function () { return "changed"; };
+locked(() => { arrayPrototype.includes = function () { return "changed"; }; });
 console.log("search patched", drive(includesOne, searched, 1, 3));
-arrayPrototype.includes = originalIncludes;
+locked(() => { arrayPrototype.includes = originalIncludes; });
 console.log("search restored", drive(includesOne, searched, 3, 3));
 const like: any = { length: 3, 0: 1, 2: 3 };
 const invoke: any = Reflect.apply;

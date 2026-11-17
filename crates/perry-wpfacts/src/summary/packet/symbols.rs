@@ -44,6 +44,9 @@ impl Model {
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
+            Cons::HasProp { key, idx } => {
+                format!("HasProp key={:?} idx={idx}", self.packet_key(key))
+            }
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
@@ -363,7 +366,9 @@ impl Model {
                 key,
                 dst
             ),
-            Cons::IdxKey { obj, dst, shape, .. } => format!(
+            Cons::IdxKey {
+                obj, dst, shape, ..
+            } => format!(
                 "IdxKey obj={:?} dst={:?} shape={:?}",
                 self.packet_token(obj, packet),
                 dst,
@@ -467,6 +472,7 @@ impl Model {
                     .map(|s| (&s.desc, s.birth, s.rooted)),
                 self.packet_shape(shape)
             ),
+            Cons::DefineAnyKey { o, key, .. } => format!("DefineAnyKey o={:?} key={:?}", o, key),
             Cons::AccessorKeyed { holder, f, setter } => format!(
                 "AccessorKeyed holder={:?} f={:?} setter={:?}",
                 holder, f, setter
@@ -487,7 +493,9 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
-            Cons::ConsoleFormat { reason, agg } => format!("ConsoleFormat reason={reason} agg={:?}", agg),
+            Cons::ConsoleFormat { reason, agg } => {
+                format!("ConsoleFormat reason={reason} agg={:?}", agg)
+            }
             Cons::BoundCall { reason, bound } => format!(
                 "BoundCall reason={:?} bound={:?}",
                 self.reasons.get(reason as usize),
@@ -508,7 +516,12 @@ impl Model {
                 search,
                 last,
             } => format!("StrIndex dst={dst:?} recv={recv:?} search={search:?} last={last}"),
-            Cons::StrSubstring { dst, recv, start, end } => {
+            Cons::StrSubstring {
+                dst,
+                recv,
+                start,
+                end,
+            } => {
                 format!("StrSubstring dst={dst:?} recv={recv:?} start={start:?} end={end:?}")
             }
             Cons::ClassReplace { dst, tok, repl } => format!(
@@ -518,9 +531,14 @@ impl Model {
             Cons::RegExpPattern { tok } => {
                 format!("RegExpPattern tok={:?}", self.packet_token(tok, packet))
             }
-            Cons::ObjTagProbe { t, key } => format!("ObjTagProbe t={:?} key={key}", self.packet_token(t, packet)),
+            Cons::ObjTagProbe { t, key } => {
+                format!("ObjTagProbe t={:?} key={key}", self.packet_token(t, packet))
+            }
             Cons::Captures { rec, pat } => {
-                format!("Captures rec={:?} pat={pat}", self.packet_token(rec, packet))
+                format!(
+                    "Captures rec={:?} pat={pat}",
+                    self.packet_token(rec, packet)
+                )
             }
             Cons::ViewedBuffer { view, fresh, share } => format!(
                 "ViewedBuffer view={:?} fresh={fresh:?} share={share}",

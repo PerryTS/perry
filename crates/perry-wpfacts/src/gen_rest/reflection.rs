@@ -25,7 +25,98 @@ impl<'a> Gen<'a> {
         let mi = fx.module;
         match e {
             // --------------------------------------------- proxy / reflect
-            Expr::ProxyNew { target, handler } | Expr::ProxyRevocable { target, handler } => {
+            // PROXY2: `new Proxy( t, h )` makes a Proxy object (`solve/proxy.rs`),
+            // through a call each summary instance replays.
+            Expr::ProxyNew { target, handler } => {
+                let t = self.expr(fx, target);
+                let h = self.expr(fx, handler);
+                let (call, ret) = self.new_call(ThisArg::Undef, vec![t, h], vec![]);
+                let hn = self.m.node_l("new-proxy");
+                let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
+                self.m.add_tok(hn, mark);
+                let name = self.m.atom(crate::solve::proxy::PROXY_NEW);
+                self.m.cons(hn, Cons::NewNamed { name, call });
+                ret
+            }
+            // PROXY2: the HIR's forms for a local bound to `new Proxy`: the
+            // ordinary operations on the value (a Proxy token's go to
+            // `solve/proxy.rs`).
+            Expr::ProxyGet { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let dst = self.tmp("proxy.get");
+                match key.as_ref() {
+                    Expr::String(s) => {
+                        let k = Key::Named(self.m.atom(s));
+                        self.m.cons(o, Cons::Load { key: k, dst });
+                    }
+                    other => {
+                        let k = self.expr(fx, other);
+                        self.to_property_key(k);
+                        self.m.cons(
+                            o,
+                            Cons::Load {
+                                key: Key::any(),
+                                dst,
+                            },
+                        );
+                    }
+                }
+                self.raise_on(o);
+                dst
+            }
+            Expr::ProxySet { proxy, key, value } => {
+                let o = self.expr(fx, proxy);
+                let k = match key.as_ref() {
+                    Expr::String(s) => Key::Named(self.m.atom(s)),
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        Key::any()
+                    }
+                };
+                let v = self.expr(fx, value);
+                self.store(fx, o, k, v, "proxy.set".to_string(), None, false);
+                self.raise_on(o);
+                v
+            }
+            Expr::ProxyHas { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let (k, idx) = match key.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        (Key::any(), kn)
+                    }
+                };
+                self.m.cons(o, Cons::HasProp { key: k, idx });
+                self.raise_on(o);
+                self.prim_node(prim::BOOL)
+            }
+            Expr::ProxyDelete { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let r = self.m.reason("E7 delete");
+                match key.as_ref() {
+                    Expr::String(s) => {
+                        let k = self.m.atom(s);
+                        self.m.cons(o, Cons::DeleteKey { key: k, reason: r });
+                    }
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        self.m.cons(
+                            o,
+                            Cons::Hard {
+                                kind: Hard::E7Delete,
+                                reason: r,
+                            },
+                        );
+                    }
+                }
+                self.raise_on(o);
+                self.prim_node(prim::BOOL)
+            }
+            Expr::ProxyRevocable { target, handler } => {
                 // E9: the target is reached only through traps; the proxy
                 // value itself is ⊤.
                 let t = self.expr(fx, target);
@@ -94,7 +185,14 @@ impl<'a> Gen<'a> {
                 // target's chain runs with this = receiver (10.1.8.1 step 7):
                 // the lookup starts at target itself, each token of the
                 // receiver its `this` (the `super.x` form, `Cons::SuperFrom`).
-                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Load(out) });
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Load(out),
+                    },
+                );
                 if self.m.is_proto_key(key) {
                     self.m.cons(rv, Cons::ProtoOf { dst: out });
                 }
@@ -126,7 +224,14 @@ impl<'a> Gen<'a> {
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
                 // 28.1.12: target.[[Set]](key, v, receiver); a setter found on
                 // target's chain runs with this = receiver (10.1.9.2 step 7).
-                self.m.cons(t, Cons::SuperFrom { recv: rv, key, act: ChainAct::Store(v) });
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Store(v),
+                    },
+                );
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectDelete { target, key } => {

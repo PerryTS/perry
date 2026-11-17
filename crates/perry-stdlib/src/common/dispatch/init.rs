@@ -281,6 +281,10 @@ pub(super) unsafe fn install_fetch_registrations() {
             response_static_error: extern "C" fn() -> f64,
         );
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
+        fn js_register_object_url_fns(
+            create: unsafe extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
+            resolve: unsafe extern "C" fn(f64) -> f64,
+        );
         // #4965: Headers → `res.setHeaders` entries-JSON producer.
         fn js_register_global_headers_entries_json(
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
@@ -311,6 +315,10 @@ pub(super) unsafe fn install_fetch_registrations() {
         crate::fetch::js_response_static_error,
     );
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
+    js_register_object_url_fns(
+        crate::fetch_blob::js_url_create_object_url,
+        crate::fetch_blob::js_buffer_resolve_object_url,
+    );
     js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     js_register_global_headers_object_json(crate::fetch::js_headers_fetch_object_json);
     // `instanceof` for WHATWG fetch handles

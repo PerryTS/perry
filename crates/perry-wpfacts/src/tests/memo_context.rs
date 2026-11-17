@@ -120,8 +120,6 @@ fn a_forwarding_maker_keeps_two_memos_apart() {
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
 }
 
-
-
 /// Negative: the memo's cell is written again from ⊤ after it was made
 /// (two producers of the cell).
 #[test]

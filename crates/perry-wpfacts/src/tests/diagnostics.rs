@@ -156,7 +156,6 @@ fn diagnostic_source_call_zero_excludes_synthetic_protocol_callees() {
     }
 }
 
-
 /// A call the solver makes for a program call (here `replace`, reached
 /// through an extracted `String.prototype.replace` and `.call`, calling its
 /// callback) is reported at that program call, the one the source names
