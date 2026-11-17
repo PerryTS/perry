@@ -182,7 +182,11 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
                 let native = super::super::shapes_branded_birth::WEAKMAP_BIRTH_LAYOUT
                     ..super::super::shapes_branded_birth::NATIVE_BIRTH_LAYOUT_END;
                 if native.contains(&(id ^ 1)) {
-                    assert!(shape_record_by_id(ShapeId(id ^ 1)).is_some(), "{:#x} seed", id ^ 1);
+                    assert!(
+                        shape_record_by_id(ShapeId(id ^ 1)).is_some(),
+                        "{:#x} seed",
+                        id ^ 1
+                    );
                 } else {
                     absent(id ^ 1);
                 }

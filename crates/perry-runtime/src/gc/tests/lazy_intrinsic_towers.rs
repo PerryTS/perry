@@ -391,7 +391,10 @@ fn typed_array_intrinsic_tower_runs_in_a_no_move_window() {
 
         let collections_after = gc_collection_count();
         assert_eq!(
-            exit_probe.with(std::cell::Cell::get).unwrap_or(collections_after), collections_before,
+            exit_probe
+                .with(std::cell::Cell::get)
+                .unwrap_or(collections_after),
+            collections_before,
             "a collection ran inside `ensure_typed_array_intrinsic` — its \
              `ctor` / `proto` locals are now dangling or from-space"
         );

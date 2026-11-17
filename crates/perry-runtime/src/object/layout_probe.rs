@@ -254,7 +254,8 @@ unsafe fn overflow_accessor_answer(
     obj: *const ObjectHeader,
     entry: u32,
 ) -> f64 {
-    crate::object::overflow::get_from_probe(table, obj, entry).map_or_else(hole, |pair| pair_answer(pair))
+    crate::object::overflow::get_from_probe(table, obj, entry)
+        .map_or_else(hole, |pair| pair_answer(pair))
 }
 
 /// [`pair_answer`] for the public accessor at key position `pos` of `obj`

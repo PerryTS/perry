@@ -85,7 +85,10 @@ impl ProgramLayoutOrdinals {
                 return Err("program entry cannot extend the native catalog".into());
             }
             if let LayoutKey::Identity(identity, shape) = &input.key {
-                if native_empty && input.role == LayoutRole::OtherStatic && shape.is_empty_ordinary() {
+                if native_empty
+                    && input.role == LayoutRole::OtherStatic
+                    && shape.is_empty_ordinary()
+                {
                     if *identity == 0 || *identity != input.requested_shape_id {
                         return Err("identity key disagrees with requested identity".into());
                     }
@@ -570,7 +573,9 @@ pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) 
     if content.is_empty_ordinary() {
         if let (Some(&id), Some(word)) = (
             plan.empty_ordinary.first(),
-            plan.empty_ordinary.first().and_then(|id| plan.identity_word(*id)),
+            plan.empty_ordinary
+                .first()
+                .and_then(|id| plan.identity_word(*id)),
         ) {
             return (id, word);
         }
@@ -612,16 +617,33 @@ mod empty_ordinary_tests {
     fn empty_literal_names_the_native_row() {
         let plan = ProgramLayoutOrdinals::assign(
             native_inputs(),
-            [identity_input(&empty(0), 0x8000_0360), identity_input(&empty(1), 0x8000_0361)],
+            [
+                identity_input(&empty(0), 0x8000_0360),
+                identity_input(&empty(1), 0x8000_0361),
+            ],
         )
         .unwrap();
         let native = perry_abi::NATIVE_LAYOUT_ROWS;
-        assert_eq!(plan.static_rows(), native + 1, "only the live-1 content gets a row");
-        assert_eq!(plan.identity_word(0x8000_0360), Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD));
-        assert_ne!(plan.identity_word(0x8000_0361), Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD));
-        assert!(plan.entries.iter().all(|e| !matches!(&e.key, LayoutKey::Identity(_, s) if s.is_empty_ordinary())));
+        assert_eq!(
+            plan.static_rows(),
+            native + 1,
+            "only the live-1 content gets a row"
+        );
+        assert_eq!(
+            plan.identity_word(0x8000_0360),
+            Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD)
+        );
+        assert_ne!(
+            plan.identity_word(0x8000_0361),
+            Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD)
+        );
+        assert!(plan
+            .entries
+            .iter()
+            .all(|e| !matches!(&e.key, LayoutKey::Identity(_, s) if s.is_empty_ordinary())));
         // Without the native catalog (a standalone plan) nothing aliases.
-        let bare = ProgramLayoutOrdinals::assign([], [identity_input(&empty(0), 0x8000_0360)]).unwrap();
+        let bare =
+            ProgramLayoutOrdinals::assign([], [identity_input(&empty(0), 0x8000_0360)]).unwrap();
         assert_eq!(bare.static_rows(), 1);
         assert!(bare.empty_ordinary.is_empty());
     }

@@ -15,7 +15,8 @@ pub(crate) const EMPTY_ORDINARY_BIRTH_LAYOUT: u32 = WEAKSET_BIRTH_LAYOUT + 1;
 pub(crate) const NATIVE_BIRTH_LAYOUT_END: u32 = EMPTY_ORDINARY_BIRTH_LAYOUT + 1;
 const _: () = assert!(
     crate::codegen_abi::EMPTY_ORDINARY_TABLE_WORD
-        == crate::codegen_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD | crate::object::overflow::SHADOW_BIT
+        == crate::codegen_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD
+            | crate::object::overflow::SHADOW_BIT
 );
 const _: () = assert!(STATIC_SHAPE_ID_END <= WEAKMAP_BIRTH_LAYOUT);
 const _: () = assert!(NATIVE_BIRTH_LAYOUT_END < SITE_SHAPE_ID_END);
@@ -135,13 +136,22 @@ mod empty_ordinary_birth_tests {
     #[test]
     fn keyless_ordinary_births_carry_the_declared_empty_word() {
         let seed = record(EMPTY_ORDINARY_BIRTH_LAYOUT_WORD);
-        assert_eq!((seed.keys, seed.live_inline_slot_count, seed.proto_id), (0, 0, 0));
+        assert_eq!(
+            (seed.keys, seed.live_inline_slot_count, seed.proto_id),
+            (0, 0, 0)
+        );
         for _ in 0..3 {
             let obj = crate::object::alloc_basic::object_alloc_plain(0);
-            assert_eq!(unsafe { (*obj).parent_class_id }, EMPTY_ORDINARY_BIRTH_LAYOUT_WORD);
+            assert_eq!(
+                unsafe { (*obj).parent_class_id },
+                EMPTY_ORDINARY_BIRTH_LAYOUT_WORD
+            );
         }
         let unmarked = crate::object::js_object_alloc(0, 0);
-        assert_ne!(unsafe { (*unmarked).parent_class_id }, EMPTY_ORDINARY_BIRTH_LAYOUT_WORD);
+        assert_ne!(
+            unsafe { (*unmarked).parent_class_id },
+            EMPTY_ORDINARY_BIRTH_LAYOUT_WORD
+        );
         let obj = crate::object::alloc_basic::object_alloc_plain(0);
         let t = unsafe { crate::object::overflow::start_empty(obj, 0) };
         unsafe { crate::object::overflow::install(obj, t) };
