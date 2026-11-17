@@ -54,6 +54,100 @@ pub(crate) fn ascii_mask(s: &str) -> u128 {
         .fold(0, |m, c| m | 1u128 << c as u32)
 }
 
+type StringPart = Result<String, (u128, String)>;
+
+#[derive(Default)]
+struct SuffixMasks {
+    first: std::collections::HashMap<u128, usize>,
+    by_bits: Vec<u128>,
+}
+
+impl SuffixMasks {
+    fn insert(&mut self, mask: u128, index: usize) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.first.entry(mask) {
+            entry.insert(index);
+            self.by_bits.push(mask);
+        }
+    }
+
+    fn prepare(&mut self) {
+        self.by_bits
+            .sort_unstable_by_key(|mask| (mask.count_ones(), *mask));
+    }
+
+    fn covers(&self, permitted: u128, own: usize) -> bool {
+        // The first identical part wins. At another suffix this match is a
+        // strict containment; the target's own index cannot occur there.
+        if self
+            .first
+            .get(&permitted)
+            .is_some_and(|&index| index != own)
+        {
+            #[cfg(test)]
+            tests::coverage_check();
+            return true;
+        }
+        let bits = permitted.count_ones();
+        self.by_bits
+            .iter()
+            .take_while(|mask| mask.count_ones() < bits)
+            .any(|&mask| {
+                #[cfg(test)]
+                tests::coverage_check();
+                mask & permitted == mask
+            })
+    }
+}
+
+fn canonical_parts(out: Vec<StringPart>) -> Vec<StringPart> {
+    let keep: Vec<bool> = {
+        let mut suffixes: std::collections::HashMap<&str, SuffixMasks> = Default::default();
+        let mut lengths = std::collections::BTreeSet::new();
+        for (index, part) in out.iter().enumerate() {
+            if let Err((mask, suffix)) = part {
+                suffixes.entry(suffix).or_default().insert(*mask, index);
+                lengths.insert(suffix.len());
+            }
+        }
+        for masks in suffixes.values_mut() {
+            masks.prepare();
+        }
+        let mut constants = std::collections::HashSet::new();
+        out.iter()
+            .enumerate()
+            .map(|(index, part)| {
+                let (text, mask) = match part {
+                    Ok(text) => {
+                        if !constants.insert(text.as_str()) {
+                            return false;
+                        }
+                        (text, !0u128)
+                    }
+                    Err((mask, suffix)) => (suffix, *mask),
+                };
+                // Only suffixes actually present can cover this part. Requiring a
+                // UTF-8 boundary is equivalent to matching a valid String suffix.
+                !lengths.range(..=text.len()).any(|length| {
+                    let offset = text.len() - length;
+                    if !text.is_char_boundary(offset) {
+                        return false;
+                    }
+                    suffixes.get(&text[offset..]).is_some_and(|masks| {
+                        // A covering mask is a subset of the target mask and may
+                        // exclude no character in the intervening prefix. Equal
+                        // cardinality implies equality, handled by the hash index.
+                        masks.covers(mask & !ascii_mask(&text[..offset]), index)
+                    })
+                })
+            })
+            .collect()
+    };
+    out.into_iter()
+        .zip(keep)
+        .filter_map(|(part, keep)| keep.then_some(part))
+        .collect()
+}
+
 impl Model {
     /// The interned set of `atoms` (sorted, distinct; `STRS_TOP` past
     /// `STRS_K`).
@@ -901,31 +995,7 @@ impl Model {
         // holds no character of E2. Dropping it keeps the
         // same set of strings (equal parts: the first stays), so rule M8
         // sees one part where the strings are one entry's.
-        let covers =
-            |a: &Result<String, (u128, String)>, b: &Result<String, (u128, String)>| match (a, b) {
-                (Err((e, s)), Err((e2, s2))) => {
-                    s2.ends_with(s.as_str())
-                        && e2 & e == *e
-                        && ascii_mask(&s2[..s2.len() - s.len()]) & e == 0
-                }
-                (Err((e, s)), Ok(c)) => {
-                    c.ends_with(s.as_str()) && ascii_mask(&c[..c.len() - s.len()]) & e == 0
-                }
-                (Ok(c), Ok(c2)) => c == c2,
-                (Ok(_), Err(_)) => false,
-            };
-        let keep: Vec<bool> = (0..out.len())
-            .map(|i| {
-                !(0..out.len()).any(|j| {
-                    j != i && covers(&out[j], &out[i]) && (j < i || !covers(&out[i], &out[j]))
-                })
-            })
-            .collect();
-        let out = out
-            .into_iter()
-            .zip(keep)
-            .filter_map(|(p, k)| k.then_some(p))
-            .collect();
+        let out = canonical_parts(out);
         Some((out, gated))
     }
 
@@ -1789,3 +1859,7 @@ fn str_to_integer(s: &str) -> i64 {
         Err(_) => 0,
     }
 }
+
+#[cfg(test)]
+#[path = "strs_tests.rs"]
+mod tests;
