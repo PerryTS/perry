@@ -204,8 +204,9 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             param_types,
             return_type,
         })
-    } else if is_builtin_function(&name) {
-        // Built-in global function (setTimeout, etc.)
+    } else if is_builtin_function(&name) && !is_builtin_global_value_name(&name) {
+        // Built-in global function (setTimeout, etc.). One that is also a
+        // global value reads that value below.
         Ok(Expr::ExternFuncRef {
             name,
             param_types: Vec::new(),
