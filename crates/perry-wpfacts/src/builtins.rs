@@ -3803,10 +3803,16 @@ fn ns_method_inner(
                 _ => None,
             };
             let settled = m.node_l("settled");
+            // R-JOBTHROW: an item's rejection goes where the combinator
+            // sends it (27.2.4.1.2 / .2.2 / .3.1 / .5.1): `all` and `race`
+            // reject their promise with it, `allSettled` records it, `any`
+            // collects it into the AggregateError's errors; never the
+            // shared thrown cell.
+            let item_rej = m.node_l("item-reason");
             if let Some(els) = lit {
                 for (i, e) in els.into_iter().enumerate() {
                     let s = m.node_l("settled");
-                    adopt(m, call, e, s);
+                    adopt_r(m, call, e, s, item_rej);
                     m.edge(s, settled);
                     let slot = m.index_slot(arr, i as u32);
                     m.edge(s, slot);
@@ -3814,7 +3820,7 @@ fn ns_method_inner(
             } else {
                 let vals = all_arg_values(m, call);
                 let items = iterate(m, call, vals);
-                adopt(m, call, items, settled);
+                adopt_r(m, call, items, settled, item_rej);
                 m.edge(settled, fa);
             }
             if name == "allSettled" {
@@ -3824,6 +3830,7 @@ fn ns_method_inner(
                 m.edge(settled, rfa);
                 let thrown = m.thrown;
                 m.edge(thrown, rfa);
+                m.edge(item_rej, rfa);
                 m.add_prim(rfa, prim::STR);
                 m.add_tok(fa, rec);
             }
@@ -3831,6 +3838,10 @@ fn ns_method_inner(
                 m.add_tok(v, arr);
             } else {
                 m.edge(settled, v);
+            }
+            if name == "all" || name == "race" {
+                let r = promise_reason(m, p);
+                m.edge(item_rej, r);
             }
             if name == "any" {
                 // Every item rejected: an AggregateError whose `errors` are
@@ -3840,10 +3851,13 @@ fn ns_method_inner(
                 let efa = m.field_any(errs);
                 let thrown = m.thrown;
                 m.edge(thrown, efa);
+                m.edge(item_rej, efa);
                 let ea = m.atom("errors");
                 let f = m.field(e, ea);
                 m.add_tok(f, errs);
                 m.add_tok(thrown, e);
+                let r = promise_reason(m, p);
+                m.add_tok(r, e);
             }
             ret_tok(m, call, p);
         }

@@ -171,6 +171,8 @@ pub struct Gen<'a> {
     /// literal's computed own key (`Cons::OwnComputedKey`).
     pub(crate) prop_key_of: FxHashMap<NodeId, NodeId>,
     pub thrown: NodeId,
+    /// The plain-async step closures and their error carriers (`StepSplits`).
+    pub(crate) step: StepSplits,
     /// The realm error a failed runtime operation throws (`Model::runtime_error`,
     /// held by `thrown`), for a site that throws it into its own region.
     pub runtime_error: Tok,
@@ -559,6 +561,26 @@ pub struct Gen<'a> {
     pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
 }
 
+/// A plain-async step closure `(__step_value, __step_is_error)` resumes its
+/// body with a normal completion (`__step_is_error` false: the awaited value,
+/// 27.7.5.3 Await step 3, `gen.next(v)`) or with a throw completion (true: the
+/// awaited promise's reason, step 5, `gen.throw(e)`). One parameter carries
+/// both at run time; the solve keeps them apart: the value carrier is the
+/// parameter, the error carrier is one node per step, read wherever
+/// `__step_value` is read under `if (__step_is_error)` and written by every
+/// resume with `true` (`AsyncStepChain`'s reason, `__step_self(e, true)`).
+#[derive(Default)]
+pub(crate) struct StepSplits {
+    /// (module, `__step_value`) -> the step's error carrier.
+    pub(crate) by_value: FxHashMap<(u32, u32), NodeId>,
+    /// (module, `__step_is_error`) -> its `__step_value`.
+    pub(crate) by_flag: FxHashMap<(u32, u32), u32>,
+    /// (module, `__step_self`) -> the step's error carrier.
+    pub(crate) by_self: FxHashMap<(u32, u32), NodeId>,
+    /// The error arms being walked, innermost last: (module, `__step_value`).
+    pub(crate) arms: Vec<(u32, u32)>,
+}
+
 /// Per-function walking context.
 #[derive(Clone)]
 pub(crate) struct Fx {
@@ -735,6 +757,7 @@ impl<'a> Gen<'a> {
             export_resolving: Default::default(),
             prop_key_of: FxHashMap::default(),
             thrown,
+            step: StepSplits::default(),
             runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),

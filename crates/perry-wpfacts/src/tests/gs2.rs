@@ -223,3 +223,19 @@ fn gs9_process_listener_gets_the_report() {
     let src = format!("process.on(\"uncaughtException\", (e: any) => {{ e.m = 0; }});\n{GS9_R}");
     assert!(!mono(&calls(&src, "m")));
 }
+
+// GLOBS11 (2026-11-17): a settled resume (`AsyncStepResumeNow`) admits only
+// a primitive or a fulfilled native promise, so the rejection of the promise
+// awaited there never reaches the shared thrown cell, nor an unrelated await.
+const GS11_R: &str = "const flag = process.argv.length > 9;\n\
+async function bad(): Promise<void> { if (flag) fetch(\"http://127.0.0.1:1/\"); }\n\
+async function waitBad(): Promise<string> { try { await bad(); return \"ok\"; } catch (e) { return \"caught\"; } }\n\
+type Scene = { traverse(f: (n: number) => void): void };\n\
+async function load(): Promise<{ scene: Scene }> { return { scene: { traverse(f) { f(7); } } }; }\n\
+async function main(): Promise<void> { await waitBad(); const g = await load(); g.scene.traverse((n) => n); }\n\
+void main();\n";
+
+#[test]
+fn gs11_settled_resume_never_rejects() {
+    assert!(mono(&calls(GS11_R, "traverse")));
+}
