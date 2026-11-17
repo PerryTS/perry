@@ -47,9 +47,13 @@ panics during compilation/validation instead of returning an incorrect match;
 the compiler must therefore retain installation for every open producer.
 Native `perry-perex` clients accept arbitrary patterns and install unconditionally.
 
-The slot holds only immutable native functions and a static dispatch table, never
-a GC value. It is
+The slot holds only immutable native functions, never a GC value. Its selected
+DFA entry points are copied into the program capability. Installation is
 process-wide, idempotent, thread-safe and cannot be replaced after installation.
+The VM projects only the word view and membership query into its execution
+state; the generic DFA projects only the word view. The linker order lists the
+specialized DFA symbols beside their shared predecessors so selection preserves
+the hot code layout.
 
 Perex program words remain relocatable property IDs. The process-local witness
 carries native code, not a GC-managed address, and witnessed relocation reuses
