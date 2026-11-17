@@ -95,3 +95,18 @@ rows().return(value).then((r) => console.log(r.done));\n";
     assert!(pf.body_reach.complete);
     assert!(!pf.body_reach.inactive(&ident(mark)), "the getter runs, so mark does");
 }
+
+#[test]
+fn a_proxy_call_method_runs_the_apply_trap() {
+    // `p.call(...)` on a Proxy is the HIR's fused `ProxyGet(p, "call")` call:
+    // the runtime runs the Proxy's [[Call]], so the handler's `apply` trap
+    // runs; `mark` runs exactly when the trap does.
+    let src = "function mark() { return 0; }\n\
+function method(this: any, a: number) { return this.x + a; }\n\
+const callable: any = new Proxy(method, { apply(t: any, r: any, args: any[]) { mark(); return t.apply(r, args); } });\n\
+console.log(callable.call({ x: 7 }, 2));\n";
+    let pf = facts(src);
+    assert!(pf.body_reach.complete);
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the apply trap runs");
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "method"))), "the target runs");
+}
