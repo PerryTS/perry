@@ -38,7 +38,9 @@ pub(crate) struct HoldLedger {
 /// Read where a model is made and where the ledger is written (a test sets
 /// it for one solve).
 pub(crate) fn path() -> Option<String> {
-    std::env::var("PERRY_FACTS_LEDGER").ok().filter(|v| !v.is_empty())
+    std::env::var("PERRY_FACTS_LEDGER")
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 pub(crate) fn on() -> bool {
@@ -69,7 +71,11 @@ impl HoldLedger {
         let n = self.roots.len() as u32;
         let r = *self.by_key.entry((reason, id, tok as u8)).or_insert(n);
         if r == n {
-            let at = if tok { format!("t{id}") } else { format!("n{id}") };
+            let at = if tok {
+                format!("t{id}")
+            } else {
+                format!("n{id}")
+            };
             self.roots.push(Root {
                 seq: n,
                 reason,
@@ -82,7 +88,12 @@ impl HoldLedger {
     }
 
     /// `escape(t, reason)` begins: returns the root to restore after it.
-    pub(crate) fn enter_escape(&mut self, t: Tok, reason: u32, loc: &'static Location<'static>) -> u32 {
+    pub(crate) fn enter_escape(
+        &mut self,
+        t: Tok,
+        reason: u32,
+        loc: &'static Location<'static>,
+    ) -> u32 {
         let r = self.root_of(reason, t, true, "escape", loc);
         std::mem::replace(&mut self.cur, r)
     }
@@ -104,6 +115,16 @@ impl HoldLedger {
         std::mem::replace(&mut self.cur, r)
     }
 
+    /// A store into ⊤ sinks its value: the sink joins the root of the
+    /// receiver's ⊤ (`origin`, its `top_origin_id`) when one is recorded.
+    /// Returns the root to restore after it.
+    pub(crate) fn enter_top(&mut self, origin: Option<(NodeId, u32)>) -> u32 {
+        let r = origin
+            .and_then(|k| self.top_root.get(&k).copied())
+            .unwrap_or(self.cur);
+        std::mem::replace(&mut self.cur, r)
+    }
+
     /// ⊤ first entered `n` for `why` (a seed, not a copy).
     pub(crate) fn top_seed(&mut self, n: NodeId, why: u32, loc: &'static Location<'static>) {
         if why == NONE {
@@ -114,7 +135,12 @@ impl HoldLedger {
     }
 
     /// The realm would be held for `reason` (`hold_realm`): only recorded.
-    pub(crate) fn realm(&mut self, kind: &'static str, reason: u32, loc: &'static Location<'static>) {
+    pub(crate) fn realm(
+        &mut self,
+        kind: &'static str,
+        reason: u32,
+        loc: &'static Location<'static>,
+    ) {
         self.root_of(reason, NONE, false, kind, loc);
     }
 }
@@ -133,6 +159,17 @@ pub(crate) fn blame(m: &Model, toks: &[Tok], top_recv: NodeId) -> Vec<u32> {
     for &t in toks {
         if let Some(&r) = l.tok_root.get(&t) {
             out.push(r);
+        } else if let crate::model::TokKind::Obj(tm, _) = m.toks[t as usize] {
+            // The layout is one per template: a site is refused when any
+            // token of its template escaped (`template_facts`), so it is
+            // blamed on that token's root.
+            let first = m
+                .tmpl_toks(tm)
+                .into_iter()
+                .find(|u| m.escaped.contains_key(u));
+            if let Some(&r) = first.and_then(|u| l.tok_root.get(&u)) {
+                out.push(r);
+            }
         }
     }
     out.sort_unstable();
@@ -156,6 +193,15 @@ pub(crate) struct Refused {
     pub(crate) roots: Vec<u32>,
     pub(crate) part: usize,
     pub(crate) store: bool,
+    /// No root: the site's own refusal (`None` when a root is blamed).
+    pub(crate) why: Option<Unattributed>,
+}
+
+/// A refused site no root explains: its verdict and where it is.
+pub(crate) struct Unattributed {
+    pub(crate) why: String,
+    /// Module, offset, key, read/store, receiver tokens, ⊤ origin (TSV).
+    pub(crate) detail: String,
 }
 
 /// Write the ledger TSV (sorted by first mass) and its summary.
@@ -166,10 +212,23 @@ pub(crate) fn write(m: &Model, refused: &[Refused], totals: [[usize; 3]; 2]) {
     // Per root: [first; 3 parts], any, first stores.
     let mut mass: FxHashMap<u32, ([usize; 3], usize, usize)> = FxHashMap::default();
     let mut unattributed = [0usize; 3];
+    // Per refusal of the unattributed sites: [3 parts], stores.
+    let mut by_why: FxHashMap<&str, ([usize; 3], usize)> = FxHashMap::default();
+    let mut details = String::from("why\tmodule\toffset\tkey\taccess\treceivers\ttop_origin\n");
     let seq_of = |r: u32| r;
     for s in refused {
         let Some(&first) = s.roots.iter().min_by_key(|&&r| (seq_of(r), r)) else {
             unattributed[s.part] += 1;
+            if let Some(u) = &s.why {
+                let e = by_why.entry(u.why.as_str()).or_default();
+                e.0[s.part] += 1;
+                e.1 += s.store as usize;
+                details.push_str(&format!(
+                    "{}\t{}\n",
+                    u.why.replace(['\t', '\n', '\r'], " "),
+                    u.detail.replace(['\n', '\r'], " ")
+                ));
+            }
             continue;
         };
         let e = mass.entry(first).or_default();
@@ -181,8 +240,10 @@ pub(crate) fn write(m: &Model, refused: &[Refused], totals: [[usize; 3]; 2]) {
             mass.entry(r).or_default().1 += 1;
         }
     }
-    let mut rows: Vec<(u32, [usize; 3], usize, usize)> =
-        mass.into_iter().map(|(r, (f, a, st))| (r, f, a, st)).collect();
+    let mut rows: Vec<(u32, [usize; 3], usize, usize)> = mass
+        .into_iter()
+        .map(|(r, (f, a, st))| (r, f, a, st))
+        .collect();
     let sum = |f: &[usize; 3]| f.iter().sum::<usize>();
     rows.sort_by(|a, b| {
         sum(&b.1)
@@ -215,6 +276,19 @@ pub(crate) fn write(m: &Model, refused: &[Refused], totals: [[usize; 3]; 2]) {
         unattributed[1],
         unattributed[2]
     ));
+    let mut whys: Vec<(&str, ([usize; 3], usize))> = by_why.into_iter().collect();
+    whys.sort_by(|a, b| sum(&b.1 .0).cmp(&sum(&a.1 .0)).then(a.0.cmp(b.0)));
+    for (why, (f, st)) in &whys {
+        tsv.push_str(&format!(
+            "-\tunattributed\t{}\t-\t{}\t-\t{}\t{}\t{}\t{st}\n",
+            clean(why),
+            sum(f),
+            f[0],
+            f[1],
+            f[2]
+        ));
+    }
+    let _ = std::fs::write(format!("{path}.unattributed"), &details);
     let attributed = refused.len() - sum(&unattributed);
     let mut summary = format!(
         "LEDGER sites reads {} (core {} addons {} rest {}), stores {}; refused {} (attributed {}, unattributed {}); roots recorded {}, roots with mass {}\n",
