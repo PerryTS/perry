@@ -1843,7 +1843,8 @@ impl Drop for GcSuppressScope {
             #[cfg(test)]
             {
                 let now = super::progress::gc_total_collection_count();
-                if window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY.with(std::cell::Cell::get) != now {
+                if window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY.with(std::cell::Cell::get) != now
+                {
                     window_exit_probe::WINDOW_SAW_COLLECTION.with(|c| c.set(true));
                 }
             }

@@ -79,8 +79,8 @@ fn bucket_of(token: u64, key_bits: u64) -> usize {
     // which pairs meet moved with every program's row numbering.
     // The index is the product's TOP bits, a single shift with no mask, so
     // the token's own multiply costs nothing over the old `token ^ key` hash.
-    let h = (token.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ key_bits)
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let h =
+        (token.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> (64 - READ_STUB_BUCKETS.trailing_zeros())) as usize
 }
 
@@ -362,6 +362,9 @@ mod bucket_mix_tests {
             }
         }
         assert_eq!(pairs, 1344);
-        assert!(same <= 8, "{same} of {pairs} cancelling pairs share a bucket");
+        assert!(
+            same <= 8,
+            "{same} of {pairs} cancelling pairs share a bucket"
+        );
     }
 }
