@@ -975,6 +975,7 @@ mod program_cell_tests {
                 let at = slot.as_mut_ptr();
                 at.cast::<u8>()
                     .write_bytes(fill, std::mem::size_of::<WitnessWords>());
+                // GC_STORE_AUDIT(STACK): slot is local test storage, outside the GC heap.
                 at.write(WitnessWords::new(witness));
                 let bytes = std::slice::from_raw_parts(
                     at.cast::<u8>(),
