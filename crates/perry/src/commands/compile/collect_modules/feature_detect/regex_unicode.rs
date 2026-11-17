@@ -12,12 +12,43 @@ fn pattern_needs_properties(pattern: &str, flags: &str) -> bool {
 }
 
 fn producer_key(key: &str) -> bool {
-    matches!(key, "RegExp" | "constructor" | "compile" | "URLPattern")
+    matches!(
+        key,
+        "RegExp"
+            | "constructor"
+            | "compile"
+            | "URLPattern"
+            | "prototype"
+            | "String"
+            | "Object"
+            | "Function"
+    )
 }
 
 fn expression(expr: &Expr) -> bool {
     match expr {
-        Expr::RegExp { pattern, flags } => return pattern_needs_properties(pattern, flags),
+        Expr::StringSplit(subject, delimiter) => {
+            if let Expr::RegExp { pattern, flags } = delimiter.as_ref() {
+                return pattern_needs_properties(pattern, flags) || expression(subject);
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
+                if matches!(property.as_str(), "test" | "exec") {
+                    if let Expr::RegExp { pattern, flags } = object.as_ref() {
+                        return pattern_needs_properties(pattern, flags)
+                            || args.iter().any(expression);
+                    }
+                }
+            }
+        }
+        // A retained regex value exposes its constructor and compile method,
+        // even through a computed key whose annotation claims to be numeric.
+        Expr::RegExp { .. } => return true,
+        Expr::ObjectGetPrototypeOf(_) | Expr::ReflectGetPrototypeOf(_) => return true,
         // Coercion, custom species and RegExp.prototype.compile can obtain a
         // pattern or flags from arbitrary user code. Do not infer string values
         // from annotations or a local binding's initializer.
@@ -68,6 +99,10 @@ mod tests {
             r"/k/iu.test('K');",
             r"new RegExp(process.argv[2], 'u');",
             r"RegExp(process.argv[2]);",
+            r"const r = /a/; function f(k: number) { return r[k]('\\p{L}', 'u'); } f('compile' as any);",
+            r"function expose() { return /a/; }",
+            r"const list = [/a/];",
+            r"String.prototype.split = function(r) { return []; }; 'x'.split(/a/);",
             r"class R extends RegExp {} new R(process.argv[2], 'u');",
             r"const C = RegExp; new C(process.argv[2], 'u');",
             r"const r = /a/; r.compile(process.argv[2], 'u');",

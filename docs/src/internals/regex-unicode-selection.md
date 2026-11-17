@@ -8,14 +8,17 @@ fills it. The engine installer does not retain this database on its own.
 The compiler retains the installer for Unicode-mode literals, non-ASCII patterns,
 property escapes, Unicode escapes and named-group syntax. Every dynamic RegExp
 construction retains it, including literal patterns whose flags are dynamic.
-String-to-RegExp coercion, exposed constructors, prototype `compile`, computed
+Escaping regex values and subclasses retain it because they expose constructors
+and recompilation. String-to-RegExp coercion, exposed constructors, prototype `compile`, computed
 API members and escaped global objects also retain it. Native modules, IPC,
 workers, addons, plugins, UI and deferred dynamic code are open producers and
 retain the database conservatively. These are whole-program unions collected
 before code generation; the entry installer is part of the object cache input.
 
 Omission is limited to programs whose remaining producers are ASCII literals
-without those syntactic forms. ASCII group validation returns before membership;
+without those syntactic forms, consumed immediately by split, test or exec.
+Retaining or passing a literal as a value retains the tables. Prototype
+reflection and exposure also retain them, covering replacement of those methods. ASCII group validation returns before membership;
 ordinary character ranges, whitespace classes and case-fold tables do not access
 the property database. The selector deliberately over-includes some patterns.
 It does not infer runtime strings from TypeScript annotations or mutable bindings.
