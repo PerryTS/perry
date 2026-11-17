@@ -370,7 +370,6 @@ pub struct SiteFacts {
     /// MATHB1: a call whose receiver (a member call) or callee (a value
     /// call) names a builtin namespace member: is the callee exactly the
     /// original builtin ([`namespace_callee`])? `None`: no namespace member.
-    /// Information only: no count and no consumer reads it yet.
     pub intrinsic_callee: Option<IntrinsicCallee>,
     pub fixed_shape: bool,
     /// A call site: the bodies its callee set holds (every body, sorted;
