@@ -22,6 +22,9 @@ fn producer_key(key: &str) -> bool {
             | "String"
             | "Object"
             | "Function"
+            | "call"
+            | "apply"
+            | "bind"
     )
 }
 
@@ -219,6 +222,7 @@ mod tests {
             r"const o = {}; const key = process.argv[2]; o[key] = r => r; o.split(/a/);",
             r"class C { helper(r) { return r; } } const c = new C(); c[process.argv[2]] = c.helper; const r = c.split(/a/); function f(k: number) { r[k]('\\p{L}', 'u'); } f('compile' as any);",
             r"class C { helper(r) { return r; } } const c = new C(); c[process.argv[2]] = c.helper; const r = c.split(/a/); const f = r[process.argv[3]]; f('\\p{L}', 'u');",
+            r"class C { helper(r) { return r; } } const c = new C(); c[process.argv[2]] = c.helper; const r = c.split(/a/); const f = r[process.argv[3]]; f.apply(r, ['\\p{L}', 'u']);",
             r"class C { split(r) { return r; } } new C().split(/a/);",
             r"const list = [/a/];",
             r"String.prototype.split = function(r) { return []; }; 'x'.split(/a/);",
