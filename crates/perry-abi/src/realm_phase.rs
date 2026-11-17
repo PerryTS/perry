@@ -25,12 +25,13 @@
 /// no table of relocated pointers in the binary) and the membership test (a
 /// `match` on the name: code, no table either).
 macro_rules! realm_names {
-    ($(#[$doc:meta])* $list:ident, $joined:ident, $member:ident: $($name:literal)*) => {
+    ($(#[$doc:meta])* $list:ident, $joined:ident, $(#[$member_attr:meta])* $member:ident: $($name:literal)*) => {
         $(#[$doc])*
         pub const $list: &[&str] = &[$($name),*];
         /// The same names in the same order, each followed by one space.
         pub const $joined: &str = concat!($($name, " "),*);
         /// Is `name` one of them?
+        $(#[$member_attr])*
         pub fn $member(name: &str) -> bool {
             matches!(name, $($name)|*)
         }
@@ -45,7 +46,11 @@ realm_names! {
     /// arrays (with the shared `%TypedArray%` intrinsic, built with the first
     /// of them), the buffers, `DataView`, and node's `Buffer` (a `Uint8Array`
     /// subclass).
-    REALM_REST_GLOBALS, REALM_REST_NAMES, realm_rest_global:
+    REALM_REST_GLOBALS, REALM_REST_NAMES,
+    // Only a phase of a two-phase realm asks (the runtime's `.perry_tail`).
+    #[cfg_attr(target_os = "linux", link_section = ".perry_tail.realm_rest_global")]
+    #[inline(never)]
+    realm_rest_global:
         "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"
         "WebAssembly" "Temporal" "PerformanceEntry" "PerformanceMark" "PerformanceMeasure"
         "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming" "Date"
