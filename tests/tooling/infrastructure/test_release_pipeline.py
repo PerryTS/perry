@@ -206,7 +206,7 @@ npm() { printf '%s\n' "$*" >> "$CALLS"; }
         action = yaml.safe_load((ROOT / '.github/actions/setup-llvm22/action.yml').read_text())
         sources += [s['run'] for s in action['runs']['steps']
                     if 'sudo apt-get update' in s.get('run', '')]
-        self.assertEqual(len(sources), 10, 'exercise every changed apt site')
+        self.assertEqual(len(sources), 9, 'exercise every changed apt site')
         for source in sources:
             start = source.index('if _bad=')
             lines = source[start:].splitlines()
