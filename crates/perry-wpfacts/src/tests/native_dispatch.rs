@@ -300,7 +300,7 @@ fn native_dispatch_push_receiver_and_override_controls_remain_open() {
     for update in [
         "b.items = { push(x: number) { return 9; } } as any;",
         "(b.items as any).push = function(x: number) { return 9; };",
-        "(Array.prototype as any).push = function(x: number) { return 9; };",
+        "Object.setPrototypeOf(b.items, { push(x: number) { return 9; } });",
     ] {
         let (pf, _) = dispatch(&format!("class Bag {{ items: number[] = []; add() {{ return this.items.push(7); }} }} const b = new Bag(); {update} console.log(b.add());"));
         let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
