@@ -53,7 +53,9 @@ process-wide, idempotent, thread-safe and cannot be replaced after installation.
 The VM projects only the word view and membership query into its execution
 state; the generic DFA projects only the word view. The linker order lists the
 specialized DFA symbols beside their shared predecessors so selection preserves
-the hot code layout.
+the hot code layout. Its read-only jump-table and dispatch-table keys likewise
+stay beside the existing regex data entries, so monomorphization preserves data
+placement as well as code placement.
 
 Perex program words remain relocatable property IDs. The process-local witness
 carries native code, not a GC-managed address, and witnessed relocation reuses
