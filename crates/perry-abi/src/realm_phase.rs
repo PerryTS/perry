@@ -21,10 +21,10 @@
 //! do not know when a slot is bound. Runtime population rows derive their
 //! phase flags from these lists at compile time.
 
-/// One list of names, three ways: the slice (tests, the compiler's audit),
+/// One list of names, three ways: the slice (tests and const classification),
 /// the names joined by spaces (a loop over them in the runtime: one string,
 /// no table of relocated pointers in the binary) and the membership test (a
-/// `match` on the name: code, no table either).
+/// `match` on the name).
 macro_rules! realm_names {
     ($(#[$doc:meta])* $list:ident, $joined:ident, $(#[$member_attr:meta])* $member:ident: $($name:literal)*) => {
         $(#[$doc])*

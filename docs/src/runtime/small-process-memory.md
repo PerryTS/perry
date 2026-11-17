@@ -50,6 +50,8 @@ surfaces and property order need Node parity work.
 Population rows derive their phase and sealing eligibility from the canonical
 lists at compile time. Completing a realm reads those flags without matching
 each constructor name again or calling sealing helpers for ineligible families.
+Population passes borrowed name bytes to the descriptor installer instead of
+allocating temporary owned copies of the static names.
 
 To compile with one-pass population throughout, set the compiler environment:
 

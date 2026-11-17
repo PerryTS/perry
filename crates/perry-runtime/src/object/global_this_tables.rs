@@ -81,6 +81,7 @@ macro_rules! builtin_constructors {
                 assert!(id <= GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len() as u32);
                 Some(unsafe { std::mem::transmute::<u8, Self>(id as u8) })
             }
+            #[inline(always)]
             pub(crate) fn declaration(self) -> &'static BuiltinConstructorDeclaration {
                 &GLOBAL_THIS_BUILTIN_CONSTRUCTORS[self as usize - 1]
             }
