@@ -1860,7 +1860,14 @@ impl<'a> Gen<'a> {
                 if let Some(v) = arm {
                     self.step.arms.push((fx.module, v));
                 }
+                // `if (IterResultGetDone)`: the plain-async step's resolve
+                // arm, entered only after a `return` wrote the slot.
+                let done_arm = matches!(condition, Expr::IterResultGetDone)
+                    .then(|| self.iter_done_arm.replace(fx.f));
                 self.stmts(&then_fx, then_branch);
+                if let Some(p) = done_arm {
+                    self.iter_done_arm = p;
+                }
                 if arm.is_some() {
                     self.step.arms.pop();
                 }

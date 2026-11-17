@@ -7,12 +7,18 @@ use crate::model::*;
 use perry_hir::Expr;
 
 impl<'a> Gen<'a> {
-    pub(crate) fn iter_res_node(&mut self, fx: &Fx) -> NodeId {
-        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&fx.f) {
+    /// A plain-async step's iter-result slot as written with `done`
+    /// (`IterResultSet(value, done)`). The step reads it back right after
+    /// its body leaves: under `if (IterResultGetDone)` the last write was a
+    /// `return` (done), after that arm an await's operand (not done), so
+    /// each read takes the writes of its own flag only.
+    pub(crate) fn iter_res_node(&mut self, fx: &Fx, done: bool) -> NodeId {
+        let key = (fx.f, done);
+        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&key) {
             return n;
         }
         let n = self.tmp("iterres");
-        self.mods[fx.module as usize].iterres.insert(fx.f, n);
+        self.mods[fx.module as usize].iterres.insert(key, n);
         n
     }
 
