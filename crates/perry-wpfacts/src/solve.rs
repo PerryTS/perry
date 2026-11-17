@@ -273,6 +273,9 @@ impl Model {
             self.top_pred
                 .entry(n)
                 .or_insert((self.cur_src, self.cur_why));
+            if let Some(l) = self.ledger.as_mut() {
+                l.top_seed(n, self.cur_why, std::panic::Location::caller());
+            }
         }
         if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
             if self
@@ -1056,6 +1059,7 @@ impl Model {
 
     fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
+        self.spelled_atoms.get_or_insert(self.atoms.len());
         self.mark_params();
         self.members_settled.get_mut().clear();
         let mut delta = crate::delta::Delta::default();
@@ -1784,7 +1788,11 @@ impl Model {
     }
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
+    #[track_caller]
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
+        if let Some(l) = self.ledger.as_mut() {
+            l.sink(n, reason, std::panic::Location::caller());
+        }
         if let Some(d) = &mut self.diagnostic {
             if let Some(c) = d.cause_node.filter(|&c| c != n) {
                 d.store_top.entry(n).or_insert(c);

@@ -278,6 +278,14 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(&l);
         out.push('\n');
     }
+    if let Some(d) = &pf.native_dispatch {
+        let n = pf.dispatch_obligations().count();
+        out.push_str(&format!("{} obligations={n}\n", d.dump_line()));
+        for o in &pf.member_ops {
+            out.push_str(&o.dump_line());
+            out.push('\n');
+        }
+    }
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }

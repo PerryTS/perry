@@ -14,32 +14,35 @@ pub(super) unsafe fn family_slot_word(obj: *const ObjectHeader, slot: u32) -> u6
 
 /// Is a key after position `pos` of `obj`'s list present (its slot
 /// written)? Then a fill of `pos` in place would enumerate out of order.
+#[inline]
 pub(crate) unsafe fn later_late_key_present(
     obj: *const ObjectHeader,
     keys: *const crate::array::ArrayHeader,
     count: u32,
     pos: u32,
 ) -> bool {
-    // A family object: its descriptor names every key's slot, all inline (a
-    // birth allocates them), so the scan is one load per key.
-    if let Some(d) = family_desc_of(obj) {
-        if d.key_count == count
-            && !d.keys.is_null()
-            && d.slot_count <= super::super::object_inline_capacity(obj)
-        {
-            return std::slice::from_raw_parts(d.keys, d.key_count as usize)[pos as usize + 1..]
-                .iter()
-                .any(|k| {
-                    *super::super::header::object_slot_at(obj as *mut _, u32::from(k.off))
-                        != crate::value::TAG_HOLE
-                });
-        }
+    // The object's own slots after the hole, through the list's storage
+    // slots (its attribute words, read once): a word that is not the hole is
+    // a present key (a required one always, a late one once written).
+    let first = pos + 1;
+    if first >= count {
+        return false;
     }
-    // Any present key after `pos` (a required one always is, an optional or
-    // an added one once written): node appends a new key after it.
-    (pos + 1..count).any(|p| {
-        family_slot_word(obj, super::super::key_attrs::key_storage_slot(keys, p))
-            != crate::value::TAG_HOLE
+    let cap = super::super::object_inline_capacity(obj);
+    let base = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let (words, len) = super::super::key_attrs::storage_slot_words(keys);
+    (first..count).any(|p| {
+        let slot = if (p as usize) < len {
+            super::super::key_attrs::slot_of_word(*words.add(p as usize), p)
+        } else {
+            p
+        };
+        let word = if slot < cap {
+            *base.add(slot as usize)
+        } else {
+            super::super::spill::spill_get_present(obj as usize, slot as usize).unwrap_or(0)
+        };
+        word != crate::value::TAG_HOLE
     })
 }
 

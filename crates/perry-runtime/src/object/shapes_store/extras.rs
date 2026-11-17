@@ -121,6 +121,11 @@ impl ShapeRecord {
             handles: self.owned_handles().map(|w| w.0),
             family_desc: self.family_desc_index_plus_one,
             edges,
+            route: crate::object::shapes::snap_image_mint_route(self.shape_id.0, self.layout_word.0),
+            node: self.keys_node(),
+            keys_ref: None,
+            proto_ref: None,
+            desc_off: None,
         }
     }
 

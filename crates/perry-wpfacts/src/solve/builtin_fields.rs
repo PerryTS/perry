@@ -213,9 +213,14 @@ impl Model {
     /// each intrinsic token the model has is held (`realm_hold_tok`); each
     /// one minted later is held when minted (`builtin_token_created`,
     /// `builtin_field`).
+    #[track_caller]
     pub(crate) fn hold_realm(&mut self, reason: u32) {
         if self.realm_held {
             return;
+        }
+        // `hold_ledger`: recorded, never held (the solve goes on past it).
+        if let Some(l) = self.ledger.as_mut() {
+            return l.realm("realm", reason, std::panic::Location::caller());
         }
         if self.prov.is_some() {
             self.why_hold("hold_realm", u32::MAX, None);
@@ -273,7 +278,15 @@ impl Model {
     }
 
     /// Interpreted code can obtain native functions by their realm paths.
+    #[track_caller]
     pub(crate) fn builtin_fields_interp(&mut self) {
+        if self.ledger.is_some() {
+            let r = self.reason("interpreted code runs");
+            if let Some(l) = self.ledger.as_mut() {
+                l.realm("interp", r, std::panic::Location::caller());
+            }
+            return;
+        }
         if crate::unksrc::on() {
             crate::unksrc::note("interp", "interpreted code runs", u32::MAX, u32::MAX);
             if !self.realm_held {

@@ -222,10 +222,14 @@ impl Model {
                 };
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
+                let root = self.ledger.as_mut().map(|l| l.enter_sink(n));
                 for &t in toks {
                     if retained != Some(t) {
                         self.escape(t, reason);
                     }
+                }
+                if let (Some(l), Some(r)) = (self.ledger.as_mut(), root) {
+                    l.cur = r;
                 }
                 self.chain_escape = saved;
             }
@@ -996,6 +1000,9 @@ impl Model {
             }
             Cons::Implicit { reason, proto } => {
                 for &t in toks {
+                    crate::family_reach::dispatch_route(self, |m| {
+                        format!("the runtime's {proto:?} protocol on {}", m.tok_name(t))
+                    });
                     match self.toks[t as usize] {
                         // A function handed to a reflecting runtime helper:
                         // it may be called back with anything.
@@ -1987,6 +1994,7 @@ impl Model {
                 }
             }
             Cons::IdxMCall { idx, call, shape } => {
+                crate::family_reach::dispatch_route(self, |_| "a call under a computed key".into());
                 // Primitive receivers (`MCall`'s rule): a number key calls
                 // a key a store into ⊤ wrote on their prototype.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
@@ -2334,23 +2342,16 @@ impl Model {
                 // result is no key: TypeError or the next method). It
                 // stores under that result's key (this rule on that node).
                 // ⊤, a marker or a token without the protocol's result keep
-                // the any-key store. GLOBK.
+                // the any-key store. For every receiver (R-INSPKEY): a
+                // String result never writes a symbol-keyed property such as
+                // the inspect hook. In a result node, ⊤ or a marker (no
+                // primitive bits: `add_top_inner`) may be a Symbol and keeps
+                // the any-key store.
                 let ret_node = self.to_prim_ret_nodes.contains(&n);
                 let mut obj_key = false;
-                // Only a receiver that may be the global object gains from
-                // the ToPrimitive result key (G2's any-String field); every
-                // other receiver keeps the any-key store for an object key
-                // (no extra nodes).
-                let recv_global = {
-                    let gt = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-                    let ot = self.tok(TokKind::Builtin(BuiltinNs::Other));
-                    let p = &self.nodes[o as usize].pts;
-                    p.contains_tok(TOP) || p.contains_tok(gt) || p.contains_tok(ot)
-                };
-                if !ret_node && !recv_global {
-                    obj_key = !toks.is_empty();
-                }
-                if !ret_node && recv_global {
+                if ret_node {
+                    obj_key = toks.iter().any(|&t| t == TOP || self.is_marker(t));
+                } else {
                     let r = self.reason("ToPropertyKey");
                     for &t in toks {
                         let ret = match t != TOP && !self.is_marker(t) {

@@ -218,7 +218,7 @@ impl Model {
         let Some(g) = glob else {
             return;
         };
-        if !self.global_def_done.insert(d.key) {
+        if !self.global_def_done.insert(d.id()) {
             return;
         }
         self.global_defs.push((d, g));
@@ -249,12 +249,12 @@ impl Model {
     /// `value` under any key, the get / set installed under the
     /// computed-key star, as `o` had before.
     pub(crate) fn define_any_old(&mut self, d: DefineAny, t: Tok) {
-        if let Some(&h) = self.define_any_old.get(&d.key) {
+        if let Some(&h) = self.define_any_old.get(&d.id()) {
             self.add_tok(h, t);
             return;
         }
         let h = self.node_l("define-any-holder");
-        self.define_any_old.insert(d.key, h);
+        self.define_any_old.insert(d.id(), h);
         self.add_tok(h, t);
         self.cons(
             h,

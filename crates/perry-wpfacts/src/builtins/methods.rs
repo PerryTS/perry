@@ -140,8 +140,17 @@ pub(crate) fn native_method_at(m: &mut Model, r: NativeRecv, key: Key, call: Cal
     }
 }
 
+/// A built-in method called under a computed key: a route into the
+/// runtime's generic method dispatcher no named site states.
+fn computed_method(m: &mut Model, key: Key) {
+    if matches!(key, Key::Any(_)) {
+        crate::family_reach::dispatch_route(m, |_| "a built-in method under a computed key".into());
+    }
+}
+
 pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     crate::family_reach::primitive(m, prim, key);
+    computed_method(m, key);
     if native_waits(m, NativeRecv::Prim(prim), key, call) {
         return;
     }
@@ -447,6 +456,7 @@ pub(super) fn wrapper_method(m: &mut Model, t: Tok, what: &str, name: &str, call
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
     crate::family_reach::tok(m, t, key);
+    computed_method(m, key);
     if native_waits(m, NativeRecv::Own(t), key, call) {
         return;
     }
@@ -598,6 +608,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
     crate::family_reach::chain(m, origin, p, key);
+    computed_method(m, key);
     if native_waits(m, NativeRecv::Proto(p, origin), key, call) {
         return;
     }

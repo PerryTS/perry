@@ -449,3 +449,74 @@ console.log(q.item);
         "item: {v:?}"
     );
 }
+
+// PROXY10 (RED on 7a7ed4e1bd: a Proxy as the KEY of a computed store degraded
+// to "E9 Proxy target (storeindexed)"). ToPropertyKey is ToPrimitive: the get
+// trap runs for `@@toPrimitive` and `toString`; the store uses the string.
+const KEY: &str = r#"const N = String(process.argv[2]);
+function mk(tag: string): any {
+  const api: Record<string, unknown> = { tag };
+  return new Proxy(api, {
+    get(t: any, key: any) { if (key === "toString") return () => "key" + String(t.tag); return t[key]; },
+  });
+}
+const p = mk("a" + N);
+const o: Record<string, string> = {};
+o[p] = "v" + N;
+const g: any = globalThis;
+g[p] = 7;
+console.log(Object.keys(o).join(","), o["keya" + N], g["keya" + N]);
+"#;
+
+#[test]
+fn px10_proxy_as_a_computed_store_key() {
+    let (tops, held) = solve(KEY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a called Proxy still takes the old path (E9), also when it is a
+// store key.
+#[test]
+fn px10_keep_called_proxy_key_stays_e9() {
+    let src = KEY.replace("g[p] = 7;", "g[p] = 7;\ntry { p(); } catch (e) {}");
+    let (tops, _) = solve(&src);
+    assert!(e9(&tops), "{tops:?}");
+}
+
+// PXSO1 R1: a Proxy whose target may be itself (one birth site in a loop):
+// the forward of each operation reaches the Proxy again. The operation
+// class is made once per Proxy (`ProxyOp`), so the forward joins it
+// instead of making a new trap call and forward without end (a stack
+// overflow on base).
+#[test]
+fn pxso1_r1_proxy_of_itself() {
+    let (tops, held) = solve(
+        r#"const h: any = { get(t: any, k: any) { return k === "z" ? 26 : t[k]; } };
+let x: any = { a: 1, b: "two" };
+for (let i = 0; i < 3; i++) x = new Proxy(x, h);
+console.log(x.a, x.b, x.z, "a" in x, process.argv[2]);
+x.c = 3;
+console.log(x.c, delete x.c, x.c);
+"#,
+    );
+    assert!(!e9(&tops) && !held, "{tops:?}");
+}
+
+// PXSO1 R2: the reads of a Proxy of itself are solved: `x` holds the
+// object and the Proxy (the mixed verdict), nothing escapes.
+#[test]
+fn pxso1_r2_get_of_proxy_of_itself() {
+    let src = r#"const h: any = { get(t: any, k: any) { return k === "z" ? 26 : t[k]; } };
+let x: any = { a: 1 };
+for (let i = 0; i < 3; i++) x = new Proxy(x, h);
+console.log(x.a, x.z, process.argv[2]);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops) && !held, "{tops:?}");
+    let v = verdicts(src, "a");
+    assert!(
+        !v.is_empty() && v.iter().all(|v| !v.contains("E9") && !v.contains("escape")),
+        "{v:?}"
+    );
+}

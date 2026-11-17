@@ -106,8 +106,20 @@ pub(crate) fn collect(
             // receiver: the site is the receiver's (`len_index_sites`).
             (u32::MAX, false) if recv != NO_NODE => {
                 let orig = orig_of.get(&recv).copied().unwrap_or(recv);
-                let site = m.len_index_sites.get(&orig);
-                (site.and_then(|&site| site_fn(m, site)), recv)
+                match m.len_index_sites.get(&orig) {
+                    Some(&site) => (site_fn(m, site), recv),
+                    // An index store's own rule (`Cons::LenIndex` beside
+                    // its `Cons::Store`, `solve::apply`): the store records
+                    // the event at its site. An instance's copy can run the
+                    // rule before its store puts the copy in
+                    // `len_index_stores`; the shared node never does.
+                    None if m.len_index_stores.contains(&recv)
+                        || m.len_index_stores.contains(&orig) =>
+                    {
+                        continue
+                    }
+                    None => (None, recv),
+                }
             }
             (u32::MAX, _) => (None, NO_NODE),
             (_, true) => (

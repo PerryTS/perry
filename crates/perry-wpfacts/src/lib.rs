@@ -45,9 +45,11 @@ mod gen_protocol;
 mod gen_rest;
 mod gen_sources;
 mod held_lengths;
+mod hold_ledger;
 mod ledger;
 pub mod list_caps;
 mod literal_strings;
+mod member_ops;
 mod method_sites;
 pub mod model;
 mod named_lengths;
@@ -74,11 +76,12 @@ pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
 pub use derive::{
-    Access, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
-    TemplateFacts, Verdict,
+    Access, DispatchObligation, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact,
+    ReceiverValue, SiteFacts, TemplateFacts, Verdict,
 };
-pub use family_reach::{FamilyReach, FamilyVerdict};
+pub use family_reach::{FamilyReach, FamilyVerdict, NativeDispatch};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
+pub use member_ops::{MemberForm, MemberOpFacts};
 use perry_hir::Module;
 pub use signatures::Signature;
 
@@ -353,6 +356,16 @@ pub struct ProgramFacts {
     /// (`PERRY_FACTS_FAMILY_REACH=0`, a per-unit run): every family is live.
     /// Nothing reads it yet but the dump.
     pub family_reach: Option<FamilyReach>,
+    /// DESIGN-native-dispatch PR 1: whether every route into the runtime's
+    /// generic method dispatcher is a member-call site stating its
+    /// obligation (`family_reach::NativeDispatch`). `None` exactly where
+    /// `family_reach` is: every stage is live. Nothing reads it but the
+    /// dump.
+    pub native_dispatch: Option<NativeDispatch>,
+    /// NDISP2: the site record of every HIR-specialized member op
+    /// (`member_ops`): its dispatcher obligation. Empty where
+    /// `native_dispatch` is `None`.
+    pub member_ops: Vec<MemberOpFacts>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
@@ -673,6 +686,10 @@ fn generate<'a>(
     for n in pending {
         g.m.refute_own_test(n);
     }
+    // The nodes the binding facts read keep their instance slots
+    // (`summary::compress`).
+    let reads = bindings::binding_reads(&g);
+    g.m.binding_reads = reads;
     g.m.summarize_and_replay();
     if unksrc::on() {
         let gm = &g;
@@ -1375,9 +1392,18 @@ fn compute_act<'a>(
     };
     let family_reach =
         (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
+    let native_dispatch = family_reach
+        .is_some()
+        .then(|| family_reach::derive_dispatch(&g, cfg));
+    let member_ops = match native_dispatch {
+        Some(_) => derive::member_op_facts(&g),
+        None => Vec::new(),
+    };
     let mut pf = ProgramFacts {
         verification_bodies,
         family_reach,
+        native_dispatch,
+        member_ops,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,
@@ -1413,6 +1439,23 @@ fn compute_act<'a>(
     };
     pf.module_digests = dump::module_digests(&pf);
     pf
+}
+
+impl ProgramFacts {
+    /// DESIGN-native-dispatch PR 1: every dispatcher obligation, each owned
+    /// by its site: a named member call ([`SiteFacts`]) or a HIR-specialized
+    /// member op ([`MemberOpFacts`]). The list is every route into the
+    /// dispatcher only when [`ProgramFacts::native_dispatch`] is complete.
+    pub fn dispatch_obligations(&self) -> impl Iterator<Item = DispatchObligation<'_>> {
+        self.sites
+            .iter()
+            .filter_map(SiteFacts::dispatch_obligation)
+            .chain(
+                self.member_ops
+                    .iter()
+                    .map(MemberOpFacts::dispatch_obligation),
+            )
+    }
 }
 
 /// `PERRY_FACTS_QUIET_SITES=0` turns the quiet-site facts off
