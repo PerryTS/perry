@@ -65,6 +65,78 @@ fn observer(scope: &TransientRootScope, label: f64) -> f64 {
 }
 
 #[cfg(unix)]
+#[test]
+fn destroy_error_publishes_after_pending_callback_before_native_close() {
+    use std::os::fd::IntoRawFd;
+    let _serial = crate::test_serial();
+    for drain_before_ack in [true, false] {
+        std::thread::spawn(move || {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let scope = TransientRootScope::enter();
+            let owner = scope.root_nanbox(socket::adopt_pipe(
+                p::undefined(),
+                stream.into_raw_fd() as f64,
+            ));
+            extern "C" {
+                fn js_node_stream_method_on(owner: i64, event: f64, callback: f64) -> f64;
+            }
+            for (event, label) in [("error", 2.0), ("close", 3.0)] {
+                let event = scope.root_nanbox(events::string(event));
+                let callback = scope.root_nanbox(observer(&scope, label));
+                unsafe {
+                    js_node_stream_method_on(
+                        p::raw_owner(owner.get()),
+                        event.get(),
+                        callback.get(),
+                    );
+                }
+            }
+            let chunk = scope.root_nanbox(events::string("pending"));
+            socket::write(
+                owner.get(),
+                chunk.get(),
+                p::undefined(),
+                observer(&scope, 9.0),
+            );
+            let error = scope.root_nanbox(socket::error("EINVAL", "actual write failure"));
+            socket::destroy(owner.get(), error.get());
+            socket::destroy(owner.get(), error.get());
+            // Drain logical jobs without polling the native close acknowledgement.
+            if drain_before_ack {
+                perry_runtime::promise::microtasks::js_promise_run_microtasks_checkpoint();
+                SEEN.with(|seen| {
+                    assert_eq!(
+                        *seen.borrow(),
+                        [
+                            "write:error:Some(\"EINVAL\")",
+                            "2:EINVAL:actual write failure",
+                        ]
+                    )
+                });
+            }
+            until(|| SEEN.with(|seen| seen.borrow().last().is_some_and(|s| s == "close")));
+            perry_runtime::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            SEEN.with(|seen| {
+                assert_eq!(
+                    *seen.borrow(),
+                    [
+                        "write:error:Some(\"EINVAL\")",
+                        "2:EINVAL:actual write failure",
+                        "close",
+                    ]
+                )
+            });
+            drop(peer);
+            perry_runtime::agent::retire_agent(agent);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[cfg(unix)]
 fn adopted_stream_end_callbacks(peer_closed: bool) {
     use std::os::fd::IntoRawFd;
     let _serial = crate::test_serial();

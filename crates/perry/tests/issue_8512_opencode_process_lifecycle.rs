@@ -167,3 +167,19 @@ child.on("close", (code: number) => console.log("RESULT:" + code + ":" + out + "
     assert_eq!(stdout, "RESULT:7:out:err\n");
     assert!(stderr.is_empty(), "unexpected parent stderr: {stderr}");
 }
+
+#[test]
+fn child_timeout_reports_pending_stdin_write_failure_before_close() {
+    let (stdout, stderr) = compile_and_run(
+        r#"
+import { spawn } from "node:child_process";
+const child = spawn("/bin/sleep", ["30"], { timeout: 100 });
+child.stdin!.on("error", (error: any) => console.log("ERROR:" + error.code));
+child.stdin!.write(Buffer.alloc(1024 * 1024), (error: any) => console.log("CALLBACK:" + error.code));
+child.on("exit", () => console.log("EXIT"));
+child.on("close", () => console.log("CLOSED"));
+"#,
+    );
+    assert_eq!(stdout, "CALLBACK:EPIPE\nERROR:EPIPE\nEXIT\nCLOSED\n");
+    assert!(stderr.is_empty(), "unexpected parent stderr: {stderr}");
+}

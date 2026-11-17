@@ -727,6 +727,11 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         cache_before_release(owner.get(), socket);
         let failure = scope.root_nanbox(error("ERR_STREAM_DESTROYED", "Socket is closed"));
         cancel_callbacks(owner.get(), state.get(), failure.get());
+        if !JsValue::from_bits(error_value.get().to_bits()).is_undefined()
+            && !JsValue::from_bits(error_value.get().to_bits()).is_null()
+        {
+            events::queue_emit(owner.get(), "error", &[error_value.get()]);
+        }
         provider::capture_socket(state.get(), record.get());
         // SAFETY: The rooted owner retains these family-checked links; memory-only release follows
         // the native borrow, and owed completions retain their own cell references.
@@ -822,6 +827,11 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         )
     };
     cancel_callbacks(owner.get(), state.get(), callback_error);
+    // Logical failure follows pending callbacks, independently of the native
+    // close acknowledgement. The one-shot lifecycle owns this publication.
+    if had_error {
+        events::queue_emit(owner.get(), "error", &[error_value.get()]);
+    }
     super::native_transport::release_codec(owner.get());
     #[cfg(test)]
     if std::env::var("PERRY_NET_BINDING_SABOTAGE").as_deref() == Ok("churn_backlog") {
