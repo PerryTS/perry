@@ -199,6 +199,14 @@ impl<'a> Gen<'a> {
     /// its stores no object, so none of its effects apply. The gate opens
     /// once and stays open (values only grow), so the fixpoint is the same
     /// one. `PERRY_FACTS_GUARD_REGIONS=0` turns it off.
+    /// `__step_self(e, true)` in a plain-async step: its error carrier.
+    fn step_error_reentry(&self, mi: u32, callee: &Expr, args: &[Expr]) -> Option<NodeId> {
+        match (callee, args) {
+            (Expr::LocalGet(s), [_, Expr::Bool(true)]) => self.step.by_self.get(&(mi, *s)).copied(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
         use crate::model::guard::*;
         let Some((t, test)) = fx.guard else {
@@ -760,6 +768,11 @@ impl<'a> Gen<'a> {
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
+            }
+            // `__step_value` in its step's error arm: the throw completion.
+            Expr::LocalGet(id) if self.step.arms.last() == Some(&(mi, *id)) => {
+                let err = self.step.by_value[&(mi, *id)];
+                self.region_read(fx, err)
             }
             Expr::LocalGet(id) => match self.for_binding {
                 Some((m, l, n)) if m == mi && l == *id => n,
@@ -1987,6 +2000,22 @@ impl<'a> Gen<'a> {
             }
 
             // ------------------------------------------------- calls
+            // A step's error re-entry `__step_self(e, true)`: `e` resumes the
+            // body as a throw completion only (`StepSplits`).
+            Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                byte_end,
+                ..
+            } if self.step_error_reentry(mi, callee, args).is_some() => {
+                let err = self.step_error_reentry(mi, callee, args).expect("guard");
+                let e = self.expr(fx, &args[0]);
+                self.m.edge(e, err);
+                let none = self.tmp("step-resume-none");
+                let b = self.prim_node(prim::BOOL);
+                self.call_with(fx, callee, vec![none, b], vec![], (*byte_offset, *byte_end))
+            }
             Expr::Call {
                 callee,
                 args,

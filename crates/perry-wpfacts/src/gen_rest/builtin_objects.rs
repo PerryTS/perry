@@ -672,8 +672,17 @@ impl<'a> Gen<'a> {
                 let (aw, rj) = self.awaited_r(v);
                 let arg = self.tmp("step-arg");
                 self.m.edge(aw, arg);
-                self.m.edge(rj, arg);
-                self.m.edge(self.thrown, arg);
+                // A plain-async step resumes with the value as a normal
+                // completion and the reason as a throw completion, each
+                // through its own carrier (`StepSplits`); any other step
+                // takes both through its value parameter.
+                let err = match step_closure.as_ref() {
+                    Expr::LocalGet(id) => self.step.by_self.get(&(mi, *id)).copied(),
+                    _ => None,
+                };
+                let err = err.unwrap_or(arg);
+                self.m.edge(rj, err);
+                self.m.edge(self.thrown, err);
                 let b = self.prim_node(prim::BOOL);
                 self.async_callback(s, vec![arg, b])
             }
@@ -684,9 +693,13 @@ impl<'a> Gen<'a> {
                 // On admission the awaited value (promise unwrapped) is the
                 // expression's result, which the step uses as its next resume
                 // value; a decline yields the TDZ sentinel, never observed.
+                // It admits only a primitive or a fulfilled native promise
+                // (`js_async_step_resume_now`, P4), so it never rejects and
+                // calls no `then`: a rejected or pending promise declines to
+                // the `AsyncStepChain`, which carries its reason.
                 let v = self.expr(fx, value);
                 let _ = self.expr(fx, step_closure);
-                self.awaited(v)
+                self.settled_now(v)
             }
             Expr::AsyncStepDeclined(e) => {
                 let _ = self.expr(fx, e);

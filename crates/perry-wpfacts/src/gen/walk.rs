@@ -1852,7 +1852,18 @@ impl<'a> Gen<'a> {
                 // it jumps to (`narrow_leave`).
                 let pre = self.narrow_snapshot();
                 let k = self.narrow_guard(fx, condition, true);
+                // `if (__step_is_error)`: a plain-async step's error arm.
+                let arm = match condition {
+                    Expr::LocalGet(id) => self.step.by_flag.get(&(fx.module, *id)).copied(),
+                    _ => None,
+                };
+                if let Some(v) = arm {
+                    self.step.arms.push((fx.module, v));
+                }
                 self.stmts(&then_fx, then_branch);
+                if arm.is_some() {
+                    self.step.arms.pop();
+                }
                 self.narrow_pop(k);
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
