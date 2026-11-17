@@ -7596,9 +7596,7 @@ pub(crate) fn snap_image_mint_replay_flags(recs: &[crate::snap_image::format::Mi
         let mut flags = 0u8;
         let identity = shapes_store::list_identity(r.node, r.keys);
         let mut family: Vec<u32> = Vec::new();
-        for w in inner.family_ids(r.node, r.keys) {
-            family.push(w.0);
-        }
+        snap_image_family_words(&inner, r.node, r.keys, &mut family);
         family.sort_unstable();
         let mut set: Vec<u32> = Vec::new();
         let mut j = carriers.partition_point(|c| c.0 < identity);
@@ -7622,6 +7620,33 @@ pub(crate) fn snap_image_mint_replay_flags(recs: &[crate::snap_image::format::Mi
         out.push(flags);
     }
     out
+}
+
+/// The words of the family of the list (node, keys), appended to out. A free function
+/// beside ShapeTableInner::family_ids, so that method keeps its two callers.
+#[inline(never)]
+fn snap_image_family_words(inner: &ShapeTableInner, node: u32, keys: u64, out: &mut Vec<u32>) {
+    if node != NO_NODE {
+        if keys == 0 {
+            for w in inner.keyless_family.as_slice() {
+                out.push(w.0);
+            }
+            return;
+        }
+        let found = crate::object::canonical_keys::with_list_shapes(node, |l| {
+            for w in l.family.as_slice() {
+                out.push(w.0);
+            }
+        });
+        if found.is_some() {
+            return;
+        }
+    }
+    if let Some(ids) = inner.owned_families.get(&keys) {
+        for w in ids.as_slice() {
+            out.push(w.0);
+        }
+    }
 }
 
 /// How far the unique-prototype and prototype-serial counters moved since `a`.
