@@ -90,10 +90,18 @@ rows().return(value).then((r) => console.log(r.done));\n";
     let ast = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").expect("lowers");
     perry_transform::transform_generators(&mut hir);
-    let mark = hir.functions.iter().find(|f| f.name == "mark").expect("mark").id;
+    let mark = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "mark")
+        .expect("mark")
+        .id;
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
     assert!(pf.body_reach.complete);
-    assert!(!pf.body_reach.inactive(&ident(mark)), "the getter runs, so mark does");
+    assert!(
+        !pf.body_reach.inactive(&ident(mark)),
+        "the getter runs, so mark does"
+    );
 }
 
 #[test]
@@ -107,8 +115,14 @@ const callable: any = new Proxy(method, { apply(t: any, r: any, args: any[]) { m
 console.log(callable.call({ x: 7 }, 2));\n";
     let pf = facts(src);
     assert!(pf.body_reach.complete);
-    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the apply trap runs");
-    assert!(!pf.body_reach.inactive(&ident(id_of(src, "method"))), "the target runs");
+    assert!(
+        !pf.body_reach.inactive(&ident(id_of(src, "mark"))),
+        "the apply trap runs"
+    );
+    assert!(
+        !pf.body_reach.inactive(&ident(id_of(src, "method"))),
+        "the target runs"
+    );
 }
 
 #[test]
@@ -124,5 +138,62 @@ Object.defineProperty(o, key, { get: function () { mark(); return 22; } });\n\
 console.log(o[key]);\n";
     let pf = facts(src);
     assert!(pf.body_reach.complete);
-    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the getter runs");
+    assert!(
+        !pf.body_reach.inactive(&ident(id_of(src, "mark"))),
+        "the getter runs"
+    );
+}
+
+#[test]
+fn numeric_and_named_redefinitions_keep_the_getter_reachable() {
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../../../../tests/parity/language/object/facts_dce_keyed_getter/",
+                $name
+            ))
+        };
+    }
+    for (name, src, value) in [
+        ("x1", fixture!("x1.ts"), 42),
+        ("named", fixture!("named.ts"), 42),
+        ("string-number", fixture!("string-number.ts"), 43),
+        ("literal-redefined", fixture!("literal-redefined.ts"), 44),
+        ("define-redefined", fixture!("define-redefined.ts"), 45),
+        ("for-in", fixture!("for-in.ts"), 46),
+        ("reflect-get", fixture!("reflect-get.ts"), 47),
+        (
+            "arguments-original",
+            fixture!("test_arguments_original.cjs"),
+            42,
+        ),
+    ] {
+        // mark is reachable exactly when the final getter's body is.
+        let body = format!("return {value};");
+        assert!(src.contains(&body), "{name}: getter marker exists");
+        let src = format!(
+            "function mark() {{ return 0; }}\n{}",
+            src.replace(&body, &format!("mark(); {body}"))
+        );
+        let pf = facts(&src);
+        assert!(pf.body_reach.complete, "{name}: solve completes");
+        assert!(
+            !pf.body_reach.inactive(&ident(id_of(&src, "mark"))),
+            "{name}: the read runs the getter"
+        );
+    }
+}
+
+#[test]
+fn an_unobserved_getter_stays_inactive_beside_a_redefined_index() {
+    let src = format!(
+        "function cold() {{ return 0; }}\nconst unrelated = {{ get unread() {{ cold(); return 1; }} }};\n{}",
+        include_str!("../../../../tests/parity/language/object/facts_dce_keyed_getter/x1.ts")
+    );
+    let pf = facts(&src);
+    assert!(pf.body_reach.complete);
+    assert!(
+        pf.body_reach.inactive(&ident(id_of(&src, "cold"))),
+        "an index read does not activate every getter"
+    );
 }
