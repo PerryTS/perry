@@ -111,6 +111,10 @@ fn note(g: &mut Group, key: &str, store: bool) {
 struct Census {
     locals: RefCell<FxHashMap<u32, Group>>,
     thises: RefCell<FxHashMap<u32, Group>>,
+    /// A `const` local bound to `this` in the methods of a class -> that
+    /// class: its accesses are the `this` group's (`const self = this;
+    /// self.k = v`).
+    this_aliases: RefCell<FxHashMap<u32, u32>>,
     /// Local -> the function it binds.
     fn_of_local: RefCell<FxHashMap<u32, u32>>,
     /// Local -> the callee of the call that initialises it.
@@ -326,6 +330,10 @@ impl FactoryMode {
 #[path = "factory_return_tests.rs"]
 mod factory_return_tests;
 
+#[cfg(test)]
+#[path = "late_this_alias_tests.rs"]
+mod this_alias_tests;
+
 struct FactoryCx<'a> {
     fn_of_local: &'a FxHashMap<u32, u32>,
     init_expr: &'a FxHashMap<u32, Expr>,
@@ -336,7 +344,11 @@ impl Census {
     fn access(&self, this_class: Option<u32>, object: &Expr, key: &str, store: bool) {
         match object {
             Expr::LocalGet(id) => {
-                note(self.locals.borrow_mut().entry(*id).or_default(), key, store)
+                let alias = self.this_aliases.borrow().get(id).copied();
+                match alias {
+                    Some(c) => note(self.thises.borrow_mut().entry(c).or_default(), key, store),
+                    None => note(self.locals.borrow_mut().entry(*id).or_default(), key, store),
+                }
             }
             Expr::This => {
                 if let Some(c) = this_class {
@@ -389,11 +401,15 @@ impl Census {
                 if let Stmt::Let {
                     id,
                     init: Some(init),
+                    mutable,
                     ..
                 } = s
                 {
                     if let Expr::LocalGet(src) = init {
                         self.aliases.borrow_mut().push((*id, *src));
+                    }
+                    if let (Some(c), Expr::This, false) = (this_class, init, *mutable) {
+                        self.this_aliases.borrow_mut().insert(*id, c);
                     }
                     if factory_form(init) {
                         self.factories
