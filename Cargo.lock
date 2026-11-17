@@ -618,7 +618,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 3.0.3",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5143,7 +5143,7 @@ dependencies = [
  "perry-hir",
  "perry-parser",
  "perry-transform",
- "wasm-encoder 0.258.3",
+ "wasm-encoder 0.262.0",
 ]
 
 [[package]]
@@ -5179,7 +5179,7 @@ dependencies = [
  "turnloop-tls",
  "url",
  "wac-graph",
- "wasm-encoder 0.258.3",
+ "wasm-encoder 0.262.0",
  "wasmparser 0.258.3",
  "wasmtime",
  "wat",

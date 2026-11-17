@@ -13,7 +13,7 @@ perry-hir.workspace = true
 perry-codegen-js.workspace = true
 perry-dispatch.workspace = true
 anyhow.workspace = true
-wasm-encoder = "0.258"
+wasm-encoder = "0.262"
 perry-base64.workspace = true
 
 [dev-dependencies]
