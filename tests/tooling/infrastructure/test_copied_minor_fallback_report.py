@@ -153,7 +153,15 @@ def layout_scans():
     }
 
 
-def old_page_cycle(*, reusable_bytes=128, pooled_bytes=0, returned_bytes=0):
+def old_page_cycle(
+    *,
+    reusable_bytes=128,
+    pooled_bytes=0,
+    returned_bytes=0,
+    selected_live_bytes=64,
+    moved_bytes=64,
+    released_bytes=64,
+):
     cycle = gc_cycle(layout_scans=layout_scans())
     cycle["old_pages"] = {
         "allocated_bytes": 0,
@@ -167,12 +175,12 @@ def old_page_cycle(*, reusable_bytes=128, pooled_bytes=0, returned_bytes=0):
     cycle["evacuation_policy"] = {
         "old_page_candidate_pages": 1,
         "old_page_selected_pages": 1,
-        "old_page_selected_live_bytes": 64,
+        "old_page_selected_live_bytes": selected_live_bytes,
         "old_page_reclaimable_bytes": reusable_bytes + pooled_bytes + returned_bytes,
     }
     cycle["evacuation"] = {
-        "old_page_moved_bytes": 64,
-        "released_original_bytes": 64,
+        "old_page_moved_bytes": moved_bytes,
+        "released_original_bytes": released_bytes,
         "released_original_reusable_bytes": 0,
         "released_original_returned_bytes": 0,
     }
@@ -664,6 +672,65 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
         self.assertEqual(old_page["reusable_bytes"], 128)
         self.assertEqual(old_page["pooled_bytes"], 192)
         self.assertEqual(old_page["returned_bytes"], 256)
+
+    def test_target_gates_accept_old_page_block_moving_more_than_selected_live(self):
+        # Measured on the forced old-page fixture: the selected page held 40
+        # live bytes; its source block also held a 48-byte unmarked string on
+        # that page and a 4096-byte unmarked string on another page, and the
+        # all-or-nothing block evacuation moved and released all three.
+        exit_code, stderr, report = self.run_report(
+            {
+                "default_copying": [gc_cycle(layout_scans=layout_scans())],
+                "old_page_forced_defrag": [
+                    old_page_cycle(
+                        selected_live_bytes=40, moved_bytes=4184, released_bytes=4184
+                    )
+                ],
+            },
+            target=True,
+        )
+
+        self.assertEqual(exit_code, 0, stderr)
+        old_page = report["workloads"]["old_page_forced_defrag"][
+            "old_page_accounting"
+        ]
+        self.assertEqual(old_page["old_page_moved_bytes"], 4184)
+        self.assertEqual(old_page["selected_live_bytes"], 40)
+
+    def test_target_gates_fail_old_page_pass_moving_less_than_selected_live(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "default_copying": [gc_cycle(layout_scans=layout_scans())],
+                "old_page_forced_defrag": [
+                    old_page_cycle(selected_live_bytes=64, moved_bytes=24, released_bytes=24)
+                ],
+            },
+            target=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn(
+            "evacuation.old_page_moved_bytes(24) < "
+            "evacuation_policy.old_page_selected_live_bytes(64)",
+            stderr,
+        )
+
+    def test_target_gates_fail_old_page_moved_more_than_released(self):
+        exit_code, stderr, _ = self.run_report(
+            {
+                "default_copying": [gc_cycle(layout_scans=layout_scans())],
+                "old_page_forced_defrag": [
+                    old_page_cycle(selected_live_bytes=40, moved_bytes=4184, released_bytes=40)
+                ],
+            },
+            target=True,
+        )
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertIn(
+            "evacuation.old_page_moved_bytes(4184) > evacuation.released_original_bytes(40)",
+            stderr,
+        )
 
 
 if __name__ == "__main__":

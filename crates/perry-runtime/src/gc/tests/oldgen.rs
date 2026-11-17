@@ -872,8 +872,28 @@ fn test_old_page_defrag_target_gate_emits_trace() {
         return;
     }
 
-    let _old_block_filler =
-        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+    // The parent's source block must hold only movable occupants, or the
+    // all-or-nothing block evacuation declines and nothing moves. Minting the
+    // parent's shape allocates its keys arrays, which are GC_FLAG_SHAPE_SHARED
+    // and never move, so mint first and then start a fresh old block. A filler
+    // sized to one block does not do that where BLOCK_SIZE is smaller (1 MiB
+    // on macOS): it gets an oversized block of its own and the parent lands
+    // next to the keys arrays.
+    let _ = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1);
+    old_free_reset_for_test();
+    let block_of =
+        |user: *mut u8| crate::arena::old_arena_block_for_test(user as usize).map(|b| b.0);
+    let minted_block = block_of(crate::arena::arena_alloc_gc_old(
+        64 - GC_HEADER_SIZE,
+        8,
+        GC_TYPE_STRING,
+    ));
+    while block_of(crate::arena::arena_alloc_gc_old(
+        4096 - GC_HEADER_SIZE,
+        8,
+        GC_TYPE_STRING,
+    )) == minted_block
+    {}
     let (parent, fields) = unsafe { alloc_old_test_object(1) };
     let parent_user = parent as usize;
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
