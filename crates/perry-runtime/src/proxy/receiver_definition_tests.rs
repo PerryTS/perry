@@ -100,3 +100,47 @@ fn delete_trap_receives_a_property_key_for_a_numeric_index() {
     assert_eq!(js_proxy_delete(proxy, 0.0).to_bits(), TAG_TRUE);
     assert!(DELETE_TRAP_KEY_WAS_STRING.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+/// A trap-less Proxy forwards `[[Get]](key, proxy)` to its target, so an
+/// inherited builtin getter runs with `this = proxy` and its brand check
+/// throws: node answers `TypeError` for `new Proxy(new Uint8Array(4), {}).length`.
+/// The direct read of the same key on the typed array stays `4`.
+#[test]
+fn trapless_proxy_get_passes_proxy_to_typed_array_getter() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::gc_init();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let kinds = [
+        crate::typedarray::KIND_UINT8,
+        crate::typedarray::KIND_FLOAT64,
+    ];
+    for kind in kinds {
+        let ta = crate::value::js_nanbox_pointer(crate::typedarray::js_typed_array_new_empty(
+            kind as i32,
+            4,
+        ) as i64);
+        for name in [
+            b"length".as_slice(),
+            b"byteLength",
+            b"byteOffset",
+            b"buffer",
+        ] {
+            assert!(
+                !JSValue::from_bits(read(ta, key(name)).to_bits()).is_undefined(),
+                "direct {} read",
+                String::from_utf8_lossy(name)
+            );
+            let proxy = js_proxy_new(ta, object());
+            let threw = crate::exception::catch_js_throw(|| {
+                super::get::js_proxy_get(proxy, key(name));
+            })
+            .is_err();
+            assert!(
+                threw,
+                "Proxy {} read must throw",
+                String::from_utf8_lossy(name)
+            );
+        }
+        assert_eq!(read(ta, key(b"length")), 4.0);
+    }
+}
