@@ -1360,7 +1360,7 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.check
     runs-on: ubuntu-latest
     # A hang backstop, not a perf budget (see `check`).
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -1390,8 +1390,9 @@ jobs:
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
-          shared-key: "${{ runner.os }}-perry-clippy"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restores check's warm cache; check is the job that saves it.
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
       - name: Clippy (product)
         if: ${{ !cancelled() }}
         run: cargo clippy -p perry --bins
