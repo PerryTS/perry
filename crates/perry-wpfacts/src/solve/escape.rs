@@ -361,6 +361,7 @@ impl Model {
         let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
         if fresh {
+            self.late_esc.push(t);
             self.enum_escaped(t);
         }
     }

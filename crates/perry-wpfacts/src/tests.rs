@@ -1667,6 +1667,7 @@ mod key_inherit;
 mod lit_fact;
 mod local_versions;
 mod multi_run;
+mod native_dispatch;
 mod navigator_decl;
 mod navigator_store;
 mod new_verdicts;

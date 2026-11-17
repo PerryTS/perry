@@ -14,7 +14,7 @@ from actions_plan import load_catalog, path_matches, select
 
 
 CATALOG = load_catalog()
-WASI_JOBS = ("wasi-native", "wasi-execution", "wasi-execution-p1", "wasi-components")
+WASI_JOBS = ("wasi-native", "wasi-component-units", "wasi-execution", "wasi-execution-p1", "wasi-components")
 
 
 def selected(category: str, event_name: str, event: dict, ref: str = "refs/heads/main",
@@ -207,7 +207,8 @@ class CategoryRoutingTests(unittest.TestCase):
             self.assertIn("--flavour p1 --suite " + suite, commands("wasi-execution-p1"))
         self.assertNotIn("--flavour p1", commands("wasi-execution"))
         self.assertIn("component_check.sh", commands("wasi-components"))
-        self.assertIn("component_unit_tests.sh", commands("wasi-native"))
+        self.assertIn("component_unit_tests.sh", commands("wasi-component-units"))
+        self.assertNotIn("component_unit_tests.sh", commands("wasi-native"))
         self.assertTrue(any(step.get("env", {}).get("COMPONENT_CHECK_UNIT_TESTS") == "0"
                             for step in jobs["wasi-components"]["steps"]
                             if "component_check.sh" in step.get("run", "")))

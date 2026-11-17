@@ -127,6 +127,10 @@ pub(crate) struct State {
     why: Vec<Option<String>>,
     /// An L1 event a hook saw.
     all: Option<String>,
+    /// The first route into the runtime's generic method dispatcher the
+    /// solve resolved that no member-call site states
+    /// ([`NativeDispatch::open`]).
+    dispatch_open: Option<String>,
 }
 
 impl State {
@@ -609,6 +613,28 @@ pub(crate) fn run(m: &mut Model, entry: &'static str) {
     });
 }
 
+/// The solve resolved a route into the runtime's generic method dispatcher
+/// that no named member-call site states (`why`): the dispatcher fact is
+/// open ([`NativeDispatch`]). The first route is the reason.
+#[inline]
+pub(crate) fn dispatch_route(m: &mut Model, why: impl FnOnce(&Model) -> String) {
+    if m.family_reach.on && m.family_reach.dispatch_open.is_none() {
+        m.family_reach.dispatch_open = Some(why(m));
+    }
+}
+
+/// [`dispatch_route`] for a callee `t` bound to a call: a program body
+/// (a closure, function or method, or a class constructor, which throws
+/// before its body when called without `new`) enters no dispatcher; any
+/// other callee (a built-in function value, a bound function, a builtin
+/// namespace, a Proxy, an object) is a borrowed or reflective route.
+#[inline]
+pub(crate) fn callee(m: &mut Model, t: Tok) {
+    if !matches!(m.toks[t as usize], TokKind::Func(..) | TokKind::ClassObj(_)) {
+        dispatch_route(m, |m| format!("a call of {} as a value", m.tok_name(t)));
+    }
+}
+
 /// The sites that mint the generic built-in function value
 /// (`TokKind::BuiltinFn(Native::Any)`, a native with no identity and no
 /// holder), by the `why` each passes to `builtins::builtin_fn`. Every one
@@ -802,27 +828,8 @@ pub(crate) fn derive(g: &crate::gen::Gen, cfg: &crate::FactsConfig) -> FamilyRea
     );
     let m = &g.m;
     let mut v = Verdicts::new();
-    // L0.
-    if unit {
-        v.all(|| "L0:per-unit solve".into());
-    } else if m.aborted {
-        v.all(|| "L0:solve aborted".into());
-    } else if m.widened {
-        v.all(|| "L0:solve widened".into());
-    }
-    // L1.
-    if !v.full() {
-        if m.interp_runs {
-            v.all(|| "L1:interpreted code may run".into());
-        } else if let Some(why) = &m.dyn_eval {
-            v.all(|| format!("L1:dynamic code ({why})"));
-        } else if m.top_calls > 0 {
-            v.all(|| format!("L1:{} calls of unknown function values", m.top_calls));
-        } else if let Some(why) = &m.family_reach.all {
-            v.all(|| why.clone());
-        } else if let Some(why) = unknown_value(m) {
-            v.all(|| why);
-        }
+    if let Some(why) = unknown_world(m, unit) {
+        v.all(|| why);
     }
     // L2, L3, L4.
     let diagnostic = closed_requested(m) && !unit && !m.aborted;
@@ -848,6 +855,94 @@ pub(crate) fn derive(g: &crate::gen::Gen, cfg: &crate::FactsConfig) -> FamilyRea
             .map(Verdicts::verdicts)
             .unwrap_or_default(),
     }
+}
+
+/// L0 and L1: the solve is incomplete, or the world is unknown; the first
+/// rule that fires is the reason. `unit`: the modules are one unit of a
+/// larger program.
+fn unknown_world(m: &Model, unit: bool) -> Option<String> {
+    if unit {
+        Some("L0:per-unit solve".into())
+    } else if m.aborted {
+        Some("L0:solve aborted".into())
+    } else if m.widened {
+        Some("L0:solve widened".into())
+    } else if m.interp_runs {
+        Some("L1:interpreted code may run".into())
+    } else if let Some(why) = &m.dyn_eval {
+        Some(format!("L1:dynamic code ({why})"))
+    } else if m.top_calls > 0 {
+        Some(format!(
+            "L1:{} calls of unknown function values",
+            m.top_calls
+        ))
+    } else if let Some(why) = &m.family_reach.all {
+        Some(why.clone())
+    } else {
+        unknown_value(m)
+    }
+}
+
+/// Whether the program's routes into the runtime's generic method
+/// dispatcher (the `js_native_call_method` tower, the native arms of the
+/// closure calls and every redispatch) are all stated (DESIGN-native-
+/// dispatch §2, PR 1). A dispatcher obligation is owned by its site:
+/// [`crate::SiteFacts::dispatch_obligation`]. No link, codegen or runtime
+/// decision reads this fact yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeDispatch {
+    /// `None`: complete. Every route into the dispatcher is a named member
+    /// call at a site of the program, on receivers the solve knows (no ⊤),
+    /// and each such site states its obligation. `Some(why)`: a route no
+    /// site states may run (the first rule that fires): every stage is
+    /// live. Completeness is no emptiness: it says which obligations exist,
+    /// not which stage answers them.
+    pub open: Option<String>,
+}
+
+impl NativeDispatch {
+    pub fn complete(&self) -> bool {
+        self.open.is_none()
+    }
+
+    /// The dump's line: `# native_dispatch complete` or
+    /// `# native_dispatch open reason=<rule>`.
+    pub fn dump_line(&self) -> String {
+        match &self.open {
+            None => "# native_dispatch complete".to_owned(),
+            Some(why) => format!(
+                "# native_dispatch open reason={}",
+                why.replace(['\n', '\r'], " ")
+            ),
+        }
+    }
+}
+
+/// The dispatcher fact, after the fixpoint (computed where `family_reach`
+/// is). O0/O1: `family_reach`'s L0 and L1. O2: the native-extern
+/// assumption (the externs' own routes are not modeled). O3: a route the
+/// solve resolved that no site states ([`dispatch_route`]). O4: a
+/// HIR-specialized member op whose record states no receiver (`member_ops`).
+pub(crate) fn derive_dispatch(g: &crate::gen::Gen, cfg: &crate::FactsConfig) -> NativeDispatch {
+    let m = &g.m;
+    let open = unknown_world(m, cfg.unit)
+        .map(|why| format!("O1:{why}"))
+        .or_else(|| {
+            (!m.native_extern_fired.is_empty()).then(|| "O2:native externs are assumed".to_owned())
+        })
+        .or_else(|| {
+            m.family_reach
+                .dispatch_open
+                .as_ref()
+                .map(|w| format!("O3:{w}"))
+        })
+        .or_else(|| {
+            g.member_ops
+                .iter()
+                .find(|o| o.recv.is_none() && o.namespace.is_none())
+                .map(|o| format!("O4:{} states no receiver", o.op))
+        });
+    NativeDispatch { open }
 }
 
 /// L1's "some node holds ⊤": the reason, naming where. Every unknown value

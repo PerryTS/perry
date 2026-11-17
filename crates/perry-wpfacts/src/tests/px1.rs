@@ -449,3 +449,37 @@ console.log(q.item);
         "item: {v:?}"
     );
 }
+
+// PROXY10 (RED on 7a7ed4e1bd: a Proxy as the KEY of a computed store degraded
+// to "E9 Proxy target (storeindexed)"). ToPropertyKey is ToPrimitive: the get
+// trap runs for `@@toPrimitive` and `toString`; the store uses the string.
+const KEY: &str = r#"const N = String(process.argv[2]);
+function mk(tag: string): any {
+  const api: Record<string, unknown> = { tag };
+  return new Proxy(api, {
+    get(t: any, key: any) { if (key === "toString") return () => "key" + String(t.tag); return t[key]; },
+  });
+}
+const p = mk("a" + N);
+const o: Record<string, string> = {};
+o[p] = "v" + N;
+const g: any = globalThis;
+g[p] = 7;
+console.log(Object.keys(o).join(","), o["keya" + N], g["keya" + N]);
+"#;
+
+#[test]
+fn px10_proxy_as_a_computed_store_key() {
+    let (tops, held) = solve(KEY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a called Proxy still takes the old path (E9), also when it is a
+// store key.
+#[test]
+fn px10_keep_called_proxy_key_stays_e9() {
+    let src = KEY.replace("g[p] = 7;", "g[p] = 7;\ntry { p(); } catch (e) {}");
+    let (tops, _) = solve(&src);
+    assert!(e9(&tops), "{tops:?}");
+}

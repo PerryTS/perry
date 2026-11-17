@@ -388,6 +388,40 @@ pub struct SiteFacts {
     pub bodies: Vec<(u32, String)>,
 }
 
+/// DESIGN-native-dispatch §2: the dispatcher obligation of a named member
+/// call: Get-then-Call of `key` on every receiver the solve gives the site,
+/// unguarded (an entry guard's refinement is no linker proof).
+#[derive(Clone, Copy, Debug)]
+pub struct DispatchObligation<'a> {
+    pub key: &'a str,
+    pub receivers: &'a [ReceiverValue],
+    pub prims: u16,
+    /// A HIR-specialized member op: its variant (`None`: a named site).
+    pub op: Option<&'a str>,
+    /// A namespace member op: the namespace, a direct call.
+    pub namespace: Option<&'a str>,
+    /// The op's fallback edge into the dispatcher can be taken
+    /// ([`crate::MemberOpFacts::redispatch`]); a named call is always the
+    /// generic Get-then-Call itself.
+    pub redispatch: bool,
+}
+
+impl SiteFacts {
+    /// The site's obligation: `Some` for a member call (a read or a store
+    /// calls no method by itself; its accessor's call is the accessor's
+    /// site).
+    pub fn dispatch_obligation(&self) -> Option<DispatchObligation<'_>> {
+        (self.is_call && self.access == Access::Read).then_some(DispatchObligation {
+            key: &self.key,
+            receivers: &self.receiver_values,
+            prims: self.receiver_prims,
+            op: None,
+            namespace: None,
+            redispatch: true,
+        })
+    }
+}
+
 /// `Some` (a reason a claim fails) absorbs `None`; of two reasons the
 /// smaller is kept, so the join is commutative and only descends among
 /// the finitely many reasons.
@@ -5029,4 +5063,58 @@ fn present_from_start(m: &Model, p: Tok, a: Atom) -> bool {
         }
         _ => false,
     }
+}
+
+impl crate::MemberOpFacts {
+    /// The op's obligation (`member_ops`).
+    pub fn dispatch_obligation(&self) -> DispatchObligation<'_> {
+        DispatchObligation {
+            key: &self.key,
+            receivers: &self.receiver_values,
+            prims: self.receiver_prims,
+            op: Some(&self.op),
+            namespace: self.namespace.as_deref(),
+            redispatch: self.redispatch,
+        }
+    }
+}
+
+/// NDISP2: the published record of every HIR-specialized member op
+/// (`member_ops`). A receiver's values are the unguarded solved set over
+/// every run's copy of the node. The fallback edge of a folded Array op is
+/// taken unless every value is an exact Array; of any other folded or
+/// native receiver op, always (its own path is not judged here).
+pub(crate) fn member_op_facts(g: &crate::gen::Gen) -> Vec<crate::MemberOpFacts> {
+    let m = &g.m;
+    let copies = element::run_copies(m);
+    g.member_ops
+        .iter()
+        .map(|o| {
+            let key = m.atoms[o.key as usize].clone();
+            let (receiver_values, receiver_prims, redispatch) = match o.recv {
+                Some(r) => {
+                    let all = element::with_copies(&copies, &[r]);
+                    let set = receiver_set(m, &all);
+                    let array_only = o.op.starts_with("Array")
+                        && set.prims == 0
+                        && !set.toks.is_empty()
+                        && !all.iter().any(|&n| m.nodes[n as usize].dropped)
+                        && set.toks.iter().all(|&t| exact_array(m, t));
+                    (set.values(m), set.prims, !(o.folded && array_only))
+                }
+                None => (Vec::new(), 0, false),
+            };
+            crate::MemberOpFacts {
+                module: o.module,
+                op: o.op.clone(),
+                key,
+                namespace: o.namespace.clone(),
+                receiver_values,
+                receiver_prims,
+                stated: o.recv.is_some() || o.namespace.is_some(),
+                redispatch,
+                form: o.form,
+            }
+        })
+        .collect()
 }

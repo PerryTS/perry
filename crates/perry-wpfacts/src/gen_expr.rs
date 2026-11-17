@@ -721,7 +721,9 @@ impl<'a> Gen<'a> {
         let zs_ok = std::mem::take(&mut self.zs_ok);
         let seq = self.expr_seq;
         self.expr_seq += 1;
+        let member_ops = self.member_ops.len();
         let n = self.expr_inner(fx, e);
+        self.member_op_class(fx.module, e, member_ops);
         // A namespace pair's argument (`namespace_pair`): the pair is built
         // from one argument list (perry-hir `try_patched_builtin_call`), so
         // the intrinsic arm holds each argument once, as subtrees that do not

@@ -380,6 +380,49 @@ fn a_var_binding_is_never_touched() {
     assert_eq!(dbg(&module.init[0]), dbg(&Stmt::Expr(Expr::LocalGet(V))));
 }
 
+fn var_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(init),
+    }
+}
+
+/// A `var` holds `undefined` until its declarator runs; a read that can run
+/// earlier (here, a closure created before it) gets the hoisted
+/// `let v = undefined` a function body's `var` has, at the module's start.
+#[test]
+fn a_var_read_before_its_declarator_is_hoisted_with_undefined() {
+    let mut module = Module::new("m.ts");
+    const V: LocalId = 9;
+    module.init = vec![
+        Stmt::Expr(closure(10, vec![ret(Expr::LocalGet(V))])),
+        var_stmt(V, "v", Expr::Array(Vec::new(), None)),
+    ];
+    run(&mut module, false);
+    assert_eq!(module.init.len(), 3);
+    assert_eq!(dbg(&module.init[0]), dbg(&var_stmt(V, "v", Expr::Undefined)));
+    assert!(!dbg(&module.init).contains(tdz_check::TDZ_CHECK), "a var has no dead zone");
+}
+
+/// A `var` every read of which runs after its declarator holds only what it
+/// is assigned: it is left exactly as it was.
+#[test]
+fn a_var_read_only_after_its_declarator_is_not_hoisted() {
+    let mut module = Module::new("m.ts");
+    const V: LocalId = 9;
+    module.functions = vec![function(1, "late", vec![ret(Expr::LocalGet(V))])];
+    module.init = vec![
+        var_stmt(V, "v", Expr::Array(Vec::new(), None)),
+        Stmt::Expr(call(Expr::FuncRef(1))),
+    ];
+    let before = dbg(&module.init);
+    run(&mut module, false);
+    assert_eq!(dbg(&module.init), before);
+}
+
 fn import(source: &str, imported: &str, local: &str) -> Import {
     Import {
         source: source.to_string(),

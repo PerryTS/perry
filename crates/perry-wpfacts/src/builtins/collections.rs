@@ -181,6 +181,16 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         Some("next" | "return" | "throw") | None if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
         {
             m.call_tok(call, t, Some(t));
+            // `return(v)` runs PromiseResolve(%Promise%, v) before the step
+            // (27.6.3.9 AsyncGeneratorAwaitReturn, 27.2.4.7): it reads
+            // `constructor` off a promise argument.
+            if matches!(name, Some("return") | None) {
+                if let Some(&value) = c.arg(0) {
+                    let k = m.atom("constructor");
+                    let cn = m.node_l("promise-resolve-constructor");
+                    m.cons(value, Cons::Load { key: Key::Named(k), dst: cn });
+                }
+            }
             // It rejects: the shared cell.
             let thrown = m.thrown;
             gen_throw_passes(m, name, thrown, &c.args, &c.spread);
