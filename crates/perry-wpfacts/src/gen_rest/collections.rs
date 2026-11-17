@@ -174,9 +174,17 @@ impl<'a> Gen<'a> {
             Expr::MapEntryKeyAt { map, idx }
             | Expr::MapEntryValueAt { map, idx }
             | Expr::SetValueAt { set: map, idx } => {
+                // The for-of index walk over a typed Map or Set (HIR
+                // `lower_decl/body_stmt.rs`): the runtime reads the
+                // collection's own entry list at a live index
+                // (`js_set_value_at`, `js_map_entry_key_at` / `_value_at`),
+                // `undefined` for a value that is no collection. No [[Get]]
+                // runs, so no prototype member is read: it is the element
+                // read of the contents, as `values()` (`SetValues`) is.
                 let m = self.expr(fx, map);
                 let _ = self.expr(fx, idx);
-                let out = self.load(m, Key::any());
+                let ek = self.m.elem_key();
+                let out = self.load(m, ek);
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
