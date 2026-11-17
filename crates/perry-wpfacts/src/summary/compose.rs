@@ -171,7 +171,7 @@ pub(super) fn compose(
                 }
             }
             if any {
-                compress(&mut s);
+                compress(&mut s, &m.binding_reads);
                 m.sum.of.insert(f, Rc::new(s));
             }
         }

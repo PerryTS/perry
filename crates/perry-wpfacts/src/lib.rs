@@ -685,6 +685,10 @@ fn generate<'a>(
     for n in pending {
         g.m.refute_own_test(n);
     }
+    // The nodes the binding facts read keep their instance slots
+    // (`summary::compress`).
+    let reads = bindings::binding_reads(&g);
+    g.m.binding_reads = reads;
     g.m.summarize_and_replay();
     if unksrc::on() {
         let gm = &g;
