@@ -1,0 +1,1 @@
+Defer DOMException, Event and its subclasses, AbortController, and AbortSignal until phase B of realm population, preserving property order and inheritance. Programs using only core globals avoid their startup allocations.

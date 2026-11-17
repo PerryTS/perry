@@ -42,7 +42,8 @@ realm_names! {
     /// Declared data names phase B binds. Reading one, by any path, runs
     /// phase B first. `Date` (the costliest single family of the population,
     /// and one no program reaches without naming it or asking one of its
-    /// instances for a property) and, the last sixteen, the byte-cell families: the typed
+    /// instances for a property), the Event, DOMException and abort families,
+    /// and, the last sixteen, the byte-cell families: the typed
     /// arrays (with the shared `%TypedArray%` intrinsic, built with the first
     /// of them), the buffers, `DataView`, and node's `Buffer` (a `Uint8Array`
     /// subclass).
@@ -54,6 +55,7 @@ realm_names! {
         "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"
         "WebAssembly" "Temporal" "PerformanceEntry" "PerformanceMark" "PerformanceMeasure"
         "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming" "Date"
+        "DOMException" "Event" "CustomEvent" "MessageEvent" "AbortSignal" "AbortController"
         "Uint8Array" "Int8Array" "Uint16Array" "Int16Array" "Uint32Array" "Int32Array"
         "Float16Array" "Float32Array" "Float64Array" "Uint8ClampedArray" "BigInt64Array"
         "BigUint64Array" "ArrayBuffer" "SharedArrayBuffer" "DataView" "Buffer"
@@ -80,8 +82,8 @@ realm_names! {
         "ReadableStreamDefaultController" "ReadableStreamDefaultReader"
         "ReadableByteStreamController" "ReadableStreamBYOBReader" "ReadableStreamBYOBRequest"
         "WritableStream" "TransformStream" "Navigator" "URL" "URLSearchParams" "URLPattern"
-        "AbortController" "AbortSignal" "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"
-        "Event" "CustomEvent" "MessageEvent" "DOMException" "FormData" "Blob" "File" "Headers"
+        "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"
+        "FormData" "Blob" "File" "Headers"
         "Request" "Response" "MessageChannel" "MessagePort" "BroadcastChannel" "Storage"
         "WebSocket" "DisposableStack" "AsyncDisposableStack" "SuppressedError" "Iterator" "eval"
         "fetch" "structuredClone" "atob" "btoa" "setTimeout" "clearTimeout" "setInterval"
