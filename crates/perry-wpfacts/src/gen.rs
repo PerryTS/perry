@@ -701,6 +701,9 @@ impl<'a> Gen<'a> {
         let r = m.reason("thrown into unknown code");
         m.sink_node(esc, r);
         m.esc_raise = esc;
+        let host = m.node_l("HOSTREPORT");
+        crate::builtins::host_report_readers(&mut m, host);
+        m.host_report = host;
         let acc = m.node_l("ESCACCESSORS");
         let r = m.reason("accessor function of a value unknown code holds");
         m.sink_node(acc, r);

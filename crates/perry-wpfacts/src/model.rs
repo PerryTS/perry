@@ -2532,6 +2532,12 @@ pub struct Model {
     /// The region of calls unknown code makes to escaped functions: what they
     /// throw goes to unknown code (sunk; no catch reads it).
     pub esc_raise: NodeId,
+    /// R-HOSTREPORT: what the runtime reports as uncaught (perry-runtime
+    /// timer.rs `with_timer_uncaught_trap`, exception.rs `print_uncaught`,
+    /// promise/rejection.rs `report_unhandled`). Its readers are the
+    /// runtime's; it reaches `esc_raise` only when the program may register
+    /// a process listener, which is handed the value.
+    pub host_report: NodeId,
     /// The accessor functions of escaped values (unknown code reads them
     /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
     pub esc_accessors: NodeId,

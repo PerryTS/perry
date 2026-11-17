@@ -314,6 +314,21 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
+    let thrown = m.thrown;
+    cb_call_in(m, by, cb, this, args, thrown)
+}
+
+/// `cb_call` whose callback throws into `region` (a job's own promise, or
+/// the host for a callback the event loop calls; R-JOBTHROW).
+#[track_caller]
+pub(super) fn cb_call_in(
+    m: &mut Model,
+    by: CallId,
+    cb: NodeId,
+    this: ThisArg,
+    args: Vec<NodeId>,
+    region: NodeId,
+) -> NodeId {
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let site = m.calls.len() as CallId;
@@ -329,7 +344,7 @@ pub(super) fn cb_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region,
         },
         |m, tg, c| m.cons(tg, Cons::Call { call: c }),
     );
@@ -1703,6 +1718,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let exec = capability_executor(m, call, ov, name == Some("finally"));
             promise_species(m, t, call, exec);
             let thrown = m.thrown;
+            // R-JOBTHROW (27.2.5.4, 27.2.2.1 NewPromiseReactionJob): the
+            // rejection handler reads this promise's reason (and `thrown`,
+            // the rejections no promise holds); a handler's abrupt
+            // completion rejects the derived promise `out`.
+            let tr = super::promise_reason(m, t);
+            let or = super::promise_reason(m, out);
             let (on_ok, on_err) = match name {
                 Some("then") => (c.arg(0).copied(), c.arg(1).copied()),
                 Some("catch") => (None, c.arg(0).copied()),
@@ -1716,19 +1737,36 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 } else {
                     v
                 };
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![arg]);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![arg], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
+                } else {
+                    // thenFinally / catchFinally (27.2.5.3.1-2): a rejected
+                    // result of the handler rejects the derived promise.
+                    let ra = super::promise_reason_atom(m);
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::Named(ra),
+                            dst: or,
+                        },
+                    );
                 }
             }
             if let Some(f) = on_err {
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![thrown]);
+                let ej = m.node_l("rejection");
+                m.edge(thrown, ej);
+                m.edge(tr, ej);
+                let r = cb_call_in(m, call, f, ThisArg::Undef, vec![ej], or);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    super::adopt_r(m, call, r, ov, or);
                 }
             }
             if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
                 m.edge(v, ov);
+            }
+            if name == Some("finally") || on_err.is_none() || !c.spread.is_empty() {
+                m.edge(tr, or);
             }
             ret_tok(m, call, out);
         }

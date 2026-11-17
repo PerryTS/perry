@@ -883,9 +883,56 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
     m.field(p, a)
 }
 
+/// R-JOBTHROW: a rejected promise's reason is its [[PromiseResult]] in the
+/// rejected state (ECMA-262 27.2.1.7 RejectPromise). The model keeps it in
+/// its own internal slot beside the fulfilled value: what the promise's
+/// rejection handlers (27.2.5.4 PerformPromiseThen, 27.2.2.1) and an
+/// `await` of it (27.7.5.3 Await) read, never a program `catch` directly.
+/// A rejection the model cannot place on its promise stays in `thrown`,
+/// which every rejection reader also reads.
+pub(crate) fn promise_reason_atom(m: &mut Model) -> Atom {
+    effects::internal_atom(m, "PromiseReason")
+}
+
+/// The rejection-reason field of a promise token (`promise_reason_atom`).
+pub(crate) fn promise_reason(m: &mut Model, p: Tok) -> NodeId {
+    let a = promise_reason_atom(m);
+    let r = m.field(p, a);
+    // R-HOSTREPORT: a rejection no handler takes is the host's to report
+    // (promise/rejection.rs `report_unhandled`).
+    let h = m.host_report;
+    m.edge(r, h);
+    r
+}
+
+/// R-HOSTREPORT: the runtime's readers of what it reports as uncaught
+/// (exception.rs `print_uncaught`): Get `message` and Get `stack` (a getter
+/// runs with this = the value), ToString of each, and ToString of the value.
+pub(crate) fn host_report_readers(m: &mut Model, host: NodeId) {
+    string_methods::read_prim(m, host, "message", "uncaught report");
+    string_methods::read_prim(m, host, "stack", "uncaught report");
+    string_methods::to_prim(m, host, "uncaught report");
+}
+
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
 pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
+    let thrown = m.thrown;
+    adopt_r(m, by, v, dst, thrown)
+}
+
+/// `adopt` by a promise whose rejection reason is `rej`: an adopted
+/// promise's reason and what a thenable's `then` rejects with reach `rej`
+/// (27.2.1.3.2 step 13, 27.2.2.2 NewPromiseResolveThenableJob).
+pub fn adopt_r(m: &mut Model, by: CallId, v: NodeId, dst: NodeId, rej: NodeId) {
+    let ra = promise_reason_atom(m);
+    m.cons(
+        v,
+        Cons::Load {
+            key: Key::Named(ra),
+            dst: rej,
+        },
+    );
     if m.reach_thenable {
         m.cons(v, Cons::Fulfil { dst });
     } else {
@@ -900,8 +947,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
         },
     );
     let res = resolver(m, by, dst);
-    let thrown = m.thrown;
-    let rej = rejecter(m, thrown);
+    let rej = rejecter(m, rej);
     let rn = m.node_l("resolver");
     m.add_tok(rn, res);
     let jn = m.node_l("rejecter");
@@ -3152,10 +3198,11 @@ fn promise_resolve_reject(m: &mut Model, name: &str, call: CallId) {
     let v = promise_value(m, p);
     if let Some(a) = arg(m, call, 0) {
         if name == "resolve" {
-            adopt(m, call, a, v);
+            let r = promise_reason(m, p);
+            adopt_r(m, call, a, v, r);
         } else {
-            let thrown = m.thrown;
-            m.edge(a, thrown);
+            let r = promise_reason(m, p);
+            m.edge(a, r);
         }
     } else {
         m.add_prim(v, prim::UNDEF);
@@ -3196,6 +3243,25 @@ fn ns_method_inner(
         {
             m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
         }
+    }
+
+    // R-HOSTREPORT: a process listener ("uncaughtException",
+    // "unhandledRejection": os_process_emitter.rs
+    // `emit_process_uncaught_exception`, promise/rejection.rs
+    // `report_unhandled`) is handed what the host reports. A call that may
+    // register one (any event; a computed key may name the method) gives
+    // the report to unknown code, as the listener is.
+    if ns == BuiltinNs::Process
+        && match name {
+            None => true,
+            Some(n) => matches!(
+                n,
+                "on" | "once" | "addListener" | "prependListener" | "prependOnceListener"
+            ),
+        }
+    {
+        let (h, e) = (m.host_report, m.esc_raise);
+        m.edge(h, e);
     }
 
     // A computed key may name any member, one no rule describes included
@@ -3298,7 +3364,12 @@ fn ns_method_inner(
                 } else {
                     ThisArg::Node(this)
                 };
-                let _ = collections::cb_call(m, call, cb, this_arg, args);
+                // R-JOBTHROW / R-HOSTREPORT: a throw of the callback goes to
+                // the host (HTML 8.1.4.6 "report the exception"; perry
+                // timer.rs `with_timer_uncaught_trap`), which no program
+                // `catch` reads (`Model::host_report`).
+                let host = m.host_report;
+                let _ = collections::cb_call_in(m, call, cb, this_arg, args, host);
                 // HTML also accepts string handlers (ToString), which may
                 // run arbitrary script. Perry/Node only accept functions;
                 // no object handler is retained in either case.

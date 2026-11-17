@@ -156,3 +156,70 @@ fn gs4_shaped_read_meets_shaped_store() {
     );
     assert!(only(&bodies_of_m(&src), "D"), "g[cls_ + ty] is the D");
 }
+
+// GLOBS7 (2026-11-17), R-JOBTHROW: a throw goes where the runtime sends it.
+// An async body's throw rejects its own promise (27.7.5.1), a reaction
+// handler's rejects the derived promise (27.2.2.1 NewPromiseReactionJob), a
+// timer callback's goes to the host (HTML "report the exception"); none
+// reaches an `await` of an unrelated promise (27.7.5.3 Await).
+const GS7_R: &str = "class Scene { n = 0; traverse(cb: (o: Scene) => void): void { cb(this); } }\n\
+function poke(k: string): void { if (k === \"never\") void fetch(\"http://h/\" + k).catch(() => null); }\n\
+async function finale(): Promise<void> { poke(String(process.argv[2])); }\n\
+setTimeout(() => { poke(String(process.argv[3])); }, 1);\n\
+async function load(): Promise<void> {\n\
+  const p = new Promise<{ scene: Scene }>((res) => res({ scene: new Scene() }));\n\
+  const gltf = await p;\n\
+  gltf.scene.traverse((o) => { o.n++; });\n\
+}\n\
+void finale().then(() => 1, () => 2);\n\
+void load();\n";
+
+#[test]
+fn gs7_job_throw_never_reaches_an_unrelated_await() {
+    assert!(mono(&calls(GS7_R, "traverse")));
+}
+
+/// The rejection still reaches its readers: an `await` in a try (the
+/// async body's own promise), `.catch` of an executor's reject, and the
+/// rejection handler of a promise whose reaction handler threw.
+const GS7_K: &str = "class B { m(): number { return 1; } }\n\
+async function bad(): Promise<number> { throw new B(); }\n\
+async function f(): Promise<number> { try { await bad(); return 0; } catch (e) { return (e as B).m(); } }\n\
+const p = new Promise<number>((_, rej) => rej(new B()));\n\
+void p.catch((e: B) => e.m());\n\
+void Promise.resolve(1).then(() => { throw new B(); }).then(() => 0, (e: B) => e.m());\n\
+void f();\n";
+
+#[test]
+fn gs7_rejection_reaches_its_await_and_handlers() {
+    let v = calls(GS7_K, "m");
+    assert_eq!(v.len(), 3, "{v:?}");
+    // Every catch and rejection reader also holds the runtime-error token
+    // (THROWN, gen.rs): the one other receiver is the builtin Error.
+    assert!(v.iter().all(|s| s.contains("builtin Error")), "{v:?}");
+}
+
+// GLOBS9 (2026-11-17), R-HOSTREPORT: what a timer or microtask callback or a
+// module body throws is the host's to report (perry exception.rs
+// `print_uncaught` reads `message`, `stack`, ToString); with no process
+// listener nothing escapes.
+const GS9_R: &str = "class B { m(): number { return 1; } }\n\
+const b = new B();\n\
+setTimeout(() => { try { b.m(); } catch (e) { throw e; } if (process.argv[2] === \"x\") throw b; }, 0);\n\
+queueMicrotask(() => { if (process.argv[2] === \"y\") throw b; });\n\
+if (process.argv[2] === \"z\") throw b;\n\
+b.m();\n";
+
+#[test]
+fn gs9_host_report_does_not_escape() {
+    let v = calls(GS9_R, "m");
+    assert_eq!(v.len(), 2, "{v:?}");
+    assert!(mono(&v), "{v:?}");
+}
+
+/// A process listener is handed the reported value: it escapes.
+#[test]
+fn gs9_process_listener_gets_the_report() {
+    let src = format!("process.on(\"uncaughtException\", (e: any) => {{ e.m = 0; }});\n{GS9_R}");
+    assert!(!mono(&calls(&src, "m")));
+}
