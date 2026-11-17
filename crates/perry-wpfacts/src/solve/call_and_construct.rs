@@ -805,7 +805,7 @@ impl Model {
         // intrinsic (below), node constructs the stored value: the union
         // is true of both.
         if builtins::global_any_names(self, &name) {
-            builtins::global_any_new(self, call);
+            builtins::global_any_new(self, &name, call);
         }
         if builtins::program_global_fn(self, &name) {
             let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));

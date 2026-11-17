@@ -2852,16 +2852,17 @@ pub struct Model {
     /// shape (the global object's token, the key, the destination): a
     /// global named later that the shape can spell is read into each.
     pub global_shaped_reads: Vec<(Tok, Key, NodeId)>,
-    /// GLOBK G2: the global object's one field under any string key: what
-    /// the program stores there under a key proven a String it cannot name
-    /// (ECMA-262 7.1.19, 10.1.9). Made by the first such store; every
-    /// global binding read takes it (`global_any_reads` until then).
-    pub global_any: Option<NodeId>,
-    /// G2: the global binding reads made before `global_any` exists.
-    pub global_any_reads: Vec<NodeId>,
-    /// G2: the `new K(...)` calls of a literal global name made before
-    /// `global_any` exists.
-    pub global_any_news: Vec<u32>,
+    /// GLOBK G2: the global object's fields under String keys the solver
+    /// cannot name: what the program stores there under a key proven a
+    /// String (ECMA-262 7.1.19, 10.1.9), one field per key shape (0: any
+    /// String). GLOBS4: a global binding read takes the fields whose shape
+    /// can spell its name (`global_any_reads`).
+    pub global_any_fields: Vec<(KeyShapeId, NodeId)>,
+    /// G2: every global binding read, with what it names (a field made
+    /// later links to the reads its shape can spell).
+    pub global_any_reads: Vec<(crate::builtins::GlobalAnyRead, NodeId)>,
+    /// G2: every `new K(...)` of a literal global name `K`.
+    pub global_any_news: Vec<(String, u32)>,
     /// G2: the realm navigator's [[Prototype]] was linked to what the
     /// any-key stores' `prototype` holds (perry-runtime navigator.rs:119
     /// reads the live `Navigator` at the first `navigator` read).

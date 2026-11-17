@@ -1273,44 +1273,107 @@ pub fn global_any_names(m: &Model, n: &str) -> bool {
         && n != crate::STAR_KEY
 }
 
-/// G2: a read of a global binding (bare name, `globalThis.K`, a module
-/// export equal to a global a native reads by name) also reads what the
-/// program stored under unknown String keys.
-pub fn global_any_read(m: &mut Model, dst: NodeId) {
+/// G2: what a global binding read names: one global name, the names a
+/// computed key's shape spells, or (a key of no shape) every name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GlobalAnyRead {
+    Name(String),
+    Shape(KeyShapeId),
+    All,
+}
+
+/// GLOBS4: may a store under a String key of shape `s` (0: any String)
+/// write what read `r` names? A store writes exactly the key
+/// ToPropertyKey gives (ECMA-262 10.1.9.1 OrdinarySet, 7.1.19); a read of
+/// name N sees the value only if that key can be N (10.1.8.1 OrdinaryGet).
+fn global_any_hits(m: &Model, s: KeyShapeId, r: &GlobalAnyRead) -> bool {
+    match r {
+        GlobalAnyRead::All => true,
+        GlobalAnyRead::Name(n) => m.key_may_name_str(Key::Any(s), n),
+        GlobalAnyRead::Shape(k) => m.shapes_meet(s, *k),
+    }
+}
+
+fn global_any_link(m: &mut Model, r: GlobalAnyRead, dst: NodeId) {
     if m.unit_mode {
         return;
     }
-    match m.global_any {
-        Some(ga) => m.edge(ga, dst),
-        None => m.global_any_reads.push(dst),
+    let hits: Vec<NodeId> = m
+        .global_any_fields
+        .iter()
+        .filter(|(s, _)| global_any_hits(m, *s, &r))
+        .map(|(_, f)| *f)
+        .collect();
+    for f in hits {
+        m.edge(f, dst);
     }
+    m.global_any_reads.push((r, dst));
+}
+
+/// G2: a read of global binding `n` (bare name, `globalThis.n`, a module
+/// export equal to a global a native reads by name) also reads what the
+/// program stored under unknown String keys that can spell `n` (GLOBS4).
+pub fn global_any_read(m: &mut Model, n: &str, dst: NodeId) {
+    global_any_link(m, GlobalAnyRead::Name(n.to_string()), dst);
+}
+
+/// G2: a read of the global object under `key`: a named key is that
+/// binding's read, a shaped key reads the stores whose shape meets it, a
+/// key of no shape reads them all.
+pub fn global_any_read_key(m: &mut Model, key: Key, dst: NodeId) {
+    let r = match key {
+        Key::Named(a) => GlobalAnyRead::Name(m.atoms[a as usize].clone()),
+        Key::Any(0) => GlobalAnyRead::All,
+        Key::Any(s) => GlobalAnyRead::Shape(s),
+    };
+    global_any_link(m, r, dst);
 }
 
 /// G2: `new K(...)` of a literal global name constructs what the program
-/// stored under unknown String keys as well (13.3.5.1 evaluates `K`).
-pub fn global_any_new(m: &mut Model, call: CallId) {
+/// stored under unknown String keys that can spell `K` (13.3.5.1
+/// evaluates `K`).
+pub fn global_any_new(m: &mut Model, name: &str, call: CallId) {
     if m.unit_mode {
         return;
     }
-    match m.global_any {
-        Some(ga) => m.cons(ga, Cons::New { call }),
-        None => m.global_any_news.push(call),
+    let hits: Vec<NodeId> = m
+        .global_any_fields
+        .iter()
+        .filter(|(s, _)| m.key_may_name_str(Key::Any(*s), name))
+        .map(|(_, f)| *f)
+        .collect();
+    for f in hits {
+        m.cons(f, Cons::New { call });
     }
+    m.global_any_news.push((name.to_string(), call));
 }
 
-/// G2: the global object's field under any String key, made by the first
-/// store under an unknown String key (the reads and constructs made before
-/// it are linked now).
-pub fn global_any_field(m: &mut Model) -> NodeId {
-    if let Some(ga) = m.global_any {
-        return ga;
+/// G2: the global object's field under String keys of shape `s` (0: any
+/// String), made by the first store under such a key; the reads and
+/// constructs its shape can spell are linked to it, those made before it
+/// too.
+pub fn global_any_field(m: &mut Model, s: KeyShapeId) -> NodeId {
+    if let Some(&(_, f)) = m.global_any_fields.iter().find(|(k, _)| *k == s) {
+        return f;
     }
     let ga = m.node_l("global-any-key");
-    m.global_any = Some(ga);
-    for d in std::mem::take(&mut m.global_any_reads) {
+    m.global_any_fields.push((s, ga));
+    let reads: Vec<NodeId> = m
+        .global_any_reads
+        .iter()
+        .filter(|(r, _)| global_any_hits(m, s, r))
+        .map(|(_, d)| *d)
+        .collect();
+    for d in reads {
         m.edge(ga, d);
     }
-    for call in std::mem::take(&mut m.global_any_news) {
+    let news: Vec<CallId> = m
+        .global_any_news
+        .iter()
+        .filter(|(n, _)| m.key_may_name_str(Key::Any(s), n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in news {
         m.cons(ga, Cons::New { call });
     }
     global_any_navigator(m);
@@ -1327,7 +1390,7 @@ pub fn global_def_field(m: &mut Model) -> NodeId {
     }
     let d = m.node_l("global-define-key");
     m.global_def = Some(d);
-    let ga = global_any_field(m);
+    let ga = global_any_field(m, 0);
     m.edge(d, ga);
     for n in std::mem::take(&mut m.global_def_navs) {
         m.edge(d, n);
@@ -1351,19 +1414,27 @@ pub fn global_def_nav_read(m: &mut Model, dst: NodeId) {
 /// `prototype` as its [[Prototype]] when the getter first runs
 /// (perry-runtime navigator.rs:119 `builtin_value_core("Navigator")`,
 /// `navigator_object_with_constructor`): with a value stored under an
-/// unknown String key that may be what `Navigator` holds then.
+/// unknown String key that may be what `Navigator` holds then (a store
+/// whose key can spell `Navigator`, GLOBS4).
 pub fn global_any_navigator(m: &mut Model) {
-    let (Some(ga), Some(nav)) = (m.global_any, m.navigator) else {
+    let Some(nav) = m.navigator else {
         return;
     };
-    if m.global_any_nav {
+    if m.global_any_nav
+        || !m
+            .global_any_fields
+            .iter()
+            .any(|(s, _)| m.key_may_name_str(Key::Any(*s), "Navigator"))
+    {
         return;
     }
     m.global_any_nav = true;
+    let r = m.node_l("global-any-Navigator");
     let p = m.node_l("global-any-Navigator.prototype");
     let key = Key::Named(m.atom("prototype"));
-    m.cons(ga, Cons::Load { key, dst: p });
+    m.cons(r, Cons::Load { key, dst: p });
     m.given_prototype(nav, p);
+    global_any_read(m, "Navigator", r);
 }
 
 /// G2 off: a native the model does not follow reads a global by name and
