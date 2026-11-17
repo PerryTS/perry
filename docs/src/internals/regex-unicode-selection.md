@@ -48,7 +48,7 @@ the compiler must therefore retain installation for every open producer.
 Native `perry-perex` clients accept arbitrary patterns and install unconditionally.
 
 The slot holds only immutable native functions, never a GC value. Its selected
-DFA entry points are copied into the program capability. Installation is
+DFA entry table is retained by a native pointer in the program capability. Installation is
 process-wide, idempotent, thread-safe and cannot be replaced after installation.
 The VM projects only the word view and membership query into its execution
 state; the generic DFA projects only the word view. The linker order lists the
