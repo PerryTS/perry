@@ -65,6 +65,11 @@ fn expression(module: &Module, expr: &Expr) -> bool {
             ) {
                 return args.iter().any(|e| expression(module, e));
             }
+            // A computed or extracted callable can be RegExp or compile,
+            // regardless of the key's TypeScript annotation.
+            if !matches!(callee.as_ref(), Expr::PropertyGet { .. }) {
+                return true;
+            }
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -107,7 +112,13 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         | Expr::ReflectDefineProperty { .. }
         | Expr::ReflectSet { .. }
         | Expr::ObjectAssign { .. }
+        | Expr::ObjectCreate(_, _)
         | Expr::ProxyNew { .. }
+        | Expr::CallSpread { .. }
+        | Expr::NewDynamic { .. }
+        | Expr::NewDynamicSpread { .. }
+        | Expr::ReflectApply { .. }
+        | Expr::ReflectConstruct { .. }
         | Expr::Closure { .. }
         | Expr::FuncRef(_)
         | Expr::ExternFuncRef { .. } => return true,
@@ -206,6 +217,8 @@ mod tests {
             r"const o = { split(r) { return r; } }; o.split(/a/);",
             r"const o = {}; Object.defineProperty(o, 'split', { value(r) { return r; } }); o.split(/a/);",
             r"const o = {}; const key = process.argv[2]; o[key] = r => r; o.split(/a/);",
+            r"class C { helper(r) { return r; } } const c = new C(); c[process.argv[2]] = c.helper; const r = c.split(/a/); function f(k: number) { r[k]('\\p{L}', 'u'); } f('compile' as any);",
+            r"class C { helper(r) { return r; } } const c = new C(); c[process.argv[2]] = c.helper; const r = c.split(/a/); const f = r[process.argv[3]]; f('\\p{L}', 'u');",
             r"class C { split(r) { return r; } } new C().split(/a/);",
             r"const list = [/a/];",
             r"String.prototype.split = function(r) { return []; }; 'x'.split(/a/);",

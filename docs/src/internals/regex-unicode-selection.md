@@ -10,7 +10,8 @@ property escapes, Unicode escapes and named-group syntax. Every dynamic RegExp
 construction retains it, including literal patterns whose flags are dynamic.
 Escaping regex values and subclasses retain it because they expose constructors
 and recompilation. String-to-RegExp coercion, exposed constructors, prototype `compile`, escaped global objects, reflective mutation, proxies and
-first-class functions also retain it. Native modules, IPC,
+first-class functions also retain it. Computed or extracted calls, dynamic
+construction and reflective application retain it regardless of key annotations. Native modules, IPC,
 workers, addons, plugins, UI and deferred dynamic code are open producers and
 retain the database conservatively. These are whole-program unions collected
 before code generation; the entry installer is part of the object cache input.
