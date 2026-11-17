@@ -357,7 +357,15 @@ impl Model {
             // Rule CONSOLE-PCT: specifiers are parsed only in a String
             // first argument (`may_hold_percent` reads the node's strings);
             // a Proxy is an object, never one, and runs no trap there.
-            | Cons::ConsoleFormat { .. } => {
+            | Cons::ConsoleFormat { .. }
+            // The KEY of a computed store `o[proxy] = v` (the rule sits on
+            // the key node): ToPropertyKey (7.1.19) is ToPrimitive with hint
+            // String, its own rule (`Cons::Implicit` on every computed key,
+            // `proxy_to_primitive`: the [[Get]]s of `@@toPrimitive`,
+            // `valueOf`, `toString`). The store then uses that primitive; the
+            // ordinary rule reads no internal method of an object key (the
+            // any-key store, or the ToPrimitive result key: `implicit`).
+            | Cons::StoreIndexed { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
