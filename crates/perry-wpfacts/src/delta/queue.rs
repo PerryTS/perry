@@ -212,6 +212,20 @@ impl EventQueue {
             id = next;
         }
     }
+    /// Drops the pending values `keep` refuses (`Delta::retain`); each
+    /// event keeps its subscribers. Returns how many were dropped.
+    pub(crate) fn retain(&mut self, pending: &mut Pending, keep: impl Fn(u32) -> bool) -> usize {
+        let mut len = 0;
+        let mut id = pending.head;
+        while id != 0 {
+            let slot = self.slot_mut(id);
+            len += slot.event.as_mut().unwrap().retain(&keep);
+            id = slot.next;
+        }
+        let dropped = pending.len - len;
+        pending.len = len;
+        dropped
+    }
     pub(crate) fn remap(&mut self, pending: &Pending, keep: &[bool]) {
         if pending.head == 0 {
             return;
