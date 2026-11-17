@@ -131,8 +131,7 @@ pub extern "C" fn js_realm_family_phase(identity: u32) {
     if identity == REALM_TYPED_ARRAY_BUILT_LATE {
         return super::typed_array::alias_to_string_late();
     }
-    let name = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS[identity as usize - 1].name;
-    if crate::codegen_abi::realm_rest_global(name) {
+    if crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS[identity as usize - 1].phase_b {
         js_get_global_this();
     }
 }

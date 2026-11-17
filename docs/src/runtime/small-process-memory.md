@@ -47,6 +47,10 @@ Runtime-created objects materialize their intrinsic family before exposing it.
 `URL`, `URLSearchParams`, and `SubtleCrypto` stay in phase A while their prototype
 surfaces and property order need Node parity work.
 
+Population rows derive their phase and sealing eligibility from the canonical
+lists at compile time. Completing a realm reads those flags without matching
+each constructor name again or calling sealing helpers for ineligible families.
+
 To compile with one-pass population throughout, set the compiler environment:
 
 ```sh

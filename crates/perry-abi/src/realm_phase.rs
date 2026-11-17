@@ -17,8 +17,9 @@
 //!
 //! The three lists partition the global's declared keys (a runtime test,
 //! `two_phase_tests::phase_lists_partition_the_declared_keys`). The phase of
-//! a name is no part of its `#[realm]` declaration: the realm table and the
-//! facts built from it do not know when a slot is bound.
+//! a name is no part of its `#[realm]` declaration: the facts built from it
+//! do not know when a slot is bound. Runtime population rows derive their
+//! phase flags from these lists at compile time.
 
 /// One list of names, three ways: the slice (tests, the compiler's audit),
 /// the names joined by spaces (a loop over them in the runtime: one string,

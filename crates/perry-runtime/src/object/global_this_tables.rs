@@ -27,6 +27,10 @@ pub(crate) enum BuiltinInstanceIdentity {
 pub(crate) struct BuiltinConstructorDeclaration {
     pub identity: BuiltinConstructorIdentity,
     pub name: &'static str,
+    /// Population flags derived at compile time; they do not change realm facts.
+    pub phase_b: bool,
+    pub realm_seals_prototype: bool,
+    pub realm_seals_namespace: bool,
     pub info: &'static crate::closure::JsFunctionInfo,
     pub prototype_class: Option<u32>,
     pub prototype_serial: Option<u64>,
@@ -93,6 +97,9 @@ macro_rules! builtin_constructors {
             $(BuiltinConstructorDeclaration {
                 identity: BuiltinConstructorIdentity::$name,
                 name: stringify!($name),
+                phase_b: super::global_this::phase_rows::in_rest(stringify!($name)),
+                realm_seals_prototype: super::global_this::phase_rows::realm_seals_prototype(stringify!($name)),
+                realm_seals_namespace: super::global_this::phase_rows::contains(crate::codegen_abi::BUILTIN_NAMESPACES.as_slice(), stringify!($name)),
                 // SAFETY: fn_info! returns its own static immutable record.
                 info: unsafe { &*$info },
                 prototype_class: builtin_constructors!(@optional $($class)?),
