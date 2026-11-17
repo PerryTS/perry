@@ -224,10 +224,15 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return value;
         }
     }
-    if let Some(value) =
-        unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
-    {
-        return value;
+    // A Node `Buffer` is integer-indexed too, but its arm below also answers a
+    // computed method or expando name, which this numeric-only read would turn
+    // into `undefined`.
+    if !crate::buffer::is_node_buffer(raw as usize) {
+        if let Some(value) =
+            unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
+        {
+            return value;
+        }
     }
     // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
     // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own

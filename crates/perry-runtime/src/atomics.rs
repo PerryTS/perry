@@ -214,7 +214,10 @@ fn atomics_view_arg(value: f64) -> AtomicView {
             kind,
         };
     }
-    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_uint8array_buffer(raw) {
+    // A Node `Buffer` is a `Uint8Array` (its type byte is not a typed-array
+    // brand, so the lookup above misses it); key material sharing the byte
+    // storage is not.
+    if crate::buffer::is_uint8_view_buffer(raw) {
         return AtomicView::Uint8ArrayBuffer(raw as *mut crate::buffer::BufferHeader);
     }
     throw_type_error(b"Atomics operation requires an integer typed array");
@@ -818,4 +821,36 @@ pub extern "C" fn js_atomics_wait_async(
         crate::thread::queue_promise_string_result(owner_agent, promise_usize, result);
     });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
+}
+
+#[cfg(test)]
+mod buffer_receiver_tests {
+    use super::*;
+
+    fn closure() -> *const ClosureHeader {
+        std::ptr::null()
+    }
+
+    fn this() -> crate::closure::JsThis {
+        crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED))
+    }
+
+    /// node: `Buffer` is a `Uint8Array`, so every integer Atomics operation
+    /// accepts it (`Atomics.load(Buffer.from([1, 2]), 1) === 2`).
+    #[test]
+    fn integer_atomics_accept_a_node_buffer() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::gc::gc_init();
+        let buf = crate::buffer::js_buffer_alloc(4, 0);
+        assert!(crate::buffer::is_node_buffer(buf as usize));
+        crate::buffer::js_buffer_set(buf, 1, 2);
+        let view = crate::value::js_nanbox_pointer(buf as i64);
+        let load =
+            crate::exception::catch_js_throw(|| js_atomics_load(closure(), this(), view, 1.0));
+        assert_eq!(load.ok(), Some(2.0));
+        assert_eq!(js_atomics_add(closure(), this(), view, 1.0, 5.0), 2.0);
+        assert_eq!(js_atomics_store(closure(), this(), view, 0.0, 7.0), 7.0);
+        assert_eq!(crate::buffer::js_buffer_get(buf, 0), 7);
+        assert_eq!(crate::buffer::js_buffer_get(buf, 1), 7);
+    }
 }

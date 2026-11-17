@@ -24,8 +24,7 @@ fn typed_array_view<'s>(
     let addr = value_pointer_addr(value)?;
     let kind = if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
         kind
-    } else if crate::buffer::is_registered_buffer(addr) && crate::buffer::is_uint8array_buffer(addr)
-    {
+    } else if crate::buffer::is_uint8_view_buffer(addr) {
         crate::typedarray_hook_slots::KIND_UINT8
     } else {
         return None;

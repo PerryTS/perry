@@ -49,7 +49,7 @@ fn typed_array_view_info(value: f64) -> Option<(usize, bool, u32)> {
     if addr < 0x1000 {
         return None;
     }
-    if crate::buffer::is_uint8array_buffer(addr) {
+    if crate::buffer::is_uint8_view_buffer(addr) {
         let len = crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader);
         return Some((addr, true, len.max(0) as u32));
     }
