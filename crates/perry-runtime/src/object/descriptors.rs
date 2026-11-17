@@ -263,11 +263,12 @@ unsafe fn own_property_ordinary(obj_value: f64, key_value: f64) -> Option<OwnPro
                 obj_value, key_value,
             ));
         }
-        if let Some((obj, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
-            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value) {
+        if let Some(view) = crate::array::subclass_elements::own_elements_value(obj_value) {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
                 return crate::array::subclass_elements::own_property_descriptor(
-                    obj,
-                    elements,
+                    view,
                     elements_key,
                 )
                 .and_then(OwnProperty::public);
@@ -1127,15 +1128,19 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     }
     // An elements-backed Array-subclass instance: present indices, then
     // `length`, then the shape's own string keys.
-    if crate::array::subclass_elements::backed_value(obj_value).is_some() {
+    if crate::array::subclass_elements::own_elements_value(obj_value).is_some() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_h = scope.root_nanbox_f64(obj_value);
         let (names, obj_value) =
             obj_h.across_nanbox(|| js_object_get_own_property_names_shape(obj_value));
-        if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
+        if let Some(view) = crate::array::subclass_elements::own_elements_value(obj_value) {
             let names_ptr = crate::value::js_nanbox_get_pointer(names) as *mut ArrayHeader;
             let combined = unsafe {
-                crate::array::subclass_elements::prepend_index_keys(elements, names_ptr, true)
+                crate::array::subclass_elements::prepend_index_keys(
+                    view,
+                    names_ptr,
+                    view.store_backed(),
+                )
             };
             return crate::value::js_nanbox_pointer(combined as i64);
         }

@@ -197,7 +197,9 @@ mod string_wrapper;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
-pub(crate) use live_slots::{object_inline_capacity, set_object_live_slot_count};
+pub(crate) use live_slots::{
+    object_inline_capacity, object_physical_capacity, set_object_live_slot_count,
+};
 pub(crate) use null_stub::null_stub_value;
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 #[cfg(test)]
@@ -1182,7 +1184,6 @@ const TRANSITION_SLOT_IDX_MASK: u32 = 0x00FF_FFFF;
 fn transition_cache_slot(prev_shape_id: LayoutWord, key_id: u64, namespace: u32) -> usize {
     let hash = match namespace {
         0 => interned_key_slot_hash(interned_key_addr(key_id)),
-        spread::SPREAD_TRANSITION_NAMESPACE => key_id,
         // Packed keys have no alignment bits. Include the length so a
         // zero-padded shorter name is not forced to alias a longer one.
         _ => key_id ^ (u64::from(namespace) << 56),

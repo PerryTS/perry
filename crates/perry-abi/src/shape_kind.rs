@@ -60,6 +60,13 @@ macro_rules! define_shape_object_kind {
             /// Runtime-born ordinary storage with native read forwarding, without
             /// the plain-store admission carried by OrdinaryNativeAlias.
             OrdinaryUnmarkedNativeAlias,
+            /// A sloppy arguments object: named record [length, callee,
+            /// @@iterator] with the elements inline after it (count from the
+            /// GcHeader size word); added keys never take an element slot.
+            Arguments,
+            /// A strict (or non-simple-parameter) arguments object: as
+            /// `Arguments`, `callee` is the %ThrowTypeError% accessor pair.
+            ArgumentsStrict,
         }
 
         impl ShapeObjectKind {
@@ -130,6 +137,8 @@ macro_rules! define_shape_object_kind {
                     ShapeObjectKind::OrdinaryNativeAlias => 10,
                     ShapeObjectKind::CallableOrdinary => 11,
                     ShapeObjectKind::OrdinaryUnmarkedNativeAlias => 12,
+                    ShapeObjectKind::Arguments => 13,
+                    ShapeObjectKind::ArgumentsStrict => 14,
                 }
             }
         }

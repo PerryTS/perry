@@ -2497,12 +2497,6 @@
       "why": "Per-agent cache of (ShapeId, inline slot index) u32 pairs. ShapeIds are numbers that are never reused and slot indices are integers; no heap address or NaN-boxed value is stored, so an entry can only go unused, never dangle."
     },
     {
-      "file": "crates/perry-runtime/src/object/arguments.rs",
-      "name": "ARGUMENTS_SHAPES",
-      "verdict": "not_a_gc_pointer",
-      "why": "[u32; 130] of the ShapeId an arguments object of each ARGUMENTS_KEYS slot was last born with. ShapeIds are never-reused numbers re-validated against the live descriptor by try_birth_stamp_preinstalled_shape; no heap pointer is stored."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/decl_prototype_birth.rs",
       "name": "BORN_FINAL_BUILDS",
       "verdict": "test_only",
@@ -3772,10 +3766,6 @@
     {
       "file": "crates/perry-runtime/src/object/field_get_set/field_ops.rs",
       "name": "WARN_NULL_PTR_STATE"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
-      "name": "PROTOTYPE_VERDICT"
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",

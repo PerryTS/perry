@@ -314,9 +314,11 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         }
     };
     let key_val = JSValue::from_bits(key.to_bits());
-    if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj) {
-        if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key) {
-            if unsafe { crate::array::subclass_elements::has_own_key(elements, elements_key) } {
+    if let Some(view) = crate::array::subclass_elements::own_elements_value(obj) {
+        if let Some(elements_key) =
+            crate::array::subclass_elements::key_of_value(key).filter(|k| view.admits(*k))
+        {
+            if unsafe { crate::array::subclass_elements::has_own_key(view, elements_key) } {
                 return nanbox_true;
             }
             // Absent index: not own — the ordinary walk continues to the

@@ -22,7 +22,10 @@ pub(super) unsafe fn hole_fill_admitted(
     if (*gc)._reserved
         & (crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            // An arguments object's named capacity is not its allocation's:
+            // refused here, so the hole test below reads the physical one.
+            | crate::gc::OBJ_FLAG_ARGUMENTS)
         != 0
         || (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
     {
@@ -51,6 +54,7 @@ pub(super) unsafe fn hole_fill_admitted(
             keys,
             (*r).logical_key_count,
             pos,
+            crate::object::object_physical_capacity(obj),
         )
         && chain_admits_add(dir, obj, r, key_bits, hash)
 }

@@ -552,11 +552,48 @@ pub fn params_are_simple_arguments_list(params: &[ast::Param]) -> bool {
     })
 }
 
-pub fn mapped_argument_parameter_ids(params: &[Param]) -> Vec<(u32, LocalId)> {
+/// The parameters a sloppy simple-parameter function maps into its
+/// arguments object: those its body names (any identifier with the
+/// parameter's name, nested closures included). An unnamed parameter's alias
+/// is unobservable: no code can read or write the binding, so the arguments
+/// element is plain data. A body that can name a binding dynamically (`eval`,
+/// `with`) maps every parameter.
+pub fn mapped_argument_parameter_ids(
+    params: &[Param],
+    body: Option<&ast::FunctionBody>,
+) -> Vec<(u32, LocalId)> {
+    use swc_ecma_visit::{Visit, VisitWith};
+    struct Names {
+        names: std::collections::HashSet<String>,
+        dynamic: bool,
+    }
+    impl Visit for Names {
+        fn visit_ident(&mut self, i: &ast::Ident) {
+            if &*i.sym == "eval" {
+                self.dynamic = true;
+            }
+            self.names.insert(i.sym.to_string());
+        }
+        fn visit_with_stmt(&mut self, w: &ast::WithStmt) {
+            self.dynamic = true;
+            w.visit_children_with(self);
+        }
+    }
+    let mut named = Names {
+        names: std::collections::HashSet::new(),
+        dynamic: false,
+    };
+    if let Some(body) = body {
+        body.visit_with(&mut named);
+    }
     let mut seen = std::collections::HashSet::new();
     let mut mapped = Vec::new();
     for (idx, param) in params.iter().enumerate().rev() {
         if param.is_rest || param.arguments_object.is_some() {
+            continue;
+        }
+        if !named.dynamic && !named.names.contains(&param.name) {
+            seen.insert(param.name.clone());
             continue;
         }
         if seen.insert(param.name.clone()) {

@@ -1400,6 +1400,15 @@ mod tests {
     /// runs puts its effects, and the body the call-graph check runs on, on
     /// the member's entry.
     #[test]
+    fn a_birth_site_is_accepted_with_reach_edges_only() {
+        let d = &inline(r#"realm_decl! { "%ExampleBirth%", kind = birth_site; }"#).unwrap()[0];
+        assert_eq!(d.get("kind").and_then(Value::string), Some("birth_site"));
+        assert!(d.get("header").is_none(), "no cell");
+        assert!(d.get("properties").is_none());
+        assert!(inline(r#"realm_decl! { "%ExampleBirth%"; }"#).is_err());
+    }
+
+    #[test]
     fn effects_only_block_declares_the_dispatch_callee() {
         let member = r#"realm_decl! { "node:example.has", provider = bound_method, receiver = "node:example"; }"#;
         let arm = r#"fn d() { match (m, k) { ("example", "has") => bool_to_f64(crate::example::js_example_has(arg(0))), _ => 0 } }"#;

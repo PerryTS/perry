@@ -30,9 +30,7 @@ fn get(obj: *const ObjectHeader, name: &str) -> JSValue {
     js_object_get_field_by_name(obj, key(name))
 }
 
-fn register_scanners() {
-    gc_register_mutable_root_scanner(scan_arguments_object_roots_mut);
-}
+fn register_scanners() {}
 
 #[test]
 fn arguments_share_keys_but_keep_identity_values_and_descriptors_private() {
@@ -42,11 +40,9 @@ fn arguments_share_keys_but_keep_identity_values_and_descriptors_private() {
     let first = arguments(&[1.0, 2.0, 3.0], undefined, false);
     let second = arguments(&[4.0, 5.0, 6.0], undefined, false);
     assert_ne!(first, second);
-    // Birth installs one meta record per call: the birth word and the
-    // per-call state are private to each object, the keys are shared.
+    // Birth is one allocation on the arguments layout: the element count and
+    // the values are private to each object, the keys are shared.
     unsafe {
-        assert!(!(*first).meta.is_null() && !(*second).meta.is_null());
-        assert_ne!((*first).meta, (*second).meta, "each call owns its record");
         let a = test_arguments_birth_word(first).unwrap();
         let b = test_arguments_birth_word(second).unwrap();
         assert_eq!((a.0, b.0), (3, 3));
@@ -368,7 +364,7 @@ fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
     let mut args = mapped_arguments(&[0.5; 8], undefined, 8);
     js_shadow_slot_set(0, ptr_bits(args as usize));
     for _ in 0..16 {
-        let map = test_arguments_mapping_array(args).expect("mapped object has a map");
+        let map = args as usize;
         let both_old = [args as usize, map as usize].iter().all(|addr| {
             matches!(
                 crate::arena::classify_heap_generation(*addr),
@@ -381,7 +377,8 @@ fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
         gc_collect_minor();
         args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
     }
-    let map = test_arguments_mapping_array(args).expect("mapped object has a map");
+    // The parameter map is the owner's own element words: no second object.
+    let map = args as usize;
     assert!(
         [args as usize, map as usize].iter().all(|addr| matches!(
             crate::arena::classify_heap_generation(*addr),
@@ -399,7 +396,7 @@ fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
     );
     js_arguments_object_map_index(args, 7, cell);
     // Only the owner is rooted (slot 0, above): the cell is reachable solely
-    // through the mapping array, exactly as a parameter cell whose frame has
+    // through the owner's element word, exactly as a parameter cell whose frame has
     // returned.
 
     let trace = super::support::collect_minor_trace(GcTriggerKind::Direct);
@@ -420,4 +417,45 @@ fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
         9.0
     );
     assert_eq!(get(owner, "7").bits(), 9.0f64.to_bits());
+}
+
+/// A define that moves element `i` to own key `i` (here a non-enumerable
+/// data define) leaves the element word the hole: index `i` is then listed
+/// once, with its key's attributes, and every read answers the key, never a
+/// stale element word.
+#[test]
+fn a_define_that_moves_an_element_to_its_key_leaves_the_hole() {
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let args = arguments(&[1.0, 2.0, 3.0], undefined, false);
+    let descriptor = js_object_alloc_null_proto(0, 0);
+    js_object_set_field_by_name(descriptor, key("value"), 7.0);
+    js_object_set_field_by_name(
+        descriptor,
+        key("enumerable"),
+        f64::from_bits(crate::value::TAG_FALSE),
+    );
+    js_object_define_property(
+        crate::value::js_nanbox_pointer(args as i64),
+        crate::value::js_nanbox_string(key("0") as i64),
+        crate::value::js_nanbox_pointer(descriptor as i64),
+    );
+    assert_eq!(get(args, "0").bits(), 7.0f64.to_bits());
+    let keys = js_object_keys(args);
+    assert_eq!(
+        crate::array::js_array_length(keys),
+        2,
+        "index 0 is non-enumerable now"
+    );
+    let names = js_object_get_own_property_names(crate::value::js_nanbox_pointer(args as i64));
+    let names = crate::value::js_nanbox_get_pointer(names) as *const crate::array::ArrayHeader;
+    let zeros = (0..crate::array::js_array_length(names))
+        .filter(|&i| {
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            (unsafe {
+                crate::string::js_string_key_bytes(crate::array::js_array_get(names, i), &mut sso)
+            }) == Some(&b"0"[..])
+        })
+        .count();
+    assert_eq!(zeros, 1, "index 0 is listed once");
 }

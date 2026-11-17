@@ -436,9 +436,10 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     // `obj` is a live GC object by contract: its header needs no admission.
     let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if crate::gc_type_is_not_object!(header.obj_type)
-        || crate::object::shapes::shape_object_kind_of_receiver(
+        || !crate::object::shapes::shape_kind_of_receiver_is(
             (crate::object::shapes::object_shape_stamp(obj)).0,
-        ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+            crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof,
+        )
     {
         return None;
     }
