@@ -816,6 +816,46 @@ pub unsafe extern "C" fn js_class_static_call_guard(
     }
 }
 
+/// [`js_class_static_call_guard`] for `super.m(..)` in a static method of
+/// class `home_id`: the read starts at the home's `[[Prototype]]`, so the
+/// declared body `body` of class `owner_id` runs directly only while that
+/// parent's lookup of `name` reaches it. The memo is armed (home, owner) for
+/// a one-link chain: a relink of the home's parent transitions the home's
+/// shape (`constructor_parent_store`), and a write of the owner's `name` the
+/// owner's.
+///
+/// # Safety
+/// As [`js_class_static_call_guard`].
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_super_call_guard(
+    home_id: i32,
+    owner_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+    body: i64,
+    memo: *mut u64,
+) -> i32 {
+    let home = home_id as u32;
+    let owner = owner_id as u32;
+    if name_ptr.is_null() || name_len <= 0 {
+        return 0;
+    }
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    let Some(parent) = static_parent_class_id(home).filter(|&p| p != 0 && p != home) else {
+        return 0;
+    };
+    match super::class_registry::lookup_static_method_owner_bytes(parent, name) {
+        Some((found, (func_ptr, ..))) if found == owner && func_ptr == body as usize => {
+            if found == parent && !memo.is_null() {
+                // SAFETY: the site's memo (see `# Safety`).
+                arm_static_call_memo(&mut *(memo as *mut StaticCallMemo), home, owner);
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
 /// A static-call site's memo (`perry-codegen/src/expr/static_method.rs`),
 /// four words the emitted hit reads (`perry_abi::STATIC_CALL_MEMO_*`):
 /// `key` = (C's shape word | owner's shape word << 32) of the last

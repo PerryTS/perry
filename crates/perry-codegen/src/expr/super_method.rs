@@ -232,7 +232,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 }
 
-/// An instance method body whose home binding (the first `let` that
+/// A method body (instance or static) whose home binding (the first `let` that
 /// `class_home::finish` inserts) is read only by `super.m(...)` sites this
 /// module proves: those sites never read the home value, so the binding is
 /// not emitted. `None` when any other read (a generic super site, a `super.x`
@@ -241,17 +241,16 @@ pub(crate) fn elided_method_home(ctx: &FnCtx<'_>, body: &[perry_hir::Stmt]) -> O
     let Some(perry_hir::Stmt::Let {
         id,
         mutable: false,
-        init:
-            Some(Expr::ClassMethodHome {
-                class_name,
-                is_static: false,
-            }),
+        init: Some(Expr::ClassMethodHome {
+            class_name,
+            is_static,
+        }),
         ..
     }) = body.first()
     else {
         return None;
     };
-    if ctx.in_static_member || ctx.class_stack.last() != Some(class_name) {
+    if *is_static != ctx.in_static_member || ctx.class_stack.last() != Some(class_name) {
         return None;
     }
     let mut unproven = |e: &Expr| home_read_unproven(ctx, e, *id);
@@ -298,12 +297,15 @@ fn home_read_unproven(ctx: &FnCtx<'_>, e: &Expr, home: u32) -> bool {
 
 /// A `super.m(...)` the compiler proves: the home class's static chain to the
 /// ConstFn holder of `m` (`static_prototype::super_chain`), the holder's
-/// method body and its declared parameter count.
+/// method body and its declared parameter count. In a static method, `chain`
+/// is empty and `static_owner` names the class declaring the static `m` the
+/// home's parent inherits or owns.
 struct SuperTarget {
     home_cid: u32,
     chain: Vec<(u32, u32)>,
     body: String,
     arity: usize,
+    static_owner: Option<u32>,
 }
 
 /// `super.m` in an instance method (or constructor) of a class whose
@@ -312,11 +314,11 @@ struct SuperTarget {
 /// holder's declared method while no prototype on the chain is shadowed.
 /// `Err` names why the site keeps the generic get and call.
 fn super_target(ctx: &FnCtx<'_>, method: &str) -> std::result::Result<SuperTarget, &'static str> {
-    if ctx.in_static_member {
-        return Err("static");
-    }
     if crate::target_layout::target_is_ilp32(ctx.target_triple) {
         return Err("target");
+    }
+    if ctx.in_static_member {
+        return static_super_target(ctx, method);
     }
     let class = ctx.class_stack.last().ok_or("no-class")?;
     let home_cid = *ctx.class_ids.get(class).ok_or("no-class")?;
@@ -354,13 +356,114 @@ fn super_target(ctx: &FnCtx<'_>, method: &str) -> std::result::Result<SuperTarge
         chain,
         body,
         arity,
+        static_owner: None,
     })
+}
+
+/// `super.m` in a static method: the home is the class function object, so
+/// the get reads the static `m` its `[[Prototype]]` (the declared parent)
+/// owns or inherits. The proof is the site's static-call memo over the home's
+/// and the owner's shapes (`js_class_static_super_call_guard`), which names
+/// one function object per class id: every class on the chain must be
+/// evaluated once (it has a static prototype image, as for an instance site).
+fn static_super_target(
+    ctx: &FnCtx<'_>,
+    method: &str,
+) -> std::result::Result<SuperTarget, &'static str> {
+    let once = |name: &str| -> std::result::Result<u32, &'static str> {
+        let cid = *ctx.class_ids.get(name).ok_or("no-class")?;
+        if cid == 0 || cid >= 0x7FFF_FF00 {
+            return Err("no-static-image");
+        }
+        crate::codegen::static_shape_ids::static_prototype_layout(cid)
+            .map(|_| cid)
+            .ok_or("no-static-image")
+    };
+    let class = ctx.class_stack.last().ok_or("no-class")?;
+    let home_cid = once(class)?;
+    let mut name = ctx
+        .classes
+        .get(class)
+        .filter(|c| c.extends_expr.is_none() && c.specialized_from.is_none())
+        .and_then(|c| c.extends_name.clone())
+        .ok_or("no-static-chain")?;
+    let declaration = loop {
+        let c = ctx.classes.get(&name).ok_or("no-static-chain")?;
+        if c.extends_expr.is_some() || c.specialized_from.is_some() {
+            return Err("no-static-chain");
+        }
+        once(&name)?;
+        if let Some(m) = c.static_methods.iter().find(|m| m.name == method) {
+            break m;
+        }
+        name = c.extends_name.clone().ok_or("no-static-chain")?;
+    };
+    let owner = once(&name)?;
+    let key = (
+        name.clone(),
+        crate::codegen::static_method_registry_key(method),
+    );
+    if declaration.is_async
+        || declaration.is_generator
+        || crate::codegen::helpers::body_has_fixed_generator_state(&declaration.body)
+        || declaration
+            .params
+            .iter()
+            .any(|p| p.is_rest || p.arguments_object.is_some())
+        || [
+            ctx.method_has_rest,
+            ctx.method_has_synthetic_arguments,
+            ctx.method_arguments_length_only,
+        ]
+        .iter()
+        .any(|m| m.get(&key).copied().unwrap_or(false))
+    {
+        return Err("arguments");
+    }
+    let body = ctx.methods.get(&key).ok_or("no-body")?.clone();
+    let arity = *ctx.method_param_counts.get(&key).ok_or("no-body")?;
+    Ok(SuperTarget {
+        home_cid,
+        chain: Vec::new(),
+        body,
+        arity,
+        static_owner: Some(owner),
+    })
+}
+
+/// The static-call memo guard of a static `super.m` site: `i1` "the get
+/// reads the owner's declared `m`".
+fn static_super_guard(
+    ctx: &mut FnCtx<'_>,
+    method: &str,
+    target: &SuperTarget,
+    owner: u32,
+) -> String {
+    let name_idx = ctx.strings.intern(method);
+    let entry = ctx.strings.entry(name_idx);
+    let name_bytes = format!("@{}", entry.bytes_global);
+    let name_len = entry.byte_len.to_string();
+    let body = ctx.block().ptrtoint(&format!("@{}", target.body), I64);
+    super::static_method::emit_static_call_guard(
+        ctx,
+        None,
+        false,
+        "js_class_static_super_call_guard",
+        &[
+            (I32, target.home_cid.to_string()),
+            (I32, owner.to_string()),
+            (PTR, name_bytes),
+            (I64, name_len),
+            (I64, body),
+        ],
+    )
 }
 
 /// `super.m(args)` in spec order: the receiver (`this`, which throws before
 /// `super()`), the [[Get]] of `m`, then the arguments, then the call. The get
-/// is the holder proof over the static chain; only where it fails does the
-/// cold block read the live home parent (`js_super_accessor_get`). The
+/// is the holder proof over the static chain (in a static method, the
+/// site's static-call memo); only where it fails does the cold block read the
+/// live home parent. The
 /// arguments are lowered once; the proven arm calls the holder's body
 /// directly (missing arguments `undefined`, extra ones evaluated and
 /// dropped), the other calls the value the get read.
@@ -376,7 +479,10 @@ fn lower_proven_super_call(
         let r = group.lower(ctx, &this_expr, collects)?;
         // The holder proof reads no user state; compute it before the
         // arguments so a write among them cannot change the callee.
-        let ok = crate::proto_constants::chain_constant(ctx, method, &target.chain);
+        let ok = match target.static_owner {
+            Some(owner) => static_super_guard(ctx, method, &target, owner),
+            None => crate::proto_constants::chain_constant(ctx, method, &target.chain),
+        };
         let how = if ok == "true" { "constant" } else { "guarded" };
         record_super_site(ctx, method, "super_direct", how);
         let f = if ok == "true" {
@@ -389,17 +495,29 @@ fn lower_proven_super_call(
             let fast_end = ctx.block().label.clone();
             ctx.block().cond_br(&ok, &done_l, &slow_l);
             ctx.current_block = slow;
-            let key = lower_expr(ctx, &Expr::String(method.to_string()))?;
-            let recv = group.reread(ctx, r)?;
-            let got = ctx.block().call(
-                DOUBLE,
-                "js_super_accessor_get",
-                &[
-                    (I32, &target.home_cid.to_string()),
-                    (DOUBLE, &key),
-                    (DOUBLE, &recv),
-                ],
-            );
+            let got = if target.static_owner.is_some() {
+                // The home is the class function object; `this` is a slot read.
+                lower(
+                    ctx,
+                    &Expr::ObjectSuperPropertyGet {
+                        home: Box::new(lexical_class_home(ctx)?),
+                        key: Box::new(Expr::String(method.to_string())),
+                        receiver: Box::new(Expr::This),
+                    },
+                )?
+            } else {
+                let key = lower_expr(ctx, &Expr::String(method.to_string()))?;
+                let recv = group.reread(ctx, r)?;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_super_accessor_get",
+                    &[
+                        (I32, &target.home_cid.to_string()),
+                        (DOUBLE, &key),
+                        (DOUBLE, &recv),
+                    ],
+                )
+            };
             let slow_end = ctx.block().label.clone();
             ctx.block().br(&done_l);
             ctx.current_block = done;
@@ -423,9 +541,18 @@ fn lower_proven_super_call(
         let direct = |ctx: &mut FnCtx<'_>| {
             let undefined =
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let mut call_args = vec![recv.clone()];
+            // A static body takes its receiver from the one-shot override its
+            // prologue consumes; an instance body as its first parameter.
+            let mut call_args = Vec::with_capacity(target.arity + 1);
+            if target.static_owner.is_some() {
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv)]);
+            } else {
+                call_args.push(recv.clone());
+            }
+            let width = call_args.len() + target.arity;
             call_args.extend(values.iter().take(target.arity).cloned());
-            call_args.resize(target.arity + 1, undefined);
+            call_args.resize(width, undefined);
             let slices: Vec<_> = call_args.iter().map(|v| (DOUBLE, v.as_str())).collect();
             ctx.block().call(DOUBLE, &target.body, &slices)
         };

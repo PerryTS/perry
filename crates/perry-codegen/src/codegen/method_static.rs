@@ -598,6 +598,9 @@ pub(in crate::codegen) fn compile_static_method(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    if !f.is_async && !f.is_generator && !generator_owner {
+        ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, &f.body);
+    }
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class.name, f.name)

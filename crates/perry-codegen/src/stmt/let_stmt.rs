@@ -81,14 +81,17 @@ pub(crate) fn lower_let(
     ctx.local_id_to_name.insert(id, name.to_string());
     if let Some(perry_hir::Expr::ClassMethodHome {
         class_name,
-        is_static: false,
+        is_static,
     }) = init
     {
         if ctx.method_home_local == Some((id, true)) {
             // Read only by proven `super.m()` sites: no home value is needed.
             return Ok(());
         }
-        if !mutable && !ctx.in_static_member && ctx.class_stack.last() == Some(class_name) {
+        if !mutable
+            && *is_static == ctx.in_static_member
+            && ctx.class_stack.last() == Some(class_name)
+        {
             ctx.method_home_local = Some((id, false));
         }
     }
