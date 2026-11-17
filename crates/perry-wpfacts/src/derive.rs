@@ -365,8 +365,8 @@ pub struct SiteFacts {
     pub receiver_prims: u16,
     pub top: bool,
     pub verdict: Verdict,
-    /// A solve certificate for an audited lowering route; absent means open.
-    pub(crate) dispatch_certificate: Option<dispatch::Certificate>,
+    /// The shared method-call elision and its optional exact-route proof.
+    pub(crate) method_call: Option<dispatch::MethodCallCertificate>,
     /// MATHB1: a call whose receiver (a member call) or callee (a value
     /// call) names a builtin namespace member: is the callee exactly the
     /// original builtin ([`namespace_callee`])? `None`: no namespace member.
@@ -412,22 +412,6 @@ pub struct DispatchObligation<'a> {
     /// ([`crate::MemberOpFacts::redispatch`]); named calls require a
     /// certificate for the actual lowering, including every failed guard.
     pub redispatch: bool,
-}
-
-impl SiteFacts {
-    /// The site's obligation: `Some` for a member call (a read or a store
-    /// calls no method by itself; its accessor's call is the accessor's
-    /// site).
-    pub fn dispatch_obligation(&self) -> Option<DispatchObligation<'_>> {
-        (self.is_call && self.access == Access::Read).then_some(DispatchObligation {
-            key: &self.key,
-            receivers: &self.receiver_values,
-            prims: self.receiver_prims,
-            op: None,
-            namespace: None,
-            redispatch: self.dispatch_certificate.is_none(),
-        })
-    }
 }
 
 /// `Some` (a reason a claim fails) absorbs `None`; of two reasons the
@@ -1953,7 +1937,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         bodies.sort_unstable();
         bodies.dedup();
         out.push(SiteFacts {
-            dispatch_certificate: None,
+            method_call: None,
             bodies,
             diagnostic_copies: diagnostic_copies.unwrap_or_default(),
             diagnostic_unit: g

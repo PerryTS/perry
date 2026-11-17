@@ -75,6 +75,7 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
+pub use derive::dispatch::{elide_enabled, MethodCallCertificate};
 pub use derive::{
     Access, DispatchObligation, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact,
     ReceiverValue, SiteFacts, TemplateFacts, Verdict,
