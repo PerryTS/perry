@@ -1452,9 +1452,11 @@ impl Model {
         }
         // A missing intrinsic member calls exactly the ordinary read's
         // values, including program fields, getters and reopened chains.
-        // No callable value means a TypeError, with no argument escape.
+        // No callable value means a TypeError, with no argument escape. The
+        // global object under a key the program owns is such a member too
+        // (`global_user_method`).
         if let Key::Named(a) = key {
-            if builtins::undeclared(self, t, a) {
+            if builtins::undeclared(self, t, a) || builtins::global_user_method(self, t, a) {
                 let callee = self.node_l("builtin-member-read");
                 self.load_from(t, t, key, callee);
                 self.bind_via(callee, call, t);

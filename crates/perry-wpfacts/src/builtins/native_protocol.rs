@@ -1199,6 +1199,17 @@ pub fn global_user_key(m: &Model, name: &str) -> bool {
         })
 }
 
+/// GLOBS13: a method call on the global object (`globalThis.k()`, a
+/// receiver that may be the global object) under a program-owned key
+/// (`global_user_key`) calls what [[Get]] reads there (ECMA-262 13.3.6.1
+/// EvaluateCall, 7.3.21 Invoke): the program's stores, ⊤ once unmodeled
+/// code may have written the key, else `undefined`, whose Call throws a
+/// TypeError (7.3.14 step 2) and hands no argument on.
+pub fn global_user_method(m: &Model, t: Tok, a: Atom) -> bool {
+    matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
+        && global_user_key(m, &m.atoms[a as usize])
+}
+
 /// S8: a name on the global sentinel (HIR `GlobalGet(0)`: an identifier
 /// with no binding; `console` lowers to it too) that is a program-owned key
 /// of the global object (`global_user_key`) and that the sentinel does not

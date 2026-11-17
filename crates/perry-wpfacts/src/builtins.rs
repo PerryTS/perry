@@ -51,12 +51,13 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_any_field, global_any_names, global_any_new, global_def_field, global_field,
-    global_user_key, global_value_written, is_builtin_module, native_accessor_known,
-    native_accessor_written, native_nonplain_written, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_parent_value, native_proto, native_writers_why,
-    native_written, native_written_by, note_global_in_top, note_handed_to_unknown,
-    note_native_accessor, note_native_data_write, note_native_write, note_realm_held,
-    program_global_fn, require_parts, settle_native_given, GlobalAnyRead, WriteValue,
+    global_user_key, global_user_method, global_value_written, is_builtin_module,
+    native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
+    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
+    native_writers_why, native_written, native_written_by, note_global_in_top,
+    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
+    note_realm_held, program_global_fn, require_parts, settle_native_given, GlobalAnyRead,
+    WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
