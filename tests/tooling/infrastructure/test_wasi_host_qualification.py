@@ -1,14 +1,42 @@
 import tempfile
 from pathlib import Path
+import tomllib
 import unittest
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
 
+from component_guest_acceptance import prepare_rust_host_manifest
 from wasi_host_qualification import (
     COMMAND_PHASES, P2_PHASES, complete_phases, discover, moving_witness, unit_results, verdict,
 )
+
+
+class ComponentGuestManifestTests(unittest.TestCase):
+    def test_copied_fixture_resolves_the_workspace_dependency(self):
+        root = Path(__file__).resolve().parents[3]
+        fixture = root / "tests/integration/wasi/components/transform/rust-host/Cargo.toml"
+        original = fixture.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory(prefix="perry component guest ") as directory:
+            copied = Path(directory) / "Cargo.toml"
+            copied.write_text(original, encoding="utf-8")
+            prepare_rust_host_manifest(copied, root)
+            expected = tomllib.loads(original)
+            expected["dependencies"]["perry-wasi"]["path"] = str(root / "crates/perry-wasi")
+            self.assertEqual(tomllib.loads(copied.read_text(encoding="utf-8")), expected)
+            self.assertTrue((root / "crates/perry-wasi/Cargo.toml").is_file())
+        self.assertEqual(fixture.read_text(encoding="utf-8"), original)
+
+    def test_manifest_without_the_fixture_dependency_is_rejected(self):
+        root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as directory:
+            copied = Path(directory) / "Cargo.toml"
+            original = '[dependencies]\nperry-wasi = { path = "elsewhere" }\n'
+            copied.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(AssertionError, "Rust host path changed: crates/perry-wasi"):
+                prepare_rust_host_manifest(copied, root)
+            self.assertEqual(copied.read_text(encoding="utf-8"), original)
 
 
 class QualificationTests(unittest.TestCase):
