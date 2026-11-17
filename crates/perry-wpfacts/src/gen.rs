@@ -189,6 +189,8 @@ pub struct Gen<'a> {
     pub store_sites: Vec<ReadSite>,
     /// The folded method nodes that have a site (`method_sites`).
     pub(crate) folded_sites: Vec<FoldedSite>,
+    /// NDISP2: every HIR-specialized member op (`member_ops`).
+    pub(crate) member_ops: Vec<crate::member_ops::MemberOp>,
     pub(crate) element_sites: Vec<ElementSite>,
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
@@ -765,6 +767,7 @@ impl<'a> Gen<'a> {
             read_sites: Vec::new(),
             store_sites: Vec::new(),
             folded_sites: Vec::new(),
+            member_ops: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),

@@ -108,7 +108,7 @@ impl<'a> Gen<'a> {
         // code runs an own or inherited user method of that name, and the
         // builtin's own effects are its declaration (perry_hir::folded_call).
         if let Some(call) = perry_hir::folded_call::folded_call(e) {
-            return self.folded_call(fx, &call);
+            return self.folded_call(fx, e, &call);
         }
         match e {
             Expr::NativeModuleRef(m) => {
@@ -143,6 +143,7 @@ impl<'a> Gen<'a> {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
+                self.member_op(mi, e, method, o, o.is_none().then_some(m0), false);
                 if module == "__perry_borrowed_proof" {
                     self.prim_node(prim::BOOL)
                 } else if module == "__perry_runtime" {
@@ -187,7 +188,7 @@ impl<'a> Gen<'a> {
                     let push = self.m.atom("push");
                     self.list_push(o, Some(a.len() as u32));
                     if let Some(call) = perry_hir::folded_call::native_array_push(e) {
-                        self.folded_site(fx, &call.receiver, push, o);
+                        self.folded_site(fx, "NativeMethodCall", &call.receiver, push, o);
                     }
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
