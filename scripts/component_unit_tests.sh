@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The host-side unit tests of the component model: perry-component-host,
 # perry-wit, and the perry-runtime modules the component harnesses exercise.
-# component_check.sh runs them first; CI runs them in wasi-native instead, in
+# component_check.sh runs them first; CI runs them in wasi-component-units, in
 # parallel with the component builds and harnesses.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

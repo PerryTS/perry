@@ -1327,7 +1327,7 @@ unwind configuration; `CARGO_BUILD_JOBS` is respected.
 
 In the core PR, sweep and full tiers the Linux `wasi-components` job invokes
 this script with `COMPONENT_CHECK_UNIT_TESTS=0`, while the parallel
-`wasi-native` job runs the unit tests. Its result feeds the required `pr-gate`;
+`wasi-component-units` job runs the unit tests. Its result feeds the required `pr-gate`;
 a failed or skipped planned execution blocks the gate. Phase logs, JSON
 verdicts, component artifacts and the source revision are retained even on
 failure. Docs-only PRs skip this build. The extended `wasi-check / wasi-codegen`

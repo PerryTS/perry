@@ -5333,8 +5333,9 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
-  # The `wasi_execution` plan entry starts four parallel WASI jobs (wasi-native,
-  # wasi-execution, wasi-execution-p1, wasi-components) so the PR gate waits for the
+  # The `wasi_execution` plan entry starts five parallel WASI jobs (wasi-native,
+  # wasi-component-units, wasi-execution, wasi-execution-p1, wasi-components) so
+  # the PR gate waits for the
   # longest one, not their sum; `gate` requires each planned one. Each keeps
   # its own rust-cache key: they compile different units, and one shared key
   # would hold whichever job saved first.
@@ -5382,8 +5383,6 @@ jobs:
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: WASI native EH toolchain and codegen regression
       run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
-    - name: Component-model unit tests
-      run: ./scripts/component_unit_tests.sh
     - name: Link-argument and flavour unit tests (feature-enabled)
       shell: bash
       run: |
@@ -5392,6 +5391,53 @@ jobs:
         # A filter that matches nothing also exits 0: require the tests ran.
         ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
         test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
+
+  # The component-model unit tests (scripts/component_unit_tests.sh): their own
+  # cargo test build, beside wasi-native's codegen and link-argument tests.
+  wasi-component-units:
+    name: wasi-component-units
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # One rustc job per vCPU of the standard Linux runner.
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-component-units
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Component-model unit tests
+      run: ./scripts/component_unit_tests.sh
 
   wasi-execution:
     name: wasi-execution
@@ -5628,7 +5674,7 @@ jobs:
           printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
         done
     - name: Typed components, resources, moving GC and cross-language composition
-      # wasi-native runs component_unit_tests.sh in parallel.
+      # wasi-component-units runs component_unit_tests.sh in parallel.
       env:
         COMPONENT_CHECK_UNIT_TESTS: '0'
       run: ./scripts/component_check.sh
@@ -5678,6 +5724,7 @@ jobs:
       - binary-size
       - security-audit
       - wasi-native
+      - wasi-component-units
       - wasi-execution
       - wasi-execution-p1
       - wasi-components
@@ -5708,7 +5755,7 @@ jobs:
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
-          for wasi_job in wasi-native wasi-execution wasi-execution-p1 wasi-components; do
+          for wasi_job in wasi-native wasi-component-units wasi-execution wasi-execution-p1 wasi-components; do
             wasi_result="$(echo "$NEEDS" | jq -r --arg j "$wasi_job" '.[$j].result')"
             if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
               echo "::error::planned $wasi_job did not pass ($wasi_result)."
