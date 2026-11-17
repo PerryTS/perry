@@ -310,6 +310,12 @@ pub(crate) fn run(
     // profile lines must agree).
     let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
     let pf = perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check));
+    // The blocker ledger (`PERRY_FACTS_LEDGER`) solved with the realm never
+    // held: its facts never reach codegen; the compile stops here.
+    if std::env::var_os("PERRY_FACTS_LEDGER").is_some_and(|v| !v.is_empty()) {
+        eprintln!("perry: wpfacts: ledger written; compile stopped (PERRY_FACTS_LEDGER)");
+        std::process::exit(0);
+    }
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if perry_codegen::verify_facts::enabled() {
         perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));

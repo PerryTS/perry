@@ -664,6 +664,10 @@ impl<'a> Gen<'a> {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
+        if crate::hold_ledger::on() {
+            m.explain = true;
+            m.ledger = Some(crate::hold_ledger::HoldLedger::new());
+        }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';

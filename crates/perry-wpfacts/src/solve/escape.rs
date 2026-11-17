@@ -14,7 +14,19 @@ impl Model {
         self.is_escaped(t)
     }
 
+    #[track_caller]
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        let Some(l) = self.ledger.as_mut() else {
+            return self.escape_at(t, reason);
+        };
+        let saved = l.enter_escape(t, reason, std::panic::Location::caller());
+        self.escape_at(t, reason);
+        if let Some(l) = self.ledger.as_mut() {
+            l.cur = saved;
+        }
+    }
+
+    fn escape_at(&mut self, t: Tok, reason: u32) {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;
@@ -339,6 +351,9 @@ impl Model {
                     c.active_gate,
                 ));
             }
+        }
+        if let Some(l) = self.ledger.as_mut() {
+            l.mark_escaped(t, reason);
         }
         self.escaped.insert(t, reason);
         if self.objtag_watch.contains_key(&t) {
