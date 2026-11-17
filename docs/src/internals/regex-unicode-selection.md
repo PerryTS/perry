@@ -34,12 +34,23 @@ TypeScript annotations or an assumed class name. It does not infer runtime
 strings from annotations or mutable bindings.
 
 Membership callers in Perex include both executors, atom filtering, candidate
-construction, named-group parsing and binary-program validation. They all use
-the same slot. Property descriptors/name lookup, case-fold data and properties
+construction, named-group parsing and binary-program validation. Compilation and
+validation resolve the slot once, when they first need membership. The validated
+Program view and binding witness retain the native function pointer; evaluator,
+atom and DFA queries call it directly without reading or checking the slot.
+Property-free programs never resolve it. Property descriptors/name lookup, case-fold data and properties
 of strings have separate references and remain available. A missing installation
-panics at the first membership request instead of returning an incorrect match;
+panics during compilation/validation instead of returning an incorrect match;
 the compiler must therefore retain installation for every open producer.
 Native `perry-perex` clients accept arbitrary patterns and install unconditionally.
 
 The slot holds only an immutable native function pointer, never a GC value. It is
 process-wide, idempotent, thread-safe and cannot be replaced after installation.
+
+Perex program words remain relocatable property IDs. The process-local witness
+carries native code, not a GC-managed address, and witnessed relocation reuses
+it without slot access. Perry stores witnesses as typed MaybeUninit values
+behind a presence tag. Perex exposes an explicit padding check; compile-time
+assertions guarantee every byte in a recorded witness is initialized for heap
+scanning. Arbitrary integer images must never be read as witnesses because a
+native function pointer has validity and provenance requirements.
