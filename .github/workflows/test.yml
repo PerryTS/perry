@@ -1276,12 +1276,91 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.check
     runs-on: ubuntu-latest
-    # 90 (was 60): full-tier runs share the free-plan runner pool with the
-    # coalesced main sweeps; in dispatch run 32298711372 sibling jobs pushed
-    # this past its cap and the cancellation alone failed full-suite-gate
-    # (the gate treats cancelled == failed). The cap is a hang backstop, not
-    # a perf budget — margin costs nothing on healthy runs.
+    # Clippy and the auto-optimize builds run in the parallel `clippy` job; the
+    # jobs chained behind `check` wait for this half only.
+    # A hang backstop, not a perf budget: full-tier runs share the runner pool
+    # with the coalesced main sweeps, and a cancellation fails the gate.
     timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Lean dependency boundaries and helper compatibility
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_lean_dependencies.py
+          cargo test --locked -p perry-base64 -p perry-hex --all-features
+          # The moved perry-uuid inline tests run through perry-stdlib's crypto
+          # feature; fail if the filter matched nothing.
+          uuid_test_output=$(cargo test --locked -p perry-stdlib --features crypto --lib crypto::uuid 2>&1)
+          echo "$uuid_test_output"
+          echo "$uuid_test_output" | grep -E 'test result: ok\. [1-9][0-9]* passed' \
+            || { echo '::error::crypto::uuid inline tests did not run'; exit 1; }
+          cargo test --locked -p perry --bin perry --features apple-api cli::
+          cargo check --locked -p perry-stdlib --no-default-features
+          cargo check --locked -p perry --no-default-features --features dev-cli
+
+      - name: Regenerate API docs
+        if: ${{ !cancelled() }}
+        run: ./scripts/regen_api_docs.sh
+
+      - name: Check for API docs drift
+        if: ${{ !cancelled() }}
+        run: |
+          if ! git diff --quiet -- docs/src/api/reference.md docs/api/perry.d.ts; then
+            echo ""
+            echo "::error::API docs drift detected. The compile-time manifest in"
+            echo "::error::crates/perry-api-manifest/src/entries.rs changed but the"
+            echo "::error::generated artifacts under docs/ weren't regenerated."
+            echo ""
+            echo "Fix by running:"
+            echo "  ./scripts/regen_api_docs.sh"
+            echo "  git add docs/src/api/reference.md docs/api/perry.d.ts"
+            echo "  git commit -m 'docs: regenerate API reference + .d.ts'"
+            echo ""
+            echo "Diff:"
+            git --no-pager diff --stat -- docs/src/api/reference.md docs/api/perry.d.ts
+            echo ""
+            git --no-pager diff -- docs/src/api/reference.md docs/api/perry.d.ts | head -200
+            exit 1
+          fi
+          echo "✅ API docs match the manifest."
+
+
+  clippy:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.check
+    runs-on: ubuntu-latest
+    # A hang backstop, not a perf budget (see `check`).
+    timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -1311,9 +1390,8 @@ jobs:
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
-          shared-key: "${{ runner.os }}-perry"
+          shared-key: "${{ runner.os }}-perry-clippy"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Clippy (product)
         if: ${{ !cancelled() }}
         run: cargo clippy -p perry --bins
@@ -1329,50 +1407,9 @@ jobs:
           done
           cargo clippy "${cargo_args[@]}"
 
-      - name: Lean dependency boundaries and helper compatibility
-        if: ${{ !cancelled() }}
-        run: |
-          python3 scripts/check_lean_dependencies.py
-          cargo test --locked -p perry-base64 -p perry-hex --all-features
-          # The moved perry-uuid inline tests run through perry-stdlib's crypto
-          # feature; fail if the filter matched nothing.
-          uuid_test_output=$(cargo test --locked -p perry-stdlib --features crypto --lib crypto::uuid 2>&1)
-          echo "$uuid_test_output"
-          echo "$uuid_test_output" | grep -E 'test result: ok\. [1-9][0-9]* passed' \
-            || { echo '::error::crypto::uuid inline tests did not run'; exit 1; }
-          cargo test --locked -p perry --bin perry --features apple-api cli::
-          cargo check --locked -p perry-stdlib --no-default-features
-          cargo check --locked -p perry --no-default-features --features dev-cli
-
       - name: Auto-optimize pruned feature builds
         if: ${{ !cancelled() }}
         run: ./scripts/check_auto_optimize_features.sh
-
-      - name: Regenerate API docs
-        if: ${{ !cancelled() }}
-        run: ./scripts/regen_api_docs.sh
-
-      - name: Check for API docs drift
-        if: ${{ !cancelled() }}
-        run: |
-          if ! git diff --quiet -- docs/src/api/reference.md docs/api/perry.d.ts; then
-            echo ""
-            echo "::error::API docs drift detected. The compile-time manifest in"
-            echo "::error::crates/perry-api-manifest/src/entries.rs changed but the"
-            echo "::error::generated artifacts under docs/ weren't regenerated."
-            echo ""
-            echo "Fix by running:"
-            echo "  ./scripts/regen_api_docs.sh"
-            echo "  git add docs/src/api/reference.md docs/api/perry.d.ts"
-            echo "  git commit -m 'docs: regenerate API reference + .d.ts'"
-            echo ""
-            echo "Diff:"
-            git --no-pager diff --stat -- docs/src/api/reference.md docs/api/perry.d.ts
-            echo ""
-            git --no-pager diff -- docs/src/api/reference.md docs/api/perry.d.ts | head -200
-            exit 1
-          fi
-          echo "✅ API docs match the manifest."
 
   # ---------------------------------------------------------------------------
   # rustc warnings gate
@@ -5652,6 +5689,7 @@ jobs:
       - lint
       - tokio-ban
       - check
+      - clippy
       - warnings
       - cargo-test
       - cargo-test-perry
