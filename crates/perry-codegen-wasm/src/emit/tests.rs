@@ -11,6 +11,12 @@ fn run_web_source_then(source: &str, after_boot: &str) -> String {
     run_web_source_with_dom(source, STUB_DOM, after_boot)
 }
 
+/// `run_web_source_then`, with `before_boot` (plain JS) run before the runtime
+/// loads: a stub for a host global the program calls while it boots.
+fn run_web_source_around(before_boot: &str, source: &str, after_boot: &str) -> String {
+    run_web_source_with_dom(source, &format!("{STUB_DOM}{before_boot}"), after_boot)
+}
+
 /// The runtime injects a `<style>` at load, so `document` must exist even for
 /// programs that never build a widget.
 const STUB_DOM: &str = r#"
