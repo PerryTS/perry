@@ -10,6 +10,11 @@ the link-cache manifest (`link/`), the behavioral SBOM (`audit.json`),
 sandbox-exec profiles (`buildrs-<pkg>.sandbox`), and HIR miss dumps
 (`debug/`) when `PERRY_CACHE_DEBUG_HIR=1`.
 
+The object and completed-build caches include compiler environment switches
+in their keys. Changing `PERRY_NS_PAIRS` or `PERRY_FACTS_NATIVE_EXTERN`,
+including setting either to `0`, invalidates cached results so that the next
+build uses the requested lowering and whole-program facts settings.
+
 ## Four ways to set it
 
 Precedence, highest to lowest: CLI flag, then `PERRY_CACHE_DIR`, then
