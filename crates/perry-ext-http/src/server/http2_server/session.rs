@@ -424,7 +424,36 @@ fn client_request_headers(stream_handle: i64, session_handle: i64) -> Vec<(Strin
     out
 }
 
+/// Node's `options.endStream` for `session.request(headers, options)`.
+///
+/// Unset, it is true for the methods whose request carries no payload
+/// (`isPayloadMeaningless` in Node's `internal/http2/core.js`), so a `GET`
+/// sends HEADERS with END_STREAM without the caller ever calling `end()`.
+pub(crate) fn client_request_ends_stream(
+    request_headers: &HashMap<String, String>,
+    options: f64,
+) -> bool {
+    let explicit =
+        perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), "endStream");
+    if explicit.is_bool() {
+        return explicit.to_bool();
+    }
+    let method = request_headers
+        .get(":method")
+        .map(String::as_str)
+        .unwrap_or("GET");
+    matches!(
+        method,
+        "GET" | "HEAD" | "DELETE" | "OPTIONS" | "CONNECT" | "TRACE"
+    )
+}
+
 pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
+    match get_handle_mut::<Http2StreamHandle>(stream_handle) {
+        Some(stream) if stream.request_started => return,
+        Some(stream) => stream.request_started = true,
+        None => {}
+    }
     // On turnloop the stream opens on this thread, on the session's existing
     // connection. No runtime, no thread, no `SendRequest` to race for.
     if let Some((session_handle, conn_id)) = get_handle::<Http2StreamHandle>(stream_handle)
@@ -603,6 +632,7 @@ mod tests {
             response_headers: Vec::new(),
             turnloop_conn: 0,
             turnloop_responded: false,
+            request_started: false,
         });
         assert!(
             super::super::turnloop_conn_of_session(session_handle).is_none(),
@@ -615,5 +645,79 @@ mod tests {
             errors_for(stream_handle),
             vec!["HTTP/2 session is not connected".to_string()]
         );
+    }
+
+    /// `session.request()` for a bodyless method sends its request without an
+    /// `end()` from the caller, as Node's default `endStream` does (#14681),
+    /// and the caller's later `end()` does not open a second stream.
+    ///
+    /// The transportless session makes "the request was started" observable:
+    /// every start errors the stream, so the count of errors is the count of
+    /// starts.
+    #[test]
+    fn a_bodyless_request_starts_without_end_and_only_once() {
+        let session_handle = register_handle(client_session(0));
+        let method = b"request";
+        // No headers object: `:method` defaults to GET.
+        let stream_value = unsafe {
+            super::super::dispatch::js_ext_http2_session_dispatch_method(
+                session_handle,
+                method.as_ptr(),
+                method.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        let stream_value = JsValue::from_bits(stream_value.to_bits());
+        assert!(
+            stream_value.is_handle(),
+            "request() must answer a stream handle"
+        );
+        let stream_handle = (stream_value.bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        assert!(
+            get_handle::<Http2StreamHandle>(stream_handle).is_some(),
+            "fixture must yield a stream handle, or the assertions below are vacuous"
+        );
+        assert_eq!(
+            errors_for(stream_handle),
+            vec!["HTTP/2 session is not connected".to_string()],
+            "a GET must start at request(), before any end()"
+        );
+
+        let end = b"end";
+        unsafe {
+            super::super::dispatch::js_ext_http2_stream_dispatch_method(
+                stream_handle,
+                end.as_ptr(),
+                end.len(),
+                std::ptr::null(),
+                0,
+            );
+        }
+        assert_eq!(
+            errors_for(stream_handle).len(),
+            1,
+            "end() after an endStream request must not start it again"
+        );
+    }
+
+    #[test]
+    fn only_bodyless_methods_end_the_stream_by_default() {
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let with_method =
+            |method: &str| HashMap::from([(":method".to_string(), method.to_string())]);
+        assert!(client_request_ends_stream(&HashMap::new(), undefined));
+        for method in ["GET", "HEAD", "DELETE", "OPTIONS", "CONNECT", "TRACE"] {
+            assert!(
+                client_request_ends_stream(&with_method(method), undefined),
+                "{method}"
+            );
+        }
+        for method in ["POST", "PUT", "PATCH"] {
+            assert!(
+                !client_request_ends_stream(&with_method(method), undefined),
+                "{method}"
+            );
+        }
     }
 }

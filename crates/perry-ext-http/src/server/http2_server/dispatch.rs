@@ -51,6 +51,8 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
         "request" => {
             let headers = args.first().copied().unwrap_or(undef);
             let request_headers = parse_headers_object(headers);
+            let end_stream =
+                client_request_ends_stream(&request_headers, args.get(1).copied().unwrap_or(undef));
             let stream_handle = register_handle(Http2StreamHandle {
                 session_handle: handle,
                 id: next_stream_id(),
@@ -68,7 +70,11 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 response_headers: Vec::new(),
                 turnloop_conn: 0,
                 turnloop_responded: false,
+                request_started: false,
             });
+            if end_stream {
+                start_client_request(stream_handle, Vec::new());
+            }
             handle_to_pointer_f64(stream_handle)
         }
         "on" | "addListener" if args.len() >= 2 => {

@@ -60,8 +60,9 @@ pub(crate) use pump::{
     try_recv_pending_h2_nonblocking,
 };
 pub(crate) use session::{
-    local_client_connect_ready, local_server_handle_for_client, local_server_session_event_ready,
-    mark_server_sessions_closed, parse_headers_object, start_client_request,
+    client_request_ends_stream, local_client_connect_ready, local_server_handle_for_client,
+    local_server_session_event_ready, mark_server_sessions_closed, parse_headers_object,
+    start_client_request,
 };
 pub(crate) use turnloop_glue::{
     bind_turnloop_client_port, bind_turnloop_session, bind_turnloop_stream_id,
@@ -243,6 +244,10 @@ pub struct Http2StreamHandle {
     pub turnloop_conn: i64,
     /// Whether `respond()` / `end()` already produced a response.
     pub turnloop_responded: bool,
+    /// A client stream whose request already went to the transport, either
+    /// from `session.request()` (`endStream`) or from `end()`. A second
+    /// `end()` must not open another stream.
+    pub request_started: bool,
 }
 
 pub(crate) enum Http2PendingEvent {
