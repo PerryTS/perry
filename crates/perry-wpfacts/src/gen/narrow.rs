@@ -264,11 +264,9 @@ impl<'a> Gen<'a> {
     /// `reads` are what narrowed reads of the local with node `local` see
     /// (`Model::name_of`).
     fn named_reads(&mut self, local: NodeId, reads: &[NodeId]) {
-        if self.m.named_lengths {
-            for &r in reads {
-                if r != local {
-                    self.m.name_of.insert(r, local);
-                }
+        for &r in reads {
+            if r != local {
+                self.m.name_of.insert(r, local);
             }
         }
     }
@@ -1713,6 +1711,8 @@ impl<'a> Gen<'a> {
         let end = self.tmp("assigned-end");
         self.zs_carrier(end);
         self.m.edge(start, end);
+        let i = self.local(mi, id);
+        self.named_reads(i, &[start, end]);
         // U8: a local holding a ToPropertyKey result holds its key
         // (`Gen::prop_key_of`).
         if let Some(&k) = self.prop_key_of.get(&vn) {
@@ -1900,6 +1900,8 @@ impl<'a> Gen<'a> {
             let end = self.tmp("defassign-end");
             self.zs_carrier(end);
             self.m.edge(start, end);
+            let i = self.local(mi, id);
+            self.named_reads(i, &[start, end]);
             self.narrow.push(Narrow {
                 mi,
                 id,

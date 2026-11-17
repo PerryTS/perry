@@ -95,3 +95,34 @@ rows().return(value).then((r) => console.log(r.done));\n";
     assert!(pf.body_reach.complete);
     assert!(!pf.body_reach.inactive(&ident(mark)), "the getter runs, so mark does");
 }
+
+#[test]
+fn a_proxy_call_method_runs_the_apply_trap() {
+    // `p.call(...)` on a Proxy is the HIR's fused `ProxyGet(p, "call")` call:
+    // the runtime runs the Proxy's [[Call]], so the handler's `apply` trap
+    // runs; `mark` runs exactly when the trap does.
+    let src = "function mark() { return 0; }\n\
+function method(this: any, a: number) { return this.x + a; }\n\
+const callable: any = new Proxy(method, { apply(t: any, r: any, args: any[]) { mark(); return t.apply(r, args); } });\n\
+console.log(callable.call({ x: 7 }, 2));\n";
+    let pf = facts(src);
+    assert!(pf.body_reach.complete);
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the apply trap runs");
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "method"))), "the target runs");
+}
+
+#[test]
+fn a_second_define_under_one_computed_key_installs_its_accessor() {
+    // Two defines under one local Symbol key: the data define, then the
+    // accessor define that replaces it. The getter runs on the read; `mark`
+    // runs exactly when it does.
+    let src = "function mark() { return 0; }\n\
+const o: any = {};\n\
+const key = Symbol(\"k\");\n\
+Object.defineProperty(o, key, { value: 11, writable: true, configurable: true });\n\
+Object.defineProperty(o, key, { get: function () { mark(); return 22; } });\n\
+console.log(o[key]);\n";
+    let pf = facts(src);
+    assert!(pf.body_reach.complete);
+    assert!(!pf.body_reach.inactive(&ident(id_of(src, "mark"))), "the getter runs");
+}

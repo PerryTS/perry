@@ -370,7 +370,7 @@ impl<'a> Gen<'a> {
                 // (`js_iterator_step`), which destructuring reads.
                 let va = self.m.atom("value");
                 let v = self.load(res, Key::Named(va));
-                let io = self.iter_out_node(fx);
+                let io = self.step_out_node(fx);
                 self.m.edge(v, io);
                 let all = self.iterate(it);
                 self.m.edge(all, io);
@@ -389,7 +389,7 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::BOOL)
             }
-            "iteratorStepOutput" => self.iter_out_node(fx),
+            "iteratorStepOutput" => self.step_out_node(fx),
             // The rest element of an array destructuring (`[a, ...rest] =
             // it`): what codegen lowers it to, `js_array_push_f64(rest,
             // value)`, the array itself as the result.
@@ -639,6 +639,15 @@ impl<'a> Gen<'a> {
         let n = self.tmp("stepyield");
         self.mods[fx.module as usize].stepyield.insert(key, n);
         n
+    }
+
+    /// What the current `iteratorStep` writes (`Gen::step_out`); outside
+    /// a step, the function's output node (`iter_out_node`).
+    fn step_out_node(&mut self, fx: &Fx) -> NodeId {
+        match self.step_out {
+            Some(n) => n,
+            None => self.iter_out_node(fx),
+        }
     }
 
     pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

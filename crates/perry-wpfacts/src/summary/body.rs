@@ -162,7 +162,7 @@ impl BodyInput {
 
 /// Encode and compress without executing an edge, rule, binding or seed.
 /// Publication and all effects require a separate live-model operation.
-pub(crate) fn encode_body(input: BodyInput) -> Summary {
+pub(crate) fn encode_body(input: BodyInput, keep: &FxHashSet<NodeId>) -> Summary {
     let lower = |x: Operand| x.lower(&input.environment);
     // Rule M1: an edge's mask joins its copies' (one without a mask is
     // every run's).
@@ -214,7 +214,7 @@ pub(crate) fn encode_body(input: BodyInput) -> Summary {
         call_reach: input.call_reach,
         ..Default::default()
     };
-    compress(&mut s);
+    compress(&mut s, keep);
     s.maker = returns_own_closure(&s);
     s
 }
@@ -255,7 +255,11 @@ fn returns_own_closure(s: &Summary) -> bool {
 /// Remove what an instance does not need: relays inside the slice become
 /// direct edges, slots that reach nothing go, and read rules into such
 /// slots go (the observation layer runs them on a superset of tokens).
-pub fn compress(s: &mut Summary) {
+/// In a body with births the slot of every node in `keep`
+/// (`Model::binding_reads`) stays: only the instance's copy of a binding
+/// holds the instance's literal, so a binding without a copy would be read
+/// off its shared node and the template token alone (`bindings::BindingNodes`).
+pub fn compress(s: &mut Summary, keep: &FxHashSet<NodeId>) {
     let n = s.nslots as usize;
     let sl = |x: NodeId| {
         if is_slot(x) {
@@ -277,6 +281,11 @@ pub fn compress(s: &mut Summary) {
     }
     for &(b, _) in &s.births {
         pinned[b as usize] = true;
+    }
+    if !s.births.is_empty() {
+        for (p, o) in pinned.iter_mut().zip(&s.orig) {
+            *p |= keep.contains(o);
+        }
     }
     for (c, _, terms, _) in &s.closures {
         pinned[*c as usize] = true;

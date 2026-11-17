@@ -6945,6 +6945,24 @@ pub(crate) fn publish_static_record(
     facts: u64,
 ) -> Result<crate::codegen_abi::PublishedShape, ShapeDescriptorError> {
     debug_assert_eq!(facts, record.facts_key_with_keys(record.keys));
+    if request.word.0 == crate::codegen_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD {
+        // The compiler names the declared empty ordinary row for a program
+        // `{}` content (`ProgramLayoutOrdinals::empty_ordinary`): that row is
+        // the agent's seed, published at agent creation, and answers the
+        // request when its facts are the request's. No second record, no
+        // second identity on the row.
+        let seed = ShapeSlab::agent_record_for_word_present(request.word)
+            .expect("declared empty ordinary layout is seeded at agent creation");
+        // SAFETY: a present record of this agent, read immediately.
+        let seed_facts = unsafe { (*seed).facts_key_with_keys((*seed).keys) };
+        if seed_facts != facts {
+            panic!("static layout publication mismatch: {request:?}: facts {facts:#x} != seed {seed_facts:#x}");
+        }
+        return Ok(crate::codegen_abi::PublishedShape {
+            identity: ShapeId(shapes_branded_birth::EMPTY_ORDINARY_BIRTH_LAYOUT),
+            word: request.word,
+        });
+    }
     let keys = record.keys;
     let keys_node = record.keys_node();
     let table = &crate::state::state().shapes;

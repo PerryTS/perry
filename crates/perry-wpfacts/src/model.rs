@@ -792,6 +792,14 @@ pub struct DefineAny {
     pub accessor: bool,
 }
 
+impl DefineAny {
+    /// One define: its key node and its own `get` node (each define site
+    /// reads its descriptor's `get` into a node of its own).
+    pub fn id(&self) -> (NodeId, NodeId) {
+        (self.key, self.get)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ThisArg {
     Undef,
@@ -1868,6 +1876,11 @@ pub struct Model {
     /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
     /// an instance-born literal's birth state for the Array a callee grew.
     pub instance_nodes: bool,
+    /// Every node a per-binding fact reads through `BindingNodes::of`
+    /// (`bindings::binding_reads`), set before the summaries are built. In
+    /// a body with births `summary::compress` keeps their slots, so each
+    /// has an instance copy that holds the instance's tokens.
+    pub binding_reads: crate::pts::FxHashSet<NodeId>,
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
@@ -2892,13 +2905,16 @@ pub struct Model {
     pub global_def: Option<NodeId>,
     /// GLOBK3: the navigator reads made before `global_def` exists.
     pub global_def_navs: Vec<NodeId>,
-    /// GLOBK3: the computed-key defines taken onto the global object (by
-    /// key node), replayed onto the old path when G2 turns off.
+    /// GLOBK3: the computed-key defines taken onto the global object,
+    /// replayed onto the old path when G2 turns off.
     pub global_defs: Vec<(DefineAny, Tok)>,
-    pub global_def_done: crate::pts::FxHashSet<NodeId>,
+    /// GLOBK3: the defines already taken onto the global object, by
+    /// `DefineAny::id`.
+    pub global_def_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
     /// GLOBK3: the holder node of a computed-key define's old path (E5
-    /// HARD), by key node.
-    pub define_any_old: crate::pts::FxHashMap<NodeId, NodeId>,
+    /// HARD), by `DefineAny::id`: two defines under one key node (one local
+    /// key) each install their own descriptor.
+    pub define_any_old: crate::pts::FxHashMap<(NodeId, NodeId), NodeId>,
     /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
     /// (`implicit`); a computed key's object value stores under what its
     /// ToPrimitive returns (`Cons::StoreIndexed` on that node).

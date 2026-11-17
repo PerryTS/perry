@@ -31,11 +31,36 @@ use super::*;
 /// spelling (`#`), never a program name.
 pub(crate) const PROXY_NEW: &str = "#proxy-new";
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ProxyRec {
     pub target: NodeId,
     pub handler: NodeId,
     pub degraded: bool,
+    /// The Proxy's operations, one entry per class (`ProxyOp`): what the
+    /// first use made (its trap call, its forward to the target), which
+    /// every later use of the class joins.
+    pub ops: crate::pts::FxHashMap<ProxyOp, NodeId>,
+}
+
+/// An operation class of one Proxy. Each is made once: its trap call and
+/// its forward rule on the target exist once per class, and the forward of
+/// a target that holds the Proxy (a Proxy of itself, a deep proxy) finds
+/// the class it is part of instead of making it again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProxyOp {
+    /// [[Get]] of `key` (with the key node of a computed read): its
+    /// result node, which the trap returns into and the target read feeds.
+    Get(Key, NodeId),
+    /// The `set` trap call for `key`: the node of the values it is passed.
+    SetTrap(Key),
+    /// The forward of one store (`key`, value node, site) to the target.
+    SetFwd(Key, NodeId, SiteId),
+    /// [[HasProperty]] of `key` (with its key node): trap and forward.
+    Has(Key, NodeId),
+    /// The `deleteProperty` trap call for `key`.
+    DelTrap(Atom),
+    /// The forward of one delete (`key`, its reason) to the target.
+    DelFwd(Atom, u32),
 }
 
 impl Model {
@@ -59,12 +84,13 @@ impl Model {
                     target,
                     handler,
                     degraded: false,
+                    ops: Default::default(),
                 });
                 self.proxy_index.insert(key, p);
                 p
             }
         };
-        let rec = self.proxies[p as usize];
+        let rec = &self.proxies[p as usize];
         for (i, n) in [rec.target, rec.handler].into_iter().enumerate() {
             match c.arg(i) {
                 Some(&a) => self.edge(a, n),
@@ -90,9 +116,10 @@ impl Model {
             return;
         }
         self.proxies[p as usize].degraded = true;
-        let ProxyRec {
-            target, handler, ..
-        } = self.proxies[p as usize];
+        let (target, handler) = (
+            self.proxies[p as usize].target,
+            self.proxies[p as usize].handler,
+        );
         let r = self.reason(&format!("E9 Proxy target ({cause})"));
         self.cons(
             target,
@@ -164,25 +191,50 @@ impl Model {
         r
     }
 
+    /// Whether Proxy `p` has made the class `op`, and enter it (`NO_NODE`
+    /// for a class without a node of its own).
+    fn proxy_made(&mut self, p: u32, op: ProxyOp) -> bool {
+        self.proxies[p as usize].ops.insert(op, NO_NODE).is_some()
+    }
+
     /// [[Get]] (10.5.8): trap `get( t, key, receiver )`, and the forward.
-    fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId, dst: NodeId) {
+    /// The result node of the class (`ProxyOp::Get`): made once, with one
+    /// trap call returning into it and one forward read of the target into
+    /// it. The class is entered before the forward runs: a target holding
+    /// `p` reads into the same node.
+    fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId) -> NodeId {
+        let op = ProxyOp::Get(key, idx);
+        if let Some(&g) = self.proxies[p as usize].ops.get(&op) {
+            return g;
+        }
+        let g = self.node_l("proxy-get");
+        self.proxies[p as usize].ops.insert(op, g);
         let t = self.proxies[p as usize].target;
         let k = self.proxy_key_arg(key, idx);
         let recv = self.proxy_recv(p);
-        self.proxy_trap(p, "get", vec![t, k, recv], dst);
+        self.proxy_trap(p, "get", vec![t, k, recv], g);
         if idx == NO_NODE {
-            self.cons(t, Cons::Load { key, dst });
+            self.cons(t, Cons::Load { key, dst: g });
         } else {
             self.cons(
                 t,
                 Cons::IdxLoad {
                     idx,
-                    dst,
+                    dst: g,
                     shape: 0,
                     enumerable: false,
                     kept: false,
                 },
             );
+        }
+        g
+    }
+
+    /// A [[Get]] of Proxy `p` whose result goes to `dst`.
+    fn proxy_get_into(&mut self, p: u32, key: Key, idx: NodeId, dst: NodeId) {
+        let g = self.proxy_get(p, key, idx);
+        if g != dst {
+            self.edge(g, dst);
         }
     }
 
@@ -221,8 +273,7 @@ impl Model {
         self.why_mint(call, Some(t), reason);
         for k in Protocol::ToPrimitive.keys().unwrap_or(&[]) {
             let a = self.atom(k);
-            let f = self.node_l("proxy-method");
-            self.proxy_get(p, Key::Named(a), NO_NODE, f);
+            let f = self.proxy_get(p, Key::Named(a), NO_NODE);
             self.cons(f, Cons::Call { call });
         }
     }
@@ -287,32 +338,46 @@ impl Model {
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
-            Cons::Load { key, dst } => self.proxy_get(p, key, NO_NODE, dst),
-            Cons::IdxLoad { idx, dst, .. } => self.proxy_get(p, Key::any(), idx, dst),
+            Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
+            Cons::IdxLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
             // `p.m( ... )` / `p[k]( ... )`: [[Get]], then Call( f, p, args ).
             Cons::MCall { key, call } => {
-                let f = self.node_l("proxy-method");
-                self.proxy_get(p, key, NO_NODE, f);
+                let f = self.proxy_get(p, key, NO_NODE);
                 let t = self.tok(TokKind::Proxy(p));
                 self.cons(f, Cons::CallThis { call, this: t });
             }
             Cons::IdxMCall { idx, call, .. } => {
-                let f = self.node_l("proxy-method");
-                self.proxy_get(p, Key::any(), idx, f);
+                let f = self.proxy_get(p, Key::any(), idx);
                 let t = self.tok(TokKind::Proxy(p));
                 self.cons(f, Cons::CallThis { call, this: t });
             }
             // [[Set]] (10.5.9): trap `set( t, key, V, receiver )`.
+            // One trap call per key, passed every stored value; the forward
+            // once per store.
             Cons::Store { key, src, site } => {
                 let t = self.proxies[p as usize].target;
-                let k = self.proxy_key_arg(key, NO_NODE);
-                let recv = self.proxy_recv(p);
-                let ret = self.node_l("proxy-set-ret");
-                self.proxy_trap(p, "set", vec![t, k, src, recv], ret);
-                self.cons(t, Cons::Store { key, src, site });
+                let v = match self.proxies[p as usize].ops.get(&ProxyOp::SetTrap(key)) {
+                    Some(&v) => v,
+                    None => {
+                        let v = self.node_l("proxy-set-value");
+                        self.proxies[p as usize].ops.insert(ProxyOp::SetTrap(key), v);
+                        let k = self.proxy_key_arg(key, NO_NODE);
+                        let recv = self.proxy_recv(p);
+                        let ret = self.node_l("proxy-set-ret");
+                        self.proxy_trap(p, "set", vec![t, k, v, recv], ret);
+                        v
+                    }
+                };
+                self.edge(src, v);
+                if !self.proxy_made(p, ProxyOp::SetFwd(key, src, site)) {
+                    self.cons(t, Cons::Store { key, src, site });
+                }
             }
             // [[HasProperty]] (10.5.7): trap `has( t, key )`.
             Cons::HasProp { key, idx } => {
+                if self.proxy_made(p, ProxyOp::Has(key, idx)) {
+                    return;
+                }
                 let t = self.proxies[p as usize].target;
                 let k = self.proxy_key_arg(key, idx);
                 let ret = self.node_l("proxy-has-ret");
@@ -322,10 +387,14 @@ impl Model {
             // [[Delete]] (10.5.10): trap `deleteProperty( t, key )`.
             Cons::DeleteKey { key, reason } => {
                 let t = self.proxies[p as usize].target;
-                let k = self.proxy_key_arg(Key::Named(key), NO_NODE);
-                let ret = self.node_l("proxy-delete-ret");
-                self.proxy_trap(p, "deleteProperty", vec![t, k], ret);
-                self.cons(t, Cons::DeleteKey { key, reason });
+                if !self.proxy_made(p, ProxyOp::DelTrap(key)) {
+                    let k = self.proxy_key_arg(Key::Named(key), NO_NODE);
+                    let ret = self.node_l("proxy-delete-ret");
+                    self.proxy_trap(p, "deleteProperty", vec![t, k], ret);
+                }
+                if !self.proxy_made(p, ProxyOp::DelFwd(key, reason)) {
+                    self.cons(t, Cons::DeleteKey { key, reason });
+                }
             }
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).

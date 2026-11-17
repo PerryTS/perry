@@ -161,6 +161,9 @@ pub(crate) enum PendingWalk<'a> {
 pub struct Gen<'a> {
     pub m: Model,
     pub(crate) diagnostic: Option<crate::diagnostics::Capture>,
+    /// The output node of the `iteratorStep` whose arguments are being
+    /// generated: what the `iteratorStepOutput` among them reads.
+    pub(crate) step_out: Option<NodeId>,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
@@ -752,6 +755,7 @@ impl<'a> Gen<'a> {
         Gen {
             m,
             diagnostic: None,
+            step_out: None,
             modules,
             mods: Vec::new(),
             path_index,

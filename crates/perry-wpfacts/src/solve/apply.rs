@@ -2338,23 +2338,16 @@ impl Model {
                 // result is no key: TypeError or the next method). It
                 // stores under that result's key (this rule on that node).
                 // ⊤, a marker or a token without the protocol's result keep
-                // the any-key store. GLOBK.
+                // the any-key store. For every receiver (R-INSPKEY): a
+                // String result never writes a symbol-keyed property such as
+                // the inspect hook. In a result node, ⊤ or a marker (no
+                // primitive bits: `add_top_inner`) may be a Symbol and keeps
+                // the any-key store.
                 let ret_node = self.to_prim_ret_nodes.contains(&n);
                 let mut obj_key = false;
-                // Only a receiver that may be the global object gains from
-                // the ToPrimitive result key (G2's any-String field); every
-                // other receiver keeps the any-key store for an object key
-                // (no extra nodes).
-                let recv_global = {
-                    let gt = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-                    let ot = self.tok(TokKind::Builtin(BuiltinNs::Other));
-                    let p = &self.nodes[o as usize].pts;
-                    p.contains_tok(TOP) || p.contains_tok(gt) || p.contains_tok(ot)
-                };
-                if !ret_node && !recv_global {
-                    obj_key = !toks.is_empty();
-                }
-                if !ret_node && recv_global {
+                if ret_node {
+                    obj_key = toks.iter().any(|&t| t == TOP || self.is_marker(t));
+                } else {
                     let r = self.reason("ToPropertyKey");
                     for &t in toks {
                         let ret = match t != TOP && !self.is_marker(t) {
