@@ -258,3 +258,53 @@ fn promise_resolve_rereads_promise_and_thenable_after_collecting_then_getter() {
     assert_eq!(crate::promise::js_promise_state(promise), 1);
     assert_eq!(crate::promise::js_promise_value(promise), 42.0);
 }
+
+/// `then(resolve, reject)`: collects, then throws 13 without calling either.
+extern "C-unwind" fn collecting_throwing_then(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _resolve: f64,
+    _reject: f64,
+) -> f64 {
+    crate::gc::gc_collect_minor();
+    crate::exception::test_throw(13.0)
+}
+
+/// PromiseResolveThenableJob with a `then` that collects and then throws
+/// (#14683: an intrinsic `then` whose SpeciesConstructor runs an allocating
+/// `constructor` getter and fails): the job's abrupt-completion arm must read
+/// the guard array and the promise it rejects from after the call, not their
+/// pre-call addresses.
+#[test]
+fn thenable_job_rejects_the_live_promise_after_then_collects_and_throws() {
+    let _gc = moving_gc();
+    let scope = RuntimeHandleScope::new();
+    let then = crate::closure::js_closure_alloc(
+        crate::fn_info!(unwind collecting_throwing_then, 2; with_declared(2)),
+        0,
+    );
+    let then = scope.root_nanbox_f64(boxed(then));
+    let target = object(&scope);
+    let promise = scope.root_nanbox_f64(boxed(js_promise_new()));
+    let before = promise.get_nanbox_f64().to_bits();
+
+    super::assimilate::enqueue_thenable_job(
+        crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise,
+        target.get_nanbox_f64(),
+        then.get_nanbox_f64(),
+    );
+    run_microtasks();
+
+    assert_ne!(
+        promise.get_nanbox_f64().to_bits(),
+        before,
+        "the promise must move"
+    );
+    let promise = crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise;
+    assert_eq!(
+        crate::promise::js_promise_state(promise),
+        2,
+        "the throw from then must reject the live promise"
+    );
+    assert_eq!(crate::promise::js_promise_reason(promise), 13.0);
+}
