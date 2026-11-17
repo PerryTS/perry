@@ -967,6 +967,21 @@ impl Model {
             out.dedup();
             return Some((self.str_set(&out), lg || rg));
         }
+        // Rule M5b's bound on rule M8: beside an operand holding a set a
+        // rule made (`STRS_RUN`) of several strings, the entries of one
+        // suffix are one entry whose excluded set is what all of them
+        // exclude (a superset: each entry's strings are that entry's). A
+        // product of two exclusion entries mints the mask
+        // `e1 & e2 & !mask(s1)`, so products of many entries mint ever more
+        // masks (the suffix argument above bounds suffixes, not masks), and
+        // a `+` beside its own earlier results would mint more every round.
+        // Joined, the mask of a suffix only shrinks from round to round, so
+        // loops end.
+        let many_run = |m: &Self, n: NodeId| {
+            let x = &m.nodes[n as usize];
+            x.strs & STRS_RUN != 0 && m.str_atoms(x.strs).len() > 1
+        };
+        let join = many_run(self, l) || many_run(self, r);
         let alone = lp.len() == 1;
         let mut out = Vec::new();
         for a in &lp {
@@ -984,6 +999,19 @@ impl Model {
                     (Ok(c), Ok(t)) => self.excl_atom(!ascii_mask(c), t),
                 };
                 out.push(at?);
+            }
+        }
+        if join {
+            let mut by_suffix: std::collections::BTreeMap<String, u128> = Default::default();
+            for &a in &out {
+                let (e, s) = self
+                    .atom_excl(a)
+                    .or_else(|| self.atom_suffix(a).map(|s| (0, s)))?;
+                *by_suffix.entry(s.to_string()).or_insert(e) &= e;
+            }
+            out.clear();
+            for (s, e) in by_suffix {
+                out.push(self.excl_atom(e, &s)?);
             }
         }
         out.sort_unstable();
