@@ -48,6 +48,8 @@ pub(crate) struct Baseline {
     /// Shape records and counters, and the next class-template token, at the baseline.
     shapes: crate::object::shapes::SnapShapeState,
     token: u64,
+    /// The canonical trie at the baseline.
+    canon: crate::object::canonical_keys::snap_image::CanonBaseline,
 }
 
 static BASELINE: AtomicPtr<Baseline> = AtomicPtr::new(std::ptr::null_mut());
@@ -112,6 +114,7 @@ pub extern "C" fn js_snap_image_begin(
         claims: Vec::new(),
         shapes: crate::object::shapes::snap_image_shape_state(),
         token: crate::object::field_get_set::snap_image_next_token(),
+        canon: crate::object::canonical_keys::snap_image::snap_image_canon_baseline(),
     });
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
@@ -313,8 +316,18 @@ fn cell_headers() -> Vec<usize> {
 pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: bool) -> Image {
     use crate::gc::{GcHeader, GC_HEADER_SIZE};
     let mut headers = cell_headers();
+    // The shape records minted since the baseline name their key lists and prototypes, and
+    // the trie names the backings of its new and changed nodes: the state at the cut holds
+    // them even where no live object does, so they are roots of the mark.
+    let mut mint = base.map(|b| crate::object::shapes::snap_image_mint_collect(&b.shapes));
     if live {
-        headers = mark_live(headers, crate::gc::image_visit_roots);
+        headers = mark_live(headers, |v| {
+            crate::gc::image_visit_roots(v);
+            if let (Some(b), Some(m)) = (base, &mint) {
+                mint_roots(m, v);
+                crate::object::canonical_keys::snap_image::snap_image_canon_words(&b.canon, v);
+            }
+        });
     }
     let mut maps = pre;
     maps.extend(read_maps());
@@ -482,8 +495,12 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 &b.shapes,
                 &crate::object::shapes::snap_image_shape_state(),
             );
-            img.mint = crate::object::shapes::snap_image_mint_collect(&b.shapes);
+            img.mint = mint.take().unwrap_or_default();
             let mint_notes = mint_capture(&w, &mut img.mint, &b.data.1, &b.pre_data, &b.shapes);
+            let (canon, canon_stops) = crate::object::canonical_keys::snap_image::snap_image_canon_capture(
+                &b.canon,
+                &mut |a| w.val(a as u64).unwrap_or_else(Val::Opaque),
+            );
             let mint_stop = mint_stop(&delta, &img.mint);
             let (pending, stops) = completeness(
                 delta,
@@ -494,6 +511,9 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             img.stops.extend(stops);
             img.stops.extend(mint_stop);
             img.stops.extend(mint_notes);
+            img.stops.extend(canon_stops);
+            img.stops.push(canon_stop(&canon));
+            img.canon = Some(canon);
             img.registry = registry_record(&w, &mut img.stops);
         }
         None => img.pending = format::PENDING,
@@ -589,6 +609,33 @@ fn mark_live(headers: Vec<usize>, roots: impl FnOnce(&mut dyn FnMut(u64))) -> Ve
         .zip(marked)
         .filter_map(|(h, m)| m.then_some(h))
         .collect()
+}
+
+/// The words a mint record references: its key list and the content of its prototype slot.
+fn mint_roots(recs: &[format::MintRec], v: &mut dyn FnMut(u64)) {
+    for r in recs {
+        if r.keys != 0 {
+            v(r.keys);
+        }
+        if r.proto_cell != 0 {
+            // SAFETY: the slot of the prototype identity words, a live allocation of the shape table.
+            v(unsafe { std::ptr::read_volatile(r.proto_cell as usize as *const u64) });
+        }
+    }
+}
+
+/// The canonical-keys record is written and read back: the stop that reports its size and
+/// node counts.
+fn canon_stop(c: &format::CanonRec) -> Stop {
+    let blob = format::canon_blob(c);
+    let same = format::parse_canon_blob(&blob).is_some_and(|(back, used)| used == blob.len() && back == *c);
+    Stop {
+        cell: u32::from(!same),
+        obj_type: 0,
+        kind: format::STOP_CANON_RECORD,
+        off: blob.len() as u32,
+        value: c.new.len() as u64 | (c.changed.len() as u64) << 32,
+    }
 }
 
 /// The mint record of the shape records minted since the baseline is written (as the file
