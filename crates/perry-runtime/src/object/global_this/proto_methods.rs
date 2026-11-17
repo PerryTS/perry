@@ -399,7 +399,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         return;
     }
     if builtin_name == "TypedArray" {
-        super::typed_array::install_typed_array_prototype_members(proto_obj);
+        super::typed_array::install_typed_array_prototype_members(realm, proto_obj);
         return;
     }
     // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks

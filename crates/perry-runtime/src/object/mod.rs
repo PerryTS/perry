@@ -1594,7 +1594,6 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // objects. Each iterator instance's `[[Prototype]]` points here, so these
     // must stay live for the lifetime of any iterator.
     for slot in [
-        &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::MAP_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,

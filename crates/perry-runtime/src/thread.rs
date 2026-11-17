@@ -143,7 +143,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 use crate::bigint::BIGINT_LIMBS;
-use crate::closure::{self, real_capture_count, ClosureHeader};
+#[cfg(test)]
+use crate::closure;
+use crate::closure::{real_capture_count, ClosureHeader};
 use crate::gc;
 #[cfg(test)]
 use crate::value::JSValue;

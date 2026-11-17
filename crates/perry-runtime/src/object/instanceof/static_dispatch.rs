@@ -24,6 +24,7 @@ pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
         0xFFFF0021 => "RegExp",
         0xFFFF0022 => "Map",
         0xFFFF0023 => "Set",
+        0xFFFF0024 => "Array",
         0xFFFF0025 => "ArrayBuffer",
         0xFFFF002E => "SharedArrayBuffer",
         crate::error::CLASS_ID_ERROR => "Error",

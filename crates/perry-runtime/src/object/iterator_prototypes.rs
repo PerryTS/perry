@@ -34,11 +34,10 @@ use super::{js_object_alloc, set_builtin_property_attrs, ObjectHeader, PropertyA
 use crate::value::JSValue;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-// GC-rooted singleton slots. Each realm builds its own tower in its own arena;
-// the process-global handles resolve to per-agent atomics and are scanned in
-// `object/mod.rs::scan_object_cache_roots_mut` (#8002).
+// Main-realm child towers. Their handles resolve to per-agent atomics and
+// are scanned in `object/mod.rs::scan_object_cache_roots_mut` (#8002).
+// Iterator's root belongs to its realm record, rather than one of these slots.
 crate::perry_thread_local! {
-    static ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static MAP_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static SET_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
@@ -48,8 +47,18 @@ crate::perry_thread_local! {
     static WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
-pub(crate) static ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
-    super::RealmAtomicI64::new(&ITERATOR_PROTOTYPE_PTR_SLOT);
+/// Read-only view of the main record's Iterator prototype cell.
+pub(crate) struct IteratorPrototypeCell;
+impl IteratorPrototypeCell {
+    #[inline(always)]
+    pub(crate) fn load(&self, _ordering: Ordering) -> i64 {
+        crate::array::intrinsic_prototype_addr_if_bound_in(
+            crate::array::thread_realm(),
+            crate::object::BuiltinConstructorIdentity::Iterator,
+        ) as i64
+    }
+}
+pub(crate) const ITERATOR_PROTOTYPE_PTR: IteratorPrototypeCell = IteratorPrototypeCell;
 pub(crate) static ARRAY_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT);
 pub(crate) static MAP_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
@@ -346,26 +355,40 @@ fn chain_to(child: *mut ObjectHeader, parent: *mut ObjectHeader) {
     super::prototype_chain::object_link_class_default_prototype(child as usize, parent_bits);
 }
 
-/// Build the shared `%IteratorPrototype%` and the four family prototypes,
-/// storing them in the GC-rooted slots. Idempotent.
-fn build_iterator_prototypes() {
-    // The tower is reachable lazily from the first iterator allocation, not
-    // only from globalThis bootstrap. Keep its raw locals stable across the
-    // allocating method/tag installs, just like the generator and TypedArray
-    // intrinsic builders (#7251).
+/// Allocate and populate a family's own Iterator root. The caller adopts it
+/// into its realm record; runtime child towers read the main record.
+#[optimize(size)]
+pub(crate) fn birth_iterator_prototype() -> *mut ObjectHeader {
     let _no_move = crate::gc::GcSuppressScope::new();
     // Shared %IteratorPrototype% — carries [Symbol.iterator] returning `this`.
     let shared = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%IteratorPrototype%", members = { [Symbol.iterator]; [Symbol.toStringTag] = "Iterator", attrs = writable | enumerable | configurable; }; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(shared) };
     if shared.is_null() {
-        return;
+        return std::ptr::null_mut();
     }
     install_symbol_iterator(shared);
     // `Iterator.prototype[Symbol.toStringTag]` is "Iterator": an iterator
     // whose own prototype carries no tag (node:sqlite's
     // StatementSyncIterator) prints as `[object Iterator]`.
     super::iterator_ctor::install_prototype_accessors(shared);
+
+    crate::iterator_helpers::install_prototype_methods(shared);
+    crate::iterator_helpers::install_dispose(shared);
+    shared
+}
+
+/// Build the main runtime's child iterator prototypes from its record's root.
+fn build_iterator_prototypes() {
+    // The tower is reachable lazily from the first iterator allocation, not
+    // only from globalThis bootstrap. Keep its raw locals stable across the
+    // allocating method/tag installs, just like the generator and TypedArray
+    // intrinsic builders (#7251).
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let shared = super::iterator_ctor::iterator_prototype_object();
+    if shared.is_null() {
+        return;
+    }
 
     let array_proto = build_family_proto(
         crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next")] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
@@ -397,13 +420,11 @@ fn build_iterator_prototypes() {
         "Iterator Helper",
         shared,
     );
-    crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
-    crate::iterator_helpers::install_dispose(shared);
+    crate::iterator_helpers::install_helper_prototype_methods(iterator_helper_proto);
     let wrap_proto = js_object_alloc(0, 0);
     crate::iterator_helpers::install_wrap_prototype_methods(wrap_proto);
     chain_to(wrap_proto, shared);
 
-    ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
     MAP_ITERATOR_PROTOTYPE_PTR.store(map_proto as i64, Ordering::Release);
     SET_ITERATOR_PROTOTYPE_PTR.store(set_proto as i64, Ordering::Release);
@@ -411,7 +432,6 @@ fn build_iterator_prototypes() {
     REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
     WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
-    super::iterator_ctor::note_birth_keys(shared);
     // `%IteratorHelperPrototype%` was born on the born-prototype lineage
     // (`build_family_proto`) and is no sealed family: mark it here, before
     // it is exposed, as every holder of that lineage is.
@@ -423,7 +443,7 @@ fn build_iterator_prototypes() {
     // suppressed above).
     unsafe {
         super::builtin_proto::seal_iterator_prototypes(
-            shared,
+            std::ptr::null_mut(),
             [
                 array_proto,
                 map_proto,
@@ -509,9 +529,9 @@ fn build_family_proto(
     proto
 }
 
-/// Whether any iterator-prototype tower has been materialized on this thread.
+/// Whether this thread's runtime child-iterator tower has been materialized.
 pub(crate) fn iterator_prototypes_materialized() -> bool {
-    ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
+    ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
 }
 
 #[cfg(test)]
@@ -544,7 +564,7 @@ mod override_probe_premise_tests {
 /// Lazily build the prototypes (idempotent). Cheap after the first call.
 
 pub(crate) fn ensure_iterator_prototypes() {
-    if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+    if ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
         // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
         let _realm = crate::snap_census::realm_build();
         build_iterator_prototypes();
@@ -672,7 +692,7 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     // here, as this probe used to, made every builtin `.next()` allocate a
     // "next" key string and run a by-name prototype lookup just to learn
     // nothing was patched.
-    if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+    if ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
         return None;
     }
     let (slot, canonical): (&crate::object::RealmAtomicI64, *const u8) = match class_id {

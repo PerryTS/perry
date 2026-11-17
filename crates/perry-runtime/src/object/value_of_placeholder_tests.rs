@@ -81,7 +81,7 @@ fn borrowed_builtin_value_of_ignores_own_sentinels() {
     let _scope = Scope::new();
     unsafe {
         let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-        super::global_this::populate_global_this_builtins(global);
+
         let receivers = [
             (
                 "Array",
@@ -121,7 +121,7 @@ fn borrowed_builtin_value_of_boxes_number_and_rejects_nullish_receivers() {
     let _scope = Scope::new();
     unsafe {
         let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-        super::global_this::populate_global_this_builtins(global);
+
         let object_value_of = builtin_prototype_method(global, "Object", "valueOf");
 
         let boxed = call_value_of(object_value_of, 42.0);
@@ -151,7 +151,7 @@ fn borrowed_builtin_value_of_keeps_number_string_and_date_brand_checks() {
     let _scope = Scope::new();
     unsafe {
         let global = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-        super::global_this::populate_global_this_builtins(global);
+
         let number_value_of = builtin_prototype_method(global, "Number", "valueOf");
         let string_value_of = builtin_prototype_method(global, "String", "valueOf");
         let date_value_of = builtin_prototype_method(global, "Date", "valueOf");

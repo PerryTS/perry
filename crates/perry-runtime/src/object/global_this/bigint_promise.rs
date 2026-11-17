@@ -731,23 +731,6 @@ pub(crate) extern "C" fn string_raw_static(
     crate::value::js_nanbox_string(s as i64)
 }
 
-pub(crate) extern "C" fn number_parse_float_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    value: f64,
-) -> f64 {
-    global_this_parse_float_thunk(closure, this, value)
-}
-
-pub(crate) extern "C" fn number_parse_int_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    value: f64,
-    radix: f64,
-) -> f64 {
-    global_this_parse_int_thunk(closure, this, value, radix)
-}
-
 pub(crate) extern "C" fn typed_array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

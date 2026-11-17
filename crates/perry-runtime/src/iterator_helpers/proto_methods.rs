@@ -134,13 +134,9 @@ impl Method {
     }
 }
 
-/// Install the helper methods on a newly built `%Iterator.prototype%`, and
-/// `return` on `%IteratorHelperPrototype%`. Part of the tower's birth keys:
-/// every tower gets the same keys, none of them a protocol method.
-pub(crate) fn install_prototype_methods(
-    iterator_proto: *mut ObjectHeader,
-    helper_proto: *mut ObjectHeader,
-) {
+/// Install the helper methods of a freshly born `%Iterator.prototype%`.
+/// Every realm's root gets the same keys, none of them a protocol method.
+pub(crate) fn install_prototype_methods(iterator_proto: *mut ObjectHeader) {
     for m in METHODS {
         crate::object::global_this::install_proto_method(
             iterator_proto,
@@ -149,6 +145,10 @@ pub(crate) fn install_prototype_methods(
             m.length(),
         );
     }
+}
+
+/// Install the runtime child prototype's return method.
+pub(crate) fn install_helper_prototype_methods(helper_proto: *mut ObjectHeader) {
     crate::object::global_this::install_proto_method(
         helper_proto,
         "return",

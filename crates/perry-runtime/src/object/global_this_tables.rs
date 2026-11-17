@@ -70,6 +70,7 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// `get C[Symbol.species]` returning `this` (#11193), defined by its birth.
     pub species: bool,
     /// The realm's name of the intrinsic (`Map`, `%TypedArray%`).
+    #[cfg(test)]
     pub realm_name: &'static str,
     /// %Global% binds the constructor under `name` (the row's `global`).
     pub global: bool,
@@ -115,6 +116,7 @@ macro_rules! builtin_constructors {
             $(BuiltinConstructorDeclaration {
                 identity: BuiltinConstructorIdentity::$name,
                 name: stringify!($name),
+                #[cfg(test)]
                 realm_name: builtin_constructors!(@realm_name $name $($global)?),
                 global: builtin_constructors!(@global $($global)?),
                 construct_error: builtin_constructors!(@optional $($construct_error)?),

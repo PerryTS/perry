@@ -2,7 +2,6 @@
 //! `prototype` is the realm's existing `%IteratorPrototype%` — the object every
 //! built-in iterator family already inherits from — never a second object.
 
-use super::iterator_prototypes::{ensure_iterator_prototypes, ITERATOR_PROTOTYPE_PTR};
 use super::ObjectHeader;
 use crate::closure::{ClosureHeader, JsThis};
 use crate::value::JSValue;
@@ -49,10 +48,11 @@ pub(crate) fn note_birth_keys(proto: *mut ObjectHeader) {
     }
 }
 
-/// `%Iterator.prototype%`, building the iterator prototype tower on first use.
+/// The main record's `%Iterator.prototype%`, born by its family on first use.
 pub(crate) fn iterator_prototype_object() -> *mut ObjectHeader {
-    ensure_iterator_prototypes();
-    ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader
+    crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::Iterator,
+    ) as *mut ObjectHeader
 }
 
 /// `Iterator()` and `new Iterator()`: only a subclass's `super()` constructs it.

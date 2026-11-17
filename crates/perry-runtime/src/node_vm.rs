@@ -180,7 +180,6 @@ struct ScriptMetadata {
 pub(crate) mod owned_state;
 
 crate::perry_thread_local! {
-    static VM_INTRINSIC_GLOBAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static MAIN_CONTEXT: std::cell::RefCell<Option<ContextState>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -880,17 +879,18 @@ fn context_key(value: f64) -> usize {
 }
 
 fn fresh_intrinsic_global() -> f64 {
-    // ponytail: share one VM intrinsic realm until Perry has a cheap realm-graph
-    // clone; rebuilding the 1.15 MB bootstrap per context exceeds the runner timeout.
-    let cached = VM_INTRINSIC_GLOBAL.with(|slot| slot.get());
-    if cached != 0 {
-        return f64::from_bits(cached);
-    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let intrinsics = (crate::object::js_new_realm_global().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
     let intrinsics = scope.root_raw_mut_ptr(intrinsics);
+    let buffer = scope.root_nanbox_f64(crate::object::native_module::buffer_constructor_value());
+    let buffer_key = scope.root_string_ptr(string_ptr("Buffer"));
     intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
-        crate::object::populate_global_this_builtins(intrinsics)
+        buffer_key.with_mut_ptr::<StringHeader, _>(|key| {
+            crate::object::define_builtin_data_property(
+                intrinsics, key, buffer.get_nanbox_f64(), "Buffer".to_string(),
+                crate::object::PropertyAttrs::new(true, false, true),
+            )
+        })
     });
     let process = scope.root_string_ptr(string_ptr("process"));
     intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
@@ -898,15 +898,7 @@ fn fresh_intrinsic_global() -> f64 {
             crate::object::js_object_delete_field(intrinsics, process)
         })
     });
-    intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
-        let value = object_value(intrinsics);
-        VM_INTRINSIC_GLOBAL.with(|slot| {
-            slot.set(value.to_bits());
-            crate::gc::runtime_write_barrier_root_raw_ptr(intrinsics as *const u8);
-            crate::gc::js_gc_register_global_root(slot.as_ptr() as i64);
-        });
-        value
-    })
+    intrinsics.with_mut_ptr::<ObjectHeader, _>(object_value)
 }
 
 fn new_context_state(sandbox: f64, dont_contextify: bool, options: ContextOptions) -> ContextState {
@@ -1783,4 +1775,40 @@ mod tests {
             crate::value::TAG_TRUE
         );
     }
+
+    #[test]
+    fn vm_default_builtin_parents_stay_in_their_realm() {
+        let _ = crate::object::js_get_global_this();
+        let state = fresh_context();
+        for name in ["Array", "Date", "Map", "Function", "Iterator"] {
+            let source = format!("Object.getPrototypeOf({name}.prototype) === Object.prototype");
+            assert_eq!(execute_in_state(&source, &state).to_bits(), crate::value::TAG_TRUE, "{name}");
+        }
+    }
+
+    #[test]
+    fn vm_iterator_roots_belong_to_their_realm() {
+        let _ = crate::object::js_get_global_this();
+        assert_eq!(main_prototype_if_bound("Iterator"), 0);
+        let first = fresh_context();
+        let second = fresh_context();
+        let a = execute_in_state("Iterator.prototype", &first);
+        let b = execute_in_state("Iterator.prototype", &second);
+        assert_ne!(a.to_bits(), b.to_bits());
+        assert_eq!(main_prototype_if_bound("Iterator"), 0, "a vm root leaves the main family unborn");
+    }
+
+    #[test]
+    fn vm_buffer_is_main_buffer_without_birthing_its_own_family() {
+        let _ = crate::object::js_get_global_this();
+        let state = fresh_context();
+        let expected = crate::object::native_module::buffer_constructor_value();
+        assert_eq!(execute_in_state("Buffer", &state).to_bits(), expected.to_bits());
+        let global = (state.intrinsics_bits & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let realm = unsafe { crate::object::global_this::realm_of(global) };
+        assert_eq!(crate::array::intrinsic_prototype_addr_if_bound_in(
+            realm, crate::object::BuiltinConstructorIdentity::Buffer,
+        ), 0, "the vm Buffer family stays unborn");
+    }
+
 }

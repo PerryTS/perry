@@ -636,3 +636,13 @@ fn typed_array_parent_direct_construction_throws_its_declared_error() {
     let message = super::super::property_ops::set::key_to_rust_string(f64::from_bits(message.bits())).unwrap();
     assert_eq!(message, "Abstract class TypedArray not directly constructable");
 }
+
+#[test]
+fn default_parent_birth_does_not_materialize_main_global() {
+    assert!(!crate::object::global_this_is_materialized());
+    let prototype = crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::WeakMap,
+    );
+    assert_ne!(prototype, 0);
+    assert!(!crate::object::global_this_is_materialized());
+}

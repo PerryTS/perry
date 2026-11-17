@@ -288,6 +288,7 @@ const _: () = assert!(
 /// and that seal's mark mints no shape. Every other one keeps the ordinary
 /// lineage until something marks it (a runtime prototype with a declared
 /// class or layout word is restamped onto that word's lineage first).
+#[cfg(test)]
 pub(crate) fn realm_seals_constructor_prototype(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) -> bool {
@@ -480,14 +481,8 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
         let realm = super::global_this::realm_of(global);
         let thread_realm = crate::array::is_thread_realm(realm);
         for (family, name) in BuiltinProto::ALL {
-            // The thread realm seals what is born; an unborn family seals
-            // its prototype in its own birth (`seal_born_family`).
-            let proto = if thread_realm && !matches!(family, BuiltinProto::Object) {
-                crate::object::BuiltinConstructorIdentity::for_name(name)
-                    .map_or(0, crate::array::intrinsic_prototype_addr_if_bound)
-            } else {
-                intrinsic_prototype_addr(family, global, name)
-            };
+            let proto = crate::object::BuiltinConstructorIdentity::for_name(name)
+                .map_or(0, |identity| crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity));
             seal_family_prototype(family, proto, thread_realm);
         }
         super::builtin_namespace::seal_namespaces(global);
@@ -567,46 +562,6 @@ unsafe fn seal_family_prototype(family: BuiltinProto, proto: usize, thread: bool
             }
         }
     }
-}
-
-/// The realm's intrinsic prototype of `family`: the memoized intrinsic cells
-/// for Object (the complete intrinsic, never the shape-only sentinel), Array
-/// and Function; `globalThis[name].prototype` for the rest.
-#[inline(never)]
-#[optimize(size)]
-unsafe fn intrinsic_prototype_addr(
-    family: BuiltinProto,
-    global: *mut ObjectHeader,
-    name: &str,
-) -> usize {
-    match family {
-        BuiltinProto::Object => crate::array::object_prototype_addr(),
-        BuiltinProto::Array => crate::array::array_prototype_addr(),
-        BuiltinProto::Function => crate::array::function_prototype_addr(),
-        _ => constructor_prototype_addr(global, name),
-    }
-}
-
-/// `globalThis[name].prototype` while the realm still names its intrinsics.
-#[inline(never)]
-#[optimize(size)]
-unsafe fn constructor_prototype_addr(global: *mut ObjectHeader, name: &str) -> usize {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let ctor = super::js_object_get_field_by_name_f64(global, key);
-    let ctor_bits = ctor.to_bits();
-    if ctor_bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    let pkey = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    let proto = super::js_object_get_field_by_name_f64(
-        (ctor_bits & crate::value::POINTER_MASK) as usize as *const ObjectHeader,
-        pkey,
-    );
-    let bits = proto.to_bits();
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    (bits & crate::value::POINTER_MASK) as usize
 }
 
 /// The invalidation hook for an ordinary object about to be mutated. One

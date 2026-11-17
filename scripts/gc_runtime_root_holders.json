@@ -682,13 +682,6 @@
       "why": "DiagStoreScopeState.handles are store KEYS produced by store_handle() (diagnostics_tail.rs:72), which admits only an INT32-tagged value, a POINTER_TAG value inside the handle band (raw < 0x10000), or a finite float — a real heap pointer returns None, so one cannot be stored here by construction. The store CONTEXT objects live in DIAG_CHANNELS[*].stores, which scan_node_submodule_singleton_roots_mut visits."
     },
     {
-      "file": "crates/perry-runtime/src/node_vm.rs",
-      "name": "VM_INTRINSIC_GLOBAL",
-      "verdict": "covered_elsewhere",
-      "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
-      "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell — fresh_intrinsic_global, node_vm.rs:1080 — calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_DECLARED_STATIC_GLOBAL_SLOTS",
       "verdict": "not_a_gc_pointer",
@@ -993,12 +986,6 @@
       "name": "CACHED",
       "verdict": "not_a_gc_pointer",
       "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be — see #7246."
-    },
-    {
-      "file": "crates/perry-runtime/src/thread.rs",
-      "name": "ACTIVE_THREAD_JOBS",
-      "verdict": "not_a_gc_pointer",
-      "why": "In-flight job counter for perry/thread."
     },
     {
       "file": "crates/perry-runtime/src/timer.rs",
@@ -3762,11 +3749,6 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ITERATOR_PROTOTYPE_PTR_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT",
       "scanner": "scan_object_cache_roots_mut"
     },
@@ -3857,14 +3839,6 @@
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
       "name": "SESSION_STORAGE_PTR_SLOT"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "TYPED_ARRAY_INTRINSIC_PTR_SLOT"
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",

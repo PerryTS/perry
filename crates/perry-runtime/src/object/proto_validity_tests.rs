@@ -112,7 +112,7 @@ fn the_generator_and_iterator_prototypes_keep_their_born_lineage() {
     use crate::object::shapes::object_on_born_prototype_lineage;
     let _scope = Scope::new();
     crate::object::ensure_generator_intrinsics();
-    let _ = crate::object::iterator_ctor::iterator_prototype_object();
+    crate::object::iterator_prototypes::ensure_iterator_prototypes();
     let mut holders = Vec::new();
     for slot in [
         &crate::object::GENERATOR_PROTOTYPE_PTR,

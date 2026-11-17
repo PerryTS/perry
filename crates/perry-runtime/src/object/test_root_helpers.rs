@@ -130,7 +130,7 @@ pub(crate) fn test_materialize_realm_owned_roots() {
     }
 }
 
-/// `(name, backing-atomic address, rooted heap word)` for every root moved by
+/// `(name, backing-cell address, rooted heap word)` for every root moved by
 /// #8002/#8003. The backing address proves the storage is per-agent; the
 /// nonzero heap word proves the corresponding builder actually populated it.
 #[cfg(test)]
@@ -174,10 +174,6 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
         ("LOCAL_STORAGE_PTR", &LOCAL_STORAGE_PTR),
         ("SESSION_STORAGE_PTR", &SESSION_STORAGE_PTR),
         (
-            "ITERATOR_PROTOTYPE_PTR",
-            &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
-        ),
-        (
             "ARRAY_ITERATOR_PROTOTYPE_PTR",
             &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
         ),
@@ -208,6 +204,12 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
             slot.load(Ordering::Acquire) as u64,
         ));
     }
+    // Iterator's root moved from its standalone atomic into this record cell.
+    roots.push((
+        "ITERATOR_PROTOTYPE_PTR",
+        crate::array::thread_realm().test_prototype_cell_addr(BuiltinConstructorIdentity::Iterator),
+        iterator_prototypes::ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as u64,
+    ));
     global_this::append_async_function_root_snapshot(&mut roots);
     roots
 }

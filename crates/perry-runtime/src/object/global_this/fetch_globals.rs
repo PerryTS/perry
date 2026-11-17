@@ -71,7 +71,7 @@ static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 ///
 /// Answers WITHOUT materializing it, which is the whole point:
 /// [`js_get_global_this`] allocates the realm global and then runs
-/// `populate_global_this_builtins`, and that population is ~5 ms of one-time
+/// `populate_realm_global`, and that population is ~5 ms of one-time
 /// work (its own `[gc-globalthis-bootstrap]` diagnostic reports the figure).
 /// A caller that only needs to know whether some address *is* one of the
 /// realm's intrinsics must not pay that to be told "there are no intrinsics
@@ -94,7 +94,7 @@ pub(crate) fn thread_realm_global_addr() -> usize {
 }
 
 /// Whether `obj` is THIS thread's realm global, as opposed to the global of a
-/// `vm` context or an eval realm that `populate_global_this_builtins` also
+/// `vm` context or an eval realm that `populate_realm_global` also
 /// fills (each of those gets its own intrinsics).
 pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
     !obj.is_null()
@@ -130,9 +130,8 @@ pub(crate) unsafe fn birth_realm_global() -> *mut ObjectHeader {
 /// A new realm's global (a `vm` context's): born by [`birth_realm_global`],
 /// then given the own private `[[Intrinsics]]` key (the canonical key-add
 /// transition) holding the realm's own record, whose `global` cell names it
-/// back. The main global never takes that key. Unpopulated: the realm's families are born on first
-/// observation.
-#[allow(dead_code)] // node_vm contexts take it in S4
+/// back. The main global never takes that key. Population binds the realm's
+/// unborn constructors; their families are born on first observation.
 pub(crate) fn js_new_realm_global() -> f64 {
     crate::gc::ensure_gc_initialized();
     let key = realm_intrinsics_key();
@@ -148,6 +147,7 @@ pub(crate) fn js_new_realm_global() -> f64 {
             crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
         );
         assert!(defined, "a vm realm global takes its [[Intrinsics]] key");
+        super::populate::populate_realm_global(global);
         crate::value::js_nanbox_pointer(global as i64)
     }
 }
@@ -177,7 +177,6 @@ fn realm_intrinsics_key() -> usize {
 ///
 /// # Safety
 /// `global` is a live realm global; no collection runs while the reference lives.
-#[allow(dead_code)] // births take it in S3a
 pub(crate) unsafe fn realm_of<'a>(global: *mut ObjectHeader) -> &'a crate::array::RealmIntrinsics {
     if is_thread_realm_global(global) {
         return &crate::state::state().realm_intrinsics;
@@ -208,7 +207,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
         let _ = crate::gc::gc_collect_minor();
     }
     // First access on this thread — allocate our own global.
-    // The birth joins population's no-move window (`populate_global_this_builtins`):
+    // The birth joins population's no-move window (`populate_realm_global`):
     // the static layout's record is one allocation that can cross an arena
     // block, and no collection may run anywhere in the bootstrap.
     // The realm global is the runtime's, whichever init first asks for it:
@@ -234,7 +233,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
-    populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    super::populate::populate_realm_global(new_ptr as *mut ObjectHeader);
     drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved
@@ -280,7 +279,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
 }
 
 // Note: `navigator` (#2923) is installed on the singleton directly (see
-// `populate_global_this_builtins`) rather than via this generic namespace
+// `populate_realm_global`) rather than via this generic namespace
 // loop because it needs its own field-populated object, not an empty stub.
 
 /// No-op thunk used as the function body for most singleton globalThis

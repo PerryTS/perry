@@ -219,6 +219,16 @@ struct IntrinsicEntry {
     constructor: Cell<usize>,
 }
 
+#[cfg(test)]
+impl RealmIntrinsics {
+    pub(crate) fn test_prototype_cell_addr(
+        &self,
+        identity: crate::object::BuiltinConstructorIdentity,
+    ) -> usize {
+        intrinsic_entry_in(self, identity).prototype.as_ptr() as usize
+    }
+}
+
 fn intrinsic_entry_in(
     realm: &RealmIntrinsics,
     identity: crate::object::BuiltinConstructorIdentity,
@@ -319,6 +329,7 @@ pub(crate) fn intrinsic_constructor_addr_in(
 
 /// This realm's original constructor of `identity` if the realm has bound
 /// it, else 0. Never builds the realm.
+#[cfg(test)]
 #[inline]
 pub(crate) fn intrinsic_constructor_addr_if_bound(
     identity: crate::object::BuiltinConstructorIdentity,

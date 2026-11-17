@@ -711,12 +711,12 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// `testTypedArray.js`). Order is node's own-key order: the four accessors
 /// (#2060), the spec methods, `toString` (= `Array.prototype.toString`),
 /// `@@iterator` (= `values`, so after the methods) and `@@toStringTag`.
-pub(crate) fn install_typed_array_prototype_members(proto: *mut ObjectHeader) {
+pub(crate) fn install_typed_array_prototype_members(realm: &crate::array::RealmIntrinsics, proto: *mut ObjectHeader) {
     install_typed_array_proto_accessors(proto);
     install_typed_array_to_string_tag(proto);
     typed_array_proto_thunks::install_typed_array_proto_methods(proto);
     install_typed_array_iterator_symbol(proto);
-    super::populate::alias_typed_array_proto_to_string(proto);
+    super::populate::alias_typed_array_proto_to_string(realm, proto);
 }
 
 /// Public accessor for the `%TypedArray%.prototype` object. Returns the cached

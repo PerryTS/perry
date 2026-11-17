@@ -86,20 +86,22 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
 
 pub(crate) use array_error::{
     function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
-    generic_array_like_to_vec, global_this_rest_array_values, is_native_error_subclass_constructor,
+    generic_array_like_to_vec, global_this_rest_array_values,
     object_prototype_to_string_thunk, object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
 pub(crate) use bigint_promise::{
-    bigint_as_n_dispatch, number_parse_float_thunk, number_parse_int_thunk,
+    bigint_as_n_dispatch,
     promise_static_function_spec,
 };
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
 pub use builtin_thunks::js_function_ctor_from_strings;
+#[cfg(test)]
+pub(crate) use builtin_thunks::global_this_parse_int_thunk;
 pub(crate) use builtin_thunks::{
     global_this_array_thunk, global_this_error_prepare_stack_trace_thunk,
-    global_this_parse_float_thunk, global_this_parse_int_thunk, js_math_round_value,
+    js_math_round_value,
     ARRAY_CONSTRUCTOR_INFO,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
@@ -118,19 +120,19 @@ pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
-    global_this_response_thunk, is_thread_realm_global,
+    global_this_response_thunk,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
     js_module_top_this, js_request_subclass_init, js_response_subclass_init,
 };
 #[cfg(test)]
-pub(crate) use generator::append_async_function_root_snapshot;
+pub(crate) use generator::{append_async_function_root_snapshot, ensure_generator_intrinsics};
 pub(crate) use generator::function_kind_prototype_unwritten;
 pub(crate) use generator::{
-    ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
+    generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, generator_original_prototype, set_intrinsic_data_prop,
-    set_intrinsic_to_string_tag, wire_function_intrinsic_parents,
+    set_intrinsic_to_string_tag,
 };
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
@@ -166,7 +168,7 @@ pub(crate) use object_intrinsic::{
 pub(crate) use populate::{
     arm_all_global_bindings, global_binding_row,
     birth_lazy_family, birth_lazy_family_in, born_by_its_observation, ensure_function_intrinsics_in, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
-    populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
