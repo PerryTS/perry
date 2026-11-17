@@ -141,13 +141,24 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
+                // A native step writes its own value binding (the
+                // `LocalSet(value, iteratorStepOutput())` among its
+                // arguments): that write reads this step's output only.
+                let outer = (module == "__perry_runtime" && method == "iteratorStep").then(|| {
+                    let n = self.tmp("iterout");
+                    self.step_out.replace(n)
+                });
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
                 self.member_op(mi, e, method, o, o.is_none().then_some(m0), false);
                 if module == "__perry_borrowed_proof" {
                     self.prim_node(prim::BOOL)
                 } else if module == "__perry_runtime" {
-                    self.runtime_glue(fx, method, o, a, args)
+                    let r = self.runtime_glue(fx, method, o, a, args);
+                    if let Some(p) = outer {
+                        self.step_out = p;
+                    }
+                    r
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
