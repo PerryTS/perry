@@ -27,10 +27,6 @@ pub(crate) enum BuiltinInstanceIdentity {
 pub(crate) struct BuiltinConstructorDeclaration {
     pub identity: BuiltinConstructorIdentity,
     pub name: &'static str,
-    /// Population flags derived at compile time; they do not change realm facts.
-    pub phase_b: bool,
-    pub realm_seals_prototype: bool,
-    pub realm_seals_namespace: bool,
     pub info: &'static crate::closure::JsFunctionInfo,
     pub prototype_class: Option<u32>,
     pub prototype_serial: Option<u64>,
@@ -61,6 +57,10 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// reading one's value births the family, which installs it. The realm
     /// source's own-key order is the check (`lazy_family_tests`).
     pub statics: &'static [&'static str],
+    /// Population flags derived at compile time; they do not change realm facts.
+    pub phase_b: bool,
+    pub realm_seals_prototype: bool,
+    pub realm_seals_namespace: bool,
 }
 
 macro_rules! builtin_constructors {
