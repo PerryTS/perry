@@ -46,7 +46,19 @@ impl BindingNodes {
     pub(crate) fn new(m: &Model) -> Self {
         BindingNodes {
             copies: if m.instance_nodes {
-                instance_born_copies(m)
+                let mut copies = instance_born_copies(m);
+                // A read of a local after an assignment sees a version node
+                // fed from the value, not the local's own node, and summary
+                // compression can drop the local's slot; the instance copies
+                // of its versions are what an instance's reads see.
+                for (&r, &l) in &m.name_of {
+                    if let Some(c) = copies.get(&r).cloned() {
+                        let all = copies.entry(l).or_default();
+                        all.push(r);
+                        all.extend(c);
+                    }
+                }
+                copies
             } else {
                 FxHashMap::default()
             },
