@@ -2196,6 +2196,12 @@ pub struct Model {
     pub escaped: FxHashMap<Tok, u32>,
     /// `escaped` as a bitset by token (the hot membership test).
     pub esc_bits: Vec<u64>,
+    /// Tokens whose escape bit was set since the last late-escape prune
+    /// (`prune_late_escaped`, R-ESCLATE): that prune's work list, which it
+    /// empties.
+    pub late_esc: Vec<Tok>,
+    /// The work counter when the last late-escape prune ran.
+    pub late_esc_at: u64,
     pub reasons: Vec<String>,
     pub reason_index: FxHashMap<String, u32>,
     pub top_node: NodeId,

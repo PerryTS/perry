@@ -328,10 +328,12 @@ After a consolidation lands, Repository automatically deletes completed runs who
 ### Required WASI command and component execution
 
 The `wasi_execution` plan entry joins the core PR, sweep and full tiers and
-starts four Linux jobs in parallel, so the gate waits for the longest of them
+starts five Linux jobs in parallel, so the gate waits for the longest of them
 rather than their sum:
 
 - `wasi-native` runs the `target-wasi` codegen and link-argument unit tests.
+- `wasi-component-units` runs the component-model unit tests
+  (`scripts/component_unit_tests.sh`).
 - `wasi-execution` builds Perry with `target-wasi` and a matching wasm32-wasip2
   runtime, checks the IR ABI, then runs all six smoke cases, twenty acceptance
   cases and ten pinned-Node comparisons.
@@ -347,6 +349,6 @@ Per-case logs, component phase verdicts, source revision and artifacts are
 retained (`wasi-required-<sha>`, `wasi-required-p1-<sha>` and
 `wasi-components-<sha>`). The required
 `pr-gate` rejects a skipped or missing planned WASI job as well as failures and
-cancellation, for each of the four. Docs-only PRs skip this build. The wider Windows/macOS matrix
+cancellation, for each of the five. Docs-only PRs skip this build. The wider Windows/macOS matrix
 remains in the extended suite. Native component execution is currently
 qualified on Linux.

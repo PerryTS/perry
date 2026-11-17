@@ -17,6 +17,7 @@ impl Model {
             }
         }
         self.diagnostic_callee(call, t);
+        crate::family_reach::callee(self, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
         // unknown function (the reader cannot follow what it is given).

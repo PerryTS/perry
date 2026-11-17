@@ -238,8 +238,8 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 // A listener may reopen either object during the first emit.
                 let wrapper_record = scope.root_nanbox(prepare_socket_closed(owner.get(), &closed));
                 let parent_record = scope.root_nanbox(prepare_socket_closed(original.get(), event));
-                emit_socket_closed(owner.get(), wrapper_record.get());
-                emit_socket_closed(original.get(), parent_record.get());
+                queue_socket_closed(owner.get(), wrapper_record.get());
+                queue_socket_closed(original.get(), parent_record.get());
             } else {
                 socket_closed(owner.get(), event);
             }
@@ -646,7 +646,9 @@ pub(crate) fn socket_closed(owner: f64, event: &tl::NetCompletion) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let record = scope.root_nanbox(prepare_socket_closed(owner.get(), event));
-    emit_socket_closed(owner.get(), record.get());
+    // Native acknowledgement may arrive before the logical destroy jobs run.
+    // Share their FIFO so cancellation and error precede close/provider retirement.
+    queue_socket_closed(owner.get(), record.get());
 }
 
 fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
@@ -754,9 +756,6 @@ fn emit_socket_closed(owner: f64, record: f64) {
         p::undefined()
     });
     server::child_closed(owner.get(), group.get());
-    if had_error {
-        events::emit_in(resource.get(), owner.get(), "error", &[error.get()]);
-    }
     let had_handle = !record_exists
         || p::record_get(record.get(), "hadHandle").to_bits() != JsValue::FALSE.bits();
     let args = if had_handle {

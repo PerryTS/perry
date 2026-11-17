@@ -996,6 +996,9 @@ impl Model {
             }
             Cons::Implicit { reason, proto } => {
                 for &t in toks {
+                    crate::family_reach::dispatch_route(self, |m| {
+                        format!("the runtime's {proto:?} protocol on {}", m.tok_name(t))
+                    });
                     match self.toks[t as usize] {
                         // A function handed to a reflecting runtime helper:
                         // it may be called back with anything.
@@ -1987,6 +1990,7 @@ impl Model {
                 }
             }
             Cons::IdxMCall { idx, call, shape } => {
+                crate::family_reach::dispatch_route(self, |_| "a call under a computed key".into());
                 // Primitive receivers (`MCall`'s rule): a number key calls
                 // a key a store into ⊤ wrote on their prototype.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {

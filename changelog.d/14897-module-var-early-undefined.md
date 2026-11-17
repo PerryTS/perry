@@ -1,0 +1,1 @@
+Fix a SIGSEGV when a getter or callback read a module-level `var` before its declarator ran: such a `var` now gets the hoisted `undefined` a function body's `var` has, so the whole-program facts no longer prove it always holds its initializer's value.
