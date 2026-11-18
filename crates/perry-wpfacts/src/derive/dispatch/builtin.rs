@@ -87,7 +87,10 @@ fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
             return;
         }
     }
-    if let Expr::Closure { body, .. } = e {
+    if let Expr::Closure { body, params, .. } = e {
+        for p in params {
+            decorators(&p.decorators, f);
+        }
         stmts(body, f);
     }
     walker::walk_expr_children(e, &mut |child| visit(child, f));
@@ -100,6 +103,23 @@ fn stmts(body: &[Stmt], f: &mut impl FnMut(&Expr)) {
         });
     }
 }
+fn decorators(decorators: &[perry_hir::Decorator], f: &mut impl FnMut(&Expr)) {
+    for decorator in decorators {
+        for arg in &decorator.args {
+            visit(arg, f);
+        }
+    }
+}
+fn function(fun: &Function, f: &mut impl FnMut(&Expr)) {
+    decorators(&fun.decorators, f);
+    for p in &fun.params {
+        decorators(&p.decorators, f);
+        if let Some(e) = &p.default {
+            visit(e, f);
+        }
+    }
+    stmts(&fun.body, f);
+}
 fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
     stmts(&hir.init, f);
     for g in &hir.globals {
@@ -107,16 +127,8 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
             visit(e, f);
         }
     }
-    let mut function = |fun: &Function| {
-        for p in &fun.params {
-            if let Some(e) = &p.default {
-                visit(e, f);
-            }
-        }
-        stmts(&fun.body, f);
-    };
     for fun in &hir.functions {
-        function(fun);
+        function(fun, f);
     }
     for c in &hir.classes {
         for fun in c
@@ -126,15 +138,21 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
             .chain(&c.static_methods)
             .chain(c.getters.iter().map(|(_, f)| f))
             .chain(c.setters.iter().map(|(_, f)| f))
+            .chain(c.computed_members.iter().map(|m| &m.function))
         {
-            function(fun);
+            function(fun, f);
         }
     }
     for c in &hir.classes {
+        decorators(&c.decorators, f);
+        for member in &c.computed_members {
+            visit(&member.key_expr, f);
+        }
         if let Some(e) = &c.extends_expr {
             visit(e, f);
         }
         for field in c.fields.iter().chain(&c.static_fields) {
+            decorators(&field.decorators, f);
             if let Some(e) = &field.key_expr {
                 visit(e, f);
             }
@@ -241,5 +259,60 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                 .get(&((s.module, s.byte_offset), s.key.clone()))
                 .copied()
                 .unwrap_or(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_dispatch_visits_computed_members_and_decorator_arguments() {
+        let ast = perry_parser::parse_typescript(
+            "class P { value = 0; m(x: any) { console.log('body'); } } console.log('init');",
+            "t.ts",
+        )
+        .unwrap();
+        let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+        let call = hir
+            .init
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Expr(e @ Expr::Call { .. }) => Some(e.clone()),
+                _ => None,
+            })
+            .expect("live init call");
+        let decorator = perry_hir::Decorator {
+            name: "decorator".into(),
+            args: vec![call.clone()],
+            is_factory: true,
+            is_reflect_metadata: false,
+        };
+        let c = &mut hir.classes[0];
+        c.decorators.push(decorator.clone());
+        c.fields[0].decorators.push(decorator.clone());
+        let mut method = c.methods.remove(0);
+        method.decorators.push(decorator.clone());
+        method.params[0].default = Some(call.clone());
+        method.params[0].decorators.push(decorator);
+        c.computed_members.push(perry_hir::ClassComputedMember {
+            key_expr: call,
+            function: method,
+            is_static: false,
+            kind: perry_hir::ClassComputedMemberKind::Method,
+            source_order: 1,
+        });
+        let mut calls = 0;
+        module(&hir, &mut |e| {
+            if matches!(e, Expr::Call { callee, .. }
+                if matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "log"))
+            {
+                calls += 1;
+            }
+        });
+        assert_eq!(
+            calls, 8,
+            "every generated call location participates in twin agreement"
+        );
     }
 }
