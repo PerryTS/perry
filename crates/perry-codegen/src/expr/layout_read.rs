@@ -1267,9 +1267,8 @@ fn run_arm(
     // where ITS merge is, and the bind call can be one arm of a larger
     // lowering (a method-dispatch tower over a program's own `bind` methods),
     // whose other arms bypass it to reach this store.
-    let dominates = |ctx: &FnCtx<'_>, proof: &str| {
-        ctx.func.proof_dominates_block_end(proof, ctx.current_block)
-    };
+    let dominates =
+        |ctx: &FnCtx<'_>, proof: &str| ctx.func.proof_dominates_block_end(proof, ctx.current_block);
     let watched = ctx
         .inline_ctor_return
         .last_mut()
