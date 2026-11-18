@@ -1,8 +1,9 @@
 //! Method calls on builtin receivers (object model step 5, phase 2,
 //! OBJECT_MODEL_2026-10-13.md §3.6 "Builtins", §3.7).
 //!
-//! An array, a string, a Map, a Set, a WeakMap, a WeakSet or a function
-//! resolves a method through its family's intrinsic prototype
+//! An array, a string, a Map, a Set, a WeakMap, a WeakSet, a function or a
+//! Buffer/`Uint8Array` byte cell (`byte_view`) resolves a method through its
+//! family's intrinsic prototype
 //! (`Array.prototype`, `String.prototype`, …), a sealed intrinsic layout
 //! whose shadow bit says whether the program has written it
 //! (`builtin_proto`, step 3). While neither that prototype nor
@@ -148,6 +149,8 @@ unsafe fn weak_ok(v: f64, brand: u32) -> bool {
 const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
+mod byte_view;
+use byte_view::{byte_view_ok, is_byte_view_receiver_type};
 mod function_receiver;
 use function_receiver::function_call;
 pub(super) use function_receiver::function_ok;
@@ -1905,6 +1908,7 @@ const FAMILY_ARRAY: u64 = 2;
 const FAMILY_MAP: u64 = 4;
 const FAMILY_SET: u64 = 8;
 const FAMILY_FUNCTION: u64 = 16;
+const FAMILY_BYTES: u64 = 32;
 
 /// The lookup half of a split method call (#11910) whose key names a builtin
 /// method of the families in `families`: a receiver of one of them that the
@@ -1944,6 +1948,9 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
             crate::gc_object_type_pat!() => {
                 (families & FAMILY_MAP != 0 && weak_ok(recv, WEAKMAP))
                     || (families & FAMILY_SET != 0 && weak_ok(recv, WEAKSET))
+            }
+            t if is_byte_view_receiver_type(t) => {
+                families & FAMILY_BYTES != 0 && byte_view_ok(recv)
             }
             crate::gc::GC_TYPE_CLOSURE => {
                 families & FAMILY_FUNCTION != 0

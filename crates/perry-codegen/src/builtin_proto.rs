@@ -531,7 +531,8 @@ pub(crate) fn array_entry(method: &str, argc: usize) -> Option<String> {
 /// The builtin methods a method site on an unproven receiver calls directly
 /// (runtime `object/builtin_method.rs`): `(name, argc, families)`, where
 /// `families` is the set of builtin kinds whose intrinsic prototype holds
-/// `name` as that builtin (1 String, 2 Array, 4 Map, 8 Set, 16 Function).
+/// `name` as that builtin (1 String, 2 Array, 4 Map, 8 Set, 16 Function,
+/// 32 a Buffer or `Uint8Array` byte cell).
 /// `js_bm_<name><argc>(site, recv, key, method_id, args…)` proves the
 /// receiver's kind and `Pristine` of its family and calls the body; any other
 /// receiver takes the universal dispatcher with the same operands.
@@ -556,6 +557,9 @@ pub(crate) const BUILTIN_METHODS: &[(&str, usize, u8)] = &[
     ("concat", 0, 1),
     ("concat", 1, 1),
     ("concat", 2, 1),
+    ("copyWithin", 1, 32),
+    ("copyWithin", 2, 32),
+    ("copyWithin", 3, 32),
     ("delete", 1, 12),
     ("endsWith", 0, 1),
     ("endsWith", 1, 1),

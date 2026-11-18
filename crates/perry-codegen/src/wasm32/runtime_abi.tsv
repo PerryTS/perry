@@ -505,6 +505,9 @@ js_bm_codePointAt1	f64	i64,f64,i64,i64,f64
 js_bm_concat0	f64	i64,f64,i64,i64
 js_bm_concat1	f64	i64,f64,i64,i64,f64
 js_bm_concat2	f64	i64,f64,i64,i64,f64,f64
+js_bm_copyWithin1	f64	i64,f64,i64,i64,f64
+js_bm_copyWithin2	f64	i64,f64,i64,i64,f64,f64
+js_bm_copyWithin3	f64	i64,f64,i64,i64,f64,f64,f64
 js_bm_delete1	f64	i64,f64,i64,i64,f64
 js_bm_endsWith0	f64	i64,f64,i64,i64
 js_bm_endsWith1	f64	i64,f64,i64,i64,f64
