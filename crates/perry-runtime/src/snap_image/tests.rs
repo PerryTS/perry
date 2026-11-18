@@ -898,6 +898,31 @@ fn full_canon_node(id: u32) -> CanonNode {
     }
 }
 
+/// A node present at the baseline that changed in place is, in a real trie, a node
+/// below the root: its parent, edge hash and length are not 0, and the record must
+/// carry them back.
+#[test]
+fn canon_record_round_trips_a_changed_node_below_the_root() {
+    let changed = CanonNode {
+        published: false,
+        addr: Val::Cell { hi: 0, bare: true, index: 7 },
+        ..full_canon_node(2)
+    };
+    let c = CanonRec {
+        begin_len: 3,
+        cut_len: 3,
+        new: Vec::new(),
+        changed: vec![changed, full_canon_node(1)],
+        last_addr: Val::Scalar(0),
+        last_len: 0,
+        last_node: 0,
+        minted: 0,
+        reaped: 0,
+    };
+    let blob = canon_blob(&c);
+    assert_eq!(parse_canon_blob(&blob), Some((c, blob.len())));
+}
+
 #[test]
 fn canon_record_round_trips_every_field() {
     let changed = CanonNode {

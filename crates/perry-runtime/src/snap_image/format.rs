@@ -585,8 +585,8 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
 }
 
 /// One trie node of the canonical-keys record. A changed node (one present at the
-/// baseline) carries only the fields a live node changes in place; its `parent`,
-/// `edge_hash` and `len` read back as 0.
+/// baseline) carries its `parent`, `edge_hash` and `len` too: they are the node's
+/// identity, which the replay checks against the restored trie.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonNode {
     pub id: u32,
@@ -620,13 +620,11 @@ pub struct CanonRec {
     pub reaped: u64,
 }
 
-fn canon_node_put(o: &mut Vec<u8>, n: &CanonNode, fresh: bool) {
+fn canon_node_put(o: &mut Vec<u8>, n: &CanonNode) {
     o.extend(n.id.to_le_bytes());
-    if fresh {
-        o.extend(n.parent.to_le_bytes());
-        o.extend(n.edge_hash.to_le_bytes());
-        o.extend(n.len.to_le_bytes());
-    }
+    o.extend(n.parent.to_le_bytes());
+    o.extend(n.edge_hash.to_le_bytes());
+    o.extend(n.len.to_le_bytes());
     o.push(u8::from(n.all_ptr) | u8::from(n.published) << 1);
     put_val(o, &n.addr);
     for x in [n.backing_slots, n.run, n.backing_owner] {
@@ -640,10 +638,10 @@ pub fn canon_blob(c: &CanonRec) -> Vec<u8> {
     let mut o = Vec::new();
     o.extend(c.begin_len.to_le_bytes());
     o.extend(c.cut_len.to_le_bytes());
-    for (list, fresh) in [(&c.new, true), (&c.changed, false)] {
+    for list in [&c.new, &c.changed] {
         o.extend((list.len() as u32).to_le_bytes());
         for n in list {
-            canon_node_put(&mut o, n, fresh);
+            canon_node_put(&mut o, n);
         }
     }
     put_val(&mut o, &c.last_addr);
@@ -658,13 +656,11 @@ fn canon_u32(b: &[u8], o: &mut usize) -> Option<u32> {
     Some(u32::from_le_bytes(mint_tail(b, o, 4)?.try_into().ok()?))
 }
 
-fn canon_node_get(b: &[u8], o: &mut usize, fresh: bool) -> Option<CanonNode> {
+fn canon_node_get(b: &[u8], o: &mut usize) -> Option<CanonNode> {
     let id = canon_u32(b, o)?;
-    let (parent, edge_hash, len) = if fresh {
-        (canon_u32(b, o)?, mint_tail_u64(b, o)?, canon_u32(b, o)?)
-    } else {
-        (0, 0, 0)
-    };
+    let parent = canon_u32(b, o)?;
+    let edge_hash = mint_tail_u64(b, o)?;
+    let len = canon_u32(b, o)?;
     let fl = mint_tail(b, o, 1)?.first().copied()?;
     let addr = tail_val(b, o)?;
     let backing_slots = canon_u32(b, o)?;
@@ -690,9 +686,9 @@ pub fn parse_canon_blob(b: &[u8]) -> Option<(CanonRec, usize)> {
     let begin_len = canon_u32(b, &mut o)?;
     let cut_len = canon_u32(b, &mut o)?;
     let mut lists = [Vec::new(), Vec::new()];
-    for (k, list) in lists.iter_mut().enumerate() {
+    for list in lists.iter_mut() {
         for _ in 0..canon_u32(b, &mut o)? {
-            list.push(canon_node_get(b, &mut o, k == 0)?);
+            list.push(canon_node_get(b, &mut o)?);
         }
     }
     let [new, changed] = lists;
