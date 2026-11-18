@@ -145,8 +145,13 @@ def gh(*args: str) -> str:
 
 
 def labelled_by_bot(repo: str, number: int) -> bool:
-    actors = gh('api', '--paginate', f'repos/{repo}/issues/{number}/events',
-                '--jq', '.[] | select(.event == "labeled") | .actor.login')
+    """An item whose events cannot be read counts as labelled, so the next run retries it."""
+    try:
+        actors = gh('api', '--paginate', f'repos/{repo}/issues/{number}/events',
+                    '--jq', '.[] | select(.event == "labeled") | .actor.login')
+    except SystemExit as error:
+        print(f'#{number}: skipped, {error}', file=sys.stderr)
+        return True
     return BOT in actors.split()
 
 
@@ -183,12 +188,13 @@ def apply(repo: str, changes: list[tuple[int, set[str], set[str]]]) -> int:
     """Label every item, report each failure, and return how many failed."""
     failed = 0
     for number, add, remove in changes:
+        # Remove first: only an added label marks the item as done, so a failure here is retried.
         try:
+            for name in sorted(remove):
+                gh('api', '-X', 'DELETE', f'repos/{repo}/issues/{number}/labels/{name.replace(":", "%3A")}')
             if add:
                 flags = [arg for name in sorted(add) for arg in ('-f', f'labels[]={name}')]
                 gh('api', '-X', 'POST', f'repos/{repo}/issues/{number}/labels', *flags)
-            for name in sorted(remove):
-                gh('api', '-X', 'DELETE', f'repos/{repo}/issues/{number}/labels/{name.replace(":", "%3A")}')
         except SystemExit as error:
             print(f'#{number}: {error}', file=sys.stderr)
             failed += 1
@@ -259,6 +265,25 @@ class Tests(unittest.TestCase):
         with mock.patch.object(sys.modules[__name__], 'gh', fake_gh), mock.patch('sys.stderr'):
             self.assertEqual(apply('o/r', [(1, {'type:bug'}, set()), (2, {'type:bug'}, set())]), 1)
         self.assertIn('repos/o/r/issues/2/labels', calls[-1])
+
+    def test_apply_removes_before_it_adds(self):
+        calls = []
+        with mock.patch.object(sys.modules[__name__], 'gh', lambda *args: calls.append(args[2]) or ''):
+            self.assertEqual(apply('o/r', [(1, {'type:perf'}, {'type:bug'})]), 0)
+        self.assertEqual(calls, ['DELETE', 'POST'])
+
+    def test_plan_skips_only_the_item_whose_events_fail(self):
+        issues = [{'number': n, 'body': f'### Where does it go wrong?\n\n{PERF_STAGE}\n', 'labels': []} for n in (1, 2)]
+        def fake_gh(*args):
+            if args[:2] == ('issue', 'list'):
+                return json.dumps(issues)
+            if args[:2] == ('pr', 'list'):
+                return '[]'
+            if 'repos/o/r/issues/1/events' in args:
+                raise SystemExit('gh api failed (1): HTTP 502')
+            return 'someone\n'
+        with mock.patch.object(sys.modules[__name__], 'gh', fake_gh), mock.patch('sys.stderr'):
+            self.assertEqual(plan('o/r', 24), [(2, {'type:perf'}, set())])
 
     def test_feature_all_platforms_and_free_text_issues_add_nothing(self):
         self.assertEqual(classify_issue('### Platforms it matters for\n\nAll platforms\n', set()), (set(), set()))
