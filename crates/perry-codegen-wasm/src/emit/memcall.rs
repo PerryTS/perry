@@ -151,8 +151,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// `console.log(a, b)` prints `a b` on one line, so every argument goes to one bridge call.
-    /// The call is an expression like any other and leaves its value, `undefined`, on the
-    /// stack: a conditional arm, an initializer or an arrow body takes it (#14876).
+    /// Like every expression, the call leaves one value: `undefined`.
     pub(super) fn emit_console_call(&mut self, func: &mut Function, bridge: &str, args: &[Expr]) {
         let count = args.len() as u32;
         self.emit_frame_begin(func, count);

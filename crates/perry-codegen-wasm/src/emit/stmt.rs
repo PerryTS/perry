@@ -1,8 +1,4 @@
-//! Statement emission extracted from emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move of `FuncEmitCtx::emit_stmt` and the free `has_return` helper.
-//! Methods stay on the same struct via a separate `impl<'a> FuncEmitCtx<'a>`
-//! block (idiomatic Rust).
+//! Statement emission: `FuncEmitCtx::emit_stmt` and the free `has_return` helper.
 
 use super::*;
 
