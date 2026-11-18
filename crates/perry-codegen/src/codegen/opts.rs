@@ -886,6 +886,7 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx<'a> {
+    pub closure_writes: crate::collectors::ClosureWrites<'a>,
     pub numeric_order_functions: &'a [perry_hir::Function],
     pub numeric_order_closures: &'a [(u32, perry_hir::Expr)],
     /// Closure regions of the splitter (`split_regions`): one body each,
