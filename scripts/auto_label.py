@@ -59,7 +59,8 @@ FORM_PLATFORM = {
 }
 HOST_PLATFORM = {'macOS': 'macos', 'Linux': 'linux', 'Windows': 'windows'}
 PERF_STAGE = 'The program is much slower or uses much more memory than Node'
-# The actor behind the workflow's github.token.
+# The actor behind the workflow's github.token. Every workflow using that token labels as
+# this actor, so a second labelling workflow must use another token or this script skips its items.
 BOT = 'github-actions[bot]'
 
 
@@ -144,21 +145,23 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
-def labelled_by_bot(repo: str, number: int) -> bool:
-    """An item whose events cannot be read counts as labelled, so the next run retries it."""
+def labelled_by_bot(repo: str, number: int) -> bool | None:
+    """None when the item's events cannot be read; plan() skips it and the run fails."""
     try:
         actors = gh('api', '--paginate', f'repos/{repo}/issues/{number}/events',
                     '--jq', '.[] | select(.event == "labeled") | .actor.login')
     except SystemExit as error:
         print(f'#{number}: skipped, {error}', file=sys.stderr)
-        return True
+        return None
     return BOT in actors.split()
 
 
-def plan(repo: str, hours: int) -> list[tuple[int, set[str], set[str]]]:
+def plan(repo: str, hours: int) -> tuple[list[tuple[int, set[str], set[str]]], int]:
+    """The label changes to make, and how many items were skipped because their events failed."""
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
     search = f'created:>={since}'
     changes = []
+    unread = 0
     issues = json.loads(gh('issue', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--search', search,
                            '--json', 'number,body,labels'))
     for issue in issues:
@@ -166,8 +169,11 @@ def plan(repo: str, hours: int) -> list[tuple[int, set[str], set[str]]]:
         if any(name.startswith('platform:') for name in current):
             continue
         add, remove = classify_issue(issue['body'], current)
-        if (add or remove) and not labelled_by_bot(repo, issue['number']):
-            changes.append((issue['number'], add, remove))
+        if add or remove:
+            done = labelled_by_bot(repo, issue['number'])
+            unread += done is None
+            if done is False:
+                changes.append((issue['number'], add, remove))
     prs = json.loads(gh('pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--search', search,
                         '--json', 'number,title,author,labels,files'))
     for pr in prs:
@@ -179,9 +185,12 @@ def plan(repo: str, hours: int) -> list[tuple[int, set[str], set[str]]]:
         if any(name.startswith('type:') for name in current):
             add = {name for name in add if not name.startswith('type:')}
         add -= current
-        if add and not labelled_by_bot(repo, pr['number']):
-            changes.append((pr['number'], add, set()))
-    return changes
+        if add:
+            done = labelled_by_bot(repo, pr['number'])
+            unread += done is None
+            if done is False:
+                changes.append((pr['number'], add, set()))
+    return changes, unread
 
 
 def apply(repo: str, changes: list[tuple[int, set[str], set[str]]]) -> int:
@@ -253,7 +262,7 @@ class Tests(unittest.TestCase):
                     return json.dumps([perf])
                 return '[]' if args[:2] == ('pr', 'list') else actors
             with mock.patch.object(sys.modules[__name__], 'gh', fake_gh):
-                self.assertEqual(plan('o/r', 24), expected)
+                self.assertEqual(plan('o/r', 24), (expected, 0))
 
     def test_apply_keeps_going_after_a_failed_item(self):
         calls = []
@@ -283,7 +292,7 @@ class Tests(unittest.TestCase):
                 raise SystemExit('gh api failed (1): HTTP 502')
             return 'someone\n'
         with mock.patch.object(sys.modules[__name__], 'gh', fake_gh), mock.patch('sys.stderr'):
-            self.assertEqual(plan('o/r', 24), [(2, {'type:perf'}, set())])
+            self.assertEqual(plan('o/r', 24), ([(2, {'type:perf'}, set())], 1))
 
     def test_feature_all_platforms_and_free_text_issues_add_nothing(self):
         self.assertEqual(classify_issue('### Platforms it matters for\n\nAll platforms\n', set()), (set(), set()))
@@ -300,11 +309,14 @@ def main() -> int:
     if args.self_test:
         result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromTestCase(Tests))
         return 0 if result.wasSuccessful() else 1
-    changes = plan(args.repo, args.hours)
+    changes, unread = plan(args.repo, args.hours)
     for number, add, remove in changes:
         print(f'#{number}: +{sorted(add)} -{sorted(remove)}')
     print(f'{len(changes)} item(s) to label' + ('' if args.apply else ' (dry run)'))
-    return 1 if args.apply and apply(args.repo, changes) else 0
+    failed = apply(args.repo, changes) if args.apply else 0
+    if unread:
+        print(f'{unread} item(s) skipped: their label events could not be read', file=sys.stderr)
+    return 1 if failed or unread else 0
 
 
 if __name__ == '__main__':
