@@ -32,7 +32,7 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
-unsafe fn object_assign_set_string_key(
+pub(super) unsafe fn object_assign_set_string_key(
     define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
@@ -821,18 +821,23 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // non-enumerable — `exotic_own_keys(.., enumerable_only = true)` encodes
     // exactly that rule, and is the same enumeration `Object.keys` and
     // `JSON.stringify` use, so the three cannot disagree.
-    if src_raw >= 0x10000 && src_raw.is_multiple_of(8) && {
+    //
+    // Every exotic-expando kind (Date, Error, Map, Set, Promise, Temporal)
+    // keeps its own properties in that one store, so one arm copies them all.
+    let exotic_kind = if src_raw >= 0x10000 && src_raw.is_multiple_of(8) {
         let src_gc =
             (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*src_gc).obj_type == crate::gc::GC_TYPE_ERROR
-    } {
-        use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys, ExoticKind};
+        crate::object::exotic_expando::exotic_kind_of_gc_type((*src_gc).obj_type)
+    } else {
+        None
+    };
+    if let Some(exotic_kind) = exotic_kind {
+        use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys};
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
         let receiver = crate::value::js_nanbox_pointer(src_raw as i64);
-        for name in exotic_own_keys(ExoticKind::Error, src_raw, true) {
-            let Some(value) = exotic_get_own_property(src_raw, ExoticKind::Error, &name, receiver)
-            else {
+        for name in exotic_own_keys(exotic_kind, src_raw, true) {
+            let Some(value) = exotic_get_own_property(src_raw, exotic_kind, &name, receiver) else {
                 continue;
             };
             let value_h = scope.root_nanbox_f64(value);
@@ -924,6 +929,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
 
+    // Set once an own accessor's getter ran (string or symbol key): from then
+    // on each later key is checked for own presence first, since the getter
+    // may have deleted it (CopyDataProperties, ECMA-262 7.3.25 step 4.c: the
+    // key's [[GetOwnProperty]] is read before its value). Until a getter runs
+    // nothing can delete a key, and nothing extra runs.
+    let mut getter_ran = false;
     let positional_plan = if crate::gc_type_is_object!(source_obj_type) {
         positional_source_plan(src)
     } else {
@@ -1120,6 +1131,15 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 )) {
                     continue;
                 }
+                if getter_ran
+                    && crate::value::js_is_truthy(js_object_has_own(
+                        crate::value::js_nanbox_pointer(src as i64),
+                        f64::from_bits(key_val.bits()),
+                    )) == 0
+                {
+                    continue;
+                }
+                getter_ran |= crate::object::key_attrs::key_is_accessor_at(src_keys, i as u32);
                 if hide_internal {
                     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                     if crate::string::js_string_key_bytes(key_val, &mut buf)
@@ -1209,6 +1229,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             continue;
         }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
+        if getter_ran
+            && !crate::symbol::js_object_has_own_symbol(source_h.get_nanbox_f64(), sym_f64)
+        {
+            continue;
+        }
+        getter_ran |= crate::object::shaped_symbols::accessor(src_raw, sym_ptr).is_some();
         let iter_scope = crate::gc::RuntimeHandleScope::new();
         let sym_h = iter_scope.root_nanbox_f64(sym_f64);
         // Read the source value through `[[Get]]`, not the raw side-table bits,

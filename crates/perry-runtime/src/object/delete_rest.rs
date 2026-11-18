@@ -1350,6 +1350,52 @@ unsafe fn copy_rest_symbol_properties(
     }
 }
 
+/// The rest object of an exotic-expando source: its own enumerable expandos
+/// outside `exclude_keys`, read with [[Get]] (an accessor expando runs its
+/// getter, so the source and the rest object are re-read from their roots).
+unsafe fn exotic_rest(
+    kind: super::exotic_expando::ExoticKind,
+    src_raw: usize,
+    exclude_keys: *const ArrayHeader,
+) -> *mut ObjectHeader {
+    use super::exotic_expando::{exotic_get_own_property, exotic_own_keys};
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(src_raw as i64));
+    let exclude_h = scope.root_raw_const_ptr(exclude_keys);
+    let rest_h = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    for name in exotic_own_keys(kind, src_raw, true) {
+        let excluded = !exclude_keys.is_null()
+            && exclude_h.with_const_ptr::<ArrayHeader, _>(|ex| {
+                (0..crate::array::js_array_length(ex)).any(|j| {
+                    crate::string::js_string_key_matches_bytes(
+                        crate::array::js_array_get(ex, j),
+                        name.as_bytes(),
+                    )
+                })
+            });
+        if excluded {
+            continue;
+        }
+        let receiver = source_h.get_nanbox_f64();
+        let src_now = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
+        let Some(value) = exotic_get_own_property(src_now, kind, &name, receiver) else {
+            continue;
+        };
+        let value_h = scope.root_nanbox_f64(value);
+        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        rest_h.with_mut_ptr::<ObjectHeader, _>(|rest| {
+            super::assign::object_assign_set_string_key(
+                true,
+                rest,
+                false,
+                key_ptr,
+                value_h.get_nanbox_f64(),
+            )
+        });
+    }
+    rest_h.get_raw_mut_ptr::<ObjectHeader>()
+}
+
 /// Create a rest object from destructuring: copies all own enumerable
 /// properties from `src` except the explicitly destructured keys.
 /// `exclude_keys` contains NaN-boxed strings and may also contain Symbols.
@@ -1361,6 +1407,12 @@ pub extern "C" fn js_object_rest(
 ) -> *mut ObjectHeader {
     if src.is_null() {
         return js_object_alloc(0, 0);
+    }
+    // Date, Error, Map, Set, Promise and Temporal keep their own properties in
+    // the exotic expando store, not in a key list: the rest copies them from
+    // there, the same enumeration `{...x}` and Object.assign use.
+    if let Some(kind) = super::exotic_expando::exotic_expando_kind(src as usize) {
+        return unsafe { exotic_rest(kind, src as usize, exclude_keys) };
     }
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
