@@ -181,6 +181,7 @@ mod map_entry_pairs;
 mod map_identity_ops;
 mod map_values;
 mod mathb1;
+mod chw2_date_statics;
 mod member_heritage;
 mod memo_context;
 mod method_sites;
