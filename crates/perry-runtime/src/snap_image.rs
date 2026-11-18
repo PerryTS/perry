@@ -17,10 +17,8 @@ mod tests;
 use format::{Cell, Image, Stop, Val, Word};
 use std::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 
-// ELF linker-defined symbols. Mach-O and PE define none of them, and off
-// Linux nothing captures an image (`begin` and `cut` exist on Linux x86_64
-// only), so `build` there sees empty section and executable ranges, as
-// `read_maps` sees no mappings.
+// ELF linker-defined symbols. Off Linux no image is captured (`begin` and
+// `cut` are Linux x86_64 only), so `build` sees empty ranges there.
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     static __data_start: u8;
