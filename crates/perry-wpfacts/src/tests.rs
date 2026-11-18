@@ -182,6 +182,7 @@ mod map_identity_ops;
 mod map_values;
 mod mathb1;
 mod chw2_date_statics;
+mod chw4_has_instance;
 mod member_heritage;
 mod memo_context;
 mod method_sites;
