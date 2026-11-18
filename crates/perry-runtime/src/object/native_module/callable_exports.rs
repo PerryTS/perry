@@ -37,6 +37,18 @@ pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> 
         .map(f64::from_bits)
 }
 
+/// A perf_hooks family export is the realm's constructor, independent of
+/// whether its read uses a statically emitted export or the dynamic namespace.
+pub(super) fn perf_hooks_constructor_value(module: &str, property: &str) -> Option<f64> {
+    if module != "perf_hooks" {
+        return None;
+    }
+    let identity = crate::object::BuiltinConstructorIdentity::for_name(property)?;
+    Some(crate::value::js_nanbox_pointer(
+        crate::array::intrinsic_constructor_addr(identity) as i64,
+    ))
+}
+
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     if super::native_namespace_member_absent(module_name, property_name) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -56,12 +68,8 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     // A perf_hooks export that is a realm family is that family's
     // constructor (`require("perf_hooks").Performance === Performance`),
     // read through the family's one birth point.
-    if module_name == "perf_hooks" {
-        if let Some(identity) = crate::object::BuiltinConstructorIdentity::for_name(property_name) {
-            return crate::value::js_nanbox_pointer(crate::array::intrinsic_constructor_addr(
-                identity,
-            ) as i64);
-        }
+    if let Some(value) = perf_hooks_constructor_value(module_name, property_name) {
+        return value;
     }
     // Codegen can request a callable directly, bypassing namespace lookup.
     #[cfg(windows)]

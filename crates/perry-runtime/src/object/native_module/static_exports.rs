@@ -194,6 +194,9 @@ include!(concat!(env!("OUT_DIR"), "/native_export_values.rs"));
 /// them a fresh callable would break Buffer/URL/TextDecoder identity.
 #[inline(always)]
 fn intrinsic_export(module: &str, property: &str) -> Option<f64> {
+    if let Some(value) = callable_exports::perf_hooks_constructor_value(module, property) {
+        return Some(value);
+    }
     if let Some(value) = worker_messaging_constructor_value(module, property) {
         return Some(value);
     }
