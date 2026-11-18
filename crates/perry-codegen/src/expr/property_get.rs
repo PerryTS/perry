@@ -642,6 +642,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &fast_label,
                 &slow_label,
                 "plen",
+                true,
             );
 
             ctx.current_block = fast_idx;

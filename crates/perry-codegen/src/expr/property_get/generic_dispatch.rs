@@ -880,9 +880,10 @@ pub(crate) fn lower_property_site_tail(
             arm
         });
 
-    // A typed array's or byte view's `.length` from its header (#10515): an
-    // untyped `for (…; i < b.length; …)` over a `Uint8Array` or `Buffer`
-    // otherwise misses the probe and takes the complete read per iteration.
+    // A typed array owner's `.length` from its header: an untyped
+    // `for (…; i < b.length; …)` over a `Uint8Array` or `Buffer` otherwise
+    // misses the probe and takes the complete read per iteration. Views take
+    // the probe, whose admission proves the cell before following its link.
     let byte_length_arm = array_length_arm.is_some().then(|| {
         let load_idx = ctx.new_block("pget.byte_length");
         let load_label = ctx.block_label(load_idx);
@@ -911,6 +912,7 @@ pub(crate) fn lower_property_site_tail(
             &load_label,
             &probe_label,
             "pget",
+            false,
         );
         ctx.current_block = load_idx;
         let len = {

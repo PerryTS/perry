@@ -393,20 +393,25 @@ fn only_length_grows_the_array_arm() {
     }
 }
 
-/// #10515: what the plain-Array arm refuses is offered to the typed-array /
-/// byte-view arm before the probe. A `Uint8Array`, `Buffer` or numeric typed
-/// array owner (type byte 64..=76, no bag, not forwarded) or a fixed view of a
-/// plain owner answers `length` from its payload word +0 while the default
-/// metadata accessor proof holds; everything else reaches the probe.
+/// What the plain-Array arm refuses is offered to the typed-array owner arm
+/// before the probe. A `Uint8Array`, `Buffer` or numeric typed array owner
+/// (type byte 64..=76, no bag, not forwarded) answers `length` from its
+/// payload word +0 while the default metadata accessor proof holds. Everything
+/// else, views included, reaches the probe: a view's link is not followed on a
+/// receiver whose cell is unproven.
 #[test]
-fn a_length_read_serves_a_typed_array_or_byte_view_from_its_header() {
+fn a_length_read_serves_a_typed_array_owner_from_its_header() {
     let ir = emit_read("length");
     let blocks = blocks_of(&ir, "\npget.slow");
 
     let (_, other_body) = block(&blocks, "pget.array_other");
-    let (cond, owner, view) = cond_br(other_body);
+    let (cond, owner, rest) = cond_br(other_body);
     assert_eq!(strip_suffix(&owner), "pget.byte_header", "{other_body:?}");
-    assert_eq!(strip_suffix(&view), "pget.view_check", "{other_body:?}");
+    assert_eq!(strip_suffix(&rest), "pget.byte_other", "{other_body:?}");
+    assert!(
+        !ir.contains("pget.view_check") && !ir.contains("pget.view_header"),
+        "an untyped receiver must not follow a view's link:\n{ir}"
+    );
     let range = def(other_body, &cond);
     let parts: Vec<&str> = range["and i1 ".len()..].split(", ").collect();
     assert!(
@@ -421,19 +426,17 @@ fn a_length_read_serves_a_typed_array_or_byte_view_from_its_header() {
         "the arm's test must not call out:\n{other_body:?}"
     );
 
-    // Both admissions require the metadata accessor proof and leave to the
+    // The admission requires the metadata accessor proof and leaves to the
     // probe otherwise.
-    for prefix in ["pget.byte_header", "pget.view_header"] {
-        let (_, body) = block(&blocks, prefix);
-        assert!(
-            body.iter()
-                .any(|l| l.contains("load atomic i8, ptr @PERRY_TYPED_NAMED_PROPS_INVALIDATED")),
-            "`{prefix}` must test the named-props withdrawal:\n{body:?}"
-        );
-        let (_, hit, miss) = cond_br(body);
-        assert_eq!(strip_suffix(&hit), "pget.byte_length", "{body:?}");
-        assert_eq!(strip_suffix(&miss), "pget.byte_other", "{body:?}");
-    }
+    let (_, body) = block(&blocks, "pget.byte_header");
+    assert!(
+        body.iter()
+            .any(|l| l.contains("load atomic i8, ptr @PERRY_TYPED_NAMED_PROPS_INVALIDATED")),
+        "`pget.byte_header` must test the named-props withdrawal:\n{body:?}"
+    );
+    let (_, hit, miss) = cond_br(body);
+    assert_eq!(strip_suffix(&hit), "pget.byte_length", "{body:?}");
+    assert_eq!(strip_suffix(&miss), "pget.byte_other", "{body:?}");
 
     // The hit loads the u32 at the receiver's payload offset 0, with no call,
     // and the merge takes it.

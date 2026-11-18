@@ -50,6 +50,14 @@ const own = new Uint8Array(4);
 Object.defineProperty(own, "length", { value: 99 });
 console.log(len(own), len(new Uint8Array(4)));
 
+// A subclass getter shadows the intrinsic accessor.
+class Sized extends Uint8Array {
+  get length(): number {
+    return 7;
+  }
+}
+console.log(len(new Sized(2)));
+
 // A Uint8Array-annotated store of an unproven value.
 function put(b: Uint8Array, src: any, i: number): any {
   return (b[i] = src[i]);

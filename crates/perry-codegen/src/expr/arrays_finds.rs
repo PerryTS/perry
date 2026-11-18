@@ -1114,10 +1114,8 @@ pub(crate) fn lower(
                         let val = vals[2].clone();
                         let strict = if ctx.is_strict_fn { "1" } else { "0" };
                         if !key_maybe_string {
-                            // A value that IS a Number at runtime needs no
-                            // conversion, so the guarded byte store answers it
-                            // first (#10515: nanoid's `b[i] = cc[b[i] & mask]`,
-                            // whose read may answer `undefined`).
+                            // A runtime Number needs no conversion: the guarded
+                            // byte store takes it, the runtime store the rest.
                             super::u8_buffer_read::emit_u8_cached_dyn_set(
                                 ctx,
                                 &a,

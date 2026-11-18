@@ -1,4 +1,4 @@
-//! #10515: a `Uint8Array` store whose value is not provably a Number
+//! A `Uint8Array` store whose value is not provably a Number
 //! (nanoid's `b[i] = charCodes[b[i] & mask]`, whose read may answer
 //! `undefined`) stores a value that IS a Number at runtime through the guarded
 //! byte store, and keeps the runtime element store for every other value.
