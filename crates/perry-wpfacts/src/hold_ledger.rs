@@ -13,6 +13,16 @@
 //! escaped token of a receiver's template. Per root, `mass_only` counts the
 //! sites whose full set is exactly that root: the sites its removal alone
 //! would free of every recorded hold.
+//!
+//! LEDG3: an escape stops at a token that already escaped, so a cause that
+//! reaches a token only through another escaped token is masked in those
+//! sets. The ledger therefore also keeps the escape-predecessor graph:
+//! every escape, sink and ⊤ seed adds one edge from its immediate cause (the
+//! root, the escaping token, the sink node or the ⊤ origin of the cascade)
+//! to what it touches, also when that is already escaped. A refused site is
+//! freed by removing a set of roots when none of its causes (its receiver's
+//! escaped tokens, their templates' escaped tokens, its ⊤ origin) is still
+//! reachable from another root (`<path>.freed`).
 
 use crate::model::{Model, NodeId, Tok};
 use crate::pts::FxHashMap;
@@ -43,6 +53,40 @@ pub(crate) struct HoldLedger {
     /// Later roots that escaped an escaped token again (beside `tok_root`).
     tok_again: FxHashMap<Tok, Vec<u32>>,
     again_seen: crate::pts::FxHashSet<(Tok, u32)>,
+    /// LEDG3: the immediate cause of the cascade being applied (a vertex,
+    /// `NOV` outside one) and the escape-predecessor edges.
+    cause: u64,
+    edges: crate::pts::FxHashSet<(u64, u64)>,
+    /// ⊤ origin (`top_origin_id`) -> its vertex number.
+    top_ids: FxHashMap<(NodeId, u32), u32>,
+    /// `PERRY_FACTS_LEDGER_DROP`: roots the solve leaves out (a re-solve
+    /// that checks a `freed` prediction): `file:line` (every root recorded
+    /// there) or `file:line@t<id>` / `@n<id>` (one root).
+    drop: Vec<(String, u32, Option<String>)>,
+}
+
+/// No vertex.
+const NOV: u64 = u64::MAX;
+
+/// The graph's vertices: a root, a token, a sink node, a ⊤ origin.
+pub(crate) fn v_root(r: u32) -> u64 {
+    r as u64
+}
+pub(crate) fn v_tok(t: Tok) -> u64 {
+    1 << 32 | t as u64
+}
+pub(crate) fn v_node(n: NodeId) -> u64 {
+    2 << 32 | n as u64
+}
+fn v_top(i: u32) -> u64 {
+    3 << 32 | i as u64
+}
+
+/// The cascade context an `enter_*` replaced (restored by `leave`).
+#[derive(Clone, Copy)]
+pub(crate) struct Ctx {
+    cur: u32,
+    cause: u64,
 }
 
 /// Read where a model is made and where the ledger is written (a test sets
@@ -61,7 +105,34 @@ impl HoldLedger {
     pub(crate) fn new() -> Box<Self> {
         Box::new(HoldLedger {
             cur: NONE,
+            cause: NOV,
+            drop: std::env::var("PERRY_FACTS_LEDGER_DROP")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|d| {
+                    let (place, at) = match d.split_once('@') {
+                        Some((p, a)) => (p, Some(a.to_string())),
+                        None => (d, None),
+                    };
+                    let (file, line) = place.rsplit_once(':')?;
+                    Some((file.to_string(), line.parse().ok()?, at))
+                })
+                .collect(),
             ..Default::default()
+        })
+    }
+
+    /// A new root (outside a cascade) for the node or token `id` recorded
+    /// at `loc` is one `PERRY_FACTS_LEDGER_DROP` leaves out.
+    pub(crate) fn dropped(&self, loc: &Location, id: u32, tok: bool) -> bool {
+        if self.drop.is_empty() || self.cur != NONE {
+            return false;
+        }
+        let at = || format!("{}{id}", if tok { "t" } else { "n" });
+        self.drop.iter().any(|(file, line, a)| {
+            *line == loc.line()
+                && short(loc.file()) == file
+                && a.as_ref().is_none_or(|a| *a == at())
         })
     }
 
@@ -97,20 +168,57 @@ impl HoldLedger {
         r
     }
 
-    /// `escape(t, reason)` begins: returns the root to restore after it.
+    /// The immediate cause of an effect whose root is `r` (`root_of`):
+    /// the cascade's cause, else the new root itself.
+    fn parent(&self, r: u32) -> u64 {
+        match self.cur != NONE && self.cause != NOV {
+            true => self.cause,
+            false => v_root(r),
+        }
+    }
+
+    /// One predecessor edge (LEDG3), once per pair.
+    fn edge(&mut self, from: u64, to: u64) {
+        if from != to {
+            self.edges.insert((from, to));
+        }
+    }
+
+    fn ctx(&self) -> Ctx {
+        Ctx {
+            cur: self.cur,
+            cause: self.cause,
+        }
+    }
+
+    /// Restore the cascade an `enter_*` replaced.
+    pub(crate) fn leave(&mut self, c: Ctx) {
+        self.cur = c.cur;
+        self.cause = c.cause;
+    }
+
+    /// `escape(t, reason)` begins (also when `t` already escaped): returns
+    /// the cascade to restore after it.
     pub(crate) fn enter_escape(
         &mut self,
         t: Tok,
         reason: u32,
         loc: &'static Location<'static>,
-    ) -> u32 {
+    ) -> Ctx {
         let r = self.root_of(reason, t, true, "escape", loc);
-        std::mem::replace(&mut self.cur, r)
+        let saved = self.ctx();
+        let p = self.parent(r);
+        self.edge(p, v_tok(t));
+        self.cur = r;
+        self.cause = v_tok(t);
+        saved
     }
 
     /// `t`, already escaped, is escaped again for `reason`.
     pub(crate) fn again(&mut self, t: Tok, reason: u32, loc: &'static Location<'static>) {
         let r = self.root_of(reason, t, true, "escape", loc);
+        let p = self.parent(r);
+        self.edge(p, v_tok(t));
         self.again_root(t, r);
     }
 
@@ -125,28 +233,52 @@ impl HoldLedger {
     #[track_caller]
     pub(crate) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         let r = self.root_of(reason, t, true, "escape", Location::caller());
+        let p = self.parent(r);
+        self.edge(p, v_tok(t));
         self.tok_root.entry(t).or_insert(r);
     }
 
     pub(crate) fn sink(&mut self, n: NodeId, reason: u32, loc: &'static Location<'static>) {
         let r = self.root_of(reason, n, false, "sink", loc);
+        let p = self.parent(r);
+        self.edge(p, v_node(n));
         self.sink_root.entry(n).or_insert(r);
     }
 
-    /// The TopSink rule of `n` runs: its escapes belong to `n`'s root.
-    pub(crate) fn enter_sink(&mut self, n: NodeId) -> u32 {
-        let r = self.sink_root.get(&n).copied().unwrap_or(self.cur);
-        std::mem::replace(&mut self.cur, r)
+    /// A TopSink rule is attached to `n` inside a cascade: what it escapes
+    /// later (as values reach `n`) belongs to that cascade, `n` its cause.
+    pub(crate) fn sink_rule(&mut self, n: NodeId) {
+        if self.cur == NONE {
+            return;
+        }
+        let p = self.parent(self.cur);
+        self.edge(p, v_node(n));
+        self.sink_root.entry(n).or_insert(self.cur);
+    }
+
+    /// The TopSink rule of `n` runs: its escapes belong to `n`'s root, and
+    /// their immediate cause is `n`.
+    pub(crate) fn enter_sink(&mut self, n: NodeId) -> Ctx {
+        let saved = self.ctx();
+        if let Some(&r) = self.sink_root.get(&n) {
+            self.cur = r;
+            self.cause = v_node(n);
+        }
+        saved
     }
 
     /// A store into ⊤ sinks its value: the sink joins the root of the
     /// receiver's ⊤ (`origin`, its `top_origin_id`) when one is recorded.
     /// Returns the root to restore after it.
-    pub(crate) fn enter_top(&mut self, origin: Option<(NodeId, u32)>) -> u32 {
-        let r = origin
-            .and_then(|k| self.top_root.get(&k).copied())
-            .unwrap_or(self.cur);
-        std::mem::replace(&mut self.cur, r)
+    pub(crate) fn enter_top(&mut self, origin: Option<(NodeId, u32)>) -> Ctx {
+        let saved = self.ctx();
+        if let Some(k) = origin {
+            if let (Some(&r), Some(&i)) = (self.top_root.get(&k), self.top_ids.get(&k)) {
+                self.cur = r;
+                self.cause = v_top(i);
+            }
+        }
+        saved
     }
 
     /// ⊤ first entered `n` for `why` (a seed, not a copy).
@@ -156,6 +288,10 @@ impl HoldLedger {
         }
         let r = self.root_of(why, n, false, "top", loc);
         self.top_root.entry((n, why)).or_insert(r);
+        let k = self.top_ids.len() as u32;
+        let i = *self.top_ids.entry((n, why)).or_insert(k);
+        let p = self.parent(r);
+        self.edge(p, v_top(i));
     }
 
     /// The realm would be held for `reason` (`hold_realm`): only recorded.
@@ -172,15 +308,25 @@ impl HoldLedger {
 /// The roots one refused site is blamed on, in no order: the recorded
 /// ones (the first root of each token) and the full set (LEDG2: with every
 /// root that escaped a token again, and every escaped token of a template).
-pub(crate) fn blame(m: &Model, toks: &[Tok], top_recv: NodeId) -> (Vec<u32>, Vec<u32>) {
+///
+/// LEDG3: also the site's causes (graph vertices): its ⊤ origin, its
+/// escaped receiver tokens and the escaped tokens of their templates.
+pub(crate) fn blame(m: &Model, toks: &[Tok], top_recv: NodeId) -> Blame {
     let Some(l) = m.ledger.as_deref() else {
-        return (Vec::new(), Vec::new());
+        return Blame::default();
     };
     let mut out = Vec::new();
     let mut full = Vec::new();
+    let mut causes = Vec::new();
     if toks.contains(&crate::model::TOP) {
-        if let Some(&r) = m.top_origin_id(top_recv).and_then(|k| l.top_root.get(&k)) {
+        let k = m.top_origin_id(top_recv);
+        if let Some(&r) = k.and_then(|k| l.top_root.get(&k)) {
             out.push(r);
+        }
+        match k.and_then(|k| l.top_ids.get(&k)) {
+            Some(&i) => causes.push(v_top(i)),
+            // ⊤ of no recorded origin: a cause no root removal frees.
+            None => causes.push(NOV),
         }
     }
     let all_of = |u: Tok, full: &mut Vec<u32>| {
@@ -192,6 +338,16 @@ pub(crate) fn blame(m: &Model, toks: &[Tok], top_recv: NodeId) -> (Vec<u32>, Vec
         }
     };
     for &t in toks {
+        if m.escaped.contains_key(&t) {
+            causes.push(v_tok(t));
+        }
+        if let crate::model::TokKind::Obj(tm, _) = m.toks[t as usize] {
+            for u in m.tmpl_toks(tm) {
+                if m.escaped.contains_key(&u) {
+                    causes.push(v_tok(u));
+                }
+            }
+        }
         if let Some(&r) = l.tok_root.get(&t) {
             out.push(r);
             all_of(t, &mut full);
@@ -217,7 +373,21 @@ pub(crate) fn blame(m: &Model, toks: &[Tok], top_recv: NodeId) -> (Vec<u32>, Vec
     full.extend_from_slice(&out);
     full.sort_unstable();
     full.dedup();
-    (out, full)
+    causes.sort_unstable();
+    causes.dedup();
+    Blame {
+        roots: out,
+        full,
+        causes,
+    }
+}
+
+/// What `blame` gives one refused site.
+#[derive(Default)]
+pub(crate) struct Blame {
+    pub(crate) roots: Vec<u32>,
+    pub(crate) full: Vec<u32>,
+    pub(crate) causes: Vec<u64>,
 }
 
 /// Which app part a module path is in (the app counts' split).
@@ -236,6 +406,9 @@ pub(crate) struct Refused {
     pub(crate) roots: Vec<u32>,
     /// The full root set (LEDG2), a superset of `roots`.
     pub(crate) full: Vec<u32>,
+    /// Its causes in the predecessor graph (LEDG3; `NOV`: one no root
+    /// removal frees).
+    pub(crate) causes: Vec<u64>,
     pub(crate) part: usize,
     pub(crate) store: bool,
     /// No root: the site's own refusal (`None` when a root is blamed).
@@ -312,6 +485,164 @@ pub(crate) fn tally(refused: &[Refused]) -> Tally {
         }
     }
     t
+}
+
+/// LEDG3: the escape-predecessor graph (CSR) and its roots in seq order.
+pub(crate) struct Graph {
+    ids: FxHashMap<u64, u32>,
+    start: Vec<u32>,
+    succ: Vec<u32>,
+    roots: Vec<(u32, u32)>,
+}
+
+/// What removing a set of roots frees.
+#[derive(Default, Debug, PartialEq)]
+pub(crate) struct Freed {
+    pub(crate) sites: usize,
+    pub(crate) stores: usize,
+    /// Sites whose first graph root (the smallest seq reaching a cause)
+    /// is in the set.
+    pub(crate) first: usize,
+    /// The root that takes over most of the set's first sites that stay
+    /// refused, and how many.
+    pub(crate) reroot: Option<(u32, usize)>,
+}
+
+impl Graph {
+    pub(crate) fn new<'a>(edges: impl Iterator<Item = &'a (u64, u64)>) -> Graph {
+        let mut ids: FxHashMap<u64, u32> = FxHashMap::default();
+        let mut roots = Vec::new();
+        let mut id = |v: u64, roots: &mut Vec<(u32, u32)>| {
+            let n = ids.len() as u32;
+            let i = *ids.entry(v).or_insert(n);
+            if i == n && v >> 32 == 0 {
+                roots.push((v as u32, i));
+            }
+            i
+        };
+        let mut es: Vec<(u32, u32)> = edges
+            .map(|&(a, b)| (id(a, &mut roots), id(b, &mut roots)))
+            .collect();
+        es.sort_unstable();
+        roots.sort_unstable();
+        let mut start = vec![0u32; ids.len() + 1];
+        for &(a, _) in &es {
+            start[a as usize + 1] += 1;
+        }
+        for i in 1..start.len() {
+            start[i] += start[i - 1];
+        }
+        Graph {
+            ids,
+            start,
+            succ: es.into_iter().map(|e| e.1).collect(),
+            roots,
+        }
+    }
+
+    pub(crate) fn edges(&self) -> usize {
+        self.succ.len()
+    }
+
+    pub(crate) fn vertices(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Each vertex's first root: the smallest seq not `skip`ped that
+    /// reaches it (`NONE`: none does).
+    pub(crate) fn labels(&self, skip: &dyn Fn(u32) -> bool) -> Vec<u32> {
+        let mut lab = vec![NONE; self.ids.len()];
+        let mut q = Vec::new();
+        for &(r, v) in &self.roots {
+            if skip(r) || lab[v as usize] != NONE {
+                continue;
+            }
+            lab[v as usize] = r;
+            q.push(v);
+            while let Some(x) = q.pop() {
+                let (a, b) = (self.start[x as usize], self.start[x as usize + 1]);
+                for &y in &self.succ[a as usize..b as usize] {
+                    if lab[y as usize] == NONE {
+                        lab[y as usize] = r;
+                        q.push(y);
+                    }
+                }
+            }
+        }
+        lab
+    }
+
+    /// A site's first root under `lab`: `None` when a cause is no vertex
+    /// (no root removal frees it), else the smallest label (`NONE` when no
+    /// root reaches any cause).
+    fn site(&self, lab: &[u32], causes: &[u64]) -> Option<u32> {
+        let mut min = NONE;
+        for c in causes {
+            min = min.min(lab[*self.ids.get(c)? as usize]);
+        }
+        Some(min)
+    }
+
+    /// The refused sites the removal of the `skip`ped roots frees: every
+    /// cause reached by a root before (`base`) and by none after.
+    pub(crate) fn freed(
+        &self,
+        refused: &[Refused],
+        base: &[u32],
+        skip: &dyn Fn(u32) -> bool,
+    ) -> Freed {
+        let lab = self.labels(skip);
+        let mut f = Freed::default();
+        let mut to: FxHashMap<u32, usize> = FxHashMap::default();
+        for s in refused {
+            if s.causes.is_empty() {
+                continue;
+            }
+            let Some(b) = self.site(base, &s.causes) else {
+                continue;
+            };
+            let rooted = s.causes.iter().all(|c| base[self.ids[c] as usize] != NONE);
+            if !rooted {
+                continue;
+            }
+            let all_gone = s.causes.iter().all(|c| lab[self.ids[c] as usize] == NONE);
+            if skip(b) {
+                f.first += 1;
+            }
+            if all_gone {
+                f.sites += 1;
+                f.stores += s.store as usize;
+            } else if skip(b) {
+                *to.entry(self.site(&lab, &s.causes).unwrap_or(NONE))
+                    .or_default() += 1;
+            }
+        }
+        f.reroot = to
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)));
+        f
+    }
+}
+
+/// A root's mechanism: its reason with node / call / token ids made `#`,
+/// and where it is recorded.
+fn mechanism(reason: &str, loc: &Location) -> String {
+    let mut out = String::with_capacity(reason.len());
+    let mut digits = false;
+    for ch in reason.chars() {
+        match ch.is_ascii_digit() {
+            true if digits => {}
+            true => out.push('#'),
+            false => out.push(ch),
+        }
+        digits = ch.is_ascii_digit();
+    }
+    format!(
+        "{} @ {}:{}",
+        out.replace(['\t', '\n', '\r'], " "),
+        short(loc.file()),
+        loc.line()
+    )
 }
 
 /// Write the ledger TSV (sorted by first mass), the same rows sorted by
@@ -463,6 +794,102 @@ pub(crate) fn write(m: &Model, refused: &[Refused], totals: [[usize; 3]; 2]) {
             named(*b)
         ));
     }
+    // LEDG3: what removing a root, a pair, a mechanism frees for real.
+    let g = Graph::new(l.edges.iter());
+    let base = g.labels(&|_| false);
+    summary.push_str(&format!(
+        "LEDGER graph vertices {} edges {} roots {}\n",
+        g.vertices(),
+        g.edges(),
+        g.roots.len()
+    ));
+    let mut freed = String::from(
+        "set\tfreed\tfreed_stores\tgraph_first\treroot_to\treroot_sites\tmass_first\tmass_only\tname\n",
+    );
+    let reroot = |f: &Freed| match f.reroot {
+        Some((r, n)) if r != NONE => (r.to_string(), n),
+        Some((_, n)) => ("-".to_string(), n),
+        None => ("-".to_string(), 0),
+    };
+    let mut one: Vec<(Freed, &(u32, RootMass))> = rows
+        .iter()
+        .take(30)
+        .map(|x| (g.freed(refused, &base, &|r| r == x.0), x))
+        .collect();
+    one.sort_by(|a, b| b.0.sites.cmp(&a.0.sites).then(a.1 .0.cmp(&b.1 .0)));
+    for (i, (f, (r, x))) in one.iter().enumerate() {
+        let (to, n) = reroot(f);
+        let line = format!(
+            "root\t{}\t{}\t{}\t{to}\t{n}\t{}\t{}\t{}",
+            f.sites,
+            f.stores,
+            f.first,
+            sum(&x.first),
+            x.only,
+            named(*r)
+        );
+        if i < 15 {
+            summary.push_str(&format!("LEDGER freed{} {line}\n", i + 1));
+        }
+        freed.push_str(&line);
+        freed.push('\n');
+    }
+    for (i, ((a, b), (n_only, _))) in pairs.iter().take(10).enumerate() {
+        let f = g.freed(refused, &base, &|r| r == *a || r == *b);
+        let (to, n) = reroot(&f);
+        let line = format!(
+            "pair\t{}\t{}\t{}\t{to}\t{n}\t-\t{n_only}\t{}\t|\t{}",
+            f.sites,
+            f.stores,
+            f.first,
+            named(*a),
+            named(*b)
+        );
+        summary.push_str(&format!("LEDGER pairfreed{} {line}\n", i + 1));
+        freed.push_str(&line);
+        freed.push('\n');
+    }
+    // Mechanisms: all roots of one reason shape and place.
+    let mut mech_of = vec![NONE; l.roots.len()];
+    let mut mech_ids: FxHashMap<String, u32> = FxHashMap::default();
+    let mut mech_names = Vec::new();
+    for (i, x) in l.roots.iter().enumerate() {
+        let reason = m.reasons.get(x.reason as usize).map_or("-", |s| s.as_str());
+        let k = mechanism(reason, x.loc);
+        let n = mech_ids.len() as u32;
+        let id = *mech_ids.entry(k.clone()).or_insert(n);
+        if id == n {
+            mech_names.push((k, x.kind));
+        }
+        mech_of[i] = id;
+    }
+    let mut mech_mass: FxHashMap<u32, (usize, usize, usize)> = FxHashMap::default();
+    for (r, x) in &rows {
+        let e = mech_mass.entry(mech_of[*r as usize]).or_default();
+        e.0 += sum(&x.first);
+        e.1 += x.only;
+        e.2 += 1;
+    }
+    let mut mechs: Vec<(u32, (usize, usize, usize))> = mech_mass.into_iter().collect();
+    mechs.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
+    let mut mf: Vec<(Freed, u32, (usize, usize, usize))> = mechs
+        .iter()
+        .take(15)
+        .map(|&(k, x)| (g.freed(refused, &base, &|r| mech_of[r as usize] == k), k, x))
+        .collect();
+    mf.sort_by(|a, b| b.0.sites.cmp(&a.0.sites).then(a.1.cmp(&b.1)));
+    for (i, (f, k, (first, only_sum, nroots))) in mf.iter().enumerate() {
+        let (to, n) = reroot(f);
+        let (name, kind) = &mech_names[*k as usize];
+        let line = format!(
+            "mech\t{}\t{}\t{}\t{to}\t{n}\t{first}\t{only_sum}\t{kind} roots {nroots}\t{name}",
+            f.sites, f.stores, f.first
+        );
+        summary.push_str(&format!("LEDGER mechfreed{} {line}\n", i + 1));
+        freed.push_str(&line);
+        freed.push('\n');
+    }
+    let _ = std::fs::write(format!("{path}.freed"), &freed);
     let _ = std::fs::write(&path, tsv);
     let _ = std::fs::write(format!("{path}.only"), &only);
     let _ = std::fs::write(format!("{path}.summary"), &summary);

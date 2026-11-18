@@ -1826,7 +1826,11 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             ledger_totals[store as usize][part] += 1;
             if matches!(verdict, Verdict::No(_)) || (store && matches!(verdict, Verdict::AddsKey)) {
                 let set = receiver_set(m, &element::with_copies(&copies, recvs));
-                let (roots, full) = crate::hold_ledger::blame(m, &set.toks, set.top_recv);
+                let crate::hold_ledger::Blame {
+                    roots,
+                    full,
+                    causes,
+                } = crate::hold_ledger::blame(m, &set.toks, set.top_recv);
                 // A site no hold explains is named by its own first refusal
                 // (its verdict), so the ledger says why it stays.
                 let why = roots.is_empty().then(|| {
@@ -1853,6 +1857,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 ledger_refused.push(crate::hold_ledger::Refused {
                     roots,
                     full,
+                    causes,
                     part,
                     store,
                     why,

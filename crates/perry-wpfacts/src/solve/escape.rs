@@ -27,6 +27,9 @@ impl Model {
         let Some(l) = self.ledger.as_mut() else {
             return self.escape_at(t, reason);
         };
+        if l.dropped(std::panic::Location::caller(), t, true) {
+            return;
+        }
         let saved = l.enter_escape(t, reason, std::panic::Location::caller());
         if again {
             // The ledger's root set: another root escapes `t` again.
@@ -35,7 +38,7 @@ impl Model {
         }
         self.escape_at(t, reason);
         if let Some(l) = self.ledger.as_mut() {
-            l.cur = saved;
+            l.leave(saved);
         }
     }
 
