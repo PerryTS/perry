@@ -2074,6 +2074,30 @@ pub unsafe extern "C" fn perry_probe_set(
     }
 }
 
+/// [`perry_probe_set`] restricted to a key the receiver already holds as an
+/// own plain writable data property: `true` when it stored. Never adds a key
+/// or fills a hole, so a key whose add needs the complete `[[Set]]` (an
+/// index key's place in the key order) is left to it.
+///
+/// # Safety
+/// As [`perry_probe_set`].
+pub(crate) unsafe fn probe_set_existing(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> bool {
+    match own_set(dir, obj_bits, key_bits, hash, value) {
+        OwnSet::Stored => true,
+        OwnSet::Slot(obj, address, slot) => {
+            probe_set_slot_any(obj, address, slot, store_bits(value)) != 0
+        }
+        OwnSet::Table(t, address) => probe_set_table_barrier(t, address, store_bits(value)) != 0,
+        _ => false,
+    }
+}
+
 /// [`perry_probe_set`] for every case [`own_set`] hands back
 /// ([`OwnSet::Rest`]): the complete store probe, which re-derives what it
 /// needs (a hole fill, a spilled slot, a prototype's store note, a TEXT
