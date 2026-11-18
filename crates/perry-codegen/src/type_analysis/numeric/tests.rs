@@ -1013,3 +1013,66 @@ mod symbol_keyed_element_reads {
 
 #[path = "number_result_tests.rs"]
 mod number_result_tests;
+
+/// `const s = <init>; for (let i = 0; i < 64; i++) u8[i] = s.charCodeAt(i);`
+/// with `u8` an annotated `Uint8Array` parameter and `s` declared `ty`.
+fn char_code_at_byte_store_ir(ty: Type, init: Expr) -> String {
+    let body = vec![
+        Stmt::Let {
+            id: 2,
+            name: "s".to_string(),
+            ty,
+            mutable: false,
+            init: Some(init),
+        },
+        Stmt::For {
+            init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(11)),
+                right: Box::new(Expr::Integer(64)),
+            }),
+            update: Some(Expr::Update {
+                id: 11,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(11)),
+                value: Box::new(char_code_at(Expr::LocalGet(2), Expr::LocalGet(11))),
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+            })],
+        },
+        Stmt::Return(Some(Expr::Integer(0))),
+    ];
+    emitted_ir(probe_module(
+        "char_code_at_byte_store_unit.ts",
+        vec![typed_param(1, "u8", Type::Named("Uint8Array".to_string()))],
+        body,
+    ))
+}
+
+#[test]
+fn char_code_at_stored_into_a_uint8array_needs_no_tonumber_call() {
+    // #14970: a byte store converts a value that may not be a Number with
+    // ToNumber in the runtime. `charCodeAt` on a proven string is a Number,
+    // and that holds without the program facts (this module carries none),
+    // so the store stays on the native byte store.
+    let literal = Expr::String("abcdefghijklmnopqrstuvwxyz".to_string());
+    // `const s = atob(b64)` reaches codegen declared `Any`: the string proof
+    // comes from the initializer alone.
+    let decoded = Expr::Atob(Box::new(Expr::String("QUJDREVGR0g=".to_string())));
+    for (ty, init) in [(Type::String, literal), (Type::Any, decoded)] {
+        let ir = char_code_at_byte_store_ir(ty, init);
+        let probe = probe_ir(&ir);
+        assert!(
+            !probe.contains("@js_typed_array_index_set_dynamic")
+                && !probe.contains("@js_typed_feedback_native_call_method_by_id"),
+            "a Number-valued byte store must not take the runtime ToNumber \
+             store, nor its value the generic method site:\n{probe}"
+        );
+    }
+}

@@ -698,7 +698,18 @@ pub(crate) fn lower_buffer_store(
     // pointer. The precheck above excludes movable/external views when the RHS
     // collects; for inline-owned storage, lower the RHS before
     // `emit_buffer_access_pointer` loads the non-movable pointer.
-    let val_i32 = lower_value_i32(ctx, value_expr)?;
+    //
+    // A Number that is not an exact int32 is stored as its ToInt32, but the
+    // assignment evaluates to the Number itself: `(u8[i] = s.charCodeAt(9))`
+    // is NaN, not the stored 0.
+    let (val_i32, raw_value) = if !byte_store_tonumber_on()
+        || can_lower_integer_typed_array_store_value(ctx, value_expr)
+    {
+        (lower_value_i32(ctx, value_expr)?, None)
+    } else {
+        let v = lower_expr(ctx, value_expr)?;
+        (ctx.toint32_wrap(&v), Some(v))
+    };
     let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Skip);
     let byte_val = ctx.block().trunc(I32, &val_i32, I8);
     ctx.block().emit_raw(format!(
@@ -725,7 +736,10 @@ pub(crate) fn lower_buffer_store(
         vec![format!("source_i32={}", val_i32)],
     );
     attach_buffer_view_facts(ctx, &proof.view);
-    let result = LoweredValue::i32(val_i32.clone());
+    let result = match raw_value {
+        Some(v) => LoweredValue::f64(v),
+        None => LoweredValue::i32(val_i32.clone()),
+    };
     Ok(Some(StoreResult { result }))
 }
 
