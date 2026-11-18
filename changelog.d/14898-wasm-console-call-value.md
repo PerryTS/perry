@@ -1,0 +1,1 @@
+`--target web`: a `console` call evaluates to `undefined`, so a module with one in a conditional arm, an initializer or an arrow body validates again; with namespace pairs on by default, every `console.log` lowers into a conditional, so every web module failed validation at boot (#14876).

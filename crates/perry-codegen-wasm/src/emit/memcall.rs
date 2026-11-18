@@ -151,6 +151,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// `console.log(a, b)` prints `a b` on one line, so every argument goes to one bridge call.
+    /// Like every expression, the call leaves one value: `undefined`.
     pub(super) fn emit_console_call(&mut self, func: &mut Function, bridge: &str, args: &[Expr]) {
         let count = args.len() as u32;
         self.emit_frame_begin(func, count);
@@ -158,6 +159,7 @@ impl<'a> FuncEmitCtx<'a> {
             self.emit_store_arg(func, slot as u32, arg);
         }
         self.emit_memcall_void(func, bridge, count);
+        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
     }
 
     #[track_caller]

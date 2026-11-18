@@ -240,6 +240,57 @@ console.log("b");
     );
 }
 
+/// A console call is `undefined` wherever it sits.
+#[test]
+fn console_call_is_undefined_in_every_expression_position() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const c = Date.now() > 0;
+const r = c ? console.log("a") : 2;
+console.log(r);
+const f = (x: number) => console.log(x);
+console.log(f(3));
+"#
+        ),
+        "a\nundefined\n3\nundefined"
+    );
+}
+
+/// With namespace pairs on, `console.log(2)` lowers as
+/// `NamespacePatched("console") ? <generic call> : <console call>`.
+#[test]
+fn namespace_pair_with_a_console_arm_validates() {
+    let mut pairs = perry_hir::PatchedBuiltins::new();
+    pairs.namespace_pairs = true;
+    perry_hir::set_patched_builtins(std::sync::Arc::new(pairs));
+    let source = "console.log(2); console.log(Math.max(1, 3));";
+    let ast = perry_parser::parse_typescript(source, "pair.ts").unwrap();
+    let module = perry_hir::lower::lower_module(&ast, "pair", "pair.ts").unwrap();
+    assert!(
+        format!("{:?}", module.init).contains("NamespacePatched(\"console\")"),
+        "the console call must lower as the pair: {:?}",
+        module.init
+    );
+    assert_eq!(run_web_source(source), "2\n3");
+    perry_hir::clear_patched_builtins();
+}
+
+/// An unsupported `console` method still evaluates its arguments.
+#[test]
+fn unsupported_console_method_evaluates_its_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as c from "node:console";
+c.time(String(c.log("a")));
+c.log("b");
+"#
+        ),
+        "a\nb"
+    );
+}
+
 #[test]
 fn json_stringify_honors_value_replacer_and_space() {
     assert_eq!(
@@ -1283,11 +1334,7 @@ console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + "
 #[test]
 fn fetch_with_auth_passes_url_method_body_and_authorization() {
     assert_eq!(
-        run_web_source_around(
-            r#"globalThis.fetch = (url, opts) => {
-  console.log(JSON.stringify([url, opts]));
-  return Promise.resolve({ text: () => Promise.resolve("ok") });
-};"#,
+        run_web_source_with_dom(
             r#"
 function base(): string { return "http://h/" + String(6 * 7); }
 function tok(): string { return "Bearer " + base().length; }
@@ -1296,6 +1343,13 @@ fetchWithAuth(arg("url", base() + "/g"), arg("auth", `${tok()}-g`))
   .then(() => fetchPostWithAuth(arg("url", base() + "/p"), arg("auth", tok()), arg("body", JSON.stringify({ n: tok() }))))
   .then(() => console.log("done"));
 "#,
+            &format!(
+                "{STUB_DOM}{}",
+                r#"globalThis.fetch = (url, opts) => {
+  console.log(JSON.stringify([url, opts]));
+  return Promise.resolve({ text: () => Promise.resolve("ok") });
+};"#
+            ),
             ""
         ),
         concat!(
@@ -1670,5 +1724,97 @@ console.log((U as any).tag);
 "#
         ),
         "class\n2\nbase"
+    );
+}
+
+#[test]
+fn a_closure_used_as_a_value_is_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = () => 1;
+function named(): number { return 2; }
+console.log(typeof f + " " + typeof (() => 1) + " " + typeof named);
+const o: any = {}; o.h = f;
+console.log(typeof o.h + " " + o.h() + " " + ({ g(n: number) { return n + 1; } }).g(41));
+const fake: any = { funcIdx: 0, captures: [] };
+console.log(typeof fake);
+"#
+        ),
+        "function function function\nfunction 1 42\nobject"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_by_an_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() { console.log(typeof o.h + " " + o.h(21)); }
+main();
+"#
+        ),
+        "function 42"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_in_a_local() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() {
+  const f = o.h;
+  if (typeof f === "function") console.log(f(21));
+  const m: any = Math.max;
+  console.log(m(3, 7));
+  const from: any = Array.from;
+  console.log(from([1, 2], o.h).join(","));
+  const t = o.t;
+  t();
+}
+o.t = () => { throw new Error("boom"); };
+main().catch((e: any) => console.log("caught " + e.message));
+"#
+        ),
+        "42\n7\n2,4\ncaught boom"
+    );
+}
+
+#[test]
+fn an_async_body_keeps_the_receiver_of_a_computed_method_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { n: 2 }; o.h = (n: number) => n * 2;
+async function main() {
+  const a = [1, 2];
+  const k = "join";
+  const h = "h";
+  console.log(a[k]("-") + " " + o[h](21));
+}
+main();
+"#
+        ),
+        "1-2 42"
+    );
+}
+
+#[test]
+fn an_async_body_passes_a_closure_lookalike_to_a_host_function_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const fake: any = { funcIdx: 0, captures: [] };
+async function main() {
+  const of: any = Array.of;
+  console.log(typeof of(fake)[0]);
+}
+main();
+"#
+        ),
+        "object"
     );
 }

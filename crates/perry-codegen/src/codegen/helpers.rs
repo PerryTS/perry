@@ -398,6 +398,7 @@ pub(crate) fn drop_number_local_root_slots(
 }
 
 pub(super) fn enable_module_init_shadow_frame(
+    memo: &crate::collectors::ClosureWrites,
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &std::collections::HashSet<u32>,
@@ -407,8 +408,7 @@ pub(super) fn enable_module_init_shadow_frame(
         return (HashMap::new(), HashMap::new());
     }
 
-    let shadow_slot_map =
-        crate::collectors::collect_pointer_typed_locals(&[], stmts, flat_const_ids);
+    let shadow_slot_map = memo.pointer_locals(&[], stmts, flat_const_ids);
     // #8583: the module-entry body is the minified-bundle IIFE — the function
     // that fans out catastrophically under RS4GC. Decide its root lowering
     // before the frame is built.

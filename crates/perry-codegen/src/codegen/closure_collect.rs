@@ -18,7 +18,8 @@ use perry_hir::Module as HirModule;
 use super::spec_function_length;
 
 /// Result bundle of the module-wide closure collection pass.
-pub(crate) struct ModuleClosures {
+pub(crate) struct ModuleClosures<'a> {
+    pub closure_writes: crate::collectors::ClosureWrites<'a>,
     pub closures: Vec<(perry_hir::types::FuncId, perry_hir::Expr)>,
     pub direct_call_closures: std::collections::HashSet<u32>,
     pub closure_rest_params: HashMap<u32, usize>,
@@ -621,7 +622,7 @@ pub(crate) fn select_trusted_box_closures(
 /// Collect every `Expr::Closure` in the program and build the derived
 /// per-closure dispatch maps. See the inline comments (preserved from the
 /// original `compile_module` body) for the per-map rationale.
-pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
+pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures<'_> {
     // Pre-walk for closures: every `Expr::Closure` in the program needs
     // its body emitted as a top-level LLVM function so the closure
     // creation site can take its address. Collect them all first, then
@@ -632,7 +633,9 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
     // otherwise a closure body in (say) a `get size() { return arr.filter(...).length }`
     // ends up referenced by `js_closure_alloc(@perry_closure_*)` but
     // never defined, and clang errors with "use of undefined value".
-    let closures: Vec<_> = perry_hir::emitted_closures(hir)
+    let source_closures = perry_hir::emitted_closures(hir);
+    let closure_writes = crate::collectors::ClosureWrites::new(&source_closures);
+    let closures: Vec<_> = source_closures
         .into_iter()
         .map(|(id, e)| (id, e.clone()))
         .collect();
@@ -771,6 +774,7 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
         .collect();
 
     ModuleClosures {
+        closure_writes,
         closures,
         direct_call_closures,
         closure_rest_params,
