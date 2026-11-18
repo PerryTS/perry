@@ -63,7 +63,10 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     // %Object% and %Object.prototype% are the realm's, whichever init first
     // reads them (SNAP census, design §2.10.20).
     let _realm = crate::snap_census::realm_build();
-    let built = build_object_intrinsics();
+    // The runtime's own definition, whichever operation reaches it first: as
+    // program writes, its installs of names the program uses (`__proto__`)
+    // would seal it shadowed and withdraw `Pristine` from every family.
+    let built = crate::object::own_override::as_builtin_definition(build_object_intrinsics);
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
