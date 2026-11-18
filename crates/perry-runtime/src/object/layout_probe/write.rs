@@ -168,6 +168,12 @@ pub(crate) unsafe fn layouts_admit_add(
     if r.is_null() || !(*r).object_kind().is_ordinary_layout() {
         return None;
     }
+    // This optional store proof reuses read indexes; deriving one for every
+    // growing prefix makes wide key additions quadratic. The caller's
+    // shape-chain proof handles cold layouts without materializing an index.
+    if (*r).probe == 0 {
+        return None;
+    }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).overflow != 0 {
@@ -410,3 +416,7 @@ pub(crate) unsafe fn function_link_admits_add(link: u64, key: *const crate::Stri
     };
     link_admits_add(super::super::ordinary_dir_addr(), link, key_bits, hash)
 }
+
+#[cfg(test)]
+#[path = "../layout_probe_write_tests.rs"]
+mod tests;
