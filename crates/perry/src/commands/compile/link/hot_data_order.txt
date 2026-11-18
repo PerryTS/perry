@@ -555,6 +555,7 @@ r:#fd6e3ddfb866a3cf
 r:#cb3597b7199c3d63
 r:_RNvNtNtNtCs_13perry_runtime6object13native_module11name_tables36should_cache_native_module_namespace
 r:_RNvNtCs_14perry_dispatch20native_module_bucket20native_module_bucket
+d:anon.eee4963e076a2b64ffc4c45410046fe5.1878
 r:#f9b3de5945d650f7
 r:_RNvNtCs_14perry_dispatch19cjs_default_modules23cjs_default_base_module
 r:#72524c3dc0e22a4f
@@ -694,6 +695,7 @@ r:#02afa6ec845913a0
 r:#15e39964c6a60806
 r:#9e673dd56848bb92
 d:#987f01aa8783bbaa
+d:#659b98412da1aa1c
 r:#a41b180058688abd
 r:#fc469e107df2789a
 r:#5b2e2216dc9c989c
