@@ -1635,8 +1635,22 @@ class __PerryClosure {
     this.captures = new Array(captureCount | 0);
   }
 }
+// A function expression whose body reads its own `this`: its body takes the
+// receiver of a method call through `closure_this` on entry.
+class __PerryReceiverClosure extends __PerryClosure {}
+let __closureReceiver;
 function __isPerryClosure(v) {
   return v instanceof __PerryClosure;
+}
+// `receiver.m(...args)` where `m` is a Perry closure. The receiver is cleared
+// after the call either way, so no later closure entry can see it.
+function __callClosureMethod(closure, receiver, args) {
+  if (closure instanceof __PerryReceiverClosure) __closureReceiver = receiver;
+  try {
+    return __memDispatch.closure_call_spread(closure, args);
+  } finally {
+    __closureReceiver = undefined;
+  }
 }
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
@@ -2150,7 +2164,13 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount) => new __PerryClosure(funcIdx, captureCount),
+  closure_new: (funcIdx, captureCount, receivesThis) =>
+    receivesThis ? new __PerryReceiverClosure(funcIdx, captureCount) : new __PerryClosure(funcIdx, captureCount),
+  closure_this: () => {
+    const receiver = __closureReceiver;
+    __closureReceiver = undefined;
+    return receiver;
+  },
   closure_set_capture: (closure, idx, value) => {
     if (closure) closure.captures[idx | 0] = __jsValueToBits(value);
     return closure;
@@ -2200,13 +2220,11 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, callee.captures.length, args.map(__jsValueToBits));
     return __bitsToJsValue(fn(...callee.captures, ...padded));
   },
-  // `Reflect.apply`: a host function (a class method value) gets `thisArg`; a Perry
-  // closure has no `this` to give.
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
     if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
-    return __memDispatch.closure_call_spread(fn, argArr);
+    return __callClosureMethod(fn, thisArg, argArr);
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
@@ -5586,7 +5604,7 @@ function __jsMethodInvoke(ref, args) {
     return result;
   }
   if (__isPerryClosure(ref.f)) {
-    const result = __memDispatch.closure_call_spread(ref.f, args);
+    const result = __callClosureMethod(ref.f, ref.r, args);
     __memDispatch.propagate_exception(true);
     return result;
   }
@@ -5643,7 +5661,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       const method = objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
-      if (__isPerryClosure(method)) return __memDispatch.closure_call_spread(method, rawArgs);
+      if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
     } catch (error) {
       if (tryDepth === 0) throw error;
       currentException = error;

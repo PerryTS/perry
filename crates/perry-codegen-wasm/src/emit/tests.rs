@@ -2067,3 +2067,54 @@ console.log(b.count(2));
         "7\nd\n10\n2\n13"
     );
 }
+
+#[test]
+fn a_function_expression_called_as_a_method_reads_its_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o = { k: 5, g() { return this.k; } };
+console.log(o.g());
+const p: any = { name: "p", hi: function () { return "hi " + this.name; } };
+const q: any = { name: "q" };
+q.hi = p.hi;
+console.log(p.hi() + "/" + q.hi());
+const counter = { c: 0, inc() { this.c = this.c + 1; return this; } };
+counter.inc().inc();
+console.log(counter.c);
+const r: any = { v: 3, outer() { return () => this.v; } };
+console.log(r.outer()());
+const holder = { k: 9, g2: o.g };
+console.log(holder.g2());
+"#
+        ),
+        "5\nhi p/hi q\n2\n3\n9"
+    );
+}
+
+#[test]
+fn a_parameter_default_reads_the_method_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { k: 4, f: function (x = this.k) { return x; } };
+console.log(o.f());
+console.log(o.f(1));
+"#
+        ),
+        "4\n1"
+    );
+}
+
+#[test]
+fn reflect_apply_hands_this_to_a_function_expression() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const hi = function (this: any, p: string) { return p + this.name; };
+console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
+"#
+        ),
+        "hi o"
+    );
+}
