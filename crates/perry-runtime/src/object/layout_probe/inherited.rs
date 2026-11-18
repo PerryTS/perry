@@ -208,7 +208,7 @@ pub(super) unsafe fn inherited_get<const ABSENT: bool>(
 ) -> f64 {
     // `cur` is an object the walk may continue from (`walks_from`): the
     // receiver is checked here, each prototype before it becomes `cur`.
-    if (*r).object_kind() != super::super::ShapeObjectKind::Ordinary {
+    if !(*r).kind_is(super::super::ShapeObjectKind::Ordinary) {
         return inherited_walk::<ABSENT>(dir, obj, r, key_bits, hash);
     }
     match link_of(dir, obj, r) {
@@ -438,7 +438,7 @@ pub(super) unsafe fn walk_step<const ABSENT: bool>(
         // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         // A runtime-born record (unmarked, its keys all in its list and
         // overflow) whose chain ends here proves absence.
-        if (*rc).object_kind() == super::super::ShapeObjectKind::OrdinaryUnmarked
+        if (*rc).kind_is(super::super::ShapeObjectKind::OrdinaryUnmarked)
             && (crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _)).is_null()
                 || (*crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _))).flags
                     & READ_BEYOND_LIST

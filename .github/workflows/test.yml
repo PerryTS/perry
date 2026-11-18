@@ -2398,12 +2398,17 @@ jobs:
           PERRY_BIN=target/debug/perry.exe \
           PERRY_RUNTIME_DIR=target/debug \
           python scripts/parity.py run tests/parity/node-suite/process/env/access.ts --mode fast
-          # A program compiled for a two-phase realm (its `parity-env` header
-          # sets PERRY_REALM_TWO_PHASE=1): the entry module's strong
-          # definitions of the runtime's weak realm hooks, linked as COFF.
+          # A program compiled for a two-phase realm (the default): the entry
+          # module's strong definitions of the runtime's weak realm hooks,
+          # linked as COFF. Then its twin compiled with the switch off (its
+          # `parity-env` header sets PERRY_REALM_TWO_PHASE=0): the runtime's
+          # weak definitions.
           PERRY_BIN=target/debug/perry.exe \
           PERRY_RUNTIME_DIR=target/debug \
           python scripts/parity.py run tests/parity/node-suite/globals/test_gap_realm_two_phase_switch_on.ts --mode fast
+          PERRY_BIN=target/debug/perry.exe \
+          PERRY_RUNTIME_DIR=target/debug \
+          python scripts/parity.py run tests/parity/node-suite/globals/test_gap_realm_two_phase_switch_off.ts --mode fast
 
       - name: Verify perry.exe VERSIONINFO resource
         shell: pwsh
@@ -5291,10 +5296,11 @@ jobs:
         run: scripts/check_std_symbolizer.sh target/release/libperry_*.a
 
       # The realm's link-time hooks (weak in the runtime, strong in the entry
-      # module of a program compiled with PERRY_REALM_TWO_PHASE=1), linked
-      # and run on this host's object format in both arms; the default
-      # program must not link the two-phase path.
-      - name: Two-phase realm link check (both arms)
+      # module of a program compiled for a two-phase realm, the default),
+      # linked and run on this host's object format with the switch off, on
+      # and unset; the program compiled with PERRY_REALM_TWO_PHASE=0 must not
+      # link the two-phase path.
+      - name: Two-phase realm link check (off, on, default)
         env:
           PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
         run: scripts/realm_two_phase_link_check.sh target/release/perry target/realm-two-phase

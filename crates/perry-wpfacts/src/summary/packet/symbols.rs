@@ -156,6 +156,7 @@ impl Model {
             Cons::NotNull { dst } => format!("NotNull dst={:?}", dst),
             Cons::TypeIs { mask, dst } => format!("TypeIs mask={mask:#x} dst={:?}", dst),
             Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
+            Cons::NotRegExp { dst } => format!("NotRegExp dst={:?}", dst),
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }

@@ -1276,7 +1276,7 @@ impl<'a> Gen<'a> {
                 if let Some(callee) = self.private_method_callee(mi, object) {
                     return callee;
                 }
-                let dst = self.load(o, Key::Named(a));
+                let dst = self.private_getter_or_load(mi, object, o, a);
                 // S8: on the global sentinel a name the main realm does not
                 // declare is [[Get]] on the global object (`loads::tok_load`);
                 // in a module a Worker may run, the Worker global's own

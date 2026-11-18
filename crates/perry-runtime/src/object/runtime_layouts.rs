@@ -873,6 +873,32 @@ runtime_layout!(
     realm = ["Array"]
 );
 
+runtime_atom!(reuse ARGS_ATOM_LENGTH, "length", "6c656e677468");
+runtime_atom!(ARGS_ATOM_CALLEE, "callee", "63616c6c6565");
+// An arguments object (DESIGN_A5 §1): slot 0 `length`, 1 `callee`, 2
+// @@iterator (%Array.prototype.values%), each W,¬E,C; the elements follow
+// inline at slot 3 and are not keys (E from the GcHeader size word).
+runtime_layout!(
+    ARGUMENTS,
+    kind = 13,
+    0x5254_0020,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ARGS_ATOM_LENGTH => 2, ARGS_ATOM_CALLEE => 2, ATOM_SYMBOL_ITERATOR => 2],
+    realm = ["%ArgumentsBirth%"]
+);
+// A strict (or non-simple-parameter) arguments object: `callee` is the
+// %ThrowTypeError% accessor pair, ¬E,¬C (key_attrs RESTRICTED entry = 63).
+runtime_layout!(
+    ARGUMENTS_STRICT,
+    kind = 14,
+    0x5254_0020,
+    1,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ARGS_ATOM_LENGTH => 2, ARGS_ATOM_CALLEE => 63, ATOM_SYMBOL_ITERATOR => 2],
+    realm = ["%ArgumentsBirth%"]
+);
+
 // Fixed legacy SQLite column metadata; the five data properties are all present.
 #[used(linker)]
 #[export_name = "perry_image_literal_0_636f6c756d6e"]
@@ -1042,6 +1068,14 @@ const fn runtime_layout_word(name: &str) -> u32 {
             i += 1;
         }
         true
+    }
+    // Word kind = prototype-identity kind: plain (%Object.prototype%), as
+    // ITERATOR_RESULT; the object kind 13/14 is the ShapeRecord kind above.
+    if same(name, "ARGUMENTS") {
+        return crate::codegen_abi::native_layout_word("ARGUMENTS", 0);
+    }
+    if same(name, "ARGUMENTS_STRICT") {
+        return crate::codegen_abi::native_layout_word("ARGUMENTS_STRICT", 0);
     }
     if same(name, "ARRAY_NAMED") {
         return crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0);
@@ -1390,43 +1424,43 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     #[cfg(test)]
     if same(name, "HOLEY") {
-        return 0x8000007d;
+        return test_layout_word(0);
     }
     #[cfg(test)]
     if same(name, "HOLEY_PERMUTED") {
-        return 0x8000007e;
+        return test_layout_word(1);
     }
     #[cfg(test)]
     if same(name, "SOLID") {
-        return 0x8000007f;
+        return test_layout_word(2);
     }
     #[cfg(test)]
     if same(name, "PERMUTED") {
-        return 0x80000080;
+        return test_layout_word(3);
     }
     #[cfg(test)]
     if same(name, "POSITIONAL") {
-        return 0x80000081;
+        return test_layout_word(4);
     }
     #[cfg(test)]
     if same(name, "SYMBOL_PERMUTED") {
-        return 0x80000082;
+        return test_layout_word(5);
     }
     #[cfg(test)]
     if same(name, "PREFIX_MOVED") {
-        return 0x80000083;
+        return test_layout_word(6);
     }
     #[cfg(test)]
     if same(name, "LITERAL_OPTIONAL") {
-        return 0x80000084;
+        return test_layout_word(7);
     }
     #[cfg(test)]
     if same(name, "ARRAY_LATE") {
-        return 0x80000085;
+        return test_layout_word(8);
     }
     #[cfg(test)]
     if same(name, "DEFINED_HOLE") {
-        return 0x80000086;
+        return test_layout_word(9);
     }
     panic!("runtime descriptor absent from native catalog");
 }
@@ -1436,9 +1470,20 @@ const fn runtime_layout_word(name: &str) -> u32 {
 /// rows. They are runtime layouts like the native ones, so their shape is
 /// installed at their first birth; no startup walk sees them.
 #[cfg(test)]
-const TEST_LAYOUT_ROWS: u32 = 10;
+const TEST_LAYOUT_ROWS: u32 = 13;
 #[cfg(not(test))]
 const TEST_LAYOUT_ROWS: u32 = 0;
+
+/// The word of test-band row `k` (`k < TEST_LAYOUT_ROWS`): rows 0..10 are
+/// the `runtime_layout!` test layouts above, 10..13 the hand-written test
+/// descriptors (`decl_prototype_birth_tests`, `class_family_birth`,
+/// `hole_tests`). Counted from the native rows, so a native row added on
+/// either side of a merge moves the band instead of landing a test layout on
+/// a native row (the empty ordinary row is the last native one).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const fn test_layout_word(k: u32) -> u32 {
+    crate::codegen_abi::LAYOUT_TAG | (crate::codegen_abi::NATIVE_LAYOUT_ROWS + k)
+}
 
 /// Rows below this bound are runtime layouts (`runtime_layout!`): the
 /// ABI's native rows, and in perry-runtime's tests the test band.

@@ -181,7 +181,7 @@ pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) 
             && r.logical_key_count == f.logical_key_count
             && r.live_inline_slot_count == f.live_inline_slot_count
             && r.hole_count == f.hole_count
-            && r.object_kind() == f.object_kind()
+            && r.same_kind_as(&f)
             && r.summary() == f.summary()
             && r.special_constfn_mask() == f.special_constfn_mask()
             && r.has_tail_constfn() == f.has_tail_constfn()

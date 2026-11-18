@@ -85,6 +85,7 @@ impl Model {
             Cons::NotNull { dst } => format!("notnull {n} {dst}"),
             Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
+            Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(

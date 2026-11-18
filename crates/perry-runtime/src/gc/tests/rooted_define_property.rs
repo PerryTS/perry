@@ -523,7 +523,6 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
     unsafe {
         for arguments in [false, true] {
             for accessor in [false, true] {

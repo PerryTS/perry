@@ -145,9 +145,10 @@ mod tests;
 mod typed_array_receiver_tests;
 
 pub(crate) use self::alloc::{
-    array_length_range_error, js_array_alloc_canonical_keys, js_array_alloc_key_list,
-    js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
-    js_array_alloc_with_length_exact,
+    array_length_range_error, fill_capacity_with_holes_from, js_array_alloc_canonical_keys,
+    js_array_alloc_key_list, js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
+    js_array_alloc_tag_scanned, js_array_alloc_with_length_exact,
+    js_array_try_alloc_tag_scanned_unfilled,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
@@ -290,9 +291,10 @@ pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
     intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
-    note_realm_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
-    object_prototype_addr_matches, object_prototype_cell, prime_prototype_addr_cache,
-    primitive_wrapper_prototype_addr, RealmIntrinsics,
+    note_realm_array_values, note_realm_intrinsic, note_realm_restricted_callee_pair,
+    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
+    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
+    realm_array_values_addr, realm_restricted_callee_pair_addr, RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{

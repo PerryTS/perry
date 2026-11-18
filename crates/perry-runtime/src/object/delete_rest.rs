@@ -1187,9 +1187,11 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     {
         return result;
     }
-    if let Some((_, elements)) = unsafe { crate::array::subclass_elements::backed(obj as usize) } {
-        if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key) {
-            return unsafe { crate::array::subclass_elements::delete_key(elements, elements_key) };
+    if let Some(view) = unsafe { crate::array::subclass_elements::own_elements(obj as usize) } {
+        if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key)
+            .filter(|k| view.admits(*k) && !unsafe { view.keyed(*k) })
+        {
+            return unsafe { crate::array::subclass_elements::delete_key(view, elements_key) };
         }
     }
     // Proxy receiver (small registered id) — route through the proxy

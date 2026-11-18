@@ -89,6 +89,8 @@ pub(crate) struct MemberOp {
     /// A folded node (`perry_hir::folded_call`): a receiver that is not the
     /// helper's own kind takes the generic call.
     pub folded: bool,
+    /// Native push route, keyed exactly as the codegen method/fill proof.
+    pub native_push: Option<perry_hir::folded_call::Site>,
     pub form: MemberForm,
 }
 
@@ -221,7 +223,6 @@ pub(crate) fn class(e: &Expr) -> Op {
         | Expr::MapGet { .. }
         | Expr::MapHas { .. }
         | Expr::MapSet { .. }
-        | Expr::Number { .. }
         | Expr::SetAdd { .. }
         | Expr::SetDelete { .. }
         | Expr::SetHas { .. } => Op::Folded,
@@ -683,6 +684,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         | Expr::NewDynamicSpread { .. }
         | Expr::NewTarget { .. }
         | Expr::Null { .. }
+        | Expr::Number { .. }
         | Expr::NumberCoerce { .. }
         | Expr::Object { .. }
         | Expr::ObjectCoerce { .. }
@@ -794,6 +796,8 @@ impl crate::gen::Gen<'_> {
             recv,
             namespace: namespace.map(str::to_owned),
             folded,
+            native_push: perry_hir::folded_call::native_array_push(e)
+                .and_then(|c| perry_hir::folded_call::receiver_site(&c.receiver)),
             form: MemberForm::Member,
         });
     }

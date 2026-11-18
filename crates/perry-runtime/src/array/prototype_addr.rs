@@ -186,6 +186,56 @@ const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUC
 /// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
 pub(crate) struct RealmIntrinsics {
     entries: [IntrinsicEntry; INTRINSIC_ENTRY_COUNT],
+    /// The restricted `callee` accessor pair of every strict arguments object
+    /// (CreateUnmappedArgumentsObject: %ThrowTypeError% as getter and setter),
+    /// born with the first one. Same cell algebra as the entries.
+    restricted_callee_pair: Cell<usize>,
+    /// %Array.prototype.values% (slot 2 of every arguments object), noted
+    /// when Array.prototype installs it.
+    array_values: Cell<usize>,
+}
+
+/// This realm's %Array.prototype.values%, 0 before Array.prototype is built.
+pub(crate) fn realm_array_values_addr() -> usize {
+    let cell = &crate::state::state().realm_intrinsics.array_values;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// Record this realm's %Array.prototype.values%.
+pub(crate) fn note_realm_array_values(addr: usize) {
+    crate::state::state()
+        .realm_intrinsics
+        .array_values
+        .set(addr);
+    if addr != 0 {
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
+}
+
+/// This realm's restricted-`callee` accessor pair, 0 before the first strict
+/// arguments object is born.
+pub(crate) fn realm_restricted_callee_pair_addr() -> usize {
+    let cell = &crate::state::state()
+        .realm_intrinsics
+        .restricted_callee_pair;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// Record this realm's restricted-`callee` accessor pair (0 resets it).
+pub(crate) fn note_realm_restricted_callee_pair(addr: usize) {
+    crate::state::state()
+        .realm_intrinsics
+        .restricted_callee_pair
+        .set(addr);
+    if addr != 0 {
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
 }
 
 /// One builtin's realm intrinsics: its constructor and its prototype.
@@ -363,6 +413,16 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
         rewrite_prototype_addr_slot(&entry.prototype, visitor);
         rewrite_prototype_addr_slot(&entry.constructor, visitor);
     }
+    rewrite_prototype_addr_slot(
+        &crate::state::state()
+            .realm_intrinsics
+            .restricted_callee_pair,
+        visitor,
+    );
+    rewrite_prototype_addr_slot(
+        &crate::state::state().realm_intrinsics.array_values,
+        visitor,
+    );
 }
 
 /// The per-cell half of [`scan_prototype_addr_cache_roots_mut`].

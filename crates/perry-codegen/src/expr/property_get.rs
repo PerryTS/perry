@@ -109,6 +109,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             return super::private_field_site::lower_get(ctx, site, property);
         }
     }
+    // A guarded private member belongs to its declaring class, independently
+    // of the receiver's public properties or prototype. Enter private dispatch
+    // with the original boxed receiver before any public lookup can replace it.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if matches!(
+            object.as_ref(),
+            Expr::PrivateGuard {
+                kind: 1 | 2 | 4,
+                ..
+            }
+        ) {
+            let receiver = lower_expr(ctx, object)?;
+            let key_idx = ctx.strings.intern(property);
+            let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let receiver_bits = blk.bitcast_double_to_i64(&receiver);
+            let key = blk.load(DOUBLE, &key_global);
+            let key_bits = blk.bitcast_double_to_i64(&key);
+            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+            return Ok(blk.call(
+                DOUBLE,
+                "js_object_get_field_by_name_f64",
+                &[(I64, &receiver_bits), (I64, &key_raw)],
+            ));
+        }
+    }
     // ACCBUILD2 P3: a read proven to call one getter.
     if let Expr::PropertyGet {
         object,

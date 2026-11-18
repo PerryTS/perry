@@ -427,19 +427,18 @@ def main():
     assert any(row.get("check") and row.get("emitted_checks") for row in inventory), inventory
     save("parallel-bodies", status=0)
 
-    # Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): a slot phase B binds is born
+    # Two-phase realm (the default; `PERRY_REALM_TWO_PHASE=0` is off): a slot phase B binds is born
     # holding the poison word in check mode. With the compiler told to read
     # the phase-B name `Intl` through the core entry, the read's shape site
     # hits an unbound slot and the check after it reports; the unchanged
     # compiler reads it through the full entry and the program equals node.
     source = fixtures / "realm-phase-negative.ts"
-    exe, e = compile_(source, "realm-phase-false", PERRY_REALM_TWO_PHASE="1",
-                      PERRY_FACTS_SABOTAGE="realm_core:Intl")
+    exe, e = compile_(source, "realm-phase-false", PERRY_FACTS_SABOTAGE="realm_core:Intl")
     observed = observe(exe, e)
     assert observed.returncode == 86, observed
     assert observed.stderr.startswith(b"PERRY_FALSE_PROOF realm-phase: a compiled global read"), observed
     assert observed.stdout == b"core 1\n", observed
-    for arm, extra in [("realm-phase-correct", {"PERRY_REALM_TWO_PHASE": "1"}), ("realm-phase-off", {})]:
+    for arm, extra in [("realm-phase-correct", {}), ("realm-phase-off", {"PERRY_REALM_TWO_PHASE": "0"})]:
         exe, e = compile_(source, arm, **extra)
         observed = observe(exe, e)
         assert observed.returncode == 0 and observed.stdout == oracle(source), (arm, observed)

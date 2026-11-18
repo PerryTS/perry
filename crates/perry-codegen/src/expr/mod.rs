@@ -397,6 +397,13 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    /// The for-in loops of this function: receiver local -> the entry slot
+    /// of the loop fact taken beside the snapshot (`js_for_in_loop_fact`).
+    /// Per-loop state: born zero per invocation, written at loop start.
+    pub for_in_facts: std::collections::HashMap<u32, String>,
+    /// The for-in snapshot locals whose deletion check this function lowered
+    /// (DYNP E3d): the binding read `keys[i]` loads element `i` directly.
+    pub for_in_snapshots: std::collections::HashSet<u32>,
     pub numeric_order_functions: &'a [perry_hir::Function],
     pub numeric_order_closures: &'a [(u32, Expr)],
     /// Lexical initialization dominance for closed callee reads.

@@ -594,9 +594,6 @@ def self_test() -> int:
         kind, _ = declaration_kind(sources, "PROP_PLAN_EPOCH")
         if kind != "per_test":
             failures.append("PROP_PLAN_EPOCH classified as %r on the real tree" % (kind,))
-        kind, _ = declaration_kind(sources, "ARGUMENTS_KEYS")
-        if kind != "thread_local":
-            failures.append("ARGUMENTS_KEYS classified as %r on the real tree" % (kind,))
         kind, _ = declaration_kind(sources, "ITERATOR_PROTOTYPE_PTR")
         if kind != "thread_local":
             failures.append("qualified ITERATOR_PROTOTYPE_PTR classified as %r on the real tree" % (kind,))
