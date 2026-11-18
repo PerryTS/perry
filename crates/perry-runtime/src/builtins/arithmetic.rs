@@ -443,6 +443,38 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
     }
 }
 
+/// Is `ToPrimitive(value, number)` the String `%Object.prototype.toString%`
+/// returns, reached with no user code? For an instance of a declared class
+/// while `%Object.prototype%` is pristine: no object of its chain before
+/// `%Object.prototype%` owns a symbol key (so `@@toPrimitive` and
+/// `@@toStringTag` are absent) or a `valueOf` or `toString`, so both resolve
+/// to `%Object.prototype%`'s builtins. OrdinaryToPrimitive then calls
+/// `valueOf`, which returns the object, and `toString`, which returns
+/// `"[object " + builtinTag + "]"`. Read from shapes; allocates nothing.
+fn object_to_primitive_is_default_string(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    v.is_pointer()
+        && crate::object::builtin_proto::pristine(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        )
+        && unsafe {
+            crate::object::native_call_method::class_holder::class_instance_chain_lacks(
+                v,
+                &[b"valueOf", b"toString"],
+            )
+        }
+}
+
+/// A relational comparison of a number-like primitive with an object whose
+/// `ToPrimitive` is the default String ([`object_to_primitive_is_default_string`]):
+/// that String's `ToNumber` is NaN, so `IsLessThan` is undefined and every
+/// relational operator answers `false`.
+#[inline]
+fn rel_object_with_number(x: f64, y: f64) -> bool {
+    (rel_numeric_operand(x).is_some() && object_to_primitive_is_default_string(y))
+        || (rel_numeric_operand(y).is_some() && object_to_primitive_is_default_string(x))
+}
+
 /// `x < y` — codegen routes here for any relational `<` whose operands are not
 /// both statically numeric. Returns a NaN-boxed boolean (`f64`).
 #[no_mangle]
@@ -452,6 +484,9 @@ pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
     }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a < b);
+    }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
     }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_TRUE)
 }
@@ -465,6 +500,9 @@ pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a > b);
     }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_TRUE)
 }
 
@@ -477,6 +515,9 @@ pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a <= b);
     }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_FALSE)
 }
 
@@ -488,6 +529,9 @@ pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
     }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a >= b);
+    }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
     }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_FALSE)
 }
