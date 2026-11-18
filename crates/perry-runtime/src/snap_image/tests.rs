@@ -76,6 +76,8 @@ fn decode_rejects_a_truncated_or_foreign_file() {
     assert!(decode(b"not an image").is_err());
 }
 
+// Captures classify words against /proc/self/maps, which only Linux has.
+#[cfg(target_os = "linux")]
 fn string_cell(img: &Image, needle: &[u8]) -> Option<usize> {
     img.cells.iter().position(|c| {
         c.obj_type == crate::gc::GC_TYPE_STRING
@@ -83,6 +85,7 @@ fn string_cell(img: &Image, needle: &[u8]) -> Option<usize> {
     })
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn array_cell_names_its_string_and_zeroes_the_slot() {
     let text = b"image-run probe string, long enough to stay a heap cell";
@@ -127,6 +130,7 @@ fn native_payload_types_have_no_image_form() {
     assert!(!no_form(crate::gc::GC_TYPE_STRING));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn shaped_object_keeps_its_slots_inside_the_cell() {
     let o = crate::object::js_object_alloc(0, 0);
@@ -238,6 +242,11 @@ fn maps_text_is_parsed_and_merged() {
         merged(parse_maps(t)),
         vec![(0x40_0000, 0x46_0000), (0x7ffc_0000_0000, 0x7ffc_0000_1000)]
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_running_process_has_memory_mappings() {
     assert!(read_maps().len() > 3, "this process has mappings");
 }
 
@@ -469,10 +478,12 @@ fn a_claim_key_over_four_kib_stops_the_image() {
     assert_eq!(s.map(|s| s.cell), Some(i));
 }
 
+#[cfg(target_os = "linux")]
 fn forms_of(img: &Image, t: u8) -> Vec<&Cell> {
     img.cells.iter().filter(|c| c.obj_type == t).collect()
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
     let key = crate::string::js_string_from_bytes(b"map-form-key".as_ptr(), 12);
@@ -508,6 +519,7 @@ fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
     let _ = m;
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn an_untraced_raw_address_stops_the_image_and_a_zero_word_does_not() {
     let mut m = crate::map::js_map_alloc(2);
@@ -869,6 +881,7 @@ fn a_runtime_layout_descriptor_is_found_by_its_changed_shape_id_word() {
     assert_eq!(mint_desc_matches(&was, &now, 901, 77).0, 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     let good: u64 = 0x1234;
