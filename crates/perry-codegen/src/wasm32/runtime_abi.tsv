@@ -2174,6 +2174,8 @@ js_native_abi_check_i32	i32s	f64
 js_native_abi_check_i64	i64	f64
 js_native_abi_check_i8	i8s	f64
 js_native_abi_check_isize	isize	f64
+js_native_abi_check_nullable_buffer_byte_len	usize	f64
+js_native_abi_check_nullable_buffer_data_ptr	ptr	f64
 js_native_abi_check_pod_object	i64	f64
 js_native_abi_check_pod_view_data_ptr	ptr	f64,i64
 js_native_abi_check_pod_view_record_count	usize	f64,i64
