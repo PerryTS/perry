@@ -1,6 +1,5 @@
 use super::spread::js_object_spread_fresh_leading;
 use super::*;
-use crate::codegen_abi::LayoutWord;
 
 unsafe fn object(entries: &[(&str, f64)]) -> f64 {
     let obj = js_object_alloc_plain(entries.len() as u32);

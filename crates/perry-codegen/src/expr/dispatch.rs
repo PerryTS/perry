@@ -157,6 +157,12 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // on the in-place append path instead of copying the whole
             // accumulator on the next `+=`.
             Expr::LocalGet(id) if property == "length" => {
+                // DYNP E13: a for-in keys local's length is the loop's bound,
+                // written by its begin call (E13-BOUND).
+                if let Some(len) = for_in_bound_slot(ctx, *id) {
+                    let n = ctx.block().load(crate::types::I64, &len);
+                    return Ok(ctx.block().sitofp(crate::types::I64, &n, DOUBLE));
+                }
                 let saved = ctx.string_length_read_of.replace(*id);
                 let result = super::property_get::lower(ctx, expr);
                 ctx.string_length_read_of = saved;
@@ -888,4 +894,13 @@ pub(crate) fn emit_math_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(raw, &entry_label), (&coerced, &slow_end)])
+}
+
+/// DYNP E13: the bound slot (I64, written by `js_for_in_begin`) behind a for-in
+/// keys local's `.length`, when `keys_id` is a for-in desugar's keys binding.
+pub(crate) fn for_in_bound_slot(ctx: &FnCtx<'_>, keys_id: u32) -> Option<String> {
+    ctx.for_in_keys_locals
+        .get(&keys_id)
+        .and_then(|recv| ctx.for_in_lens.get(recv))
+        .cloned()
 }
