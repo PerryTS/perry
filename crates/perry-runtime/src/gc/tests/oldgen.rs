@@ -872,13 +872,8 @@ fn test_old_page_defrag_target_gate_emits_trace() {
         return;
     }
 
-    // The parent's source block must hold only movable occupants, or the
-    // all-or-nothing block evacuation declines and nothing moves. Minting the
-    // parent's shape allocates its keys arrays, which are GC_FLAG_SHAPE_SHARED
-    // and never move, so mint first and then start a fresh old block. A filler
-    // sized to one block does not do that where BLOCK_SIZE is smaller (1 MiB
-    // on macOS): it gets an oversized block of its own and the parent lands
-    // next to the keys arrays.
+    // The shape's keys arrays are shape-shared and never move, and block
+    // evacuation is all-or-nothing: mint them first, then start a fresh block.
     let _ = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1);
     old_free_reset_for_test();
     let block_of =

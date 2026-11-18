@@ -674,10 +674,7 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
         self.assertEqual(old_page["returned_bytes"], 256)
 
     def test_target_gates_accept_old_page_block_moving_more_than_selected_live(self):
-        # Measured on the forced old-page fixture: the selected page held 40
-        # live bytes; its source block also held a 48-byte unmarked string on
-        # that page and a 4096-byte unmarked string on another page, and the
-        # all-or-nothing block evacuation moved and released all three.
+        # The forced old-page fixture's block: 40 live bytes plus 4144 unmarked.
         exit_code, stderr, report = self.run_report(
             {
                 "default_copying": [gc_cycle(layout_scans=layout_scans())],
