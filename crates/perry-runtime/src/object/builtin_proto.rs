@@ -1633,6 +1633,23 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    // `ta.set(source, offset)` whose `Get` structure answers: the builtin's
+    // body, as the typed-array tower runs it (a missing offset is 0).
+    if mode == GENERIC_RECEIVER && name == b"set" {
+        if let Some(ta) = super::typed_array_chain::builtin_set_receiver(recv) {
+            let source = if argc > 0 && !args.is_null() {
+                *args
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let offset = if argc > 1 && !args.is_null() {
+                *args.add(1)
+            } else {
+                0.0
+            };
+            return crate::typedarray_hook_slots::js_typed_array_set_from(ta, source, offset);
+        }
+    }
     // The name may live in `scratch`; own it across the calls below.
     let name: Vec<u8> = name.to_vec();
     let family = match mode {

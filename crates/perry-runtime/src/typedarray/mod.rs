@@ -311,23 +311,6 @@ pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         return shared_access::load(base.add(off), kind);
     }
     match kind {
-        KIND_INT8 => *(base.add(off) as *const i8) as f64,
-        KIND_UINT8 | KIND_UINT8_CLAMPED => *base.add(off) as f64,
-        KIND_INT16 => *(base.add(off) as *const i16) as f64,
-        KIND_UINT16 => *(base.add(off) as *const u16) as f64,
-        KIND_INT32 => *(base.add(off) as *const i32) as f64,
-        KIND_UINT32 => *(base.add(off) as *const u32) as f64,
-        // #10779: an ArrayBuffer lane is arbitrary user bytes, so a float
-        // kind is the one element kind whose value can land inside Perry's
-        // NaN-box tag band. Canonicalise here — this is the single runtime
-        // choke point every `ta[i]` read funnels through — so the value that
-        // leaves is a number for every consumer that tag-dispatches it.
-        // Integer kinds cannot produce a NaN and are left untouched.
-        KIND_FLOAT16 => {
-            crate::array::canonical_raw_f64(f16_bits_to_f64(*(base.add(off) as *const u16)))
-        }
-        KIND_FLOAT32 => crate::array::canonical_raw_f64(*(base.add(off) as *const f32) as f64),
-        KIND_FLOAT64 => crate::array::canonical_raw_f64(*(base.add(off) as *const f64)),
         // BigInt kinds return a NaN-boxed BigInt (not a plain Number), so
         // `ta[i]` round-trips as a `bigint`. The raw slot bits are the BigInt's
         // low limb; widen via the signed/unsigned constructor for `> i64::MAX`.
@@ -339,6 +322,29 @@ pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
             let v = *(base.add(off) as *const u64);
             crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
         }
+        _ => load_number_raw(base.add(off), kind),
+    }
+}
+
+/// The Number at `src`, an element of the numeric (non-BigInt) `kind`.
+#[inline(always)]
+unsafe fn load_number_raw(src: *const u8, kind: u8) -> f64 {
+    match kind {
+        KIND_INT8 => *(src as *const i8) as f64,
+        KIND_UINT8 | KIND_UINT8_CLAMPED => *src as f64,
+        KIND_INT16 => *(src as *const i16) as f64,
+        KIND_UINT16 => *(src as *const u16) as f64,
+        KIND_INT32 => *(src as *const i32) as f64,
+        KIND_UINT32 => *(src as *const u32) as f64,
+        // #10779: an ArrayBuffer lane is arbitrary user bytes, so a float
+        // kind is the one element kind whose value can land inside Perry's
+        // NaN-box tag band. Canonicalise here — this is the single runtime
+        // choke point every `ta[i]` read funnels through — so the value that
+        // leaves is a number for every consumer that tag-dispatches it.
+        // Integer kinds cannot produce a NaN and are left untouched.
+        KIND_FLOAT16 => crate::array::canonical_raw_f64(f16_bits_to_f64(*(src as *const u16))),
+        KIND_FLOAT32 => crate::array::canonical_raw_f64(*(src as *const f32) as f64),
+        KIND_FLOAT64 => crate::array::canonical_raw_f64(*(src as *const f64)),
         _ => 0.0,
     }
 }
