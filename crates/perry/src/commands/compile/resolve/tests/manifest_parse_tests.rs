@@ -202,7 +202,10 @@ fn buffer_len_descriptor_parses_nullable_and_rejects_unknown_fields() {
         "params": [{ "kind": "buffer+len", "elementSize": 4 }],
         "returns": "void"
     }));
-    assert!(err.contains("unknown buffer+len descriptor field `elementSize`"), "{err}");
+    assert!(
+        err.contains("unknown buffer+len descriptor field `elementSize`"),
+        "{err}"
+    );
 }
 
 #[test]
