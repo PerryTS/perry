@@ -1,0 +1,1 @@
+`http2`: `session.request()` ends the stream itself for `GET`, `HEAD`, `DELETE`, `OPTIONS`, `CONNECT` and `TRACE` unless `options.endStream` says otherwise, as Node does, so a bodyless request gets its response without an `end()` call; a later `end()` on such a stream no longer opens a second one (#14681).
