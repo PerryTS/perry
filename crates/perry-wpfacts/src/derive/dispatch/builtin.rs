@@ -140,7 +140,7 @@ fn function(fun: &Function, f: &mut impl FnMut(&Expr)) {
     }
     stmts(&fun.body, f);
 }
-fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
+pub(super) fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
     stmts(&hir.init, f);
     for g in &hir.globals {
         if let Some(e) = &g.init {

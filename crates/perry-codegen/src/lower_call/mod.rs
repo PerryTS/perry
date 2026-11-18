@@ -596,6 +596,31 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        if !ctx.wpfacts_off
+            && matches!(object.as_ref(), Expr::LocalGet(_))
+            && ctx
+                .wpfacts
+                .method_calls
+                .get(&(*byte_offset, property.clone()))
+                .is_some_and(|record| record.5)
+        {
+            let value = property_get::try_lower_proven_method_call(ctx, callee, args)?;
+            debug_assert!(
+                value.is_some(),
+                "imported receiver must have a materialized public entry"
+            );
+            if let Some(value) = value {
+                return Ok(value);
+            }
+        }
+    }
     if let Some(value) = property_get::try_lower_certified_map(ctx, callee, args)? {
         return Ok(value);
     }

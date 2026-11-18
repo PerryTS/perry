@@ -675,7 +675,7 @@ pub struct ElisionFacts {
     /// `null` (never another primitive): the call tests it first, and the
     /// nullish edge is the complete member read, which throws.
     pub method_calls:
-        std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool)>,
+        std::collections::BTreeMap<(u32, String), (u32, u32, String, DirectAbi, bool, bool)>,
     /// ONCHG2: this module's named method calls `o.k(args)` whose callee set
     /// is proven to be these compiled closures / declarations of this module
     /// (wpfacts `SiteFacts::target_bodies` of `T0Mono` / `T0Set`), every
