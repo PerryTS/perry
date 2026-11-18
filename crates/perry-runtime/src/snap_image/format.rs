@@ -358,7 +358,7 @@ pub const MINT_FLAG_CANONICAL: u8 = 2;
 pub const MINT_FLAG_ROW_GAP: u8 = 4;
 
 /// Items of the census stop (`obj_type`).
-pub const MINT_CENSUS_ITEMS: usize = 17;
+pub const MINT_CENSUS_ITEMS: usize = 18;
 
 /// One shape record minted between the baseline and the cut, as the facts a replay hands
 /// the runtime's mint: the identity facts, the record's attached state and the layout
@@ -399,6 +399,9 @@ pub struct MintRec {
     pub proto_ref: Option<Val>,
     /// A runtime layout's descriptor: its offset from the start of the data window.
     pub desc_off: Option<u64>,
+    /// A runtime layout's (or lazy row's) first birth that drew its family's prototype serial:
+    /// the serial it drew (0 = the birth draws none).
+    pub fam_serial: u64,
 }
 
 /// The record without the references the capture adds after the live record is read.
@@ -407,6 +410,7 @@ pub fn mint_without_refs(r: &MintRec) -> MintRec {
     c.keys_ref = None;
     c.proto_ref = None;
     c.desc_off = None;
+    c.fam_serial = 0;
     c
 }
 
@@ -479,8 +483,8 @@ pub fn mint_census_text(stops: &[Stop]) -> Option<String> {
     }
     let g = |i: usize| v.get(i).copied().unwrap_or(0);
     Some(format!(
-        "mint census: routes dynamic {}, runtime {}, lazy {}, static {}; canonical key lists {}; successor mints {}; row gaps {}; prototype ids default {}, class {}, mixed {}, unique {}, other {}; unique-prototype counter moved {}, prototype-serial counter moved {}; key lists as image cells {}, as binary data {}; runtime-layout descriptor cells found {}",
-        g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7), g(8), g(9), g(10), g(11), g(12), g(13), g(14), g(15), g(16)
+        "mint census: routes dynamic {}, runtime {}, lazy {}, static {}; canonical key lists {}; successor mints {}; row gaps {}; prototype ids default {}, class {}, mixed {}, unique {}, other {}; unique-prototype counter moved {}, prototype-serial counter moved {}; key lists as image cells {}, as binary data {}; runtime-layout descriptor cells found {}; runtime-layout births that draw the prototype serial {}",
+        g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7), g(8), g(9), g(10), g(11), g(12), g(13), g(14), g(15), g(16), g(17)
     ))
 }
 
@@ -531,6 +535,7 @@ pub fn mint_blob(recs: &[MintRec]) -> Vec<u8> {
                 o.extend(x.to_le_bytes());
             }
         }
+        o.extend(r.fam_serial.to_le_bytes());
     }
     o
 }
@@ -589,6 +594,7 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
             0 => None,
             _ => Some(mint_tail_u64(b, &mut o)?),
         };
+        r.fam_serial = mint_tail_u64(b, &mut o)?;
     }
     Some((v, o))
 }

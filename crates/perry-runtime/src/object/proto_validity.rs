@@ -552,3 +552,15 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;
+
+/// Image replay (R1): position the prototype-serial counter so that the next draw is `next`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_prototype_serial_next(next: u64) {
+    PROTOTYPE_SERIAL_NEXT.store(next, Ordering::Relaxed);
+}
+
+/// Image replay (R1): the address of the prototype-serial counter.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_prototype_serial_cell() -> usize {
+    PROTOTYPE_SERIAL_NEXT.as_ptr() as usize
+}

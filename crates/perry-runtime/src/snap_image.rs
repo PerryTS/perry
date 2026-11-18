@@ -496,7 +496,14 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                 &crate::object::shapes::snap_image_shape_state(),
             );
             img.mint = mint.take().unwrap_or_default();
-            let mint_notes = mint_capture(&w, &mut img.mint, &b.data.1, &b.pre_data, &b.shapes);
+            let mint_notes = mint_capture(
+                &w,
+                &mut img.mint,
+                b.data.0,
+                &b.data.1,
+                &b.pre_data,
+                &b.shapes,
+            );
             // A torn-down trie leaves the record out: the replay needs it, so the image stops.
             // The addresses the record names, with their image form, for the replay check.
             let mut named: Vec<(Val, usize)> = Vec::new();
@@ -788,6 +795,41 @@ fn mint_desc_matches(was: &[u8], now: &[u8], id: u32, word: u32) -> (u32, u64) {
     (n, at)
 }
 
+/// The prototype serial the first birth of the descriptor at `desc_off` drew for its family: the
+/// family's serial word changed from 0 between the baseline copy `was` and the cut copy `now` of
+/// the data window (which starts at `data_lo`), and no record earlier in mint order drew it
+/// (`families`). 0 when the birth drew none.
+fn mint_fam_serial(
+    was: &[u8],
+    now: &[u8],
+    data_lo: usize,
+    desc_off: u64,
+    families: &mut Vec<u64>,
+) -> u64 {
+    use crate::object::layout_desc as ld;
+    let u64at = |b: &[u8], o: u64| {
+        usize::try_from(o)
+            .ok()
+            .and_then(|o| b.get(o..o.checked_add(8)?))
+            .map_or(0, |s| u64::from_le_bytes(s.try_into().unwrap_or([0; 8])))
+    };
+    let proto = std::mem::offset_of!(ld::PerryLayoutDesc, proto) as u64;
+    let fam = u64at(now, desc_off.saturating_add(proto));
+    if fam < ld::LAYOUT_PROTO_TAG_END as u64 {
+        return 0;
+    }
+    let Some(off) = fam.checked_sub(data_lo as u64) else {
+        return 0;
+    };
+    let off = off.saturating_add(ld::SNAP_IMAGE_FAMILY_SERIAL_OFFSET as u64);
+    let (old, new) = (u64at(was, off), u64at(now, off));
+    if old != 0 || new == 0 || families.contains(&off) {
+        return 0;
+    }
+    families.push(off);
+    new
+}
+
 fn mint_bump(c: &mut [u64], k: usize) {
     if let Some(x) = c.get_mut(k) {
         *x += 1;
@@ -816,6 +858,7 @@ fn mint_note(n: &mut [u32], first: &mut [usize], k: usize, i: usize) {
 fn mint_capture(
     w: &Where,
     recs: &mut [format::MintRec],
+    data_lo: usize,
     was: &[u8],
     now: &[u8],
     begin: &crate::object::shapes::SnapShapeState,
@@ -831,6 +874,8 @@ fn mint_capture(
     let (mut n, mut first): (Vec<u32>, Vec<usize>) = (Vec::new(), Vec::new());
     // Census items (`MINT_CENSUS_*` order).
     let mut c: Vec<u64> = Vec::new();
+    // The family serial words a record earlier in mint order drew (offsets in the window).
+    let mut families: Vec<u64> = Vec::new();
     for _ in 0..6 {
         n.push(0);
         first.push(0);
@@ -862,8 +907,21 @@ fn mint_capture(
             if m == 1 {
                 r.desc_off = Some(off);
                 mint_bump(&mut c, 16);
+                r.fam_serial = mint_fam_serial(was, now, data_lo, off, &mut families);
+                if r.fam_serial != 0 {
+                    mint_bump(&mut c, 17);
+                }
             } else {
                 mint_note(&mut n, &mut first, 3, i);
+            }
+        }
+        if r.route == f::MINT_ROUTE_LAZY {
+            let d = crate::object::layout_desc::snap_image_lazy_descriptor(r.word);
+            if let Some(off) = d.checked_sub(data_lo).filter(|_| d != 0) {
+                r.fam_serial = mint_fam_serial(was, now, data_lo, off as u64, &mut families);
+                if r.fam_serial != 0 {
+                    mint_bump(&mut c, 17);
+                }
             }
         }
         let fl = flags.get(i).copied().unwrap_or(0);
@@ -1133,3 +1191,6 @@ fn tls_window(fs: usize, memsz: usize, align: usize) -> (usize, usize) {
     let lo = fs.saturating_sub(memsz.div_ceil(align.max(1)) * align.max(1));
     (lo, memsz.min(fs - lo))
 }
+
+// Image replay R1 (enter step 3b): the shape records minted again with positioned counters.
+mod replay;

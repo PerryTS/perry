@@ -681,6 +681,7 @@ fn full_mint_rec(n: u32) -> MintRec {
         keys_ref: Some(Val::Cell { hi: 0, bare: true, index: 4 }),
         proto_ref: Some(Val::Scalar(0x7FFC_0000_0000_0002)),
         desc_off: Some(16),
+        fam_serial: 0x99,
     }
 }
 
@@ -758,6 +759,8 @@ fn mint_record_round_trips_route_and_refs() {
     assert_eq!(back[2].desc_off, None);
     assert_eq!(back, recs);
     assert_eq!(mint_without_refs(&back[0]).desc_off, None);
+    assert_eq!(back[0].fam_serial, 0x99);
+    assert_eq!(mint_without_refs(&back[0]).fam_serial, 0);
     assert_eq!(mint_without_refs(&back[0]).route, MINT_ROUTE_RUNTIME);
 }
 
@@ -828,7 +831,7 @@ fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     recs[2].proto_cell = std::ptr::addr_of!(bad) as u64;
     recs[3].node = 3;
     recs[3].keys = 0x7000_0000_1010;
-    let stops = mint_capture(&w, &mut recs, &[], &[], &begin);
+    let stops = mint_capture(&w, &mut recs, 0, &[], &[], &begin);
     let by = |k: u8| stops.iter().filter(|s| s.kind == k).collect::<Vec<_>>();
     let one = |k: u8| {
         let v = by(k);
@@ -849,7 +852,7 @@ fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     assert!(t.contains("routes dynamic 1, runtime 1, lazy 0, static 2; canonical key lists 1; successor mints 0; row gaps 0;"), "{t}");
     assert!(t.contains("key lists as image cells 3, as binary data 0; runtime-layout descriptor cells found 0"), "{t}");
     // No records, no stops.
-    assert!(mint_capture(&w, &mut [], &[], &[], &begin).is_empty());
+    assert!(mint_capture(&w, &mut [], 0, &[], &[], &begin).is_empty());
 }
 
 #[test]
@@ -860,7 +863,7 @@ fn the_census_line_names_every_item_in_order() {
     }
     let t = mint_census_text(&stops).expect("a census");
     assert!(
-        t.contains("routes dynamic 10, runtime 20, lazy 30, static 40; canonical key lists 50; successor mints 60; row gaps 70; prototype ids default 80, class 90, mixed 100, unique 110, other 120; unique-prototype counter moved 130, prototype-serial counter moved 140; key lists as image cells 150, as binary data 160; runtime-layout descriptor cells found 170"),
+        t.contains("routes dynamic 10, runtime 20, lazy 30, static 40; canonical key lists 50; successor mints 60; row gaps 70; prototype ids default 80, class 90, mixed 100, unique 110, other 120; unique-prototype counter moved 130, prototype-serial counter moved 140; key lists as image cells 150, as binary data 160; runtime-layout descriptor cells found 170; runtime-layout births that draw the prototype serial 180"),
         "{t}"
     );
     assert_eq!(mint_census_text(&[]), None);
@@ -953,4 +956,32 @@ fn canon_record_round_trips_every_field() {
     assert_eq!(decode(&encode(&img)).expect("parses"), img);
     img.canon = None;
     assert_eq!(decode(&encode(&img)).expect("parses"), img);
+}
+
+#[test]
+fn a_runtime_layout_birth_records_the_family_serial_it_drew_once() {
+    use crate::object::layout_desc as ld;
+    let data_lo = 0x7000_0000_0000_usize;
+    let fam_off = 0x100_usize;
+    let serial_at = fam_off + ld::SNAP_IMAGE_FAMILY_SERIAL_OFFSET;
+    let proto_at = std::mem::offset_of!(ld::PerryLayoutDesc, proto);
+    let put = |b: &mut Vec<u8>, at: usize, v: u64| b[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    let mut was = vec![0u8; 0x200];
+    let mut now = was.clone();
+    put(&mut now, 0x10 + proto_at, (data_lo + fam_off) as u64);
+    put(&mut now, 0x40 + proto_at, (data_lo + fam_off) as u64);
+    put(&mut now, 0x70 + proto_at, 3);
+    put(&mut now, serial_at, 7);
+    let mut families = Vec::new();
+    assert_eq!(mint_fam_serial(&was, &now, data_lo, 0x10, &mut families), 7);
+    assert_eq!(mint_fam_serial(&was, &now, data_lo, 0x40, &mut families), 0);
+    assert_eq!(
+        mint_fam_serial(&was, &now, data_lo, 0x70, &mut Vec::new()),
+        0
+    );
+    put(&mut was, serial_at, 7);
+    assert_eq!(
+        mint_fam_serial(&was, &now, data_lo, 0x10, &mut Vec::new()),
+        0
+    );
 }
