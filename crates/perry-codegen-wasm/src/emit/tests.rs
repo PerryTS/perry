@@ -556,8 +556,8 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
-// A user class's method wins over what its instance inherits from
-// Object.prototype, also through a subclass.
+// A user class's method wins over what its instance inherits from Object.prototype,
+// also through a subclass.
 #[test]
 fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() {
     assert_eq!(
@@ -1288,8 +1288,7 @@ console.log(new MM((n: number) => n * 10).out.join(","));
     );
 }
 
-// Instances are not linked to the class value's `prototype`, so host `instanceof` walks
-// the class table, as compiled `instanceof` does.
+// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
 #[test]
 fn host_instanceof_on_a_class_value_walks_the_class_chain() {
     assert_eq!(
@@ -1921,10 +1920,8 @@ console.log(new B().m());
     );
 }
 
-// An instance inherits its evaluation from a prototype per evaluation, which inherits
-// the class tag from the class's prototype, so it gains no own key, through the class
-// value's constructor or through a `new K()` that the class's own member runs on a later
-// evaluation, and both still resolve: the evaluation's captures and `instanceof`.
+// An evaluation's instance inherits its evaluation and class tag, so it gains no own key,
+// whether the class value built it or a member's `new K()` on a later evaluation did.
 #[test]
 fn an_evaluation_instance_keeps_only_its_declared_own_keys() {
     assert_eq!(
@@ -1951,9 +1948,8 @@ for (const o of [a, b, k]) {
     );
 }
 
-// The class tag is not an own key of an instance or an object literal, so a host API
-// that walks every own key, enumerable or not (Node's `Headers`), sees only declared
-// fields (#14726). Sync code and an async (JS) body build instances differently.
+// Node's `Headers` copies every own key, enumerable or not: an instance or object literal
+// built in sync code or in an async (JS) body shows it only declared fields.
 #[test]
 fn an_instance_has_no_own_class_tag_key() {
     assert_eq!(
@@ -1977,8 +1973,8 @@ for (const o of [h, p, ah, ap]) {
     );
 }
 
-// The tag lives on the class's prototype: a copy is a plain object, the original
-// still dispatches, and an object literal's prototype is Object.prototype.
+// A copy of an instance is an untagged plain object; an object literal's prototype is
+// Object.prototype.
 #[test]
 fn a_copied_instance_is_untagged_and_the_original_still_dispatches() {
     assert_eq!(
