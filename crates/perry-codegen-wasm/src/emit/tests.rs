@@ -2246,3 +2246,34 @@ console.log(make("a"), make("b"));
         "a:K,a:K b:K,b:K"
     );
 }
+
+#[test]
+fn a_computed_static_method_gets_closure_arguments_as_closures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(key: string) {
+  class K { static [key](cb: (n: number) => number) { return [1, 2].map(cb).join(","); } }
+  return K;
+}
+const C: any = make("run");
+console.log(C.run((n: number) => n * 2));
+"#
+        ),
+        "2,4"
+    );
+}
+
+#[test]
+fn a_declared_static_field_shadows_the_class_values_own_properties() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { static name = "custom"; }
+const C: any = K;
+console.log(C.name);
+"#
+        ),
+        "custom"
+    );
+}
