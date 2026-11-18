@@ -104,11 +104,8 @@ fn localize_provided_by_replacement(
     Ok(shared.len())
 }
 
-/// Whether the object at `path` defines writable or thread-local data. Two
-/// copies of such a member each hold their own state, so its exports cannot be
-/// divided between them: perry-ffi's `register_link_sink` would set the
-/// stdlib copy's registration flag while this copy's `available` reads its
-/// own. An object that cannot be read or parsed counts as stateful.
+/// Whether the object at `path` defines writable or thread-local data; an
+/// object that cannot be read or parsed counts as stateful.
 fn defines_mutable_state(path: &Path) -> bool {
     use object::{Object, ObjectSection, SectionKind};
     let Ok(bytes) = std::fs::read(path) else {

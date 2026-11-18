@@ -112,9 +112,6 @@ fn kept_member_with_mutable_state_keeps_every_export() {
     let original = decode_hex(STATEFUL_MEMBER_HEX);
     std::fs::write(&member_path, &original).unwrap();
 
-    // Localizing `_shared_register` would send its callers to the stdlib's
-    // copy and its write to that copy's static, while `_needed_by_sibling`
-    // kept reading this one's.
     let exported = symbol_set(&["_shared_register", "_needed_by_sibling"]);
     let replacement = symbol_set(&["_shared_register", "_only_in_stdlib"]);
 
