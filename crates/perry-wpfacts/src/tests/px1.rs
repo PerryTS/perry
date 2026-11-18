@@ -520,3 +520,64 @@ console.log(x.a, x.z, process.argv[2]);
         "{v:?}"
     );
 }
+
+// PROXY11 (RED on 16c4381812: a Proxy serialized by JSON, or held by a
+// console argument the formatter's `%j` serializes, degraded to "E9 Proxy
+// target (implicit)"; the cube program's first ⊤, bloom's CSSStyleDeclaration
+// Proxy in an Element's `_style`). SerializeJSONProperty runs the Proxy's
+// internal methods: the `toJSON` [[Get]], [[OwnPropertyKeys]],
+// [[GetOwnProperty]] and the member [[Get]]s, each its trap or the target's.
+const JSONP: &str = r#"const N = String(process.argv[2]);
+function style(host: { tag: string }): any {
+  const api: Record<string, unknown> = { cssText: "a" + N, item: (i: number): string => "i" + i };
+  return new Proxy(api, {
+    get(t: any, key: any) { if (typeof key !== "string") return t[key]; if (key in api) return t[key]; return host.tag + key; },
+    set(t: any, key: any, v: any) { t[key] = String(v); return true; },
+    has(_t: any, key: any) { return typeof key === "string" && key in api; },
+  });
+}
+class El { tag = "div" + N; _style: any = null; get style(): any { if (this._style === null) this._style = style(this); return this._style; } }
+const e = new El();
+e.style.color = "red";
+console.log(e);
+console.log({ s: e.style, n: N });
+console.log(JSON.stringify(e.style), e.tag);
+"#;
+
+#[test]
+fn proxy11_json_of_a_proxy_runs_its_internal_methods() {
+    let (tops, held) = solve(JSONP);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// A Proxy console argument itself: `%j`, ToPrimitive and the unwrapped show;
+// with `ownKeys` / `getOwnPropertyDescriptor` traps.
+#[test]
+fn proxy11_console_argument_proxy_with_key_traps() {
+    let src = r#"const N = String(process.argv[2]);
+const api: Record<string, unknown> = { a: "x" + N };
+const p: any = new Proxy(api, {
+  ownKeys(t: any) { return Reflect.ownKeys(t); },
+  getOwnPropertyDescriptor(t: any, k: any) { return { value: t[k], enumerable: true, configurable: true, writable: true }; },
+  get(t: any, k: any) { return k === "toJSON" ? undefined : t[k]; },
+});
+console.log(p);
+console.log(JSON.stringify([p, { q: p }]), N);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: an operation the rule does not model (a call of the Proxy) still
+// takes the old path: its target is E9.
+#[test]
+fn proxy11_keep_called_proxy_stays_e9() {
+    let src = JSONP.replace(
+        "console.log(e);",
+        "console.log(e);\ntry { (e.style as any)(); } catch (x) {}",
+    );
+    let (tops, _) = solve(&src);
+    assert!(e9(&tops), "{tops:?}");
+}
