@@ -970,7 +970,13 @@ mod tests {
             }),
             binding(2, Expr::LocalGet(1)),
         ];
-        let roots = |frame: &[Stmt]| collect_pointer_typed_locals(&[], frame, &HashSet::new());
+        let source = frame.clone();
+        let Stmt::Expr(source_closure) = &source[1] else {
+            unreachable!()
+        };
+        let memo = ClosureWrites::new(&[(7, source_closure)]);
+        let roots = |frame: &[Stmt]| memo.pointer_locals(&[], frame, &HashSet::new());
+        assert!(roots(&source).contains_key(&2));
         assert!(roots(&frame).contains_key(&2));
         // Reuse the exact allocation, as an allocator may for successive
         // temporary HIR copies. The captured cell stays rooted in both frames.

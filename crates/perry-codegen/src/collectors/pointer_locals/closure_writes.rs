@@ -128,17 +128,8 @@ impl<'hir> ClosureWrites<'hir> {
         }
     }
 
-    /// Shallow: ids DECLARED directly in `stmts` (`let` bindings), recursing
-    /// through control-flow blocks but NOT into nested closures. A nested
-    /// closure's locals belong to its own scope, and its own memo entry already
-    /// excludes them, so we stop at the closure boundary.
-    ///
-    /// Used only to decide which of a closure's collected writes are "free"
-    /// (i.e. target a captured outer local) and therefore worth propagating to
-    /// ancestor frames. Approximation is safe in BOTH directions: HIR local ids
-    /// are globally unique, so under-counting here at worst propagates a write
-    /// to an id no ancestor declares (pruned harmlessly), and over-counting at
-    /// worst makes an ancestor slightly more conservative (an extra safe root).
+    /// An enclosing frame needs only writes to its own bindings. Each nested
+    /// closure filters its declarations before its free writes propagate.
     fn collect_direct_let_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
         for stmt in stmts {
             match stmt {
