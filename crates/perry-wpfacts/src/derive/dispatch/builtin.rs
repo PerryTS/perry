@@ -45,6 +45,81 @@ fn arguments(g: &Gen<'_>) -> HashMap<At, Option<Vec<u16>>> {
     out
 }
 
+/// The fast arm may inline part of an argument the generic arm preserves. A
+/// full source call span still identifies the actual fast operand across copies.
+fn numeric_results(g: &Gen<'_>) -> std::collections::HashSet<(u32, u32, u32)> {
+    let copies = element::run_copies(&g.m);
+    let mut results = HashMap::new();
+    for &(mi, at, end, n) in &g.call_kinds_at {
+        let numeric = end > at
+            && at != 0
+            && element::with_copies(&copies, &[n]).iter().all(|&id| {
+                let node = &g.m.nodes[id as usize];
+                !node.dropped && node.pts.is_empty() && node.prim == prim::NUM
+            });
+        *results.entry((mi, at, end)).or_insert(true) &= numeric;
+    }
+    results
+        .into_iter()
+        .filter_map(|(span, yes)| yes.then_some(span))
+        .collect()
+}
+
+/// The checked entries observe prototype changes across the entire family.
+fn pristine_method_tables(m: &crate::model::Model) -> bool {
+    use crate::model::TokKind;
+    m.native_writes.is_empty()
+        && !m.realm_held
+        && !m.objproto_accessor
+        && !m.reshaped_any
+        && m.reshaped_keys.is_empty()
+        && !m.top_reshaped_any
+        && m.top_reshaped_keys.is_empty()
+        && !m.hard.keys().chain(m.super_relink.iter()).any(|&t| {
+            matches!(
+                m.toks[t as usize],
+                TokKind::Top
+                    | TokKind::ObjectProto
+                    | TokKind::Builtin(_)
+                    | TokKind::NativeProto(_, _)
+            )
+        })
+}
+
+/// Each read's receiver must pass the indexed-access proof at every instance;
+/// a builtin member by itself only proves the lookup under its own name.
+fn quiet_arrays(g: &Gen<'_>) -> std::collections::HashSet<(At, String)> {
+    let m = &g.m;
+    let copies = element::run_copies(m);
+    let mut sites = HashMap::new();
+    for s in &g.read_sites {
+        let key = &m.atoms[s.key as usize];
+        if !s.is_call || !matches!(key.as_str(), "fill" | "pop" | "includes") {
+            continue;
+        }
+        let quiet = !s.value_call
+            && element::with_copies(&copies, &[s.recv]).iter().all(|&n| {
+                let node = &m.nodes[n as usize];
+                !node.dropped
+                    && node.prim == 0
+                    && crate::quiet_sites::not_plain_arrays(m, n).is_none()
+                    && node.pts.to_sorted().iter().all(|t| {
+                        !m.hard.contains_key(t)
+                            && !m.super_relink.contains(t)
+                            && m.tmpl_of(*t)
+                                .is_some_and(|tm| !m.record_arrays.contains_key(&tm))
+                    })
+            });
+        *sites
+            .entry(((s.module, s.byte_offset), key.to_string()))
+            .or_insert(true) &= quiet;
+    }
+    sites
+        .into_iter()
+        .filter_map(|(at, quiet)| quiet.then_some(at))
+        .collect()
+}
+
 /// Operand coercions are part of the proof: the audited Math helpers take
 /// Numbers only. Number predicates perform no coercion at all.
 fn namespace_fast(ns: &str, key: &str, fast: &Expr, args: &[u16], operands: &[Expr]) -> bool {
@@ -120,7 +195,7 @@ fn function(fun: &Function, f: &mut impl FnMut(&Expr)) {
     }
     stmts(&fun.body, f);
 }
-fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
+pub(super) fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
     stmts(&hir.init, f);
     for g in &hir.globals {
         if let Some(e) = &g.init {
@@ -164,7 +239,18 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
 }
 
 pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConfig) {
+    use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
     let args = arguments(g);
+    let numeric_results = numeric_results(g);
+    let mut strings = std::collections::BTreeSet::new();
+    let pristine = pristine_method_tables(&g.m);
+    let quiet_arrays = if pristine {
+        quiet_arrays(g)
+    } else {
+        Default::default()
+    };
+    let mut arrays = std::collections::BTreeSet::new();
+    let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
     // manifest's thread family owns diagnostics_channel and its producers.
     let no_subscribers = pf.family_reach.as_ref().is_some_and(|f| !f.live("thread"));
@@ -205,8 +291,53 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     cfg.namespace_pairs
                         && perry_hir::namespace_pairs::pair_offset(ns, call) == Some(*byte_offset)
                 });
-            let safe =
-                selected && !spread && args.get(&at).is_some_and(|a| {
+            let map = pristine
+                && namespace.is_none()
+                && !spread
+                && direct_map_call(callee, arity)
+                && pf.bindings[mi].method_sites.iter().any(|(site, k, flags)| {
+                    *site == Site::Callee(*byte_offset) && k == property && flags & SITE_MAP != 0
+                });
+            if map {
+                maps.insert((at, property.clone()));
+            }
+            let array = namespace.is_none()
+                && !spread
+                && perry_hir::folded_call::direct_array_call(callee, arity)
+                && quiet_arrays.contains(&(at, property.clone()))
+                && pf.bindings[mi].method_sites.iter().any(|(site, k, flags)| {
+                    *site == Site::Callee(*byte_offset)
+                        && k == property
+                        && flags & perry_hir::folded_call::SITE_ARRAY_MEMBER != 0
+                });
+            if array {
+                arrays.insert((at, property.clone()));
+            }
+            let fill = pristine
+                && namespace.is_none()
+                && pf.bindings[mi].fill_births.iter().any(|&(o, len)| {
+                    o == *byte_offset
+                        && perry_hir::folded_call::fill_birth_value(call, len)
+                            .is_ok_and(|v| matches!(v, Expr::Integer(_) | Expr::Number(_)))
+                });
+            let string = pristine
+                && namespace.is_none()
+                && !spread
+                && perry_hir::folded_call::direct_string_call(callee, arity)
+                && (arity == 0
+                    || args.get(&at).and_then(Option::as_ref).is_some_and(|p| {
+                        p.as_slice()
+                            == [if property == "indexOf" {
+                                prim::STR
+                            } else {
+                                prim::NUM
+                            }]
+                    }));
+            if string {
+                strings.insert((at, property.clone()));
+            }
+            let safe = (map || fill || string || array) && selected
+                || selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;
                     };
@@ -229,6 +360,14 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                         }
                     }
                     namespace.is_some_and(|ns| {
+                        if ns == "Math" && property == "abs" && arity == 1 {
+                            if let Expr::MathAbs(x) = fast {
+                                if matches!(x.as_ref(), Expr::Call {byte_offset, byte_end, ..}
+                                    if numeric_results.contains(&(mi as u32, *byte_offset, *byte_end))) {
+                                    return true;
+                                }
+                            }
+                        }
                         namespace_fast(
                             ns,
                             property,
@@ -252,6 +391,68 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             .entry(((s.module, s.byte_offset), s.key.clone()))
             .or_insert(false) &=
             s.access == Access::Read && !s.top && (s.verdict == Verdict::NativeMember || exact);
+    }
+    for ((mi, offset), key) in strings {
+        let at = ((mi, offset), key.clone());
+        let mut twins = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
+            .peekable();
+        if certified.get(&at) == Some(&true)
+            && twins.peek().is_some()
+            && twins.all(|s| {
+                s.verdict == Verdict::NativeMember
+                    && s.receiver_prims == prim::STR
+                    && s.receiver_values.is_empty()
+            })
+        {
+            let sites = &mut pf.bindings[mi as usize].method_sites;
+            use perry_hir::folded_call::SITE_DIRECT_STRING;
+            if let Some((_, _, flags)) = sites
+                .iter_mut()
+                .find(|(s, k, _)| *s == Site::Callee(offset) && *k == key)
+            {
+                *flags |= SITE_DIRECT_STRING;
+            } else {
+                sites.push((Site::Callee(offset), key, SITE_DIRECT_STRING));
+            }
+        } else {
+            certified.insert(at, false);
+        }
+    }
+    for ((mi, offset), key) in arrays {
+        if certified.get(&((mi, offset), key.clone())) == Some(&true) {
+            if let Some((_, _, flags)) = pf.bindings[mi as usize]
+                .method_sites
+                .iter_mut()
+                .find(|(site, k, _)| *site == Site::Callee(offset) && *k == key)
+            {
+                *flags |= perry_hir::folded_call::SITE_DIRECT_ARRAY;
+            }
+        }
+    }
+    for ((mi, offset), key) in maps {
+        let at = ((mi, offset), key.clone());
+        let mut twins = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
+            .peekable();
+        if certified.get(&at) == Some(&true)
+            && twins.peek().is_some()
+            && twins.all(|s| s.verdict == Verdict::NativeMember && s.receiver_prims == 0)
+        {
+            if let Some((_, _, flags)) = pf.bindings[mi as usize]
+                .method_sites
+                .iter_mut()
+                .find(|(site, k, _)| *site == Site::Callee(offset) && k == &key)
+            {
+                *flags |= SITE_DIRECT_MAP;
+            }
+        } else {
+            certified.insert(at, false);
+        }
     }
     for s in &mut pf.sites {
         s.builtin_dispatch = s.is_call

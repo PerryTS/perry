@@ -328,3 +328,64 @@ fn ns_export_star_cycle() {
     all_pf(&pf, main, "u", false, "NsExport");
     none_pf(&pf, main, "w", false, "NsExport");
 }
+
+#[test]
+fn native_dispatch_imported_binding_needs_single_program_target() {
+    let classes = "export class P { m() {return 7;} } export class Q { m() {return 8;} }";
+    for (init, direct) in [
+        ("new P()", true),
+        ("process.argv.length > 5 ? new P() : new Q()", false),
+    ] {
+        let main =
+            format!("import {{P,Q}} from './classes'; const p = {init}; console.log(p.m());");
+        let pf = modules(&[("classes", classes), ("main", &main)]);
+        let site = pf
+            .sites
+            .iter()
+            .find(|s| s.is_call && s.key == "m")
+            .expect("live method call");
+        assert_eq!(
+            !site.dispatch_obligation().unwrap().redispatch,
+            direct,
+            "{}",
+            pf.dump_text()
+        );
+        if direct {
+            assert_eq!(site.target_fns.len(), 1);
+        }
+    }
+}
+
+fn assert_imported_call_redispatches(setup: &str) {
+    let main = format!("import {{P}} from './classes'; {setup} p.m();");
+    let pf = modules(&[
+        ("classes", "export class P { m() {return 7;} }"),
+        ("main", &main),
+    ]);
+    let mut sites = pf
+        .sites
+        .iter()
+        .filter(|s| s.is_call && s.key == "m")
+        .peekable();
+    assert!(sites.peek().is_some(), "missing imported call: {main}");
+    assert!(
+        sites.all(|s| s.dispatch_obligation().unwrap().redispatch),
+        "{main}\n{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn native_dispatch_imported_instance_own_method_write() {
+    assert_imported_call_redispatches("const p = new P(); p.m = () => 9;");
+}
+
+#[test]
+fn native_dispatch_imported_instance_prototype_method_write() {
+    assert_imported_call_redispatches("const p = new P(); P.prototype.m = () => 9;");
+}
+
+#[test]
+fn native_dispatch_imported_instance_mutable_binding() {
+    assert_imported_call_redispatches("let p = new P();");
+}

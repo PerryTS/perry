@@ -66,6 +66,67 @@ pub const SITE_MAP: u8 = 4;
 /// [`SITE_MAP`] for `Set` (`new Set`).
 pub const SITE_SET: u8 = 8;
 
+/// A named call whose receiver, member lookup and call form admit the direct Map entry.
+pub const SITE_DIRECT_MAP: u8 = 16;
+
+/// A named primitive String operation whose operand protocols have been discharged.
+pub const SITE_DIRECT_STRING: u8 = 32;
+
+/// The builtin lookup and indexed element accesses are both quiet.
+pub const SITE_DIRECT_ARRAY: u8 = 64;
+
+pub fn direct_array_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("fill" | "includes", 1) | ("pop", 0)))
+}
+
+pub fn direct_string_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("charAt" | "charCodeAt" | "indexOf", 1) | ("trim" | "toUpperCase" | "toLowerCase", 0)))
+}
+
+pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { object, property, byte_offset, byte_end, .. }
+        if *byte_offset != 0 && byte_end > byte_offset
+            && matches!(object.as_ref(), Expr::PropertyGet { .. })
+            && matches!((property.as_str(), arity), ("clear", 0) | ("get", 1) | ("set", 2)))
+}
+
+/// The fill operand when this call can realize the published allocation length.
+pub fn fill_birth_value(call: &Expr, len: u32) -> Result<&Expr, &'static str> {
+    let Expr::Call { callee, args, .. } = call else {
+        return Err("shape");
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return Err("shape");
+    };
+    let Expr::New {
+        class_name,
+        args: ctor,
+        ..
+    } = object.as_ref()
+    else {
+        return Err("shape");
+    };
+    let [value] = args.as_slice() else {
+        return Err("shape");
+    };
+    if class_name != "Array" || property != "fill" || ctor.len() != 1 {
+        return Err("shape");
+    }
+    let length_matches = match ctor.as_slice() {
+        [Expr::Integer(k)] => *k == i64::from(len),
+        [Expr::Number(n)] => *n == f64::from(len),
+        _ => false,
+    };
+    length_matches.then_some(value).ok_or("length")
+}
+
 /// The site of the unfolded call whose callee is `callee`, when it has a
 /// source offset.
 pub fn callee_site(callee: &Expr) -> Option<Site> {

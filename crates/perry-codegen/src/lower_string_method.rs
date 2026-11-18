@@ -102,6 +102,50 @@ pub(crate) fn lower_string_method(
     property: &str,
     args: &[Expr],
 ) -> Result<String> {
+    lower_string_method_with_proof(ctx, object, property, args, None)
+}
+
+pub(crate) fn try_lower_certified_string(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    use perry_hir::folded_call::{direct_string_call, Site, SITE_DIRECT_STRING};
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    if ctx.wpfacts_off
+        || !direct_string_call(callee, args.len())
+        || !ctx
+            .wpfacts
+            .method_sites
+            .get(&(Site::Callee(*byte_offset), property.clone()))
+            .is_some_and(|flags| flags & SITE_DIRECT_STRING != 0)
+    {
+        return Ok(None);
+    }
+    debug_assert!(ctx.wpfacts.native_member_calls.contains(byte_offset));
+    let proof = if matches!(property.as_str(), "charAt" | "charCodeAt") {
+        StringProof::CertifiedEntry
+    } else {
+        StringProof::Proven
+    };
+    lower_string_method_with_proof(ctx, object, property, args, Some(proof)).map(Some)
+}
+
+fn lower_string_method_with_proof(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    proof: Option<StringProof>,
+) -> Result<String> {
     // A scalar-replaced uppercase local is only admitted when all reads are
     // covered by fused operations. Preserve the source value in its own slot
     // and perform `toUpperCase().indexOf("literal")` without allocating the
@@ -129,7 +173,7 @@ pub(crate) fn lower_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    let proof = string_proof_for(ctx, property, args);
+    let proof = proof.unwrap_or_else(|| string_proof_for(ctx, property, args));
     lower_string_method_from_box(ctx, object, property, args, recv_box, proof)
 }
 
@@ -148,6 +192,9 @@ pub(crate) enum StringProof {
     /// No entry for the method and arity: the site tests the byte before its
     /// arguments and has a generic arm.
     Guard,
+    /// A solved member and operand certificate selects the unchecked entry,
+    /// including the inline ASCII character path used by string concatenation.
+    CertifiedEntry,
     /// The caller's branch already tested it.
     Proven,
 }
@@ -222,7 +269,7 @@ fn lower_string_method_from_box(
     let mut group = open_rooted_group(1);
     let recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, args_can_collect);
     let result = match proof {
-        StringProof::Entry | StringProof::EntryPreRead => {
+        StringProof::Entry | StringProof::EntryPreRead | StringProof::CertifiedEntry => {
             let patched_before = (proof == StringProof::EntryPreRead).then(|| {
                 crate::builtin_proto::emit_patched_test(
                     ctx,
@@ -237,7 +284,11 @@ fn lower_string_method_from_box(
                 property,
                 &recv_box,
                 &arg_values,
-                patched_before.as_deref(),
+                if proof == StringProof::CertifiedEntry {
+                    EntryGuard::Certified
+                } else {
+                    EntryGuard::from_pre_read(patched_before.as_deref())
+                },
                 None,
             );
             arg_group.release(ctx);
@@ -338,33 +389,36 @@ fn lower_string_method_pristine(
     Ok(ctx.block().phi(DOUBLE, &pairs))
 }
 
-/// The string method through its entries (#11915), on operands the caller
-/// has evaluated (each rooted across the next) and re-read.
-///
-/// * `patched_before == None` (the arguments cannot observe the method
-///   read): ONE call to the checked entry `js_string_m_<method><argc>`, which
-///   proves `Pristine(String)` itself.
-/// * `Some(p)`: `p` is the byte the site read BEFORE the arguments; set, it
-///   takes the generic path — `generic_label` when the caller has one (the
-///   tag guard's dispatcher arm, which reads the same rooted operands), else
-///   one `js_builtin_proto_generic_call*`; clear, the unchecked body
-///   `js_string_b_<method><argc>`.
-///
-/// `charCodeAt` and `charAt` keep an inline body: the proof joins the index
-/// test the body already has, and the entry is its slow arm.
+pub(crate) enum EntryGuard<'a> {
+    Checked,
+    Before(&'a str),
+    Certified,
+}
+
+impl<'a> EntryGuard<'a> {
+    pub(crate) fn from_pre_read(patched: Option<&'a str>) -> Self {
+        patched.map_or(Self::Checked, Self::Before)
+    }
+}
+
+/// The caller roots the evaluated operands across argument evaluation.
+/// A checked entry reads the prototype flag itself. A pre-read flag selects
+/// the generic arm when arguments can modify the prototype after lookup.
+/// A certified entry can call the original body on both the fast and slow
+/// paths because the solve excludes such writes and proves the operands.
 pub(crate) fn emit_string_entry_call(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     recv_box: &str,
     arg_values: &[String],
-    patched_before: Option<&str>,
+    guard: EntryGuard<'_>,
     generic_label: Option<&str>,
 ) -> Result<String> {
     let checked = crate::builtin_proto::string_entry(property, arg_values.len())
         .expect("an entry proof is chosen only for a method with a checked entry");
     let body = checked.replacen("js_string_m_", "js_string_b_", 1);
-    let callee = if patched_before.is_some() {
+    let callee = if !matches!(guard, EntryGuard::Checked) {
         &body
     } else {
         &checked
@@ -382,7 +436,7 @@ pub(crate) fn emit_string_entry_call(
                 &idx_d,
                 callee,
                 arg_values,
-                patched_before.is_none(),
+                matches!(guard, EntryGuard::Checked),
             ) {
                 return value;
             }
@@ -399,7 +453,7 @@ pub(crate) fn emit_string_entry_call(
                 &idx_d,
                 callee,
                 arg_values,
-                patched_before.is_none(),
+                matches!(guard, EntryGuard::Checked),
             ) {
                 return value;
             }
@@ -408,7 +462,7 @@ pub(crate) fn emit_string_entry_call(
         operands.extend(arg_values.iter().map(|a| (DOUBLE, a.as_str())));
         ctx.block().call(DOUBLE, callee, &operands)
     };
-    let Some(patched) = patched_before else {
+    let EntryGuard::Before(patched) = guard else {
         return Ok(call(ctx));
     };
     let direct_idx = ctx.new_block("strentry.direct");

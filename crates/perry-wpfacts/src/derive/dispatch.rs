@@ -10,6 +10,7 @@ pub(crate) enum Certificate {
     /// `lower_call` -> `try_lower_proven_method_call`, with an ordinary
     /// same-class holder and a nonnullable `this`; no guard or fallback.
     DirectThisMethod,
+    ImportedInstance,
 }
 
 /// A solve-backed method-call elision. Only `dispatch` additionally proves
@@ -21,6 +22,12 @@ pub struct MethodCallCertificate {
     pub function: u32,
     pub nullable: bool,
     pub(crate) dispatch: Option<Certificate>,
+}
+
+impl MethodCallCertificate {
+    pub fn direct_imported_instance(&self) -> bool {
+        self.dispatch == Some(Certificate::ImportedInstance)
+    }
 }
 
 /// The A/B control shared by fact certification and every driver elision.
@@ -109,6 +116,51 @@ fn direct_this(s: &SiteFacts, c: &Class, target: &Function, holder_module: u32) 
         })
 }
 
+/// Imported constructors are heap allocations in codegen. Restrict the receiver
+/// to the immutable module-init binding of that allocation in every call copy.
+fn imported_instance(s: &SiteFacts, hir: &perry_hir::Module, c: &Class) -> bool {
+    if s.receiver_prims != 0
+        || s.receiver_values.is_empty()
+        || s.access != Access::Read
+        || !perry_hir::method_call::named_site(&s.key, s.byte_offset)
+        || s.bodies.is_empty()
+        || !s.bodies.iter().all(|(id, _)| *id == u32::MAX)
+        || hir.classes.iter().any(|local| local.name == c.name)
+    {
+        return false;
+    }
+    let imported = hir.imports.iter().any(|i| !i.type_only && !i.runtime_erased &&
+        i.module_kind == perry_hir::ModuleKind::NativeCompiled && i.specifiers.iter().any(|spec|
+        matches!(spec, perry_hir::ImportSpecifier::Named {imported, local} if imported == &c.name && local == imported)));
+    if !imported {
+        return false;
+    }
+    let mut seen = false;
+    let mut agree = true;
+    builtin::module(hir, &mut |e| {
+        let (callee, plain) = match e {
+            Expr::Call { callee, .. } => (callee, true),
+            Expr::CallSpread { callee, .. } => (callee, false),
+            _ => return,
+        };
+        if let Expr::PropertyGet {
+            object,
+            property,
+            byte_offset,
+            ..
+        } = callee.as_ref()
+        {
+            if *byte_offset == s.byte_offset && property == &s.key {
+                seen = true;
+                agree &= plain
+                    && matches!(object.as_ref(), Expr::LocalGet(receiver) if hir.init.iter().any(|st|
+                    matches!(st, perry_hir::Stmt::Let {id, mutable:false, init:Some(Expr::New {class_name, ..}), ..} if id == receiver && class_name == &c.name)));
+            }
+        }
+    });
+    seen && agree
+}
+
 /// Resolve every twin once, using borrowed keys and copyable certificates.
 /// A refusal is sticky; nullable receivers are joined, and the narrower
 /// dispatch proof survives only when every twin carries it.
@@ -178,8 +230,18 @@ pub(crate) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             class,
             function: *function,
             nullable: s.receiver_prims != 0,
-            dispatch: (direct && direct_this(s, c, target, *module))
-                .then_some(Certificate::DirectThisMethod),
+            dispatch: if direct && direct_this(s, c, target, *module) {
+                Some(Certificate::DirectThisMethod)
+            } else if direct
+                && s.module != *module
+                && ordinary(target)
+                && root_class(c)
+                && imported_instance(s, g.modules[s.module as usize].1, c)
+            {
+                Some(Certificate::ImportedInstance)
+            } else {
+                None
+            },
         });
     }
     agree(&mut pf.sites);
