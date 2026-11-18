@@ -1091,10 +1091,19 @@ impl Model {
 
     /// Is `t` an object of the RegExp family (a literal's or a
     /// constructor's)?
-    fn is_regexp_tok(&self, t: Tok) -> bool {
+    pub(super) fn is_regexp_tok(&self, t: Tok) -> bool {
         t != TOP
             && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                 if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "RegExp", .. }))
+    }
+
+    /// Is `t` a native Error (a runtime ErrorHeader: `builtins::error_tok`,
+    /// `Gen::error_obj`, `Model::runtime_error`)? A subclass instance, a
+    /// Proxy, a marker and ⊤ are not.
+    pub(super) fn native_error_tok(&self, t: Tok) -> bool {
+        t != TOP
+            && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "Error", .. }))
     }
 
     /// Rule M9, ECMA-262 22.2.6.11 RegExp.prototype[@@replace] with a

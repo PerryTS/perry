@@ -751,7 +751,7 @@ impl Model {
             let saved = self.ledger.as_mut().map(|l| l.enter_top(origin));
             self.sink_node(src, r);
             if let (Some(l), Some(c)) = (self.ledger.as_mut(), saved) {
-                l.cur = c;
+                l.leave(c);
             }
             return;
         }

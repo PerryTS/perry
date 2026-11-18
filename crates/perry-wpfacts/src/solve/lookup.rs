@@ -987,7 +987,13 @@ impl Model {
         // R9BIRTH4: a class constructor's own `prototype` (`surely_own_data`)
         // is present for life: the read is the field's value alone.
         let ctor_proto = stop && matches!(self.toks[t as usize], TokKind::ClassObj(_));
-        if !present && !private && !realm && !first && !ctor_proto {
+        // A final chain read whose intrinsic chain defines the key
+        // (`builtins::locked_chain_defines`: the locked member can be
+        // neither replaced nor deleted) finds that member past every own
+        // key; what an own key holds reaches the read through its field.
+        let chain_defined =
+            matches!(key, Key::Named(a) if builtins::locked_chain_defines(self, t, a));
+        if !present && !private && !realm && !first && !ctor_proto && !chain_defined {
             self.add_prim(dst, prim::UNDEF);
         }
         // What a closed marker's own load gives (its classes' chain through
