@@ -497,15 +497,30 @@ pub(crate) fn facts_read(
     if property.starts_with('#') {
         return Err("private key requires private-element semantics");
     }
-    if recv.class_ids.is_empty() || recv.class_ids.len() > 4 {
+    if recv.class_ids.is_empty() {
         return Err("receiver class set is empty or exceeds four classes");
     }
-    let mut bare = !recv.checked && !facts.interp_guard;
+    // Past four classes the site would emit code per class (the class-id
+    // compares of a guarded receiver, the select of disagreeing slots).
+    // An unguarded receiver whose classes all hold the key at one slot
+    // emits none of it, whatever the class count: the read is the one
+    // fixed-offset load (PVN-08: a base-class method of eight subclasses).
+    let unguarded = !recv.checked && !facts.interp_guard;
+    let mut one_slot: Option<Option<u32>> = None;
+    let mut bare = unguarded;
     for &cid in &recv.class_ids {
         let f = facts
             .field(cid, property)
             .ok_or("key is not a definite data birth field of every receiver class")?;
         bare &= !f.declared && !f.reserved;
+        match one_slot {
+            None => one_slot = Some(Some(f.slot)),
+            Some(Some(s)) if s != f.slot => one_slot = Some(None),
+            _ => {}
+        }
+    }
+    if recv.class_ids.len() > 4 && !(unguarded && matches!(one_slot, Some(Some(_)))) {
+        return Err("receiver class set is empty or exceeds four classes");
     }
     Ok(bare)
 }
