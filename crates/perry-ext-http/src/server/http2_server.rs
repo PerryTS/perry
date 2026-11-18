@@ -244,9 +244,8 @@ pub struct Http2StreamHandle {
     pub turnloop_conn: i64,
     /// Whether `respond()` / `end()` already produced a response.
     pub turnloop_responded: bool,
-    /// A client stream whose request already went to the transport, either
-    /// from `session.request()` (`endStream`) or from `end()`. A second
-    /// `end()` must not open another stream.
+    /// The client request went to the transport; a later `end()` must not open
+    /// a second stream.
     pub request_started: bool,
 }
 

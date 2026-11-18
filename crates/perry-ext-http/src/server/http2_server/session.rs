@@ -424,11 +424,8 @@ fn client_request_headers(stream_handle: i64, session_handle: i64) -> Vec<(Strin
     out
 }
 
-/// Node's `options.endStream` for `session.request(headers, options)`.
-///
-/// Unset, it is true for the methods whose request carries no payload
-/// (`isPayloadMeaningless` in Node's `internal/http2/core.js`), so a `GET`
-/// sends HEADERS with END_STREAM without the caller ever calling `end()`.
+/// Node's `options.endStream` for `session.request(headers, options)`: unset,
+/// it is true for the methods without a payload (`isPayloadMeaningless`).
 pub(crate) fn client_request_ends_stream(
     request_headers: &HashMap<String, String>,
     options: f64,
@@ -450,7 +447,12 @@ pub(crate) fn client_request_ends_stream(
 
 pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
     match get_handle_mut::<Http2StreamHandle>(stream_handle) {
-        Some(stream) if stream.request_started => return,
+        Some(stream) if stream.request_started => {
+            if !body.is_empty() {
+                super::queue_turnloop_stream_error(stream_handle, "ERR_STREAM_WRITE_AFTER_END");
+            }
+            return;
+        }
         Some(stream) => stream.request_started = true,
         None => {}
     }
@@ -698,6 +700,13 @@ mod tests {
             errors_for(stream_handle).len(),
             1,
             "end() after an endStream request must not start it again"
+        );
+
+        start_client_request(stream_handle, b"payload".to_vec());
+        assert_eq!(
+            errors_for(stream_handle).last().map(String::as_str),
+            Some("ERR_STREAM_WRITE_AFTER_END"),
+            "data after an ended request is reported, not dropped"
         );
     }
 
