@@ -187,7 +187,7 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
     use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
     let args = arguments(g);
     let numeric_results = numeric_results(g);
-    let mut strings = std::collections::HashSet::new();
+    let mut strings = std::collections::BTreeSet::new();
     let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
     // manifest's thread family owns diagnostics_channel and its producers.
