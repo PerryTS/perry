@@ -421,11 +421,9 @@ impl<'a> FuncEmitCtx<'a> {
             } if self.current_class.is_some() => {
                 self.emit_super_method_call(func, key, receiver, args);
             }
-            // A class declared in a function body: each evaluation is its own
-            // constructor with its own capture environment, the first one included
-            // (`ClassIsFirstEvaluation` is not represented, so code takes the
-            // by-value forms). Static initializers and computed member names are not
-            // represented here and stay `undefined`.
+            // A class declared in a function body: each evaluation, the first included,
+            // is its own constructor with its own captures. A class with static
+            // initializers or computed member names is not represented and stays `undefined`.
             Expr::ClassExprFresh {
                 template,
                 named_statics,
@@ -441,9 +439,8 @@ impl<'a> FuncEmitCtx<'a> {
                 && static_init_order.is_empty()
                 && definition_steps.is_empty() =>
             {
-                // The self-binding (`evaluation_owner`) is assigned by the
-                // surrounding HIR, and the capture refresh that follows it
-                // republishes a capture that read it before then.
+                // The surrounding HIR assigns the self-binding (`evaluation_owner`), and
+                // the capture refresh after it republishes captures read before then.
                 let ctor_slot = self.class_ctor_slot(template);
                 let caps = Expr::Array(captured_args.clone(), None);
                 self.emit_class_bridge(
@@ -556,17 +553,6 @@ impl<'a> FuncEmitCtx<'a> {
                 parent_expr,
             } if matches!(parent_expr.as_ref(), Expr::Null) => {
                 self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
-            }
-            Expr::ObjectSuperPropertyGet {
-                home,
-                key,
-                receiver,
-            } => {
-                self.emit_frame_begin(func, 3);
-                self.emit_store_arg(func, 0, home);
-                self.emit_store_arg(func, 1, receiver);
-                self.emit_store_arg(func, 2, key);
-                self.emit_memcall(func, "object_super_get", 3);
             }
             Expr::ClassRef(class_name) => {
                 let ctor_slot = self.class_ctor_slot(class_name);
