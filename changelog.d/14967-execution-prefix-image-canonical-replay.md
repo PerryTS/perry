@@ -1,0 +1,1 @@
+Execution-prefix image capture (build knob, off by default): the canonical-keys record is replayed at the cut into a trie rebuilt from the baseline and compared with the trie at the cut, and the capture stops naming the first node that differs.
