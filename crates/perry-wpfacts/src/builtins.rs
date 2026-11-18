@@ -1350,6 +1350,22 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             return image_member(m, holder, &m.atoms[a as usize]);
         }
     }
+    // Rule HI: `@@hasInstance` on a class object, whatever its `extends`.
+    // The lookup passes the class's own keys and those of its parents
+    // (program tokens or ⊤: the chain walk reads them, and a `setPrototypeOf`
+    // or `__proto__` store is a parent there), then ends at
+    // `%Function.prototype%`: a superclass is a constructor or null (ECMA-262
+    // 15.7.14), and every constructor's chain ends there unless a program
+    // set its [[Prototype]]. There `@@hasInstance` is non-writable and
+    // non-configurable (20.2.3.6), an image member the runtime refuses to
+    // replace (DEC 250); a plain store of the key on the class or a parent
+    // fails against it (10.1.9.2 step 2.a), so only a define installs one,
+    // as an own key the walk reads. The intrinsic end is final.
+    if matches!(m.toks[t as usize], TokKind::ClassObj(_))
+        && m.atoms[a as usize] == crate::model::WK_HAS_INSTANCE
+    {
+        return true;
+    }
     let what = match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what, .. } => Some(*what),
