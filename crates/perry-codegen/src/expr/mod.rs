@@ -404,6 +404,15 @@ pub(crate) struct FnCtx<'a> {
     /// The for-in snapshot locals whose deletion check this function lowered
     /// (DYNP E3d): the binding read `keys[i]` loads element `i` directly.
     pub for_in_snapshots: std::collections::HashSet<u32>,
+    /// DYNP E13: the keys local of a for-in desugar (`let __keys =
+    /// ForInKeys(__obj)`, immutable) -> its receiver local. Its `.length`
+    /// (the desugar's one `let __n`) is the begin call's bound
+    /// (`for_in_lens`), never the list's live length: the keys may be the
+    /// receiver's own key list in place.
+    pub for_in_keys_locals: std::collections::HashMap<u32, u32>,
+    /// DYNP E13: receiver local of a for-in -> its bound slot (I64, written
+    /// by `js_for_in_begin`).
+    pub for_in_lens: std::collections::HashMap<u32, String>,
     pub numeric_order_functions: &'a [perry_hir::Function],
     pub numeric_order_closures: &'a [(u32, Expr)],
     /// Lexical initialization dominance for closed callee reads.

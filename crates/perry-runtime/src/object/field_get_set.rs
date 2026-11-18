@@ -322,7 +322,7 @@ pub(crate) use enumeration::{
     keys_contain_array_index, own_key_hidden_bytes, own_keys_may_hide, own_slot_hidden,
 };
 pub use enumeration::{
-    js_for_in_key_live, js_for_in_keys_fact, js_for_in_keys_value, js_for_in_loop_fact,
+    js_for_in_begin, js_for_in_key_live, js_for_in_keys_value, js_for_in_loop_fact,
     js_object_entries, js_object_entries_value, js_object_keys, js_object_keys_value,
     js_object_values, js_object_values_value,
 };

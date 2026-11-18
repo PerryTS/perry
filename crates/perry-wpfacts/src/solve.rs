@@ -902,6 +902,13 @@ impl Model {
                 self.diagnostic_sink(n, reason);
             }
         }
+        // `hold_ledger`: what the rule later escapes belongs to the cascade
+        // that attached it.
+        if let (Cons::TopSink { .. } | Cons::RuntimeStore { .. }, Some(l)) =
+            (c, self.ledger.as_mut())
+        {
+            l.sink_rule(n);
+        }
         if self.relations.is_some()
             && !matches!(
                 c,
@@ -1792,6 +1799,9 @@ impl Model {
     #[track_caller]
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
         if let Some(l) = self.ledger.as_mut() {
+            if l.dropped(std::panic::Location::caller(), n, false) {
+                return;
+            }
             l.sink(n, reason, std::panic::Location::caller());
         }
         if let Some(d) = &mut self.diagnostic {

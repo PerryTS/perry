@@ -1878,6 +1878,8 @@ pub(crate) fn take_unique_run(keys: crate::object::ObjectKeys) -> u32 {
 mod stats;
 mod views;
 
+pub(crate) mod snap_image;
+
 pub(crate) use stats::{
     canonical_element_words, canonical_stats, canonical_storage_stats, canonical_trie_stats,
 };

@@ -23,7 +23,6 @@ import androidx.core.view.WindowInsetsCompat
 class PerryActivity : Activity() {
 
     private lateinit var rootLayout: FrameLayout
-    private var nativeThread: Thread? = null
     private var nativeStarted = false
 
     companion object {
@@ -194,7 +193,7 @@ class PerryActivity : Activity() {
     }
 
     /**
-     * Load the native library and start the perry-native thread.
+     * Load the native library and run the compiled TypeScript main() on the UI thread.
      * Called after permissions are resolved (granted or denied).
      */
     private fun startNative() {
@@ -211,16 +210,17 @@ class PerryActivity : Activity() {
         // Initialize JNI cache on the UI thread first
         PerryBridge.nativeInit()
 
-        // Spawn native init thread — this runs the compiled TypeScript main()
-        nativeThread = Thread {
-            // This calls the entry point of the compiled TypeScript.
-            // It will create widgets via JNI, then call App() which blocks.
-            PerryBridge.nativeMain()
-        }.apply {
-            name = "perry-native"
-            isDaemon = true
-            start()
-        }
+        // Run the compiled TypeScript main() right here, on the UI thread.
+        // Every later JS entry — widget callbacks, the timer pump, deep links,
+        // GC pump steps — also runs on the UI thread, and the runtime's
+        // per-thread state (arena, shadow stack, agent pointer block, shape
+        // directory, …) is only valid on the thread that ran main(). Running
+        // main() on a separate `perry-native` thread left callbacks executing
+        // against a second, half-initialised copy of that state (#1160 class:
+        // "Invalid native property owner", vanishing strings, FORTIFY aborts
+        // once the error path exits the process). App() does not block on
+        // Android, so main() returns as soon as the initial UI is built.
+        PerryBridge.nativeMain()
     }
 
     override fun onResume() {

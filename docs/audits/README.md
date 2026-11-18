@@ -18,3 +18,4 @@ Nothing outside this directory links to these files except `scripts/check_gc_env
 | `2026-10-11-stdelete.md` | 2026-10-11 | Class D side-table deletion |
 | `wasi-component-validation-2026-10-21/` | 2026-10-21 | WASI and component-model validation runs |
 | `2026-11-02-test-structure-census.md` | 2026-11-02 | Program-test lanes, judges, subjects and source ownership behind the test-structure proposal |
+| `iife-return-depth-determinism-2026-11-18.md` | 2026-11-18 | Depth-sensitive IIFE memoization, negative controls, and determinism validation |

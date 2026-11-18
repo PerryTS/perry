@@ -191,7 +191,7 @@ pub(crate) struct ShapeRecord {
     special_constfn_mask: u32,
     /// Charter step 5: the per-slot field representation, two bits per inline
     /// slot 0..32 (`field_rep`). An identity fact under
-    /// [`field_rep::identity`](crate::object::field_rep::identity), folded into the
+    /// `field_rep::identity`, folded into the
     /// facts key only when nonzero.
     pub(super) rep: u64,
     /// Zero, a low-bit-tagged scalar rollback parent, or an aligned, owned

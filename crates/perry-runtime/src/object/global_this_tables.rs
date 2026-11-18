@@ -57,6 +57,10 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// reading one's value births the family, which installs it. The realm
     /// source's own-key order is the check (`lazy_family_tests`).
     pub statics: &'static [&'static str],
+    /// Population flags derived at compile time; they do not change realm facts.
+    pub phase_b: bool,
+    pub realm_seals_prototype: bool,
+    pub realm_seals_namespace: bool,
 }
 
 macro_rules! builtin_constructors {
@@ -77,6 +81,7 @@ macro_rules! builtin_constructors {
                 assert!(id <= GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len() as u32);
                 Some(unsafe { std::mem::transmute::<u8, Self>(id as u8) })
             }
+            #[inline(always)]
             pub(crate) fn declaration(self) -> &'static BuiltinConstructorDeclaration {
                 &GLOBAL_THIS_BUILTIN_CONSTRUCTORS[self as usize - 1]
             }
@@ -93,6 +98,9 @@ macro_rules! builtin_constructors {
             $(BuiltinConstructorDeclaration {
                 identity: BuiltinConstructorIdentity::$name,
                 name: stringify!($name),
+                phase_b: super::global_this::phase_rows::in_rest(stringify!($name)),
+                realm_seals_prototype: super::global_this::phase_rows::realm_seals_prototype(stringify!($name)),
+                realm_seals_namespace: super::global_this::phase_rows::contains(crate::codegen_abi::BUILTIN_NAMESPACES.as_slice(), stringify!($name)),
                 // SAFETY: fn_info! returns its own static immutable record.
                 info: unsafe { &*$info },
                 prototype_class: builtin_constructors!(@optional $($class)?),

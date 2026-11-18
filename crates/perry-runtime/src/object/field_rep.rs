@@ -130,6 +130,7 @@ pub(crate) fn is_valid_with_special(rep: u64, special_constfn_mask: u32) -> bool
 /// reads as `F64` (`01`). The deprecated state is a learned fact of a record,
 /// like the #10905 width fields, and two records that differ only in it are
 /// the same identity.
+#[cfg(test)]
 #[inline]
 pub(crate) fn identity(rep: u64) -> u64 {
     debug_assert!(is_valid(rep), "reserved rep lane in {rep:#x}");

@@ -1884,6 +1884,45 @@ pub(crate) const ENUM_INDEX_KEY: u32 = 1 << 8;
 pub(crate) const ENUM_ANY: u32 = 1 << 9;
 /// Some own key may carry a runtime-internal name ([`is_internal_key_name`]).
 pub(crate) const ENUM_INTERNAL_KEY: u32 = 1 << 10;
+
+/// Table summary bit (`Table::summary`): an entry key may be a non-string or
+/// a name [`key_name_bits`] decodes as index or runtime-internal, so a copy
+/// of the table's keys decodes each name. ORed with no decode by the general
+/// insert (`overflow::insert_key_bits`: any key may arrive there; a per-key
+/// decode on the insert cost tssrc +0.17%) and by a table born from a
+/// non-empty layout (`overflow::ensure_adding`).
+/// A spread's table birth (`spread::table_born`) ORs it once. The plain
+/// append (`overflow::append_plain`) writes none: its admission
+/// (`layout_probe::table_add_admitted`) refuses non-strings and every hidden
+/// name. User names such as `_x` or `#y` are ordinary enumerable keys.
+pub(crate) const TABLE_KEY_HIDDEN: u32 = 1 << 11;
+
+/// Table summary bit: an entry may be an enumerable key. ORed by every entry
+/// attribute write whose attributes lack `ENTRY_NON_ENUMERABLE`
+/// ([`table_entry_summary`]) and by the plain append; never cleared (a
+/// deleted entry leaves it), so its absence proves no enumerable key.
+pub(crate) const TABLE_ENUM_ANY: u32 = (ENTRY_NON_ENUMERABLE as u32) << TABLE_ATTRS_SHIFT;
+
+/// Where [`table_entry_summary_with`] places an entry's attribute byte, so
+/// that its `ENTRY_NON_ENUMERABLE` bit, inverted, is [`TABLE_ENUM_ANY`].
+const TABLE_ATTRS_SHIFT: u32 = 12;
+const _: () = assert!(TABLE_KEY_HIDDEN & (0xff << TABLE_ATTRS_SHIFT) == 0);
+
+/// The table summary contribution of an entry written with `attrs`.
+#[inline(always)]
+pub(crate) fn table_entry_summary(attrs: u8) -> u32 {
+    table_entry_summary_with(attrs, 0)
+}
+
+/// [`table_entry_summary`] ORed with `extra`, a constant of table bits
+/// outside the shifted attribute byte (such as [`TABLE_KEY_HIDDEN`]): the
+/// inverted shifted byte has those bits set, so the mask carries `extra`
+/// with no further instruction.
+#[inline(always)]
+pub(crate) fn table_entry_summary_with(attrs: u8, extra: u32) -> u32 {
+    u32::from(entry_summary(attrs))
+        | (!(u32::from(attrs) << TABLE_ATTRS_SHIFT) & (TABLE_ENUM_ANY | extra))
+}
 /// Every enumeration bit: the answer for a key list nothing is proven of.
 pub(crate) const ENUM_BITS: u32 = ENUM_INDEX_KEY | ENUM_ANY | ENUM_INTERNAL_KEY;
 

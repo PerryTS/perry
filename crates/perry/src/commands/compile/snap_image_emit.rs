@@ -945,6 +945,7 @@ pub(super) fn prepare(b0: &Path, work: &Path, target: Option<&str>) -> Result<Pr
         claims: img.claims,
         registry: img.registry,
         mint: Vec::new(),
+        canon: None,
     };
     Ok(Prepared {
         object,
@@ -1348,6 +1349,7 @@ mod tests {
             claims: vec![b"ab".to_vec(), b"c".to_vec()],
             registry: vec![rec],
             mint: Vec::new(),
+            canon: None,
         };
         assert_eq!(got, want);
     }
@@ -1502,6 +1504,15 @@ fn stop_summary(stops: &[format::Stop]) -> String {
             format::STOP_MINT_PROTO_WORD => format!("mint record {cell} (shape id {value}): its prototype word is not an image cell ({off} record(s) in all)"),
             format::STOP_MINT_NO_DESC => format!("mint record {cell} (shape id {value}) is a runtime layout's first birth whose descriptor cell was not found ({off} record(s) in all)"),
             format::STOP_MINT_ROW_GAP => format!("mint record {cell} (shape id {value}) leaves a row gap; replay cannot position rows ({off} record(s) in all)"),
+            format::STOP_CANON_FREE => format!("the canonical trie freed {value} node(s) between the baseline and the cut (a full trace pruned lists; {off} node(s) present at the baseline were touched, the first {cell}); the record cannot carry the free list"),
+            format::STOP_CANON_ADDR => format!("trie node {cell}: its backing is not an image cell (address {value:#x}; {off} node(s) in all)"),
+            format::STOP_CANON_ORDER => format!("trie node {cell} was allocated out of id order ({off} node(s) in all)"),
+            format::STOP_CANON_RECORD => format!(
+                "the canonical-keys record was written ({off} byte(s)) and {}; trie: new {}, changed {}",
+                if cell == 0 { "reads back equal" } else { "does not read back equal" },
+                value & 0xffff_ffff,
+                value >> 32
+            ),
             format::STOP_MINT_SUCCESSOR => format!("mint record {cell} (shape id {value}) was minted by a slot-list successor (holes, tombstone or delete); replay has no route ({off} record(s) in all)"),
             format::STOP_MINT_MISMATCH if off == format::MINT_BAD_LAZY_ROW => {
                 format!("mint record {cell} (shape id {value}) is on a static row that is neither a runtime layout nor a lazy image row naming its word")
