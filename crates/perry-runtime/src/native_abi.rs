@@ -784,8 +784,16 @@ mod tests {
             let expected = crate::buffer::bytes::no_gc(|_| {
                 crate::buffer::bytes::span(boxed, false).unwrap().ptr as *const u8
             });
-            assert_eq!(js_native_abi_check_buffer_data_ptr(boxed), expected, "kind {kind}");
-            assert_eq!(js_native_abi_check_buffer_byte_len(boxed), 3 * size, "kind {kind}");
+            assert_eq!(
+                js_native_abi_check_buffer_data_ptr(boxed),
+                expected,
+                "kind {kind}"
+            );
+            assert_eq!(
+                js_native_abi_check_buffer_byte_len(boxed),
+                3 * size,
+                "kind {kind}"
+            );
             assert_eq!(
                 js_native_abi_check_nullable_buffer_byte_len(boxed),
                 3 * size,
@@ -798,7 +806,10 @@ mod tests {
         let dv = crate::buffer::js_data_view_new(boxed_ptr(ab), 8.0, 12.0);
         let base = js_native_abi_check_buffer_data_ptr(boxed_ptr(ab));
         assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(ab)), 32);
-        assert_eq!(js_native_abi_check_buffer_data_ptr(dv), base.wrapping_add(8));
+        assert_eq!(
+            js_native_abi_check_buffer_data_ptr(dv),
+            base.wrapping_add(8)
+        );
         assert_eq!(js_native_abi_check_buffer_byte_len(dv), 12);
     }
 

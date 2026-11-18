@@ -163,8 +163,16 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_native_abi_check_ptr", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_buffer_data_ptr", PTR, &[DOUBLE]);
     module.declare_function("js_native_abi_check_buffer_byte_len", I64, &[DOUBLE]);
-    module.declare_function("js_native_abi_check_nullable_buffer_data_ptr", PTR, &[DOUBLE]);
-    module.declare_function("js_native_abi_check_nullable_buffer_byte_len", I64, &[DOUBLE]);
+    module.declare_function(
+        "js_native_abi_check_nullable_buffer_data_ptr",
+        PTR,
+        &[DOUBLE],
+    );
+    module.declare_function(
+        "js_native_abi_check_nullable_buffer_byte_len",
+        I64,
+        &[DOUBLE],
+    );
     module.declare_function("js_native_abi_check_promise", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_pod_object", I64, &[DOUBLE]);
 
