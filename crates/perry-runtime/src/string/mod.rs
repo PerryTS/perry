@@ -185,6 +185,7 @@ pub use char_ops::{
 pub(crate) use char_ops::test_utf16_index_entries;
 pub(crate) use char_ops::{
     prune_dead_utf16_indexes, scan_utf16_index_roots_mut, string_from_code_unit,
+    string_property_get_canonical,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
