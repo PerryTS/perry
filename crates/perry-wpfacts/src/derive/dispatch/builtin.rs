@@ -65,17 +65,31 @@ fn numeric_results(g: &Gen<'_>) -> std::collections::HashSet<(u32, u32, u32)> {
         .collect()
 }
 
+/// The checked entries observe prototype changes across the entire family.
+fn pristine_method_tables(m: &crate::model::Model) -> bool {
+    use crate::model::TokKind;
+    m.native_writes.is_empty()
+        && !m.realm_held
+        && !m.objproto_accessor
+        && !m.reshaped_any
+        && m.reshaped_keys.is_empty()
+        && !m.top_reshaped_any
+        && m.top_reshaped_keys.is_empty()
+        && !m.hard.keys().chain(m.super_relink.iter()).any(|&t| {
+            matches!(
+                m.toks[t as usize],
+                TokKind::Top
+                    | TokKind::ObjectProto
+                    | TokKind::Builtin(_)
+                    | TokKind::NativeProto(_, _)
+            )
+        })
+}
+
 /// Each read's receiver must pass the indexed-access proof at every instance;
 /// a builtin member by itself only proves the lookup under its own name.
 fn quiet_arrays(g: &Gen<'_>) -> std::collections::HashSet<(At, String)> {
     let m = &g.m;
-    if !m.native_writes.is_empty()
-        || m.objproto_accessor
-        || m.reshaped_any
-        || !m.reshaped_keys.is_empty()
-    {
-        return Default::default();
-    }
     let copies = element::run_copies(m);
     let mut sites = HashMap::new();
     for s in &g.read_sites {
@@ -229,7 +243,12 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
     let args = arguments(g);
     let numeric_results = numeric_results(g);
     let mut strings = std::collections::BTreeSet::new();
-    let quiet_arrays = quiet_arrays(g);
+    let pristine = pristine_method_tables(&g.m);
+    let quiet_arrays = if pristine {
+        quiet_arrays(g)
+    } else {
+        Default::default()
+    };
     let mut arrays = std::collections::BTreeSet::new();
     let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
@@ -272,7 +291,8 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     cfg.namespace_pairs
                         && perry_hir::namespace_pairs::pair_offset(ns, call) == Some(*byte_offset)
                 });
-            let map = namespace.is_none()
+            let map = pristine
+                && namespace.is_none()
                 && !spread
                 && direct_map_call(callee, arity)
                 && pf.bindings[mi].method_sites.iter().any(|(site, k, flags)| {
@@ -293,13 +313,15 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             if array {
                 arrays.insert((at, property.clone()));
             }
-            let fill = namespace.is_none()
+            let fill = pristine
+                && namespace.is_none()
                 && pf.bindings[mi].fill_births.iter().any(|&(o, len)| {
                     o == *byte_offset
                         && perry_hir::folded_call::fill_birth_value(call, len)
                             .is_ok_and(|v| matches!(v, Expr::Integer(_) | Expr::Number(_)))
                 });
-            let string = namespace.is_none()
+            let string = pristine
+                && namespace.is_none()
                 && !spread
                 && perry_hir::folded_call::direct_string_call(callee, arity)
                 && (arity == 0
