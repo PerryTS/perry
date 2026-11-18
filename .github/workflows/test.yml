@@ -431,13 +431,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cargo-xwin-bin"
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/cargo-xwin-bin"
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
+          # cargo-xwin 0.23.0 finds no x86_64 headers in the newest SDK, Win11SDK_10.0.26100.
+          echo "XWIN_SDK_VERSION=10.0.22621" >> "$GITHUB_ENV"
 
       - name: Restore cargo-xwin MSVC sysroot
         if: ${{ !cancelled() }}
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ~/.cache/cargo-xwin
-          key: cargo-xwin-${{ runner.os }}-0.23.0
+          key: cargo-xwin-${{ runner.os }}-0.23.0-sdk10.0.22621
 
       - name: Type-check Windows runtime and stdlib
         if: ${{ !cancelled() }}
@@ -482,7 +484,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ~/.cache/cargo-xwin
-          key: cargo-xwin-${{ runner.os }}-0.23.0
+          key: cargo-xwin-${{ runner.os }}-0.23.0-sdk10.0.22621
 
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
@@ -3798,6 +3800,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cargo-xwin-bin"
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/cargo-xwin-bin"
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
+          # cargo-xwin 0.23.0 finds no x86_64 headers in the newest SDK, Win11SDK_10.0.26100.
+          echo "XWIN_SDK_VERSION=10.0.22621" >> "$GITHUB_ENV"
           echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-msvc
       - name: Install Windows cross-build tools
@@ -3813,7 +3817,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ~/.cache/cargo-xwin
-          key: cargo-xwin-${{ runner.os }}-0.23.0
+          key: cargo-xwin-${{ runner.os }}-0.23.0-sdk10.0.22621
       - name: Build the archives, write their sidecars, check the pinned facts
         # cargo-xwin runs OpenSSL's Windows Configure script with Linux Perl.
         # OpenSSL's windows-checker rejects that host by default; CONFIGURE_INSIST
