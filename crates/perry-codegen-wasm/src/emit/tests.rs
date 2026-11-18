@@ -1727,9 +1727,6 @@ console.log((U as any).tag);
     );
 }
 
-// A closure is a `{funcIdx, captures}` record on the host side: `typeof` still answers
-// "function", and a call through an object property runs it. A plain object with the
-// same keys stays an object.
 #[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(
@@ -1762,8 +1759,6 @@ main();
     );
 }
 
-// An async body runs as JS: a closure held in a local is a NaN-boxed handle there, so
-// calling it must go through closure dispatch, not a direct JS call on the number.
 #[test]
 fn an_async_body_calls_a_closure_held_in_a_local() {
     assert_eq!(
@@ -1785,5 +1780,41 @@ main().catch((e: any) => console.log("caught " + e.message));
 "#
         ),
         "42\n7\n2,4\ncaught boom"
+    );
+}
+
+#[test]
+fn an_async_body_keeps_the_receiver_of_a_computed_method_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { n: 2 }; o.h = (n: number) => n * 2;
+async function main() {
+  const a = [1, 2];
+  const k = "join";
+  const h = "h";
+  console.log(a[k]("-") + " " + o[h](21));
+}
+main();
+"#
+        ),
+        "1-2 42"
+    );
+}
+
+#[test]
+fn an_async_body_passes_a_closure_lookalike_to_a_host_function_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const fake: any = { funcIdx: 0, captures: [] };
+async function main() {
+  const of: any = Array.of;
+  console.log(typeof of(fake)[0]);
+}
+main();
+"#
+        ),
+        "object"
     );
 }

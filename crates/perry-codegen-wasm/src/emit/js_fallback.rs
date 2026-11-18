@@ -409,14 +409,10 @@ impl WasmModuleEmitter {
                     } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
                         && matches!(property.as_str(), "log" | "warn" | "error") =>
                     {
-                        let args_js: Vec<String> = args_js
-                            .iter()
-                            .map(|a| format!("toJsValue({})", a))
-                            .collect();
                         format!(
                             "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
                             property,
-                            args_js.join(", ")
+                            host_args(&args_js)
                         )
                     }
                     Expr::PropertyGet {
@@ -427,25 +423,26 @@ impl WasmModuleEmitter {
                             "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
                             obj,
                             js_string_literal(property),
-                            args_js
-                                .iter()
-                                .map(|a| format!("toJsValue({})", a))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            host_args(&args_js)
                         )
                     }
-                    // The callee is a NaN-boxed value here, so a direct JS call on it
-                    // throws; `__jsMethodInvoke` runs a Perry closure or a host function.
+                    Expr::IndexGet { object, index, .. } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        let key = self.emit_js_expr(index, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), toJsValue({})), [{}]))",
+                            obj,
+                            key,
+                            host_args(&args_js)
+                        )
+                    }
+                    // A NaN-boxed callee: `__jsMethodInvoke` runs a Perry closure or a host function.
                     _ => {
                         let callee_js = self.emit_js_expr(callee, locals);
                         format!(
                             "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({}) }}, [{}]))",
                             callee_js,
-                            args_js
-                                .iter()
-                                .map(|a| format!("toJsValue({})", a))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            host_args(&args_js)
                         )
                     }
                 }
@@ -998,6 +995,15 @@ impl WasmModuleEmitter {
             },
         }
     }
+}
+
+/// NaN-boxed call arguments as a comma-separated list of JS values.
+fn host_args(args_js: &[String]) -> String {
+    args_js
+        .iter()
+        .map(|a| format!("toJsValue({})", a))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A double-quoted JS string literal holding exactly `s`.

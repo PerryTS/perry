@@ -496,7 +496,7 @@ function buildImports() {
 
       // closure_new(func_table_idx, capture_count) -> handle
       closure_new: (funcIdx, captureCount) => {
-        return nanboxPointer(allocHandle(__newClosure(funcIdx, captureCount)));
+        return nanboxPointer(allocHandle(new __PerryClosure(funcIdx, captureCount)));
       },
       // closure_set_capture(handle, idx, value) -> handle (chaining)
       // value is NaN-boxed f64 — convert to BigInt for WASM i64 ABI
@@ -1627,17 +1627,16 @@ function wrapImportsForI64(imports) {
   return wrapped;
 }
 
-// A Perry closure is a `{funcIdx, captures}` record, not a JS function. This set marks
-// the records closure_new makes, so `typeof` and a call through an object property
-// (`o.h()`) can tell a closure from a plain object that merely has those keys.
-const __perryClosures = new WeakSet();
-function __newClosure(funcIdx, captureCount) {
-  const closure = { funcIdx: funcIdx, captures: new Array(captureCount | 0) };
-  __perryClosures.add(closure);
-  return closure;
+// What closure_new makes. Its class, not its keys, tells a closure from a plain
+// object that has `funcIdx` / `captures` fields, at no per-closure cost.
+class __PerryClosure {
+  constructor(funcIdx, captureCount) {
+    this.funcIdx = funcIdx;
+    this.captures = new Array(captureCount | 0);
+  }
 }
 function __isPerryClosure(v) {
-  return __perryClosures.has(v);
+  return v instanceof __PerryClosure;
 }
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
@@ -2074,7 +2073,7 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount) => __newClosure(funcIdx, captureCount),
+  closure_new: (funcIdx, captureCount) => new __PerryClosure(funcIdx, captureCount),
   closure_set_capture: (closure, idx, value) => {
     if (closure) closure.captures[idx | 0] = __jsValueToBits(value);
     return closure;
@@ -5338,7 +5337,7 @@ const hostCallbacks = new WeakMap();
 
 // Host APIs require a stable function identity for Perry closure objects.
 function __hostCallback(value) {
-  if (!value || typeof value !== 'object' || typeof value.funcIdx === 'undefined') return value;
+  if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
     hostCallbacks.set(value, (...args) => {
       const result = callWasmClosure(value, ...args);
