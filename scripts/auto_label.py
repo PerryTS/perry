@@ -7,9 +7,10 @@ into type:perf. Pull requests are labelled from their changed paths (area:*,
 platform:*) and their Conventional Commit title prefix (type:*). effort:* and
 impact:* stay a human triage decision.
 
-Labels are only added, except the type:bug -> type:perf swap, so a maintainer's
-correction stands once the item carries the skip label below. Items created in the last --hours that already carry
-an area: label (PRs) or a platform: label (issues) are skipped.
+Labels are only added, except the type:bug -> type:perf swap. Each item is labelled
+at most once: items created in the last --hours are skipped when they already carry
+an area: label (PRs) or a platform: label (issues), or when BOT has labelled them
+before, so a maintainer's correction stands.
 
   python3 scripts/auto_label.py            # dry run: print what would change
   python3 scripts/auto_label.py --apply    # write labels (needs GH_TOKEN)
@@ -24,6 +25,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 COMPILER = ('perry-parser', 'perry-hir', 'perry-transform', 'perry-codegen', 'perry-wpfacts')
 RUNTIME = ('perry-runtime', 'perry-abi', 'perry-realm-table', 'perry-ffi', 'perry-native-registration')
@@ -57,6 +59,8 @@ FORM_PLATFORM = {
 }
 HOST_PLATFORM = {'macOS': 'macos', 'Linux': 'linux', 'Windows': 'windows'}
 PERF_STAGE = 'The program is much slower or uses much more memory than Node'
+# The actor behind the workflow's github.token.
+BOT = 'github-actions[bot]'
 
 
 def crate_of(path: str) -> str | None:
@@ -140,20 +144,26 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
-def plan(hours: int) -> list[tuple[int, set[str], set[str]]]:
+def labelled_by_bot(repo: str, number: int) -> bool:
+    actors = gh('api', '--paginate', f'repos/{repo}/issues/{number}/events',
+                '--jq', '.[] | select(.event == "labeled") | .actor.login')
+    return BOT in actors.split()
+
+
+def plan(repo: str, hours: int) -> list[tuple[int, set[str], set[str]]]:
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
     search = f'created:>={since}'
     changes = []
-    issues = json.loads(gh('issue', 'list', '--state', 'open', '--limit', '200', '--search', search,
+    issues = json.loads(gh('issue', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--search', search,
                            '--json', 'number,body,labels'))
     for issue in issues:
         current = {label['name'] for label in issue['labels']}
         if any(name.startswith('platform:') for name in current):
             continue
         add, remove = classify_issue(issue['body'], current)
-        if add or remove:
+        if (add or remove) and not labelled_by_bot(repo, issue['number']):
             changes.append((issue['number'], add, remove))
-    prs = json.loads(gh('pr', 'list', '--state', 'open', '--limit', '200', '--search', search,
+    prs = json.loads(gh('pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--search', search,
                         '--json', 'number,title,author,labels,files'))
     for pr in prs:
         current = {label['name'] for label in pr['labels']}
@@ -164,18 +174,25 @@ def plan(hours: int) -> list[tuple[int, set[str], set[str]]]:
         if any(name.startswith('type:') for name in current):
             add = {name for name in add if not name.startswith('type:')}
         add -= current
-        if add:
+        if add and not labelled_by_bot(repo, pr['number']):
             changes.append((pr['number'], add, set()))
     return changes
 
 
-def apply(repo: str, changes: list[tuple[int, set[str], set[str]]]) -> None:
+def apply(repo: str, changes: list[tuple[int, set[str], set[str]]]) -> int:
+    """Label every item, report each failure, and return how many failed."""
+    failed = 0
     for number, add, remove in changes:
-        if add:
-            flags = [arg for name in sorted(add) for arg in ('-f', f'labels[]={name}')]
-            gh('api', '-X', 'POST', f'repos/{repo}/issues/{number}/labels', *flags)
-        for name in sorted(remove):
-            gh('api', '-X', 'DELETE', f'repos/{repo}/issues/{number}/labels/{name.replace(":", "%3A")}')
+        try:
+            if add:
+                flags = [arg for name in sorted(add) for arg in ('-f', f'labels[]={name}')]
+                gh('api', '-X', 'POST', f'repos/{repo}/issues/{number}/labels', *flags)
+            for name in sorted(remove):
+                gh('api', '-X', 'DELETE', f'repos/{repo}/issues/{number}/labels/{name.replace(":", "%3A")}')
+        except SystemExit as error:
+            print(f'#{number}: {error}', file=sys.stderr)
+            failed += 1
+    return failed
 
 
 class Tests(unittest.TestCase):
@@ -222,6 +239,27 @@ class Tests(unittest.TestCase):
         body = f'### Where does it go wrong?\n\n{PERF_STAGE}\n'
         self.assertEqual(classify_issue(body, {'type:bug'}), ({'type:perf'}, {'type:bug'}))
 
+    def test_plan_leaves_items_the_bot_already_labelled(self):
+        perf = {'number': 1, 'body': f'### Where does it go wrong?\n\n{PERF_STAGE}\n', 'labels': [{'name': 'type:bug'}]}
+        for actors, expected in (('someone\n', [(1, {'type:perf'}, {'type:bug'})]), (f'someone\n{BOT}\n', [])):
+            def fake_gh(*args, actors=actors):
+                if args[:2] == ('issue', 'list'):
+                    return json.dumps([perf])
+                return '[]' if args[:2] == ('pr', 'list') else actors
+            with mock.patch.object(sys.modules[__name__], 'gh', fake_gh):
+                self.assertEqual(plan('o/r', 24), expected)
+
+    def test_apply_keeps_going_after_a_failed_item(self):
+        calls = []
+        def fake_gh(*args):
+            calls.append(args)
+            if 'repos/o/r/issues/1/labels' in args:
+                raise SystemExit('gh api failed (1): HTTP 404')
+            return ''
+        with mock.patch.object(sys.modules[__name__], 'gh', fake_gh), mock.patch('sys.stderr'):
+            self.assertEqual(apply('o/r', [(1, {'type:bug'}, set()), (2, {'type:bug'}, set())]), 1)
+        self.assertIn('repos/o/r/issues/2/labels', calls[-1])
+
     def test_feature_all_platforms_and_free_text_issues_add_nothing(self):
         self.assertEqual(classify_issue('### Platforms it matters for\n\nAll platforms\n', set()), (set(), set()))
         self.assertEqual(classify_issue('it crashes on my machine', set()), (set(), set()))
@@ -237,13 +275,11 @@ def main() -> int:
     if args.self_test:
         result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromTestCase(Tests))
         return 0 if result.wasSuccessful() else 1
-    changes = plan(args.hours)
+    changes = plan(args.repo, args.hours)
     for number, add, remove in changes:
         print(f'#{number}: +{sorted(add)} -{sorted(remove)}')
     print(f'{len(changes)} item(s) to label' + ('' if args.apply else ' (dry run)'))
-    if args.apply:
-        apply(args.repo, changes)
-    return 0
+    return 1 if args.apply and apply(args.repo, changes) else 0
 
 
 if __name__ == '__main__':
