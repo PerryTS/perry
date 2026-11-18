@@ -1947,3 +1947,48 @@ for (const o of [a, b, k]) {
         "ABk\nx\nx\nv"
     );
 }
+
+#[test]
+fn an_evaluation_prototype_is_the_one_its_instances_inherit() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { who() { return tag; } }; }
+const A: any = make("A");
+A.prototype.extra = 7;
+const a: any = new A();
+console.log(a.extra + " " + a.who());
+"#
+        ),
+        "7 A"
+    );
+}
+
+#[test]
+fn reflect_apply_takes_an_array_like_argument_list() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { echo(x: number) { return x; } }
+console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any));
+"#
+        ),
+        "7"
+    );
+}
+
+// B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
+#[test]
+fn a_super_read_stops_at_a_setter_only_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { get x() { return "a"; } }
+class B extends A { set x(v: string) {} }
+class C extends B { m() { return super.x; } }
+console.log(new C().m());
+"#
+        ),
+        "undefined"
+    );
+}
