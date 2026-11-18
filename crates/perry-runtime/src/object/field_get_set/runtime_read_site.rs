@@ -239,7 +239,7 @@ pub(crate) fn integer_key(key: f64) -> Option<i64> {
 }
 
 /// `ToString(n)` of an integer of magnitude at most 2^53, written into `buf`.
-fn integer_key_text(n: i64, buf: &mut [u8; 24]) -> &[u8] {
+pub(crate) fn integer_key_text(n: i64, buf: &mut [u8; 24]) -> &[u8] {
     let mut i = buf.len();
     let mut m = n.unsigned_abs();
     loop {
@@ -321,6 +321,56 @@ pub(crate) unsafe fn probe_integer_key(
     } else {
         Err(obj)
     }
+}
+
+/// `obj[n] = value` for an integral Number key `key` that names an own plain
+/// writable data property of the ordinary object `obj` (not an arguments
+/// object, whose mapped indices alias its parameters): the probe store of the
+/// key's atom, exactly the store the complete `[[Set]]` makes for an own
+/// writable data property. `false` (nothing stored) for every other case,
+/// a key add included: the complete `[[Set]]` then runs. GC leaf.
+///
+/// # Safety
+/// `obj_bits` is any value bits.
+pub(crate) unsafe fn store_integer_key(obj_bits: u64, key: f64, value: f64) -> bool {
+    let Some(obj) = object_receiver(f64::from_bits(obj_bits)) else {
+        return false;
+    };
+    if (*crate::gc::header_from_trusted_user_ptr(obj as *const u8))._reserved
+        & crate::gc::OBJ_FLAG_ARGUMENTS
+        != 0
+    {
+        return false;
+    }
+    let Some(n) = integer_key(key) else {
+        return false;
+    };
+    if (0..i64::from(u32::MAX)).contains(&n) {
+        // A1_UNPROVEN: record-first: runtime store site, as the read's index arm.
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+        let class_id = (*obj).class_id;
+        if (!meta.is_null() && (*meta).elements != 0)
+            || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
+        {
+            return false;
+        }
+    }
+    let mut buf = [0u8; 24];
+    let text = integer_key_text(n, &mut buf);
+    let hash = crate::object::key_bytes_hash(text.as_ptr(), text.len());
+    let Some(atom) = crate::string::atom_lookup(text, hash) else {
+        return false;
+    };
+    if !crate::string::is_property_atom(atom) {
+        return false;
+    }
+    crate::object::layout_probe::probe_set_existing(
+        crate::object::shapes::ordinary_dir_addr(),
+        crate::value::POINTER_TAG | obj as u64,
+        crate::value::STRING_TAG | atom as u64,
+        crate::string::property_atom_hash(atom),
+        value,
+    )
 }
 
 /// The ordinary-object receiver a read reads from: `value` is a pointer

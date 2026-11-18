@@ -170,6 +170,22 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     } else {
         obj_handle as u64
     };
+    // An ordinary object (no arguments object, whose mapped indices are its
+    // own): an integral key its layouts hold answers before the exotic
+    // receiver ladder below, none of whose kinds is a `GC_TYPE_OBJECT` cell.
+    // The probe itself declines Array-subclass instances and objects with an
+    // elements store.
+    if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+        crate::value::POINTER_TAG | raw,
+    )) {
+        let flags =
+            unsafe { (*crate::gc::header_from_trusted_user_ptr(obj as *const u8))._reserved };
+        if flags & crate::gc::OBJ_FLAG_ARGUMENTS == 0 {
+            if let Ok(value) = integer_key_probe(obj as u64, idx) {
+                return value;
+            }
+        }
+    }
     // Array.from's array-like fallback can receive a Proxy record. Its id is
     // not a heap header; route it inside the existing low-address guard so
     // ordinary heap receivers do not perform a proxy registry lookup.
