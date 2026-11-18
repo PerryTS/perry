@@ -8,6 +8,7 @@ fn site(roots: &[u32], full: &[u32], store: bool) -> Refused {
     Refused {
         roots: roots.to_vec(),
         full: full.to_vec(),
+        causes: Vec::new(),
         part: 0,
         store,
         why: None,
