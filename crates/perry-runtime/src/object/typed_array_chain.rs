@@ -1,6 +1,7 @@
-//! A typed array's `[[Prototype]]` chain read from structure, for
+//! A typed array's `[[Prototype]]` chain read from structure, for the two
+//! operations a renderer runs on typed arrays it holds in untyped places:
 //! `ta.set(source, offset)` at a method site the compiler could not fold
-//! (an Array-annotated or untyped receiver).
+//! (an Array-annotated or untyped receiver), and `v instanceof Float32Array`.
 //! Each answer is exact or `None`; on `None` the caller performs the
 //! complete operation.
 
@@ -162,4 +163,42 @@ pub(crate) unsafe fn builtin_set_receiver(recv: f64) -> Option<*mut TypedArrayHe
         f64,
     ) -> f64 = super::typed_array_proto_thunks::ta_set_thunk;
     (info.code == set_thunk as *const u8).then_some(addr as *mut TypedArrayHeader)
+}
+
+/// OrdinaryHasInstance(C, `value`) for `C` the realm's typed-array
+/// constructor with instance class id `class_id`, whose `prototype` (not
+/// writable, not configurable) is its kind's intrinsic prototype `P`, when
+/// `value` is a typed array on its default chain `K.prototype`,
+/// `%TypedArray%.prototype`, ...:
+///
+/// * the same kind: `P` is the first link, `true`;
+/// * another kind, while `K.prototype` links to `%TypedArray%.prototype` and
+///   that to `%Object.prototype%` (whose `[[Prototype]]` is immutably null):
+///   the whole chain is those three objects, none of them `P`, `false`.
+///
+/// `None` for every other value or chain. Reads no property and runs no code.
+///
+/// # Safety
+/// `value` is any NaN-boxed value.
+pub(crate) unsafe fn typed_array_has_instance(value: f64, class_id: u32) -> Option<bool> {
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    let bits = value.to_bits();
+    if bits & !POINTER_MASK != POINTER_TAG {
+        return None;
+    }
+    let (kind, kind_proto) = default_chain((bits & POINTER_MASK) as usize)?;
+    let target = (class_id - first) as u8;
+    if kind == target {
+        return Some(true);
+    }
+    let ta_proto = typed_array_prototype()?;
+    let object_proto = crate::array::object_prototype_addr_if_resolved();
+    (object_proto != 0
+        && prototype_link(kind_proto)? == POINTER_TAG | ta_proto as u64
+        && prototype_link(ta_proto)? == POINTER_TAG | object_proto as u64)
+        .then_some(false)
 }

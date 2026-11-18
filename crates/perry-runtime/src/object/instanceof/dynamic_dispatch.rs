@@ -114,9 +114,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // its intrinsic one: a linked function's `@@hasInstance` is GetMethod's
     // full [[Get]] over its chain (the intrinsic thunk, reached, answers the
     // same ordinary walk).
-    let linked = rhs
-        .closure
-        .is_some_and(|(closure, _)| unsafe { linked_chain_may_hook(closure) });
+    let linked = rhs.closure.is_some_and(|(closure, _)| unsafe {
+        linked_chain_may_hook(
+            closure,
+            crate::symbol::well_known_symbol("hasInstance") as usize,
+        )
+    });
     let symbols_absent = !linked
         && rhs.closure.is_some_and(|(closure, _)| unsafe {
             let bag = (*closure).props;
@@ -341,6 +344,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         use super::super::global_this_tables::BuiltinInstanceIdentity;
         let matched = match declaration.instance_identity {
             Some(BuiltinInstanceIdentity::Class(class_id)) => {
+                if let Some(matched) = unsafe {
+                    crate::object::typed_array_chain::typed_array_has_instance(value, class_id)
+                } {
+                    return f64::from_bits(if matched {
+                        crate::value::TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    });
+                }
                 return super::static_dispatch::native_with_constructor(
                     value,
                     class_id,
@@ -696,13 +708,20 @@ mod tests {
 
 /// Can the chain a linked function `closure` names supply an `@@hasInstance`
 /// other than `%Function.prototype%`'s default? Walks the hops before that
-/// default (or null): each must prove it owns no symbol key from its shape.
-/// `false` for a function on its intrinsic chain, or one whose linked chain
-/// proves absence hop by hop (a builtin constructor linked to its parent).
+/// default (or null): each must prove it owns no `@@hasInstance` (`hi_sym`),
+/// from its shape (no symbol key at all) or its key list (no entry for that
+/// symbol, the test the receiver's own bag takes). `false` for a function on
+/// its intrinsic chain, or one whose linked chain proves absence hop by hop
+/// (a builtin constructor linked to its parent: `Float32Array` to
+/// `%TypedArray%`, which owns `@@species`).
 ///
 /// # Safety
-/// `closure` is a proven, live closure cell.
-unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -> bool {
+/// `closure` is a proven, live closure cell; `hi_sym` is the
+/// `Symbol.hasInstance` header, or 0.
+unsafe fn linked_chain_may_hook(
+    closure: *const crate::closure::ClosureHeader,
+    hi_sym: usize,
+) -> bool {
     let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
         return false;
     };
@@ -721,6 +740,7 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
                 || !crate::object::overflow::shadowed(bag)
                     && crate::object::shapes::object_shape_record(bag)
                         .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+                || hi_sym != 0 && super::shaped_symbols::position(bag, hi_sym).is_none()
         };
         if crate::closure::is_closure_ptr(addr) {
             let hop = addr as *const crate::closure::ClosureHeader;
