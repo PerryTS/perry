@@ -2036,3 +2036,9 @@ impl OwnedChunks {
         self.more.clear();
     }
 }
+
+/// Image replay (R1): the address of the shape chunk counter.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn snap_image_chunks_next_cell() -> usize {
+    CHUNKS.next.as_ptr() as usize
+}

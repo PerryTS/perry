@@ -7963,3 +7963,143 @@ mod snap_image_delta_tests {
         assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_DICTIONARY)));
     }
 }
+
+/// Image replay (R1): position the id counter of `id`'s family so that its next draw is `id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_id_next(id: u32) -> bool {
+    let f = snap_image_mint_family(id);
+    let c = match f.checked_sub(4) {
+        None => SHAPE_ID_NEXT.get(f),
+        Some(e) => EXOTIC_SHAPE_ID_NEXT.get(e),
+    };
+    c.map(|c| c.store(id, std::sync::atomic::Ordering::Relaxed))
+        .is_some()
+}
+
+/// Image replay (R1): position the semantic-generation counter so that its next draw is `generation`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_semantic_next(generation: u64) {
+    SHAPE_SEMANTIC_NEXT.store(generation, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Image replay (R1): whether this agent's table holds a record with id `id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_id_present(id: u32) -> bool {
+    shape_descriptor_by_id(ShapeId(id)).is_some()
+}
+
+/// Image replay (R1): mint the dynamic (or, `requested`, static-id) record `r` on the key list at
+/// `keys` through the runtime's mint; the word it returns.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_mint_dynamic(
+    r: &crate::snap_image::format::MintRec,
+    keys: usize,
+    requested: Option<ShapeId>,
+) -> Option<u32> {
+    let kind = shapes_store::snap_image_kind_of_code(r.kind);
+    let word = if r.constfn.is_empty() {
+        shape_descriptor_ensure_with_rep(
+            keys as *const ArrayHeader,
+            r.logical,
+            r.live,
+            r.generation,
+            kind,
+            r.holes,
+            r.proto_id,
+            ReceiverFacts {
+                integrity_flags: r.integrity,
+                extra_summary: r.summary,
+                brands: BrandList::copy_of(&r.brands),
+            },
+            r.rep,
+            requested,
+        )
+    } else {
+        let infos: Vec<shapes_store::ConstFnSlotInfo> = r
+            .constfn
+            .iter()
+            .map(|&(slot, info)| shapes_store::ConstFnSlotInfo { slot, info })
+            .collect();
+        shape_descriptor_intern_with_special(
+            keys as *const ArrayHeader,
+            r.logical,
+            r.live,
+            r.generation,
+            kind,
+            r.holes,
+            r.proto_id,
+            r.summary,
+            r.rep,
+            &infos,
+            &r.brands,
+            requested,
+            r.integrity,
+        )
+    };
+    word.ok().map(|w| w.0)
+}
+
+/// Image replay (R1): the live record of `word` as a mint-record entry.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_mint_of_word(word: u32) -> Option<crate::snap_image::format::MintRec> {
+    let rec = shape_record_for_word(LayoutWord(word))?;
+    // SAFETY: a live record of this agent's slab.
+    Some(unsafe { &*rec.0.as_ptr() }.snap_image_mint())
+}
+
+/// Image replay (R1, pass 2): set the six handles of the record of `word`; false when it is gone.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_handles(word: u32, handles: [u32; 6]) -> bool {
+    let Some(rec) = shape_record_for_word(LayoutWord(word)) else {
+        return false;
+    };
+    // SAFETY: a live record of this agent's slab; one agent, one thread.
+    unsafe { (*rec.0.as_ptr()).snap_image_set_handles(handles.map(LayoutWord)) };
+    true
+}
+
+/// Image replay (R1): write the prototype identity word of `proto_id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_write_identity_word(proto_id: u64, bits: u64) {
+    shapes_prototype::write_identity_word(proto_id, bits);
+}
+
+/// Image replay (R1): the process counters the shape mints draw from, as (name, address, bytes).
+/// The image's changed data words hold their values at the cut.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_counter_cells() -> Vec<(String, usize, usize)> {
+    let mut v = Vec::new();
+    for (i, c) in SHAPE_ID_NEXT.iter().enumerate() {
+        v.push((format!("shape id next {i}"), c.as_ptr() as usize, 4));
+    }
+    for (i, c) in EXOTIC_SHAPE_ID_NEXT.iter().enumerate() {
+        v.push((format!("exotic shape id next {i}"), c.as_ptr() as usize, 4));
+    }
+    v.push((
+        "semantic generation next".to_string(),
+        SHAPE_SEMANTIC_NEXT.as_ptr() as usize,
+        8,
+    ));
+    v.push((
+        "unique prototype id next".to_string(),
+        PROTO_ID_UNIQUE_NEXT.as_ptr() as usize,
+        8,
+    ));
+    v.push((
+        "shape chunk next".to_string(),
+        shapes_store::snap_image_chunks_next_cell(),
+        4,
+    ));
+    v.push((
+        "prototype serial next".to_string(),
+        super::proto_validity::snap_image_prototype_serial_cell(),
+        8,
+    ));
+    v
+}
+
+/// Test: draw one id from the counter of `proto_id`'s kind and drop it (a gap).
+#[cfg(test)]
+pub(crate) fn snap_image_test_waste_id(proto_id: u64) -> u32 {
+    alloc_shape_id(proto_id).map_or(0, |i| i.0)
+}
