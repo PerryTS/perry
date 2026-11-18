@@ -607,7 +607,7 @@ fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
         crate::module_require::js_register_path_init(
             key.as_ptr(),
             key.len() as i64,
-            registry_probe_init as usize as i64,
+            registry_probe_init as *const () as usize as i64,
         );
     }
     let (b, _) = probe_baseline();
@@ -618,7 +618,10 @@ fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
         .find(|r| r.key == key)
         .expect("the entry is in the record");
     let exe = std::ptr::addr_of!(__executable_start) as usize;
-    assert_eq!(r.init_off, (registry_probe_init as usize - exe) as u64);
+    assert_eq!(
+        r.init_off,
+        (registry_probe_init as *const () as usize - exe) as u64
+    );
     assert_eq!((r.status, r.exports.clone()), (0, None));
     let blob = registry_blob(&img.registry);
     let (back, used) = parse_registry_blob(&blob).expect("parses");
