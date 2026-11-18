@@ -187,9 +187,8 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     cfg.namespace_pairs
                         && perry_hir::namespace_pairs::pair_offset(ns, call) == Some(*byte_offset)
                 });
-            let safe = selected
-                && !spread
-                && args.get(&at).is_some_and(|a| {
+            let safe =
+                selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;
                     };
@@ -205,6 +204,8 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                         if perry_hir::method_call::console_method(fast_callee) == Some("log")
                             && property == "log"
                             && fast_args.len() == arity
+                            && matches!(call, Expr::Call { args, .. } if fast_args.iter().zip(args)
+                            .all(|(a, b)| perry_hir::stable_hash::same_expr_structure(a, b)))
                         {
                             return a.is_empty() || (no_subscribers && a.as_slice() == [prim::STR]);
                         }

@@ -59,18 +59,12 @@ impl Arms<'_> {
     }
 }
 
-/// The generic call's member offset when `generic` is a pair's generic arm
-/// `globalThis.<ns>.<m>(args…)`.
-pub fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
+/// The callee of the pair's generic `globalThis.<ns>.<member>` call.
+pub fn pair_callee<'a>(ns: &str, generic: &'a Expr) -> Option<&'a Expr> {
     let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
         return None;
     };
-    let Expr::PropertyGet {
-        object,
-        byte_offset,
-        ..
-    } = callee.as_ref()
-    else {
+    let Expr::PropertyGet { object, .. } = callee.as_ref() else {
         return None;
     };
     match object.as_ref() {
@@ -78,8 +72,16 @@ pub fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
             object: g,
             property,
             ..
-        } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(*byte_offset),
+        } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(callee),
         _ => None,
+    }
+}
+
+/// The generic call's named member offset, shared by the picker and facts.
+pub fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
+    match pair_callee(ns, generic)? {
+        Expr::PropertyGet { byte_offset, .. } => Some(*byte_offset),
+        _ => unreachable!("pair_callee only admits a named member"),
     }
 }
 

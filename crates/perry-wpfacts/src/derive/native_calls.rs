@@ -11,13 +11,11 @@ pub enum IntrinsicCallee {
     No(String),
 }
 
-/// The method call offsets of module `module` proven to read their intrinsic
-/// member: the NativeMember verdicts, and (MATHC1, the namespace pairs on)
-/// the namespace calls whose callee is exactly the original builtin `N.m`.
-/// The set is keyed by offset alone, so such an offset joins only when every
-/// call site there is proven (NativeMember or exact), and one holding an
-/// unproven namespace call leaves it (a chain `Math.f(x).g()` shares the
-/// offset).
+/// The driver's native-member offsets. NativeMember sites seed the set;
+/// namespace pairs add exact builtin callees only if no twin is unproven.
+/// An explicitly refused namespace twin removes the offset in either case.
+/// Dispatch certificates additionally require every named and HIR twin to
+/// satisfy their stricter route/operand proof.
 pub fn native_member_calls_of(
     pf: &crate::ProgramFacts,
     module: usize,
