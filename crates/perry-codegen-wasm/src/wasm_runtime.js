@@ -1656,14 +1656,9 @@ const classParentTable = {};
 // `{}`. `proto` is a class-expression evaluation's prototype (see __classCtor).
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
-const __classProtos = new Map();
 function __classProto(className) {
-  let proto = __classProtos.get(className);
-  if (!proto) {
-    proto = Object.create(Object.prototype, { [__classTag]: { value: className } });
-    __classProtos.set(className, proto);
-  }
-  return proto;
+  const t = __classTemplate(className);
+  return t.proto || (t.proto = Object.create(Object.prototype, { [__classTag]: { value: className } }));
 }
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
@@ -1677,8 +1672,8 @@ function __holdsProperties(v) {
 }
 
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
-// so `new` on it builds what `new K()` builds — an instance (see __classInstance) run through
-// the compiled constructor. `ctorIdx` is the constructor's
+// so `new` on it builds what `new K()` builds — an instance (see __classInstance) run
+// through the compiled constructor. `ctorIdx` is the constructor's
 // table slot, or -1 when the class has none. Its arguments stay Perry values: a
 // closure passed to it must reach the compiled constructor as a closure, so
 // __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
@@ -1767,7 +1762,7 @@ const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
   let t = __classTemplates.get(className);
-  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [] }));
+  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined }));
   return t;
 }
 function __classEvaluate(className, ctorIdx, caps) {
