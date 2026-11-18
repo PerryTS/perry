@@ -1850,8 +1850,10 @@ use object_format::object_is_coff;
 
 mod kept_overlap;
 use kept_overlap::localize_kept_shared_exports;
+mod android_jni;
 mod nm_command;
 mod stub_symbols;
+pub(super) use android_jni::localize_bundled_jni_in_stdlib;
 use nm_command::nm_command;
 pub(super) use stub_symbols::localize_stdlib_stub_symbols;
 use stub_symbols::strip_members_present_in_reference;

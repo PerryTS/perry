@@ -3,6 +3,8 @@ use crate::{derive::Access, gen::Gen, DispatchObligation, ProgramFacts, SiteFact
 use perry_hir::{walker, Class, Expr, Function};
 use std::collections::HashMap;
 
+mod builtin;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Certificate {
     /// `lower_call` -> `try_lower_proven_method_call`, with an ordinary
@@ -30,6 +32,12 @@ pub fn elide_enabled() -> bool {
 }
 
 impl SiteFacts {
+    /// Whether publication proved an audited builtin lowering, including its
+    /// argument protocols, instead of merely identifying the native member.
+    pub fn builtin_dispatch_certified(&self) -> bool {
+        elide_enabled() && self.builtin_dispatch
+    }
+
     pub fn method_call_certificate(&self) -> Option<&MethodCallCertificate> {
         elide_enabled()
             .then_some(self.method_call.as_ref())
@@ -175,6 +183,9 @@ pub(crate) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
         });
     }
     agree(&mut pf.sites);
+    if direct {
+        builtin::certify(pf, g, cfg);
+    }
 }
 
 impl SiteFacts {
@@ -188,10 +199,11 @@ impl SiteFacts {
             prims: self.receiver_prims,
             op: None,
             namespace: None,
-            redispatch: self
-                .method_call_certificate()
-                .and_then(|c| c.dispatch)
-                .is_none(),
+            redispatch: !self.builtin_dispatch_certified()
+                && self
+                    .method_call_certificate()
+                    .and_then(|c| c.dispatch)
+                    .is_none(),
         })
     }
 }

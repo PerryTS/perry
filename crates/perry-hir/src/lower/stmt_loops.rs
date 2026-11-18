@@ -1925,6 +1925,29 @@ pub(crate) fn lower_stmt_for_in(
         mutable: false,
         init: Some(keys_expr),
     });
+    let len_id = ctx.fresh_local();
+    // The loop's bound, bound once (DYNP E13): the begin call's `len`, which
+    // may be below the keys' length when they are the receiver's own list.
+    // A key list is a dense array (length <= ARRAY_MAX_CAPACITY < 2^31), so
+    // `& 0x7fffffff` is the identity here; it states the bound as an int
+    // in [0, i32::MAX], the shape the integer-local, range and `i < n`
+    // loop rules read, like the counter's integer literal (DYNP E18/E19).
+    module.init.push(Stmt::Let {
+        id: len_id,
+        name: format!("__n_{}", len_id),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::Binary {
+            op: crate::ir::BinaryOp::BitAnd,
+            left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(keys_id)),
+                property: "length".to_string(),
+            }),
+            right: Box::new(Expr::Integer(0x7fff_ffff)),
+        }),
+    });
 
     // Lower the body
     let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
@@ -1953,17 +1976,12 @@ pub(crate) fn lower_stmt_for_in(
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,
             mutable: true,
-            init: Some(Expr::Number(0.0)),
+            init: Some(Expr::Integer(0)),
         })),
         condition: Some(Expr::Compare {
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
-            right: Box::new(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(keys_id)),
-                property: "length".to_string(),
-            }),
+            right: Box::new(Expr::LocalGet(len_id)),
         }),
         update: Some(Expr::Update {
             id: idx_id,

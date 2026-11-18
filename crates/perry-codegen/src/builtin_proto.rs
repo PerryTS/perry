@@ -118,25 +118,7 @@ fn guarded_member(generic: &perry_hir::Expr) -> Option<&str> {
     }
 }
 
-/// The callee `globalThis.<ns>.<member>` of a namespace pair's generic call
-/// (`patched_builtin_call::dynamic_member_call`), spread or not.
-fn pair_callee<'e>(ns: &str, generic: &'e perry_hir::Expr) -> Option<&'e perry_hir::Expr> {
-    use perry_hir::Expr;
-    let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
-        return None;
-    };
-    let Expr::PropertyGet { object, .. } = callee.as_ref() else {
-        return None;
-    };
-    match object.as_ref() {
-        Expr::PropertyGet {
-            object: g,
-            property,
-            ..
-        } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(callee.as_ref()),
-        _ => None,
-    }
-}
+use perry_hir::namespace_pairs::pair_callee;
 
 /// A guarded call's generic arm `globalThis.<ns>.<member>(args…)` without
 /// spread: its family, member and arguments.
@@ -265,7 +247,7 @@ pub(crate) fn native_member_site_proven(
     callee: &perry_hir::Expr,
 ) -> bool {
     matches!(callee, perry_hir::Expr::PropertyGet { byte_offset, .. }
-        if *byte_offset != 0 && native_member_calls.contains(byte_offset))
+        if perry_hir::namespace_pairs::intrinsic_selected(*byte_offset, native_member_calls))
 }
 
 /// `console.<member>(args...)` as the real call: read `globalThis.console`

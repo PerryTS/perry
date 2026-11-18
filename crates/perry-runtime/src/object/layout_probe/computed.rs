@@ -488,7 +488,7 @@ unsafe fn table_add_admitted_meta(
         return false;
     }
     let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
-    if first == b'#' || first.is_ascii_digit() {
+    if first < b'a' && lead_refused(first, key) {
         return false;
     }
     let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
@@ -989,7 +989,7 @@ unsafe fn append_admitted(
         return false;
     }
     let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
-    if first == b'#' || first.is_ascii_digit() {
+    if first < b'a' && lead_refused(first, key) {
         return false;
     }
     let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
@@ -1049,4 +1049,20 @@ pub(crate) unsafe fn probe_set_keyed(
         return false;
     };
     perry_probe_set(dir, obj_bits, key, hash, value) != 0
+}
+
+/// Whether a table admission refuses a name whose lead `first` sorts below
+/// `a` (lower-case leads, the common case, are admitted by one compare): `#`
+/// and digit names unread, a `_`-led name when it is a hidden runtime name.
+/// The plain appends behind the admission write no
+/// `key_attrs::TABLE_KEY_HIDDEN` bit.
+#[inline(always)]
+unsafe fn lead_refused(first: u8, key: u64) -> bool {
+    first == b'#' || first.is_ascii_digit() || (first == b'_' && underscore_name_is_internal(key))
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn underscore_name_is_internal(key: u64) -> bool {
+    crate::object::key_attrs::key_name_bits(key) != 0
 }

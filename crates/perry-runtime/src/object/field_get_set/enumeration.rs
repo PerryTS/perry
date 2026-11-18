@@ -305,21 +305,39 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
     // process.env is a plain object: its refresh runs first, as in
     // `js_object_keys_value` (one latch test when no env object exists).
     let value = crate::process::refresh_process_env(value);
-    if let Some((keys, _)) = ordinary_keys::for_in_keys_of_value(value.to_bits()) {
+    if let Some((keys, _, _)) = ordinary_keys::for_in_keys_of_value(value.to_bits(), false) {
         return keys;
     }
     for_in_keys_with(value, lazy_shadow_enabled())
 }
 
-/// `js_for_in_keys_value` plus the loop fact (`js_for_in_loop_fact`) of the
-/// snapshot, written to `fact_out` (the loop's own fact slot): the structural
-/// path reads it off its copy; the generic walk takes it from the receiver,
+/// The for-in loop's begin (DYNP E6 step 4): its keys, the loop fact
+/// (`js_for_in_loop_fact`) written to `fact_out` (the loop's own fact slot)
+/// and, when `len_out` is not null, the loop's bound written to it (the
+/// loop's own bound slot, read once by `let __n`). With a bound slot the keys
+/// may be the receiver's own key list in place, longer than the bound
+/// (`ordinary_keys::keys_in_place`); otherwise, and on every other path,
+/// they are a snapshot and the bound is its length. The structural path
+/// reads the fact off its copy; the generic walk takes it from the receiver,
 /// rooted across the walk's allocations.
 #[no_mangle]
-pub extern "C" fn js_for_in_keys_fact(value: f64, fact_out: *mut i64) -> *mut ArrayHeader {
+pub extern "C" fn js_for_in_begin(
+    value: f64,
+    fact_out: *mut i64,
+    len_out: *mut i64,
+) -> *mut ArrayHeader {
     let value = crate::process::refresh_process_env(value);
-    if let Some((keys, fact)) = ordinary_keys::for_in_keys_of_value(value.to_bits()) {
-        unsafe { *fact_out = fact as i64 };
+    if let Some((keys, fact, len)) =
+        ordinary_keys::for_in_keys_of_value(value.to_bits(), !len_out.is_null())
+    {
+        unsafe {
+            *fact_out = fact as i64;
+            if !len_out.is_null() {
+                // Codegen types the bound as an int32 (DYNP E17).
+                debug_assert!(len <= i32::MAX as u32);
+                *len_out = i64::from(len);
+            }
+        }
         return keys;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -327,7 +345,13 @@ pub extern "C" fn js_for_in_keys_fact(value: f64, fact_out: *mut i64) -> *mut Ar
     let keys = for_in_keys_with(value, lazy_shadow_enabled());
     let fact =
         unsafe { ordinary_keys::for_in_loop_fact(receiver.get_nanbox_f64().to_bits(), keys) };
-    unsafe { *fact_out = fact as i64 };
+    unsafe {
+        *fact_out = fact as i64;
+        if !len_out.is_null() {
+            debug_assert!((*keys).length <= i32::MAX as u32);
+            *len_out = (*keys).length as i64;
+        }
+    }
     keys
 }
 

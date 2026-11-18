@@ -36,9 +36,15 @@ pub(super) fn own_enumerable_keys_of_value(bits: u64) -> Option<*mut ArrayHeader
 /// snapshot. The chain is walked before the result is allocated and runs no
 /// user code. `None`: the generic walk (`for_in_keys_with`).
 #[inline]
-/// `Some((keys, fact))`: the snapshot and its loop fact ([`for_in_loop_fact`]),
-/// read off the copy that made it (no second pass over the keys).
-pub(super) fn for_in_keys_of_value(bits: u64) -> Option<(*mut ArrayHeader, u64)> {
+/// `Some((keys, fact, len))`: the keys, their loop fact ([`for_in_loop_fact`],
+/// read off the copy that made it: no second pass over the keys) and the
+/// loop's bound `len`. `in_place`: the caller holds `len` as the loop's bound
+/// for this one execution, so the receiver's own key list may be the keys
+/// ([`keys_in_place`]); otherwise they are a snapshot of length `len`.
+pub(super) fn for_in_keys_of_value(
+    bits: u64,
+    in_place: bool,
+) -> Option<(*mut ArrayHeader, u64, u32)> {
     let header = crate::value::addr_class::pointer_value_header(bits)?;
     if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
@@ -55,7 +61,13 @@ pub(super) fn for_in_keys_of_value(bits: u64) -> Option<(*mut ArrayHeader, u64)>
             unsafe { crate::object::object_ops::structural_prototype_link_of(level, record) }?;
         let pbits = proto.to_bits();
         if JSValue::from_bits(pbits).is_null() {
-            return unsafe { keys_of_record(receiver, receiver_record) };
+            if in_place {
+                if let Some(keys) = unsafe { keys_in_place(receiver, receiver_record) } {
+                    return Some(keys);
+                }
+            }
+            return unsafe { keys_of_record(receiver, receiver_record) }
+                .map(|(keys, fact)| (keys, fact, unsafe { (*keys).length } as u32));
         }
         let ph = crate::value::addr_class::pointer_value_header(pbits)?;
         if crate::gc_type_is_not_object!(ph.obj_type) {
@@ -68,6 +80,71 @@ pub(super) fn for_in_keys_of_value(bits: u64) -> Option<(*mut ArrayHeader, u64)>
         }
     }
     None
+}
+
+/// The for-in keys of `obj` in place (DYNP E6 step 4): the record's own key
+/// list `K0` and the bound `n` = its logical key count, with no birth and no
+/// copy. Sound because the loop reads only `K0[i]` for `i < n`, and those
+/// positions never change (P2): a canonical backing's prefix is immutable (the
+/// only in-place write is the tip append past every published count,
+/// `canonical_keys`), and a list that is rewritten is replaced, not written
+/// (`shapes.rs` rekeys; the squeeze in `delete_rest.rs` rewrites only owned
+/// lists, never a record's). Taken when the copy would be `K0[..n]` verbatim:
+/// an ordinary layout object without a table, every key an enumerable string
+/// (no private, non-enumerable, optional-hole, index, internal or symbol key)
+/// and no class refusal of [`keys_of_record`]; the list is the record's own
+/// live array (not forwarded) and carries no attribute words. The fact is
+/// the layout fact of the whole list ([`for_in_loop_fact`]: key `i < n` is
+/// layout key `i` while the word is unchanged).
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell; `record` is its live record.
+#[inline(always)]
+unsafe fn keys_in_place(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+) -> Option<(*mut ArrayHeader, u64, u32)> {
+    use crate::object::key_attrs as ka;
+    if !matches!(
+        record.object_kind(),
+        crate::object::shapes::ShapeObjectKind::Ordinary
+            | crate::object::shapes::ShapeObjectKind::OrdinaryUnmarked
+    ) || !table_of_object(obj).is_null()
+    {
+        return None;
+    }
+    let word = (*obj).parent_class_id;
+    if !crate::object::shapes::is_layout_word(word) {
+        return None;
+    }
+    let summary = record.summary();
+    if summary & (ka::SUMMARY_PRIVATE | ka::SUMMARY_NON_ENUMERABLE) != 0
+        || crate::object::key_view::summary_may_have_holes(summary)
+        || record.enum_bits() & (ka::ENUM_INDEX_KEY | ka::ENUM_INTERNAL_KEY) != 0
+        || !record.proves_no_symbols()
+    {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    if class_id != 0
+        && (class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
+            || crate::array::subclass_elements::backed(obj as usize).is_some())
+    {
+        return None;
+    }
+    let n = record.logical_key_count();
+    let k0 = record.keys() as usize as *mut ArrayHeader;
+    if n == 0 || n >= 1 << 30 || k0.is_null() {
+        return None;
+    }
+    let (slots, len) = record.keys_view().dense_slots();
+    if len != n as usize
+        || slots.add(0) as *const u64 != crate::array::array_elements_ptr(k0) as *const u64
+        || crate::array::array_object_flags_resolved(k0) & crate::gc::GC_ARRAY_KEY_ATTRS != 0
+    {
+        return None;
+    }
+    Some((k0, FACT_SET | (u64::from(n) << 32) | u64::from(word), n))
 }
 
 /// Loop fact bit: the fact holds an answer.
@@ -216,18 +293,9 @@ unsafe fn level_has_no_enumerable_key(
     if t.is_null() {
         return record.enum_bits() & ka::ENUM_ANY == 0;
     }
-    let non_enumerable = (*t).summary as u8 & ka::SUMMARY_NON_ENUMERABLE != 0;
-    let arr = crate::object::object_keys(obj).arr() as *const ArrayHeader;
-    let source = crate::object::overflow::keys_ptr(t) as *const u64;
-    for i in 0..(*t).length {
-        if !JSValue::from_bits(*source.add(i as usize)).is_any_string() {
-            continue;
-        }
-        if !non_enumerable || ka::keys_entry(arr, i) & ka::ENTRY_NON_ENUMERABLE == 0 {
-            return false;
-        }
-    }
-    true
+    // A table level (Object.prototype, the builtin prototypes) is decided by
+    // its summary: no entry was ever written enumerable.
+    (*t).summary & ka::TABLE_ENUM_ANY == 0
 }
 
 /// [`crate::object::overflow::table`] of an object whose GC header was read
@@ -320,8 +388,19 @@ unsafe fn keys_of_record(
         } else {
             crate::object::ObjectKeys::NONE
         };
-        return copy_own_keys(obj, keys, t, out, count, holes, non_enumerable, true)
-            .map(|fact| (out, fact));
+        let verbatim = t.is_null() && record.proves_no_symbols();
+        return copy_own_keys(
+            obj,
+            keys,
+            t,
+            out,
+            count,
+            holes,
+            non_enumerable,
+            verbatim,
+            true,
+        )
+        .map(|fact| (out, fact));
     }
     // A refused birth takes the collecting allocation: root the receiver and
     // re-read its key list (layout keys or table) after it.
@@ -333,7 +412,17 @@ unsafe fn keys_of_record(
     let complete = owner.with_const_ptr::<ObjectHeader, _>(|obj| {
         let keys = crate::object::object_keys(obj);
         let t = table_of_object(obj);
-        copy_own_keys(obj, keys, t, out, count, holes, non_enumerable, false)
+        copy_own_keys(
+            obj,
+            keys,
+            t,
+            out,
+            count,
+            holes,
+            non_enumerable,
+            false,
+            false,
+        )
     });
     complete.map(|fact| (out, fact))
 }
@@ -349,6 +438,17 @@ unsafe fn keys_of_record(
 ///
 /// # Safety
 /// `obj`, `keys` and `t` are current; `out` has capacity for `count` keys.
+/// P1: a key word in a key list or table column is never a uniquely owned
+/// heap string (refcount 1): layout keys were demoted when the list took them
+/// (`ensure_key_in_keys_array_inner`, the string ownership rule) or are
+/// interned literals; table keys are property atoms. So the result array
+/// shares them with no per-key addref.
+#[inline(always)]
+unsafe fn copy_key_is_shared(key: u64) -> bool {
+    key & crate::value::TAG_MASK != crate::value::STRING_TAG
+        || (*((key & crate::value::POINTER_MASK) as *const crate::StringHeader)).refcount != 1
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn copy_own_keys(
@@ -359,6 +459,7 @@ unsafe fn copy_own_keys(
     count: u32,
     holes: bool,
     non_enumerable: bool,
+    verbatim: bool,
     young: bool,
 ) -> Option<u64> {
     // Read once: every optional-key hole test below compares against it.
@@ -397,7 +498,19 @@ unsafe fn copy_own_keys(
             (std::ptr::null(), 0)
         };
         let dest = crate::array::array_elements_ptr(out) as *mut u64;
-        for i in 0..available {
+        // A layout list of string keys only (`verbatim`: its record proves
+        // no symbol) with no attributed key is copied as one block: every
+        // key word is already shared (P1, `copy_key_is_shared`).
+        if verbatim && !attributed && !source.is_null() {
+            debug_assert!((0..available).all(|i| copy_key_is_shared(*source.add(i))));
+            std::ptr::copy_nonoverlapping(source, dest, available);
+            written = available;
+        }
+        // A table's names are decoded only when its summary says one may be
+        // hidden (`key_attrs::TABLE_KEY_HIDDEN`).
+        let decode_names = table && (*t).summary & ka::TABLE_KEY_HIDDEN != 0;
+        let from = written;
+        for i in from..available {
             let key = *source.add(i);
             // Symbols and tombstoned table entries are not string keys.
             if !JSValue::from_bits(key).is_any_string() {
@@ -411,7 +524,7 @@ unsafe fn copy_own_keys(
                 continue;
             }
             // A table entry's name facts are read here, not at its append.
-            if table && ka::key_name_bits(key) != 0 {
+            if decode_names && ka::key_name_bits(key) != 0 {
                 break 'copy None;
             }
             if attributed {
@@ -443,7 +556,7 @@ unsafe fn copy_own_keys(
                     }
                 }
             }
-            crate::string::js_string_addref_if_heap_string(f64::from_bits(key));
+            debug_assert!(copy_key_is_shared(key));
             // GC_STORE_AUDIT(INIT): the fresh tag-scanned result before its
             // length is published; an old-generation birth gets the slot
             // barriers below.

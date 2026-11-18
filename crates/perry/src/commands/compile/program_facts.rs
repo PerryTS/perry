@@ -704,7 +704,19 @@ fn elision_for(
     // namespace shadow bit instead).
     if !out.interp_guard {
         if let Some(module) = pf.module_paths.iter().position(|p| p == path) {
-            out.native_member_calls = native_member_calls_of(pf, module);
+            out.native_member_calls =
+                perry_wpfacts::native_member_calls_of(pf, module, namespace_pairs_on());
+            debug_assert!(
+                pf.sites
+                    .iter()
+                    .filter(|s| s.module as usize == module)
+                    .all(|s| !s.builtin_dispatch_certified()
+                        || perry_hir::namespace_pairs::intrinsic_selected(
+                            s.byte_offset,
+                            &out.native_member_calls
+                        )),
+                "builtin dispatch certificate requires the emitted intrinsic arm"
+            );
             // ACCBUILD2 P3: the named sites proven to call one accessor.
             // Every record at an offset must agree, or the offset is left out.
             let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
@@ -1234,54 +1246,8 @@ fn elision_for(
     out
 }
 
-/// The method call offsets of module `module` proven to read their intrinsic
-/// member: the NativeMember verdicts, and (MATHC1, the namespace pairs on)
-/// the namespace calls whose callee is exactly the original builtin `N.m`.
-/// The set is keyed by offset alone, so such an offset joins only when every
-/// call site there is proven (NativeMember or exact), and one holding an
-/// unproven namespace call leaves it (a chain `Math.f(x).g()` shares the
-/// offset).
-fn native_member_calls_of(pf: &perry_wpfacts::ProgramFacts, module: usize) -> BTreeSet<u32> {
-    let mut out: BTreeSet<u32> = pf
-        .sites
-        .iter()
-        .filter(|s| {
-            s.module as usize == module
-                && s.is_call
-                && matches!(s.verdict, perry_wpfacts::Verdict::NativeMember)
-        })
-        .map(|s| s.byte_offset)
-        .collect();
-    if !namespace_pairs_on() {
-        return out;
-    }
-    use perry_wpfacts::derive::IntrinsicCallee;
-    let here = |s: &&perry_wpfacts::SiteFacts| s.module as usize == module && s.is_call;
-    let exact = |s: &perry_wpfacts::SiteFacts| {
-        matches!(&s.intrinsic_callee, Some(IntrinsicCallee::Exact(n))
-            if n.rsplit('.').next() == Some(s.key.as_str()))
-    };
-    let mut unproven = BTreeSet::new();
-    let mut refused = BTreeSet::new();
-    for s in pf.sites.iter().filter(here) {
-        if !exact(s) && !matches!(s.verdict, perry_wpfacts::Verdict::NativeMember) {
-            unproven.insert(s.byte_offset);
-            if s.intrinsic_callee.is_some() {
-                refused.insert(s.byte_offset);
-            }
-        }
-    }
-    for s in pf.sites.iter().filter(here) {
-        if exact(s) && !unproven.contains(&s.byte_offset) {
-            out.insert(s.byte_offset);
-        }
-    }
-    out.retain(|o| !refused.contains(o));
-    out
-}
-
 /// MATHC1: the namespace pair offsets of module `path` whose generic call is
-/// proven to read the original builtin ([`native_member_calls_of`]). Empty
+/// proven to read the original builtin ([`perry_wpfacts::native_member_calls_of`]). Empty
 /// without the facts, past their bounds, with the checks kept
 /// (`PERRY_FACTS_ELIDE=0`) or where interpreted code can run: every pair is
 /// then its generic call.
@@ -1297,7 +1263,7 @@ pub(crate) fn namespace_pair_proven(
         return BTreeSet::new();
     }
     match pf.module_paths.iter().position(|p| *p == key) {
-        Some(module) => native_member_calls_of(pf, module),
+        Some(module) => perry_wpfacts::native_member_calls_of(pf, module, namespace_pairs_on()),
         None => BTreeSet::new(),
     }
 }

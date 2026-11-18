@@ -17,13 +17,14 @@
 //!
 //! The three lists partition the global's declared keys (a runtime test,
 //! `two_phase_tests::phase_lists_partition_the_declared_keys`). The phase of
-//! a name is no part of its `#[realm]` declaration: the realm table and the
-//! facts built from it do not know when a slot is bound.
+//! a name is no part of its `#[realm]` declaration: the facts built from it
+//! do not know when a slot is bound. Runtime population rows derive their
+//! phase flags from these lists at compile time.
 
-/// One list of names, three ways: the slice (tests, the compiler's audit),
+/// One list of names, three ways: the slice (tests and const classification),
 /// the names joined by spaces (a loop over them in the runtime: one string,
 /// no table of relocated pointers in the binary) and the membership test (a
-/// `match` on the name: code, no table either).
+/// `match` on the name).
 macro_rules! realm_names {
     ($(#[$doc:meta])* $list:ident, $joined:ident, $(#[$member_attr:meta])* $member:ident: $($name:literal)*) => {
         $(#[$doc])*
@@ -42,7 +43,8 @@ realm_names! {
     /// Declared data names phase B binds. Reading one, by any path, runs
     /// phase B first. `Date` (the costliest single family of the population,
     /// and one no program reaches without naming it or asking one of its
-    /// instances for a property) and, the last sixteen, the byte-cell families: the typed
+    /// instances for a property), the Event, DOMException and abort families,
+    /// and, the last sixteen, the byte-cell families: the typed
     /// arrays (with the shared `%TypedArray%` intrinsic, built with the first
     /// of them), the buffers, `DataView`, and node's `Buffer` (a `Uint8Array`
     /// subclass).
@@ -54,6 +56,7 @@ realm_names! {
         "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"
         "WebAssembly" "Temporal" "PerformanceEntry" "PerformanceMark" "PerformanceMeasure"
         "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming" "Date"
+        "DOMException" "Event" "CustomEvent" "MessageEvent" "AbortSignal" "AbortController"
         "Uint8Array" "Int8Array" "Uint16Array" "Int16Array" "Uint32Array" "Int32Array"
         "Float16Array" "Float32Array" "Float64Array" "Uint8ClampedArray" "BigInt64Array"
         "BigUint64Array" "ArrayBuffer" "SharedArrayBuffer" "DataView" "Buffer"
@@ -80,8 +83,8 @@ realm_names! {
         "ReadableStreamDefaultController" "ReadableStreamDefaultReader"
         "ReadableByteStreamController" "ReadableStreamBYOBReader" "ReadableStreamBYOBRequest"
         "WritableStream" "TransformStream" "Navigator" "URL" "URLSearchParams" "URLPattern"
-        "AbortController" "AbortSignal" "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"
-        "Event" "CustomEvent" "MessageEvent" "DOMException" "FormData" "Blob" "File" "Headers"
+        "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"
+        "FormData" "Blob" "File" "Headers"
         "Request" "Response" "MessageChannel" "MessagePort" "BroadcastChannel" "Storage"
         "WebSocket" "DisposableStack" "AsyncDisposableStack" "SuppressedError" "Iterator" "eval"
         "fetch" "structuredClone" "atob" "btoa" "setTimeout" "clearTimeout" "setInterval"

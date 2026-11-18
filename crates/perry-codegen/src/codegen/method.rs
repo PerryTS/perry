@@ -416,7 +416,7 @@ pub(super) fn compile_method(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(
+            cross_module.closure_writes.pointer_locals(
                 &method.params,
                 method_body,
                 &flat_const_ids,
@@ -686,6 +686,8 @@ pub(super) fn compile_method(
     let mut ctx = FnCtx {
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),

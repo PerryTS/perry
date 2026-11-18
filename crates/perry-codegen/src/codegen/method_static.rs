@@ -78,7 +78,9 @@ pub(in crate::codegen) fn compile_static_method(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            cross_module
+                .closure_writes
+                .pointer_locals(&f.params, &f.body, &flat_const_ids),
             &cross_module.scope_map,
         );
         lf.enable_shadow_frame(m.len() as u32 + 1);
@@ -251,6 +253,8 @@ pub(in crate::codegen) fn compile_static_method(
     let mut ctx = FnCtx {
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),

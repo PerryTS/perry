@@ -631,7 +631,20 @@ pub(crate) fn build_and_run_link(
                     cmd.arg(wk);
                 }
             }
-            cmd.arg(stdlib);
+            // The stdlib (linked first) bundles its own `jni` crate copy; left
+            // global, its AttachGuard functions shadow perry-ui-android's and
+            // the jni frame-level check aborts in PerryBridge.nativeInit.
+            let ndk_bin = std::env::var_os("ANDROID_NDK_HOME").and_then(|ndk| {
+                std::path::Path::new(&ndk_clang_path(&ndk.to_string_lossy()))
+                    .parent()
+                    .map(|p| p.to_path_buf())
+            });
+            let stdlib = if is_android {
+                localize_bundled_jni_in_stdlib(stdlib, ndk_bin.as_deref())
+            } else {
+                stdlib.clone()
+            };
+            cmd.arg(&stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
             for wk in &well_known_libs {

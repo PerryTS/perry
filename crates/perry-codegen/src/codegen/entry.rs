@@ -886,6 +886,7 @@ pub(super) fn compile_module_entry(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let (mut main_shadow_slot_map, _) = enable_module_init_shadow_frame(
+            &cross_module.closure_writes,
             main,
             main_init,
             &flat_const_ids,
@@ -980,6 +981,8 @@ pub(super) fn compile_module_entry(
         let mut ctx = FnCtx {
             for_in_facts: Default::default(),
             for_in_snapshots: Default::default(),
+            for_in_keys_locals: Default::default(),
+            for_in_lens: Default::default(),
             numeric_order_functions: cross_module.numeric_order_functions,
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
