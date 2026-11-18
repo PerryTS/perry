@@ -401,20 +401,11 @@ impl<'a> EntryGuard<'a> {
     }
 }
 
-/// The string method through its entries (#11915), on operands the caller
-/// has evaluated (each rooted across the next) and re-read.
-///
-/// * `patched_before == None` (the arguments cannot observe the method
-///   read): ONE call to the checked entry `js_string_m_<method><argc>`, which
-///   proves `Pristine(String)` itself.
-/// * `Some(p)`: `p` is the byte the site read BEFORE the arguments; set, it
-///   takes the generic path — `generic_label` when the caller has one (the
-///   tag guard's dispatcher arm, which reads the same rooted operands), else
-///   one `js_builtin_proto_generic_call*`; clear, the unchecked body
-///   `js_string_b_<method><argc>`.
-///
-/// `charCodeAt` and `charAt` keep an inline body: the proof joins the index
-/// test the body already has, and the entry is its slow arm.
+/// The caller roots the evaluated operands across argument evaluation.
+/// A checked entry reads the prototype flag itself. A pre-read flag selects
+/// the generic arm when arguments can modify the prototype after lookup.
+/// A certified entry can call the original body on both the fast and slow
+/// paths because the solve excludes such writes and proves the operands.
 pub(crate) fn emit_string_entry_call(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
