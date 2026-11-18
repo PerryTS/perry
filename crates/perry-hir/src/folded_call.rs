@@ -95,15 +95,15 @@ pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
 }
 
 /// The fill operand when this call can realize the published allocation length.
-pub fn fill_birth_value(call: &Expr, len: u32) -> Option<&Expr> {
+pub fn fill_birth_value(call: &Expr, len: u32) -> Result<&Expr, &'static str> {
     let Expr::Call { callee, args, .. } = call else {
-        return None;
+        return Err("shape");
     };
     let Expr::PropertyGet {
         object, property, ..
     } = callee.as_ref()
     else {
-        return None;
+        return Err("shape");
     };
     let Expr::New {
         class_name,
@@ -111,20 +111,20 @@ pub fn fill_birth_value(call: &Expr, len: u32) -> Option<&Expr> {
         ..
     } = object.as_ref()
     else {
-        return None;
+        return Err("shape");
     };
     let [value] = args.as_slice() else {
-        return None;
+        return Err("shape");
     };
-    if class_name != "Array" || property != "fill" {
-        return None;
+    if class_name != "Array" || property != "fill" || ctor.len() != 1 {
+        return Err("shape");
     }
     let length_matches = match ctor.as_slice() {
         [Expr::Integer(k)] => *k == i64::from(len),
         [Expr::Number(n)] => *n == f64::from(len),
         _ => false,
     };
-    length_matches.then_some(value)
+    length_matches.then_some(value).ok_or("length")
 }
 
 /// The site of the unfolded call whose callee is `callee`, when it has a

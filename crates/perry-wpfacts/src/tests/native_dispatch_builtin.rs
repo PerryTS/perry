@@ -236,3 +236,45 @@ fn native_dispatch_string_protocol_inputs() {
     );
     assert_named("function f(s:string) { return s.charAt({valueOf() {return 1;}} as any); } console.log(f('ab'));", "charAt", true);
 }
+
+#[test]
+fn native_dispatch_math_abs_checks_the_transformed_fast_operand() {
+    use perry_hir::{Expr, Stmt};
+    for (result, redispatch) in [("7", false), ("{ valueOf() {return 7;} }", true)] {
+        let src = format!("function f() {{return {result};}} Math.abs(f() as any);");
+        let ast = perry_parser::parse_typescript(&src, "t.ts").unwrap();
+        let mut set = perry_hir::PatchedBuiltins::new();
+        set.namespace_pairs = true;
+        perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+        let hir = perry_hir::lower_module(&ast, "t", "t.ts");
+        perry_hir::clear_patched_builtins();
+        let mut hir = hir.unwrap();
+        let mut changed = false;
+        for s in &mut hir.init {
+            if let Stmt::Expr(Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            }) = s
+            {
+                if let (Expr::Call { args, .. }, Expr::MathAbs(_)) =
+                    (then_expr.as_mut(), else_expr.as_ref())
+                {
+                    args[0] = Expr::Integer(7);
+                    changed = true;
+                }
+            }
+        }
+        assert!(changed, "test must exercise the mismatched arms");
+        let cfg = FactsConfig {
+            namespace_pairs: true,
+            ..Default::default()
+        };
+        assert_named_facts(
+            compute(&[("t.ts".into(), &hir)], &cfg),
+            &src,
+            "abs",
+            redispatch,
+        );
+    }
+}

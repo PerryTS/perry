@@ -101,7 +101,9 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
         return None;
     }
     let len = *ctx.wpfacts.fill_births.get(&offset)?;
-    let value = perry_hir::folded_call::fill_birth_value(e, len)?;
+    let value = perry_hir::folded_call::fill_birth_value(e, len)
+        .map_err(|why| super::note_site(&format!("fill-birth-refused why={why} {}", ctx.func.name)))
+        .ok()?;
     debug_assert_eq!(ctx.wpfacts.fill_births.get(&offset), Some(&len));
     let rest = ctx.wpfacts.rest_births.contains(&offset);
     let reserve = ctx
