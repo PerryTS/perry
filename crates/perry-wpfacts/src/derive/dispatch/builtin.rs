@@ -434,12 +434,14 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
     }
     for ((mi, offset), key) in maps {
         let at = ((mi, offset), key.clone());
+        let mut twins = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
+            .peekable();
         if certified.get(&at) == Some(&true)
-            && pf
-                .sites
-                .iter()
-                .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
-                .all(|s| s.verdict == Verdict::NativeMember && s.receiver_prims == 0)
+            && twins.peek().is_some()
+            && twins.all(|s| s.verdict == Verdict::NativeMember && s.receiver_prims == 0)
         {
             if let Some((_, _, flags)) = pf.bindings[mi as usize]
                 .method_sites
