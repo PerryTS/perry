@@ -86,22 +86,18 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
 
 pub(crate) use array_error::{
     function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
-    generic_array_like_to_vec, global_this_rest_array_values,
-    object_prototype_to_string_thunk, object_prototype_value_of_thunk,
+    generic_array_like_to_vec, global_this_rest_array_values, object_prototype_to_string_thunk,
+    object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
-pub(crate) use bigint_promise::{
-    bigint_as_n_dispatch,
-    promise_static_function_spec,
-};
+pub(crate) use bigint_promise::{bigint_as_n_dispatch, promise_static_function_spec};
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
-pub use builtin_thunks::js_function_ctor_from_strings;
 #[cfg(test)]
 pub(crate) use builtin_thunks::global_this_parse_int_thunk;
+pub use builtin_thunks::js_function_ctor_from_strings;
 pub(crate) use builtin_thunks::{
-    global_this_array_thunk, global_this_error_prepare_stack_trace_thunk,
-    js_math_round_value,
+    global_this_array_thunk, global_this_error_prepare_stack_trace_thunk, js_math_round_value,
     ARRAY_CONSTRUCTOR_INFO,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
@@ -126,9 +122,9 @@ pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
     js_module_top_this, js_request_subclass_init, js_response_subclass_init,
 };
+pub(crate) use generator::function_kind_prototype_unwritten;
 #[cfg(test)]
 pub(crate) use generator::{append_async_function_root_snapshot, ensure_generator_intrinsics};
-pub(crate) use generator::function_kind_prototype_unwritten;
 pub(crate) use generator::{
     generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, generator_original_prototype, set_intrinsic_data_prop,
@@ -166,17 +162,17 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    arm_all_global_bindings, global_binding_row,
-    birth_lazy_family, birth_lazy_family_in, born_by_its_observation, ensure_function_intrinsics_in, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
-    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    arm_all_global_bindings, birth_lazy_family, birth_lazy_family_in, birth_unborn_family_of,
+    born_by_its_observation, default_prepare_stack_trace_func_ptr, ensure_function_intrinsics_in,
+    global_binding_row, scan_error_constructor_root_mut, unborn_declared_statics_of,
+    ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
-    install_function_has_instance_symbol,
-    typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,
-    validate_array_buffer_species_constructor,
+    install_function_has_instance_symbol, typed_array_constructor_this_kind,
+    typed_array_intrinsic_proto_ptr, validate_array_buffer_species_constructor,
 };
 
 pub(crate) use array_error::array_prototype_values_thunk;

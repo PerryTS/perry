@@ -1,8 +1,8 @@
 //! Installer-selected performance timeline and native-object operations.
 use crate::feature_hooks::Hook;
 use crate::object::ObjectHeader;
-static HISTOGRAM_METHOD: Hook<unsafe fn(*const ObjectHeader, &str, &[f64]) -> Option<f64>> =
-    Hook::empty();
+type HistogramMethod = unsafe fn(*const ObjectHeader, &str, &[f64]) -> Option<f64>;
+static HISTOGRAM_METHOD: Hook<HistogramMethod> = Hook::empty();
 pub(crate) unsafe fn histogram_method(
     obj: *const ObjectHeader,
     method: &str,

@@ -882,8 +882,8 @@ unsafe fn bind_closure_value_to_receiver(value: JSValue, receiver: f64) -> JSVal
 }
 
 pub(crate) unsafe fn primitive_builtin_prototype_property(
-    mut key: *const crate::StringHeader,
-    mut receiver: f64,
+    key: *const crate::StringHeader,
+    receiver: f64,
 ) -> Option<JSValue> {
     if key.is_null() {
         return None;

@@ -42,14 +42,33 @@ fn realm_population_does_not_birth_lazy_families() {
     let object = crate::object::BuiltinConstructorIdentity::Object;
     assert!(!object.declaration().lazy, "Object is not declared lazy");
     assert!(!born_by_its_observation(object.declaration()));
-    assert_ne!(crate::array::intrinsic_constructor_addr_if_bound(object), 0, "Object: setup binds the constructor");
-    assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(object), 0, "Object is born at realm setup");
+    assert_ne!(
+        crate::array::intrinsic_constructor_addr_if_bound(object),
+        0,
+        "Object: setup binds the constructor"
+    );
+    assert_ne!(
+        crate::array::intrinsic_prototype_addr_if_bound(object),
+        0,
+        "Object is born at realm setup"
+    );
     // Function is the second root family: born at realm setup, exactly (321-reply).
     let function = crate::object::BuiltinConstructorIdentity::Function;
-    assert!(!function.declaration().lazy, "Function is not declared lazy");
+    assert!(
+        !function.declaration().lazy,
+        "Function is not declared lazy"
+    );
     assert!(!born_by_its_observation(function.declaration()));
-    assert_ne!(crate::array::intrinsic_constructor_addr_if_bound(function), 0, "Function: setup binds the constructor");
-    assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(function), 0, "Function is born at realm setup");
+    assert_ne!(
+        crate::array::intrinsic_constructor_addr_if_bound(function),
+        0,
+        "Function: setup binds the constructor"
+    );
+    assert_ne!(
+        crate::array::intrinsic_prototype_addr_if_bound(function),
+        0,
+        "Function is born at realm setup"
+    );
     assert!(!lazy.is_empty(), "Navigator is declared lazy");
     for declaration in &lazy {
         let ctor = crate::array::intrinsic_constructor_addr_if_bound(declaration.identity);
@@ -123,13 +142,22 @@ fn lazy_declarations_are_bornable_late() {
         // layout, and the one instance birth (`js_weakmap_new` /
         // `js_weakset_new` / `js_weakref_new`) observes the family cell first; every other
         // reader compares the word (the `_if_bound` form).
-        const IDENTITY_WORD_AUDITED: &[&str] = &["Array", "WeakMap", "WeakSet", "WeakRef", "DataView", "URL", "URLSearchParams", "FinalizationRegistry"];
+        const IDENTITY_WORD_AUDITED: &[&str] = &[
+            "Array",
+            "WeakMap",
+            "WeakSet",
+            "WeakRef",
+            "DataView",
+            "URL",
+            "URLSearchParams",
+            "FinalizationRegistry",
+        ];
         assert!(
             IDENTITY_WORD_AUDITED.contains(&declaration.name)
                 || declaration.prototype_class.is_none()
-                && declaration.prototype_serial.is_none()
-                && declaration.sealed_serial.is_none()
-                && declaration.named_serial.is_none(),
+                    && declaration.prototype_serial.is_none()
+                    && declaration.sealed_serial.is_none()
+                    && declaration.named_serial.is_none(),
             "{}: its prototype names an identity word",
             declaration.name
         );
@@ -473,8 +501,12 @@ fn perf_hooks_families_are_born_by_their_first_read() {
         .expect("performance is an accessor");
     assert_ne!(accessor.get, 0, "performance has a getter");
     assert_ne!(accessor.set, 0, "performance has a setter");
-    let attrs = crate::object::get_property_attrs(global, "performance").expect("performance attrs");
-    assert!(attrs.enumerable() && attrs.configurable(), "performance: e and c");
+    let attrs =
+        crate::object::get_property_attrs(global, "performance").expect("performance attrs");
+    assert!(
+        attrs.enumerable() && attrs.configurable(),
+        "performance: e and c"
+    );
     assert_eq!(
         crate::array::intrinsic_prototype_addr_if_bound(event_target),
         0,
@@ -487,7 +519,9 @@ fn perf_hooks_families_are_born_by_their_first_read() {
     let performance_value =
         js_object_get_field_by_name_f64(global as *const ObjectHeader, performance_key);
     assert_ne!(
-        crate::array::intrinsic_prototype_addr_if_bound(crate::object::BuiltinConstructorIdentity::Performance),
+        crate::array::intrinsic_prototype_addr_if_bound(
+            crate::object::BuiltinConstructorIdentity::Performance
+        ),
         0,
         "reading performance births Performance"
     );
@@ -523,18 +557,27 @@ fn perf_hooks_families_are_born_by_their_first_read() {
         let prototype = builtin_prototype_value(name);
         assert_eq!(
             prototype.to_bits(),
-            crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr_if_bound(identity) as i64)
-                .to_bits(),
+            crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr_if_bound(
+                identity
+            ) as i64)
+            .to_bits(),
             "{name}: born by the first ask for its prototype"
         );
         let export = crate::object::bound_native_callable_export_value("perf_hooks", name);
-        assert_eq!(export.to_bits(), value.to_bits(), "require(\"perf_hooks\").{name} === {name}");
+        assert_eq!(
+            export.to_bits(),
+            value.to_bits(),
+            "require(\"perf_hooks\").{name} === {name}"
+        );
     }
     let event_target_proto = crate::array::intrinsic_prototype_addr_if_bound(event_target);
     assert_ne!(event_target_proto, 0, "Performance births its parent");
-    let performance =
-        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Performance);
-    let parent = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(performance as i64));
+    let performance = crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::Performance,
+    );
+    let parent = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(
+        performance as i64,
+    ));
     assert_eq!(
         parent.to_bits(),
         crate::value::js_nanbox_pointer(event_target_proto as i64).to_bits(),
@@ -550,7 +593,11 @@ fn perf_hooks_families_are_born_by_their_first_read() {
     );
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let length = js_object_get_field_by_name_f64(mark as *const ObjectHeader, length_key);
-    assert_eq!(length.to_bits(), 1.0f64.to_bits(), "PerformanceMark.length === 1");
+    assert_eq!(
+        length.to_bits(),
+        1.0f64.to_bits(),
+        "PerformanceMark.length === 1"
+    );
 }
 
 /// %TypedArray% is a declared lazy family without a globalThis binding: one
@@ -561,20 +608,37 @@ fn typed_array_parent_is_one_lazy_family_born_by_its_first_observation() {
     let _lock = crate::gc::global_side_table_test_lock();
     js_get_global_this();
     let parent = crate::object::BuiltinConstructorIdentity::TypedArray;
-    assert_eq!(crate::object::BuiltinConstructorIdentity::for_name("%TypedArray%"), Some(parent));
-    assert!(born_by_its_observation(parent.declaration()), "%TypedArray% is declared lazy");
-    assert!(!parent.declaration().global, "%TypedArray% has no globalThis binding");
+    assert_eq!(
+        crate::object::BuiltinConstructorIdentity::for_name("%TypedArray%"),
+        Some(parent)
+    );
+    assert!(
+        born_by_its_observation(parent.declaration()),
+        "%TypedArray% is declared lazy"
+    );
+    assert!(
+        !parent.declaration().global,
+        "%TypedArray% has no globalThis binding"
+    );
     assert_eq!(
         js_get_global_this_builtin_value(b"TypedArray".as_ptr(), 10).to_bits(),
         crate::value::TAG_UNDEFINED,
         "globalThis.TypedArray is undefined"
     );
-    assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(parent), 0, "%TypedArray% born at realm setup");
+    assert_eq!(
+        crate::array::intrinsic_prototype_addr_if_bound(parent),
+        0,
+        "%TypedArray% born at realm setup"
+    );
     let children: Vec<_> = GLOBAL_THIS_BUILTIN_CONSTRUCTORS
         .iter()
         .filter(|d| d.extends == Some(parent))
         .collect();
-    assert_eq!(children.len(), 12, "the 12 typed-array families extend %TypedArray%");
+    assert_eq!(
+        children.len(),
+        12,
+        "the 12 typed-array families extend %TypedArray%"
+    );
     // The first observation: Int8Array's family. It births its parent.
     let int8 = crate::object::BuiltinConstructorIdentity::Int8Array;
     crate::array::intrinsic_prototype_addr(int8);
@@ -591,7 +655,9 @@ fn typed_array_parent_is_one_lazy_family_born_by_its_first_observation() {
             child.name
         );
         let child_proto = crate::array::intrinsic_prototype_addr(child.identity);
-        let proto_of_proto = crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(child_proto as i64));
+        let proto_of_proto = crate::object::js_object_get_prototype_of(
+            crate::value::js_nanbox_pointer(child_proto as i64),
+        );
         assert_eq!(
             proto_of_proto.to_bits(),
             crate::value::js_nanbox_pointer(parent_proto as i64).to_bits(),
@@ -599,7 +665,11 @@ fn typed_array_parent_is_one_lazy_family_born_by_its_first_observation() {
             child.name
         );
     }
-    assert_eq!(crate::array::intrinsic_constructor_addr_if_bound(parent), parent_ctor, "one %TypedArray%");
+    assert_eq!(
+        crate::array::intrinsic_constructor_addr_if_bound(parent),
+        parent_ctor,
+        "one %TypedArray%"
+    );
 }
 
 #[test]
@@ -613,9 +683,18 @@ fn builtin_constructor_realm_slots_are_permanent_birth_data() {
     let vm = unsafe { super::realm_of(global_ptr) };
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         for (realm, expected) in [(main, crate::value::TAG_UNDEFINED), (vm, global.to_bits())] {
-            let ctor = super::super::global_this_tables::alloc_builtin_constructor(declaration.identity, realm);
-            assert_eq!(crate::closure::js_closure_get_capture_bits(ctor, 1), expected);
-            assert!(std::ptr::eq(unsafe { super::super::global_this_tables::builtin_constructor_realm(ctor) }, realm));
+            let ctor = super::super::global_this_tables::alloc_builtin_constructor(
+                declaration.identity,
+                realm,
+            );
+            assert_eq!(
+                crate::closure::js_closure_get_capture_bits(ctor, 1),
+                expected
+            );
+            assert!(std::ptr::eq(
+                unsafe { super::super::global_this_tables::builtin_constructor_realm(ctor) },
+                realm
+            ));
         }
     }
 }
@@ -628,21 +707,27 @@ fn typed_array_parent_direct_construction_throws_its_declared_error() {
     let parent = super::super::js_object_get_prototype_of(constructor(child.declaration()));
     let thrown = crate::exception::catch_js_throw(|| unsafe {
         super::super::js_new_function_construct(parent, std::ptr::null(), 0)
-    }).expect_err("%TypedArray% is abstract");
+    })
+    .expect_err("%TypedArray% is abstract");
     let key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
     let message = super::super::js_object_get_field_by_name(
-        (thrown.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader, key,
+        (thrown.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader,
+        key,
     );
-    let message = super::super::property_ops::set::key_to_rust_string(f64::from_bits(message.bits())).unwrap();
-    assert_eq!(message, "Abstract class TypedArray not directly constructable");
+    let message =
+        super::super::property_ops::set::key_to_rust_string(f64::from_bits(message.bits()))
+            .unwrap();
+    assert_eq!(
+        message,
+        "Abstract class TypedArray not directly constructable"
+    );
 }
 
 #[test]
 fn default_parent_birth_does_not_materialize_main_global() {
     assert!(!crate::object::global_this_is_materialized());
-    let prototype = crate::array::intrinsic_prototype_addr(
-        crate::object::BuiltinConstructorIdentity::WeakMap,
-    );
+    let prototype =
+        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::WeakMap);
     assert_ne!(prototype, 0);
     assert!(!crate::object::global_this_is_materialized());
 }

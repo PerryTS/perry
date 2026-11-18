@@ -157,11 +157,9 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
             // A lazy family's constructor namespace is sealed by its own birth
             // (`seal_born_family`): a bag made here would be that birth.
             let name: &str = name;
-            if crate::object::BuiltinConstructorIdentity::for_name(name)
-                .is_some_and(|identity| {
-                    crate::object::global_this::born_by_its_observation(identity.declaration())
-                })
-            {
+            if crate::object::BuiltinConstructorIdentity::for_name(name).is_some_and(|identity| {
+                crate::object::global_this::born_by_its_observation(identity.declaration())
+            }) {
                 continue;
             }
             seal_namespace(i, name, bits);
@@ -210,8 +208,15 @@ pub(crate) unsafe fn seal_born_namespace(name: &str, ctor: usize) {
     if ctor == 0 {
         return;
     }
-    if let Some(i) = crate::codegen_abi::BUILTIN_NAMESPACES.iter().position(|n| *n == name) {
-        seal_namespace(i, name, crate::value::js_nanbox_pointer(ctor as i64).to_bits());
+    if let Some(i) = crate::codegen_abi::BUILTIN_NAMESPACES
+        .iter()
+        .position(|n| *n == name)
+    {
+        seal_namespace(
+            i,
+            name,
+            crate::value::js_nanbox_pointer(ctor as i64).to_bits(),
+        );
     }
 }
 

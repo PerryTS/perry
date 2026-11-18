@@ -482,7 +482,9 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
         let thread_realm = crate::array::is_thread_realm(realm);
         for (family, name) in BuiltinProto::ALL {
             let proto = crate::object::BuiltinConstructorIdentity::for_name(name)
-                .map_or(0, |identity| crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity));
+                .map_or(0, |identity| {
+                    crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity)
+                });
             seal_family_prototype(family, proto, thread_realm);
         }
         super::builtin_namespace::seal_namespaces(global);

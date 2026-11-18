@@ -10,7 +10,10 @@ fn finish_builtin_prototype(
     // These ordinary native receivers carry CLASS identities, just
     // like declared-class instances. Publish the intrinsic holder in
     // the identity's GC-traced word when it becomes available.
-    if let Some(class) = declaration.prototype_class.filter(|_| crate::array::is_thread_realm(realm)) {
+    if let Some(class) = declaration
+        .prototype_class
+        .filter(|_| crate::array::is_thread_realm(realm))
+    {
         crate::object::shapes::write_identity_word(
             crate::object::shapes::PROTO_ID_CLASS | u64::from(class),
             crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
@@ -143,7 +146,8 @@ fn populate_realm_global_inner(singleton_at_entry: *mut ObjectHeader) {
         if !declaration.lazy {
             crate::array::intrinsic_prototype_addr_in(realm, declaration.identity);
         }
-        let bound = crate::array::intrinsic_constructor_addr_if_bound_in(realm, declaration.identity);
+        let bound =
+            crate::array::intrinsic_constructor_addr_if_bound_in(realm, declaration.identity);
         let closure_ptr = if bound != 0 {
             bound as *mut crate::closure::ClosureHeader
         } else {
@@ -193,7 +197,11 @@ fn populate_realm_global_inner(singleton_at_entry: *mut ObjectHeader) {
     // Each row is born only in a program that can observe it (GLOBAL_BINDING_ROWS); an unarmed
     // row keeps its key, value undefined.
     for row in GLOBAL_BINDING_ROWS.iter().filter(|row| !row.namespace) {
-        define_global_binding(singleton(), row, armed_global_binding_value(row, singleton()));
+        define_global_binding(
+            singleton(),
+            row,
+            armed_global_binding_value(row, singleton()),
+        );
     }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
@@ -391,7 +399,8 @@ fn link_extends_parent(
         crate::array::intrinsic_prototype_addr_in(realm, parent)
     } else {
         let bound = crate::array::intrinsic_prototype_addr_if_bound_in(
-            realm, crate::object::BuiltinConstructorIdentity::Object,
+            realm,
+            crate::object::BuiltinConstructorIdentity::Object,
         );
         if bound != 0 {
             bound
@@ -509,7 +518,8 @@ fn birth_family(
         crate::object::iterator_ctor::note_birth_keys(proto_obj);
         unsafe {
             crate::object::builtin_proto::seal_object_family(
-                proto_obj, crate::object::builtin_proto::ITERATOR_FAMILY,
+                proto_obj,
+                crate::object::builtin_proto::ITERATOR_FAMILY,
             );
         }
     } else if !proto_obj.is_null() {
@@ -586,7 +596,10 @@ fn birth_family(
                 proto_obj,
             );
         }
-        if let Some(serial) = declaration.prototype_serial.filter(|_| crate::array::is_thread_realm(realm)) {
+        if let Some(serial) = declaration
+            .prototype_serial
+            .filter(|_| crate::array::is_thread_realm(realm))
+        {
             // SAFETY: `proto_obj` is the live, just-populated prototype.
             unsafe {
                 crate::object::proto_validity::assign_intrinsic_prototype_serial(
@@ -596,7 +609,10 @@ fn birth_family(
                 name_first_realm_prototype(proto_obj, serial);
             }
         }
-        if let Some(serial) = declaration.named_serial.filter(|_| crate::array::is_thread_realm(realm)) {
+        if let Some(serial) = declaration
+            .named_serial
+            .filter(|_| crate::array::is_thread_realm(realm))
+        {
             // SAFETY: `proto_obj` is the live intrinsic array; its holder
             // of named properties is the object the serial names.
             unsafe {
@@ -607,7 +623,10 @@ fn birth_family(
                 }
             }
         }
-        if let Some(serial) = declaration.sealed_serial.filter(|_| crate::array::is_thread_realm(realm)) {
+        if let Some(serial) = declaration
+            .sealed_serial
+            .filter(|_| crate::array::is_thread_realm(realm))
+        {
             // SAFETY: as above; runtime layouts name it by this serial.
             unsafe { crate::object::builtin_proto::seal_runtime_prototype(proto_obj, serial) };
         }
@@ -796,7 +815,8 @@ fn birth_own_family(
         // A constructor observed before %Global% uses the same allocation
         // as realm setup. Object's pair is made by its own builder.
         let _no_move = crate::gc::GcSuppressScope::new();
-        let closure_ptr = super::super::global_this_tables::alloc_builtin_constructor(identity, realm);
+        let closure_ptr =
+            super::super::global_this_tables::alloc_builtin_constructor(identity, realm);
         if closure_ptr.is_null() {
             return;
         }
@@ -805,7 +825,10 @@ fn birth_own_family(
     }
     // A member install that asks for its own family's prototype is a
     // programming error: it would read the unfinished birth.
-    let birthing = (realm as *const crate::array::RealmIntrinsics as usize, identity as u8);
+    let birthing = (
+        realm as *const crate::array::RealmIntrinsics as usize,
+        identity as u8,
+    );
     debug_assert_ne!(
         BIRTHING.with(|c| c.get()),
         birthing,
@@ -822,7 +845,9 @@ fn birth_own_family(
             declaration,
             ctor as *mut crate::closure::ClosureHeader,
         );
-        unsafe { crate::object::builtin_proto::seal_born_family(realm, declaration.name, identity) };
+        unsafe {
+            crate::object::builtin_proto::seal_born_family(realm, declaration.name, identity)
+        };
     });
     BIRTHING.with(|c| c.set(outer));
 }
@@ -843,8 +868,9 @@ pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
 #[cold]
 #[inline(never)]
 fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
-    unborn_lazy_identity(ptr, word)
-        .is_some_and(|(realm, identity)| crate::array::intrinsic_prototype_addr_in(realm, identity) != 0)
+    unborn_lazy_identity(ptr, word).is_some_and(|(realm, identity)| {
+        crate::array::intrinsic_prototype_addr_in(realm, identity) != 0
+    })
 }
 
 /// The declared static keys of the closure at `ptr` while it is its realm's
@@ -866,23 +892,36 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 
 /// The identity of the closure at `ptr` (header word `word`) while it is its
 /// realm's still unborn `lazy` constructor, outside that family's own birth.
-fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<(&'static crate::array::RealmIntrinsics, crate::object::BuiltinConstructorIdentity)> {
+fn unborn_lazy_identity(
+    ptr: usize,
+    word: u32,
+) -> Option<(
+    &'static crate::array::RealmIntrinsics,
+    crate::object::BuiltinConstructorIdentity,
+)> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
-    let realm = unsafe { super::super::global_this_tables::builtin_constructor_realm(ptr as *const _) };
+    let realm =
+        unsafe { super::super::global_this_tables::builtin_constructor_realm(ptr as *const _) };
     // The record cells first: a born family stops the test there, so the
     // BIRTHING pair is read only for a still unborn constructor.
     (identity.declaration().lazy
         && crate::array::intrinsic_prototype_addr_if_bound_in(realm, identity) == 0
         && crate::array::intrinsic_constructor_addr_if_bound_in(realm, identity) == ptr
         && BIRTHING.with(|c| c.get())
-            != (realm as *const crate::array::RealmIntrinsics as usize, identity as u8))
+            != (
+                realm as *const crate::array::RealmIntrinsics as usize,
+                identity as u8,
+            ))
         .then_some((realm, identity))
 }
 
 /// `%TypedArray%.prototype.toString` is `Array.prototype.toString` (ECMA-262
 /// §23.2.3.33): `%TypedArray%`'s birth installs it, reading Array's own
 /// family cell (which births Array), never %Global%.
-pub(super) fn alias_typed_array_proto_to_string(realm: &crate::array::RealmIntrinsics, ta_proto_addr: *mut ObjectHeader) {
+pub(super) fn alias_typed_array_proto_to_string(
+    realm: &crate::array::RealmIntrinsics,
+    ta_proto_addr: *mut ObjectHeader,
+) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ta_proto_handle = scope.root_raw_mut_ptr(ta_proto_addr);
     let arr_proto_ptr = crate::array::intrinsic_prototype_addr_in(
@@ -911,7 +950,6 @@ pub(super) fn alias_typed_array_proto_to_string(realm: &crate::array::RealmIntri
         super::super::PropertyAttrs::new(true, false, true),
     );
 }
-
 
 /// The info and spec length of the function intrinsic `which`.
 fn realm_parse_function_info(
@@ -944,14 +982,14 @@ fn global_helper_closure(
         crate::builtins::register_function_name(&*info, name.as_bytes());
     }
     super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
-        // Every global helper installed here (parseInt/parseFloat/isNaN/
-        // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
-        // built-in *non-constructor* function: per spec it has no `.prototype`
-        // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
-        // closure so the `new`/`.prototype` paths honor that — otherwise these
-        // functions defaulted to an ordinary `.prototype` object and silently
-        // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
-        // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
+    // Every global helper installed here (parseInt/parseFloat/isNaN/
+    // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
+    // built-in *non-constructor* function: per spec it has no `.prototype`
+    // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
+    // closure so the `new`/`.prototype` paths honor that — otherwise these
+    // functions defaulted to an ordinary `.prototype` object and silently
+    // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
+    // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
     super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
     closure_ptr
 }
@@ -959,7 +997,10 @@ fn global_helper_closure(
 /// `%parseFloat%` / `%parseInt%` of `realm`: its cell when born,
 /// else its birth (first observation: the global binding or `Number`'s
 /// statics). One closure is both `parseFloat` and `Number.parseFloat`.
-pub(crate) fn realm_parse_function(realm: &crate::array::RealmIntrinsics, which: crate::array::RealmFunctionIntrinsic) -> f64 {
+pub(crate) fn realm_parse_function(
+    realm: &crate::array::RealmIntrinsics,
+    which: crate::array::RealmFunctionIntrinsic,
+) -> f64 {
     let bound = crate::array::realm_function_intrinsic_if_bound_in(realm, which);
     if bound != 0 {
         return crate::value::js_nanbox_pointer(bound as i64);
@@ -1112,16 +1153,26 @@ fn arm_global_binding(name: &'static str, birth: GlobalBirth) {
     let Some(row) = global_binding_row(name) else {
         return;
     };
-    if row.birth.swap(birth as usize, std::sync::atomic::Ordering::Relaxed) != 0 {
+    if row
+        .birth
+        .swap(birth as usize, std::sync::atomic::Ordering::Relaxed)
+        != 0
+    {
         return;
     }
     if let Some(global) = super::fetch_globals::born_thread_global() {
         let _no_move = crate::gc::GcSuppressScope::new();
-        super::super::own_override::as_builtin_definition(|| define_global_binding(global, row, birth(global)));
+        super::super::own_override::as_builtin_definition(|| {
+            define_global_binding(global, row, birth(global))
+        });
     }
 }
 
-fn global_helper_value(info: *const crate::closure::JsFunctionInfo, name: &'static str, arity: u32) -> f64 {
+fn global_helper_value(
+    info: *const crate::closure::JsFunctionInfo,
+    name: &'static str,
+    arity: u32,
+) -> f64 {
     let closure_ptr = global_helper_closure(info, name, arity);
     if closure_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -1131,7 +1182,10 @@ fn global_helper_value(info: *const crate::closure::JsFunctionInfo, name: &'stat
 
 /// The global binding and `Number` statics read the same function cell in
 /// their realm, whichever one observes the intrinsic first.
-fn birth_global_parse(global: *mut ObjectHeader, which: crate::array::RealmFunctionIntrinsic) -> f64 {
+fn birth_global_parse(
+    global: *mut ObjectHeader,
+    which: crate::array::RealmFunctionIntrinsic,
+) -> f64 {
     let realm = unsafe { super::realm_of(global) };
     realm_parse_function(realm, which)
 }

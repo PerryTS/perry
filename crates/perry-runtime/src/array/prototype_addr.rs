@@ -496,7 +496,8 @@ unsafe fn realm_record_cell_words(user_ptr: usize) -> (*mut usize, usize) {
 /// The `GC_TYPE_REALM_RECORD` arm's view of a record (see `crate::feature_hooks`).
 /// Records are born only by `vm` realm globals, so the `vm` install fills it
 /// before any record exists; empty, no record exists and the arm never runs.
-static REALM_RECORD_CELLS: crate::feature_hooks::Hook<unsafe fn(usize) -> (*mut usize, usize)> =
+type RealmRecordCells = unsafe fn(usize) -> (*mut usize, usize);
+static REALM_RECORD_CELLS: crate::feature_hooks::Hook<RealmRecordCells> =
     crate::feature_hooks::Hook::empty();
 
 /// The cell words of the record at `user_ptr` for the GC arm of

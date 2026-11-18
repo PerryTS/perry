@@ -29,7 +29,10 @@ pub(crate) fn buffer_constructor_value() -> f64 {
 pub(crate) fn buffer_constructor_statics(mut define: impl FnMut(&'static str, f64)) {
     crate::object::native_module_registry::js_nm_install_buffer();
     for method in BUFFER_STATIC_METHODS {
-        define(method, bound_native_callable_export_value("buffer.Buffer", method));
+        define(
+            method,
+            bound_native_callable_export_value("buffer.Buffer", method),
+        );
     }
     define("poolSize", buffer_pool_size());
 }

@@ -1533,7 +1533,7 @@ mod dynamic_super_new_target_tests {
 pub(crate) fn born_thread_global() -> Option<*mut ObjectHeader> {
     let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
     (mine != 0 && GLOBAL_THIS_READY.load(Ordering::Acquire))
-        .then(|| (mine & crate::value::POINTER_MASK) as *mut ObjectHeader)
+        .then_some((mine & crate::value::POINTER_MASK) as *mut ObjectHeader)
 }
 
 #[cfg(test)]
