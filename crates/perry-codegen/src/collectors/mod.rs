@@ -130,7 +130,7 @@ pub(crate) use object_literal_exports::{
     exported_object_literal_capabilities, object_literal_facts,
 };
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
-pub(crate) use pointer_locals::collect_pointer_typed_locals;
+pub(crate) use pointer_locals::{collect_pointer_typed_locals, ClosureWrites};
 pub(crate) use proven_args::{
     method_proven_shape_args, pshape_args_method_name, ProvenShapeArgPlan,
 };

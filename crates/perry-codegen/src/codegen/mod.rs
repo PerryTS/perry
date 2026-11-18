@@ -2996,18 +2996,8 @@ fn lower_module(
             .into_iter()
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
-    // Closure collection + derived per-closure dispatch maps. See
-    // `closure_collect::collect_module_closures`.
-    let closure_collect::ModuleClosures {
-        closures,
-        direct_call_closures,
-        closure_rest_params,
-        closure_synthetic_arguments,
-        closure_rest_and_arguments,
-        closure_arities,
-        closure_lengths,
-        closure_arrow_functions,
-    } = closure_collect::collect_module_closures(hir);
+    let collected = closure_collect::collect_module_closures(hir);
+    let closures = collected.closures;
     if opts.program_has_tla {
         llmod.declare_function(
             "js_async_module_configure",
@@ -3035,6 +3025,7 @@ fn lower_module(
         .then(|| crate::collectors::life_census::register(hir, &opts.program_facts.elision))
         .flatten();
     let mut cross_module = CrossModuleCtx {
+        closure_writes: collected.closure_writes,
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,
         region_closures: hir
@@ -3556,7 +3547,7 @@ fn lower_module(
     }
     // Step 5C: a method site whose static lane names one of these bodies
     // calls it directly, so it needs each body's exact parameter count.
-    static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
+    static_constfn::set_module_body_arities(&module_prefix, &collected.closure_arities);
 
     // #8103: closure bodies are emitted before their enclosing regions. Prove
     // inline array-callback element shapes module-wide now, while both sides
@@ -3740,7 +3731,7 @@ fn lower_module(
         .collect();
     let trusted_box_closures = closure_collect::select_trusted_box_closures(
         &closures,
-        &direct_call_closures,
+        &collected.direct_call_closures,
         &module_boxed_vars,
         &module_globals,
         &trusted_box_exclusions,
@@ -4193,7 +4184,7 @@ fn lower_module(
             &func_signatures,
             &func_synthetic_arguments,
             &module_boxed_vars,
-            &closure_rest_params,
+            &collected.closure_rest_params,
             &cross_module,
             None,
             Some(&plan),
@@ -4244,7 +4235,7 @@ fn lower_module(
                 &func_signatures,
                 &func_synthetic_arguments,
                 &module_boxed_vars,
-                &closure_rest_params,
+                &collected.closure_rest_params,
                 &cross_module,
                 typed_public_trampoline,
                 None,
@@ -4303,7 +4294,7 @@ fn lower_module(
             &func_signatures,
             &func_synthetic_arguments,
             &module_boxed_vars,
-            &closure_rest_params,
+            &collected.closure_rest_params,
             &cross_module,
             None,
             None,
@@ -4464,12 +4455,12 @@ fn lower_module(
             module_boxed_vars: &module_boxed_vars,
             module_local_types: &module_local_types,
             module_receiver_types: &module_receiver_types,
-            closure_rest_params: &closure_rest_params,
-            closure_synthetic_arguments: &closure_synthetic_arguments,
-            closure_rest_and_arguments: &closure_rest_and_arguments,
-            closure_arities: &closure_arities,
-            closure_lengths: &closure_lengths,
-            closure_arrow_functions: &closure_arrow_functions,
+            closure_rest_params: &collected.closure_rest_params,
+            closure_synthetic_arguments: &collected.closure_synthetic_arguments,
+            closure_rest_and_arguments: &collected.closure_rest_and_arguments,
+            closure_arities: &collected.closure_arities,
+            closure_lengths: &collected.closure_lengths,
+            closure_arrow_functions: &collected.closure_arrow_functions,
             trusted_box_closures: &trusted_box_closures,
             versioned_loop_callbacks: &versioned_loop_callbacks,
             closures: &closures,
