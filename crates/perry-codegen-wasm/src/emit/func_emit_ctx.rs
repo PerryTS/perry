@@ -34,7 +34,7 @@ pub(super) struct FuncEmitCtx<'a> {
     /// The local holding `this`: local 0 in a class constructor, method or
     /// accessor, or an arrow's captured `this`.
     pub(super) this_local: Option<u32>,
-    /// The class whose static method or static block this is: `this` is that class.
+    /// The class of a static method or static block, which is its `this`.
     pub(super) static_class: Option<String>,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,

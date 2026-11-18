@@ -881,8 +881,8 @@ impl WasmModuleEmitter {
                     let _ = setter;
                     user_func_idx += 1;
                 }
-                // Computed members: `this` + declared params, installed under their
-                // key when the class definition evaluates it (`class_define_computed`).
+                // Computed members take `this` + params; the class definition installs
+                // each under its evaluated key.
                 for member in &class.computed_members {
                     let param_count = 1 + member.function.params.len();
                     // The type section is emitted before the bodies: intern the signature now.
@@ -1667,9 +1667,7 @@ impl WasmModuleEmitter {
                         func.instruction(&Instruction::Drop);
                     }
 
-                    // Static field initializers run where the HIR places them (a
-                    // `StaticFieldSet` in source order, or a class evaluation), in
-                    // the scope of the class definition.
+                    // Static field initializers run where the HIR places them, in source order.
                 }
             }
 

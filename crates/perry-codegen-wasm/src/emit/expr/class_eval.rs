@@ -1,11 +1,7 @@
 //! Class definition evaluation: computed member names, static initializers and
 //! static blocks, for a class declared once (template-keyed nodes) and for each
-//! evaluation of a class in a function body (`Expr::ClassExprFresh`).
-//!
-//! The runtime keeps the definitions being evaluated on a stack
-//! (`__classDefining` in wasm_runtime.js): between `class_eval_begin` and
-//! `class_eval_end` a template's computed members, key slots and statics belong to
-//! the evaluation on top, and outside one they belong to the class itself.
+//! evaluation of a class in a function body (`Expr::ClassExprFresh`, bracketed by
+//! `class_eval_begin` / `class_eval_end`; see `__classDefining` in wasm_runtime.js).
 
 use super::*;
 

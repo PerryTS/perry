@@ -75,8 +75,7 @@ impl WasmModuleEmitter {
         self.compile_function_in(hir_func, force_returning, None)
     }
 
-    /// A static method or static block of `class`: `(params) -> i64`, and its
-    /// `this` is the class it runs on.
+    /// A static method or static block of `class`: `(params) -> i64`, `this` its class.
     pub(super) fn compile_static_method(
         &self,
         class: &perry_hir::ir::Class,

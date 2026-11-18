@@ -1,6 +1,4 @@
-On the web target a class definition runs its computed member names and
-static initializers: `function f() { let n = 0; class K { [(n++, "m")]() {} } return n; }`
-returns 1, computed methods, accessors and fields are installed under their
-evaluated keys (a Symbol-keyed computed accessor is not installed yet), static
-fields and `static { }` blocks run in source order with `this` bound to the
-class, and each evaluation of a class in a function body gets its own statics.
+On the web target, static fields and `static {}` blocks run once, in source
+order, with `this` bound to the class. A class declared in a function body
+evaluates its computed member names and installs those methods, accessors and
+fields (not yet a Symbol-keyed accessor), with fresh statics per evaluation.

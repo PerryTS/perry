@@ -367,8 +367,8 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
-            // A static method or block runs on its class: the evaluation that runs
-            // its static block, else the class itself.
+            // In a static method or block, `this` is its class, or the evaluation a
+            // static block initializes.
             Expr::This if self.this_local.is_none() && self.static_class.is_some() => {
                 let class_name = self.static_class.clone().unwrap_or_default();
                 let ctor_slot = self.class_ctor_slot(&class_name);
