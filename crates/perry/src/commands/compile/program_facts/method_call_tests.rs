@@ -10,7 +10,13 @@ fn module(source: &str) -> perry_hir::Module {
 }
 
 fn facts(hir: &perry_hir::Module) -> perry_wpfacts::ProgramFacts {
-    perry_wpfacts::compute(&[("main.ts".into(), hir)], &Default::default())
+    perry_wpfacts::compute(
+        &[("main.ts".into(), hir)],
+        &perry_wpfacts::FactsConfig {
+            namespace_pairs: namespace_pairs_on(),
+            ..Default::default()
+        },
+    )
 }
 
 fn published(
@@ -130,20 +136,25 @@ fn method_call_publication_respects_elide_off() {
 #[test]
 fn native_dispatch_builtin_certificate_publishes_the_intrinsic_selection() {
     for (source, certified) in [
-        ("console.log('hello');", true),
+        ("Math.abs(-3);", true),
+        ("console.log('hello');", false),
         ("console.log({});", false),
         (
             "console.log = function(x: any) {}; console.log('hello');",
             false,
         ),
     ] {
+        let mut patched = perry_hir::PatchedBuiltins::new();
+        patched.namespace_pairs = namespace_pairs_on();
+        perry_hir::set_patched_builtins(std::sync::Arc::new(patched));
         let hir = module(source);
+        perry_hir::clear_patched_builtins();
         let pf = facts(&hir);
         let out = published(&pf, &hir);
         let site = pf
             .sites
             .iter()
-            .find(|s| s.is_call && s.key == "log")
+            .find(|s| s.is_call && s.key == if certified { "abs" } else { "log" })
             .unwrap();
         assert_eq!(
             site.builtin_dispatch_certified(),

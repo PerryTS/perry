@@ -2,23 +2,30 @@
 use super::*;
 
 fn solve(src: &str) -> ProgramFacts {
+    solve_with_pairs(src, true)
+}
+
+fn solve_with_pairs(src: &str, namespace_pairs: bool) -> ProgramFacts {
     let ast = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let mut set = perry_hir::PatchedBuiltins::new();
     perry_hir::scan_patched_builtins(&ast, &mut set);
-    set.namespace_pairs = true;
+    set.namespace_pairs = namespace_pairs;
     perry_hir::set_patched_builtins(std::sync::Arc::new(set));
     let hir = perry_hir::lower_module(&ast, "t", "t.ts");
     perry_hir::clear_patched_builtins();
     let hir = hir.expect("lowers");
     let cfg = FactsConfig {
-        namespace_pairs: true,
+        namespace_pairs,
         ..Default::default()
     };
     compute(&[("t.ts".into(), &hir)], &cfg)
 }
 
 fn assert_named(src: &str, key: &str, redispatch: bool) {
-    let pf = solve(src);
+    assert_named_facts(solve(src), src, key, redispatch);
+}
+
+fn assert_named_facts(pf: ProgramFacts, src: &str, key: &str, redispatch: bool) {
     let calls: Vec<_> = pf
         .sites
         .iter()
@@ -36,13 +43,15 @@ fn assert_named(src: &str, key: &str, redispatch: bool) {
 }
 
 #[test]
-fn native_dispatch_console_string_and_empty_are_closed() {
+fn native_dispatch_console_requires_selected_intrinsic_and_safe_operands() {
     for src in [
         "console.log('hello');",
         "const n = process.argv.length; console.log('hello ' + n);",
         "console.log();",
     ] {
-        assert_named(src, "log", false);
+        assert_named_facts(solve_with_pairs(src, false), src, "log", false);
+        // Pair publication refuses the mixed Console/Other namespace callee.
+        assert_named(src, "log", true);
     }
 }
 
@@ -55,7 +64,10 @@ fn native_dispatch_console_protocols_and_replacement_remain_open() {
         "console.log((globalThis as any).unknown);",
         "import { performance } from 'node:perf_hooks'; performance.now(); console.log('hello');",
         "import * as dc from 'node:diagnostics_channel'; dc.subscribe('console.log', (m: any) => { m.arguments[0] = {}; }); console.log('hello');",
-    ] { assert_named(src, "log", true); }
+    ] {
+        assert_named(src, "log", true);
+        assert_named_facts(solve_with_pairs(src, false), src, "log", true);
+    }
 }
 
 #[test]
