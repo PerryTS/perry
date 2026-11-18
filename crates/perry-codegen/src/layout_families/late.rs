@@ -8,7 +8,8 @@
 //! census rule over the program's own text:
 //!
 //! * a receiver group is one local binding of a module (every function and
-//!   closure), or `this` in the methods of a class;
+//!   closure), or `this` in the methods of a class together with the `const`
+//!   locals bound to it there;
 //! * a local group may be F when F explains as much of the group's
 //!   constructor-key usage as any family does, and a group that touches a
 //!   single constructor key counts only when all families with that key are
@@ -111,9 +112,7 @@ fn note(g: &mut Group, key: &str, store: bool) {
 struct Census {
     locals: RefCell<FxHashMap<u32, Group>>,
     thises: RefCell<FxHashMap<u32, Group>>,
-    /// A `const` local bound to `this` in the methods of a class -> that
-    /// class: its accesses are the `this` group's (`const self = this;
-    /// self.k = v`).
+    /// A `const` local bound to `this` in a class's methods -> that class.
     this_aliases: RefCell<FxHashMap<u32, u32>>,
     /// Local -> the function it binds.
     fn_of_local: RefCell<FxHashMap<u32, u32>>,
