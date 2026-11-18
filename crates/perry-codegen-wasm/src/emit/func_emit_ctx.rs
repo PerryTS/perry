@@ -33,8 +33,7 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) current_class: Option<String>,
     /// Local 0 is `this`: a class constructor, method or accessor.
     pub(super) this_is_local0: bool,
-    /// The local `this` reads: the receiver (local 0) in a method or constructor,
-    /// the captured `this` parameter in an arrow function that captures it.
+    /// The local `this` reads: local 0 (the receiver), or a closure's captured `this`.
     pub(super) this_local: u32,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,

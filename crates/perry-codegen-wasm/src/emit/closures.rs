@@ -5,8 +5,8 @@ use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::walk_expr_children;
 
 /// A collected closure: its id, params, body, captures, mutable captures, whether
-/// it captures the enclosing `this` (an arrow's lexical `this`), and whether it is
-/// an arrow (which shares its enclosing method's `this` and `super`).
+/// it captures `this`, and whether it is an arrow (which shares its enclosing
+/// method's `this` and `super`).
 pub(super) type CollectedClosure = (
     FuncId,
     Vec<Param>,
