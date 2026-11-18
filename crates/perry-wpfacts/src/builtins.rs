@@ -878,6 +878,32 @@ pub(crate) fn promise_result_atom(m: &mut Model) -> Atom {
     effects::internal_atom(m, "PromiseResult")
 }
 
+/// A host Worker's internal slots: `[[WorkerPayload]]` (the clone tree a
+/// message delivers) and `[[WorkerEvent]]` (the event its listeners get).
+pub(crate) fn worker_slot_atom(m: &mut Model, name: &str) -> Atom {
+    effects::internal_atom(m, name)
+}
+
+/// W-HOST step 5: the construct queues the `worker` process event
+/// (worker_surface.rs `queue_process_worker_event`: [[Get]](process,
+/// "nextTick") called with a host callback capturing `w`, which does
+/// [[Get]](process, "emit") and calls it with ("worker", w); this =
+/// process). Unwritten, both are the realm's natives: `nextTick` queues
+/// the callback, `emit` hands `w` to the process listeners
+/// (`Model::process_event`). A key the program or unknown code wrote
+/// (`opaque_written`): a stored function is called, an opaque write is the
+/// unknown call (the replay). `tick` passes `w` itself for the callback
+/// (its one capture). `emit` = ("worker", w), `tick` = (w).
+pub(crate) fn process_worker_event(m: &mut Model, w: NodeId, emit: CallId, tick: CallId) {
+    let p = m.tok(TokKind::Builtin(BuiltinNs::Process));
+    let pe = m.process_event;
+    m.edge(w, pe);
+    for (k, call) in [("emit", emit), ("nextTick", tick)] {
+        let a = m.atom(k);
+        let _ = opaque_written(m, p, a, NativeMiss::Call(p, call));
+    }
+}
+
 /// The settled-value field of a promise token.
 fn promise_value(m: &mut Model, p: Tok) -> NodeId {
     let a = promise_result_atom(m);
@@ -3279,6 +3305,10 @@ fn ns_method_inner(
     {
         let (h, e) = (m.host_report, m.esc_raise);
         m.edge(h, e);
+        // W-HOST: the listener is handed the process events too
+        // (`Model::process_event`).
+        let pe = m.process_event;
+        m.edge(pe, e);
     }
 
     // A computed key may name any member, one no rule describes included

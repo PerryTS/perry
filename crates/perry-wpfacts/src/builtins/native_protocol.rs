@@ -345,6 +345,10 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
 /// have replaced (`realm_replaced`) take the opaque member.
 pub fn note_realm_held(m: &mut Model) {
     replay_native_missing(m);
+    // Unknown code may register a process listener: it is handed the
+    // process events (`Model::process_event`).
+    let (pe, e) = (m.process_event, m.esc_raise);
+    m.edge(pe, e);
 }
 
 /// Built-in object `np` was handed to unknown code (not reached along a

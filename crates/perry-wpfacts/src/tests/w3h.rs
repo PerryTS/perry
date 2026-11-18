@@ -110,3 +110,115 @@ fn w3h_k3_spawn_capture_mutated_after() {
     assert!(!z.is_empty(), "the spawned read exists");
     assert!(all_proven(&pf, "v"), "the core stays proven beside spawn");
 }
+
+// W-HOST (LADDER18): the host Worker is a fresh host object no unknown code
+// holds. The runtime calls only the listeners the program installed on it
+// (`onmessage` / `onerror` / `onmessageerror`, `addEventListener`, `on`),
+// with events whose `data` is a structured clone (plain data, never a
+// program object); `postMessage` reads its value (getters run) and stores
+// nothing into it (perry-stdlib worker_threads worker_pump.rs,
+// thread/clone_write.rs; HTML Workers, StructuredSerialize).
+
+const LISTEN: &str = "(globalThis as any).g = new M(); console.log(String((globalThis as any).g.v));";
+
+// R2 (RED on base): an `onmessage` handler that stores a program object on
+// a global: the class sites stay proven.
+#[test]
+fn w3h_r2_onmessage_listener_keeps_realm() {
+    let pf = facts(&format!(
+        "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url), {{ type: \"module\" }});\n\
+         w.onmessage = (e: any) => {{ {LISTEN} }};\n{TAIL}"
+    ));
+    assert!(all_proven(&pf, "v"), "m.v / g.v proven beside an onmessage handler");
+}
+
+// R3 (RED on base): the same through `addEventListener`.
+#[test]
+fn w3h_r3_add_event_listener_keeps_realm() {
+    let pf = facts(&format!(
+        "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url), {{ type: \"module\" }});\n\
+         w.addEventListener(\"message\", (e: any) => {{ {LISTEN} }});\n{TAIL}"
+    ));
+    assert!(all_proven(&pf, "v"), "m.v / g.v proven beside addEventListener");
+}
+
+// R4 (RED on base): `event.data` is a clone, not a program object: a store
+// into it does not reach the class's instances.
+#[test]
+fn w3h_r4_event_data_is_not_a_program_object() {
+    let pf = facts(&format!(
+        "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url));\n\
+         w.onmessage = (e: any) => {{ e.data.v = \"s\"; e.data.list.push(e.target); }};\n{TAIL}"
+    ));
+    assert!(all_proven(&pf, "v"), "m.v proven beside a store into event.data");
+}
+
+// K4 (KEEP): `postMessage` clones its value: an own getter of the value
+// runs, what it stores is seen and the stored callee is called.
+#[test]
+fn w3h_k4_post_message_runs_getters() {
+    let pf = facts(&format!(
+        "{CORE}class H {{ fn: any = null; }}\nconst hh = new H();\n\
+         const w = new Worker(\"./b.ts\");\n\
+         w.postMessage({{ get x() {{ hh.fn = () => String(process.argv[2]); return 1; }} }});\n\
+         if (hh.fn !== null) console.log(hh.fn());\n{TAIL}"
+    ));
+    let v = verdicts(&pf, "fn", false);
+    assert!(
+        !v.is_empty() && v.iter().all(|x| !x.starts_with("Dead")),
+        "the getter's store reaches hh.fn"
+    );
+}
+
+// K5 (KEEP): every kind of listener runs: what it stores is seen.
+#[test]
+fn w3h_k5_listeners_run() {
+    for reg in [
+        "w.onmessage = () => { hh.fn = () => String(process.argv[2]); };",
+        "w.onerror = () => { hh.fn = () => String(process.argv[2]); };",
+        "w.addEventListener(\"message\", () => { hh.fn = () => String(process.argv[2]); });",
+        "w.on(\"message\", () => { hh.fn = () => String(process.argv[2]); });",
+        "w.once(\"exit\", () => { hh.fn = () => String(process.argv[2]); });",
+    ] {
+        let pf = facts(&format!(
+            "{CORE}class H {{ fn: any = null; }}\nconst hh = new H();\n\
+             const w: any = new Worker(\"./b.ts\");\n{reg}\n\
+             if (hh.fn !== null) console.log(hh.fn());\n{TAIL}"
+        ));
+        let v = verdicts(&pf, "fn", false);
+        assert!(
+            !v.is_empty() && v.iter().all(|x| !x.starts_with("Dead")),
+            "the listener's store reaches hh.fn: {reg}"
+        );
+    }
+}
+
+// K6 (KEEP): a program object stored into the Worker is no escape.
+#[test]
+fn w3h_k6_store_into_worker_is_no_escape() {
+    let pf = facts(&format!(
+        "{CORE}const w: any = new Worker(\"./b.ts\");\nconst mm = new M();\nw.foo = mm;\n\
+         console.log(String(mm.v));\n{TAIL}"
+    ));
+    assert!(all_proven(&pf, "v"), "m.v proven beside w.foo = obj");
+}
+
+// R5 (RED on the record event): a message event is a MessageEvent, so its
+// Event.prototype members are found on its chain: `e.preventDefault()`
+// does not throw, and the store after it runs.
+#[test]
+fn w3h_r5_message_event_has_event_members() {
+    let pf = facts(&format!(
+        "{CORE}class H {{ n = 0; }}\nconst hh = new H();\n\
+         const w = new Worker(new URL(\"./b.ts\", import.meta.url));\n\
+         w.onmessage = (e: any) => {{ e.preventDefault(); hh.n = String(e.type).length; }};\n\
+         console.log(hh.n);\n{TAIL}"
+    ));
+    let pd = verdicts(&pf, "preventDefault", false);
+    let n = verdicts(&pf, "n", true);
+    assert!(!pd.is_empty(), "e.preventDefault is read");
+    assert!(
+        !n.is_empty() && n.iter().all(|x| !x.starts_with("Dead")),
+        "the store after e.preventDefault() runs"
+    );
+}

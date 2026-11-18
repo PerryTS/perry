@@ -861,12 +861,11 @@ impl<'a> Gen<'a> {
                         },
                     );
                 }
-                // The host holds the Worker: it calls the listeners stored
-                // on it (`onmessage`, `on`, `addEventListener`) with events
-                // of its own making, so what the program stores into it or
-                // passes to its members is given to the host.
-                let (_, n) = self.bobj(mi, "Worker");
-                self.to_sink(n, "host Worker object: the runtime calls its listeners");
+                // W-HOST: the Worker is a fresh host object no unknown code
+                // holds; the runtime only calls the listeners the program
+                // installed on it (`worker_host`).
+                let (t, n) = self.bobj(mi, "Worker");
+                self.worker_host(mi, t, n);
                 n
             }
             Expr::BoxedPrimitiveNew { kind, .. } => {
@@ -1113,5 +1112,104 @@ impl<'a> Gen<'a> {
             );
         }
         on
+    }
+}
+
+impl<'a> Gen<'a> {
+    /// W-HOST (LADDER18): what the runtime does with the host Worker `t`
+    /// (node `n`) made at this site (perry-stdlib worker_threads
+    /// worker_pump.rs `dispatch_worker_event_with_ports`, worker_threads.rs
+    /// `call_callback1` / `call_message_callback1` / `event_object` /
+    /// `worker_new_prepared`; HTML Workers, StructuredDeserialize).
+    ///
+    /// - A message crosses as a structured clone the runtime makes
+    ///   (thread/clone_write.rs, Message mode: a function is a
+    ///   DataCloneError, a class instance becomes a plain object): the
+    ///   clone tree `[[WorkerPayload]]` is fresh ordinary objects and
+    ///   arrays, Map, Set, Date, RegExp, Error, ArrayBuffer and typed
+    ///   arrays, each holding the others and any primitive; never a
+    ///   program object, function or program prototype. It is also the
+    ///   payload of the `error` (an Error) and `exit` (a Number) events.
+    /// - A web listener (`onmessage` / `onerror` / `onmessageerror`,
+    ///   `addEventListener`) gets an event of `[[WorkerEvent]]`: for a
+    ///   message a fresh MessageEvent (chain %MessageEvent.prototype% ->
+    ///   %Event.prototype% -> %Object.prototype%) whose `[[data]]` is the
+    ///   clone tree; for any other event a fresh plain record whose values
+    ///   are the Worker (`target`, `currentTarget`) and primitives.
+    /// - A property handler is called with `this` = the Worker and the
+    ///   event; its throw is reported by the host
+    ///   (`run_resource_scope_catching`): no program `catch` sees it.
+    /// - The construct queues `process.emit("worker", worker)`: [[Get]]
+    ///   of `emit` on `process`, called with the Worker.
+    ///
+    /// Listener registration and `postMessage` are the Worker methods of
+    /// `bobj_method` (builtins/collections.rs `worker_method`).
+    fn worker_host(&mut self, mi: u32, t: Tok, n: NodeId) {
+        let (obj, _) = self.bobj(mi, "json");
+        let arr = self.new_arr_template(mi, "json");
+        let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        let mut tree = vec![obj, arr];
+        for what in ["Map", "Set", "Date", "RegExp", "Error", "ArrayBuffer", "TypedArray"] {
+            let (x, _) = self.bobj(mi, what);
+            tree.push(x);
+        }
+        for &o in &tree {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, prim::ALL);
+            for &x in &tree {
+                self.m.add_tok(fa, x);
+            }
+        }
+        let pa = crate::builtins::worker_slot_atom(&mut self.m, "WorkerPayload");
+        let payload = self.m.field_r(t, pa);
+        self.m.add_prim(payload, prim::ALL);
+        for &x in &tree {
+            self.m.add_tok(payload, x);
+        }
+        // A message's event: a MessageEvent (message_event.rs `delivery`),
+        // [[Prototype]] %MessageEvent.prototype% -> %Event.prototype%, no
+        // own property; its `data` getter returns its [[data]] slot, the
+        // clone tree. Its `ports` stay the generic MessagePort path.
+        let (mev, _) = self.bobj(mi, "MessageEvent.prototype");
+        let da = crate::builtins::worker_slot_atom(&mut self.m, "data");
+        let data = self.m.field_r(mev, da);
+        self.m.add_prim(data, prim::ALL);
+        for &x in &tree {
+            self.m.add_tok(data, x);
+        }
+        // Any other event (`error`, `messageerror`): the plain object of
+        // worker_threads.rs `event_object` (own type, target,
+        // currentTarget, defaultPrevented, constructor; Object.prototype).
+        let (ev, _) = self.bobj(mi, "hostrecord");
+        let efa = self.m.field_any(ev);
+        self.m.add_prim(efa, prim::ALL);
+        self.m.add_tok(efa, t);
+        for &x in &tree {
+            self.m.add_tok(efa, x);
+        }
+        let ea = crate::builtins::worker_slot_atom(&mut self.m, "WorkerEvent");
+        let evn = self.m.field_r(t, ea);
+        self.m.add_tok(evn, mev);
+        self.m.add_tok(evn, ev);
+        let host = self.m.host_report;
+        let any = self.m.field_any(t);
+        for k in ["onmessage", "onerror", "onmessageerror"] {
+            let a = self.m.atom(k);
+            let f = self.m.field_r(t, a);
+            let arg = self.tok_node(if k == "onmessage" { mev } else { ev });
+            let (id, _) = self.new_call(ThisArg::Node(n), vec![arg], vec![]);
+            self.m.calls[id as usize].region = host;
+            self.m.cons(f, Cons::Call { call: id });
+            self.m.cons(any, Cons::Call { call: id });
+        }
+        let p = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
+        let pn = self.tok_node(p);
+        let name = self.m.node_l("worker-event-name");
+        self.m.add_prim(name, prim::STR);
+        let (emit, _) = self.new_call(ThisArg::Node(pn), vec![name, n], vec![]);
+        let (tick, _) = self.new_call(ThisArg::Node(pn), vec![n], vec![]);
+        self.m.calls[emit as usize].region = host;
+        self.m.calls[tick as usize].region = host;
+        crate::builtins::process_worker_event(&mut self.m, n, emit, tick);
     }
 }
