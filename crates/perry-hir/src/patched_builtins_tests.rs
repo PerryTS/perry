@@ -633,3 +633,31 @@ fn non_static_global_store_rebinds_timers() {
         "{call}"
     );
 }
+
+/// A computed store into the global object may rebind a global FUNCTION, but
+/// never turns a program class or other non-global-function name into a
+/// global read.
+#[test]
+fn any_key_global_store_rebinds_only_global_functions() {
+    let s = scan("const k: any = process.argv[2]; (globalThis as any)[k] = 0;");
+    assert!(s.contains(&pair(GLOBAL_ANY_KEY, ANY_MEMBER)), "{s:?}");
+    set_patched_builtins(Arc::new(s));
+    let foo = global_function_patched("Foo");
+    let st = global_function_patched("setTimeout");
+    clear_patched_builtins();
+    assert!(!foo);
+    assert!(st);
+}
+
+#[test]
+fn dynamic_code_reach_rebinds_only_global_functions() {
+    let mut s = PatchedBuiltins::new();
+    s.dynamic_code_reach
+        .record_global("new Function(...) @ test".to_string());
+    set_patched_builtins(Arc::new(s));
+    let foo = global_function_patched("Foo");
+    let st = global_function_patched("setTimeout");
+    clear_patched_builtins();
+    assert!(!foo);
+    assert!(st);
+}

@@ -742,12 +742,13 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
 /// that reaches the global scope. A bare call then reads the binding off the
 /// global object; otherwise it binds the runtime entry directly.
 pub fn global_function_patched(name: &str) -> bool {
-    with_set(|s| {
-        s.contains(&(GLOBAL_FUNCTION.to_string(), name.to_string()))
-            || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
-            || s.dynamic_code_reach.disables_builtin_constants()
-    })
-    .unwrap_or(false)
+    is_global_function(name)
+        && with_set(|s| {
+            s.contains(&(GLOBAL_FUNCTION.to_string(), name.to_string()))
+                || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
+                || s.dynamic_code_reach.disables_builtin_constants()
+        })
+        .unwrap_or(false)
 }
 
 /// May something the scan cannot name replace a builtin namespace member or
