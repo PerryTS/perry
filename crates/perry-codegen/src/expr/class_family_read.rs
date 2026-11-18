@@ -232,6 +232,7 @@ mod tests {
             init_count: keys.len() as u32,
             discriminant: 0,
             variants: Vec::new(),
+            born_with_keys: false,
         }
     }
 

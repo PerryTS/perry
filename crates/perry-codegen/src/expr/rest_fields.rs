@@ -76,9 +76,7 @@ pub(crate) fn class_lanes(
     // born at its static family layout (`layout_families`, planned before
     // the facts) is not, so it has none. A class born keyless gets them
     // after its definitions whatever its birth.
-    if layouts.families.contains_key(cid)
-        && crate::lower_call::new_alloc::keys_defined_at_birth(class)
-    {
+    if layouts.families.get(cid).is_some_and(|f| f.born_with_keys) {
         return 0;
     }
     // A class born keyless at its static family layout stores each key at
@@ -233,6 +231,37 @@ fn site_slot(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> Option<u32> {
         .filter(|&s| byte_offset != 0 && s < LANE_SLOTS && lanes_agree(ctx, property))
 }
 
+/// The lanes of program class `cid` as this module sees it: its local class,
+/// or the imported stub(s) `class_ids` registers under the source module's id
+/// (a stub's HIR id is 0, so `class_name_of` misses it). `None` when this
+/// module knows no class of that id, or its names disagree.
+fn class_lane_mask(ctx: &FnCtx<'_>, cid: u32) -> Option<u32> {
+    let mut names: Vec<String> = wpfacts_access::class_name_of(ctx, cid)
+        .into_iter()
+        .collect();
+    names.extend(
+        ctx.class_ids
+            .iter()
+            .filter(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut mask: Option<u32> = None;
+    for name in &names {
+        let m = lanes_of(ctx, name);
+        if mask.is_some_and(|x| x != m) {
+            return None;
+        }
+        mask = Some(m);
+    }
+    mask
+}
+
+/// Does program class `cid` have an I32 lane at `slot` here? `None`: this
+/// module cannot tell (`class_lane_mask`).
+fn has_lane(ctx: &FnCtx<'_>, cid: u32, slot: u32) -> Option<bool> {
+    class_lane_mask(ctx, cid).map(|m| slot < LANE_SLOTS && m & (1 << slot) != 0)
+}
+
 /// Every class the facts give a lane at `property` has that lane in codegen
 /// too (`class_lanes` keeps none for a class born with its keys at its
 /// static family layout): a site verdict of the facts then names lanes the
@@ -242,11 +271,7 @@ fn lanes_agree(ctx: &FnCtx<'_>, property: &str) -> bool {
         fc.fields
             .iter()
             .filter(|f| f.key == property && f.rest)
-            .all(|f| {
-                wpfacts_access::class_name_of(ctx, cid).is_some_and(|name| {
-                    f.slot < LANE_SLOTS && lanes_of(ctx, &name) & (1 << f.slot) != 0
-                })
-            })
+            .all(|f| has_lane(ctx, cid, f.slot) == Some(true))
     })
 }
 
@@ -276,16 +301,22 @@ fn plan(ctx: &FnCtx<'_>, object: &Expr, property: &str, access: Access) -> Plan 
     let Some((ids, _)) = wpfacts_access::proven_receiver_classes(ctx, object) else {
         return Plan::Complete;
     };
-    let lane = |cid: u32, slot: u32| {
-        wpfacts_access::class_name_of(ctx, cid)
-            .is_some_and(|name| slot < LANE_SLOTS && lanes_of(ctx, &name) & (1 << slot) != 0)
-    };
-    let with = ids.iter().filter(|&&cid| {
-        ctx.wpfacts
-            .field(cid, property)
-            .is_some_and(|f| lane(cid, f.slot))
-    });
-    let n = with.count();
+    let lane = |cid: u32, slot: u32| has_lane(ctx, cid, slot) == Some(true);
+    let mut n = 0;
+    for &cid in &ids {
+        let Some(f) = ctx.wpfacts.field(cid, property) else {
+            continue;
+        };
+        match has_lane(ctx, cid, f.slot) {
+            Some(true) => n += 1,
+            Some(false) => {}
+            // A class the facts give a lane at the key that this module
+            // cannot name: its instances may hold the I32 word, which only
+            // the complete operation reads and writes right.
+            None if f.rest => return Plan::Complete,
+            None => {}
+        }
+    }
     if n == 0 {
         return Plan::Ordinary;
     }
@@ -689,9 +720,14 @@ fn class_guard(ctx: &FnCtx<'_>, property: &str) -> Option<(Vec<u32>, u32)> {
         let Some(f) = fc.fields.iter().find(|f| f.key == property && f.rest) else {
             continue;
         };
-        let name = wpfacts_access::class_name_of(ctx, cid)?;
+        let name = wpfacts_access::class_name_of(ctx, cid).or_else(|| {
+            ctx.class_ids
+                .iter()
+                .find(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+                .map(|(name, _)| name.clone())
+        })?;
         let class = ctx.classes.get(&name)?;
-        if class.is_literal_shape() || lanes_of(ctx, &name) & (1 << f.slot) == 0 {
+        if class.is_literal_shape() || has_lane(ctx, cid, f.slot) != Some(true) {
             return None;
         }
         if slot.is_some_and(|s| s != f.slot) {
