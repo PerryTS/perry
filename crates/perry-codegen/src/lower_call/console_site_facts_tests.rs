@@ -292,7 +292,16 @@ fn native_dispatch_collection_identity_does_not_remove_receiver_guards() {
 #[test]
 fn native_dispatch_named_now_is_not_the_receiverless_perf_intrinsic() {
     let ir = compile(
-        member_call(Expr::NativeModuleRef("performance".into()), "now", vec![]),
+        member_call(
+            Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "performance".into(),
+                byte_offset: 0,
+                byte_end: 0,
+            },
+            "now",
+            vec![],
+        ),
         &[],
     );
     let body = build_body(&ir);
