@@ -920,9 +920,8 @@ impl WasmModuleEmitter {
                     );
                 }
                 // A user class, including the `__AnonShape_*` class of an object literal,
-                // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
-                // `{__class__}` object, whose tag is not enumerable) and run the compiled
-                // constructor, which returns `this`.
+                // has no JS constructor. Birth it as the WASM arm's `class_new` does
+                // (`__classInstance`) and run the compiled constructor, which returns `this`.
                 let instance = format!(
                     "fromJsValue(__classInstance({}))",
                     js_string_literal(class_name)

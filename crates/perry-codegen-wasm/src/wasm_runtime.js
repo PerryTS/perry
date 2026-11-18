@@ -681,8 +681,8 @@ function buildImports() {
         const obj = getHandle(handle);
         const mname = stringTable[methodNameId | 0];
         // Try class method dispatch first
-        if (obj && obj.__class__) {
-          let cls = obj.__class__;
+        if (obj && __classOf(obj)) {
+          let cls = __classOf(obj);
           while (cls) {
             const methods = classMethodTable[cls];
             if (methods && mname in methods) {
@@ -773,8 +773,8 @@ function buildImports() {
         if (!obj) return u64ToF64(TAG_UNDEFINED);
         const fname = getString(name);
         // Check for compiled getter method — WASM uses i64 (BigInt)
-        if (obj.__class__) {
-          let cls = obj.__class__;
+        if (__classOf(obj)) {
+          let cls = __classOf(obj);
           while (cls) {
             const methods = classMethodTable[cls];
             if (methods && ('__get_' + fname) in methods) {
@@ -791,8 +791,8 @@ function buildImports() {
         if (!obj) return;
         const fname = getString(name);
         // Check for compiled setter method — WASM uses i64 (BigInt)
-        if (obj.__class__) {
-          let cls = obj.__class__;
+        if (__classOf(obj)) {
+          let cls = __classOf(obj);
           while (cls) {
             const methods = classMethodTable[cls];
             if (methods && ('__set_' + fname) in methods) {
@@ -818,7 +818,7 @@ function buildImports() {
       class_instanceof: (handle, classId) => {
         const obj = getHandle(handle);
         if (!obj) return 0;
-        let cls = obj.__class__;
+        let cls = __classOf(obj);
         const target = getString(classId);
         while (cls) {
           if (cls === target) return 1;
@@ -1650,10 +1650,19 @@ const classParentTable = {};
 // Core bridge dispatch table — maps bridge function names to their implementations.
 // Args are decoded from NaN-boxed BigInt bits to plain JS values by __bitsToJsValue before dispatch.
 // Return values are plain JS values, converted back to BigInt bits by __jsValueToBits in mem_call.
-// The class name is non-enumerable, so Object.keys, for-in, spread and
-// JSON.stringify see only the fields the program declared.
-function __classInstance(className, proto = Object.prototype) {
-  return Object.defineProperty(Object.create(proto), "__class__", { value: className, writable: true, configurable: true });
+// A user-class instance inherits its class name from one prototype per class, so its
+// own keys are only its declared fields (Node's `new Headers(obj)` copies every own
+// key). An object literal's shape class has no members to dispatch, so it is a plain
+// `{}`. `proto` is a class-expression evaluation's prototype (see __classCtor).
+const __classTag = Symbol('perry.class');
+function __classOf(obj) { return obj[__classTag]; }
+function __classProto(className) {
+  const t = __classTemplate(className);
+  return t.proto || (t.proto = Object.create(Object.prototype, { [__classTag]: { value: className } }));
+}
+function __classInstance(className, proto) {
+  if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
+  return Object.create(proto || __classProto(className));
 }
 
 // An object or a function: a class value (see __classRef) is a host function, and
@@ -1663,8 +1672,8 @@ function __holdsProperties(v) {
 }
 
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
-// so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
-// the compiled constructor. `ctorIdx` is the constructor's
+// so `new` on it builds what `new K()` builds — an instance (see __classInstance) run
+// through the compiled constructor. `ctorIdx` is the constructor's
 // table slot, or -1 when the class has none. Its arguments stay Perry values: a
 // closure passed to it must reach the compiled constructor as a closure, so
 // __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
@@ -1710,10 +1719,10 @@ function __classCtor(className, ctorIdx, caps) {
   Object.defineProperty(ctor, Symbol.hasInstance, {
     value: (obj) => {
       if (!obj || typeof obj !== 'object') return false;
-      if (evaluated && obj.__class__ === className) {
+      if (evaluated && __classOf(obj) === className) {
         return (__instanceEvaluationOf(obj) || __classTemplate(className).first) === ctor;
       }
-      for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+      for (let c = __classOf(obj); c; c = classParentTable[c] || null) {
         if (c === className) return true;
       }
       return false;
@@ -1729,7 +1738,7 @@ function __classCtor(className, ctorIdx, caps) {
     }
   }
   for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
-  if (evaluated) Object.defineProperty(proto, __evaluationTag, { value: ctor });
+  if (evaluated) Object.defineProperties(proto, { [__evaluationTag]: { value: ctor }, [__classTag]: { value: className } });
   ctor.prototype = proto;
   return ctor;
 }
@@ -1753,7 +1762,7 @@ const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
   let t = __classTemplates.get(className);
-  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [] }));
+  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined }));
   return t;
 }
 function __classEvaluate(className, ctorIdx, caps) {
@@ -2303,10 +2312,10 @@ const __memDispatch = {
   },
   class_env_stamp: (className, instance, evaluation) => {
     const e = __evaluationOf(evaluation);
-    // class_new built `new C()` on the default prototype (or another evaluation's).
-    if (e && instance && typeof instance === 'object' && instance.__class__ === e.template) {
+    // class_new built `new C()` on the class's prototype (or another evaluation's).
+    if (e && instance && typeof instance === 'object' && __classOf(instance) === e.template) {
       const proto = Object.getPrototypeOf(instance);
-      if (proto !== evaluation.prototype && (proto === Object.prototype || __instanceEvaluationOf(proto) !== undefined)) {
+      if (proto !== evaluation.prototype && (proto === __classProto(e.template) || __instanceEvaluationOf(proto) !== undefined)) {
         Object.setPrototypeOf(instance, evaluation.prototype);
       }
     }
@@ -2327,7 +2336,7 @@ const __memDispatch = {
   // template answers for the evaluation that built it.
   class_instanceof_value: (classId, obj, ctor) => {
     const e = __evaluationOf(ctor);
-    if (e && obj && typeof obj === 'object' && obj.__class__ === e.template) {
+    if (e && obj && typeof obj === 'object' && __classOf(obj) === e.template) {
       return (__instanceEvaluationOf(obj) || __classTemplate(e.template).first) === ctor;
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
@@ -2340,8 +2349,8 @@ const __memDispatch = {
   class_call_method: (obj, methodNameId, argsArr) => {
     // methodNameId is a plain number (string table index), not a decoded JS value
     const mname = stringTable[methodNameId | 0];
-    if (obj && obj.__class__) {
-      let cls = obj.__class__;
+    if (obj && __classOf(obj)) {
+      let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
         if (methods && mname in methods) {
@@ -2412,8 +2421,8 @@ const __memDispatch = {
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
-    if (obj.__class__) {
-      let cls = obj.__class__;
+    if (__classOf(obj)) {
+      let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
         if (methods && ('__get_' + fname) in methods) {
@@ -2425,7 +2434,7 @@ const __memDispatch = {
       // A compiled method read as a value (`o.m`, and the `o.m?.()` guard, which is
       // `o.m == null`): it lives in the WASM table, not on the object.
       if (!Object.prototype.hasOwnProperty.call(obj, fname)) {
-        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+        for (let c = __classOf(obj); c; c = classParentTable[c] || null) {
           const methods = classMethodTable[c];
           if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
             return __classMethodValue(c, fname, __instanceEvaluationOf(obj));
@@ -2439,8 +2448,8 @@ const __memDispatch = {
     if (!__holdsProperties(obj)) return;
     const fname = String(name);
     // Check for compiled setter method — WASM uses i64 (BigInt)
-    if (obj.__class__) {
-      let cls = obj.__class__;
+    if (__classOf(obj)) {
+      let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
         if (methods && ('__set_' + fname) in methods) {
@@ -2465,10 +2474,10 @@ const __memDispatch = {
   class_instanceof: (obj, classId) => {
     if (!obj || typeof obj !== 'object') return 0;
     const target = String(classId);
-    // A user-class instance is a `{__class__}` object: its chain is the class table,
+    // A user-class instance (see __classInstance): its chain is the class table,
     // and as a plain object it is also an instance of Object.
-    if (obj.__class__) {
-      let cls = obj.__class__;
+    if (__classOf(obj)) {
+      let cls = __classOf(obj);
       while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
       return target === 'Object' ? 1 : 0;
     }
@@ -2563,7 +2572,7 @@ const __memDispatch = {
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
-  // `{__class__}` object, so it takes the message the Error constructor would
+  // object (see __classInstance), so it takes the message the Error constructor would
   // give it, non-enumerable as on a real Error. Returns the instance.
   error_super_init: (obj, msg) => {
     if (!obj || typeof obj !== 'object') return obj;
@@ -5549,16 +5558,16 @@ function __jsNativeMember(obj, name) {
 }
 
 // A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,
-// the method is looked up before the arguments are evaluated. A user-class instance is a
-// `{__class__}` object whose methods live in the WASM function table: a name its class
+// the method is looked up before the arguments are evaluated. A user-class instance (see
+// __classInstance) keeps its methods in the WASM function table: a name its class
 // chain defines wins over what the object inherits from Object.prototype (`toString`),
 // and loses only to an own property. Otherwise the property is read exactly once (an
 // inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
 // only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
 function __jsMethodGet(obj, mname) {
-  const tagged = obj && typeof obj === 'object' && obj.__class__
+  const tagged = obj && typeof obj === 'object' && __classOf(obj)
     && !Object.prototype.hasOwnProperty.call(obj, mname);
-  if (tagged && __classHasMethod(obj.__class__, mname)) {
+  if (tagged && __classHasMethod(__classOf(obj), mname)) {
     return { r: obj, m: mname, user: true };
   }
   const f = obj[mname];
@@ -5613,8 +5622,8 @@ function __classDispatch(objVal, mname, rawArgs) {
   }
   // 1) Try class method table (for user-defined classes)
   // WASM functions use i64 (BigInt) params/returns
-  if (objVal && typeof objVal === 'object' && objVal.__class__) {
-    let cls = objVal.__class__;
+  if (objVal && typeof objVal === 'object' && __classOf(objVal)) {
+    let cls = __classOf(objVal);
     while (cls) {
       const methods = classMethodTable[cls];
       // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`

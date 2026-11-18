@@ -556,8 +556,8 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
-// A user class's method wins over what its `{__class__}` instance inherits from
-// Object.prototype, also through a subclass.
+// A user class's method wins over what its instance inherits from Object.prototype,
+// also through a subclass.
 #[test]
 fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() {
     assert_eq!(
@@ -590,7 +590,7 @@ let reads = 0;
 class Base {}
 Object.defineProperty(Base.prototype, "m", { get() { reads++; return function () { return "ok"; }; } });
 const o = Object.create(Base.prototype);
-o.__class__ = "NoSuchClass";
+Object.defineProperty(o, __classTag, { value: "NoSuchClass" });
 console.log(__jsMethodInvoke(__jsMethodGet(o, "m"), []) + " " + reads);
 "#
         ),
@@ -1288,8 +1288,7 @@ console.log(new MM((n: number) => n * 10).out.join(","));
     );
 }
 
-// Instances are `{__class__}` objects, so host `instanceof` on a class value walks
-// the class table, as compiled `instanceof` does.
+// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
 #[test]
 fn host_instanceof_on_a_class_value_walks_the_class_chain() {
     assert_eq!(
@@ -1921,9 +1920,8 @@ console.log(new B().m());
     );
 }
 
-// An instance inherits its evaluation from a prototype per evaluation, so it gains no
-// own key: neither through the class value's constructor nor through a `new K()` that
-// the class's own member runs on a later evaluation.
+// An evaluation's instance inherits its evaluation and class tag, so it gains no own key,
+// whether the class value built it or a member's `new K()` on a later evaluation did.
 #[test]
 fn an_evaluation_instance_keeps_only_its_declared_own_keys() {
     assert_eq!(
@@ -1932,19 +1930,67 @@ fn an_evaluation_instance_keeps_only_its_declared_own_keys() {
 function make(tag: string) { return class { x = 1; who() { return tag; } }; }
 function declared(t: string) { class K { v = 2; who() { return t; } again() { return new K(); } } return new K().again(); }
 const g: any = globalThis;
-g.a = new (make("A"))();
-g.b = new (make("B"))();
+const A = make("A");
+const B = make("B");
+g.a = new A();
+g.b = new B();
 declared("j");
 g.k = declared("k");
-console.log(g.a.who() + g.b.who() + g.k.who());
+console.log(g.a.who() + g.b.who() + g.k.who() + " " + (g.a instanceof A) + " " + (g.a instanceof B) + " " + (g.b instanceof B));
 "#,
             r#"
 for (const o of [a, b, k]) {
-  console.log(Reflect.ownKeys(o).filter((key) => key !== "__class__").map(String).join(","));
+  console.log(Reflect.ownKeys(o).map(String).join(",") + "|" + [...new Headers(o).keys()].join(","));
 }
 "#
         ),
-        "ABk\nx\nx\nv"
+        "ABk true false true\nx|x\nx|x\nv|v"
+    );
+}
+
+// Node's `Headers` copies every own key, enumerable or not: an instance or object literal
+// built in sync code or in an async (JS) body shows it only declared fields.
+#[test]
+fn an_instance_has_no_own_class_tag_key() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class P { x: number; constructor() { this.x = 1; } }
+const g: any = globalThis;
+g.h = { "Content-Type": "application/json" };
+g.p = new P();
+async function inBody(): Promise<void> { g.ah = { "X-A": "1" }; g.ap = new P(); }
+inBody();
+"#,
+            r#"
+await new Promise((r) => setTimeout(r, 0));
+for (const o of [h, p, ah, ap]) {
+  console.log(Reflect.ownKeys(o).join(",") + "|" + [...new Headers(o).keys()].join(","));
+}
+"#
+        ),
+        "Content-Type|content-type\nx|x\nX-A|x-a\nx|x"
+    );
+}
+
+// A copy of an instance is an untagged plain object; an object literal's prototype is
+// Object.prototype.
+#[test]
+fn a_copied_instance_is_untagged_and_the_original_still_dispatches() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class Q { v: number; constructor() { this.v = 2; } get twice(): number { return this.v * 2; } }
+const q = new Q();
+const c: any = { ...q };
+const a: any = Object.assign({}, q);
+const g: any = globalThis;
+g.q = q; g.c = c; g.lit = { v: 3 };
+console.log(JSON.stringify(c) + " " + (c instanceof Q) + " " + (a instanceof Q) + " " + (q instanceof Q) + " " + q.twice);
+"#,
+            r#"console.log([lit, c, q].map((o) => Object.getPrototypeOf(o) === Object.prototype).join(" "));"#
+        ),
+        "{\"v\":2} false false true 4\ntrue true false"
     );
 }
 
