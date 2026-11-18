@@ -2557,6 +2557,12 @@ pub struct Model {
     /// runtime's; it reaches `esc_raise` only when the program may register
     /// a process listener, which is handed the value.
     pub host_report: NodeId,
+    /// W-HOST: what the realm's `process.emit` hands process listeners
+    /// beside reports (the `worker` event's Worker, worker_surface.rs
+    /// `emit_process_worker_event`). No reader of its own: it reaches
+    /// `esc_raise` where the program may register a process listener (the
+    /// R-HOSTREPORT call set) and once unknown code holds the realm.
+    pub process_event: NodeId,
     /// The accessor functions of escaped values (unknown code reads them
     /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
     pub esc_accessors: NodeId,
