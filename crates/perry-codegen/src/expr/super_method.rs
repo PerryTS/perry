@@ -463,8 +463,7 @@ fn static_super_guard(
 /// `super()`), the [[Get]] of `m`, then the arguments, then the call. The get
 /// is the holder proof over the static chain (in a static method, the
 /// site's static-call memo); only where it fails does the cold block read the
-/// live home parent. The
-/// arguments are lowered once; the proven arm calls the holder's body
+/// live home parent. The arguments are lowered once; the proven arm calls the holder's body
 /// directly (missing arguments `undefined`, extra ones evaluated and
 /// dropped), the other calls the value the get read.
 fn lower_proven_super_call(
@@ -476,13 +475,14 @@ fn lower_proven_super_call(
     let this_expr = Expr::This;
     let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
     crate::rooting::with_rooted_group(ctx, args.len() + 2, |ctx, group| {
-        let r = group.lower(ctx, &this_expr, collects)?;
         // The holder proof reads no user state; compute it before the
         // arguments so a write among them cannot change the callee.
         let ok = match target.static_owner {
             Some(owner) => static_super_guard(ctx, method, &target, owner),
             None => crate::proto_constants::chain_constant(ctx, method, &target.chain),
         };
+        // A guard miss and the slow arm's getter can collect before `this` is reread.
+        let r = group.lower(ctx, &this_expr, collects || ok != "true")?;
         let how = if ok == "true" { "constant" } else { "guarded" };
         record_super_site(ctx, method, "super_direct", how);
         let f = if ok == "true" {
