@@ -282,15 +282,11 @@ unsafe fn client_ca_material(options: f64) -> Vec<Vec<u8>> {
     if !array.is_null() && is_js_array(value) {
         let len = perry_ffi::js_array_length(array);
         for index in 0..len {
-            if let Some(pem) = pem_bytes(perry_ffi::js_array_get(array, index)) {
-                out.push(pem);
-            }
+            out.push(pem_bytes(perry_ffi::js_array_get(array, index)));
         }
         return out;
     }
-    if let Some(pem) = pem_bytes(value) {
-        out.push(pem);
-    }
+    out.push(pem_bytes(value));
     out
 }
 
@@ -301,25 +297,21 @@ unsafe fn is_js_array(value: JsValue) -> bool {
     JsValue::from_bits(js_array_is_array(f64::from_bits(value.bits())).to_bits()).to_bool()
 }
 
-/// One PEM blob, from a string or a Buffer.
-///
-/// Only a string takes the text path: `jsvalue_to_owned_string` answers any
-/// object with its JSON, so a Buffer read as text becomes
-/// `{"type":"Buffer","data":[…]}`, holds no PEM block, and leaves the session
-/// trusting nothing (#14680).
+/// One PEM blob, from a string or a Buffer; any other value is an empty blob, so
+/// a bad `ca` trusts nothing rather than falling back to the platform roots.
 ///
 /// The Buffer read goes through the **canonical runtime registry**: this crate
 /// is a separately linked archive and cannot see a Buffer the program runtime
 /// allocated, which is exactly what `fs.readFileSync` returns.
-unsafe fn pem_bytes(value: JsValue) -> Option<Vec<u8>> {
+unsafe fn pem_bytes(value: JsValue) -> Vec<u8> {
+    // `jsvalue_to_owned_string` answers an object with its JSON, not its bytes.
     if value.is_any_string() {
-        return jsvalue_to_owned_string(f64::from_bits(value.bits())).map(String::into_bytes);
+        return jsvalue_to_owned_string(f64::from_bits(value.bits()))
+            .unwrap_or_default()
+            .into_bytes();
     }
-    perry_ffi::bytes::no_gc(|scope| {
-        perry_ffi::bytes::borrow(value, scope)
-            .filter(|bytes| !bytes.is_empty())
-            .map(<[u8]>::to_vec)
-    })
+    perry_ffi::bytes::no_gc(|scope| perry_ffi::bytes::borrow(value, scope).map(<[u8]>::to_vec))
+        .unwrap_or_default()
 }
 
 /// `(host, port, host:port)` for an `http2.connect` authority.
@@ -487,17 +479,28 @@ mod tests {
     use super::*;
 
     /// `http2.connect(url, { ca: fs.readFileSync(path) })` hands over a Buffer,
-    /// and its bytes are the PEM — not the Buffer's JSON (#14680).
+    /// and its bytes are the PEM, not the Buffer's JSON.
     #[test]
     fn a_buffer_ca_yields_its_bytes() {
         let pem = b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
-        let buffer = perry_ffi::alloc_buffer(pem);
-        let value = JsValue::from_bits(0x7ffd_0000_0000_0000 | buffer as u64);
+        let value = JsValue::from_object_ptr(perry_ffi::alloc_buffer(pem));
         assert!(
             !value.is_any_string(),
             "fixture must be a Buffer, not a string"
         );
-        assert_eq!(unsafe { pem_bytes(value) }, Some(pem.to_vec()));
+        assert_eq!(unsafe { pem_bytes(value) }, pem.to_vec());
+    }
+
+    /// An empty Buffer or a non-PEM value stays an empty blob: an explicit
+    /// `ca` never falls back to the platform roots.
+    #[test]
+    fn an_empty_or_invalid_ca_trusts_nothing() {
+        let empty = JsValue::from_object_ptr(perry_ffi::alloc_buffer(&[]));
+        assert_eq!(unsafe { pem_bytes(empty) }, Vec::<u8>::new());
+        assert_eq!(
+            unsafe { pem_bytes(JsValue::from_bits(1.0f64.to_bits())) },
+            Vec::<u8>::new()
+        );
     }
 
     /// The events queued for one handle, without draining the global queue —
