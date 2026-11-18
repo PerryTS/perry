@@ -58,10 +58,30 @@ unsafe fn object_assign_set_string_key(
     if !define {
         // Set(to, key, value, true) must walk inherited descriptors and invoke
         // setters with the target as receiver, including on non-extensible
-        // targets. Use the same strict [[Set]] as property assignment.
+        // targets. Preserve learned inline additions while physical room
+        // remains; dictionaries use keyed assignment's guarded append. This
+        // selects between complete setters, never grants write permission.
         let target_value = crate::value::js_nanbox_pointer(target as i64);
         let key_value = f64::from_bits(JSValue::string_ptr(key_ptr as *mut _).bits());
-        crate::proxy::js_put_value_set(target_value, key_value, value_f64, target_value, 1);
+        let inline_room = !target_is_array
+            && crate::value::addr_class::try_read_gc_header(target as usize).is_some_and(|header| {
+                crate::gc_type_is_object!(header.obj_type)
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            })
+            && !super::overflow::has_overflow(target)
+            && (super::object_keys(target).count() as usize)
+                < super::object_inline_capacity(target) as usize;
+        if inline_room {
+            crate::proxy::js_put_value_set(target_value, key_value, value_f64, target_value, 1);
+        } else {
+            crate::object::property_ops::put_value::js_put_value_set_dynamic(
+                crate::object::shapes::ordinary_dir_addr(),
+                target_value,
+                key_value,
+                value_f64,
+                1,
+            );
+        }
     } else if target_is_array {
         crate::array::js_array_set_string_key(
             target as *mut crate::array::ArrayHeader,
@@ -580,20 +600,27 @@ unsafe fn object_assign_enumerated_source(
         let iter_scope = crate::gc::RuntimeHandleScope::new();
         let key_h = iter_scope.root_nanbox_u64(key.bits());
         let key_f64 = f64::from_bits(key.bits());
-        // `[[GetOwnProperty]]` — fires the getOwnPropertyDescriptor trap.
-        let desc = crate::proxy::js_reflect_get_own_property_descriptor(source_f64, key_f64);
-        let desc_h = iter_scope.root_nanbox_f64(desc);
-        let desc_ptr =
-            (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-        if desc.to_bits() == JSValue::undefined().bits() || desc_ptr.is_null() {
-            continue;
-        }
-        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
-        if crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
-            (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader,
-            ek,
-        )) == 0
-        {
+        // Resolve the live descriptor without materializing ordinary property
+        // facts. Proxy/exotic descriptors keep their public representation and
+        // traps; the subsequent Get must still observe any intervening changes.
+        use super::descriptors::OwnProperty;
+        let enumerable = match super::descriptors::own_property(source_f64, key_f64) {
+            Some(OwnProperty::Data(_, attrs) | OwnProperty::Accessor(_, _, attrs)) => {
+                attrs.enumerable()
+            }
+            Some(OwnProperty::Public(desc)) => {
+                let desc_h = iter_scope.root_nanbox_f64(desc);
+                let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+                let desc_ptr = (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                    as *const ObjectHeader;
+                !desc_ptr.is_null()
+                    && crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
+                        desc_ptr, ek,
+                    )) != 0
+            }
+            None => false,
+        };
+        if !enumerable {
             continue;
         }
         // `[[Get]]` — fires the get trap.
