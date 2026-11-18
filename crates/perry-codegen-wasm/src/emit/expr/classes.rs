@@ -26,6 +26,7 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 captures,
                 mutable_captures,
+                captures_this,
                 ..
             } => {
                 // Compile closure body as a function (it was already registered if it's in module.functions)
@@ -43,13 +44,19 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
                     self.emit_memcall(func, "closure_new", 2);
-                    // Set captures
-                    for (i, cap_id) in captures.iter().chain(mutable_captures.iter()).enumerate() {
+                    // Set captures, then the captured `this` (see compile_closure).
+                    let local_map = self.local_map;
+                    let cap_locals = captures
+                        .iter()
+                        .chain(mutable_captures.iter())
+                        .map(|id| local_map.get(id).copied());
+                    let this_cap = captures_this.then_some(Some(self.this_local.unwrap_or(0)));
+                    for (i, local) in cap_locals.chain(this_cap).enumerate() {
                         // Duplicate closure handle (it's returned by closure_new)
                         // closure_set_capture(handle, idx, value) -> handle (chaining)
                         func.instruction(&f64_const(i as f64));
                         func.instruction(&Instruction::I64ReinterpretF64);
-                        if let Some(&local_idx) = self.local_map.get(cap_id) {
+                        if let Some(local_idx) = local {
                             func.instruction(&Instruction::LocalGet(local_idx));
                         } else {
                             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
@@ -356,8 +363,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
             Expr::This => {
-                // 'this' is passed as first parameter (local 0) in methods
-                func.instruction(&Instruction::LocalGet(0));
+                func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
             Expr::SuperCall(args) => {
                 // Call parent constructor: super(args)
@@ -778,7 +784,7 @@ impl<'a> FuncEmitCtx<'a> {
     /// The receiver a class-environment node resolves its evaluation from: `this`
     /// in a member.
     fn class_env_receiver(&self) -> Expr {
-        if self.this_is_local0 {
+        if self.this_local.is_some() {
             Expr::This
         } else {
             Expr::Undefined

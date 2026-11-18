@@ -4,14 +4,16 @@ use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::walk_expr_children;
 
-/// A collected closure: its id, params, body, captures, mutable captures, and
-/// whether it is an arrow (which shares its enclosing method's `this` and `super`).
+/// A collected closure: its id, params, body, captures, mutable captures, whether
+/// it captures `this`, and whether it is an arrow (which shares its enclosing
+/// method's `this` and `super`).
 pub(super) type CollectedClosure = (
     FuncId,
     Vec<Param>,
     Vec<Stmt>,
     Vec<LocalId>,
     Vec<LocalId>,
+    bool,
     bool,
 );
 
@@ -105,6 +107,7 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
         body,
         captures,
         mutable_captures,
+        captures_this,
         is_arrow,
         ..
     } = expr
@@ -115,6 +118,7 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
             body.clone(),
             captures.clone(),
             mutable_captures.clone(),
+            *captures_this,
             *is_arrow,
         ));
     }
