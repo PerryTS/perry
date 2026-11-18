@@ -1534,6 +1534,21 @@
           "validation_only_events": []
         },
         {
+          "id": "auto-label",
+          "file": "auto-label.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "13,43 * * * *"
+              }
+            ]
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
           "id": "npm-publish-freshness",
           "file": "npm-publish-freshness.yml",
           "original_events": {
