@@ -498,9 +498,15 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             img.mint = mint.take().unwrap_or_default();
             let mint_notes = mint_capture(&w, &mut img.mint, &b.data.1, &b.pre_data, &b.shapes);
             // A torn-down trie leaves the record out: the replay needs it, so the image stops.
+            // The addresses the record names, with their image form, for the replay check.
+            let mut named: Vec<(Val, usize)> = Vec::new();
             let canon = crate::object::canonical_keys::snap_image::snap_image_canon_capture(
                 &b.canon,
-                &mut |a| w.val(a as u64).unwrap_or_else(Val::Opaque),
+                &mut |a| {
+                    let v = w.val(a as u64).unwrap_or_else(Val::Opaque);
+                    named.push((v.clone(), a));
+                    v
+                },
             );
             let mint_stop = mint_stop(&delta, &img.mint);
             let (pending, stops) = completeness(
@@ -511,10 +517,18 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             img.pending = pending;
             img.stops.extend(stops);
             img.stops.extend(mint_stop);
-            img.stops.extend(mint_notes);
+            // A record keying a canonical list needs the canonical-keys record, which replays
+            // its node: the stop stands only where the record is left out.
+            let held = canon.is_some();
+            img.stops.extend(
+                mint_notes
+                    .into_iter()
+                    .filter(|s| !(held && s.kind == format::STOP_MINT_CANONICAL)),
+            );
             if let Some((canon, canon_stops)) = canon {
                 img.stops.extend(canon_stops);
                 img.stops.push(canon_stop(&canon));
+                img.stops.push(canon_replay_stop(&b.canon, &canon, named));
                 img.canon = Some(canon);
             }
             img.registry = registry_record(&w, &mut img.stops);
@@ -631,13 +645,54 @@ fn mint_roots(recs: &[format::MintRec], v: &mut dyn FnMut(u64)) {
 /// node counts.
 fn canon_stop(c: &format::CanonRec) -> Stop {
     let blob = format::canon_blob(c);
-    let same = format::parse_canon_blob(&blob).is_some_and(|(back, used)| used == blob.len() && back == *c);
+    let same = format::parse_canon_blob(&blob)
+        .is_some_and(|(back, used)| used == blob.len() && back == *c);
     Stop {
         cell: u32::from(!same),
         obj_type: 0,
         kind: format::STOP_CANON_RECORD,
         off: blob.len() as u32,
         value: c.new.len() as u64 | (c.changed.len() as u64) << 32,
+    }
+}
+
+/// The canonical-keys record as the file holds it, replayed into a trie rebuilt from the
+/// baseline and compared with the trie at the cut: the stop that reports the outcome.
+fn canon_replay_stop(
+    b: &crate::object::canonical_keys::snap_image::CanonBaseline,
+    c: &format::CanonRec,
+    named: Vec<(Val, usize)>,
+) -> Stop {
+    use crate::object::canonical_keys::snap_image as ck;
+    // The replay overwrites its thread's trie: it runs on a thread of its own, which owns a
+    // copy of the baseline, the record and the address list. The builder's spawn carries no
+    // panic site (a scope would bring one, with this file's location string, into every
+    // binary that links the image module); a failed spawn or a panicked replay is an error.
+    let check = format::parse_canon_blob(&format::canon_blob(c)).and_then(|(back, _)| {
+        let base = b.copy();
+        let worker = std::thread::Builder::new()
+            .spawn(move || {
+                let addr = |v: &Val| match v {
+                    Val::Scalar(x) => *x as usize,
+                    _ => named.iter().find(|n| n.0 == *v).map_or(0, |n| n.1),
+                };
+                ck::snap_image_canon_replay_apart(&base, &back, &addr)
+            })
+            .ok()?;
+        let replayed = worker.join().ok().flatten()?;
+        ck::snap_image_canon_check(replayed)
+    });
+    let first = match check {
+        Some(Ok(())) => None,
+        Some(Err(e)) => Some(e.node),
+        None => Some(u32::MAX),
+    };
+    Stop {
+        cell: u32::from(first.is_some()),
+        obj_type: 0,
+        kind: format::STOP_CANON_REPLAY,
+        off: first.unwrap_or(0),
+        value: u64::from(c.cut_len),
     }
 }
 
@@ -704,7 +759,10 @@ fn mint_ref(w: &Where, bits: u64, scalar_any: bool) -> Option<Val> {
 /// of the last from the window start.
 fn mint_desc_matches(was: &[u8], now: &[u8], id: u32, word: u32) -> (u32, u64) {
     use crate::object::layout_desc::PerryLayoutDesc;
-    let (so, lo) = (std::mem::offset_of!(PerryLayoutDesc, shape_id), std::mem::offset_of!(PerryLayoutDesc, layout_id));
+    let (so, lo) = (
+        std::mem::offset_of!(PerryLayoutDesc, shape_id),
+        std::mem::offset_of!(PerryLayoutDesc, layout_id),
+    );
     let u32at = |b: &[u8], o: usize| {
         b.get(o..o + 4)
             .map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap_or([0; 4])))
@@ -849,11 +907,23 @@ fn mint_capture(
     for (kind, (cnt, at)) in kinds.iter().zip(n.iter().zip(first.iter())) {
         if *cnt > 0 {
             let id = recs.get(*at).map_or(0, |r| r.id);
-            stops.push(Stop { cell: *at as u32, obj_type: 0, kind: *kind, off: *cnt, value: u64::from(id) });
+            stops.push(Stop {
+                cell: *at as u32,
+                obj_type: 0,
+                kind: *kind,
+                off: *cnt,
+                value: u64::from(id),
+            });
         }
     }
     for (item, value) in c.iter().enumerate() {
-        stops.push(Stop { cell: 0, obj_type: item as u8, kind: f::STOP_MINT_CENSUS, off: 0, value: *value });
+        stops.push(Stop {
+            cell: 0,
+            obj_type: item as u8,
+            kind: f::STOP_MINT_CENSUS,
+            off: 0,
+            value: *value,
+        });
     }
     stops
 }

@@ -340,6 +340,10 @@ pub const STOP_CANON_ORDER: u8 = 22;
 /// The canonical-keys record is written (`value` = new nodes | changed nodes << 32,
 /// `off` = its bytes, `cell` = 0 when it reads back equal, 1 when it does not).
 pub const STOP_CANON_RECORD: u8 = 23;
+/// The canonical-keys record, read back and replayed into a trie rebuilt from the baseline,
+/// gives the trie at the cut (`cell` = 0) or not (`cell` = 1, `off` = the first node that
+/// differs, `value` = nodes at the cut).
+pub const STOP_CANON_REPLAY: u8 = 24;
 
 /// How a record was minted: a dynamic row, a runtime layout's first birth, a lazy image
 /// row, or a compile-time shape id.
@@ -442,7 +446,12 @@ fn tail_val(b: &[u8], o: &mut usize) -> Option<Val> {
             let bare = mint_tail(b, o, 1)?[0] != 0;
             let region = mint_tail(b, o, 1)?[0];
             let off = mint_tail_u64(b, o)?;
-            Some(Val::Ext { hi, bare, region, off })
+            Some(Val::Ext {
+                hi,
+                bare,
+                region,
+                off,
+            })
         }
         3 => Some(Val::Opaque(mint_tail_u64(b, o)?)),
         4 => Some(Val::Sym(mint_tail_u64(b, o)?)),
