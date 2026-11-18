@@ -266,6 +266,10 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // string lowering. The value may be SSO, not only a heap string; the
         // string lowerings tag-dispatch a proven local for exactly that.
         Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_) => Some(HirType::String),
+        // `atob(x)` / `btoa(x)` return a string or throw (`js_atob` /
+        // `js_btoa`); without this, `const s = atob(b64)` keeps no proof and
+        // `s.charCodeAt(i)` takes the generic method site.
+        Expr::Atob(_) | Expr::Btoa(_) => Some(HirType::String),
         // `+` with a string literal on either side concatenates: a string or a
         // throw, whatever the other operand is (`"" + n`, `"k" + i`). Only a
         // literal counts; a declared `string` operand is not a proof (#7837).
