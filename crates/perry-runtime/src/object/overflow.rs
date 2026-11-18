@@ -296,7 +296,7 @@ pub(crate) unsafe fn find_hashed_with(
 /// The value of found data entry `i` when one load answers it: the value
 /// word the table holds, or the word of the fixed inline slot the entry
 /// refers to (a layout key of a receiver that also has a table). `None`
-/// leaves the entry to [`get_found_from_record`], which gives the same
+/// leaves the entry to the complete read, which gives the same
 /// answer for both of these: an accessor pair, a fixed slot past `live`
 /// (the spill), and the two slot words that are not their own value (the
 /// null pointer word, an I32 lane's word).
@@ -492,6 +492,12 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     // own slot numbers. The hole is no heap reference, so no barrier and
     // no index entry.
     let t = rooted.get_raw_mut_ptr::<Table>();
+    // The layout's keys copied above are not decoded: a non-empty prefix may
+    // hold a hidden name (no record read here, no per-key decode). The table
+    // bits of the copied entries are set once, here.
+    if count != 0 {
+        (*t).summary |= super::key_attrs::TABLE_KEY_HIDDEN | copied_enum_any(t, count);
+    }
     for i in count..prefix {
         *key_at(t, i) = TAG_HOLE;
         *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
@@ -505,6 +511,29 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     }
     install(owner.get_raw_mut_ptr::<ObjectHeader>(), t);
     t
+}
+
+/// `key_attrs::TABLE_ENUM_ANY` when one of the first `count` entries of `t`,
+/// all written by [`ensure_adding`]'s copy, lacks `ENTRY_NON_ENUMERABLE`.
+/// The summary of those entries (the table is born with no attribute bit)
+/// answers when none is non-enumerable; else the entries are read.
+#[inline(always)]
+unsafe fn copied_enum_any(t: *const Table, count: u32) -> u32 {
+    if (*t).summary & u32::from(super::key_attrs::SUMMARY_NON_ENUMERABLE) == 0 {
+        return super::key_attrs::TABLE_ENUM_ANY;
+    }
+    copied_enum_any_scan(t, count)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn copied_enum_any_scan(t: *const Table, count: u32) -> u32 {
+    for i in 0..count {
+        if *attrs_at(t, i) as u8 & super::key_attrs::ENTRY_NON_ENUMERABLE == 0 {
+            return super::key_attrs::TABLE_ENUM_ANY;
+        }
+    }
+    0
 }
 
 /// Does storage slot `fixed` of `obj` (live inline slots `live`) hold the
@@ -584,6 +613,7 @@ pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, hash: u64, value: u64
     *value_at(t, slot) = value;
     // GC_STORE_AUDIT(POINTER_FREE): attributes word, scalar.
     *attrs_at(t, slot) = 0;
+    (*t).summary |= super::key_attrs::TABLE_ENUM_ANY;
     (*t).length = slot + 1;
     place_hashed(t, slot, key, hash);
     crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
@@ -619,6 +649,13 @@ pub(crate) unsafe fn insert_key_bits(
     let val = scope.root_nanbox_f64(f64::from_bits(value));
     let key = scope.root_nanbox_u64(key);
     let t = reserve(obj);
+    // The general insert marks the table before it touches an entry: any key
+    // may arrive here (`key_attrs::TABLE_KEY_HIDDEN`, no per-key decode), and
+    // the entry's attributes. Both are "may" bits, never cleared, so a hit or
+    // an add that `note_write` refuses only over-approximates. One write
+    // here, none on the add path after `note_write`.
+    (*t).summary |=
+        super::key_attrs::table_entry_summary_with(attrs, super::key_attrs::TABLE_KEY_HIDDEN);
     let key = key.get_nanbox_u64();
     let hit = if super::key_attrs::entry_is_private(attrs) {
         (0..(*t).length).find(|&i| {
@@ -643,7 +680,6 @@ pub(crate) unsafe fn insert_key_bits(
         *key_at(t, slot) = key;
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
-        (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
         (*t).length += 1;
         place(t, slot);
         super::proto_validity::note_object_own_keys_changed(
@@ -659,7 +695,6 @@ pub(crate) unsafe fn insert_key_bits(
     } else {
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
-        (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
     }
     crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
     if *attrs_at(t, slot) & SLOT_REF == 0 {
@@ -703,12 +738,15 @@ pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u
 }
 
 /// Read an entry just found in the actual table, using the receiver's current
-/// record rather than resolving that same published inline bound again.
+/// record rather than resolving that same published inline bound again. Only
+/// the tests read the complete form; the probe uses
+/// [`get_found_from_record_probe`].
 ///
 /// # Safety
 /// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
 /// current present record of `obj`. No callback or collection separates those
-/// proofs from this NoCollect read. The caller retains its property-kind checks.
+/// proofs from this NoCollect read.
+#[cfg(test)]
 #[inline(always)]
 pub(crate) unsafe fn get_found_from_record(
     t: *const Table,
@@ -736,10 +774,14 @@ pub(crate) unsafe fn get_from_probe(
     read_found_probe(t, obj, slot, || super::object_live_slot_count(obj))
 }
 
-/// [`get_found_from_record`] for the probe, with [`get_from_probe`]'s null rule.
+/// Read an entry just found in the actual table, using the receiver's current
+/// record rather than resolving that same published inline bound again, with
+/// [`get_from_probe`]'s null rule.
 ///
 /// # Safety
-/// As [`get_found_from_record`].
+/// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
+/// current present record of `obj`. No callback or collection separates those
+/// proofs from this NoCollect read.
 #[inline(always)]
 pub(crate) unsafe fn get_found_from_record_probe(
     t: *const Table,
@@ -1074,7 +1116,7 @@ unsafe fn delete_present_key_bits(obj: *mut ObjectHeader, key: u64) -> Option<bo
 pub(crate) unsafe fn set_entry_attrs(obj: *mut ObjectHeader, t: *mut Table, i: u32, attrs: u8) {
     let word = attrs_at(t, i);
     *word = (*word & !0xff) | attrs as u64;
-    (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
+    (*t).summary |= super::key_attrs::table_entry_summary(attrs);
     if *word & SLOT_REF != 0 && attrs & super::key_attrs::ENTRY_ACCESSOR != 0 {
         let fixed = *value_at(t, i) as u32;
         let value = if fixed < super::object_live_slot_count(obj) {

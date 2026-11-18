@@ -307,28 +307,14 @@ unsafe fn link_of_record(
 }
 
 /// DYNP E3: the [[Prototype]] link of an ordinary layout object as its shape
-/// states it, for a walk that runs no user code and exposes nothing (the
-/// for-in chain test). `None`: the shape does not state it (exotic kinds, a
-/// held record prototype, an unbuilt class holder, an unresolved realm
-/// default); the caller takes the generic walk.
+/// states it, read from `obj`'s live record, already read by a caller that
+/// tests the same record (the for-in walk: one record per level). `None`: the
+/// shape does not state it (exotic kinds, a held record prototype, an unbuilt
+/// class holder, an unresolved realm default); the caller takes the generic
+/// walk.
 ///
 /// # Safety
-/// `obj` is a live `GC_TYPE_OBJECT` cell.
-pub(crate) unsafe fn structural_prototype_link(obj: *const ObjectHeader) -> Option<f64> {
-    use crate::object::shapes as s;
-    let record = s::shape_record_of_receiver((s::object_shape_stamp(obj)).0)?;
-    if record.proto_id() == s::PROTO_ID_RECORD_HELD {
-        return None;
-    }
-    shape_link_prototype(obj, false)
-}
-
-/// [`structural_prototype_link`] from `obj`'s live record, already read by a
-/// caller that tests the same record (the for-in walk: one record per level).
-///
-/// # Safety
-/// As [`structural_prototype_link`]; `record` is `obj`'s live record.
-#[inline(always)]
+/// `obj` is a live `GC_TYPE_OBJECT` cell; `record` is `obj`'s live record.
 pub(crate) unsafe fn structural_prototype_link_of(
     obj: *const ObjectHeader,
     record: crate::object::shapes::ShapeRecordRef,

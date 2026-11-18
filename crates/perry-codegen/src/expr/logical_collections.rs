@@ -1166,10 +1166,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         s
                     }
                 };
+                // DYNP E13: the loop's bound slot when its keys are bound by
+                // the desugar's `let __keys` (`for_in_keys_locals`): the keys
+                // may then be the receiver's own key list in place, and the
+                // bound is read from this slot (`let __n`), not their length.
+                let in_place = ctx.for_in_keys_locals.values().any(|r| r == obj_id);
+                let len = if in_place {
+                    let s = match ctx.for_in_lens.get(obj_id) {
+                        Some(s) => s.clone(),
+                        None => {
+                            let s = ctx.func.alloca_entry(I64);
+                            ctx.func.entry_allocas_push_store(I64, "0", &s);
+                            ctx.for_in_lens.insert(*obj_id, s.clone());
+                            s
+                        }
+                    };
+                    s
+                } else {
+                    "null".to_string()
+                };
                 let arr_handle = ctx.block().call(
                     I64,
-                    "js_for_in_keys_fact",
-                    &[(DOUBLE, &obj_box), (PTR, &slot)],
+                    "js_for_in_begin",
+                    &[(DOUBLE, &obj_box), (PTR, &slot), (PTR, &len)],
                 );
                 return Ok(nanbox_pointer_inline(ctx.block(), &arr_handle));
             }

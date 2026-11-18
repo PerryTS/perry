@@ -1,7 +1,7 @@
 //! FVA 4.3b: a for-in body is a function of its key.
 //!
 //! HIR lowers `for (k in o) body` to `__obj = o; __keys = ForInKeys(__obj);
-//! for (i …) if (guard) { const k = __keys[i]; body }`. Generation makes the
+//! __n = __keys.length; for (i < __n …) if (guard) { const k = __keys[i]; body }`. Generation makes the
 //! body a function of the key (`for_in_body`) and the loop a call of it per
 //! value of `__obj` (`Cons::ForInBody`). The solve runs it once per key of a
 //! literal whose keys are exactly its birth keys, that run's key parameter
@@ -204,7 +204,7 @@ fn defining_loops<'s>(body: &'s [Stmt]) -> Vec<(&'s Expr, ForIn<'s>)> {
     stmt_lists(body, &mut lists);
     let mut out = Vec::new();
     for l in lists {
-        for w in l.windows(3) {
+        for w in l.windows(4) {
             let [Stmt::Let {
                 id: obj,
                 init: Some(src),
@@ -213,11 +213,19 @@ fn defining_loops<'s>(body: &'s [Stmt]) -> Vec<(&'s Expr, ForIn<'s>)> {
                 id: keys,
                 init: Some(Expr::ForInKeys(of)),
                 ..
+            }, Stmt::Let {
+                init:
+                    Some(Expr::PropertyGet {
+                        object: bound_of, ..
+                    }),
+                ..
             }, Stmt::For { body: fb, .. }] = w
             else {
                 continue;
             };
-            if !matches!(of.as_ref(), Expr::LocalGet(o) if o == obj) {
+            if !matches!(of.as_ref(), Expr::LocalGet(o) if o == obj)
+                || !matches!(bound_of.as_ref(), Expr::LocalGet(k) if k == keys)
+            {
                 continue;
             }
             let Some(f) = for_in_shape(fb, |k| (k == *keys).then_some(*obj)) else {

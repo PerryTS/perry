@@ -23,7 +23,7 @@ pub(crate) mod has_own;
 mod host_prototype;
 mod keys_array;
 mod prototype;
-pub(crate) use prototype::{structural_prototype_link, structural_prototype_link_of};
+pub(crate) use prototype::structural_prototype_link_of;
 
 // `#[no_mangle] pub extern "C"` FFI entry points keep their `pub` visibility so
 // the parent's `pub use object_ops::*` glob re-exports them crate-publicly.
