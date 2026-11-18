@@ -241,11 +241,11 @@ fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
     let mut missing = s.clone();
     missing.method_call.as_mut().unwrap().dispatch = None;
     assert!(missing.dispatch_obligation().unwrap().redispatch);
-    let (native, _) = dispatch("const s = 'abc'; console.log(s.charCodeAt(0));");
+    let (native, _) = dispatch("const s = 'abc'; console.log(s.split(/b/));");
     let s = native
         .sites
         .iter()
-        .find(|s| s.is_call && s.key == "charCodeAt")
+        .find(|s| s.is_call && s.key == "split")
         .expect("native call");
     assert_eq!(s.verdict, Verdict::NativeMember);
     assert!(s.dispatch_obligation().unwrap().redispatch);

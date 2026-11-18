@@ -596,6 +596,64 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        if !ctx.wpfacts_off
+            && matches!(object.as_ref(), Expr::LocalGet(_))
+            && ctx
+                .wpfacts
+                .method_calls
+                .get(&(*byte_offset, property.clone()))
+                .is_some_and(|record| record.5)
+        {
+            let value = property_get::try_lower_proven_method_call(ctx, callee, args)?;
+            debug_assert!(
+                value.is_some(),
+                "imported receiver must have a materialized public entry"
+            );
+            if let Some(value) = value {
+                return Ok(value);
+            }
+        }
+    }
+    if let Some(value) = property_get::try_lower_certified_map(ctx, callee, args)? {
+        return Ok(value);
+    }
+    if let Some(value) = crate::lower_string_method::try_lower_certified_string(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        use perry_hir::folded_call::{
+            direct_array_call, Site, SITE_ARRAY_MEMBER, SITE_DIRECT_ARRAY,
+        };
+        if !ctx.wpfacts_off
+            && direct_array_call(callee, args.len())
+            && ctx
+                .wpfacts
+                .method_sites
+                .get(&(Site::Callee(*byte_offset), property.clone()))
+                .is_some_and(|flags| flags & SITE_DIRECT_ARRAY != 0)
+        {
+            debug_assert!(
+                ctx.wpfacts.method_sites[&(Site::Callee(*byte_offset), property.clone())]
+                    & SITE_ARRAY_MEMBER
+                    != 0
+            );
+            return crate::lower_array_method::lower_array_method(ctx, object, property, args);
+        }
+    }
     // b1: a call the facts prove a field element read is that read.
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);

@@ -42,6 +42,10 @@ pub fn map_cons(
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
         },
+        OwnProp { key, idx } => OwnProp {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+        },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },

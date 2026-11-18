@@ -715,6 +715,32 @@ pub(super) fn object_proto_own_call(m: &mut Model, own: crate::model::ProtoOwn, 
                 },
             );
         }
+        // 20.1.3.2 / 20.1.3.4: this.[[GetOwnProperty]](key), with `this` the
+        // receiver a `.call` / method form gives the function.
+        let idx = c.args.first().copied().unwrap_or(NO_NODE);
+        match (m.cur_this, c.this.clone()) {
+            (Some(t), _) | (None, ThisArg::Tok(t)) => {
+                let recv = m.node_l("hasown-recv");
+                m.add_tok(recv, t);
+                m.cons(
+                    recv,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
+            }
+            (None, ThisArg::Node(n)) => {
+                m.cons(
+                    n,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
+            }
+            (None, ThisArg::Undef) => {}
+        }
     }
     ret_prim(m, call, prim::BOOL);
 }
@@ -743,6 +769,19 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
         TokKind::ObjectProto => match name.as_str() {
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
+                if name != "isPrototypeOf" {
+                    // 20.1.3.2 / 20.1.3.4: this.[[GetOwnProperty]](key).
+                    let recv = m.node_l("hasown-recv");
+                    m.add_tok(recv, origin);
+                    let idx = m.calls[call as usize].arg(0).copied().unwrap_or(NO_NODE);
+                    m.cons(
+                        recv,
+                        Cons::OwnProp {
+                            key: Key::any(),
+                            idx,
+                        },
+                    );
+                }
                 if name == "isPrototypeOf" && m.value_records {
                     // The receiver against each object on the argument's chain.
                     let recv = m.node_l("isprototypeof-recv");

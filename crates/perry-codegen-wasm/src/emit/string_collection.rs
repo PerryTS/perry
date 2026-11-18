@@ -144,6 +144,18 @@ impl WasmModuleEmitter {
             "tagged_template",
             "template_raw",
             "class_ref",
+            "class_fresh",
+            "class_env_refresh",
+            "class_env_get",
+            "class_env_set",
+            "class_env_stamp",
+            "class_env_current",
+            "class_register_captures",
+            "class_capture_value",
+            "class_method_home",
+            "class_extends_null",
+            "class_instanceof_value",
+            "reflect_apply",
             "class_set_method",
             "class_call_method",
             "class_super_get",
@@ -691,9 +703,12 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(a);
                 }
             }
-            Expr::InstanceOf { expr, ty, .. } => {
+            Expr::InstanceOf { expr, ty, ty_expr } => {
                 self.collect_strings_in_expr(expr);
                 self.intern_string(ty);
+                if let Some(ty_expr) = ty_expr {
+                    self.collect_strings_in_expr(ty_expr);
+                }
             }
             Expr::In { property, object } => {
                 self.collect_strings_in_expr(property);

@@ -403,8 +403,14 @@ fn a_var_read_before_its_declarator_is_hoisted_with_undefined() {
     ];
     run(&mut module, false);
     assert_eq!(module.init.len(), 3);
-    assert_eq!(dbg(&module.init[0]), dbg(&var_stmt(V, "v", Expr::Undefined)));
-    assert!(!dbg(&module.init).contains(tdz_check::TDZ_CHECK), "a var has no dead zone");
+    assert_eq!(
+        dbg(&module.init[0]),
+        dbg(&var_stmt(V, "v", Expr::Undefined))
+    );
+    assert!(
+        !dbg(&module.init).contains(tdz_check::TDZ_CHECK),
+        "a var has no dead zone"
+    );
 }
 
 /// A `var` every read of which runs after its declarator holds only what it
@@ -494,4 +500,27 @@ fn a_commonjs_module_s_exports_are_never_seeded() {
     module.exports = vec![export("_cjs"), export("y")];
     run(&mut module, true);
     assert_eq!(dbg(&module.init), dbg(&wrap));
+}
+
+#[test]
+fn a_checked_delete_keeps_its_member_operand_under_the_check() {
+    let mut module = Module::new("m.ts");
+    let target = Expr::PropertyGet {
+        byte_end: 0,
+        object: Box::new(Expr::LocalGet(X)),
+        property: "a".into(),
+        byte_offset: 0,
+    };
+    let del = Expr::Delete(Box::new(target));
+    module.functions = vec![function(1, "f", vec![ret(del.clone())])];
+    module.init = vec![
+        Stmt::Expr(call(Expr::FuncRef(1))),
+        let_stmt(X, "x", Expr::Integer(1)),
+    ];
+    run(&mut module, false);
+    // `delete (check, x.a)` would delete nothing: the check is lifted out.
+    assert_eq!(
+        dbg(&module.functions[0].body),
+        dbg(&vec![ret(guarded(X, "x", del))])
+    );
 }

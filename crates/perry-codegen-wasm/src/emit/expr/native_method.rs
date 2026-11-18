@@ -24,7 +24,13 @@ impl<'a> FuncEmitCtx<'a> {
                         "log" => self.emit_console_call(func, "console_log", args),
                         "warn" => self.emit_console_call(func, "console_warn", args),
                         "error" => self.emit_console_call(func, "console_error", args),
-                        _ => {}
+                        _ => {
+                            for a in args {
+                                self.emit_expr(func, a);
+                                func.instruction(&Instruction::Drop);
+                            }
+                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                        }
                     },
                     "JSON" => match method.as_str() {
                         "parse" => {

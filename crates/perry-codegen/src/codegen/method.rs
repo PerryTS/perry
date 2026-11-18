@@ -416,7 +416,7 @@ pub(super) fn compile_method(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(
+            cross_module.closure_writes.pointer_locals(
                 &method.params,
                 method_body,
                 &flat_const_ids,

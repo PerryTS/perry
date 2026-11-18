@@ -3533,7 +3533,16 @@ fn ns_method_inner(
             }
             ret_prim(m, call, prim::BOOL);
         }
-        (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "hasOwn") => {
+        (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible") => {
+            ret_prim(m, call, prim::BOOL);
+        }
+        // 20.1.2.13: ToObject(O), ToPropertyKey(P), then O.[[GetOwnProperty]](P):
+        // a Proxy's `getOwnPropertyDescriptor` trap runs.
+        (BuiltinNs::Object, "hasOwn") => {
+            if let Some(o) = arg(m, call, 0) {
+                let idx = arg(m, call, 1).unwrap_or(NO_NODE);
+                m.cons(o, Cons::OwnProp { key: Key::any(), idx });
+            }
             ret_prim(m, call, prim::BOOL);
         }
         // Only a call with a spread argument (`object_statics::value_call`

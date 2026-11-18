@@ -24,7 +24,7 @@ crates/perry/src/commands/compile/run_pipeline.rs	6493
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2057
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3709
+crates/perry-codegen/src/codegen/mod.rs	3702
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2759
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
@@ -62,7 +62,7 @@ third_party/windows-winui/windows-reactor/src/bindings.rs	26441
 # Upstream Windows Reactor backend; preserve layout for vendor comparisons.
 third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs	4035
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/derive.rs	3692
+crates/perry-wpfacts/src/derive.rs	3691
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/builtins.rs	2931
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.

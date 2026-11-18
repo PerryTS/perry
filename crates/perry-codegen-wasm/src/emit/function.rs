@@ -128,9 +128,10 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
+        captures_this: bool,
         home_class: Option<&str>,
     ) -> Function {
-        // Closure parameters: captures first, then declared params
+        // Closure parameters: captures, the captured `this`, then declared params
         let mut local_map = BTreeMap::new();
         let mut param_idx = 0u32;
         for cap in captures {
@@ -141,6 +142,8 @@ impl WasmModuleEmitter {
             local_map.insert(*cap, param_idx);
             param_idx += 1;
         }
+        let this_local = captures_this.then_some(param_idx);
+        param_idx += u32::from(captures_this);
         for param in params {
             local_map.insert(param.id, param_idx);
             param_idx += 1;
@@ -158,6 +161,7 @@ impl WasmModuleEmitter {
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = home_class.map(str::to_string);
+        ctx.this_local = this_local;
         ctx.emit_box_params(&mut func, params);
         // A captured cell already exists; a `let` of it in the body (a lowered
         // generator re-declares its locals per state) fills that cell.
@@ -281,6 +285,7 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
+        ctx.this_local = Some(0);
         ctx.emit_box_params(&mut func, &ctor.params);
         for (index, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
@@ -328,6 +333,7 @@ impl WasmModuleEmitter {
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class_name.to_string());
+        ctx.this_local = Some(0);
         ctx.emit_box_params(&mut func, &method.params);
 
         for stmt in &method.body {
