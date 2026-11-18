@@ -17,6 +17,9 @@ mod tests;
 use format::{Cell, Image, Stop, Val, Word};
 use std::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 
+// ELF linker-defined symbols. Off Linux no image is captured (`begin` and
+// `cut` are Linux x86_64 only), so `build` sees empty ranges there.
+#[cfg(target_os = "linux")]
 unsafe extern "C" {
     static __data_start: u8;
     static _end: u8;
@@ -331,6 +334,7 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
     }
     let mut maps = pre;
     maps.extend(read_maps());
+    #[cfg(target_os = "linux")]
     let sect = |lo: &u8, hi: &u8| (lo as *const u8 as usize, hi as *const u8 as usize);
     // SAFETY: linker-defined section bounds.
     let w = unsafe {
@@ -345,12 +349,18 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
                     )
                 })
                 .collect(),
+            #[cfg(target_os = "linux")]
             sections: [
                 sect(&__start_perry_strings, &__stop_perry_strings),
                 sect(&__start_perry_layouts, &__stop_perry_layouts),
                 sect(&__start_perry_atoms, &__stop_perry_atoms),
             ],
+            #[cfg(not(target_os = "linux"))]
+            sections: [(0, 0); 3],
+            #[cfg(target_os = "linux")]
             exe: sect(&__executable_start, &_end),
+            #[cfg(not(target_os = "linux"))]
+            exe: (0, 0),
             tls: base.map_or((0, 0), |b| (b.tls.0, b.tls.0 + b.tls.1.len())),
             maps: merged(maps),
             sym: crate::symbol::snap_image_space(),

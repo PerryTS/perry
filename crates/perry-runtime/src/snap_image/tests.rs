@@ -162,9 +162,12 @@ fn shaped_object_keeps_its_slots_inside_the_cell() {
     std::hint::black_box(o);
 }
 
+// The data window is `[__data_start, _end)`, which only ELF links define.
+#[cfg(target_os = "linux")]
 #[used]
 static mut PROBE: u64 = 0x1234_5678;
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let text = b"root word probe string, long enough to stay a heap cell!!";
