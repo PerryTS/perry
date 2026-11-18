@@ -7,13 +7,11 @@ use perry_hir::walker::{stmt_any_expr, walk_expr_children};
 /// Where a closure's `this` comes from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClosureThis {
-    /// The body does not read `this` (or reads it where local 0 is still meant).
+    /// No own `this`: `Expr::This` reads local 0.
     None,
-    /// An arrow function's lexical `this`: one more capture, after the others.
+    /// An arrow's lexical `this`, passed after the other captures.
     Captured,
-    /// A function expression's own `this`, the receiver of a method call
-    /// (`o.m()`): the runtime hands it over through the `closure_this` bridge,
-    /// which the body calls on entry.
+    /// A function expression's call receiver, read from `closure_this` on entry.
     Receiver,
 }
 
@@ -27,8 +25,7 @@ pub(super) fn closure_this(captures_this: bool, is_arrow: bool, body: &[Stmt]) -
     }
 }
 
-/// `this` read by this function body; a nested closure reads its own `this`
-/// unless it is an arrow that captures this one.
+/// `expr` reads its function's own `this`; a nested closure does only by capturing it.
 fn reads_this(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
