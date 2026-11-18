@@ -18,6 +18,23 @@ const KEPT_MEMBER_HEX: &str = concat!(
     "005f7368617265645f74776f005f6e65656465645f62795f7369626c696e67005f7368617265645f6f6e650000000000",
 );
 
+// x86_64 Mach-O object compiled from two extern functions over one internal
+// static: `shared_register` writes it and `needed_by_sibling` reads it.
+const STATEFUL_MEMBER_HEX: &str = concat!(
+    "cffaedfe0700000103000000010000000400000068010000002000000000000019000000e80000000000000000000000",
+    "00000000000000000000000000000000210000000000000088010000000000001f000000000000000700000007000000",
+    "02000000000000005f5f74657874000000000000000000005f5f54455854000000000000000000000000000000000000",
+    "1f000000000000008801000004000000a801000002000000000400800000000000000000000000005f5f627373000000",
+    "00000000000000005f5f4441544100000000000000000000200000000000000001000000000000000000000002000000",
+    "00000000000000000100000000000000000000000000000032000000180000000100000000000b0000021b0000000000",
+    "0200000018000000b801000003000000e8010000380000000b0000005000000000000000010000000100000002000000",
+    "030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000554889e5c605ffffffff015dc30f1f00554889e50fb60500000000ffc05dc300170000000000001d",
+    "060000000000006d250000000e0200002000000000000000120000000f0100001000000000000000010000000f010000",
+    "0000000000000000005f7368617265645f7265676973746572005f6e65656465645f62795f7369626c696e67005f7265",
+    "67697374657265640000000000000000",
+);
+
 fn decode_hex(hex: &str) -> Vec<u8> {
     (0..hex.len())
         .step_by(2)
@@ -81,5 +98,38 @@ fn kept_member_stops_exporting_symbols_its_stdlib_replacement_provides() {
             "_needed_by_sibling",
             "_ring_core_0_17_14__OPENSSL_cpuid_setup"
         ]
+    );
+}
+
+#[test]
+fn kept_member_with_mutable_state_keeps_every_export() {
+    let objcopy = find_nightly_llvm_tool("llvm-objcopy")
+        .or_else(|| find_llvm_tool("llvm-objcopy"))
+        .expect("llvm-objcopy is required to localize Mach-O exports");
+    let extract_dir = tempfile::tempdir().unwrap();
+    let member = "kept_stateful_unit.o";
+    let member_path = extract_dir.path().join(member);
+    let original = decode_hex(STATEFUL_MEMBER_HEX);
+    std::fs::write(&member_path, &original).unwrap();
+
+    // Localizing `_shared_register` would send its callers to the stdlib's
+    // copy and its write to that copy's static, while `_needed_by_sibling`
+    // kept reading this one's.
+    let exported = symbol_set(&["_shared_register", "_needed_by_sibling"]);
+    let replacement = symbol_set(&["_shared_register", "_only_in_stdlib"]);
+
+    let localized = localize_provided_by_replacement(
+        &objcopy,
+        extract_dir.path(),
+        member,
+        &exported,
+        &replacement,
+    )
+    .unwrap();
+
+    assert_eq!(localized, 0);
+    assert_eq!(
+        global_defined_symbols(&std::fs::read(&member_path).unwrap()),
+        ["_needed_by_sibling", "_shared_register"]
     );
 }

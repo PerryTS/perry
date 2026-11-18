@@ -9,6 +9,12 @@
 //! symbol` on Mach-O. Making the kept member's copy of the shared exports local
 //! leaves the stdlib as their single provider; the symbols the wrapper
 //! genuinely needs from its own copy stay global.
+//!
+//! That split is sound only for a member without mutable state. Code that
+//! called a localized export now runs the stdlib's copy, against the stdlib
+//! copy's statics, while the exports that stay global keep reading this
+//! member's. A member that defines writable or thread-local data is therefore
+//! left whole.
 
 use super::object_format::object_is_macho;
 use super::*;
@@ -47,7 +53,8 @@ pub(super) fn localize_kept_shared_exports<'a>(
 }
 
 /// Localize, in the extracted Mach-O `member`, every extern symbol that
-/// `replacement` also provides. Returns how many symbols were localized.
+/// `replacement` also provides, unless the member holds mutable state (see
+/// [`defines_mutable_state`]). Returns how many symbols were localized.
 ///
 /// Expressed as a `--keep-global-symbols` keep-list: llvm-objcopy's
 /// `--localize-symbol` leaves `LC_DYSYMTAB` inconsistent on Mach-O (see
@@ -65,7 +72,7 @@ fn localize_provided_by_replacement(
             "failed to locate extracted archive member {member}"
         ));
     };
-    if !object_is_macho(&member_path) {
+    if !object_is_macho(&member_path) || defines_mutable_state(&member_path) {
         return Ok(0);
     }
     let (shared, mut keep): (Vec<&String>, Vec<&String>) = exported
@@ -95,6 +102,33 @@ fn localize_provided_by_replacement(
         ));
     }
     Ok(shared.len())
+}
+
+/// Whether the object at `path` defines writable or thread-local data. Two
+/// copies of such a member each hold their own state, so its exports cannot be
+/// divided between them: perry-ffi's `register_link_sink` would set the
+/// stdlib copy's registration flag while this copy's `available` reads its
+/// own. An object that cannot be read or parsed counts as stateful.
+fn defines_mutable_state(path: &Path) -> bool {
+    use object::{Object, ObjectSection, SectionKind};
+    let Ok(bytes) = std::fs::read(path) else {
+        return true;
+    };
+    let Ok(file) = object::File::parse(&*bytes) else {
+        return true;
+    };
+    file.sections().any(|section| {
+        section.size() > 0
+            && matches!(
+                section.kind(),
+                SectionKind::Data
+                    | SectionKind::UninitializedData
+                    | SectionKind::Common
+                    | SectionKind::Tls
+                    | SectionKind::UninitializedTls
+                    | SectionKind::TlsVariables
+            )
+    })
 }
 
 #[cfg(test)]
