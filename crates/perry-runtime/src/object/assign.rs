@@ -827,7 +827,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let exotic_kind = if src_raw >= 0x10000 && src_raw.is_multiple_of(8) {
         let src_gc =
             (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        crate::object::exotic_expando::exotic_kind_of_gc_type((*src_gc).obj_type)
+        let obj_type = (*src_gc).obj_type;
+        if crate::gc_type_is_object!(obj_type) || crate::gc_type_is_array!(obj_type) {
+            None
+        } else {
+            crate::object::exotic_expando::exotic_kind_of_gc_type(obj_type)
+        }
     } else {
         None
     };
@@ -1111,81 +1116,35 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             // the shape's own list does.
             let hide_internal = (*src).class_id != 0;
             let holey = crate::object::key_view::object_may_have_holes(src);
+            // Until an own accessor is read no user code runs, so no key can
+            // be deleted: this is the plain loop. It stops at the first
+            // accessor key, before reading it, and the rest are copied with
+            // the re-check.
             for i in 0..key_count {
-                // Re-derive every raw address from its handle at the top of the
-                // iteration: the PREVIOUS iteration's getter may have moved all
-                // of them.
-                let src_keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-                let src = src_h.get_raw_const_ptr::<ObjectHeader>();
-                let src_raw = src as usize;
-                let key_val = crate::array::js_array_get(src_keys, i as u32);
-                if !key_val.is_any_string() {
-                    continue;
+                if copy_string_key::<false>(
+                    define,
+                    target_is_array,
+                    &tgt_h,
+                    &src_h,
+                    &keys_h,
+                    hide_internal,
+                    holey,
+                    i,
+                ) {
+                    copy_string_keys_rechecking(
+                        define,
+                        target_is_array,
+                        &tgt_h,
+                        &src_h,
+                        &keys_h,
+                        hide_internal,
+                        holey,
+                        i,
+                        key_count,
+                    );
+                    getter_ran = true;
+                    break;
                 }
-                // An optional key whose slot holds the hole is absent.
-                if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
-                    continue;
-                }
-                if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
-                    src_keys, i as u32,
-                )) {
-                    continue;
-                }
-                if getter_ran
-                    && crate::value::js_is_truthy(js_object_has_own(
-                        crate::value::js_nanbox_pointer(src as i64),
-                        f64::from_bits(key_val.bits()),
-                    )) == 0
-                {
-                    continue;
-                }
-                getter_ran |= crate::object::key_attrs::key_is_accessor_at(src_keys, i as u32);
-                if hide_internal {
-                    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                    if crate::string::js_string_key_bytes(key_val, &mut buf)
-                        .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
-                    {
-                        continue;
-                    }
-                }
-                let key_f64 = f64::from_bits(key_val.bits());
-                let key_ptr = crate::value::js_get_string_pointer_unified(key_f64)
-                    as *const crate::StringHeader;
-                if key_ptr.is_null() {
-                    continue;
-                }
-                let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
-                {
-                    if let Ok(name) = std::str::from_utf8(name_bytes) {
-                        if let Some(attrs) = get_property_attrs(src_raw, name) {
-                            if !attrs.enumerable() {
-                                continue;
-                            }
-                        }
-                    }
-                }
-                // Per-iteration scope so the key/value roots are cut each time
-                // round rather than growing the handle stack by 2 per key.
-                let iter_scope = crate::gc::RuntimeHandleScope::new();
-                let key_h = iter_scope.root_string_ptr(key_ptr);
-                let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
-                // The getter's RETURN VALUE is a fresh heap reference reachable
-                // from nothing else, and the write funnel below allocates (key
-                // interning, keys-array growth, shape transition). Root it and
-                // read it back, exactly like the pointers.
-                let val_h = iter_scope.root_nanbox_f64(field_f64);
-                tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                    key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                        object_assign_set_string_key(
-                            define,
-                            t,
-                            target_is_array,
-                            k,
-                            val_h.get_nanbox_f64(),
-                        )
-                    })
-                });
             }
         }
     }
@@ -1269,4 +1228,138 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
     // next link.
     tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+}
+
+/// One own string key `i` of an ordinary-object spread/assign source:
+/// CopyDataProperties (ECMA-262 7.3.25) step 4 for that key.
+///
+/// `RECHECK = false` is the plain loop's step: it returns `true`, without
+/// reading the key, when the key is an own accessor, since its getter may
+/// delete later keys. `RECHECK = true` (after such a key) first checks the
+/// key's own presence ([[GetOwnProperty]], step 4.c), and always returns
+/// `false`.
+///
+/// # Safety
+/// The handles root a live target, source and source keys array.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_string_key<const RECHECK: bool>(
+    define: bool,
+    target_is_array: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    keys_h: &crate::gc::RuntimeHandle<'_>,
+    hide_internal: bool,
+    holey: bool,
+    i: usize,
+) -> bool {
+    // Re-derive every raw address from its handle at the top of the
+    // iteration: the PREVIOUS iteration's getter may have moved all
+    // of them.
+    let src_keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+    let src = src_h.get_raw_const_ptr::<ObjectHeader>();
+    let src_raw = src as usize;
+    let key_val = crate::array::js_array_get(src_keys, i as u32);
+    if !key_val.is_any_string() {
+        return false;
+    }
+    // An optional key whose slot holds the hole is absent.
+    if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
+        return false;
+    }
+    // One test of the key's entry covers both rare kinds: a private entry is
+    // skipped; an accessor entry stops the plain loop before it is read.
+    let entry = crate::object::key_attrs::keys_entry(src_keys, i as u32);
+    if entry & (crate::object::key_attrs::ENTRY_PRIVATE | crate::object::key_attrs::ENTRY_ACCESSOR)
+        != 0
+    {
+        if crate::object::key_attrs::entry_is_private(entry) {
+            return false;
+        }
+        if !RECHECK {
+            return true;
+        }
+    }
+    if RECHECK
+        && crate::value::js_is_truthy(js_object_has_own(
+            crate::value::js_nanbox_pointer(src as i64),
+            f64::from_bits(key_val.bits()),
+        )) == 0
+    {
+        return false;
+    }
+    if hide_internal {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if crate::string::js_string_key_bytes(key_val, &mut buf)
+            .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
+        {
+            return false;
+        }
+    }
+    let key_f64 = f64::from_bits(key_val.bits());
+    let key_ptr =
+        crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return false;
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+        if let Ok(name) = std::str::from_utf8(name_bytes) {
+            if let Some(attrs) = get_property_attrs(src_raw, name) {
+                if !attrs.enumerable() {
+                    return false;
+                }
+            }
+        }
+    }
+    // Per-iteration scope so the key/value roots are cut each time
+    // round rather than growing the handle stack by 2 per key.
+    let iter_scope = crate::gc::RuntimeHandleScope::new();
+    let key_h = iter_scope.root_string_ptr(key_ptr);
+    let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
+    // The getter's RETURN VALUE is a fresh heap reference reachable
+    // from nothing else, and the write funnel below allocates (key
+    // interning, keys-array growth, shape transition). Root it and
+    // read it back, exactly like the pointers.
+    let val_h = iter_scope.root_nanbox_f64(field_f64);
+    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
+        key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
+            object_assign_set_string_key(define, t, target_is_array, k, val_h.get_nanbox_f64())
+        })
+    });
+    false
+}
+
+/// Keys `from..key_count` of a spread/assign source, from its first own
+/// accessor key on: each key is re-checked for own presence first, since a
+/// getter may have deleted it. Out of line so the plain loop stays main's.
+///
+/// # Safety
+/// As [`copy_string_key`].
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_string_keys_rechecking(
+    define: bool,
+    target_is_array: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    keys_h: &crate::gc::RuntimeHandle<'_>,
+    hide_internal: bool,
+    holey: bool,
+    from: usize,
+    key_count: usize,
+) {
+    for i in from..key_count {
+        copy_string_key::<true>(
+            define,
+            target_is_array,
+            tgt_h,
+            src_h,
+            keys_h,
+            hide_internal,
+            holey,
+            i,
+        );
+    }
 }

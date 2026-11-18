@@ -722,10 +722,22 @@ pub(super) fn object_proto_own_call(m: &mut Model, own: crate::model::ProtoOwn, 
             (Some(t), _) | (None, ThisArg::Tok(t)) => {
                 let recv = m.node_l("hasown-recv");
                 m.add_tok(recv, t);
-                m.cons(recv, Cons::OwnProp { key: Key::any(), idx });
+                m.cons(
+                    recv,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
             }
             (None, ThisArg::Node(n)) => {
-                m.cons(n, Cons::OwnProp { key: Key::any(), idx });
+                m.cons(
+                    n,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
             }
             (None, ThisArg::Undef) => {}
         }
@@ -762,7 +774,13 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                     let recv = m.node_l("hasown-recv");
                     m.add_tok(recv, origin);
                     let idx = m.calls[call as usize].arg(0).copied().unwrap_or(NO_NODE);
-                    m.cons(recv, Cons::OwnProp { key: Key::any(), idx });
+                    m.cons(
+                        recv,
+                        Cons::OwnProp {
+                            key: Key::any(),
+                            idx,
+                        },
+                    );
                 }
                 if name == "isPrototypeOf" && m.value_records {
                     // The receiver against each object on the argument's chain.

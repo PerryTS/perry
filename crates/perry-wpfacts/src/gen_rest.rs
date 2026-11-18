@@ -961,9 +961,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(on, Cons::OwnProp { key, idx });
                 self.prim_node(prim::BOOL)
             }
-            Expr::IsNaN(..)
-            | Expr::IsFinite(..)
-            | Expr::ReflectHas { .. } => self.prim_kids(
+            Expr::IsNaN(..) | Expr::IsFinite(..) | Expr::ReflectHas { .. } => self.prim_kids(
                 fx,
                 e,
                 prim::BOOL,
