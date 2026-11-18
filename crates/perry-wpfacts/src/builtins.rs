@@ -3541,7 +3541,13 @@ fn ns_method_inner(
         (BuiltinNs::Object, "hasOwn") => {
             if let Some(o) = arg(m, call, 0) {
                 let idx = arg(m, call, 1).unwrap_or(NO_NODE);
-                m.cons(o, Cons::OwnProp { key: Key::any(), idx });
+                m.cons(
+                    o,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
             }
             ret_prim(m, call, prim::BOOL);
         }
