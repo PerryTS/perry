@@ -940,8 +940,28 @@ impl<'a> Gen<'a> {
             }
             // `isNaN` / `isFinite` ToNumber their operand (19.2.2, 19.2.3);
             // `Object.hasOwn` and `Reflect.has` ToPropertyKey their key.
-            Expr::ObjectHasOwn(..)
-            | Expr::IsNaN(..)
+            Expr::ObjectHasOwn(o, k) => {
+                let r = self.m.reason("primitive builtin operand");
+                let on = self.expr(fx, o);
+                let kn = self.expr(fx, k);
+                for n in [on, kn] {
+                    self.m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                }
+                // [[GetOwnProperty]] of the key: a Proxy's trap runs.
+                let (key, idx) = match k.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    _ => (Key::any(), kn),
+                };
+                self.m.cons(on, Cons::OwnProp { key, idx });
+                self.prim_node(prim::BOOL)
+            }
+            Expr::IsNaN(..)
             | Expr::IsFinite(..)
             | Expr::ReflectHas { .. } => self.prim_kids(
                 fx,

@@ -9,6 +9,9 @@ impl Model {
             // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
             // `solve/proxy.rs`).
             Cons::HasProp { .. } => {}
+            // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
+            // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
+            Cons::OwnProp { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being

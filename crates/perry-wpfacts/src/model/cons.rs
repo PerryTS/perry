@@ -347,6 +347,12 @@ pub enum Cons {
     /// object; a Proxy runs its `has` trap (`solve/proxy.rs`). `idx`: the
     /// key value, or `NO_NODE` for a named key.
     HasProp { key: Key, idx: NodeId },
+    /// `Object.hasOwn(o, k)`, `o.hasOwnProperty(k)`, `propertyIsEnumerable`
+    /// (ECMA-262 [[GetOwnProperty]], 10.1.5): the twin of `HasProp`. No
+    /// flow on an ordinary object; a Proxy runs its
+    /// `getOwnPropertyDescriptor` trap (`solve/proxy.rs`). `idx`: the key
+    /// value, or `NO_NODE` for a named key.
+    OwnProp { key: Key, idx: NodeId },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -1032,6 +1038,7 @@ impl Cons {
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::HasProp { .. } => "hasprop",
+            Cons::OwnProp { .. } => "ownprop",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
