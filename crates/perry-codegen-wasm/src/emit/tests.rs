@@ -1283,11 +1283,7 @@ console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + "
 #[test]
 fn fetch_with_auth_passes_url_method_body_and_authorization() {
     assert_eq!(
-        run_web_source_around(
-            r#"globalThis.fetch = (url, opts) => {
-  console.log(JSON.stringify([url, opts]));
-  return Promise.resolve({ text: () => Promise.resolve("ok") });
-};"#,
+        run_web_source_with_dom(
             r#"
 function base(): string { return "http://h/" + String(6 * 7); }
 function tok(): string { return "Bearer " + base().length; }
@@ -1296,6 +1292,13 @@ fetchWithAuth(arg("url", base() + "/g"), arg("auth", `${tok()}-g`))
   .then(() => fetchPostWithAuth(arg("url", base() + "/p"), arg("auth", tok()), arg("body", JSON.stringify({ n: tok() }))))
   .then(() => console.log("done"));
 "#,
+            &format!(
+                "{STUB_DOM}{}",
+                r#"globalThis.fetch = (url, opts) => {
+  console.log(JSON.stringify([url, opts]));
+  return Promise.resolve({ text: () => Promise.resolve("ok") });
+};"#
+            ),
             ""
         ),
         concat!(
