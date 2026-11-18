@@ -45,6 +45,26 @@ fn arguments(g: &Gen<'_>) -> HashMap<At, Option<Vec<u16>>> {
     out
 }
 
+/// The fast arm may inline part of an argument the generic arm preserves. A
+/// full source call span still identifies the actual fast operand across copies.
+fn numeric_results(g: &Gen<'_>) -> std::collections::HashSet<(u32, u32, u32)> {
+    let copies = element::run_copies(&g.m);
+    let mut results = HashMap::new();
+    for &(mi, at, end, n) in &g.call_kinds_at {
+        let numeric = end > at
+            && at != 0
+            && element::with_copies(&copies, &[n]).iter().all(|&id| {
+                let node = &g.m.nodes[id as usize];
+                !node.dropped && node.pts.is_empty() && node.prim == prim::NUM
+            });
+        *results.entry((mi, at, end)).or_insert(true) &= numeric;
+    }
+    results
+        .into_iter()
+        .filter_map(|(span, yes)| yes.then_some(span))
+        .collect()
+}
+
 /// Operand coercions are part of the proof: the audited Math helpers take
 /// Numbers only. Number predicates perform no coercion at all.
 fn namespace_fast(ns: &str, key: &str, fast: &Expr, args: &[u16], operands: &[Expr]) -> bool {
@@ -166,6 +186,7 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
 pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConfig) {
     use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
     let args = arguments(g);
+    let numeric_results = numeric_results(g);
     let mut strings = std::collections::HashSet::new();
     let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
@@ -262,6 +283,14 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                         }
                     }
                     namespace.is_some_and(|ns| {
+                        if ns == "Math" && property == "abs" && arity == 1 {
+                            if let Expr::MathAbs(x) = fast {
+                                if matches!(x.as_ref(), Expr::Call {byte_offset, byte_end, ..}
+                                    if numeric_results.contains(&(mi as u32, *byte_offset, *byte_end))) {
+                                    return true;
+                                }
+                            }
+                        }
                         namespace_fast(
                             ns,
                             property,
