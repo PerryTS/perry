@@ -3981,6 +3981,23 @@ fn ns_method_inner(
         // `ArrayBuffer.isView(a)` (ECMA-262 25.1.5.1): a Boolean; it reads
         // only the argument's [[ViewedArrayBuffer]] slot and runs no code.
         (BuiltinNs::ArrayBuffer, "isView") => ret_prim(m, call, prim::BOOL),
+        // The Date statics called through the constructor (a program that
+        // writes one of them lowers each call as `Date.m(…)`, perry-hir
+        // `try_patched_builtin_call`): the realm's own functions, the steps
+        // of the intrinsic forms (`Expr::DateNow` / `DateParse` / `DateUtc`,
+        // gen_rest.rs; perry-runtime date_proto_thunks.rs
+        // `date_now_static` / `date_parse_static` / `date_utc_static`).
+        // ECMA-262 21.4.3.1 `now`: a Number, no argument read, `this`
+        // ignored. 21.4.3.2 `parse`: ToString of the one operand. 21.4.3.4
+        // `UTC`: ToNumber of each component. A value the program stored
+        // under the key is bound as the callee besides (the ordinary read),
+        // and a write unknown code may make holds the realm where the read
+        // gives ⊤.
+        (BuiltinNs::Date, "now") => ret_prim(m, call, prim::NUM),
+        (BuiltinNs::Date, "parse" | "UTC") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::NUM);
+        }
         // A key the namespace's description (its own keys and its chain)
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).
