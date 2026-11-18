@@ -3371,8 +3371,16 @@ fn judge_store(
     let verdict = match verdict {
         // A slot store's receiver test sends only a nullish base to the
         // complete [[Set]] (rule N); another primitive arm composes with the
-        // generic store a KnownObjectStore keeps.
-        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore | Verdict::ProxyTrap)
+        // generic store a KnownObjectStore keeps. COVER3: a store proven to
+        // call one setter takes the same receiver test (`undefined` / `null`
+        // only): the nullish base goes to the complete [[Set]], whose
+        // ToObject throws the TypeError after the value was evaluated
+        // (6.2.5.6 step 3.a, 13.15.2); an object calls the setter.
+        v @ (Verdict::T0Mono
+        | Verdict::T0Set
+        | Verdict::KnownObjectStore
+        | Verdict::ProxyTrap
+        | Verdict::AccessorSet)
             if nullish_beside && (prim_obj == 0 || matches!(v, Verdict::KnownObjectStore)) =>
         {
             receivers.extend(prim_throw_arms(prim));

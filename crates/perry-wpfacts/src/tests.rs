@@ -1653,6 +1653,7 @@ mod birth1;
 mod birthdef1;
 mod bns_recv;
 mod builtin_ctor_number_key;
+mod cover3;
 mod d1;
 mod elems1;
 mod env1;
