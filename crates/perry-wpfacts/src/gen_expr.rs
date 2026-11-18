@@ -721,7 +721,9 @@ impl<'a> Gen<'a> {
         let zs_ok = std::mem::take(&mut self.zs_ok);
         let seq = self.expr_seq;
         self.expr_seq += 1;
+        let member_ops = self.member_ops.len();
         let n = self.expr_inner(fx, e);
+        self.member_op_class(fx.module, e, member_ops);
         // A namespace pair's argument (`namespace_pair`): the pair is built
         // from one argument list (perry-hir `try_patched_builtin_call`), so
         // the intrinsic arm holds each argument once, as subtrees that do not
@@ -1274,7 +1276,7 @@ impl<'a> Gen<'a> {
                 if let Some(callee) = self.private_method_callee(mi, object) {
                     return callee;
                 }
-                let dst = self.load(o, Key::Named(a));
+                let dst = self.private_getter_or_load(mi, object, o, a);
                 // S8: on the global sentinel a name the main realm does not
                 // declare is [[Get]] on the global object (`loads::tok_load`);
                 // in a module a Worker may run, the Worker global's own

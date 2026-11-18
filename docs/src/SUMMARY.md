@@ -200,6 +200,7 @@
 - [RegExp Unicode membership selection](internals/regex-unicode-selection.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
   - [Implementation validation](internals/weakmap-owned-index-validation.md)
+- [Mixed I32 field layouts](internals/layout-probe-i32.md)
 - [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)

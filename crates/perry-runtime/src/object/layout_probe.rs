@@ -254,7 +254,8 @@ unsafe fn overflow_accessor_answer(
     obj: *const ObjectHeader,
     entry: u32,
 ) -> f64 {
-    crate::object::overflow::get_from(table, obj, entry).map_or_else(hole, |pair| pair_answer(pair))
+    crate::object::overflow::get_from_probe(table, obj, entry)
+        .map_or_else(hole, |pair| pair_answer(pair))
 }
 
 /// [`pair_answer`] for the public accessor at key position `pos` of `obj`
@@ -326,15 +327,7 @@ unsafe fn key_word_hash(bits: u64) -> Option<u64> {
 #[cold]
 #[inline(never)]
 unsafe fn derive(r: *mut ShapeRecord) -> u64 {
-    // I32 at rest (PR C): the probe returns slot words as JS values and its
-    // site memos keep shape/slot pairs, so it declines every key of a record
-    // with an I32 lane; the complete read decodes through the layout
-    // accessor (`layout_slot::slot_get`).
-    let mut word = if (*r).i32_lanes() != 0 {
-        PROBE_READY | PROBE_DECLINE
-    } else {
-        derive_word(&*r)
-    };
+    let mut word = derive_word(&*r);
     // Verify mode sends every probe of the record through the cold path,
     // where its answer is held for the slow entry's check.
     if verify::on() {
@@ -573,7 +566,9 @@ unsafe fn direct_position(
     {
         return false;
     }
-    key_storage_slot(keys, pos) == pos && pos < rec.live_inline_slot_count
+    key_storage_slot(keys, pos) == pos
+        && pos < rec.live_inline_slot_count
+        && (rec.lane(pos) != crate::object::field_rep::REP_SPECIAL || rec.lane_is_constfn(pos))
 }
 
 /// The inline slot of a data key (no accessor, not private) at position
@@ -594,7 +589,11 @@ unsafe fn inline_slot(
         return None;
     }
     let slot = key_storage_slot(keys, pos);
-    (slot != pos && slot < rec.live_inline_slot_count && slot != NO_LOAD).then_some(slot)
+    (slot != pos
+        && slot < rec.live_inline_slot_count
+        && slot != NO_LOAD
+        && (rec.lane(slot) != crate::object::field_rep::REP_SPECIAL || rec.lane_is_constfn(slot)))
+    .then_some(slot)
 }
 
 /// A TEXT entry's word (a short or plain string no program atom named when
@@ -738,8 +737,9 @@ unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) ->
     // from storage (#12637); its position is its slot otherwise.
     let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
     if slot < (*r).live_inline_slot_count {
-        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-            as *const f64);
+        // Encoded slots carry no direct-load entry. Their existing layout
+        // accessor returns the JS value; ordinary indexed hits never get here.
+        return f64::from_bits(crate::layout_slot::slot_get(obj, slot));
     }
     crate::object::spill::spill_get_present(obj as usize, slot as usize)
         .map(f64::from_bits)
@@ -845,8 +845,16 @@ pub unsafe extern "C" fn perry_probe_get_length(
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     // Only an ordinary layout's receiver is an `ObjectHeader` to look into.
-    if record_of(dir, LayoutWord((*obj).parent_class_id)).is_null() {
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
+    if r.is_null() {
         return hole();
+    }
+    // An arguments object (kinds 13/14) on its birth layout holds `length`
+    // as own data in its first named slot: a fixed-slot read.
+    if (*r).kind_is(super::ShapeObjectKind::Arguments)
+        || (*r).kind_is(super::ShapeObjectKind::ArgumentsStrict)
+    {
+        return crate::object::arguments::arguments_born_length(obj).unwrap_or_else(|| hole());
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
@@ -898,7 +906,7 @@ unsafe fn owned_accessor_answer<const ABSENT: bool>(
     key_bits: u64,
 ) -> f64 {
     let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+    let value = crate::object::overflow::get_found_from_record_probe(table, obj, entry, record)
         .map_or_else(hole, |pair| pair_answer(pair));
     if ABSENT {
         verify::answer(obj as usize, key_bits, value)
@@ -980,7 +988,7 @@ unsafe fn owned_found<const ABSENT: bool>(
         return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
     }
     let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+    let value = crate::object::overflow::get_found_from_record_probe(table, obj, entry, record)
         .map(f64::from_bits)
         .unwrap_or_else(hole);
     if ABSENT {
@@ -1044,7 +1052,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     // its existing index first avoids deriving a second record-key index.
     if word & crate::object::overflow::SHADOW_BIT != 0
         && (*r).present()
-        && (*r).object_kind() == super::ShapeObjectKind::Ordinary
+        && (*r).kind_is(super::ShapeObjectKind::Ordinary)
     {
         // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
@@ -1708,7 +1716,7 @@ unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Op
         return Some(overflow_accessor_answer(t, obj, i));
     }
     Some(
-        crate::object::overflow::get_from(t, obj, i)
+        crate::object::overflow::get_from_probe(t, obj, i)
             .map(f64::from_bits)
             .unwrap_or_else(hole),
     )
@@ -1797,7 +1805,7 @@ pub(crate) unsafe fn probe_accessor_slot(
     }
     for hop in 0..=MAX_HOPS {
         if hop > 0
-            || (*rc).object_kind() == super::ShapeObjectKind::Ordinary
+            || (*rc).kind_is(super::ShapeObjectKind::Ordinary)
             || listed(cur, (*rc).object_kind())
         {
             match own_entry(rc as *mut ShapeRecord, key_bits, hash) {
@@ -1872,7 +1880,7 @@ unsafe fn overflow_accessor(obj: *const ObjectHeader, key_bits: u64, hash: u64) 
     {
         return OverflowKey::Data;
     }
-    OverflowKey::Accessor(crate::object::overflow::get_from(t, obj, i).unwrap_or(0))
+    OverflowKey::Accessor(crate::object::overflow::get_from_probe(t, obj, i).unwrap_or(0))
 }
 
 /// The accessor slot word at key position `pos` of `obj` (record `r`): one
@@ -2249,7 +2257,7 @@ pub(crate) unsafe fn own_set(
     let obj = payload as *mut ObjectHeader;
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
-    if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
+    if r.is_null() || !(*r).kind_is(super::ShapeObjectKind::Ordinary) {
         return OwnSet::Rest;
     }
     let gc = crate::value::addr_class::honest_header(payload);
@@ -2506,7 +2514,7 @@ unsafe fn set_front(
     let obj = payload as *mut ObjectHeader;
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
-    if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
+    if r.is_null() || !(*r).kind_is(super::ShapeObjectKind::Ordinary) {
         return Stored(0);
     }
     let gc = crate::value::addr_class::honest_header(payload);
@@ -2630,7 +2638,7 @@ pub(crate) use computed::probe_set_keyed;
 pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
 pub(crate) use computed::{
     keyed_add_admitted, keyed_leaf, keyed_overflow_append, probe_store_atom, probe_store_keyed,
-    probe_store_keyed_complete, store_key_mintable, KeyedStore,
+    probe_store_keyed_complete, store_key_mintable, table_add_admitted, table_append, KeyedStore,
 };
 pub(crate) use keyed_delete::probe_delete_keyed;
 
@@ -2697,3 +2705,13 @@ mod global_tests;
 #[cfg(test)]
 #[path = "layout_probe_symbol_store_tests.rs"]
 mod symbol_store_tests;
+
+#[cfg(test)]
+#[path = "layout_probe_i32_tests.rs"]
+mod i32_tests;
+
+/// The live inline slot count of record `r` (a live shape record).
+#[inline(always)]
+pub(crate) unsafe fn record_live_inline_slots(r: *const ShapeRecord) -> u32 {
+    (*r).live_inline_slot_count
+}

@@ -304,3 +304,131 @@ fn phase_b_families_are_sealed_when_bound() {
         }
     });
 }
+
+const WEB_FAMILIES: [&str; 6] = [
+    "DOMException",
+    "Event",
+    "CustomEvent",
+    "MessageEvent",
+    "AbortSignal",
+    "AbortController",
+];
+
+fn web_family_keys() -> Vec<(Vec<String>, Vec<String>)> {
+    WEB_FAMILIES
+        .iter()
+        .map(|name| {
+            let ctor = builtin_constructor_value(name);
+            let proto = builtin_prototype_value(name);
+            (own_names(ctor), own_names(proto))
+        })
+        .collect()
+}
+
+#[test]
+fn population_row_flags_match_the_abi_sets() {
+    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
+        let name = declaration.name;
+        assert_eq!(
+            declaration.phase_b,
+            crate::codegen_abi::realm_rest_global(name),
+            "{name}"
+        );
+        assert_eq!(
+            declaration.realm_seals_prototype,
+            crate::codegen_abi::BuiltinProto::REALM
+                .iter()
+                .any(|(_, listed)| *listed == name),
+            "{name} prototype seal"
+        );
+        assert_eq!(
+            declaration.realm_seals_namespace,
+            crate::codegen_abi::BUILTIN_NAMESPACES.contains(&name),
+            "{name} namespace seal"
+        );
+    }
+    for names in [GLOBAL_THIS_BUILTIN_FUNCTIONS, GLOBAL_THIS_BUILTIN_NAMESPACES] {
+        let mask = super::phase_rows::rest_mask(names);
+        for (index, name) in names.iter().enumerate() {
+            assert_eq!(
+                mask & (1 << index) != 0,
+                crate::codegen_abi::realm_rest_global(name),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn web_family_births_preserve_keys_and_parent_links() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let reference = std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            js_get_global_this();
+            web_family_keys()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    on_core_realm(move |value| {
+        for name in WEB_FAMILIES {
+            assert!(crate::codegen_abi::realm_rest_global(name), "{name}");
+            assert!(!crate::codegen_abi::realm_core_global(name), "{name}");
+            assert_eq!(slot_word(global_ptr(value), name), REALM_UNBOUND_POISON);
+        }
+        for name in [
+            "EventTarget",
+            "Storage",
+            "Performance",
+            "Response",
+            "WebSocket",
+            "URL",
+            "URLSearchParams",
+            "SubtleCrypto",
+        ] {
+            assert!(crate::codegen_abi::realm_core_global(name), "{name}");
+        }
+        js_get_global_this();
+        assert_eq!(web_family_keys(), reference);
+        for (child, parent, inherits) in INTERFACE_PARENTS {
+            let child_proto = builtin_prototype_value(child);
+            let parent_proto = builtin_prototype_value(parent);
+            assert_eq!(
+                crate::object::js_object_get_prototype_of(child_proto).to_bits(),
+                parent_proto.to_bits(),
+                "{child}.prototype inherits {parent}.prototype"
+            );
+            if inherits {
+                let child_ctor = builtin_constructor_value(child);
+                assert_eq!(
+                    crate::object::js_object_get_prototype_of(child_ctor).to_bits(),
+                    builtin_constructor_value(parent).to_bits(),
+                    "{child} inherits {parent}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn each_web_intrinsic_reader_completes_the_core_realm() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    for name in WEB_FAMILIES {
+        on_core_realm(move |_| {
+            let identity = BuiltinConstructorIdentity::for_name(name).unwrap();
+            assert_eq!(
+                crate::array::intrinsic_constructor_addr_if_bound(identity),
+                0
+            );
+            let proto = crate::array::intrinsic_prototype_addr(identity);
+            assert!(fetch_globals::realm_is_complete(), "{name}");
+            assert_ne!(proto, 0, "{name}");
+            assert_eq!(
+                proto,
+                crate::value::js_nanbox_get_pointer(builtin_prototype_value(name)) as usize,
+                "{name}: one intrinsic across completion"
+            );
+        });
+    }
+}

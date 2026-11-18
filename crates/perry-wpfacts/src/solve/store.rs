@@ -742,7 +742,17 @@ impl Model {
                 return;
             }
             let r = self.reason("stored into a value from unmodeled code");
+            // `hold_ledger`: what the store sinks belongs to the receiver's
+            // ⊤ root, not to a root of its own.
+            let origin = match self.ledger {
+                Some(_) => self.store_at.and_then(|n| self.top_origin_id(n)),
+                None => None,
+            };
+            let saved = self.ledger.as_mut().map(|l| l.enter_top(origin));
             self.sink_node(src, r);
+            if let (Some(l), Some(c)) = (self.ledger.as_mut(), saved) {
+                l.leave(c);
+            }
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {

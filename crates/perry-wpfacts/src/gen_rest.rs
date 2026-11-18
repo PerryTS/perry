@@ -108,7 +108,7 @@ impl<'a> Gen<'a> {
         // code runs an own or inherited user method of that name, and the
         // builtin's own effects are its declaration (perry_hir::folded_call).
         if let Some(call) = perry_hir::folded_call::folded_call(e) {
-            return self.folded_call(fx, &call);
+            return self.folded_call(fx, e, &call);
         }
         match e {
             Expr::NativeModuleRef(m) => {
@@ -141,12 +141,43 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
+                // A native step writes its own value binding (the
+                // `LocalSet(value, iteratorStepOutput())` among its
+                // arguments): that write reads this step's output only.
+                let outer = (module == "__perry_runtime" && method == "iteratorStep").then(|| {
+                    let n = self.tmp("iterout");
+                    self.step_out.replace(n)
+                });
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
+                let key = if m0 == "array"
+                    && matches!(method.as_str(), "push_single" | "push_field_single")
+                {
+                    "push"
+                } else {
+                    method
+                };
+                let guarded_push = module == "array"
+                    && o.is_some()
+                    && (method == "push_field_single"
+                        || (matches!(method.as_str(), "push_single" | "push")
+                            && push_method_tiers()
+                            && !self
+                                .push_fill
+                                .pushes
+                                .contains_key(&(e as *const Expr as usize))));
+                // A guarded push publishes its one route at folded_site below.
+                if !guarded_push || perry_hir::folded_call::native_array_push(e).is_none() {
+                    self.member_op(mi, e, key, o, o.is_none().then_some(m0), false);
+                }
                 if module == "__perry_borrowed_proof" {
                     self.prim_node(prim::BOOL)
                 } else if module == "__perry_runtime" {
-                    self.runtime_glue(fx, method, o, a, args)
+                    let r = self.runtime_glue(fx, method, o, a, args);
+                    if let Some(p) = outer {
+                        self.step_out = p;
+                    }
+                    r
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
@@ -187,7 +218,7 @@ impl<'a> Gen<'a> {
                     let push = self.m.atom("push");
                     self.list_push(o, Some(a.len() as u32));
                     if let Some(call) = perry_hir::folded_call::native_array_push(e) {
-                        self.folded_site(fx, &call.receiver, push, o);
+                        self.folded_site(fx, "NativeMethodCall", &call.receiver, push, o);
                     }
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {

@@ -135,8 +135,8 @@ pub(crate) unsafe fn function_own_put(
         FunctionPut::Add => {
             let prev = (*c).shape_id;
             if !super::leaf_key_add(bag, key, value.to_bits()) {
-                if super::shapes::object_shape_record(bag)?.object_kind()
-                    == super::shapes::ShapeObjectKind::OrdinaryUnmarked
+                if super::shapes::object_shape_record(bag)?
+                    .kind_is(super::shapes::ShapeObjectKind::OrdinaryUnmarked)
                 {
                     super::alloc_plain::mark_object_plain_ordinary(bag);
                 }

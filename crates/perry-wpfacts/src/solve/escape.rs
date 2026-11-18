@@ -8,13 +8,41 @@ impl Model {
     /// effect is a change of a unit's contract check (DECISIONS 180).
     pub fn escape_changed(&mut self, t: Tok, reason: u32) -> bool {
         if self.is_escaped(t) {
+            // The ledger's root set: this root escapes `t` again.
+            if let Some(l) = self.ledger.as_mut() {
+                l.again(t, reason, std::panic::Location::caller());
+            }
             return false;
         }
         self.escape(t, reason);
         self.is_escaped(t)
     }
 
+    #[track_caller]
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if self.ledger.is_none() {
+            return self.escape_at(t, reason);
+        }
+        let again = self.is_escaped(t);
+        let Some(l) = self.ledger.as_mut() else {
+            return self.escape_at(t, reason);
+        };
+        if l.dropped(std::panic::Location::caller(), t, true) {
+            return;
+        }
+        let saved = l.enter_escape(t, reason, std::panic::Location::caller());
+        if again {
+            // The ledger's root set: another root escapes `t` again.
+            let r = l.cur;
+            l.again_root(t, r);
+        }
+        self.escape_at(t, reason);
+        if let Some(l) = self.ledger.as_mut() {
+            l.leave(saved);
+        }
+    }
+
+    fn escape_at(&mut self, t: Tok, reason: u32) {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;
@@ -340,6 +368,9 @@ impl Model {
                 ));
             }
         }
+        if let Some(l) = self.ledger.as_mut() {
+            l.mark_escaped(t, reason);
+        }
         self.escaped.insert(t, reason);
         if self.objtag_watch.contains_key(&t) {
             self.objtag_widen(t);
@@ -361,6 +392,7 @@ impl Model {
         let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
         if fresh {
+            self.late_esc.push(t);
             self.enum_escaped(t);
         }
     }

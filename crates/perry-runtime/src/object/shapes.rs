@@ -511,6 +511,20 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).object_kind() }
     }
 
+    /// [`ShapeRecord::kind_is`]: the kind test on the stored field, no decode.
+    #[inline(always)]
+    pub(crate) fn kind_is(self, kind: ShapeObjectKind) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).kind_is(kind) }
+    }
+
+    /// [`ShapeRecord::same_kind_as`] for two live records.
+    #[inline(always)]
+    pub(crate) fn same_kind_as(self, other: &ShapeRecordRef) -> bool {
+        // SAFETY: both are live slab records (type docs).
+        unsafe { (*self.0.as_ptr()).same_kind_as(&*other.0.as_ptr()) }
+    }
+
     /// The record's live inline-slot bound — the same fact a lifted
     /// descriptor's `live_inline_slot_count` copies.
     #[inline]
@@ -541,6 +555,14 @@ impl ShapeRecordRef {
     pub(crate) fn summary(self) -> u8 {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).summary() }
+    }
+
+    /// The record's E2 enumeration bits (`key_attrs::ENUM_*`): birth facts
+    /// of its immutable key prefix.
+    #[inline]
+    pub(crate) fn enum_bits(self) -> u32 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).enum_bits() }
     }
 
     /// The record's logical key count (how many entries of `keys` the shape
@@ -2902,6 +2924,14 @@ pub(crate) fn shape_object_kind_of_receiver(shape_id: u32) -> Option<ShapeObject
     shape_record_of_receiver(shape_id).map(ShapeRecordRef::object_kind)
 }
 
+/// "The receiver's present record is of kind `kind`", on the stored field
+/// ([`ShapeRecord::kind_is`]): no decode, so the test folds with the
+/// presence bit into one masked compare.
+#[inline(always)]
+pub(crate) fn shape_kind_of_receiver_is(shape_id: u32, kind: ShapeObjectKind) -> bool {
+    shape_record_of_receiver(shape_id).is_some_and(|r| r.kind_is(kind))
+}
+
 /// Record that a shape is carried by an OLD-generation receiver.
 ///
 /// Called from the collector's slot visitor, which resolved the record for
@@ -3599,11 +3629,11 @@ fn region_loop_pack(
     // Borrow the same record throughout priming; no descriptor clone or
     // second slab probe, and no allocation/callback in this operation.
     let descriptor = unsafe { &*record.0.as_ptr() };
-    let unmarked_numeric_read = descriptor.object_kind() == ShapeObjectKind::OrdinaryUnmarked
+    let unmarked_numeric_read = descriptor.kind_is(ShapeObjectKind::OrdinaryUnmarked)
         && stored_mask == 0
         && boxed_mask == 0
         && r_mask == (1 << n) - 1;
-    if (descriptor.object_kind() != ShapeObjectKind::Ordinary && !unmarked_numeric_read)
+    if (!descriptor.kind_is(ShapeObjectKind::Ordinary) && !unmarked_numeric_read)
         || descriptor.proto_id == PROTO_ID_PER_OBJECT
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
@@ -5083,7 +5113,7 @@ pub(crate) unsafe fn class_object_first_key_is(
         return false;
     };
     let record = &*record;
-    record.object_kind() == ShapeObjectKind::Class
+    record.kind_is(ShapeObjectKind::Class)
         && record.logical_key_count > 0
         && record.live_inline_slot_count > 0
         && record.hole_count == 0
@@ -5362,7 +5392,7 @@ pub(crate) fn shape_is_keyless_birth_of(
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
-        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
+        r.kind_is(kind) && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
     }
 }
 
@@ -5419,7 +5449,7 @@ fn filled_birth(
     unsafe {
         let r = &*record;
         r.proto_id == proto_id
-            && r.object_kind() == kind
+            && r.kind_is(kind)
             && kind.is_ordinary_layout()
             && r.logical_key_count == count
             && r.live_inline_slot_count == count
@@ -5542,9 +5572,13 @@ pub(crate) unsafe fn object_proto_id_for(
     // A namespace's vtable/override registry can answer before its physical
     // own slots. Project that read classification into the shape, as for
     // process.env and arguments below; an own-slot region cannot admit it.
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-        || (*super::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
-    {
+    // Only a MAPPED arguments object is exotic (its aliased elements read the
+    // parameter bindings); an unmapped one (strict, non-simple parameters, or
+    // no parameter the body names) is an ordinary object (ES CreateUnmapped-
+    // ArgumentsObject) and takes the ordinary prototype identity.
+    // A mapped arguments object's aliased elements are inline elements read
+    // through their cells (never named slots), so it keeps its layout identity.
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         return PROTO_ID_PER_OBJECT;
     }
     // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
@@ -6945,6 +6979,24 @@ pub(crate) fn publish_static_record(
     facts: u64,
 ) -> Result<crate::codegen_abi::PublishedShape, ShapeDescriptorError> {
     debug_assert_eq!(facts, record.facts_key_with_keys(record.keys));
+    if request.word.0 == crate::codegen_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD {
+        // The compiler names the declared empty ordinary row for a program
+        // `{}` content (`ProgramLayoutOrdinals::empty_ordinary`): that row is
+        // the agent's seed, published at agent creation, and answers the
+        // request when its facts are the request's. No second record, no
+        // second identity on the row.
+        let seed = ShapeSlab::agent_record_for_word_present(request.word)
+            .expect("declared empty ordinary layout is seeded at agent creation");
+        // SAFETY: a present record of this agent, read immediately.
+        let seed_facts = unsafe { (*seed).facts_key_with_keys((*seed).keys) };
+        if seed_facts != facts {
+            panic!("static layout publication mismatch: {request:?}: facts {facts:#x} != seed {seed_facts:#x}");
+        }
+        return Ok(crate::codegen_abi::PublishedShape {
+            identity: ShapeId(shapes_branded_birth::EMPTY_ORDINARY_BIRTH_LAYOUT),
+            word: request.word,
+        });
+    }
     let keys = record.keys;
     let keys_node = record.keys_node();
     let table = &crate::state::state().shapes;
@@ -7144,6 +7196,9 @@ pub(crate) struct SnapShapeState {
     next: [u32; 4],
     exotic: [u32; 4],
     semantic: u64,
+    /// The counters of the unique prototype identities and of the prototype serials.
+    unique: u64,
+    serial: u64,
 }
 
 /// What changed in the shape state between two [`SnapShapeState`]s. A record is minted
@@ -7200,7 +7255,135 @@ pub(crate) fn snap_image_shape_state() -> SnapShapeState {
         next: std::array::from_fn(|i| SHAPE_ID_NEXT[i].load(Relaxed)),
         exotic: std::array::from_fn(|i| EXOTIC_SHAPE_ID_NEXT[i].load(Relaxed)),
         semantic: SHAPE_SEMANTIC_NEXT.load(Relaxed),
+        unique: PROTO_ID_UNIQUE_NEXT.load(Relaxed),
+        serial: super::proto_validity::snap_image_prototype_serial_next(),
     }
+}
+
+/// How a minted record was born, from its id band, its row and whether its word is a runtime layout's.
+pub(crate) fn snap_image_mint_route_of(id: u32, row: u32, runtime: bool) -> u8 {
+    use crate::snap_image::format as f;
+    if snap_image_id_band(id) == 0 {
+        return f::MINT_ROUTE_STATIC;
+    }
+    if row >= DYNAMIC_BASE_ROWS {
+        return f::MINT_ROUTE_DYNAMIC;
+    }
+    if runtime {
+        return f::MINT_ROUTE_RUNTIME;
+    }
+    f::MINT_ROUTE_LAZY
+}
+
+pub(crate) fn snap_image_mint_route(id: u32, word: u32) -> u8 {
+    snap_image_mint_route_of(
+        id,
+        LayoutWord(word).row().0,
+        super::layout_desc::snap_image_runtime_layout_word(word),
+    )
+}
+
+/// Whether two dynamic rows in mint order leave a gap: the next row follows, or a chunk ended
+/// (rows are claimed in chunks that start at multiples of the chunk size from the first dynamic row).
+pub(crate) fn snap_image_mint_row_jumps(prev: u32, row: u32) -> bool {
+    row != prev + 1
+        && !(row > prev
+            && (prev + 1).wrapping_sub(DYNAMIC_BASE_ROWS) % shapes_store::DYNAMIC_CHUNK_ROWS == 0
+            && row.wrapping_sub(DYNAMIC_BASE_ROWS) % shapes_store::DYNAMIC_CHUNK_ROWS == 0)
+}
+
+/// A record minted by a slot-list successor: it has holes, or the family of its key list is not
+/// exactly the set of records that carry the keys (both sorted).
+pub(crate) fn snap_image_mint_successor(holes: u32, family: &[u32], carriers: &[u32]) -> bool {
+    holes != 0 || family != carriers
+}
+
+/// Per record of the mint record (`MINT_FLAG_*`): minted by a successor, keys a canonical list,
+/// leaves a row gap behind the dynamic row before it.
+pub(crate) fn snap_image_mint_replay_flags(recs: &[crate::snap_image::format::MintRec]) -> Vec<u8> {
+    use crate::snap_image::format as f;
+    let table = &crate::state::state().shapes;
+    let mut carriers: Vec<(u64, u32)> = Vec::new();
+    table.slab().for_each(|_, p| {
+        // SAFETY: a present record of this agent's slab.
+        let r = unsafe { &*p };
+        carriers.push((
+            shapes_store::list_identity(r.keys_node(), r.keys),
+            r.layout_word.0,
+        ));
+    });
+    carriers.sort_unstable();
+    let inner = table.inner.borrow();
+    let mut out = Vec::new();
+    let mut prev: Option<u32> = None;
+    for r in recs {
+        let mut flags = 0u8;
+        let identity = shapes_store::list_identity(r.node, r.keys);
+        let mut family: Vec<u32> = Vec::new();
+        snap_image_family_words(&inner, r.node, r.keys, &mut family);
+        family.sort_unstable();
+        let mut set: Vec<u32> = Vec::new();
+        let mut j = carriers.partition_point(|c| c.0 < identity);
+        while j < carriers.len() && carriers[j].0 == identity {
+            set.push(carriers[j].1);
+            j += 1;
+        }
+        if snap_image_mint_successor(r.holes, &family, &set) {
+            flags |= f::MINT_FLAG_SUCCESSOR;
+        }
+        if r.node != NO_NODE {
+            flags |= f::MINT_FLAG_CANONICAL;
+        }
+        if r.route == f::MINT_ROUTE_DYNAMIC {
+            let row = LayoutWord(r.word).row().0;
+            if prev.is_some_and(|p| snap_image_mint_row_jumps(p, row)) {
+                flags |= f::MINT_FLAG_ROW_GAP;
+            }
+            prev = Some(row);
+        }
+        out.push(flags);
+    }
+    out
+}
+
+/// The words of the family of the list (node, keys), appended to out. A free function
+/// beside ShapeTableInner::family_ids, so that method keeps its two callers.
+#[inline(never)]
+fn snap_image_family_words(inner: &ShapeTableInner, node: u32, keys: u64, out: &mut Vec<u32>) {
+    if node != NO_NODE {
+        if keys == 0 {
+            for w in inner.keyless_family.as_slice() {
+                out.push(w.0);
+            }
+            return;
+        }
+        let found = crate::object::canonical_keys::with_list_shapes(node, |l| {
+            for w in l.family.as_slice() {
+                out.push(w.0);
+            }
+        });
+        if found.is_some() {
+            return;
+        }
+    }
+    if let Some(ids) = inner.owned_families.get(&keys) {
+        for w in ids.as_slice() {
+            out.push(w.0);
+        }
+    }
+}
+
+/// How far the unique-prototype and prototype-serial counters moved since `a`.
+pub(crate) fn snap_image_mint_counters_moved(a: &SnapShapeState) -> (u64, u64) {
+    let now = snap_image_shape_state_counters();
+    (now.0.wrapping_sub(a.unique), now.1.wrapping_sub(a.serial))
+}
+
+fn snap_image_shape_state_counters() -> (u64, u64) {
+    (
+        PROTO_ID_UNIQUE_NEXT.load(std::sync::atomic::Ordering::Relaxed),
+        super::proto_validity::snap_image_prototype_serial_next(),
+    )
 }
 
 /// Ids drawn between two readings of one counter (a counter that moved to another kind
@@ -7482,6 +7665,8 @@ mod snap_image_delta_tests {
             next: [0; 4],
             exotic: [0; 4],
             semantic: 0,
+            unique: 0,
+            serial: 0,
         }
     }
     const S: u32 = SHAPE_ID_BASE + 5;
@@ -7647,6 +7832,96 @@ mod snap_image_delta_tests {
         let h = back[i].handles.iter().position(|&h| h != 0).unwrap_or(0);
         back[i].handles[h] ^= 1 << 8;
         assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_route_names_each_birth() {
+        use crate::snap_image::format::*;
+        assert_eq!(
+            snap_image_mint_route_of(S, DYN0 + 3, false),
+            MINT_ROUTE_STATIC
+        );
+        assert_eq!(snap_image_mint_route_of(S, 12, true), MINT_ROUTE_STATIC);
+        assert_eq!(
+            snap_image_mint_route_of(O, DYN0 + 3, false),
+            MINT_ROUTE_DYNAMIC
+        );
+        assert_eq!(snap_image_mint_route_of(O, 12, true), MINT_ROUTE_RUNTIME);
+        assert_eq!(snap_image_mint_route_of(O, 12, false), MINT_ROUTE_LAZY);
+        let (_, recs) = live_mints("snapmintroute");
+        assert!(
+            recs.iter().all(|r| r.route == MINT_ROUTE_DYNAMIC),
+            "{recs:?}"
+        );
+    }
+
+    #[test]
+    fn snap_image_mint_row_jumps_names_a_gap_and_allows_a_chunk_boundary() {
+        let c = shapes_store::DYNAMIC_CHUNK_ROWS;
+        assert!(!snap_image_mint_row_jumps(DYN0, DYN0 + 1));
+        assert!(snap_image_mint_row_jumps(DYN0, DYN0 + 2));
+        assert!(snap_image_mint_row_jumps(DYN0 + 5, DYN0 + 5));
+        // A chunk ended: the next chunk starts at another multiple of the chunk size.
+        assert!(!snap_image_mint_row_jumps(DYN0 + c - 1, DYN0 + 3 * c));
+        assert!(snap_image_mint_row_jumps(DYN0 + c - 2, DYN0 + 3 * c));
+        assert!(snap_image_mint_row_jumps(DYN0 + c - 1, DYN0 + 3 * c + 1));
+        assert!(snap_image_mint_row_jumps(DYN0 + 2 * c - 1, DYN0 + c));
+    }
+
+    #[test]
+    fn snap_image_mint_successor_names_holes_and_a_family_that_is_not_the_carriers() {
+        assert!(!snap_image_mint_successor(0, &[1, 2], &[1, 2]));
+        assert!(snap_image_mint_successor(1, &[1, 2], &[1, 2]));
+        assert!(snap_image_mint_successor(0, &[1], &[1, 2]));
+        assert!(snap_image_mint_successor(0, &[1, 2], &[1]));
+    }
+
+    #[test]
+    fn snap_image_mint_flags_see_a_fresh_shape_as_plain() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintflags");
+        let flags = snap_image_mint_replay_flags(&recs);
+        assert_eq!(flags.len(), recs.len());
+        for (r, f) in recs.iter().zip(&flags) {
+            assert_eq!(f & (MINT_FLAG_SUCCESSOR | MINT_FLAG_ROW_GAP), 0, "{r:?}");
+            assert_eq!(f & MINT_FLAG_CANONICAL != 0, r.node != NO_NODE, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn snap_image_mint_flags_name_a_row_gap_and_the_node_of_a_live_record() {
+        use crate::snap_image::format::*;
+        let word = |row: u32| {
+            LayoutWord::new(perry_abi::layouts::LayoutRow(row), 1, SHAPE_ID_KIND_PLAIN)
+                .expect("a word")
+                .0
+        };
+        let mk = |row: u32| MintRec {
+            route: MINT_ROUTE_DYNAMIC,
+            node: NO_NODE,
+            keys: 0x1000_0000,
+            word: word(row),
+            ..MintRec::default()
+        };
+        let flags = snap_image_mint_replay_flags(&[mk(DYN0), mk(DYN0 + 1), mk(DYN0 + 3)]);
+        assert_eq!(
+            flags
+                .iter()
+                .map(|f| f & MINT_FLAG_ROW_GAP)
+                .collect::<Vec<_>>(),
+            vec![0, 0, MINT_FLAG_ROW_GAP]
+        );
+        // A static-id record leaves the row sequence alone.
+        let mut s = mk(DYN0 + 9);
+        s.route = MINT_ROUTE_STATIC;
+        let flags = snap_image_mint_replay_flags(&[mk(DYN0), s, mk(DYN0 + 1)]);
+        assert_eq!(flags[2] & MINT_FLAG_ROW_GAP, 0);
+        let (_, recs) = live_mints("snapmintnode");
+        let slab = crate::state::state().shapes.slab();
+        for r in &recs {
+            let p = slab.record_ptr(ShapeId(r.id)).expect("a present record");
+            assert_eq!(r.node, unsafe { &*p }.keys_node());
+        }
     }
 
     #[test]

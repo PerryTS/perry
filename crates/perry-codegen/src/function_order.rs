@@ -62,8 +62,24 @@ pub const JS_FN_SECTION_PREFIX: &str = "perry_js_text.fn.";
 /// The ELF link rule that gathers the JS text input sections into the
 /// `perry_js_text` output section: a C-identifier name, so the linker defines
 /// `__start_`/`__stop_perry_js_text` around every JS frame.
+///
+/// Behind it, the runtime's tail text ([`RUNTIME_TAIL_SECTION`]): the
+/// two-phase population of the realm, which a program compiled without the
+/// two-phase realm does not link. Placed here it moves nothing in front of
+/// it: the runtime text and the JS text of a two-phase program lie where
+/// they lie without it. Left to the linker's orphan placement it would sit in
+/// front of the JS text (GNU ld). First the head (`.perry_tail_head.*`): the
+/// two small functions every two-phase program runs once, in the 64 KiB
+/// window the end of the JS text (the entry's `main`) maps anyway. An output
+/// section with no input (the program links none of it) is not emitted.
 pub const JS_TEXT_LINK_RULE: &str =
-    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n} INSERT AFTER .text;\n";
+    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n .perry_tail : ALIGN(16) {\n  *(.perry_tail_head.*)\n  *(.perry_tail .perry_tail.*)\n }\n} INSERT AFTER .text;\n";
+
+/// The output section of the runtime's tail text on Linux, and the prefix of
+/// its input sections: one per function (`.perry_tail.<name>`, the head's
+/// `.perry_tail_head.<name>`; `#[link_section]` in perry-runtime and
+/// perry-abi), so the link keeps or drops each function by itself.
+pub const RUNTIME_TAIL_SECTION: &str = ".perry_tail";
 
 /// A parsed order list: function name -> rank (0 runs first).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -619,6 +619,23 @@ impl Model {
         i.checked_sub(first).map(|k| fi.captures[k])
     }
 
+    /// Diagnostics (`hold_ledger`): the reason id `top_origin` ends at.
+    pub(crate) fn top_origin_id(&self, start: NodeId) -> Option<(NodeId, u32)> {
+        let mut n = start;
+        let mut seen: crate::pts::FxHashSet<NodeId> = Default::default();
+        while seen.insert(n) {
+            let &(src, why) = self.top_pred.get(&n)?;
+            if why != u32::MAX {
+                return Some((n, why));
+            }
+            if src == NO_NODE {
+                return None;
+            }
+            n = src;
+        }
+        None
+    }
+
     /// Diagnostics: follow the first-arrival chain of ⊤ back to its origin.
     pub fn top_origin(&self, start: NodeId) -> String {
         let mut n = start;

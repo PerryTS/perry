@@ -32,6 +32,13 @@ pub(crate) fn lower_let(
     // when the initializer emits no call. Invalidate its existing proof at
     // the binding, then use the same receiver-invariance proof as parameters.
     let immutable = !mutable && !ctx.reassigned_locals.contains(&id);
+    // DYNP E13: a for-in desugar's keys binding; its begin call then takes a
+    // bound slot, read by the desugar's `let __n = __keys.length`.
+    if let Some(perry_hir::Expr::ForInKeys(recv)) = init {
+        if let (perry_hir::Expr::LocalGet(recv), true) = (recv.as_ref(), immutable) {
+            ctx.for_in_keys_locals.insert(id, *recv);
+        }
+    }
     for state in ctx
         .receiver_descriptors
         .byte_receiver_binding(id, immutable)

@@ -29,7 +29,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
     }
     let obj = addr as *mut ObjectHeader;
     let record = shapes::shape_record_of_receiver((*obj).shape_word())?;
-    if record.object_kind() != shapes::ShapeObjectKind::Ordinary || record.summary() != 0 {
+    if !record.kind_is(shapes::ShapeObjectKind::Ordinary) || record.summary() != 0 {
         return None;
     }
     Some((obj, record))
@@ -46,7 +46,7 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     };
     let slot = from.logical_key_count();
     if to.logical_key_count() != slot + 1
-        || to.object_kind() != from.object_kind()
+        || !to.same_kind_as(&from)
         || to.proto_id() != from.proto_id()
         || to.summary() != 0
     {

@@ -63,6 +63,8 @@ pub(crate) fn runtime_layouts(
             perry_abi::ShapeObjectKind::Ordinary,
             perry_abi::ShapeObjectKind::OrdinaryUnmarked,
             perry_abi::ShapeObjectKind::CallableOrdinary,
+            perry_abi::ShapeObjectKind::Arguments,
+            perry_abi::ShapeObjectKind::ArgumentsStrict,
         ]
         .into_iter()
         .find(|kind| kind.code() == u64::from(source.object_kind))

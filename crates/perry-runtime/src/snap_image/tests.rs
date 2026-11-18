@@ -673,6 +673,11 @@ fn full_mint_rec(n: u32) -> MintRec {
         handles: [1, 2, 3, 4, 5, 6],
         family_desc: 13,
         edges: vec![9, 10, 11],
+        route: MINT_ROUTE_LAZY,
+        node: 9,
+        keys_ref: Some(Val::Cell { hi: 0, bare: true, index: 4 }),
+        proto_ref: Some(Val::Scalar(0x7FFC_0000_0000_0002)),
+        desc_off: Some(16),
     }
 }
 
@@ -722,4 +727,155 @@ fn mint_stop_reports_the_size_of_a_verified_record_and_names_a_failing_one() {
         (s.kind, s.cell, u64::from(bad[0].id)),
         (STOP_MINT_MISMATCH, 0, s.value)
     );
+}
+
+#[test]
+fn mint_record_round_trips_route_and_refs() {
+    let mut r = full_mint_rec(3);
+    r.route = MINT_ROUTE_RUNTIME;
+    r.node = 7;
+    r.keys_ref = Some(Val::Cell { hi: 0, bare: true, index: 5 });
+    r.proto_ref = Some(Val::Ext { hi: 0x7FFD, bare: false, region: REGION_EXE, off: 0x40 });
+    r.desc_off = Some(0x1230);
+    let mut d = full_mint_rec(4);
+    d.keys_ref = Some(Val::Scalar(0));
+    d.desc_off = None;
+    let recs = vec![r, MintRec::default(), d];
+    let blob = mint_blob(&recs);
+    let (back, used) = parse_mint_blob(&blob).expect("parses");
+    assert_eq!(used, blob.len());
+    assert_eq!(back[0].route, MINT_ROUTE_RUNTIME);
+    assert_eq!(back[0].node, 7);
+    assert_eq!(back[0].desc_off, Some(0x1230));
+    assert!(matches!(back[0].keys_ref, Some(Val::Cell { index: 5, .. })), "{:?}", back[0].keys_ref);
+    assert!(matches!(back[0].proto_ref, Some(Val::Ext { off: 0x40, region: REGION_EXE, .. })), "{:?}", back[0].proto_ref);
+    assert_eq!(back[1].desc_off, None);
+    assert_eq!(back[1].keys_ref, None);
+    assert_eq!(back[2].keys_ref, Some(Val::Scalar(0)));
+    assert_eq!(back[2].desc_off, None);
+    assert_eq!(back, recs);
+    assert_eq!(mint_without_refs(&back[0]).desc_off, None);
+    assert_eq!(mint_without_refs(&back[0]).route, MINT_ROUTE_RUNTIME);
+}
+
+fn mint_where(extra: Option<usize>) -> Where {
+    let mut maps = vec![(0x40_0000, 0x50_0000), (0x7000_0000_0000, 0x7000_0001_0000)];
+    if let Some(a) = extra {
+        maps.push((a & !0xfff, (a & !0xfff) + 0x2000));
+    }
+    Where {
+        cells: vec![(0x7000_0000_1010, 0x7000_0000_1000, 0x40)],
+        sections: [(0, 0); 3],
+        exe: (0x40_0000, 0x40_1000),
+        tls: (0, 0),
+        maps,
+        sym: (0x7000_0000_8000, 0x7000_0001_0000),
+    }
+}
+
+#[test]
+fn mint_refs_accept_an_image_cell_or_binary_data_and_refuse_a_heap_address() {
+    let w = mint_where(None);
+    assert!(matches!(mint_ref(&w, 0x7000_0000_1010, false), Some(Val::Cell { index: 0, bare: true, .. })));
+    assert!(matches!(mint_ref(&w, 0x40_0100, false), Some(Val::Ext { region: REGION_EXE, off: 0x100, .. })));
+    assert_eq!(mint_ref(&w, 0x7000_0000_4000, false), None);
+    assert_eq!(mint_ref(&w, 0x7000_0000_4000, true), None);
+    assert_eq!(mint_ref(&w, 0, false), Some(Val::Scalar(0)));
+    // A word outside every mapping is a scalar: not a key list, but a prototype word may be one.
+    assert_eq!(mint_ref(&w, 0x1234, false), None);
+    assert_eq!(mint_ref(&w, 0x1234, true), Some(Val::Scalar(0x1234)));
+}
+
+#[test]
+fn a_runtime_layout_descriptor_is_found_by_its_changed_shape_id_word() {
+    use crate::object::layout_desc::PerryLayoutDesc;
+    let (so, lo) = (std::mem::offset_of!(PerryLayoutDesc, shape_id), std::mem::offset_of!(PerryLayoutDesc, layout_id));
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    let mut was = vec![0u8; 3 * size];
+    let mut now = was.clone();
+    let put = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    // An unchanged descriptor that already holds the id and the word.
+    for b in [&mut was, &mut now] {
+        put(b, so, 900);
+        put(b, lo, 77);
+    }
+    // The descriptor the birth wrote: id changed from 0 to 900.
+    put(&mut was, size + lo, 77);
+    put(&mut now, size + lo, 77);
+    put(&mut now, size + so, 900);
+    // A changed descriptor of another layout.
+    put(&mut was, 2 * size + lo, 78);
+    put(&mut now, 2 * size + lo, 78);
+    put(&mut now, 2 * size + so, 900);
+    assert_eq!(mint_desc_matches(&was, &now, 900, 77), (1, size as u64));
+    assert_eq!(mint_desc_matches(&was, &now, 900, 99).0, 0);
+    assert_eq!(mint_desc_matches(&was, &now, 901, 77).0, 0);
+}
+
+#[test]
+fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
+    let good: u64 = 0x1234;
+    let bad: u64 = 0x7000_0000_4000;
+    let w = mint_where(Some(std::ptr::addr_of!(bad) as usize));
+    let begin = crate::object::shapes::snap_image_shape_state();
+    let mk = |id: u32, route: u8| MintRec { id, route, node: u32::MAX, keys: 0x7000_0000_1010, ..MintRec::default() };
+    let mut recs = vec![mk(10, MINT_ROUTE_DYNAMIC), mk(11, MINT_ROUTE_RUNTIME), mk(12, MINT_ROUTE_STATIC), mk(13, MINT_ROUTE_STATIC)];
+    recs[0].proto_cell = std::ptr::addr_of!(good) as u64;
+    recs[1].keys = 0x7000_0000_4000;
+    recs[2].proto_cell = std::ptr::addr_of!(bad) as u64;
+    recs[3].node = 3;
+    recs[3].keys = 0x7000_0000_1010;
+    let stops = mint_capture(&w, &mut recs, &[], &[], &begin);
+    let by = |k: u8| stops.iter().filter(|s| s.kind == k).collect::<Vec<_>>();
+    let one = |k: u8| {
+        let v = by(k);
+        assert_eq!(v.len(), 1, "kind {k}: {stops:?}");
+        (v[0].cell, v[0].value, v[0].off)
+    };
+    assert_eq!(one(STOP_MINT_KEYS), (1, 11, 1));
+    assert_eq!(one(STOP_MINT_NO_DESC), (1, 11, 1));
+    assert_eq!(one(STOP_MINT_PROTO_WORD), (2, 12, 1));
+    assert_eq!(one(STOP_MINT_CANONICAL), (3, 13, 1));
+    assert!(by(STOP_MINT_ROW_GAP).is_empty() && by(STOP_MINT_SUCCESSOR).is_empty(), "{stops:?}");
+    assert_eq!(recs[0].proto_ref, Some(Val::Scalar(0x1234)));
+    assert!(matches!(recs[0].keys_ref, Some(Val::Cell { index: 0, .. })));
+    assert!(matches!(recs[2].keys_ref, Some(Val::Cell { index: 0, .. })));
+    assert_eq!(recs[1].keys_ref, None);
+    assert_eq!(recs[1].desc_off, None);
+    let t = mint_census_text(&stops).expect("a census");
+    assert!(t.contains("routes dynamic 1, runtime 1, lazy 0, static 2; canonical key lists 1; successor mints 0; row gaps 0;"), "{t}");
+    assert!(t.contains("key lists as image cells 3, as binary data 0; runtime-layout descriptor cells found 0"), "{t}");
+    // No records, no stops.
+    assert!(mint_capture(&w, &mut [], &[], &[], &begin).is_empty());
+}
+
+#[test]
+fn the_census_line_names_every_item_in_order() {
+    let mut stops = Vec::new();
+    for i in 0..MINT_CENSUS_ITEMS {
+        stops.push(Stop { cell: 0, obj_type: i as u8, kind: STOP_MINT_CENSUS, off: 0, value: (i as u64 + 1) * 10 });
+    }
+    let t = mint_census_text(&stops).expect("a census");
+    assert!(
+        t.contains("routes dynamic 10, runtime 20, lazy 30, static 40; canonical key lists 50; successor mints 60; row gaps 70; prototype ids default 80, class 90, mixed 100, unique 110, other 120; unique-prototype counter moved 130, prototype-serial counter moved 140; key lists as image cells 150, as binary data 160; runtime-layout descriptor cells found 170"),
+        "{t}"
+    );
+    assert_eq!(mint_census_text(&[]), None);
+}
+
+#[test]
+fn mint_stop_verifies_records_that_carry_references() {
+    let before = crate::object::shapes::snap_image_shape_state();
+    let o = crate::object::js_object_alloc(0, 0);
+    crate::object::js_object_set_field_by_name(o, crate::string::js_string_from_bytes(b"snapimgmintrefs".as_ptr(), 15u32), 1.0);
+    let delta = crate::object::shapes::snap_image_shape_delta(&before, &crate::object::shapes::snap_image_shape_state());
+    let mut recs = crate::object::shapes::snap_image_mint_collect(&before);
+    assert!(!recs.is_empty());
+    for r in recs.iter_mut() {
+        r.keys_ref = Some(Val::Scalar(0));
+        r.proto_ref = Some(Val::Scalar(1));
+        r.desc_off = Some(8);
+    }
+    let s = mint_stop(&delta, &recs).expect("a stop");
+    assert_eq!(s.kind, STOP_MINT_RECORD);
 }

@@ -92,20 +92,6 @@ pub(crate) unsafe fn to_property_key_rooted<'scope>(
     scope.root_nanbox_f64(coerced)
 }
 
-/// True when `v` is not a JS Object — i.e. a usable primitive result from
-/// `OrdinaryToPrimitive` (undefined/null/boolean/number/string/bigint and,
-/// crucially, **Symbol**, the one `POINTER_TAG` primitive).
-fn js_value_is_not_object(v: f64) -> bool {
-    let bits = v.to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
-        return true;
-    }
-    // A Symbol is the one POINTER_TAG primitive. Use `js_is_symbol` (not the
-    // narrower registered-handle table) so a fresh heap `Symbol()` returned
-    // from `toString`/`valueOf` is recognized and preserved as the key.
-    unsafe { crate::symbol::js_is_symbol(v) != 0 }
-}
-
 /// `OrdinaryToPrimitive(O, "string")` with Symbol preservation. The spec
 /// fallback (when no `@@toPrimitive` exists) invokes `toString` then `valueOf`
 /// and uses the first result whose type is not Object — and a Symbol is not an
@@ -146,7 +132,7 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             std::ptr::null(),
             0,
         );
-        if js_value_is_not_object(result) {
+        if crate::value::to_string_primitive::is_primitive_value(result) {
             return Some(result);
         }
     }

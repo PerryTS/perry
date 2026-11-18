@@ -1700,7 +1700,13 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
             && !m.is_constructor_key(key)
             && locked_chain_read(m, of, a)
         {
-            m.add_prim(dst, prim::UNDEF);
+            // The chain ends in `undefined` only where no locked member
+            // defines the key (`locked_chain_defines`: a RegExp's
+            // `RegExp.prototype[@@split]`); that member reaches the read
+            // through the receiver's builtin field (`builtin_field_use`).
+            if !locked_chain_defines(m, of, a) {
+                m.add_prim(dst, prim::UNDEF);
+            }
             object_proto_method_value(m, a, dst);
             return;
         }

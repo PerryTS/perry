@@ -22,7 +22,10 @@ pub(super) unsafe fn hole_fill_admitted(
     if (*gc)._reserved
         & (crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            // An arguments object's named capacity is not its allocation's:
+            // refused here, so the hole test below reads the physical one.
+            | crate::gc::OBJ_FLAG_ARGUMENTS)
         != 0
         || (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
     {
@@ -51,6 +54,7 @@ pub(super) unsafe fn hole_fill_admitted(
             keys,
             (*r).logical_key_count,
             pos,
+            crate::object::object_physical_capacity(obj),
         )
         && chain_admits_add(dir, obj, r, key_bits, hash)
 }
@@ -266,6 +270,17 @@ pub(super) unsafe fn chain_admits_add(
     key_bits: u64,
     hash: u64,
 ) -> bool {
+    // A receiver on the realm-default link: its chain is `%Object.prototype%`
+    // alone, and that link's authority answers every key but `__proto__`
+    // (as in the `Next::Unknown` arm below and `table_add_admitted`): a
+    // sealed or unmaterialized intrinsic blocks no add (DEC 250 locks it).
+    if hash != PROTO_KEY_HASH
+        && walks_from(obj, r)
+        && realm_default_link(obj, r)
+        && !crate::object::descriptor_state::object_proto_may_intercept_any()
+    {
+        return true;
+    }
     let (mut cur, mut rc) = (obj, r);
     for _ in 0..MAX_HOPS {
         if !walks_from(cur, rc) {

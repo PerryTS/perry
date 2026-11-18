@@ -350,6 +350,32 @@ mod tests {
     }
 
     #[test]
+    fn a_birth_site_owns_its_layouts_and_has_no_cell() {
+        const LAYOUTS: [&str; 2] = ["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"];
+        let site = crate::realm_manifest::REALM
+            .iter()
+            .find(|e| e.name == "%ArgumentsBirth%")
+            .unwrap();
+        assert_eq!(site.kind, perry_hir::realm_manifest::RealmKind::BirthSite);
+        for layout in LAYOUTS {
+            assert!(site.births.contains(&layout), "reach edge {layout}");
+        }
+        let hello = RealmPlan::from_reach(&reach("console.log('hi');")).unwrap();
+        for layout in LAYOUTS {
+            assert!(!hello.runtime_layouts.contains_key(layout), "{layout}");
+        }
+        let mut r = reach("console.log('hi');");
+        r.names.insert("%ArgumentsBirth%".into());
+        r.close(crate::realm_manifest::REALM);
+        let plan = RealmPlan::from_reach(&r).unwrap();
+        for layout in LAYOUTS {
+            assert!(plan.runtime_layouts.contains_key(layout), "{layout}");
+        }
+        assert!(!plan.cells.contains_key("%ArgumentsBirth%"));
+        assert!(!plan.providers.contains_key("%ArgumentsBirth%"));
+    }
+
+    #[test]
     fn runtime_layouts_follow_reached_births_without_retaining_unrelated_kinds() {
         let hello = RealmPlan::from_reach(&reach("console.log('hi');")).unwrap();
         for layout in [

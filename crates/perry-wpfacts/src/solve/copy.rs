@@ -288,6 +288,9 @@ impl Model {
             self.top_pred
                 .entry(dst)
                 .or_insert((self.cur_src, self.cur_why));
+            if let Some(l) = self.ledger.as_mut() {
+                l.top_seed(dst, self.cur_why, std::panic::Location::caller());
+            }
         }
         if before >> 20 != self.pts_entries >> 20 {
             if self

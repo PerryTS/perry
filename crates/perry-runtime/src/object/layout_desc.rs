@@ -764,6 +764,36 @@ unsafe fn alloc_layout_object_offering(
     )
 }
 
+/// An arguments object (kinds 13/14) on `desc`: the layout's three named
+/// slots and the elements after them, `physical_slots` in all, every slot the
+/// hole, in one allocation. Can collect.
+///
+/// # Safety
+/// `desc` is `runtime_layouts::ARGUMENTS` or `ARGUMENTS_STRICT`.
+pub(crate) unsafe fn alloc_arguments_layout(
+    desc: *const PerryLayoutDesc,
+    physical_slots: usize,
+) -> *mut ObjectHeader {
+    let Some(id) = layout_word_for_birth(desc) else {
+        eprintln!("Perry internal error: arguments layout is not registered");
+        std::process::abort();
+    };
+    alloc_layout_object_sized(&*desc, LayoutWord(id), physical_slots)
+}
+
+/// Does `obj` still carry the exact birth layout of `desc`, with no overflow
+/// (no key added, deleted or redefined since birth)?
+///
+/// # Safety
+/// `obj` is a live object.
+pub(crate) unsafe fn is_unchanged_birth_layout(
+    obj: *const ObjectHeader,
+    desc: *const PerryLayoutDesc,
+) -> bool {
+    layout_word_for_birth(desc).is_some_and(|id| (*obj).shape_word() == id)
+        && !super::overflow::has_overflow(obj)
+}
+
 /// Function births alone retain the ordinary inline floor. Keep their
 /// sizing and diagnostic work out of the shared class/literal allocator.
 /// `desc` is the registered layout admitted by function_family_birth.
@@ -1441,6 +1471,11 @@ fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
+/// Image run: whether `word` is a runtime layout's (installed at its first birth).
+pub(crate) fn snap_image_runtime_layout_word(word: u32) -> bool {
+    registration::is_runtime_layout_word(word)
+}
+
 /// Image run: whether a record on a static row below the dynamic rows belongs there: the word
 /// is a runtime layout's (installed at its first birth) or a lazy image row whose descriptor
 /// carries the word.
@@ -1674,6 +1709,19 @@ pub(crate) unsafe fn route_family_add(
         }
     }
     let n = d.slot_count;
+    // An arguments layout's inline slots past its named ones are elements: the
+    // added key (any attributes) holds its value in its own overflow entry.
+    if d.kind == super::shapes::ShapeObjectKind::Arguments.code() as u8
+        || d.kind == super::shapes::ShapeObjectKind::ArgumentsStrict.code() as u8
+    {
+        let key = crate::JSValue::from_bits(*new.add(n as usize));
+        super::overflow::append_unfixed(
+            obj,
+            key.bits(),
+            super::key_attrs::keys_entry(keys.arr(), n),
+        );
+        return true;
+    }
     if super::key_attrs::keys_entry(keys.arr(), n) != 0 {
         return false;
     }

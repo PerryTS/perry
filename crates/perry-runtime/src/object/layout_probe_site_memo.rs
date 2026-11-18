@@ -243,7 +243,11 @@ pub(crate) unsafe fn prime(
                     return None;
                 }
                 let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-                if slot >= SLOT_MASK - 1 {
+                // A memo stores a raw-load location, not a representation accessor.
+                if slot >= SLOT_MASK - 1
+                    || (slot < crate::object::field_rep::REP_SLOTS
+                        && (*r).i32_lanes() & (1 << slot) != 0)
+                {
                     return None;
                 }
                 // `ordinary_word` proved the meta form: an inline answer

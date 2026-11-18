@@ -131,7 +131,9 @@ pub(crate) struct ModInfo {
     pub scope: FxHashMap<String, NodeId>,
     pub ns_tok: Tok,
     pub site_counter: u32,
-    pub iterres: FxHashMap<FnIdx, NodeId>,
+    /// A plain-async step's iter-result slot, per function and `done` flag
+    /// of its writes (`Gen::iter_res_node`).
+    pub iterres: FxHashMap<(FnIdx, bool), NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
     /// Per for-of loop (its value local): what its step yields
     /// (`Gen::step_yield_node`).
@@ -161,6 +163,12 @@ pub(crate) enum PendingWalk<'a> {
 pub struct Gen<'a> {
     pub m: Model,
     pub(crate) diagnostic: Option<crate::diagnostics::Capture>,
+    /// The output node of the `iteratorStep` whose arguments are being
+    /// generated: what the `iteratorStepOutput` among them reads.
+    pub(crate) step_out: Option<NodeId>,
+    /// The function whose `if (IterResultGetDone)` arm is being walked:
+    /// the `IterResultGetValue` there reads the slot a `return` wrote.
+    pub(crate) iter_done_arm: Option<FnIdx>,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
@@ -189,6 +197,8 @@ pub struct Gen<'a> {
     pub store_sites: Vec<ReadSite>,
     /// The folded method nodes that have a site (`method_sites`).
     pub(crate) folded_sites: Vec<FoldedSite>,
+    /// NDISP2: every HIR-specialized member op (`member_ops`).
+    pub(crate) member_ops: Vec<crate::member_ops::MemberOp>,
     pub(crate) element_sites: Vec<ElementSite>,
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
@@ -659,6 +669,10 @@ impl<'a> Gen<'a> {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
+        if crate::hold_ledger::on() {
+            m.explain = true;
+            m.ledger = Some(crate::hold_ledger::HoldLedger::new());
+        }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
@@ -750,6 +764,8 @@ impl<'a> Gen<'a> {
         Gen {
             m,
             diagnostic: None,
+            step_out: None,
+            iter_done_arm: None,
             modules,
             mods: Vec::new(),
             path_index,
@@ -765,6 +781,7 @@ impl<'a> Gen<'a> {
             read_sites: Vec::new(),
             store_sites: Vec::new(),
             folded_sites: Vec::new(),
+            member_ops: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),

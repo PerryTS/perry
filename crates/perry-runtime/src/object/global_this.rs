@@ -43,6 +43,7 @@ mod json_reflect_namespaces;
 mod math_namespace;
 
 mod object_intrinsic;
+pub(super) mod phase_rows;
 mod populate;
 mod proto_methods;
 pub(crate) mod proto_room;

@@ -7,12 +7,18 @@ use crate::model::*;
 use perry_hir::Expr;
 
 impl<'a> Gen<'a> {
-    pub(crate) fn iter_res_node(&mut self, fx: &Fx) -> NodeId {
-        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&fx.f) {
+    /// A plain-async step's iter-result slot as written with `done`
+    /// (`IterResultSet(value, done)`). The step reads it back right after
+    /// its body leaves: under `if (IterResultGetDone)` the last write was a
+    /// `return` (done), after that arm an await's operand (not done), so
+    /// each read takes the writes of its own flag only.
+    pub(crate) fn iter_res_node(&mut self, fx: &Fx, done: bool) -> NodeId {
+        let key = (fx.f, done);
+        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&key) {
             return n;
         }
         let n = self.tmp("iterres");
-        self.mods[fx.module as usize].iterres.insert(fx.f, n);
+        self.mods[fx.module as usize].iterres.insert(key, n);
         n
     }
 
@@ -370,7 +376,7 @@ impl<'a> Gen<'a> {
                 // (`js_iterator_step`), which destructuring reads.
                 let va = self.m.atom("value");
                 let v = self.load(res, Key::Named(va));
-                let io = self.iter_out_node(fx);
+                let io = self.step_out_node(fx);
                 self.m.edge(v, io);
                 let all = self.iterate(it);
                 self.m.edge(all, io);
@@ -389,7 +395,7 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::BOOL)
             }
-            "iteratorStepOutput" => self.iter_out_node(fx),
+            "iteratorStepOutput" => self.step_out_node(fx),
             // The rest element of an array destructuring (`[a, ...rest] =
             // it`): what codegen lowers it to, `js_array_push_f64(rest,
             // value)`, the array itself as the result.
@@ -639,6 +645,15 @@ impl<'a> Gen<'a> {
         let n = self.tmp("stepyield");
         self.mods[fx.module as usize].stepyield.insert(key, n);
         n
+    }
+
+    /// What the current `iteratorStep` writes (`Gen::step_out`); outside
+    /// a step, the function's output node (`iter_out_node`).
+    fn step_out_node(&mut self, fx: &Fx) -> NodeId {
+        match self.step_out {
+            Some(n) => n,
+            None => self.iter_out_node(fx),
+        }
     }
 
     pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

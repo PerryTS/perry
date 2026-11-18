@@ -234,12 +234,13 @@ pub(super) fn compile_module_entry(
             stub.block_mut(0).unwrap().ret_void();
         }
 
-        // Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): the entry module
-        // defines the runtime's three link-time hooks (weak in the runtime),
-        // so the runtime's own readers of a phase-A intrinsic call the core
-        // entry and the full entry can complete a core-only realm, with no
-        // mode test on any call; a program compiled without the switch
-        // defines none of them and does not link the two-phase path.
+        // Two-phase realm (the default; `PERRY_REALM_TWO_PHASE=0` is off):
+        // the entry module defines the runtime's three link-time hooks (weak
+        // in the runtime), so the runtime's own readers of a phase-A
+        // intrinsic call the core entry and the full entry can complete a
+        // core-only realm, with no mode test on any call; a program compiled
+        // with the switch off defines none of them and does not link the
+        // two-phase path.
         if crate::expr::property_get::globalget::realm_two_phase() {
             for (hook, target) in [
                 ("perry_realm_core_entry", "js_get_global_core"),
@@ -977,6 +978,10 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            for_in_facts: Default::default(),
+            for_in_snapshots: Default::default(),
+            for_in_keys_locals: Default::default(),
+            for_in_lens: Default::default(),
             numeric_order_functions: cross_module.numeric_order_functions,
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),

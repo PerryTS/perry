@@ -321,7 +321,37 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
             out.top.insert(RealmTop::GlobalObjectValue);
         }
     });
+    if entries.iter().any(|e| e.name == ARGUMENTS_BIRTH) && synthesizes_arguments(module) {
+        out.names.insert(ARGUMENTS_BIRTH.into());
+    }
     out.close(entries);
+}
+
+/// The per-call birth site of an arguments object (object/arguments.rs).
+const ARGUMENTS_BIRTH: &str = "%ArgumentsBirth%";
+
+/// Whether any function of the module synthesizes an `arguments` object: the
+/// hidden raw-arguments parameter HIR adds for it (`Param::arguments_object`).
+fn synthesizes_arguments(module: &crate::Module) -> bool {
+    let synthesizes = |params: &[crate::Param]| params.iter().any(|p| p.arguments_object.is_some());
+    let mut found = module.functions.iter().any(|f| synthesizes(&f.params))
+        || module.classes.iter().any(|c| {
+            c.constructor
+                .iter()
+                .chain(&c.methods)
+                .chain(&c.static_methods)
+                .chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f))
+                .chain(c.computed_members.iter().map(|m| &m.function))
+                .any(|f| synthesizes(&f.params))
+        });
+    if !found {
+        crate::for_each_module_expr(module, &mut |expr| {
+            if let crate::Expr::Closure { params, .. } = expr {
+                found |= synthesizes(params);
+            }
+        });
+    }
+    found
 }
 
 /// The module loaders a program can name. A loader is a function that loads

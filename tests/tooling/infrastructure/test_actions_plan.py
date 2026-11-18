@@ -14,7 +14,7 @@ from actions_plan import load_catalog, path_matches, select
 
 
 CATALOG = load_catalog()
-WASI_JOBS = ("wasi-native", "wasi-execution", "wasi-components")
+WASI_JOBS = ("wasi-native", "wasi-component-units", "wasi-execution", "wasi-execution-p1", "wasi-components")
 
 
 def selected(category: str, event_name: str, event: dict, ref: str = "refs/heads/main",
@@ -203,7 +203,15 @@ class CategoryRoutingTests(unittest.TestCase):
             self.assertIn("--suite " + suite, commands("wasi-execution"))
         self.assertIn("wasi_build_runtime.py", commands("wasi-execution"))
         self.assertIn("--features target-wasi", commands("wasi-execution"))
+        for suite in ["smoke", "acceptance", "gap"]:
+            self.assertIn("--flavour p1 --suite " + suite, commands("wasi-execution-p1"))
+        self.assertNotIn("--flavour p1", commands("wasi-execution"))
         self.assertIn("component_check.sh", commands("wasi-components"))
+        self.assertIn("component_unit_tests.sh", commands("wasi-component-units"))
+        self.assertNotIn("component_unit_tests.sh", commands("wasi-native"))
+        self.assertTrue(any(step.get("env", {}).get("COMPONENT_CHECK_UNIT_TESTS") == "0"
+                            for step in jobs["wasi-components"]["steps"]
+                            if "component_check.sh" in step.get("run", "")))
         keys = {name: next(step["with"]["shared-key"] for step in jobs[name]["steps"]
                            if "rust-cache" in step.get("uses", "")) for name in WASI_JOBS}
         self.assertEqual(len(set(keys.values())), len(WASI_JOBS), keys)

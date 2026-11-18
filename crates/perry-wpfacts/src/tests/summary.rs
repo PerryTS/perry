@@ -358,7 +358,7 @@ fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
         )
     };
     let before = snapshot(&m);
-    let s = encode_body(input());
+    let s = encode_body(input(), &Default::default());
     assert!(
         !s.seeds.iter().any(|(_, ts, _, _)| ts.contains(&foreign)),
         "incoming caller points-to values became direct body seeds"
@@ -372,7 +372,10 @@ fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
     let bytes = format!("{s:?}");
     // Changing already-solved incoming values cannot change body bytes.
     m.add_tok(param, object);
-    assert_eq!(bytes, format!("{:?}", encode_body(input())));
+    assert_eq!(
+        bytes,
+        format!("{:?}", encode_body(input(), &Default::default()))
+    );
     // Publication is explicit and executes the sealed description once.
     let nodes: Vec<_> = s.orig.iter().map(|_| m.node_l("published slot")).collect();
     let mut nodes = nodes;

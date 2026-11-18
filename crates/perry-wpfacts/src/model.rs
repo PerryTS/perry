@@ -792,6 +792,14 @@ pub struct DefineAny {
     pub accessor: bool,
 }
 
+impl DefineAny {
+    /// One define: its key node and its own `get` node (each define site
+    /// reads its descriptor's `get` into a node of its own).
+    pub fn id(&self) -> (NodeId, NodeId) {
+        (self.key, self.get)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ThisArg {
     Undef,
@@ -1868,6 +1876,11 @@ pub struct Model {
     /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
     /// an instance-born literal's birth state for the Array a callee grew.
     pub instance_nodes: bool,
+    /// Every node a per-binding fact reads through `BindingNodes::of`
+    /// (`bindings::binding_reads`), set before the summaries are built. In
+    /// a body with births `summary::compress` keeps their slots, so each
+    /// has an instance copy that holds the instance's tokens.
+    pub binding_reads: crate::pts::FxHashSet<NodeId>,
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
@@ -2196,6 +2209,12 @@ pub struct Model {
     pub escaped: FxHashMap<Tok, u32>,
     /// `escaped` as a bitset by token (the hot membership test).
     pub esc_bits: Vec<u64>,
+    /// Tokens whose escape bit was set since the last late-escape prune
+    /// (`prune_late_escaped`, R-ESCLATE): that prune's work list, which it
+    /// empties.
+    pub late_esc: Vec<Tok>,
+    /// The work counter when the last late-escape prune ran.
+    pub late_esc_at: u64,
     pub reasons: Vec<String>,
     pub reason_index: FxHashMap<String, u32>,
     pub top_node: NodeId,
@@ -2572,6 +2591,9 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// `PERRY_FACTS_LEDGER` only (`hold_ledger`): the realm is never held
+    /// and each hold's effects carry their root. `None` otherwise.
+    pub(crate) ledger: Option<Box<crate::hold_ledger::HoldLedger>>,
     /// `PERRY_WPF_KEYREAD=1` only (`diagnostics::keysnap_plan`): the nodes
     /// snapshotted when the realm is first held; `None` otherwise.
     pub keysnap: Option<Box<crate::diagnostics::KeySnap>>,
@@ -2594,6 +2616,10 @@ pub struct Model {
     /// for the original member's effect; this call binds every callee but
     /// that original (`call_tok`).
     pub ns_pair_calls: crate::pts::FxHashMap<CallId, (BuiltinNs, Atom)>,
+    /// A named member call `o.k(…)` at a read site (`Gen` call arm) and
+    /// its key and receiver node: the site's own dispatch obligation
+    /// states the route of the native member it binds (`call_tok`).
+    pub named_calls: crate::pts::FxHashMap<CallId, (Atom, NodeId)>,
     /// The namespace pairs are the knob's (`FactsConfig::namespace_pairs`):
     /// every direct namespace call is one, walked as one call
     /// (`Gen::namespace_pair`). Off, a pair is main's shadow-bit guard of a
@@ -2746,6 +2772,12 @@ pub struct Model {
     pub val_runs: Vec<(CallId, Tok, Option<Tok>, u16, u32)>,
     /// (call, body token) run once with every key.
     pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// The atom count when the fixpoint started (`solve_fixpoint`): the
+    /// atoms below it are the names the program and the realm spell
+    /// (finitely many); an atom at or past it is a text a solver rule made
+    /// (a concatenation, a case mapping, a for-in key folded into one).
+    /// `None` before the first solve: every atom is a spelled name.
+    pub spelled_atoms: Option<usize>,
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
     pub for_in_named: Vec<(CallId, Tok, Tok)>,
@@ -2886,13 +2918,16 @@ pub struct Model {
     pub global_def: Option<NodeId>,
     /// GLOBK3: the navigator reads made before `global_def` exists.
     pub global_def_navs: Vec<NodeId>,
-    /// GLOBK3: the computed-key defines taken onto the global object (by
-    /// key node), replayed onto the old path when G2 turns off.
+    /// GLOBK3: the computed-key defines taken onto the global object,
+    /// replayed onto the old path when G2 turns off.
     pub global_defs: Vec<(DefineAny, Tok)>,
-    pub global_def_done: crate::pts::FxHashSet<NodeId>,
+    /// GLOBK3: the defines already taken onto the global object, by
+    /// `DefineAny::id`.
+    pub global_def_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
     /// GLOBK3: the holder node of a computed-key define's old path (E5
-    /// HARD), by key node.
-    pub define_any_old: crate::pts::FxHashMap<NodeId, NodeId>,
+    /// HARD), by `DefineAny::id`: two defines under one key node (one local
+    /// key) each install their own descriptor.
+    pub define_any_old: crate::pts::FxHashMap<(NodeId, NodeId), NodeId>,
     /// ToPropertyKey (7.1.19): the result node of ToPrimitive on a token
     /// (`implicit`); a computed key's object value stores under what its
     /// ToPrimitive returns (`Cons::StoreIndexed` on that node).

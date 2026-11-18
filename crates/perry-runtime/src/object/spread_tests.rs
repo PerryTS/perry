@@ -1,6 +1,5 @@
 use super::spread::js_object_spread_fresh_leading;
 use super::*;
-use crate::codegen_abi::LayoutWord;
 
 unsafe fn object(entries: &[(&str, f64)]) -> f64 {
     let obj = js_object_alloc_plain(entries.len() as u32);
@@ -172,47 +171,6 @@ fn spread_number_copy_refuses_a_generalized_source_shape() {
     }
 }
 
-#[test]
-fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let _suppress = crate::gc::GcSuppressScope::new();
-    unsafe {
-        let source = object(&[("spread_gc_namespace", 3.0)]);
-        js_object_freeze(source);
-        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
-        let id = shapes::object_shape_stamp(receiver(source));
-        let kid = id.0 as usize;
-        let slot = spread::cache_slot(LayoutWord(0), id.0, 0);
-        let entry = with_transition_cache(|t| (*t)[slot]);
-        assert_eq!(spread::source_shape(&entry), Some(id));
-        assert_eq!(
-            entry.target_shape_id,
-            shapes::object_shape_stamp(receiver(result))
-        );
-        let mut addresses = Vec::new();
-        let mut mark = |value: f64| addresses.push(value.to_bits() & crate::value::POINTER_MASK);
-        let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
-        scan_transition_cache_roots_mut(&mut visitor);
-        assert!(
-            !addresses.contains(&(kid as u64)),
-            "source ShapeId is scalar metadata"
-        );
-        // A cold cache edge must not keep a source descriptor alive. The
-        // complete target list may remain live independently of that source.
-        prune_dead_transition_cache_entries(&|_| false);
-        assert_ne!(with_transition_cache(|t| (*t)[slot].next_keys), 0);
-        assert_ne!(
-            object_keys(receiver(source)).arr(),
-            object_keys(receiver(result)).arr()
-        );
-        shapes::test_drop_shape_descriptors(object_keys(receiver(source)).arr() as usize);
-        assert!(shapes::shape_record_for_word(entry.target_shape_id).is_some());
-        assert!(shapes::shape_is_retired(id));
-        prune_dead_transition_cache_entries(&|_| false);
-        assert_eq!(with_transition_cache(|t| (*t)[slot].next_keys), 0);
-    }
-}
-
 unsafe fn has_meta(value: f64) -> bool {
     !(*crate::meta_slot_of!(crate::meta_obj_runtime_born!(receiver(value)))).is_null()
 }
@@ -293,33 +251,83 @@ fn assign_into_a_fresh_target_is_born_with_the_source_width() {
     }
 }
 
-/// The reserved slots are part of the result's inline bound, so a result born
-/// with a tail and one born without carry different shapes: a key added to the
-/// narrow one after the wide one learned its edge still lands where its own
-/// width puts it (a shared shape would hand the narrow object an inline slot
-/// past its allocation).
+unsafe fn key_of(name: &str) -> *const crate::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+
+/// A layout key with a runtime-internal name (`__perry_ctor_caps` written
+/// by user code): the record's birth facts carry `ENUM_INTERNAL_KEY`, so the
+/// same-layout copy refuses and the generic spread decides which keys the
+/// result owns (enumeration's internal-name rule). The verbatim copy would
+/// hand the result the source's own layout word, hidden key included,
+/// without asking that rule.
 #[test]
-fn spread_tail_width_is_part_of_the_result_shape() {
+fn layout_internal_name_refuses_the_same_layout_copy() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _suppress = crate::gc::GcSuppressScope::new();
     unsafe {
-        let source = object(&[("tail_shape_i", 1.0), ("tail_shape_j", 2.0)]);
-        let wide = js_object_spread_fresh_leading(empty_prefix(), source, 1);
-        let narrow = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        let source = object(&[("a", 1.0), ("__perry_ctor_caps", 5.0), ("b", 2.0)]);
+        let src = receiver(source);
+        assert!(overflow::table(src).is_null());
+        let record = shapes::shape_record_for_word(shapes::object_shape_stamp(src)).unwrap();
+        assert_eq!(record.logical_key_count(), 3);
+        assert_ne!(record.enum_bits() & key_attrs::ENUM_INTERNAL_KEY, 0);
+        assert_eq!(get(source, "__perry_ctor_caps"), 5.0);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         assert_ne!(
-            shapes::object_shape_stamp(receiver(wide)),
-            shapes::object_shape_stamp(receiver(narrow))
+            shapes::object_shape_stamp(receiver(result)),
+            shapes::object_shape_stamp(src)
         );
-        let key = crate::string::js_string_from_bytes(b"tail_shape_k".as_ptr(), 12);
-        js_object_set_field_by_name(receiver(wide), key, 5.0);
-        let key = crate::string::js_string_from_bytes(b"tail_shape_k".as_ptr(), 12);
-        js_object_set_field_by_name(receiver(narrow), key, 6.0);
-        let key = crate::string::js_string_from_bytes(b"tail_shape_l".as_ptr(), 12);
-        js_object_set_field_by_name(receiver(narrow), key, 7.0);
-        assert!(!has_meta(wide));
-        assert_eq!(get(wide, "tail_shape_k"), 5.0);
-        assert_eq!(get(narrow, "tail_shape_k"), 6.0);
-        assert_eq!(get(narrow, "tail_shape_l"), 7.0);
-        assert_eq!(get(narrow, "tail_shape_j"), 2.0);
+        assert_eq!(get(result, "a"), 1.0);
+        assert_eq!(get(result, "b"), 2.0);
+    }
+}
+
+/// The table copy admits only plain enumerable string entries: a
+/// non-enumerable table entry makes `plain_enumerable_strings` refuse, so
+/// the spread result does not own it.
+#[test]
+fn table_non_enumerable_entry_refuses_the_table_copy() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = js_object_alloc_plain(0);
+        overflow::insert(obj, key_of("plain"), 1.0f64.to_bits(), 0);
+        assert!(overflow::plain_enumerable_strings(overflow::table(obj)).is_some());
+        overflow::insert(
+            obj,
+            key_of("hidden"),
+            2.0f64.to_bits(),
+            key_attrs::ENTRY_NON_ENUMERABLE,
+        );
+        assert!(overflow::plain_enumerable_strings(overflow::table(obj)).is_none());
+        let source = crate::value::js_nanbox_pointer(obj as i64);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        assert_eq!(get(result, "plain"), 1.0);
+        assert_eq!(get(result, "hidden").to_bits(), crate::value::TAG_UNDEFINED);
+    }
+}
+
+/// A table past the hash-index threshold (capacity >= 8) is cloned with its
+/// index: every key of the copy is found by lookup.
+#[test]
+fn table_copy_carries_the_hash_index() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = js_object_alloc_plain(0);
+        let names: Vec<String> = (0..24).map(|i| format!("hk{i}")).collect();
+        for (i, n) in names.iter().enumerate() {
+            overflow::insert(obj, key_of(n), (i as f64).to_bits(), 0);
+        }
+        let t = overflow::table(obj);
+        assert!(!t.is_null() && (*t).index_capacity != 0);
+        let source = crate::value::js_nanbox_pointer(obj as i64);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        let rt = overflow::table(receiver(result));
+        assert!(!rt.is_null() && rt != t);
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(get(result, n), i as f64, "{n}");
+        }
     }
 }

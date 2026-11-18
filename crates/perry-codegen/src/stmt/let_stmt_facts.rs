@@ -17,7 +17,11 @@ pub(super) fn record_array_length_snapshot(ctx: &mut FnCtx<'_>, id: u32, init: &
     } = init
     {
         if property == "length" {
+            // A for-in bound is not its keys' length (`for_in_keys_locals`).
             if let perry_hir::Expr::LocalGet(array_id) = object.as_ref() {
+                if ctx.for_in_keys_locals.contains_key(array_id) {
+                    return;
+                }
                 ctx.array_length_snapshots.insert(id, *array_id);
             }
         }

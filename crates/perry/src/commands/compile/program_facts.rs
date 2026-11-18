@@ -32,6 +32,7 @@
 //! can run every proof is guarded by the runtime's interpreted-prototype-write
 //! word (`ElisionFacts::interp_guard`).
 
+use perry_wpfacts::elide_enabled;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -310,6 +311,12 @@ pub(crate) fn run(
     // profile lines must agree).
     let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
     let pf = perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check));
+    // The blocker ledger (`PERRY_FACTS_LEDGER`) solved with the realm never
+    // held: its facts never reach codegen; the compile stops here.
+    if std::env::var_os("PERRY_FACTS_LEDGER").is_some_and(|v| !v.is_empty()) {
+        eprintln!("perry: wpfacts: ledger written; compile stopped (PERRY_FACTS_LEDGER)");
+        std::process::exit(0);
+    }
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if perry_codegen::verify_facts::enabled() {
         perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
@@ -507,23 +514,7 @@ pub(crate) fn method_symbol_in(
     func: u32,
     key: &str,
 ) -> Option<(String, perry_codegen::DirectAbi)> {
-    let mut classes = hir.classes.iter().filter(|c| c.id == class_id);
-    let c = classes.next()?;
-    if classes.next().is_some()
-        || hir.classes.iter().filter(|o| o.name == c.name).count() != 1
-        || c.has_evaluated_accessor()
-        || c.static_accessor_names.iter().any(|n| n == key)
-    {
-        return None;
-    }
-    let m = c.methods.iter().rev().find(|m| m.name == key)?;
-    if m.id != func
-        || m.is_generator
-        || m.is_async
-        || perry_codegen::body_has_fixed_generator_state(&m.body)
-    {
-        return None;
-    }
+    let (c, m) = perry_hir::method_call::target(hir, class_id, func, key)?;
     let abi = perry_codegen::DirectAbi {
         params: m.params.len() as u32,
         rest: m.params.iter().any(|p| p.is_rest),
@@ -615,15 +606,6 @@ pub(crate) fn view_for(
     }
 }
 
-/// `PERRY_FACTS_ELIDE=0` keeps every check (facts still computed, dumped and
-/// claimed): the A/B control for slice 2.
-fn elide_enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_ELIDE").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
-}
-
 /// Slice 2: the receiver facts of `path`'s bindings that the zero-guard tier
 /// can act on, and the layout facts of the classes they can hold.
 ///
@@ -647,6 +629,42 @@ fn elision_for(
         contracts: contracts_requested(),
         ..Default::default()
     };
+    // The certificate is the decision; the driver only names its entry.
+    // Keep this before early returns so disabled worlds are asserted too.
+    if let Some(module) = pf.module_paths.iter().position(|p| p == path) {
+        for s in pf
+            .sites
+            .iter()
+            .filter(|s| s.module as usize == module && s.is_call)
+        {
+            if let Some(c) = s.method_call_certificate() {
+                if let Some((symbol, abi)) = pf
+                    .module_paths
+                    .get(c.module as usize)
+                    .and_then(|p| holder_symbol(p, c.class, c.function, &s.key, Member::Method))
+                {
+                    out.method_calls.insert(
+                        (s.byte_offset, s.key.clone()),
+                        (c.class, c.function, symbol, abi, c.nullable),
+                    );
+                }
+            }
+        }
+        for s in pf
+            .sites
+            .iter()
+            .filter(|s| s.module as usize == module && s.is_call)
+        {
+            debug_assert_eq!(
+                s.method_call_certificate().is_some(),
+                out.method_calls
+                    .contains_key(&(s.byte_offset, s.key.clone())),
+                "method-call certificate/publication disagreement at {path}:{} .{}",
+                s.byte_offset,
+                s.key
+            );
+        }
+    }
     if !elide_enabled() || pf.stats.aborted {
         return out;
     }
@@ -687,62 +705,6 @@ fn elision_for(
     if !out.interp_guard {
         if let Some(module) = pf.module_paths.iter().position(|p| p == path) {
             out.native_member_calls = native_member_calls_of(pf, module);
-            // ONCHANGE2: the named method calls proven to run one class
-            // method body: (holder class id, the body's function id). Every
-            // record at an offset must agree, or the offset is left out. A
-            // receiver that may be a number, string, Boolean, symbol or
-            // BigInt, or ⊤, keeps its site. NULLCALL1: one that may be
-            // `undefined` / `null` besides its objects is served `nullable`:
-            // the site tests the receiver for nullish first, where the
-            // complete call throws (GetValue's ToObject, 6.2.5.5 / 7.1.18,
-            // before ArgumentListEvaluation, 13.3.6.1). The objects' verdict
-            // holds with nullish in the set: derive.rs drops it to `No` when
-            // a source left a value out.
-            let mut refused_calls: std::collections::BTreeSet<(u32, String)> = Default::default();
-            for s in pf
-                .sites
-                .iter()
-                .filter(|s| s.module as usize == module && s.is_call)
-            {
-                // ONCHANGE3: the body's entry is named from its own module
-                // (`method_symbol_in`), so a holder this module never names
-                // (reached through a value or a re-export) is served too.
-                let one = match (&s.verdict, s.holder_class, s.target_fns.as_slice()) {
-                    (
-                        perry_wpfacts::Verdict::T0Mono | perry_wpfacts::Verdict::T0Set,
-                        Some(cid),
-                        &[(hm, fid)],
-                    ) if s.receiver_prims & !(prim::NULL | prim::UNDEF) == 0 && !s.top => {
-                        let nullable = s.receiver_prims != 0;
-                        pf.module_paths
-                            .get(hm as usize)
-                            .and_then(|p| holder_symbol(p, cid, fid, &s.key, Member::Method))
-                            .map(|(sym, abi)| (cid, fid, sym, abi, nullable))
-                    }
-                    _ => None,
-                };
-                let at = (s.byte_offset, s.key.clone());
-                match one {
-                    Some(v) if !refused_calls.contains(&at) => {
-                        // The records agree on the body; the site is nullable
-                        // when any record's receiver may be nullish.
-                        let e = out
-                            .method_calls
-                            .entry(at.clone())
-                            .or_insert_with(|| v.clone());
-                        if (e.0, e.1, &e.2, e.3) != (v.0, v.1, &v.2, v.3) {
-                            out.method_calls.remove(&at);
-                            refused_calls.insert(at);
-                        } else {
-                            e.4 |= v.4;
-                        }
-                    }
-                    _ => {
-                        out.method_calls.remove(&at);
-                        refused_calls.insert(at);
-                    }
-                }
-            }
             // ACCBUILD2 P3: the named sites proven to call one accessor.
             // Every record at an offset must agree, or the offset is left out.
             let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
@@ -1781,3 +1743,7 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
         Rep::Record(_) => FactsRep::Boxed,
     }
 }
+
+#[cfg(test)]
+#[path = "program_facts/method_call_tests.rs"]
+mod method_call_tests;

@@ -154,6 +154,27 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
         match callee {
+            // The HIR's fused member call on a Proxy local: the runtime reads
+            // the member off the Proxy and calls it with `this` = the Proxy
+            // (codegen `try_lower_proxy_method_call`; `call`/`apply` run the
+            // Proxy's own [[Call]], `try_lower_proxy_fn_call_apply`).
+            Expr::ProxyGet { proxy, key } if matches!(key.as_ref(), Expr::String(_)) => {
+                let Expr::String(s) = key.as_ref() else {
+                    unreachable!("matched above")
+                };
+                let o = self.expr(fx, proxy);
+                let a = self.m.atom(s);
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                self.m.cons(
+                    o,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call,
+                    },
+                );
+                self.raise_on(o);
+                ret
+            }
             Expr::PropertyGet {
                 object,
                 property,
@@ -277,13 +298,18 @@ impl<'a> Gen<'a> {
                 self.str_index_bound(object, property, call);
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
-                    None => self.m.cons(
-                        o,
-                        Cons::MCall {
-                            key: Key::Named(a),
-                            call,
-                        },
-                    ),
+                    None => {
+                        if off != 0 {
+                            self.m.named_calls.insert(call, (a, o));
+                        }
+                        self.m.cons(
+                            o,
+                            Cons::MCall {
+                                key: Key::Named(a),
+                                call,
+                            },
+                        )
+                    }
                 }
                 ret
             }

@@ -128,7 +128,7 @@ unsafe fn index(t: *const Table) -> *mut u32 {
 /// The keys column: a dense key list of `length` entries.
 #[inline(always)]
 pub(crate) unsafe fn keys_ptr(t: *const Table) -> *mut u64 {
-    values(t).add(2 * (*t).capacity as usize + (*t).index_capacity as usize / 2)
+    values(t).add(3 * (*t).capacity as usize)
 }
 
 /// Entry `i`'s key (`TAG_HOLE` for a tombstone).
@@ -147,11 +147,11 @@ pub(crate) unsafe fn tombstone(t: *mut Table, i: u32) {
 }
 
 unsafe fn allocate(capacity: u32) -> *mut Table {
-    let index_capacity = if capacity < 8 {
-        0
-    } else {
-        (capacity * 2).next_power_of_two()
-    };
+    // Every table is indexed, its index twice its capacity (capacity is a
+    // power of two, at least 4): a lookup derives the mask and the keys
+    // column from `capacity` alone.
+    debug_assert!(capacity.is_power_of_two() && capacity >= 4);
+    let index_capacity = capacity * 2;
     // Keys last: `array_elements_ptr` of the table is the keys column.
     let size =
         std::mem::size_of::<Table>() + 3 * capacity as usize * 8 + index_capacity as usize * 4;
@@ -163,14 +163,34 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         fixed_prefix: 0,
         deleted: 0,
         index_capacity,
-        summary: 0,
+        // E2: a table is born "may have an enumerable key" (ENUM_ANY), so no
+        // append writes an enumeration bit. Its name facts are read from its
+        // keys (`key_attrs::key_name_bits`), never from the summary.
+        summary: super::key_attrs::ENUM_ANY,
     });
+    if index_capacity == SMALLEST_INDEX / 2 {
+        // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-4 table, EMPTY=u32::MAX, in one fixed-size store.
+        index(t)
+            .cast::<[u32; SMALLEST_INDEX as usize / 2]>()
+            .write_unaligned([EMPTY; SMALLEST_INDEX as usize / 2]);
+        return t;
+    }
+    if index_capacity == SMALLEST_INDEX {
+        // GC_STORE_AUDIT(POINTER_FREE): the whole scalar u32 slot-index column of a capacity-8 table, EMPTY=u32::MAX, in one fixed-size store (no memset call).
+        index(t)
+            .cast::<[u32; SMALLEST_INDEX as usize]>()
+            .write_unaligned([EMPTY; SMALLEST_INDEX as usize]);
+        return t;
+    }
     for i in 0..index_capacity as usize {
         // GC_STORE_AUDIT(POINTER_FREE): index(t) returns *mut u32 scalar slot-index column; writes EMPTY=u32::MAX, not the key/value columns.
         index(t).add(i).write(EMPTY);
     }
     t
 }
+
+/// The index of a capacity-8 table (`2 * 8`); a capacity-4 table has half.
+const SMALLEST_INDEX: u32 = 16;
 
 /// A key atom is canonicalized before entry lookup, including long keys.
 #[inline]
@@ -184,15 +204,19 @@ unsafe fn key_hash(key: u64) -> u64 {
 }
 
 unsafe fn place(t: *mut Table, slot: u32) {
-    if (*t).index_capacity == 0 {
-        return;
-    }
     let key = *key_at(t, slot);
     if key == TAG_HOLE || super::key_attrs::entry_is_private(*attrs_at(t, slot) as u8) {
         return;
     }
-    let mask = (*t).index_capacity as usize - 1;
-    let mut p = key_hash(key) as usize & mask;
+    place_hashed(t, slot, key, key_hash(key));
+}
+
+/// [`place`] of entry `slot`, a live key `key` that is no private name, by
+/// `hash`, the key's [`key_hash`] (the hash every lookup of it probes with).
+#[inline(always)]
+unsafe fn place_hashed(t: *mut Table, slot: u32, key: u64, hash: u64) {
+    let mask = 2 * (*t).capacity as usize - 1;
+    let mut p = hash as usize & mask;
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
         if *key_at(t, previous) == key {
@@ -229,7 +253,7 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         }
         return None;
     }
-    let mask = (*t).index_capacity as usize - 1;
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = hash as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -252,21 +276,10 @@ pub(crate) unsafe fn find_hashed_with(
     key: u64,
     hash: impl FnOnce() -> u64,
 ) -> Option<u32> {
-    // A table too small to carry an index is scanned, newest entry first.
-    // Every other table answers from its index, which every insert places
-    // (`place`: the newest entry of a key, never a private name).
-    if (*t).index_capacity == 0 {
-        let keys = keys_ptr(t);
-        let mut i = (*t).length;
-        while i > 0 {
-            i -= 1;
-            if *keys.add(i as usize) == key {
-                return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
-            }
-        }
-        return None;
-    }
-    let mask = (*t).index_capacity as usize - 1;
+    // Every table answers from its index (`allocate`: twice the capacity),
+    // which every insert places (`place`: the newest entry of a key, never a
+    // private name).
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = hash() as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -283,7 +296,7 @@ pub(crate) unsafe fn find_hashed_with(
 /// The value of found data entry `i` when one load answers it: the value
 /// word the table holds, or the word of the fixed inline slot the entry
 /// refers to (a layout key of a receiver that also has a table). `None`
-/// leaves the entry to [`get_found_from_record`], which gives the same
+/// leaves the entry to the complete read, which gives the same
 /// answer for both of these: an accessor pair, a fixed slot past `live`
 /// (the spill), and the two slot words that are not their own value (the
 /// null pointer word, an I32 lane's word).
@@ -341,7 +354,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
             *key_at(t, i) == key && !super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
         });
     }
-    let mask = (*t).index_capacity as usize - 1;
+    let mask = 2 * (*t).capacity as usize - 1;
     let mut p = key_hash(key) as usize & mask;
     loop {
         let i = *index(t).add(p);
@@ -355,7 +368,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
     }
 }
 
-unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
+pub(crate) unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     (*meta).overflow = t as usize as u64;
     // The slot owner is the live metadata record, whose generation can
@@ -380,6 +393,40 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
 /// [`ensure`] inside the publication of the key at `adding`: that key's value
 /// is stored only after the publication returns, so its slot may still hold
 /// the hole. It is a live key, not a tombstone.
+/// [`ensure_adding`] for an object whose layout names no key (`live` live
+/// inline slots): no key to copy, so the table is the prefix of keyless
+/// references to the inline slots (no atom, no barrier, no index entry) and
+/// room for the caller's append. The caller, which roots `obj` (the meta and
+/// the table allocate), installs it ([`install`]) before its append, with no
+/// allocation between. An existing table is returned as is.
+///
+/// # Safety
+/// `obj` is live with an empty layout; the caller holds no other raw heap
+/// pointer across the call (it allocates).
+pub(crate) unsafe fn start_empty(obj: *mut ObjectHeader, live: u32) -> *mut Table {
+    let existing = table(obj);
+    if !existing.is_null() {
+        return existing;
+    }
+    super::layout_desc::diag_note_install(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let prefix = live.max(super::INLINE_SLOT_FLOOR as u32);
+    let t = allocate((prefix + 4).next_power_of_two().max(4));
+    for i in 0..prefix {
+        // GC_STORE_AUDIT(POINTER_FREE): keyless prefix entry: the hole, an internal slot word, a scalar attrs word.
+        *key_at(t, i) = TAG_HOLE;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
+        *attrs_at(t, i) = SLOT_REF;
+    }
+    (*t).length = prefix;
+    (*t).fixed_prefix = prefix;
+    t
+}
+
 pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) -> *mut Table {
     let existing = table(obj);
     if !existing.is_null() {
@@ -445,6 +492,12 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     // own slot numbers. The hole is no heap reference, so no barrier and
     // no index entry.
     let t = rooted.get_raw_mut_ptr::<Table>();
+    // The layout's keys copied above are not decoded: a non-empty prefix may
+    // hold a hidden name (no record read here, no per-key decode). The table
+    // bits of the copied entries are set once, here.
+    if count != 0 {
+        (*t).summary |= super::key_attrs::TABLE_KEY_HIDDEN | copied_enum_any(t, count);
+    }
     for i in count..prefix {
         *key_at(t, i) = TAG_HOLE;
         *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
@@ -458,6 +511,29 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     }
     install(owner.get_raw_mut_ptr::<ObjectHeader>(), t);
     t
+}
+
+/// `key_attrs::TABLE_ENUM_ANY` when one of the first `count` entries of `t`,
+/// all written by [`ensure_adding`]'s copy, lacks `ENTRY_NON_ENUMERABLE`.
+/// The summary of those entries (the table is born with no attribute bit)
+/// answers when none is non-enumerable; else the entries are read.
+#[inline(always)]
+unsafe fn copied_enum_any(t: *const Table, count: u32) -> u32 {
+    if (*t).summary & u32::from(super::key_attrs::SUMMARY_NON_ENUMERABLE) == 0 {
+        return super::key_attrs::TABLE_ENUM_ANY;
+    }
+    copied_enum_any_scan(t, count)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn copied_enum_any_scan(t: *const Table, count: u32) -> u32 {
+    for i in 0..count {
+        if *attrs_at(t, i) as u8 & super::key_attrs::ENTRY_NON_ENUMERABLE == 0 {
+            return super::key_attrs::TABLE_ENUM_ANY;
+        }
+    }
+    0
 }
 
 /// Does storage slot `fixed` of `obj` (live inline slots `live`) hold the
@@ -486,7 +562,7 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
         }
         (*t).length = out;
         (*t).deleted = 0;
-        for i in 0..(*t).index_capacity as usize {
+        for i in 0..2 * (*t).capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): Compaction clears scalar u32 hash-index column to EMPTY; the separate managed key/value columns receive their own visit_slots barrier.
             index(t).add(i).write(EMPTY);
         }
@@ -523,6 +599,27 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
     next
 }
 
+/// The append of a plain writable data entry `key` (a property atom the
+/// table does not hold) with `value` into table `t`, which has room
+/// (`length < capacity`). No allocation, no collection: the caller proved the
+/// receiver admits the add (`layout_probe::table_append`). `hash` is the
+/// key's hash, as the caller's lookup of it computed (`key_hash`).
+#[inline(always)]
+pub(crate) unsafe fn append_plain(t: *mut Table, key: u64, hash: u64, value: u64) {
+    let slot = (*t).length;
+    // GC_STORE_AUDIT(BARRIERED): new entry's key atom; the resolved-slot barrier below covers it.
+    *key_at(t, slot) = key;
+    // GC_STORE_AUDIT(BARRIERED): new entry's value word; the resolved-slot barrier below covers it.
+    *value_at(t, slot) = value;
+    // GC_STORE_AUDIT(POINTER_FREE): attributes word, scalar.
+    *attrs_at(t, slot) = 0;
+    (*t).summary |= super::key_attrs::TABLE_ENUM_ANY;
+    (*t).length = slot + 1;
+    place_hashed(t, slot, key, hash);
+    crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
+    crate::gc::runtime_write_barrier_resolved_slot(t as usize, value_at(t, slot) as usize, value);
+}
+
 pub(crate) unsafe fn insert(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
@@ -552,6 +649,13 @@ pub(crate) unsafe fn insert_key_bits(
     let val = scope.root_nanbox_f64(f64::from_bits(value));
     let key = scope.root_nanbox_u64(key);
     let t = reserve(obj);
+    // The general insert marks the table before it touches an entry: any key
+    // may arrive here (`key_attrs::TABLE_KEY_HIDDEN`, no per-key decode), and
+    // the entry's attributes. Both are "may" bits, never cleared, so a hit or
+    // an add that `note_write` refuses only over-approximates. One write
+    // here, none on the add path after `note_write`.
+    (*t).summary |=
+        super::key_attrs::table_entry_summary_with(attrs, super::key_attrs::TABLE_KEY_HIDDEN);
     let key = key.get_nanbox_u64();
     let hit = if super::key_attrs::entry_is_private(attrs) {
         (0..(*t).length).find(|&i| {
@@ -576,7 +680,6 @@ pub(crate) unsafe fn insert_key_bits(
         *key_at(t, slot) = key;
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
-        (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
         (*t).length += 1;
         place(t, slot);
         super::proto_validity::note_object_own_keys_changed(
@@ -592,7 +695,6 @@ pub(crate) unsafe fn insert_key_bits(
     } else {
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
-        (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
     }
     crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
     if *attrs_at(t, slot) & SLOT_REF == 0 {
@@ -636,12 +738,15 @@ pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u
 }
 
 /// Read an entry just found in the actual table, using the receiver's current
-/// record rather than resolving that same published inline bound again.
+/// record rather than resolving that same published inline bound again. Only
+/// the tests read the complete form; the probe uses
+/// [`get_found_from_record_probe`].
 ///
 /// # Safety
 /// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
 /// current present record of `obj`. No callback or collection separates those
-/// proofs from this NoCollect read. The caller retains its property-kind checks.
+/// proofs from this NoCollect read.
+#[cfg(test)]
 #[inline(always)]
 pub(crate) unsafe fn get_found_from_record(
     t: *const Table,
@@ -651,6 +756,64 @@ pub(crate) unsafe fn get_found_from_record(
 ) -> Option<u64> {
     debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
     read_found_with_live(t, obj, slot, || record.live_inline_slot_count())
+}
+
+/// The probe's (GC-leaf) read of entry `slot`: as [`get_from`], except that
+/// a fixed inline slot holding the null POINTER word (never legitimate) answers
+/// `None`, so the caller's hole sends the read to the complete path, which keeps
+/// its diagnostic. No formatting, allocation or collection is reachable.
+#[inline(always)]
+pub(crate) unsafe fn get_from_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+) -> Option<u64> {
+    if slot >= (*t).length || *key_at(t, slot) == TAG_HOLE {
+        return None;
+    }
+    read_found_probe(t, obj, slot, || super::object_live_slot_count(obj))
+}
+
+/// Read an entry just found in the actual table, using the receiver's current
+/// record rather than resolving that same published inline bound again, with
+/// [`get_from_probe`]'s null rule.
+///
+/// # Safety
+/// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
+/// current present record of `obj`. No callback or collection separates those
+/// proofs from this NoCollect read.
+#[inline(always)]
+pub(crate) unsafe fn get_found_from_record_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u64> {
+    debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
+    read_found_probe(t, obj, slot, || record.live_inline_slot_count())
+}
+
+#[inline(always)]
+unsafe fn read_found_probe(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    inline_bound: impl FnOnce() -> u32,
+) -> Option<u64> {
+    if *attrs_at(t, slot) & SLOT_REF != 0 {
+        let fixed = *value_at(t, slot) as u32;
+        let live = inline_bound();
+        if fixed < live {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            let w = *fields.add(fixed as usize);
+            if w == crate::value::POINTER_TAG {
+                return None;
+            }
+            return Some(crate::layout_slot::slot_word_value(obj, fixed, w));
+        }
+        return super::spill::spill_get_present(obj as usize, fixed as usize);
+    }
+    Some(*value_at(t, slot))
 }
 
 /// The single entry-value operation. General callers validate the entry above
@@ -783,6 +946,18 @@ pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u3
     *attrs_at(t, entry) |= SLOT_REF;
 }
 
+/// Case 2c for an arguments layout (kinds 13/14): the inline slots past its
+/// three named ones are elements, so the added `key` holds its value in its
+/// own entry (attributes `entry`), never a fixed slot.
+pub(crate) unsafe fn append_unfixed(obj: *mut ObjectHeader, key: u64, entry: u8) {
+    let key = if crate::JSValue::from_bits(key).is_any_string() {
+        crate::string::property_atom_from_value(key)
+    } else {
+        key
+    };
+    insert_key_bits(obj, key, crate::value::TAG_UNDEFINED, entry.into());
+}
+
 /// A table key's positional field is its value or its fixed-slot reference.
 pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) -> bool {
     let t = table(obj);
@@ -805,6 +980,11 @@ pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) 
 
 /// Delete keeps fixed slot numbers intact. Re-add appends a reference to the
 /// fixed binding, so subsequent static and dynamic writes meet at that slot.
+///
+/// An elements key (an Array-subclass index, an arguments element) is never
+/// a named entry: an index the elements do not hold is keyed (moved to its
+/// own key) and found by the lookup. So the elements answer `delete` only
+/// where the named lookup misses, and a present named key never tests them.
 pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
     let hash = super::key_bytes_hash(key.as_ptr(), key.len());
     if table(obj).is_null() {
@@ -849,31 +1029,67 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                     super::layout_desc::install_cause::DELETE
                 });
                 ensure(obj);
-            } else if super::layout_desc::is_family_object(obj) {
-                // An absent family spelling has no order entry to retire.
-                return true;
+            } else {
+                // Absent from the record, which holds every named key while
+                // there is no overflow: the elements answer before an
+                // overflow is established for a miss.
+                if let Some(result) = delete_elements_miss(obj, key) {
+                    return result;
+                }
+                if super::layout_desc::is_family_object(obj) {
+                    // An absent family spelling has no order entry to retire.
+                    return true;
+                }
             }
         }
     }
     // A key that was never interned names no entry and no fixed slot.
     let Some(atom) = crate::string::atom_lookup(key, hash) else {
-        return true;
+        return delete_elements_miss(obj, key).unwrap_or(true);
     };
-    delete_key_bits(obj, crate::JSValue::string_ptr(atom as *mut _).bits())
+    match delete_present_key_bits(obj, crate::JSValue::string_ptr(atom as *mut _).bits()) {
+        Some(result) => result,
+        None => delete_elements_miss(obj, key).unwrap_or(true),
+    }
+}
+
+/// `delete obj[index]` of an elements key where it lives, for a key the
+/// named lookup missed; `None` when `obj` holds no such element.
+#[inline]
+unsafe fn delete_elements_miss(obj: *mut ObjectHeader, key: &[u8]) -> Option<bool> {
+    if !key.first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    delete_elements_index(obj, key)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn delete_elements_index(obj: *mut ObjectHeader, key: &[u8]) -> Option<bool> {
+    use crate::array::subclass_elements as elements;
+    let view = elements::own_elements(obj as usize)?;
+    let index = crate::object::canonical_array_index(std::str::from_utf8(key).ok()?)?;
+    let elements_key =
+        Some(elements::ElementsKey::Index(index)).filter(|k| view.admits(*k) && !view.keyed(*k))?;
+    Some(elements::delete_key(view, elements_key) != 0)
 }
 
 /// Delete the entry keyed `key` (an atom or a symbol). A fixed-slot entry's
 /// slot becomes the hole marker. False only for a non-configurable key.
 pub(crate) unsafe fn delete_key_bits(obj: *mut ObjectHeader, key: u64) -> bool {
+    delete_present_key_bits(obj, key).unwrap_or(true)
+}
+
+/// [`delete_key_bits`] that tells a miss (`None`: no entry keyed `key`) from
+/// a delete of a present entry.
+unsafe fn delete_present_key_bits(obj: *mut ObjectHeader, key: u64) -> Option<bool> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
     let key = scope.root_nanbox_u64(key);
     let t = ensure(obj);
-    let Some(slot) = find(t, key.get_nanbox_u64()) else {
-        return true;
-    };
+    let slot = find(t, key.get_nanbox_u64())?;
     if *attrs_at(t, slot) as u8 & super::key_attrs::ENTRY_NON_CONFIGURABLE != 0 {
-        return false;
+        return Some(false);
     }
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
@@ -888,7 +1104,7 @@ pub(crate) unsafe fn delete_key_bits(obj: *mut ObjectHeader, key: u64) -> bool {
     super::proto_validity::note_object_own_keys_changed(
         owner.get_raw_mut_ptr::<ObjectHeader>() as usize
     );
-    true
+    Some(true)
 }
 
 /// Record entry `i`'s key attributes. An accessor never stays a fixed-slot
@@ -900,7 +1116,7 @@ pub(crate) unsafe fn delete_key_bits(obj: *mut ObjectHeader, key: u64) -> bool {
 pub(crate) unsafe fn set_entry_attrs(obj: *mut ObjectHeader, t: *mut Table, i: u32, attrs: u8) {
     let word = attrs_at(t, i);
     *word = (*word & !0xff) | attrs as u64;
-    (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
+    (*t).summary |= super::key_attrs::table_entry_summary(attrs);
     if *word & SLOT_REF != 0 && attrs & super::key_attrs::ENTRY_ACCESSOR != 0 {
         let fixed = *value_at(t, i) as u32;
         let value = if fixed < super::object_live_slot_count(obj) {
@@ -1277,4 +1493,165 @@ static KEEP_PERRY_OVERFLOW_DELETE: unsafe extern "C" fn(
 pub(crate) unsafe fn establish_order(obj: *mut ObjectHeader) -> bool {
     ensure(obj);
     true
+}
+
+/// E4 spread: whether every present entry of `t` is plain enumerable
+/// string-keyed data (attributes 0, or a default-attribute slot reference),
+/// with no symbol and no internal runtime key, and its index has the
+/// standard size for its capacity: a verbatim copy is then the spread's own
+/// key copy. Tombstones (and their probe chains) are copied verbatim and
+/// skipped here, like keyless prefix slots. Answers the
+/// number of inline slots the table's slot references reach (at least the
+/// fixed prefix): the clone must copy that many inline slots.
+#[inline(always)]
+pub(crate) unsafe fn plain_enumerable_strings(t: *const Table) -> Option<u32> {
+    if (*t).index_capacity != (*t).capacity * 2 {
+        return None;
+    }
+    let mut reach = (*t).fixed_prefix;
+    for i in 0..(*t).length {
+        let key = *key_at(t, i);
+        let attrs = *attrs_at(t, i);
+        if attrs == SLOT_REF {
+            reach = reach.max((*value_at(t, i) & 0xffff_ffff) as u32 + 1);
+        }
+        if key == TAG_HOLE {
+            continue;
+        }
+        if (attrs != 0 && attrs != SLOT_REF)
+            || crate::symbol::js_is_symbol(f64::from_bits(key)) != 0
+            || super::key_attrs::key_name_bits(key) & super::key_attrs::ENUM_INTERNAL_KEY != 0
+        {
+            return None;
+        }
+    }
+    Some(reach)
+}
+
+/// E4 spread: give the fresh `obj` (born on the source's layout word) a
+/// verbatim copy of `src` (see [`plain_enumerable_strings`]): columns and
+/// hash index copied, no re-hash. The caller suppresses collection.
+pub(crate) unsafe fn clone_plain_into(obj: *mut ObjectHeader, src: *const Table) {
+    super::layout_desc::diag_note_install(obj);
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let t = allocate((*src).capacity);
+    let bytes = 3 * (*src).capacity as usize * 8 + (*src).index_capacity as usize * 4;
+    std::ptr::copy_nonoverlapping(values(src).cast::<u8>(), values(t).cast::<u8>(), bytes);
+    (*t).length = (*src).length;
+    (*t).fixed_prefix = (*src).fixed_prefix;
+    (*t).deleted = (*src).deleted;
+    (*t).summary = (*src).summary;
+    // A young table owes no remembered-set entry: one header test for the
+    // whole run (`newborn_parent_needs_barrier`, as bulk births do), then
+    // the per-slot barrier only for an old birth or an active mark.
+    if crate::gc::newborn_parent_needs_barrier(t as usize) {
+        for i in 0..(*t).length {
+            let key = *key_at(t, i);
+            if key == TAG_HOLE {
+                continue;
+            }
+            crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, i) as usize, key);
+            let value = *value_at(t, i);
+            crate::gc::runtime_write_barrier_resolved_slot(
+                t as usize,
+                value_at(t, i) as usize,
+                value,
+            );
+        }
+    }
+    install(obj, t);
+}
+
+/// [`start_empty`] sized once for `entries` appended entries (E4 spread).
+pub(crate) unsafe fn start_sized(obj: *mut ObjectHeader, live: u32, entries: u32) -> *mut Table {
+    super::layout_desc::diag_note_install(obj);
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
+    let prefix = live.max(super::INLINE_SLOT_FLOOR as u32);
+    let t = allocate(prefix.saturating_add(entries).next_power_of_two().max(4));
+    for i in 0..prefix {
+        *key_at(t, i) = TAG_HOLE;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
+        *attrs_at(t, i) = SLOT_REF;
+    }
+    (*t).length = prefix;
+    (*t).fixed_prefix = prefix;
+    t
+}
+
+/// Append a property atom with its stored hash (E4 spread; room is sized).
+pub(crate) unsafe fn append_atom(t: *mut Table, key: u64, value: u64) {
+    append_plain(t, key, key_hash(key), value);
+}
+
+#[cfg(test)]
+mod every_table_indexed_tests {
+    use super::*;
+
+    fn hash_of(i: u32) -> u64 {
+        (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+
+    /// Every table, the capacity-4 one included, is born with an index of
+    /// twice its capacity, and a probe front's lookup answers from it: the
+    /// hash is asked for (only the index path asks) and every key, and an
+    /// absent one, is answered.
+    #[test]
+    fn every_table_is_born_indexed_and_answers_from_its_index() {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(|| unsafe {
+                crate::gc::initialize_runtime_fixture();
+                let _no_move = crate::gc::GcSuppressScope::new();
+                for capacity in [4u32, 8, 16, 64] {
+                    let t = allocate(capacity);
+                    assert_eq!(
+                        (*t).index_capacity,
+                        2 * capacity,
+                        "capacity {capacity}: no full index"
+                    );
+                    for b in 0..2 * capacity as usize {
+                        assert_eq!(
+                            *index(t).add(b),
+                            EMPTY,
+                            "capacity {capacity}: bucket {b} not empty"
+                        );
+                    }
+                    for i in 0..capacity {
+                        append_plain(
+                            t,
+                            (i as f64 + 0.5).to_bits(),
+                            hash_of(i),
+                            crate::value::TAG_UNDEFINED,
+                        );
+                    }
+                    for i in 0..=capacity {
+                        let asked = std::cell::Cell::new(false);
+                        let key = (i as f64 + 0.5).to_bits();
+                        let found = find_hashed_with(t, key, || {
+                            asked.set(true);
+                            hash_of(i)
+                        });
+                        assert_eq!(
+                            found,
+                            (i < capacity).then_some(i),
+                            "capacity {capacity}: key {i}"
+                        );
+                        assert!(
+                            asked.get(),
+                            "capacity {capacity}: key {i} took the linear path"
+                        );
+                        assert_eq!(find_hashed(t, key, hash_of(i)), (i < capacity).then_some(i));
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

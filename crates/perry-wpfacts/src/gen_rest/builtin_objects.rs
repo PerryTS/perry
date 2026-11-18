@@ -653,13 +653,16 @@ impl<'a> Gen<'a> {
                 }
                 o
             }
-            Expr::IterResultSet(v, _) => {
+            Expr::IterResultSet(v, done) => {
                 let vn = self.expr(fx, v);
-                let r = self.iter_res_node(fx);
+                let r = self.iter_res_node(fx, *done);
                 self.m.edge(vn, r);
                 self.prim_node(prim::UNDEF)
             }
-            Expr::IterResultGetValue => self.iter_res_node(fx),
+            Expr::IterResultGetValue => {
+                let done = self.iter_done_arm == Some(fx.f);
+                self.iter_res_node(fx, done)
+            }
             Expr::AsyncStepChain {
                 value,
                 step_closure,
@@ -915,9 +918,14 @@ impl<'a> Gen<'a> {
                 if *is_call {
                     read_only(&mut self.m, p, "constructor");
                 }
-                read_prim(&mut self.m, p, "source", "RegExp pattern source ToString");
-                read_prim(&mut self.m, p, "flags", "RegExp pattern flags ToString");
-                to_prim(&mut self.m, p, "RegExp pattern ToString");
+                // Step 4: a pattern with [[RegExpMatcher]] gives its
+                // [[OriginalSource]] / [[OriginalFlags]] (perry-runtime
+                // regex.rs `js_regexp_construct`; `Cons::NotRegExp`).
+                let q = self.m.node_l("RegExp pattern");
+                self.m.cons(p, Cons::NotRegExp { dst: q });
+                read_prim(&mut self.m, q, "source", "RegExp pattern source ToString");
+                read_prim(&mut self.m, q, "flags", "RegExp pattern flags ToString");
+                to_prim(&mut self.m, q, "RegExp pattern ToString");
                 let fnode = flags.as_ref().map(|f| self.expr(fx, f));
                 if let Some(f) = fnode {
                     to_prim(&mut self.m, f, "RegExp flags ToString");

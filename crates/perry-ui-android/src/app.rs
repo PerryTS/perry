@@ -149,6 +149,7 @@ fn attach_root_to_activity() {
 }
 
 extern "C" {
+    fn js_set_event_loop_host_driven(v: i32);
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_promise_run_microtasks() -> i32;
@@ -260,6 +261,13 @@ pub fn app_run(_app_handle: i64) {
     // Forwards perry_arkts_show_toast → PerryBridge.showToast (UI-thread
     // Toast.makeText) and perry_arkts_set_text → TextView.setText via JNI.
     register_cross_platform_text_handlers();
+
+    // main() runs on the UI thread (PerryActivity.startNative), and the 8 ms
+    // pump below drives timers / promise jobs from the Looper. Like watchOS,
+    // tell the generated entry to return to the host instead of entering its
+    // own event loop: with a live timer that loop would never return and the
+    // UI thread would never get back to the Looper (blank, then ANR).
+    unsafe { js_set_event_loop_host_driven(1) };
 
     // Attach the root widget to the Activity
     attach_root_to_activity();

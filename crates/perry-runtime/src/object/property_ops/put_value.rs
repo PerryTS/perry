@@ -517,6 +517,12 @@ fn set_dynamic_absent(
             return set_dynamic_rest_atom(target, atom, hash, value, strict);
         }
         let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
+        // An empty layout has no slot to migrate: its first key starts its
+        // table (`overflow::ensure_adding`) and is appended to it, under the
+        // admission of every later table add.
+        if crate::object::layout_probe::table_add_admitted(obj, r, atom, hash) {
+            return table_first_append(obj, r, atom, hash, value);
+        }
         if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
             if let Some(stored) = keyed_append(obj, atom, value) {
                 return stored;
@@ -541,6 +547,9 @@ fn set_dynamic_overflow_miss(
 ) -> f64 {
     unsafe {
         let obj = (target.to_bits() & POINTER_MASK) as usize as *mut crate::ObjectHeader;
+        if crate::object::layout_probe::table_append(obj, r, atom, hash, value) {
+            return value;
+        }
         if crate::object::layout_probe::keyed_overflow_append(obj, r, atom, hash) {
             if let Some(stored) = keyed_append(obj, atom, value) {
                 return stored;
@@ -674,6 +683,47 @@ unsafe fn keyed_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> 
         value.get_nanbox_f64(),
     );
     Some(value.get_nanbox_f64())
+}
+
+/// [`set_dynamic_absent`]'s add for a receiver whose layout names no key and
+/// which admits the table add (`layout_probe::table_add_admitted`): its table
+/// is started and the entry appended to it, with no migration and no note.
+///
+/// # Safety
+/// `obj`'s layout names no key and it admits the add of `atom` (absent),
+/// whose hash is `hash`.
+#[inline(never)]
+unsafe fn table_first_append(
+    obj: *mut crate::ObjectHeader,
+    r: *const crate::object::layout_probe::ShapeRecord,
+    atom: u64,
+    hash: u64,
+    value: f64,
+) -> f64 {
+    let live = crate::object::layout_probe::record_live_inline_slots(r);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(obj);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_nanbox_u64(atom);
+    let t =
+        crate::object::overflow::start_empty(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), live);
+    crate::object::overflow::install(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), t);
+    if (*t).length < (*t).capacity {
+        crate::object::overflow::append_plain(
+            t,
+            key.get_nanbox_u64(),
+            hash,
+            crate::object::layout_probe::store_bits(value.get_nanbox_f64()),
+        );
+        return value.get_nanbox_f64();
+    }
+    let obj = owner.get_raw_mut_ptr::<crate::ObjectHeader>();
+    crate::object::overflow::store_unfixed_routed(
+        obj,
+        (atom & POINTER_MASK) as *const crate::StringHeader,
+        value.get_nanbox_f64(),
+    );
+    value.get_nanbox_f64()
 }
 
 /// A store whose key no atom names yet: the atom is minted once (a key has

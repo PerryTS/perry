@@ -856,6 +856,30 @@ pub(crate) unsafe fn list_storage_slot(keys: *const ArrayHeader, pos: u32) -> Op
     Some(attributed_storage_slot(keys, pos))
 }
 
+/// [`list_storage_slot`] over many positions of one list: its attribute
+/// words and their written length, or `(null, 0)` when every position is its
+/// own slot (a handle, an overflow table, a list without attributes).
+#[inline]
+pub(crate) unsafe fn storage_slot_words(keys: *const ArrayHeader) -> (*const u64, usize) {
+    if (keys as usize) < perry_abi::RECEIVER_HANDLE_FLOOR || (keys as u64) >> 48 != 0 {
+        return (std::ptr::null(), 0);
+    }
+    let header = &*crate::gc::header_from_trusted_user_ptr(keys.cast());
+    if header.obj_type == crate::gc::GC_TYPE_OVERFLOW
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (crate::gc_type_is_not_array!(header.obj_type)
+                || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
+    {
+        return (std::ptr::null(), 0);
+    }
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    let (w, len) = words(attrs);
+    (w as *const u64, len)
+}
+
 /// [`list_storage_slot`] for a list with attributes: one shared helper, so
 /// each reader inlines only the header test.
 #[inline(never)]
@@ -1845,6 +1869,132 @@ pub(crate) unsafe fn owned_note_compaction(keys: *mut ArrayHeader, mapping: &[u3
     }
     (*attrs).length = mapping.len() as u32;
     recompute_cumulative(keys, attrs, 0);
+}
+
+/// E2 enumeration bits: what an object's own keys may be. A layout record
+/// carries all three as birth facts of its immutable key prefix
+/// (`ShapeRecordRef::enum_bits`). A table is born with [`ENUM_ANY`] in
+/// `Table::summary` (above the attribute summary byte), the conservative
+/// "may", so no table writer stores an enumeration bit; a table entry's NAME
+/// facts (index, internal) are read by [`key_name_bits`] while the entries
+/// are copied. A set bit is "may" (a slower answer), never a wrong one.
+/// Some own string key may be a canonical array index (ECMA key order).
+pub(crate) const ENUM_INDEX_KEY: u32 = 1 << 8;
+/// Some own string key may be enumerable.
+pub(crate) const ENUM_ANY: u32 = 1 << 9;
+/// Some own key may carry a runtime-internal name ([`is_internal_key_name`]).
+pub(crate) const ENUM_INTERNAL_KEY: u32 = 1 << 10;
+
+/// Table summary bit (`Table::summary`): an entry key may be a non-string or
+/// a name [`key_name_bits`] decodes as index or runtime-internal, so a copy
+/// of the table's keys decodes each name. ORed with no decode by the general
+/// insert (`overflow::insert_key_bits`: any key may arrive there; a per-key
+/// decode on the insert cost tssrc +0.17%) and by a table born from a
+/// non-empty layout (`overflow::ensure_adding`).
+/// A spread's table birth (`spread::table_born`) ORs it once. The plain
+/// append (`overflow::append_plain`) writes none: its admission
+/// (`layout_probe::table_add_admitted`) refuses non-strings and every hidden
+/// name. User names such as `_x` or `#y` are ordinary enumerable keys.
+pub(crate) const TABLE_KEY_HIDDEN: u32 = 1 << 11;
+
+/// Table summary bit: an entry may be an enumerable key. ORed by every entry
+/// attribute write whose attributes lack `ENTRY_NON_ENUMERABLE`
+/// ([`table_entry_summary`]) and by the plain append; never cleared (a
+/// deleted entry leaves it), so its absence proves no enumerable key.
+pub(crate) const TABLE_ENUM_ANY: u32 = (ENTRY_NON_ENUMERABLE as u32) << TABLE_ATTRS_SHIFT;
+
+/// Where [`table_entry_summary_with`] places an entry's attribute byte, so
+/// that its `ENTRY_NON_ENUMERABLE` bit, inverted, is [`TABLE_ENUM_ANY`].
+const TABLE_ATTRS_SHIFT: u32 = 12;
+const _: () = assert!(TABLE_KEY_HIDDEN & (0xff << TABLE_ATTRS_SHIFT) == 0);
+
+/// The table summary contribution of an entry written with `attrs`.
+#[inline(always)]
+pub(crate) fn table_entry_summary(attrs: u8) -> u32 {
+    table_entry_summary_with(attrs, 0)
+}
+
+/// [`table_entry_summary`] ORed with `extra`, a constant of table bits
+/// outside the shifted attribute byte (such as [`TABLE_KEY_HIDDEN`]): the
+/// inverted shifted byte has those bits set, so the mask carries `extra`
+/// with no further instruction.
+#[inline(always)]
+pub(crate) fn table_entry_summary_with(attrs: u8, extra: u32) -> u32 {
+    u32::from(entry_summary(attrs))
+        | (!(u32::from(attrs) << TABLE_ATTRS_SHIFT) & (TABLE_ENUM_ANY | extra))
+}
+/// Every enumeration bit: the answer for a key list nothing is proven of.
+pub(crate) const ENUM_BITS: u32 = ENUM_INDEX_KEY | ENUM_ANY | ENUM_INTERNAL_KEY;
+
+/// A name that enumeration hides by name: a runtime-internal key of a class
+/// instance (`is_internal_runtime_key_bytes`) or WASI state (`__wasi*`).
+#[inline]
+pub(crate) fn is_internal_key_name(b: &[u8]) -> bool {
+    crate::object::field_get_set::enumeration::is_internal_runtime_key_bytes(b)
+        || b.starts_with(b"__wasi")
+}
+
+/// The enumeration bits key `key` with entry attributes `entry` brings to the
+/// object that gains it. One first-byte test decides almost every key; only a
+/// digit-, `_`- or `#`-leading name is decoded. A non-string key (a symbol,
+/// the hole) brings none: string enumeration never lists it.
+///
+/// # Safety
+/// `key` is a live key value.
+#[inline(always)]
+pub(crate) unsafe fn key_enum_bits(key: u64, entry: u8) -> u32 {
+    let v = crate::JSValue::from_bits(key);
+    let first = if v.is_short_string() {
+        (key & crate::value::SHORT_STRING_DATA_MASK) as u8
+    } else if v.is_string() {
+        let p = v.as_string_ptr();
+        if p.is_null() {
+            return 0;
+        }
+        if (*p).byte_len == 0 {
+            0
+        } else {
+            *(p as *const u8).add(std::mem::size_of::<crate::StringHeader>())
+        }
+    } else {
+        return 0;
+    };
+    let mut bits = if entry & (ENTRY_NON_ENUMERABLE | ENTRY_PRIVATE) == 0 {
+        ENUM_ANY
+    } else {
+        0
+    };
+    if first.wrapping_sub(b'0') <= 9 || first == b'_' || first == b'#' {
+        bits |= key_name_bits_decoded(v);
+    }
+    bits
+}
+
+/// The name facts ([`ENUM_INDEX_KEY`], [`ENUM_INTERNAL_KEY`]) of string key
+/// `key`: one first-byte test, the name decoded only when it leads with a
+/// digit, `_` or `#`.
+///
+/// # Safety
+/// `key` is a live key value.
+#[inline(always)]
+pub(crate) unsafe fn key_name_bits(key: u64) -> u32 {
+    key_enum_bits(key, ENTRY_NON_ENUMERABLE)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn key_name_bits_decoded(v: crate::JSValue) -> u32 {
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(b) = crate::string::js_string_key_bytes(v, &mut buf) else {
+        return 0;
+    };
+    if crate::object::field_get_set::enumeration::canonical_array_index_bytes(b).is_some() {
+        ENUM_INDEX_KEY
+    } else if is_internal_key_name(b) {
+        ENUM_INTERNAL_KEY
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
