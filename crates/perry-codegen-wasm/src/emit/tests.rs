@@ -2118,3 +2118,6 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
         "hi o"
     );
 }
+
+#[path = "class_eval_tests.rs"]
+mod class_eval;

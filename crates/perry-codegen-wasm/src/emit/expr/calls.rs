@@ -138,6 +138,13 @@ impl<'a> FuncEmitCtx<'a> {
                 // the plain check and the throw fall through to the unknown-
                 // extern arm (args dropped, `undefined`).
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                    // ToPropertyKey of a computed member name.
+                    if name == "js_to_property_key" && args.len() == 1 {
+                        self.emit_frame_begin(func, 1);
+                        self.emit_store_arg(func, 0, &args[0]);
+                        self.emit_memcall(func, "to_property_key", 1);
+                        return true;
+                    }
                     if name == perry_hir::tdz_check::TDZ_CHECK_THEN {
                         if let Some(value) = args.get(2) {
                             self.emit_expr(func, value);

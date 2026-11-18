@@ -1692,12 +1692,14 @@ function __holdsProperties(v) {
 // closure passed to it must reach the compiled constructor as a closure, so
 // __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
 const __classRefs = new Map();
+const __classRefName = Symbol('perry.classRef');
 const __perryClassCtors = new WeakSet();
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
     ctor = __classCtor(className, ctorIdx, undefined);
     __classRefs.set(className, ctor);
+    Object.defineProperty(ctor, __classRefName, { value: className });
   }
   return ctor;
 }
@@ -1797,6 +1799,91 @@ function __classEvaluationOf(receiver, className) {
 function __classEnvCaps(receiver, className) {
   const ev = __classEvaluationOf(receiver, className);
   return ev ? __evaluationOf(ev).caps : __classTemplate(className).slots;
+}
+
+// Class definition evaluation (emit/expr/class_eval.rs). `__classDefining` holds the
+// evaluations whose definitions are running, innermost last: a template's computed
+// members, key slots and statics go to the evaluation on top while it is the
+// template's, else to the class itself.
+const __classDefining = [];
+let __classStaticThis = null;
+function __classDefiningOf(className) {
+  const top = __classDefining[__classDefining.length - 1];
+  return top !== undefined && __evaluationOf(top).template === className ? top : undefined;
+}
+function __classDefiningTop() {
+  return __classDefining[__classDefining.length - 1];
+}
+function __defineHidden(target, key, value) {
+  Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
+}
+// A compiled member called on `self`, in `evaluation`'s capture environment.
+function __classMemberCall(funcIdx, evaluation, self, args) {
+  const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+  const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+  const outer = __classEnvCall;
+  if (evaluation) __classEnvCall = { receiver: self, evaluation };
+  try {
+    return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+  } finally {
+    __classEnvCall = outer;
+  }
+}
+// A static block runs with `this` = the evaluation it initializes, in that
+// evaluation's capture environment (static code reads it with no receiver).
+function __classStaticRun(template, value, funcIdx) {
+  const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+  const outerThis = __classStaticThis;
+  const outerCall = __classEnvCall;
+  __classStaticThis = { template, value };
+  __classEnvCall = { receiver: undefined, evaluation: value };
+  try {
+    return __bitsToJsValue(__invokeWasmCallback(impl));
+  } finally {
+    __classStaticThis = outerThis;
+    __classEnvCall = outerCall;
+  }
+}
+// Static `name` of class `cls` along its parent chain: a declared static, else an own
+// member of the class value (a computed static); else `fallback`'s.
+function __classStaticGet(cls, name, receiver, fallback) {
+  for (let c = cls; c; c = classParentTable[c] || null) {
+    const statics = classStaticTable[c];
+    if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
+    const ref = __classRefs.get(c);
+    if (ref && Object.prototype.hasOwnProperty.call(ref, name)) return Reflect.get(ref, name, receiver);
+  }
+  return Reflect.get(fallback, name, receiver);
+}
+// A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
+// member goes in the template's method table, so every evaluation's instances
+// dispatch it; a static one is a property of the class value.
+function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b) {
+  const evaluation = __classDefiningOf(className);
+  if (isStatic) {
+    const target = evaluation || __classRef(className, ctorIdx);
+    if (kind === 0) {
+      const fn = function (...args) { return __classMemberCall(a, evaluation, this, args); };
+      __classMethodFns.add(fn);
+      __defineHidden(target, key, fn);
+      return;
+    }
+    const prev = Object.getOwnPropertyDescriptor(target, key);
+    const desc = { configurable: true, enumerable: false, get: prev && prev.get, set: prev && prev.set };
+    if (a >= 0) desc.get = function () { return __classMemberCall(a, evaluation, this, []); };
+    if (b >= 0) desc.set = function (v) { __classMemberCall(b, evaluation, this, [v]); };
+    Object.defineProperty(target, key, desc);
+    return;
+  }
+  const methods = (classMethodTable[className] ||= {});
+  if (kind === 0) {
+    methods[key] = a;
+    if (evaluation) __defineHidden(evaluation.prototype, key, __classMethodValue(className, key, evaluation));
+    return;
+  }
+  if (typeof key === 'symbol') return;
+  if (a >= 0) methods['__get_' + key] = a;
+  if (b >= 0) methods['__set_' + key] = b;
 }
 
 // A lowered sync generator drives its resume record, a wasm closure taking
@@ -2315,6 +2402,57 @@ const __memDispatch = {
   class_new: (className, fieldCount) => __classInstance(String(className)),
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
+  class_eval_begin: (className, ctorIdx) => {
+    const ctor = __classEvaluate(String(className), ctorIdx | 0, []);
+    __classDefining.push(ctor);
+    return ctor;
+  },
+  class_eval_slot: (className, slot, key) => { __defineHidden(__classDefiningTop(), String(slot), key); },
+  class_eval_caps: (className, caps) => {
+    if (Array.isArray(caps)) __evaluationOf(__classDefiningTop()).caps = caps;
+  },
+  class_eval_static: (className, name, value) => {
+    Object.defineProperty(__classDefiningTop(), String(name),
+      { value, writable: true, configurable: true, enumerable: true });
+  },
+  class_eval_static_computed: (className, slot, value) => {
+    const ctor = __classDefiningTop();
+    Object.defineProperty(ctor, ctor[String(slot)], { value, writable: true, configurable: true, enumerable: true });
+  },
+  class_eval_block: (className, funcIdx) => {
+    if ((funcIdx | 0) >= 0) __classStaticRun(String(className), __classDefiningTop(), funcIdx | 0);
+  },
+  class_eval_end: (className) => __classDefining.pop(),
+  class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b) =>
+    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0),
+  // `static [key] = value` of a class declared once.
+  class_static_define: (className, ctorIdx, key, value) => {
+    const cls = String(className);
+    const evaluation = __classDefiningOf(cls);
+    if (evaluation) {
+      Object.defineProperty(evaluation, key, { value, writable: true, configurable: true, enumerable: true });
+    } else {
+      (classStaticTable[cls] ||= {})[typeof key === 'symbol' ? key : String(key)] = value;
+    }
+  },
+  class_static_this: (className, ctorIdx) => {
+    const armed = __classStaticThis;
+    if (armed && armed.template === String(className)) return armed.value;
+    return __classRef(String(className), ctorIdx | 0);
+  },
+  // A computed instance field: its key is the hidden slot its class definition
+  // resolved, on the instance's evaluation or on the class.
+  class_init_computed_field: (className, slot, instance, value) => {
+    if (!instance || typeof instance !== 'object') return;
+    const name = String(slot);
+    const ev = __instanceEvaluationOf(instance);
+    let key;
+    if (ev && Object.prototype.hasOwnProperty.call(ev, name)) key = ev[name];
+    else key = (classStaticTable[String(className)] || {})[name];
+    Object.defineProperty(instance, key, { value, writable: true, configurable: true, enumerable: true });
+  },
+  // ToPropertyKey, object-to-primitive conversion included (`Object(Symbol.iterator)`).
+  to_property_key: (v) => Reflect.ownKeys({ [v]: 0 })[0],
   // A refresh of a path that never evaluated the class gets `undefined`: a no-op.
   class_env_refresh: (ctor, caps) => {
     const evaluation = __evaluationOf(ctor);
@@ -2367,6 +2505,11 @@ const __memDispatch = {
   class_call_method: (obj, methodNameId, argsArr) => {
     // methodNameId is a plain number (string table index), not a decoded JS value
     const mname = stringTable[methodNameId | 0];
+    // A static member of a class value.
+    if (typeof obj === 'function') {
+      const member = __classStaticGet(obj[__classRefName], mname, obj, obj);
+      if (typeof member === 'function') return __callHostFunction(member, Array.isArray(argsArr) ? argsArr : [], obj);
+    }
     if (obj && __classOf(obj)) {
       let cls = __classOf(obj);
       while (cls) {
@@ -2436,6 +2579,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
+    if (typeof obj === 'function') return __classStaticGet(obj[__classRefName], String(name), obj, obj);
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
@@ -2463,6 +2607,14 @@ const __memDispatch = {
     return obj[fname];
   },
   class_set_field: (obj, name, value) => {
+    if (typeof obj === 'function') {
+      const fname = String(name);
+      const cls = obj[__classRefName];
+      const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
+      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) statics[fname] = value;
+      else obj[fname] = value;
+      return;
+    }
     if (!__holdsProperties(obj)) return;
     const fname = String(name);
     // Check for compiled setter method — WASM uses i64 (BigInt)
@@ -2483,6 +2635,7 @@ const __memDispatch = {
     const cls = String(classId);
     if (!classStaticTable[cls]) classStaticTable[cls] = {};
     classStaticTable[cls][String(name)] = value;
+    return value;
   },
   class_get_static: (classId, name) => {
     const cls = String(classId); const statics = classStaticTable[cls];
@@ -5449,7 +5602,7 @@ const __uiMethodMap = {
 
 function __callHostFunction(fn, args, receiver = undefined) {
   try {
-    return Reflect.apply(fn, receiver, args.map(__hostCallback));
+    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
@@ -5493,28 +5646,20 @@ function __hostCallback(value) {
 // value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
+// Keyed by class, then by method name, which a computed member may make a Symbol.
 function __classMethodValue(cls, mname, evaluation) {
-  const key = cls + '\u0000' + mname;
   const cache = evaluation ? __evaluationOf(evaluation) : null;
   const values = cache ? (cache.methods ||= new Map()) : __classMethodValues;
-  let fn = values.get(key);
-  if (!fn) {
-    const funcIdx = classMethodTable[cls][mname];
-    fn = function (...args) {
-      const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
-      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      const outer = __classEnvCall;
-      if (evaluation) __classEnvCall = { receiver: this, evaluation };
-      try {
-        return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
-      } finally {
-        __classEnvCall = outer;
-      }
-    };
+  let byName = values.get(cls);
+  if (!byName) values.set(cls, (byName = new Map()));
+  const funcIdx = classMethodTable[cls][mname];
+  let fn = byName.get(mname);
+  if (!fn || fn.funcIdx !== funcIdx) {
+    fn = function (...args) { return __classMemberCall(funcIdx, evaluation, this, args); };
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
     __classMethodFns.add(fn);
-    values.set(key, fn);
+    byName.set(mname, fn);
   }
   return fn;
 }

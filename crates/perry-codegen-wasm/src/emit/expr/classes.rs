@@ -367,6 +367,18 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
+            // In a static method or block, `this` is its class, or the evaluation a
+            // static block initializes.
+            Expr::This if self.this_local.is_none() && self.static_class.is_some() => {
+                let class_name = self.static_class.clone().unwrap_or_default();
+                let ctor_slot = self.class_ctor_slot(&class_name);
+                self.emit_class_bridge(
+                    func,
+                    "class_static_this",
+                    &class_name,
+                    &[&Expr::Number(ctor_slot)],
+                );
+            }
             Expr::This => {
                 func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
@@ -433,8 +445,8 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_super_method_call(func, key, receiver, args);
             }
             // A class declared in a function body: each evaluation, the first included,
-            // is its own constructor with its own captures. A class with static
-            // initializers or computed member names is not represented and stays `undefined`.
+            // is its own constructor with its own captures. One with computed member
+            // names or static initializers is built by `class_eval.rs`.
             Expr::ClassExprFresh {
                 template,
                 named_statics,
@@ -615,9 +627,8 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
                 self.emit_store_const(func, 1, f64::from_bits(field_bits));
                 self.emit_store_arg(func, 2, value);
-                self.emit_memcall_void(func, "class_set_static", 3);
-                // void return, push the value back
-                self.emit_expr(func, value);
+                // The bridge returns the stored value: the initializer runs once.
+                self.emit_memcall(func, "class_set_static", 3);
             }
             Expr::StaticMethodCall {
                 class_name,
@@ -778,7 +789,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// The table slot of `class_name`'s compiled constructor, or -1 without one.
-    fn class_ctor_slot(&self, class_name: &str) -> f64 {
+    pub(super) fn class_ctor_slot(&self, class_name: &str) -> f64 {
         self.emitter
             .class_ctor_map
             .get(class_name)
@@ -797,7 +808,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// Call `bridge(class_name, args...)`.
-    fn emit_class_bridge(
+    pub(in crate::emit) fn emit_class_bridge(
         &mut self,
         func: &mut Function,
         bridge: &str,
