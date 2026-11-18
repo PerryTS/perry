@@ -673,6 +673,52 @@ pub unsafe fn dispatch_buffer_method(
 /// The signature of [`dispatch_buffer_method`] and of the bodies it selects.
 pub(crate) type BufferDispatch = unsafe fn(usize, &str, *const f64, usize) -> f64;
 
+/// `%TypedArray%.prototype.copyWithin(target, start, end)` over a Buffer or
+/// `Uint8Array` byte cell, whose elements are single bytes: a memmove of the
+/// selected range. Returns the receiver. An undefined `end` is the length.
+///
+/// The index coercions can run user `valueOf`, so the range is clamped to the
+/// bytes the view spans after them, not to the length read before.
+pub(crate) unsafe fn byte_view_copy_within(view: f64, target: f64, start: f64, end: f64) -> f64 {
+    let addr = (view.to_bits() & crate::value::POINTER_MASK) as usize;
+    let len = crate::buffer::store::raw_length(addr) as i64;
+    let rel = |v: f64| -> i64 {
+        let n = crate::builtins::js_number_coerce(v);
+        if n.is_nan() {
+            return 0;
+        }
+        if !n.is_finite() {
+            return if n > 0.0 { len } else { 0 };
+        }
+        let idx = n.trunc() as i64;
+        if idx < 0 {
+            (len + idx).max(0)
+        } else {
+            idx.min(len)
+        }
+    };
+    let to = rel(target);
+    let from = rel(start);
+    let final_ = if JSValue::from_bits(end.to_bits()).is_undefined() {
+        len
+    } else {
+        rel(end)
+    };
+    let count = (final_ - from).min(len - to);
+    if count > 0 {
+        crate::buffer::bytes::no_gc(|scope| {
+            if let Ok(data) = crate::buffer::bytes::bytes_mut(view, scope) {
+                let span = data.len() as i64;
+                let count = count.min(span - from).min(span - to);
+                if count > 0 {
+                    data.copy_within(from as usize..(from + count) as usize, to as usize);
+                }
+            }
+        });
+    }
+    view
+}
+
 /// The builtin name dispatch: the receiver's own property, the `#BUFNS` view
 /// members, then the Buffer and typed-array method bodies by name.
 #[inline(never)]
@@ -850,36 +896,14 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         }
         // #2879: `Uint8Array.prototype.copyWithin` — Buffer/Uint8Array elements
         // are single bytes, so copy at byte granularity. Returns the receiver.
-        "copyWithin" => {
-            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i64;
-            let rel = |v: f64| -> i64 {
-                let n = crate::builtins::js_number_coerce(v);
-                if n.is_nan() {
-                    return 0;
-                }
-                if !n.is_finite() {
-                    return if n > 0.0 { len } else { 0 };
-                }
-                let idx = n.trunc() as i64;
-                if idx < 0 {
-                    (len + idx).max(0)
-                } else {
-                    idx.min(len)
-                }
-            };
-            let to = rel(arg_or_zero(0));
-            let from = rel(arg_or_zero(1));
-            let final_ = if args.len() >= 3 { rel(args[2]) } else { len };
-            let count = (final_ - from).min(len - to);
-            if count > 0 {
-                crate::buffer::bytes::no_gc(|scope| {
-                    if let Ok(data) = crate::buffer::bytes::bytes_mut(buf_f64, scope) {
-                        data.copy_within(from as usize..(from + count) as usize, to as usize);
-                    }
-                });
-            }
-            buf_f64
-        }
+        "copyWithin" => byte_view_copy_within(
+            buf_f64,
+            arg_or_zero(0),
+            arg_or_zero(1),
+            args.get(2)
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+        ),
         // Issue #1206: explicit iterator-protocol surface. Each helper
         // returns a Buffer-iterator object whose `.next()` is dispatched
         // through `dispatch_buffer_iterator_method` in `iter.rs`.
