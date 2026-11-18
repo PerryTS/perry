@@ -32,6 +32,7 @@ mod fetch_chain;
 mod helpers;
 mod imported_object;
 mod map_set;
+pub(crate) use map_set::try_lower_certified_map;
 mod number_string;
 pub(crate) mod own_override_guard;
 pub(crate) mod patched_proto;

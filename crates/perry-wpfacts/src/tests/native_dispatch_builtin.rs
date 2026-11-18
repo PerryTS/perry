@@ -199,3 +199,15 @@ fn native_dispatch_builtin_refuses_check_sabotage_and_incomplete_worlds() {
         );
     }
 }
+
+#[test]
+fn native_dispatch_map_needs_brand_and_exact_lookup() {
+    let source = "class H { table = new Map(); run() { this.table.clear(); } } new H().run();";
+    assert_named(source, "clear", false);
+    assert_named(
+        &format!("Map.prototype.clear = function() {{}}; {source}"),
+        "clear",
+        true,
+    );
+    assert_named("class H { table = new Map(); run() { this.table.clear = function() {}; this.table.clear(); } } new H().run();", "clear", true);
+}

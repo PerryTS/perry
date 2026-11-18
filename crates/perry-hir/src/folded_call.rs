@@ -66,6 +66,16 @@ pub const SITE_MAP: u8 = 4;
 /// [`SITE_MAP`] for `Set` (`new Set`).
 pub const SITE_SET: u8 = 8;
 
+/// A named call whose receiver, member lookup and call form admit the direct Map entry.
+pub const SITE_DIRECT_MAP: u8 = 16;
+
+pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { object, property, byte_offset, byte_end, .. }
+        if *byte_offset != 0 && byte_end > byte_offset
+            && matches!(object.as_ref(), Expr::PropertyGet { .. })
+            && matches!((property.as_str(), arity), ("clear", 0) | ("get", 1) | ("set", 2)))
+}
+
 /// The site of the unfolded call whose callee is `callee`, when it has a
 /// source offset.
 pub fn callee_site(callee: &Expr) -> Option<Site> {

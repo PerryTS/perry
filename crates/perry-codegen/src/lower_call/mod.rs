@@ -596,6 +596,9 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    if let Some(value) = property_get::try_lower_certified_map(ctx, callee, args)? {
+        return Ok(value);
+    }
     // b1: a call the facts prove a field element read is that read.
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);

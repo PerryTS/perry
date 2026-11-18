@@ -164,7 +164,9 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
 }
 
 pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConfig) {
+    use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
     let args = arguments(g);
+    let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
     // manifest's thread family owns diagnostics_channel and its producers.
     let no_subscribers = pf.family_reach.as_ref().is_some_and(|f| !f.live("thread"));
@@ -205,8 +207,17 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     cfg.namespace_pairs
                         && perry_hir::namespace_pairs::pair_offset(ns, call) == Some(*byte_offset)
                 });
-            let safe =
-                selected && !spread && args.get(&at).is_some_and(|a| {
+            let map = namespace.is_none()
+                && !spread
+                && direct_map_call(callee, arity)
+                && pf.bindings[mi].method_sites.iter().any(|(site, k, flags)| {
+                    *site == Site::Callee(*byte_offset) && k == property && flags & SITE_MAP != 0
+                });
+            if map {
+                maps.insert((at, property.clone()));
+            }
+            let safe = map && selected
+                || selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;
                     };
@@ -252,6 +263,26 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             .entry(((s.module, s.byte_offset), s.key.clone()))
             .or_insert(false) &=
             s.access == Access::Read && !s.top && (s.verdict == Verdict::NativeMember || exact);
+    }
+    for ((mi, offset), key) in maps {
+        let at = ((mi, offset), key.clone());
+        if certified.get(&at) == Some(&true)
+            && pf
+                .sites
+                .iter()
+                .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
+                .all(|s| s.verdict == Verdict::NativeMember && s.receiver_prims == 0)
+        {
+            if let Some((_, _, flags)) = pf.bindings[mi as usize]
+                .method_sites
+                .iter_mut()
+                .find(|(site, k, _)| *site == Site::Callee(offset) && k == &key)
+            {
+                *flags |= SITE_DIRECT_MAP;
+            }
+        } else {
+            certified.insert(at, false);
+        }
     }
     for s in &mut pf.sites {
         s.builtin_dispatch = s.is_call
