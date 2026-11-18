@@ -229,7 +229,7 @@ const _: () = assert!(
 
 /// The presence tag guards a typed witness. An absent witness has initialized
 /// zero bytes inside MaybeUninit; those bytes are never read as a witness.
-/// Perex witnesses contain native function pointers, so integer probes or a
+/// Perex witnesses contain native provider references, so integer probes or a
 /// zero-initialized ProgramWitness are invalid. Perex explicitly fills its
 /// alignment gap, and the assertions exclude uninitialized padding from the
 /// whole-heap from-space scan without erasing pointer provenance.
@@ -396,7 +396,7 @@ impl<'scope> GcProgram<'scope> {
             0,
             "a program cell's witness must not be written while a view of its words is live"
         );
-        // Validation metadata and native code pointers need no GC barrier.
+        // Validation metadata and native provider references need no GC barrier.
         root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness);
         });
@@ -701,7 +701,7 @@ impl InPlace {
     pub(crate) fn record_witness(&self, witness: perex::binding::ProgramWitness) {
         #[cfg(debug_assertions)]
         debug_assert_eq!(PROGRAM_VIEWS.with(std::cell::Cell::get), 0);
-        // Validation metadata and native code pointers need no GC barrier.
+        // Validation metadata and native provider references need no GC barrier.
         self.with_cell(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness)
         });
@@ -943,7 +943,7 @@ mod program_cell_tests {
     }
 
     /// Every byte in a typed witness store is initialized, independently of
-    /// the memory's previous occupant, including its native code pointer.
+    /// the memory's previous occupant, including its native provider reference.
     #[test]
     fn a_recorded_witness_does_not_carry_its_source_padding() {
         use perex::{
@@ -970,7 +970,7 @@ mod program_cell_tests {
         for fill in [0x00u8, 0xA5, 0xFF] {
             let mut slot = std::mem::MaybeUninit::<WitnessWords>::uninit();
             // SAFETY: the assertions above exclude all padding. new supplies
-            // every field, including a valid typed native function pointer.
+            // every field, including a valid typed native provider reference.
             let (stored, bytes) = unsafe {
                 let at = slot.as_mut_ptr();
                 at.cast::<u8>()

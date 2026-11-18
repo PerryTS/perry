@@ -36,8 +36,8 @@ strings from annotations or mutable bindings.
 Membership callers in Perex include both executors, atom filtering, candidate
 construction, named-group parsing and binary-program validation. Compilation and
 validation resolve the slot once, when they first need membership. The validated
-Program view and binding witness retain the native membership function and DFA
-entry points. Evaluator and atom queries use the cached function. The single DFA
+Program view and binding witness retain one reference to an immutable provider table. Evaluator and atom queries
+project its membership function once into their execution state. The single DFA
 implementation is generic over its zero-sized provider, so membership calls
 inline into character-class construction. Its cached entry selects the entire
 instantiation before the search loops. Neither executor reads or checks the slot.
@@ -63,4 +63,4 @@ it without slot access. Perry stores witnesses as typed MaybeUninit values
 behind a presence tag. Perex exposes an explicit padding check; compile-time
 assertions guarantee every byte in a recorded witness is initialized for heap
 scanning. Arbitrary integer images must never be read as witnesses because a
-native function pointer has validity and provenance requirements.
+native provider reference has validity and provenance requirements.
