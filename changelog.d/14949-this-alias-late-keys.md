@@ -1,0 +1,1 @@
+A class method that adds properties through a `const` alias of `this` (`const s = this; s.$y = …`) now gives those keys late slots in the class's layout, as `this.$y = …` already did. Each instance used to take an overflow table for them instead. The issue's dayjs-shaped `init()` benchmark runs 6.7× faster and its peak RSS drops from 46 MB to 16 MB (#10496).
