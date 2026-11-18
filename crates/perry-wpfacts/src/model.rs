@@ -2616,6 +2616,10 @@ pub struct Model {
     /// for the original member's effect; this call binds every callee but
     /// that original (`call_tok`).
     pub ns_pair_calls: crate::pts::FxHashMap<CallId, (BuiltinNs, Atom)>,
+    /// A named member call `o.k(…)` at a read site (`Gen` call arm) and
+    /// its key and receiver node: the site's own dispatch obligation
+    /// states the route of the native member it binds (`call_tok`).
+    pub named_calls: crate::pts::FxHashMap<CallId, (Atom, NodeId)>,
     /// The namespace pairs are the knob's (`FactsConfig::namespace_pairs`):
     /// every direct namespace call is one, walked as one call
     /// (`Gen::namespace_pair`). Off, a pair is main's shadow-bit guard of a

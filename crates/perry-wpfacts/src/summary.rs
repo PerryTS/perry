@@ -370,6 +370,7 @@ impl Model {
                 | Cons::Fulfil { dst }
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
+                | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
                 | Cons::TypeIs { dst, .. }
                 | Cons::Objects { dst }

@@ -1351,8 +1351,24 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
 /// native member is found, never the chain end's `undefined`
 /// (`Promise.prototype.then` on a promise).
 pub(crate) fn locked_chain_defines(m: &Model, t: Tok, a: Atom) -> bool {
-    locked_chain_read(m, t, a)
-        && lock_family(m, t).is_some_and(|f| members::member(f, &m.atoms[a as usize]).is_some())
+    if !locked_chain_read(m, t, a) {
+        return false;
+    }
+    // A RegExp, a Date, a Map/Set/String iterator: the locked prototype
+    // (`members::image_locked_prototype`) defines `a` when its declaration
+    // holds it (a locked absent key is final too, and defines nothing).
+    if let TokKind::Obj(tm, _) = m.toks[t as usize] {
+        if let TmplKind::BObj { what, .. } = m.tmpls[tm as usize].kind {
+            if let Some((holder, _)) = members::image_locked_prototype(what) {
+                return m.declarations.named(holder, m).is_some_and(|h| {
+                    m.declarations
+                        .property(h, &m.atoms[a as usize], m)
+                        .is_some()
+                });
+            }
+        }
+    }
+    lock_family(m, t).is_some_and(|f| members::member(f, &m.atoms[a as usize]).is_some())
 }
 
 /// Is a read of `name` on the declared intrinsic prototype `holder` final?

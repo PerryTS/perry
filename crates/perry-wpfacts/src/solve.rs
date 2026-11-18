@@ -347,6 +347,7 @@ impl Model {
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::TypeIs { .. }

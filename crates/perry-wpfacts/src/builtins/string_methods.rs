@@ -482,9 +482,34 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         // else ToString(separator), ToUint32(limit).
         "split" => {
             if let Some(p) = arg0 {
-                to_prim(m, p, "split separator ToString");
                 let lim = ops.get(1).copied().unwrap_or(s);
-                to_prim(m, lim, "split limit ToUint32");
+                // Steps 4-5 run only when GetMethod(separator, @@split)
+                // is undefined or null (a nullish separator skips step 2):
+                // the separator and limit are converted behind a nullish
+                // test of the same lookup the call below makes.
+                let wk = m.atom(&format!("{WK}split"));
+                let g = m.node_l("split @@split");
+                m.cons(
+                    p,
+                    Cons::Load {
+                        key: Key::Named(wk),
+                        dst: g,
+                    },
+                );
+                let conv = m.node_l("split separator");
+                let conv_lim = m.node_l("split limit");
+                for (test_on, from, dst) in [(g, p, conv), (g, lim, conv_lim), (p, lim, conv_lim)] {
+                    m.cons(
+                        test_on,
+                        Cons::Guard {
+                            test: crate::model::guard::NULLISH,
+                            from,
+                            dst,
+                        },
+                    );
+                }
+                to_prim(m, conv, "split separator ToString");
+                to_prim(m, conv_lim, "split limit ToUint32");
                 let r = sym_call(m, call, p, "split", vec![s, lim]);
                 m.edge(r, c.ret);
             }

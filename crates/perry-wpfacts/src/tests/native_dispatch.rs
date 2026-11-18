@@ -363,3 +363,133 @@ fn native_dispatch_refused_twin_clears_every_certificate() {
             .all(|s| s.dispatch_obligation().unwrap().redispatch));
     }
 }
+
+// ERVJ: four routes the runtime runs without its generic dispatcher.
+
+fn closed(src: &str) {
+    let (pf, d) = dispatch(src);
+    assert!(d.complete(), "{:?}\n{}", d.open, pf.dump_text());
+}
+
+#[test]
+fn ervj_uncaught_native_error_report_is_no_route() {
+    // node: prints `a` to stdout, then reports `Error: boom` and exits 1.
+    closed("console.log('a');\nthrow new Error('boom');\n");
+}
+
+#[test]
+fn ervj_regexp_split_converts_no_separator() {
+    // node: prints `3 2`.
+    closed(
+        "const re = /,/g;\n\
+         const r2 = new RegExp(re, 'g');\n\
+         console.log('a,b,c'.split(re).length, 'x,y'.split(r2).length);\n",
+    );
+}
+
+#[test]
+fn ervj_performance_now_at_its_named_site_is_no_route() {
+    // node: prints `number`.
+    closed("const t0 = performance.now();\nconsole.log(typeof t0);\n");
+}
+
+#[test]
+fn ervj_json_of_a_plain_record_is_no_route() {
+    // node: prints `{"a":1,"b":"x","c":[true]}`.
+    closed("console.log(JSON.stringify({ a: 1, b: 'x', c: [true] }));\n");
+}
+
+#[test]
+fn ervj_program_now_and_program_to_json_are_closed() {
+    // node: prints `1 {"v":2}`.
+    closed(
+        "const o = { now() { return 1; } };\n\
+         const r = { toJSON() { return { v: 2 }; } };\n\
+         console.log(o.now(), JSON.stringify(r));\n",
+    );
+}
+
+#[test]
+fn ervj_negative_controls_keep_the_fact_open() {
+    // (what, src, O3 expected): every control stays open; a control that
+    // installs a program function on a prototype reports the unknown
+    // function value it calls (O1): open, any reason.
+    let controls: &[(&str, &str, bool)] = &[
+        // node: prints `Error: m`.
+        (
+            "plain string concat of an Error",
+            "const e = new Error('m');\n\
+             console.log('' + e);\n",
+            true,
+        ),
+        // node: prints `T`.
+        (
+            "string concat of an Error with an overridden toString",
+            "const e = new Error('m');\n\
+             (Error.prototype as any).toString = function () { return 'T'; };\n\
+             console.log('' + e);\n",
+            false,
+        ),
+        // node: reports the thrown object, exits 1.
+        (
+            "uncaught program object with valueOf",
+            "throw { valueOf() { return 1; } };\n",
+            true,
+        ),
+        // node: prints `1`.
+        (
+            "patched RegExp.prototype[@@split] = undefined",
+            "(RegExp.prototype as any)[Symbol.split] = undefined;\n\
+             console.log('a,b'.split(/,/ as any).length);\n",
+            true,
+        ),
+        // node: prints `x`.
+        (
+            "patched RegExp.prototype[@@split] = fn",
+            "(RegExp.prototype as any)[Symbol.split] = function () { return ['x']; };\n\
+             console.log('a,b'.split(/,/ as any)[0]);\n",
+            false,
+        ),
+        // node: prints `2`.
+        (
+            "split separator object with toString",
+            "console.log('a,b'.split({ toString() { return ','; } } as any).length);\n",
+            true,
+        ),
+        // node: prints `1`.
+        (
+            "split limit object with valueOf",
+            "console.log('a,b'.split(',', { valueOf() { return 1; } } as any).length);\n",
+            true,
+        ),
+        // node: prints `1 number`.
+        (
+            "program now beside a borrowed performance.now",
+            "const o = { now() { return 1; } };\n\
+             const f = performance.now;\n\
+             console.log(o.now(), typeof f.call(performance));\n",
+            true,
+        ),
+        // node: prints `{"d":"1970-01-01T00:00:00.000Z"}`.
+        (
+            "Date in JSON",
+            "console.log(JSON.stringify({ d: new Date(0) }));\n",
+            true,
+        ),
+        // node: prints `{}`.
+        (
+            "toJSON accessor returning a native",
+            "const o = { get toJSON() { return Object.prototype.valueOf; } };\n\
+             console.log(JSON.stringify(o));\n",
+            true,
+        ),
+    ];
+    for (what, src, o3) in controls {
+        let (pf, d) = dispatch(src);
+        let why = d
+            .open
+            .unwrap_or_else(|| panic!("{what}: complete, expected open:\n{}", pf.dump_text()));
+        assert!(!*o3 || why.starts_with("O3:"), "{what}: {why}");
+        eprintln!("CONTROL {what}: {why}");
+    }
+}

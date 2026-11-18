@@ -134,6 +134,7 @@ pub fn map_cons(
         NotNull { dst } => NotNull { dst: n(dst) },
         TypeIs { mask, dst } => TypeIs { mask, dst: n(dst) },
         ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
+        NotRegExp { dst } => NotRegExp { dst: n(dst) },
         NotBuffer { shared, dst } => NotBuffer {
             shared,
             dst: n(dst),
@@ -647,6 +648,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Fulfil { .. }
             | Falsy { .. }
             | NotBuffer { .. }
+            | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }
             | TypeIs { .. }
