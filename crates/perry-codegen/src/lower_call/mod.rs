@@ -628,6 +628,32 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     {
         return Ok(value);
     }
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        use perry_hir::folded_call::{
+            direct_array_call, Site, SITE_ARRAY_MEMBER, SITE_DIRECT_ARRAY,
+        };
+        if !ctx.wpfacts_off
+            && direct_array_call(callee, args.len())
+            && ctx
+                .wpfacts
+                .method_sites
+                .get(&(Site::Callee(*byte_offset), property.clone()))
+                .is_some_and(|flags| flags & SITE_DIRECT_ARRAY != 0)
+        {
+            debug_assert!(
+                ctx.wpfacts.method_sites[&(Site::Callee(*byte_offset), property.clone())]
+                    & SITE_ARRAY_MEMBER
+                    != 0
+            );
+            return crate::lower_array_method::lower_array_method(ctx, object, property, args);
+        }
+    }
     // b1: a call the facts prove a field element read is that read.
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);

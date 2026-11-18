@@ -65,6 +65,47 @@ fn numeric_results(g: &Gen<'_>) -> std::collections::HashSet<(u32, u32, u32)> {
         .collect()
 }
 
+/// Each read's receiver must pass the indexed-access proof at every instance;
+/// a builtin member by itself only proves the lookup under its own name.
+fn quiet_arrays(g: &Gen<'_>) -> std::collections::HashSet<(At, String)> {
+    let m = &g.m;
+    if !m.native_writes.is_empty()
+        || m.objproto_accessor
+        || m.reshaped_any
+        || !m.reshaped_keys.is_empty()
+    {
+        return Default::default();
+    }
+    let copies = element::run_copies(m);
+    let mut sites = HashMap::new();
+    for s in &g.read_sites {
+        let key = &m.atoms[s.key as usize];
+        if !s.is_call || !matches!(key.as_str(), "fill" | "pop" | "includes") {
+            continue;
+        }
+        let quiet = !s.value_call
+            && element::with_copies(&copies, &[s.recv]).iter().all(|&n| {
+                let node = &m.nodes[n as usize];
+                !node.dropped
+                    && node.prim == 0
+                    && crate::quiet_sites::not_plain_arrays(m, n).is_none()
+                    && node.pts.to_sorted().iter().all(|t| {
+                        !m.hard.contains_key(t)
+                            && !m.super_relink.contains(t)
+                            && m.tmpl_of(*t)
+                                .is_some_and(|tm| !m.record_arrays.contains_key(&tm))
+                    })
+            });
+        *sites
+            .entry(((s.module, s.byte_offset), key.to_string()))
+            .or_insert(true) &= quiet;
+    }
+    sites
+        .into_iter()
+        .filter_map(|(at, quiet)| quiet.then_some(at))
+        .collect()
+}
+
 /// Operand coercions are part of the proof: the audited Math helpers take
 /// Numbers only. Number predicates perform no coercion at all.
 fn namespace_fast(ns: &str, key: &str, fast: &Expr, args: &[u16], operands: &[Expr]) -> bool {
@@ -188,6 +229,8 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
     let args = arguments(g);
     let numeric_results = numeric_results(g);
     let mut strings = std::collections::BTreeSet::new();
+    let quiet_arrays = quiet_arrays(g);
+    let mut arrays = std::collections::BTreeSet::new();
     let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
     // manifest's thread family owns diagnostics_channel and its producers.
@@ -238,6 +281,18 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             if map {
                 maps.insert((at, property.clone()));
             }
+            let array = namespace.is_none()
+                && !spread
+                && perry_hir::folded_call::direct_array_call(callee, arity)
+                && quiet_arrays.contains(&(at, property.clone()))
+                && pf.bindings[mi].method_sites.iter().any(|(site, k, flags)| {
+                    *site == Site::Callee(*byte_offset)
+                        && k == property
+                        && flags & perry_hir::folded_call::SITE_ARRAY_MEMBER != 0
+                });
+            if array {
+                arrays.insert((at, property.clone()));
+            }
             let fill = namespace.is_none()
                 && pf.bindings[mi].fill_births.iter().any(|&(o, len)| {
                     o == *byte_offset
@@ -259,7 +314,7 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             if string {
                 strings.insert((at, property.clone()));
             }
-            let safe = (map || fill || string) && selected
+            let safe = (map || fill || string || array) && selected
                 || selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;
@@ -342,6 +397,17 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             }
         } else {
             certified.insert(at, false);
+        }
+    }
+    for ((mi, offset), key) in arrays {
+        if certified.get(&((mi, offset), key.clone())) == Some(&true) {
+            if let Some((_, _, flags)) = pf.bindings[mi as usize]
+                .method_sites
+                .iter_mut()
+                .find(|(site, k, _)| *site == Site::Callee(offset) && *k == key)
+            {
+                *flags |= perry_hir::folded_call::SITE_DIRECT_ARRAY;
+            }
         }
     }
     for ((mi, offset), key) in maps {

@@ -72,6 +72,15 @@ pub const SITE_DIRECT_MAP: u8 = 16;
 /// A named primitive String operation whose operand protocols have been discharged.
 pub const SITE_DIRECT_STRING: u8 = 32;
 
+/// The builtin lookup and indexed element accesses are both quiet.
+pub const SITE_DIRECT_ARRAY: u8 = 64;
+
+pub fn direct_array_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("fill" | "includes", 1) | ("pop", 0)))
+}
+
 pub fn direct_string_call(callee: &Expr, arity: usize) -> bool {
     matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
         if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),

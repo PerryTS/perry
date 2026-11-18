@@ -219,7 +219,12 @@ fn native_dispatch_fill_birth_requires_the_named_literal_allocation() {
         "fill",
         false,
     );
-    assert_named("const a = [1]; a.fill(0);", "fill", true);
+    assert_named(
+        "class H { a = [1]; run() {this.a.fill(0);} } new H().run();",
+        "fill",
+        false,
+    );
+    assert_named("class H { a = [1]; run() {Object.defineProperty(this.a,'0',{set(v){console.log(v);}}); this.a.fill(0);} } new H().run();", "fill", true);
 }
 
 #[test]

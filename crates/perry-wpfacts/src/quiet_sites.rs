@@ -88,7 +88,7 @@ fn strings_only(m: &Model, n: NodeId) -> bool {
 
 /// Why node `n` may hold something that is no plain program Array
 /// (`None`: it holds such Arrays and nothing else, or only Strings).
-fn not_plain_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
+pub(crate) fn not_plain_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
     let node = &m.nodes[n as usize];
     // A String's own index is a data property, and past its end the read
     // goes up the chain as an Array's hole does.
