@@ -4,6 +4,7 @@
 pub(crate) mod dispatch;
 mod element;
 mod member_ops;
+pub(crate) mod native_calls;
 mod native_member;
 pub(crate) use element::element_facts;
 pub(crate) use element::receiver_set;
@@ -338,15 +339,7 @@ impl Access {
     }
 }
 
-/// MATHB1: the verdict of a call of a builtin namespace member `N.m`
-/// ([`namespace_callee`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IntrinsicCallee {
-    /// The callee is exactly the realm's original `N.m` (named `N.m`).
-    Exact(String),
-    /// Refused, with the reason.
-    No(String),
-}
+pub use native_calls::IntrinsicCallee;
 
 #[derive(Clone, Debug)]
 pub struct SiteFacts {
@@ -367,6 +360,8 @@ pub struct SiteFacts {
     pub verdict: Verdict,
     /// The shared method-call elision and its optional exact-route proof.
     pub(crate) method_call: Option<dispatch::MethodCallCertificate>,
+    /// The audited named builtin route, including its runtime protocols.
+    pub(crate) builtin_dispatch: bool,
     /// MATHB1: a call whose receiver (a member call) or callee (a value
     /// call) names a builtin namespace member: is the callee exactly the
     /// original builtin ([`namespace_callee`])? `None`: no namespace member.
@@ -1938,6 +1933,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         bodies.dedup();
         out.push(SiteFacts {
             method_call: None,
+            builtin_dispatch: false,
             bodies,
             diagnostic_copies: diagnostic_copies.unwrap_or_default(),
             diagnostic_unit: g

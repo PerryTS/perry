@@ -265,7 +265,7 @@ pub(crate) fn native_member_site_proven(
     callee: &perry_hir::Expr,
 ) -> bool {
     matches!(callee, perry_hir::Expr::PropertyGet { byte_offset, .. }
-        if *byte_offset != 0 && native_member_calls.contains(byte_offset))
+        if perry_hir::namespace_pairs::intrinsic_selected(*byte_offset, native_member_calls))
 }
 
 /// `console.<member>(args...)` as the real call: read `globalThis.console`

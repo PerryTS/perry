@@ -47,3 +47,41 @@ pub fn target<'a>(
     }
     Some((c, target_in_class(c, fid, key)?))
 }
+
+/// The global console call shape handled by the console lowering.
+pub fn console_method(callee: &crate::Expr) -> Option<&str> {
+    use crate::Expr;
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee
+    else {
+        return None;
+    };
+    (matches!(object.as_ref(), Expr::GlobalGet(_))
+        && matches!(
+            property.as_str(),
+            "log"
+                | "info"
+                | "warn"
+                | "error"
+                | "debug"
+                | "dir"
+                | "dirxml"
+                | "profile"
+                | "profileEnd"
+                | "timeStamp"
+                | "table"
+                | "trace"
+                | "group"
+                | "groupEnd"
+                | "groupCollapsed"
+                | "time"
+                | "timeEnd"
+                | "timeLog"
+                | "count"
+                | "countReset"
+                | "clear"
+                | "assert"
+        ))
+    .then_some(property.as_str())
+}

@@ -37,6 +37,7 @@ fn compile(body: Vec<Stmt>, proven: &[u32]) -> String {
     });
     let elision = crate::ElisionFacts {
         native_member_calls: proven.iter().copied().collect::<BTreeSet<u32>>(),
+        namespace_pair_arms: true,
         ..Default::default()
     };
     let opts = crate::CompileOptions {
@@ -155,5 +156,148 @@ fn unproven_console_spread_call_is_the_real_call() {
         calls(build_body(&proven), "js_console_log_spread"),
         "a proven spread site binds the console intrinsic:\n{}",
         build_body(&proven)
+    );
+}
+
+#[test]
+fn native_dispatch_namespace_selection_matches_the_shared_predicate() {
+    for (namespace, method, fast, symbol) in [
+        (
+            "Math",
+            "abs",
+            Expr::MathAbs(Box::new(Expr::Number(-3.0))),
+            "llvm.fabs.f64",
+        ),
+        (
+            "Math",
+            "round",
+            Expr::MathRound(Box::new(Expr::Number(1.5))),
+            "js_math_round",
+        ),
+        (
+            "Number",
+            "isInteger",
+            Expr::NumberIsInteger(Box::new(Expr::Number(1.0))),
+            "js_number_is_integer",
+        ),
+        (
+            "Number",
+            "isSafeInteger",
+            Expr::NumberIsSafeInteger(Box::new(Expr::Number(1.0))),
+            "js_number_is_safe_integer",
+        ),
+    ] {
+        let generic = Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::GlobalThisExpr),
+                    property: namespace.into(),
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                property: method.into(),
+                byte_offset: SITE,
+                byte_end: 0,
+            }),
+            args: vec![Expr::Number(1.0)],
+            type_args: vec![],
+            byte_offset: SITE,
+            byte_end: 0,
+        };
+        let pair = Expr::Conditional {
+            condition: Box::new(Expr::NamespacePatched(namespace.into())),
+            then_expr: Box::new(generic),
+            else_expr: Box::new(fast),
+        };
+        for proven in [vec![], vec![SITE], vec![SITE + 1]] {
+            let selected = perry_hir::namespace_pairs::intrinsic_selected(
+                SITE,
+                &proven.iter().copied().collect(),
+            );
+            let ir = compile(vec![Stmt::Expr(pair.clone())], &proven);
+            let body = build_body(&ir);
+            assert_eq!(
+                calls(body, symbol),
+                selected,
+                "{namespace}.{method}: {body}"
+            );
+            assert_eq!(
+                calls(body, "js_builtin_namespace_member"),
+                !selected,
+                "{body}"
+            );
+            if selected {
+                assert!(
+                    !body
+                        .lines()
+                        .any(|l| l.contains("call ") && l.contains("js_native_call_method")),
+                    "{body}"
+                );
+            }
+        }
+    }
+}
+
+fn member_call(object: Expr, method: &str, args: Vec<Expr>) -> Vec<Stmt> {
+    vec![Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(object),
+            property: method.into(),
+            byte_offset: SITE,
+            byte_end: 0,
+        }),
+        args,
+        type_args: vec![],
+        byte_offset: SITE,
+        byte_end: 0,
+    })]
+}
+
+#[test]
+fn native_dispatch_string_identity_still_uses_a_checked_entry() {
+    let ir = compile(
+        member_call(
+            Expr::String("abc".into()),
+            "charAt",
+            vec![Expr::Number(0.0)],
+        ),
+        &[SITE],
+    );
+    let body = build_body(&ir);
+    assert!(
+        body.contains("@js_string_m_charAt1("),
+        "checked slow arm must remain visible: {body}"
+    );
+}
+
+#[test]
+fn native_dispatch_collection_identity_does_not_remove_receiver_guards() {
+    for (object, method, args) in [
+        (
+            Expr::Array(vec![Expr::Number(1.0)], None),
+            "fill",
+            vec![Expr::Number(3.0)],
+        ),
+        (Expr::MapNew, "clear", vec![]),
+    ] {
+        let ir = compile(member_call(object, method, args), &[SITE]);
+        let body = build_body(&ir);
+        assert!(
+            body.contains("ownoverride.own"),
+            "NativeMember alone must not remove the own-method fallback: {body}"
+        );
+    }
+}
+
+#[test]
+fn native_dispatch_named_now_is_not_the_receiverless_perf_intrinsic() {
+    let ir = compile(
+        member_call(Expr::NativeModuleRef("performance".into()), "now", vec![]),
+        &[],
+    );
+    let body = build_body(&ir);
+    assert!(
+        !calls(body, "js_performance_now"),
+        "ordinary member call cannot borrow the NativeMethodCall certificate: {body}"
     );
 }

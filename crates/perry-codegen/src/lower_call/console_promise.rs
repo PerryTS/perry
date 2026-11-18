@@ -37,49 +37,8 @@ pub fn try_lower_console_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    // console.log(<args...>) sink.
-    //
-    // JS spec: console.log can take any number of args, separated by
-    // single spaces. We approximate by emitting a separate dispatch
-    // call per arg with a literal " " in between, then a final "\n".
-    // The runtime functions take a NaN-boxed double and print it
-    // followed by a single trailing space (for the inter-arg form)
-    // or newline (for the final/single-arg form). For now we use the
-    // existing js_console_log_dynamic for every arg — the runtime
-    // already adds a newline, so multi-arg console.log will be
-    // separated by newlines instead of spaces. Spec-compliant
-    // separator handling lives in a future Phase I tweak.
-    if let Expr::PropertyGet {
-        object, property, ..
-    } = callee
-    {
-        if matches!(object.as_ref(), Expr::GlobalGet(_))
-            && matches!(
-                property.as_str(),
-                "log"
-                    | "info"
-                    | "warn"
-                    | "error"
-                    | "debug"
-                    | "dir"
-                    | "dirxml"
-                    | "profile"
-                    | "profileEnd"
-                    | "timeStamp"
-                    | "table"
-                    | "trace"
-                    | "group"
-                    | "groupEnd"
-                    | "groupCollapsed"
-                    | "time"
-                    | "timeEnd"
-                    | "timeLog"
-                    | "count"
-                    | "countReset"
-                    | "clear"
-                    | "assert"
-            )
-        {
+    if let Expr::PropertyGet { property, .. } = callee {
+        if perry_hir::method_call::console_method(callee).is_some() {
             // The intrinsic is what `console.<m>` holds only where the facts
             // prove it; elsewhere read the property and call its value.
             if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {

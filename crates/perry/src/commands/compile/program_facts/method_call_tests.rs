@@ -126,3 +126,36 @@ fn method_call_publication_respects_elide_off() {
     assert!(s.dispatch_obligation().unwrap().redispatch);
     assert!(published(&pf, &hir).method_calls.is_empty());
 }
+
+#[test]
+fn native_dispatch_builtin_certificate_publishes_the_intrinsic_selection() {
+    for (source, certified) in [
+        ("console.log('hello');", true),
+        ("console.log({});", false),
+        (
+            "console.log = function(x: any) {}; console.log('hello');",
+            false,
+        ),
+    ] {
+        let hir = module(source);
+        let pf = facts(&hir);
+        let out = published(&pf, &hir);
+        let site = pf
+            .sites
+            .iter()
+            .find(|s| s.is_call && s.key == "log")
+            .unwrap();
+        assert_eq!(
+            site.builtin_dispatch_certified(),
+            certified,
+            "{}",
+            pf.dump_text()
+        );
+        if certified {
+            assert!(perry_hir::namespace_pairs::intrinsic_selected(
+                site.byte_offset,
+                &out.native_member_calls
+            ));
+        }
+    }
+}

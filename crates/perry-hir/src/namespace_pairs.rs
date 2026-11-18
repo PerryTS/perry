@@ -61,7 +61,7 @@ impl Arms<'_> {
 
 /// The generic call's member offset when `generic` is a pair's generic arm
 /// `globalThis.<ns>.<m>(args…)`.
-fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
+pub fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
     let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
         return None;
     };
@@ -81,6 +81,11 @@ fn pair_offset(ns: &str, generic: &Expr) -> Option<u32> {
         } if matches!(g.as_ref(), Expr::GlobalThisExpr) && property == ns => Some(*byte_offset),
         _ => None,
     }
+}
+
+/// The live pair takes its intrinsic exactly when its named site is proven.
+pub fn intrinsic_selected(offset: u32, proven: &BTreeSet<u32>) -> bool {
+    offset != 0 && proven.contains(&offset)
 }
 
 /// MATHC5: `callee(args…)` as `(callee, <intrinsic of Math.<member>(args…)>)`
@@ -117,7 +122,7 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
     {
         if let Expr::NamespacePatched(ns) = condition.as_ref() {
             if let Some(offset) = pair_offset(ns, then_expr) {
-                let arm = if proven.dead || (offset != 0 && proven.proven.contains(&offset)) {
+                let arm = if proven.dead || intrinsic_selected(offset, proven.proven) {
                     std::mem::replace(else_expr.as_mut(), Expr::Undefined)
                 } else {
                     proven.kept.set(proven.kept.get() + 1);
