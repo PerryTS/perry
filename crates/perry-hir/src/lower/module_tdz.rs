@@ -794,9 +794,14 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
 /// expression: `(check, x).p` becomes `(check, x.p)`. This keeps the access
 /// itself in the shape later passes recognize (a member read or a call of a
 /// binding), and repeats up a chain like `x.a.b(c)`.
+///
+/// `delete x.p` evaluates the reference `x.p` first as well, and its operand
+/// must stay a reference: `delete (check, x.p)` deletes nothing and returns
+/// true, so the check is lifted to `(check, delete x.p)`.
 fn lift_check(expr: &mut Expr) {
     let first = match expr {
         Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => object.as_mut(),
+        Expr::Delete(operand) => operand.as_mut(),
         Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee.as_mut(),
         _ => return,
     };

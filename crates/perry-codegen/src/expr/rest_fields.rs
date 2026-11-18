@@ -81,11 +81,21 @@ pub(crate) fn class_lanes(
     {
         return 0;
     }
+    // A class born keyless at its static family layout stores each key at
+    // the slot `layout_families::assign_slots` gave it, which key colouring
+    // may move off the key's field position. A lane is the field position
+    // the facts name (`FactsField::slot`: every site's proof and the
+    // runtime's lane mask), so a field whose family slot is another one has
+    // no lane, and its sites take their ordinary tiers.
+    let family = layouts.families.get(cid);
     let mut mask = 0u32;
     for (slot, f) in class.fields.iter().enumerate() {
         let slot = slot as u32;
         if slot >= LANE_SLOTS {
             break;
+        }
+        if !family_keeps_lane(family, &f.name, slot) {
+            continue;
         }
         if fc
             .fields
@@ -96,6 +106,22 @@ pub(crate) fn class_lanes(
         }
     }
     mask
+}
+
+/// Can field `key` at field position `slot` be an I32 lane of a class whose
+/// static family layout is `family` (`None`: no family)? Only when the
+/// family stores the key at that same slot.
+pub(super) fn family_keeps_lane(
+    family: Option<&crate::layout_families::FamilyLayout>,
+    key: &str,
+    slot: u32,
+) -> bool {
+    family.is_none_or(|fam| {
+        fam.keys
+            .iter()
+            .find_map(|(k, s)| (k.name() == Some(key)).then_some(*s))
+            == Some(slot)
+    })
 }
 
 /// The I32 word of 0, as an IR constant: an I32 lane's birth default.

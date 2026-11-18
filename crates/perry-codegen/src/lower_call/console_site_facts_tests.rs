@@ -18,6 +18,10 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 const SITE: u32 = 41;
 
 fn compile(body: Vec<Stmt>, proven: &[u32]) -> String {
+    compile_with_site(body, proven, "", 0)
+}
+
+fn compile_with_site(body: Vec<Stmt>, proven: &[u32], key: &str, flags: u8) -> String {
     let mut hir = HirModule::new("console_site_facts");
     hir.functions.push(Function {
         id: 0,
@@ -36,6 +40,11 @@ fn compile(body: Vec<Stmt>, proven: &[u32]) -> String {
         was_unrolled: false,
     });
     let elision = crate::ElisionFacts {
+        method_sites: [(
+            (perry_hir::folded_call::Site::Callee(SITE), key.to_owned()),
+            flags,
+        )]
+        .into(),
         native_member_calls: proven.iter().copied().collect::<BTreeSet<u32>>(),
         namespace_pair_arms: true,
         ..Default::default()
@@ -244,12 +253,12 @@ fn member_call(object: Expr, method: &str, args: Vec<Expr>) -> Vec<Stmt> {
             object: Box::new(object),
             property: method.into(),
             byte_offset: SITE,
-            byte_end: 0,
+            byte_end: SITE + 10,
         }),
         args,
         type_args: vec![],
         byte_offset: SITE,
-        byte_end: 0,
+        byte_end: SITE + 10,
     })]
 }
 
@@ -292,7 +301,16 @@ fn native_dispatch_collection_identity_does_not_remove_receiver_guards() {
 #[test]
 fn native_dispatch_named_now_is_not_the_receiverless_perf_intrinsic() {
     let ir = compile(
-        member_call(Expr::NativeModuleRef("performance".into()), "now", vec![]),
+        member_call(
+            Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "performance".into(),
+                byte_offset: 0,
+                byte_end: 0,
+            },
+            "now",
+            vec![],
+        ),
         &[],
     );
     let body = build_body(&ir);
@@ -300,4 +318,38 @@ fn native_dispatch_named_now_is_not_the_receiverless_perf_intrinsic() {
         !calls(body, "js_performance_now"),
         "ordinary member call cannot borrow the NativeMethodCall certificate: {body}"
     );
+}
+
+#[test]
+fn native_dispatch_certificate_selects_direct_entries() {
+    use perry_hir::folded_call::{SITE_DIRECT_MAP, SITE_DIRECT_STRING, SITE_MAP};
+    let string = compile_with_site(
+        member_call(Expr::String("abc".into()), "trim", vec![]),
+        &[SITE],
+        "trim",
+        SITE_DIRECT_STRING,
+    );
+    assert!(
+        calls(build_body(&string), "js_string_trim"),
+        "{}",
+        build_body(&string)
+    );
+    let map = Expr::PropertyGet {
+        object: Box::new(Expr::GlobalGet(0)),
+        property: "table".into(),
+        byte_offset: 0,
+        byte_end: 0,
+    };
+    let ir = compile_with_site(
+        member_call(map, "clear", vec![]),
+        &[SITE],
+        "clear",
+        SITE_MAP | SITE_DIRECT_MAP,
+    );
+    assert!(
+        calls(build_body(&ir), "js_map_clear"),
+        "{}",
+        build_body(&ir)
+    );
+    assert!(!build_body(&ir).contains("ownoverride.own"));
 }

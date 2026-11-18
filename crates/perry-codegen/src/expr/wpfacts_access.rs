@@ -1784,11 +1784,20 @@ pub(crate) fn proven_method_fn(
     {
         return None;
     }
-    let (cid, fid, symbol, abi, nullable) = ctx
+    let (cid, fid, symbol, abi, nullable, imported_instance) = ctx
         .wpfacts
         .method_calls
         .get(&(offset, property.to_string()))?
         .clone();
+    if imported_instance {
+        debug_assert!(!nullable && matches!(object, Expr::LocalGet(_)));
+        ctx.pending_declares.push((
+            symbol.clone(),
+            DOUBLE,
+            vec![DOUBLE; abi.params as usize + 1],
+        ));
+        return Some((None, symbol, abi, false));
+    }
     // NULLCALL1: a receiver a dominating access of the same binding has
     // tested already is an object here.
     let nullable = nullable && !tested_in_block(ctx, object);

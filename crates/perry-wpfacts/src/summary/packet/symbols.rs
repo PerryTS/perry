@@ -47,6 +47,9 @@ impl Model {
             Cons::HasProp { key, idx } => {
                 format!("HasProp key={:?} idx={idx}", self.packet_key(key))
             }
+            Cons::OwnProp { key, idx } => {
+                format!("OwnProp key={:?} idx={idx}", self.packet_key(key))
+            }
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),

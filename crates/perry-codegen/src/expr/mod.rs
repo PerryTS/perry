@@ -124,6 +124,8 @@ pub(crate) fn literal_descriptor_worker_ir() -> String {
 mod map_entry_at_tests;
 #[cfg(test)]
 mod member_update_class_field_tests;
+#[cfg(test)]
+mod rest_fields_tests;
 pub(crate) mod stack_guard;
 #[cfg(test)]
 mod stack_guard_leaf_tests;

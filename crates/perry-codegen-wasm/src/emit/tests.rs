@@ -240,6 +240,57 @@ console.log("b");
     );
 }
 
+/// A console call is `undefined` wherever it sits.
+#[test]
+fn console_call_is_undefined_in_every_expression_position() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const c = Date.now() > 0;
+const r = c ? console.log("a") : 2;
+console.log(r);
+const f = (x: number) => console.log(x);
+console.log(f(3));
+"#
+        ),
+        "a\nundefined\n3\nundefined"
+    );
+}
+
+/// With namespace pairs on, `console.log(2)` lowers as
+/// `NamespacePatched("console") ? <generic call> : <console call>`.
+#[test]
+fn namespace_pair_with_a_console_arm_validates() {
+    let mut pairs = perry_hir::PatchedBuiltins::new();
+    pairs.namespace_pairs = true;
+    perry_hir::set_patched_builtins(std::sync::Arc::new(pairs));
+    let source = "console.log(2); console.log(Math.max(1, 3));";
+    let ast = perry_parser::parse_typescript(source, "pair.ts").unwrap();
+    let module = perry_hir::lower::lower_module(&ast, "pair", "pair.ts").unwrap();
+    assert!(
+        format!("{:?}", module.init).contains("NamespacePatched(\"console\")"),
+        "the console call must lower as the pair: {:?}",
+        module.init
+    );
+    assert_eq!(run_web_source(source), "2\n3");
+    perry_hir::clear_patched_builtins();
+}
+
+/// An unsupported `console` method still evaluates its arguments.
+#[test]
+fn unsupported_console_method_evaluates_its_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as c from "node:console";
+c.time(String(c.log("a")));
+c.log("b");
+"#
+        ),
+        "a\nb"
+    );
+}
+
 #[test]
 fn json_stringify_honors_value_replacer_and_space() {
     assert_eq!(
@@ -505,8 +556,8 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
-// A user class's method wins over what its `{__class__}` instance inherits from
-// Object.prototype, also through a subclass.
+// A user class's method wins over what its instance inherits from Object.prototype,
+// also through a subclass.
 #[test]
 fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() {
     assert_eq!(
@@ -539,7 +590,7 @@ let reads = 0;
 class Base {}
 Object.defineProperty(Base.prototype, "m", { get() { reads++; return function () { return "ok"; }; } });
 const o = Object.create(Base.prototype);
-o.__class__ = "NoSuchClass";
+Object.defineProperty(o, __classTag, { value: "NoSuchClass" });
 console.log(__jsMethodInvoke(__jsMethodGet(o, "m"), []) + " " + reads);
 "#
         ),
@@ -1237,8 +1288,7 @@ console.log(new MM((n: number) => n * 10).out.join(","));
     );
 }
 
-// Instances are `{__class__}` objects, so host `instanceof` on a class value walks
-// the class table, as compiled `instanceof` does.
+// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
 #[test]
 fn host_instanceof_on_a_class_value_walks_the_class_chain() {
     assert_eq!(
@@ -1283,11 +1333,7 @@ console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + "
 #[test]
 fn fetch_with_auth_passes_url_method_body_and_authorization() {
     assert_eq!(
-        run_web_source_around(
-            r#"globalThis.fetch = (url, opts) => {
-  console.log(JSON.stringify([url, opts]));
-  return Promise.resolve({ text: () => Promise.resolve("ok") });
-};"#,
+        run_web_source_with_dom(
             r#"
 function base(): string { return "http://h/" + String(6 * 7); }
 function tok(): string { return "Bearer " + base().length; }
@@ -1296,6 +1342,13 @@ fetchWithAuth(arg("url", base() + "/g"), arg("auth", `${tok()}-g`))
   .then(() => fetchPostWithAuth(arg("url", base() + "/p"), arg("auth", tok()), arg("body", JSON.stringify({ n: tok() }))))
   .then(() => console.log("done"));
 "#,
+            &format!(
+                "{STUB_DOM}{}",
+                r#"globalThis.fetch = (url, opts) => {
+  console.log(JSON.stringify([url, opts]));
+  return Promise.resolve({ text: () => Promise.resolve("ok") });
+};"#
+            ),
             ""
         ),
         concat!(
@@ -1672,3 +1725,399 @@ console.log((U as any).tag);
         "class\n2\nbase"
     );
 }
+
+#[test]
+fn a_closure_used_as_a_value_is_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = () => 1;
+function named(): number { return 2; }
+console.log(typeof f + " " + typeof (() => 1) + " " + typeof named);
+const o: any = {}; o.h = f;
+console.log(typeof o.h + " " + o.h() + " " + ({ g(n: number) { return n + 1; } }).g(41));
+const fake: any = { funcIdx: 0, captures: [] };
+console.log(typeof fake);
+"#
+        ),
+        "function function function\nfunction 1 42\nobject"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_by_an_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() { console.log(typeof o.h + " " + o.h(21)); }
+main();
+"#
+        ),
+        "function 42"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_in_a_local() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() {
+  const f = o.h;
+  if (typeof f === "function") console.log(f(21));
+  const m: any = Math.max;
+  console.log(m(3, 7));
+  const from: any = Array.from;
+  console.log(from([1, 2], o.h).join(","));
+  const t = o.t;
+  t();
+}
+o.t = () => { throw new Error("boom"); };
+main().catch((e: any) => console.log("caught " + e.message));
+"#
+        ),
+        "42\n7\n2,4\ncaught boom"
+    );
+}
+
+#[test]
+fn an_async_body_keeps_the_receiver_of_a_computed_method_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { n: 2 }; o.h = (n: number) => n * 2;
+async function main() {
+  const a = [1, 2];
+  const k = "join";
+  const h = "h";
+  console.log(a[k]("-") + " " + o[h](21));
+}
+main();
+"#
+        ),
+        "1-2 42"
+    );
+}
+
+#[test]
+fn an_async_body_passes_a_closure_lookalike_to_a_host_function_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const fake: any = { funcIdx: 0, captures: [] };
+async function main() {
+  const of: any = Array.of;
+  console.log(typeof of(fake)[0]);
+}
+main();
+"#
+        ),
+        "object"
+    );
+}
+
+// Each evaluation of a capturing class expression is its own constructor, and its
+// members read the captures of the evaluation that built the instance.
+#[test]
+fn each_class_expression_evaluation_keeps_its_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { who() { return tag; } }; }
+const A = make("A");
+const B = make("B");
+const a = new A();
+const b = new B();
+console.log(a.who() + " " + b.who() + " " + (A === B));
+console.log((a instanceof A) + " " + (a instanceof B) + " " + (b instanceof B));
+"#
+        ),
+        "A B false\ntrue false true"
+    );
+}
+
+#[test]
+fn a_class_expression_sees_a_capture_assigned_after_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function counter(start: number) {
+  let n = start;
+  const K = class { bump() { n = n + 1; return n; } peek() { return n; } };
+  n = start * 10;
+  return K;
+}
+const C1 = counter(1);
+const C2 = counter(2);
+const c1 = new C1();
+console.log(c1.peek() + " " + new C2().peek());
+console.log(c1.bump() + " " + new C1().peek() + " " + new C2().bump());
+"#
+        ),
+        "10 20\n11 11 21"
+    );
+}
+
+// A method read off an instance or off `C.prototype` runs in that class's
+// evaluation whatever its `this`, as a JS method closes over its class (#12578).
+#[test]
+fn a_method_value_runs_in_its_class_expression_evaluation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { inst = tag; who() { return tag; } }; }
+const A = make("A");
+const B = make("B");
+const a: any = new A();
+const b: any = new B();
+console.log(a.who.call(b) + " " + A.prototype.who.call(b) + " " + Reflect.apply(A.prototype.who, b, []));
+const borrowed = { who: b.who, inst: "x" };
+console.log(borrowed.who() + " " + b.inst);
+"#
+        ),
+        "A A A\nB B"
+    );
+}
+
+#[test]
+fn a_class_declaration_in_a_function_is_fresh_per_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function declared(t: string) {
+  class K { v: number; constructor(v: number) { this.v = v; } who() { return t + this.v; } again() { return new K(this.v + 1); } }
+  return new K(1);
+}
+const x = declared("x");
+const y = declared("y");
+console.log(x.who() + " " + y.who() + " " + x.again().who() + " " + y.again().who());
+function bare() { return class {}; }
+console.log(bare() === bare());
+"#
+        ),
+        "x1 y1 x2 y2\nfalse"
+    );
+}
+
+// `super.x` in a class method reads from the prototype of the method's home: a parent
+// class's getter runs on the receiver, a class without `extends` reads Object.prototype,
+// and `extends null` has no prototype, so the read throws.
+#[test]
+fn a_super_property_read_uses_the_home_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class N extends null { m() { return super.x; } }
+try { console.log(N.prototype.m.call({})); } catch (e) { console.log(e instanceof TypeError); }
+class A { get g() { return "g" + this.k; } }
+class B extends A { k = 1; m() { return super.g + " " + typeof super.toString + " " + super.nope; } }
+console.log(new B().m());
+"#
+        ),
+        "true\ng1 function undefined"
+    );
+}
+
+// An evaluation's instance inherits its evaluation and class tag, so it gains no own key,
+// whether the class value built it or a member's `new K()` on a later evaluation did.
+#[test]
+fn an_evaluation_instance_keeps_only_its_declared_own_keys() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+function make(tag: string) { return class { x = 1; who() { return tag; } }; }
+function declared(t: string) { class K { v = 2; who() { return t; } again() { return new K(); } } return new K().again(); }
+const g: any = globalThis;
+const A = make("A");
+const B = make("B");
+g.a = new A();
+g.b = new B();
+declared("j");
+g.k = declared("k");
+console.log(g.a.who() + g.b.who() + g.k.who() + " " + (g.a instanceof A) + " " + (g.a instanceof B) + " " + (g.b instanceof B));
+"#,
+            r#"
+for (const o of [a, b, k]) {
+  console.log(Reflect.ownKeys(o).map(String).join(",") + "|" + [...new Headers(o).keys()].join(","));
+}
+"#
+        ),
+        "ABk true false true\nx|x\nx|x\nv|v"
+    );
+}
+
+// Node's `Headers` copies every own key, enumerable or not: an instance or object literal
+// built in sync code or in an async (JS) body shows it only declared fields.
+#[test]
+fn an_instance_has_no_own_class_tag_key() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class P { x: number; constructor() { this.x = 1; } }
+const g: any = globalThis;
+g.h = { "Content-Type": "application/json" };
+g.p = new P();
+async function inBody(): Promise<void> { g.ah = { "X-A": "1" }; g.ap = new P(); }
+inBody();
+"#,
+            r#"
+await new Promise((r) => setTimeout(r, 0));
+for (const o of [h, p, ah, ap]) {
+  console.log(Reflect.ownKeys(o).join(",") + "|" + [...new Headers(o).keys()].join(","));
+}
+"#
+        ),
+        "Content-Type|content-type\nx|x\nX-A|x-a\nx|x"
+    );
+}
+
+// A copy of an instance is an untagged plain object; an object literal's prototype is
+// Object.prototype.
+#[test]
+fn a_copied_instance_is_untagged_and_the_original_still_dispatches() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class Q { v: number; constructor() { this.v = 2; } get twice(): number { return this.v * 2; } }
+const q = new Q();
+const c: any = { ...q };
+const a: any = Object.assign({}, q);
+const g: any = globalThis;
+g.q = q; g.c = c; g.lit = { v: 3 };
+console.log(JSON.stringify(c) + " " + (c instanceof Q) + " " + (a instanceof Q) + " " + (q instanceof Q) + " " + q.twice);
+"#,
+            r#"console.log([lit, c, q].map((o) => Object.getPrototypeOf(o) === Object.prototype).join(" "));"#
+        ),
+        "{\"v\":2} false false true 4\ntrue true false"
+    );
+}
+
+#[test]
+fn an_evaluation_prototype_is_the_one_its_instances_inherit() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { who() { return tag; } }; }
+const A: any = make("A");
+A.prototype.extra = 7;
+const a: any = new A();
+console.log(a.extra + " " + a.who());
+"#
+        ),
+        "7 A"
+    );
+}
+
+#[test]
+fn reflect_apply_takes_an_array_like_argument_list() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { echo(x: number) { return x; } }
+console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any));
+"#
+        ),
+        "7"
+    );
+}
+
+// B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
+#[test]
+fn a_super_read_stops_at_a_setter_only_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { get x() { return "a"; } }
+class B extends A { set x(v: string) {} }
+class C extends B { m() { return super.x; } }
+console.log(new C().m());
+"#
+        ),
+        "undefined"
+    );
+}
+
+#[test]
+fn an_arrow_function_reads_the_this_it_was_created_with() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class B {
+  children: any;
+  n = 1;
+  add = (c: any) => { this.children = c; };
+  nested = () => { const f = () => this.n * 10; return f(); };
+  later() { return () => this.n + 1; }
+  count(a: number) { let c = 0; const inc = (d: number) => { c += this.n + a + d; }; inc(10); return c; }
+}
+const b = new B();
+b.add([7]);
+const detached = b.add;
+console.log(b.children[0]);
+detached("d");
+console.log(b.children);
+console.log(b.nested());
+const f = b.later();
+console.log(f());
+console.log(b.count(2));
+"#
+        ),
+        "7\nd\n10\n2\n13"
+    );
+}
+
+#[test]
+fn a_function_expression_called_as_a_method_reads_its_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o = { k: 5, g() { return this.k; } };
+console.log(o.g());
+const p: any = { name: "p", hi: function () { return "hi " + this.name; } };
+const q: any = { name: "q" };
+q.hi = p.hi;
+console.log(p.hi() + "/" + q.hi());
+const counter = { c: 0, inc() { this.c = this.c + 1; return this; } };
+counter.inc().inc();
+console.log(counter.c);
+const r: any = { v: 3, outer() { return () => this.v; } };
+console.log(r.outer()());
+const holder = { k: 9, g2: o.g };
+console.log(holder.g2());
+"#
+        ),
+        "5\nhi p/hi q\n2\n3\n9"
+    );
+}
+
+#[test]
+fn a_parameter_default_reads_the_method_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { k: 4, f: function (x = this.k) { return x; } };
+console.log(o.f());
+console.log(o.f(1));
+"#
+        ),
+        "4\n1"
+    );
+}
+
+#[test]
+fn reflect_apply_hands_this_to_a_function_expression() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const hi = function (this: any, p: string) { return p + this.name; };
+console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
+"#
+        ),
+        "hi o"
+    );
+}
+
+#[path = "class_eval_tests.rs"]
+mod class_eval;

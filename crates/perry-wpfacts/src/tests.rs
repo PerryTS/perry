@@ -235,6 +235,7 @@ mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
 mod protocol_touch_births;
+mod own_prop_trap;
 mod px1;
 mod quiet_sites;
 mod quiet_strings;

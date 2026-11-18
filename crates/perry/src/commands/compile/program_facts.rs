@@ -645,7 +645,14 @@ fn elision_for(
                 {
                     out.method_calls.insert(
                         (s.byte_offset, s.key.clone()),
-                        (c.class, c.function, symbol, abi, c.nullable),
+                        (
+                            c.class,
+                            c.function,
+                            symbol,
+                            abi,
+                            c.nullable,
+                            c.direct_imported_instance(),
+                        ),
                     );
                 }
             }

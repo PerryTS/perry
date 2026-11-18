@@ -57,6 +57,8 @@ pub enum ProxyOp {
     SetFwd(Key, NodeId, SiteId),
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
     Has(Key, NodeId),
+    /// [[GetOwnProperty]] of `key` (with its key node): trap and forward.
+    OwnProp(Key, NodeId),
     /// The `deleteProperty` trap call for `key`.
     DelTrap(Atom),
     /// The forward of one delete (`key`, its reason) to the target.
@@ -383,6 +385,22 @@ impl Model {
                 let ret = self.node_l("proxy-has-ret");
                 self.proxy_trap(p, "has", vec![t, k], ret);
                 self.cons(t, Cons::HasProp { key, idx });
+            }
+            // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
+            // key )`. ToPropertyDescriptor reads the returned object's fields
+            // by HasProperty / Get (6.2.6.5): program code on a value this
+            // model does not follow, so the result is sunk.
+            Cons::OwnProp { key, idx } => {
+                if self.proxy_made(p, ProxyOp::OwnProp(key, idx)) {
+                    return;
+                }
+                let t = self.proxies[p as usize].target;
+                let k = self.proxy_key_arg(key, idx);
+                let ret = self.node_l("proxy-gopd-ret");
+                let r = self.reason("Proxy getOwnPropertyDescriptor trap result");
+                self.sink_node(ret, r);
+                self.proxy_trap(p, "getOwnPropertyDescriptor", vec![t, k], ret);
+                self.cons(t, Cons::OwnProp { key, idx });
             }
             // [[Delete]] (10.5.10): trap `deleteProperty( t, key )`.
             Cons::DeleteKey { key, reason } => {

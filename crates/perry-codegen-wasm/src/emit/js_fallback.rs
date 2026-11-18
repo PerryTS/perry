@@ -409,14 +409,10 @@ impl WasmModuleEmitter {
                     } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
                         && matches!(property.as_str(), "log" | "warn" | "error") =>
                     {
-                        let args_js: Vec<String> = args_js
-                            .iter()
-                            .map(|a| format!("toJsValue({})", a))
-                            .collect();
                         format!(
                             "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
                             property,
-                            args_js.join(", ")
+                            host_args(&args_js)
                         )
                     }
                     Expr::PropertyGet {
@@ -427,16 +423,27 @@ impl WasmModuleEmitter {
                             "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
                             obj,
                             js_string_literal(property),
-                            args_js
-                                .iter()
-                                .map(|a| format!("toJsValue({})", a))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            host_args(&args_js)
                         )
                     }
+                    Expr::IndexGet { object, index, .. } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        let key = self.emit_js_expr(index, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), toJsValue({})), [{}]))",
+                            obj,
+                            key,
+                            host_args(&args_js)
+                        )
+                    }
+                    // A NaN-boxed callee: `__jsMethodInvoke` runs a Perry closure or a host function.
                     _ => {
                         let callee_js = self.emit_js_expr(callee, locals);
-                        format!("{}({})", callee_js, args_js.join(", "))
+                        format!(
+                            "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({}) }}, [{}]))",
+                            callee_js,
+                            host_args(&args_js)
+                        )
                     }
                 }
             }
@@ -913,9 +920,8 @@ impl WasmModuleEmitter {
                     );
                 }
                 // A user class, including the `__AnonShape_*` class of an object literal,
-                // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
-                // `{__class__}` object, whose tag is not enumerable) and run the compiled
-                // constructor, which returns `this`.
+                // has no JS constructor. Birth it as the WASM arm's `class_new` does
+                // (`__classInstance`) and run the compiled constructor, which returns `this`.
                 let instance = format!(
                     "fromJsValue(__classInstance({}))",
                     js_string_literal(class_name)
@@ -952,7 +958,7 @@ impl WasmModuleEmitter {
             }
             Expr::TypeOf(operand) => {
                 let o = self.emit_js_expr(operand, locals);
-                format!("fromJsValue(typeof toJsValue({}))", o)
+                format!("fromJsValue(__typeOf(toJsValue({})))", o)
             }
             Expr::Void(e) => {
                 let v = self.emit_js_expr(e, locals);
@@ -988,6 +994,15 @@ impl WasmModuleEmitter {
             },
         }
     }
+}
+
+/// NaN-boxed call arguments as a comma-separated list of JS values.
+fn host_args(args_js: &[String]) -> String {
+    args_js
+        .iter()
+        .map(|a| format!("toJsValue({})", a))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A double-quoted JS string literal holding exactly `s`.

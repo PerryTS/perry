@@ -95,9 +95,7 @@ impl<'a> FuncEmitCtx<'a> {
             }
             ("arrayRecordForBound", [mode, len, idx, step_call, state_set]) => {
                 self.emit_expr(func, state_set);
-                if self.expr_has_value(state_set) {
-                    func.instruction(&Instruction::Drop);
-                }
+                func.instruction(&Instruction::Drop);
                 let protocol = |ctx: &mut Self, func: &mut Function| {
                     ctx.emit_select(
                         func,
@@ -114,18 +112,14 @@ impl<'a> FuncEmitCtx<'a> {
             ("arrayRecordPayload", [_source, payload, clear]) => {
                 self.emit_expr(func, payload);
                 self.emit_expr(func, clear);
-                if self.expr_has_value(clear) {
-                    func.instruction(&Instruction::Drop);
-                }
+                func.instruction(&Instruction::Drop);
             }
             // The step runs before its output operand, which reads what it produced.
             ("iteratorStep", [iter, next, output, read @ ..]) => {
                 let read = read.first().cloned().unwrap_or(Expr::Bool(true));
                 self.emit_bridge(func, "rt_iteratorStep", &[iter.clone(), next.clone(), read]);
                 self.emit_expr(func, output);
-                if self.expr_has_value(output) {
-                    func.instruction(&Instruction::Drop);
-                }
+                func.instruction(&Instruction::Drop);
             }
             // The source of an object pattern, or a TypeError for a nullish one. The
             // second operand is a source offset for native `--debug-symbols` only.

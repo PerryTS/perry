@@ -199,3 +199,82 @@ fn native_dispatch_builtin_refuses_check_sabotage_and_incomplete_worlds() {
         );
     }
 }
+
+#[test]
+fn native_dispatch_map_needs_brand_and_exact_lookup() {
+    let source = "class H { table = new Map(); run() { this.table.clear(); } } new H().run();";
+    assert_named(source, "clear", false);
+    assert_named(
+        &format!("Map.prototype.clear = function() {{}}; {source}"),
+        "clear",
+        true,
+    );
+    assert_named("class H { table = new Map(); run() { this.table.clear = function() {}; this.table.clear(); } } new H().run();", "clear", true);
+}
+
+#[test]
+fn native_dispatch_fill_birth_requires_the_named_literal_allocation() {
+    assert_named(
+        "const a = new Array(8).fill(0); console.log(a.length);",
+        "fill",
+        false,
+    );
+    assert_named(
+        "class H { a = [1]; run() {this.a.fill(0);} } new H().run();",
+        "fill",
+        false,
+    );
+    assert_named("class H { a = [1]; run() {Object.defineProperty(this.a,'0',{set(v){console.log(v);}}); this.a.fill(0);} } new H().run();", "fill", true);
+}
+
+#[test]
+fn native_dispatch_string_protocol_inputs() {
+    assert_named(
+        "function f(s:string) { return s.charAt(1); } console.log(f('ab'));",
+        "charAt",
+        false,
+    );
+    assert_named("function f(s:string) { return s.charAt({valueOf() {return 1;}} as any); } console.log(f('ab'));", "charAt", true);
+}
+
+#[test]
+fn native_dispatch_math_abs_checks_the_transformed_fast_operand() {
+    use perry_hir::{Expr, Stmt};
+    for (result, redispatch) in [("7", false), ("{ valueOf() {return 7;} }", true)] {
+        let src = format!("function f() {{return {result};}} Math.abs(f() as any);");
+        let ast = perry_parser::parse_typescript(&src, "t.ts").unwrap();
+        let mut set = perry_hir::PatchedBuiltins::new();
+        set.namespace_pairs = true;
+        perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+        let hir = perry_hir::lower_module(&ast, "t", "t.ts");
+        perry_hir::clear_patched_builtins();
+        let mut hir = hir.unwrap();
+        let mut changed = false;
+        for s in &mut hir.init {
+            if let Stmt::Expr(Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            }) = s
+            {
+                if let (Expr::Call { args, .. }, Expr::MathAbs(_)) =
+                    (then_expr.as_mut(), else_expr.as_ref())
+                {
+                    args[0] = Expr::Integer(7);
+                    changed = true;
+                }
+            }
+        }
+        assert!(changed, "test must exercise the mismatched arms");
+        let cfg = FactsConfig {
+            namespace_pairs: true,
+            ..Default::default()
+        };
+        assert_named_facts(
+            compute(&[("t.ts".into(), &hir)], &cfg),
+            &src,
+            "abs",
+            redispatch,
+        );
+    }
+}
