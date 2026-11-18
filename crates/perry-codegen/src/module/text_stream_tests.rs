@@ -72,7 +72,10 @@ fn streamed_units_carry_cross_unit_inline_copies() {
     }
     let expected = module().render_codegen_units(2);
     let streamed: Vec<_> = module().into_codegen_unit_texts(2).collect();
-    assert_eq!(streamed, expected, "both text transports render the same units");
+    assert_eq!(
+        streamed, expected,
+        "both text transports render the same units"
+    );
     let caller = streamed
         .iter()
         .find(|u| u.contains("define double @perry_fn_m__caller("))
