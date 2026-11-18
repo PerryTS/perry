@@ -571,6 +571,19 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            Cons::NotRegExp { dst } => {
+                for &t in toks {
+                    if !self.is_regexp_tok(t) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
             Cons::FieldTruthy { key, test, dst } => {
                 // Rule G2: `x` where `x.key` was truthy; rule G1: where
                 // `x.key === b` (a Boolean constant) was decided. Reading `key` on
@@ -1000,9 +1013,27 @@ impl Model {
             }
             Cons::Implicit { reason, proto } => {
                 for &t in toks {
-                    crate::family_reach::dispatch_route(self, |m| {
-                        format!("the runtime's {proto:?} protocol on {}", m.tok_name(t))
-                    });
+                    // The uncaught report of a native Error (perry-runtime
+                    // exception.rs `print_uncaught`: `ptr_is_native_error`,
+                    // then `uncaught_native_error_report`) reads the stored
+                    // name, message and stack and returns: no property
+                    // lookup, no ToPrimitive, no program code. Every other
+                    // value and every other ToPrimitive keeps the request.
+                    if proto == Protocol::ToPrimitive
+                        && n == self.host_report
+                        && self.native_error_tok(t)
+                    {
+                        continue;
+                    }
+                    // JSON.stringify reads `toJSON` and the values itself
+                    // (json/stringify.rs: native_get, native_call_value_this):
+                    // the request is no route; each call it makes is bound
+                    // by `Model::implicit` and keeps its callee's.
+                    if proto != Protocol::Json {
+                        crate::family_reach::dispatch_route(self, |m| {
+                            format!("the runtime's {proto:?} protocol on {}", m.tok_name(t))
+                        });
+                    }
                     match self.toks[t as usize] {
                         // A function handed to a reflecting runtime helper:
                         // it may be called back with anything.

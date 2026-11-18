@@ -146,9 +146,13 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             if let Some(&p) = c.arg(0) {
                 let wk = collections::WK_PREFIX;
                 string_methods::read_only(m, p, &format!("{wk}match"));
-                string_methods::read_prim(m, p, "source", "RegExp pattern source ToString");
-                string_methods::read_prim(m, p, "flags", "RegExp pattern flags ToString");
-                string_methods::to_prim(m, p, "RegExp pattern ToString");
+                // Step 4: a pattern with [[RegExpMatcher]] gives its
+                // [[OriginalSource]] / [[OriginalFlags]] (`Cons::NotRegExp`).
+                let q = m.node_l("RegExp pattern");
+                m.cons(p, Cons::NotRegExp { dst: q });
+                string_methods::read_prim(m, q, "source", "RegExp pattern source ToString");
+                string_methods::read_prim(m, q, "flags", "RegExp pattern flags ToString");
+                string_methods::to_prim(m, q, "RegExp pattern ToString");
             }
             if let Some(&f) = c.arg(1) {
                 string_methods::to_prim(m, f, "RegExp flags ToString");

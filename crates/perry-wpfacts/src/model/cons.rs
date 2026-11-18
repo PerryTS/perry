@@ -314,6 +314,13 @@ pub enum Cons {
     /// primitive pass. The binding's other values pass all (a `Guard`,
     /// `guard::NOT_BUFFER_CTOR`, on the read of the global).
     NotBuffer { shared: bool, dst: NodeId },
+    /// The pattern operand of the RegExp constructor as ECMA-262 22.2.4.1
+    /// steps 4-6 convert it: an object with a [[RegExpMatcher]] slot gives
+    /// its [[OriginalSource]] and [[OriginalFlags]] (no `source`/`flags`
+    /// Get, no ToString). Every value but a token of the RegExp family
+    /// (a literal's or a constructor's birth, the objects with that slot)
+    /// flows into `dst`: other objects, ⊤, markers and every primitive.
+    NotRegExp { dst: NodeId },
     /// A value given as a prototype (`__proto__` store, `setPrototypeOf`,
     /// `Object.create`): dst ⊇ the node's objects (⊤ included) and `null`.
     /// No other primitive is ever one: the `__proto__` setter ignores it
@@ -940,6 +947,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::TypeIs { .. }
@@ -965,6 +973,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::TypeIs { .. }
@@ -1016,6 +1025,7 @@ impl Cons {
             Cons::NotNull { .. } => "notnull",
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
+            Cons::NotRegExp { .. } => "notregexp",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",
             Cons::Hard { .. } => "hard",
