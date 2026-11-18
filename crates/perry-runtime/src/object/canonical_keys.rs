@@ -109,7 +109,6 @@ use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
 
-pub(crate) mod snap_image;
 pub(crate) mod static_seed;
 pub(crate) use static_seed::from_static_layout;
 pub(crate) use static_seed::link_image_list;
@@ -1878,6 +1877,8 @@ pub(crate) fn take_unique_run(keys: crate::object::ObjectKeys) -> u32 {
 
 mod stats;
 mod views;
+
+pub(crate) mod snap_image;
 
 pub(crate) use stats::{
     canonical_element_words, canonical_stats, canonical_storage_stats, canonical_trie_stats,
