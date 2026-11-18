@@ -20,11 +20,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use taffy::prelude::{auto, length, percent};
+use taffy::compute_leaf_layout;
+use taffy::prelude::{auto, length, percent, FromLength, FromPercent, TaffyAuto};
 use taffy::{
-    AlignContent, AlignItems, AvailableSpace, Dimension, Display, FlexDirection, FlexWrap,
-    JustifyContent, Layout, LengthPercentage, LengthPercentageAuto, NodeId, Overflow, Point,
-    Position, Rect, Size, Style, TaffyTree,
+    AlignContent, AlignItems, AvailableSpace, Display, FlexDirection, FlexWrap, JustifyContent,
+    Layout, LengthPercentage, LengthPercentageAuto, NodeId, Overflow, Point, Position, Rect, Size,
+    Style, TaffyTree,
 };
 
 use crate::value::{POINTER_MASK, POINTER_TAG, TAG_UNDEFINED};
@@ -105,8 +106,10 @@ impl YogaNode {
         YogaNode {
             style: Style {
                 // yoga defaults to flex-direction: column, position: relative.
+                // Taffy defaults to `position: static`, which ignores insets.
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
+                position: Position::Relative,
                 ..Default::default()
             },
             children: Vec::new(),
@@ -163,7 +166,7 @@ fn yoga_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 // ---------------------------------------------------------------------------
 
 #[inline]
-fn dim(value: f32, unit: u32) -> Dimension {
+fn dim<T: FromLength + FromPercent + TaffyAuto>(value: f32, unit: u32) -> T {
     match unit {
         U_POINT => length(value),
         U_PERCENT => percent(value / 100.0),
@@ -448,10 +451,12 @@ pub extern "C" fn js_yoga_set_enum(id: f64, prop: f64, value: f64) -> f64 {
             let s = &mut node.style;
             match prop {
                 EN_FLEX_DIRECTION => s.flex_direction = map_flex_direction(v),
-                EN_JUSTIFY => s.justify_content = map_justify(v),
-                EN_ALIGN_ITEMS => s.align_items = map_align(v),
+                EN_JUSTIFY => s.justify_content = map_justify(v).unwrap_or(JustifyContent::NORMAL),
+                EN_ALIGN_ITEMS => s.align_items = map_align(v).unwrap_or(AlignItems::NORMAL),
                 EN_ALIGN_SELF => s.align_self = map_align(v),
-                EN_ALIGN_CONTENT => s.align_content = map_align_content(v),
+                EN_ALIGN_CONTENT => {
+                    s.align_content = map_align_content(v).unwrap_or(AlignContent::NORMAL)
+                }
                 EN_FLEX_WRAP => {
                     s.flex_wrap = match v {
                         1 => FlexWrap::Wrap,
@@ -535,28 +540,35 @@ pub extern "C" fn js_yoga_calculate_layout(
     let _ = taffy.compute_layout_with_measure(
         root_taffy,
         avail,
-        |known_dims, available_space, _node_id, node_context, _style| {
-            // Re-read the callback from the registry on EVERY call rather than
-            // from a snapshot taken in phase 1. `yoga_root_scanner` visits
-            // `node.measure` with `visit_nanbox_f64_slot(&mut ...)`, so an
-            // evacuating cycle rewrites the registry's copy in place; a
-            // snapshot in a plain `HashMap<u32, f64>` is visited by nothing and
-            // rewritten by nothing. One measure callback that allocated enough
-            // to trigger a copying minor therefore left every later callback in
-            // the same layout pass pointing into from-space.
-            //
-            // The borrow ends before `measure_leaf` runs, which matters:
-            // `measure_leaf` re-enters JS, and that JS may call yoga functions
-            // that borrow the registry again (`with_nodes` uses `borrow_mut`).
-            let cb = node_context.and_then(|yid| {
-                let handle = *yid;
-                with_nodes(|m| {
-                    m.get(&handle)
-                        .map(|n| n.measure)
-                        .filter(|mv| (mv.to_bits() & !POINTER_MASK) == POINTER_TAG)
-                })
-            });
-            measure_leaf(known_dims, available_space, cb)
+        |inputs, _node_id, node_context, style| {
+            let handle = node_context.map(|yid| *yid);
+            compute_leaf_layout(
+                inputs,
+                style,
+                |_, _| 0.0,
+                |known_dims, available_space| {
+                    // Re-read the callback from the registry on EVERY call rather than
+                    // from a snapshot taken in phase 1. `yoga_root_scanner` visits
+                    // `node.measure` with `visit_nanbox_f64_slot(&mut ...)`, so an
+                    // evacuating cycle rewrites the registry's copy in place; a
+                    // snapshot in a plain `HashMap<u32, f64>` is visited by nothing and
+                    // rewritten by nothing. One measure callback that allocated enough
+                    // to trigger a copying minor therefore left every later callback in
+                    // the same layout pass pointing into from-space.
+                    //
+                    // The borrow ends before `measure_leaf` runs, which matters:
+                    // `measure_leaf` re-enters JS, and that JS may call yoga functions
+                    // that borrow the registry again (`with_nodes` uses `borrow_mut`).
+                    let cb = handle.and_then(|handle| {
+                        with_nodes(|m| {
+                            m.get(&handle)
+                                .map(|n| n.measure)
+                                .filter(|mv| (mv.to_bits() & !POINTER_MASK) == POINTER_TAG)
+                        })
+                    });
+                    measure_leaf(known_dims, available_space, cb)
+                },
+            )
         },
     );
 
@@ -783,7 +795,6 @@ keep!(KEEP_YOGA_13: extern "C" fn(f64, f64, f64) -> f64 = js_yoga_get_computed_e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taffy::AlignmentSafety;
 
     #[test]
     fn alignment_mappings_keep_yogas_unsafe_overflow_behavior() {
@@ -802,7 +813,7 @@ mod tests {
             map_align_content(7),
             map_align_content(8),
         ] {
-            assert_eq!(alignment.unwrap().safety, AlignmentSafety::Unsafe);
+            assert!(!alignment.unwrap().is_safe());
         }
 
         for alignment in [
@@ -812,7 +823,7 @@ mod tests {
             map_align(4),
             map_align(5),
         ] {
-            assert_eq!(alignment.unwrap().safety, AlignmentSafety::Unsafe);
+            assert!(!alignment.unwrap().is_safe());
         }
     }
 
@@ -830,5 +841,76 @@ mod tests {
 
         std::thread::spawn(|| exercise_thread(1)).join().unwrap();
         std::thread::spawn(|| exercise_thread(2)).join().unwrap();
+    }
+
+    fn sized_node(w: f64, h: f64) -> f64 {
+        let n = js_yoga_node_new();
+        if w >= 0.0 {
+            js_yoga_set_number(n, P_WIDTH as f64, w, U_POINT as f64);
+        }
+        if h >= 0.0 {
+            js_yoga_set_number(n, P_HEIGHT as f64, h, U_POINT as f64);
+        }
+        n
+    }
+
+    fn computed(n: f64, field: u32) -> f64 {
+        js_yoga_get_computed(n, field as f64)
+    }
+
+    /// Yoga nodes are `relative` by default, so an inset moves a node that
+    /// never set a position type. Taffy's own default is `static`, which
+    /// ignores insets.
+    #[test]
+    fn insets_apply_without_an_explicit_position_type() {
+        let root = sized_node(100.0, 100.0);
+        let child = sized_node(20.0, 20.0);
+        js_yoga_insert_child(root, child, 0.0);
+        js_yoga_set_edge(
+            child,
+            E_POSITION as f64,
+            EDGE_LEFT as f64,
+            7.0,
+            U_POINT as f64,
+        );
+        js_yoga_set_edge(
+            child,
+            E_POSITION as f64,
+            EDGE_TOP as f64,
+            5.0,
+            U_POINT as f64,
+        );
+        js_yoga_calculate_layout(root, f64::NAN, f64::NAN, 0.0);
+        assert_eq!(
+            (computed(child, C_LEFT), computed(child, C_TOP)),
+            (7.0, 5.0)
+        );
+    }
+
+    /// Taffy matches `stretch` by comparing the whole alignment value, safety
+    /// included, so the mappings must produce taffy's own `STRETCH`.
+    #[test]
+    fn stretch_alignment_stretches_items_and_lines() {
+        let row = sized_node(50.0, 40.0);
+        js_yoga_set_enum(row, EN_FLEX_DIRECTION as f64, 2.0);
+        js_yoga_set_enum(row, EN_ALIGN_ITEMS as f64, 4.0);
+        let item = sized_node(10.0, -1.0);
+        js_yoga_insert_child(row, item, 0.0);
+        js_yoga_calculate_layout(row, f64::NAN, f64::NAN, 0.0);
+        assert_eq!(computed(item, C_HEIGHT), 40.0);
+
+        let wrap = sized_node(60.0, 80.0);
+        js_yoga_set_enum(wrap, EN_FLEX_DIRECTION as f64, 2.0);
+        js_yoga_set_enum(wrap, EN_FLEX_WRAP as f64, 1.0);
+        js_yoga_set_enum(wrap, EN_ALIGN_CONTENT as f64, 4.0);
+        let mut items = Vec::new();
+        for i in 0..3 {
+            let n = sized_node(40.0, 10.0);
+            js_yoga_insert_child(wrap, n, i as f64);
+            items.push(n);
+        }
+        js_yoga_calculate_layout(wrap, f64::NAN, f64::NAN, 0.0);
+        let tops: Vec<f64> = items.iter().map(|n| computed(*n, C_TOP)).collect();
+        assert_eq!(tops, [0.0, 80.0 / 3.0, 160.0 / 3.0].map(f64::round));
     }
 }

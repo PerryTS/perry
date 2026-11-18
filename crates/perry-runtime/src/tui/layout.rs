@@ -135,17 +135,17 @@ fn box_style_to_taffy(s: &BoxStyle) -> Style {
         FlexDirection::Column => taffy::FlexDirection::Column,
     };
     let justify = match s.justify_content {
-        JustifyContent::Start => Some(taffy::JustifyContent::START),
-        JustifyContent::Center => Some(taffy::JustifyContent::CENTER),
-        JustifyContent::End => Some(taffy::JustifyContent::END),
-        JustifyContent::SpaceBetween => Some(taffy::JustifyContent::SPACE_BETWEEN),
-        JustifyContent::SpaceAround => Some(taffy::JustifyContent::SPACE_AROUND),
+        JustifyContent::Start => taffy::JustifyContent::START,
+        JustifyContent::Center => taffy::JustifyContent::CENTER,
+        JustifyContent::End => taffy::JustifyContent::END,
+        JustifyContent::SpaceBetween => taffy::JustifyContent::SPACE_BETWEEN,
+        JustifyContent::SpaceAround => taffy::JustifyContent::SPACE_AROUND,
     };
     let align = match s.align_items {
-        AlignItems::Start => Some(taffy::AlignItems::START),
-        AlignItems::Center => Some(taffy::AlignItems::CENTER),
-        AlignItems::End => Some(taffy::AlignItems::END),
-        AlignItems::Stretch => Some(taffy::AlignItems::STRETCH),
+        AlignItems::Start => taffy::AlignItems::START,
+        AlignItems::Center => taffy::AlignItems::CENTER,
+        AlignItems::End => taffy::AlignItems::END,
+        AlignItems::Stretch => taffy::AlignItems::STRETCH,
     };
     Style {
         display: Display::Flex,
