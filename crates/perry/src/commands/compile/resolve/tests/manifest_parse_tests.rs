@@ -159,6 +159,53 @@ fn native_abi_descriptors_parse_strings_and_structured_forms() {
 }
 
 #[test]
+fn buffer_len_descriptor_parses_nullable_and_rejects_unknown_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let parsed = parse_manifest_from_functions(
+        dir.path(),
+        serde_json::json!([{
+            "name": "spans",
+            "params": [
+                "buffer+len",
+                { "kind": "buffer+len" },
+                { "kind": "buffer+len", "nullable": false },
+                { "kind": "buffer+len", "nullable": true }
+            ],
+            "returns": "void"
+        }]),
+    )
+    .expect("manifest parses")
+    .expect("manifest present");
+    let params = &parsed.functions[0].params;
+    let nullable: Vec<bool> = params
+        .iter()
+        .map(|p| match p {
+            NativeAbiType::BufferAndLen { nullable } => *nullable,
+            other => panic!("expected buffer+len, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(nullable, vec![false, false, false, true]);
+    // The object cache keys native signatures by this text: the two forms
+    // lower to different guards, so they must not render alike.
+    assert_eq!(params[0].to_string(), "buffer+len");
+    assert_eq!(params[3].to_string(), "buffer+len?");
+    assert_eq!(params[3].canonical_kind(), "buffer+len");
+
+    let err = parse_manifest_error(serde_json::json!({
+        "name": "bad",
+        "params": [{ "kind": "buffer+len", "nullable": "yes" }],
+        "returns": "void"
+    }));
+    assert!(err.contains("`nullable` must be a boolean"), "{err}");
+    let err = parse_manifest_error(serde_json::json!({
+        "name": "bad",
+        "params": [{ "kind": "buffer+len", "elementSize": 4 }],
+        "returns": "void"
+    }));
+    assert!(err.contains("unknown buffer+len descriptor field `elementSize`"), "{err}");
+}
+
+#[test]
 fn native_async_promise_return_parses_completion_metadata() {
     let dir = tempfile::tempdir().expect("tempdir");
     let parsed = parse_manifest_from_functions(
