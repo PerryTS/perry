@@ -331,6 +331,7 @@ pub(crate) use spill::{
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
+pub(crate) mod typed_array_chain;
 mod typed_array_define;
 pub(crate) mod typed_array_proto_thunks;
 mod util_types;
