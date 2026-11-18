@@ -310,10 +310,8 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     );
 }
 
-/// #12135: on a minor, an owner's physical generation decides, not its
-/// TENURED flag. An object can be TENURED while it still sits in a nursery
-/// block, and the minor sweep frees it there if unmarked; keeping its entry
-/// would hand it to the next object at that address.
+/// On a minor, an owner's physical generation decides, not its TENURED flag:
+/// a TENURED object can still sit in a nursery block the minor sweep frees (#12135).
 #[test]
 fn tenured_owner_still_in_the_nursery_is_pruned_on_a_minor() {
     let _serialized = crate::array::test_serialize();
