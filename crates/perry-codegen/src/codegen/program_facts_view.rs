@@ -659,10 +659,16 @@ pub struct ElisionFacts {
     /// symbol, named from the holder's own module and class (the module that
     /// defines the class emits it; any other module declares it), not from
     /// this module's class table.
-    pub accessor_sets: std::collections::BTreeMap<(u32, String), (u32, String)>,
+    /// The flag is `nullable` (COVER3): the receiver can also be
+    /// `undefined` / `null` (never another primitive), so the site keeps its
+    /// one receiver test, whose nullish edge is the complete [[Set]] (it
+    /// throws the TypeError after the value was evaluated, 13.15.2).
+    pub accessor_sets: std::collections::BTreeMap<(u32, String), (u32, String, bool)>,
     /// The same for named reads (and a compound's GetValue) whose verdict is
     /// `Verdict::AccessorGet`: the class holding the one getter (10.1.8.1).
-    pub accessor_gets: std::collections::BTreeMap<(u32, String), (u32, String)>,
+    /// `nullable` as for `accessor_sets`; the nullish edge is the complete
+    /// [[Get]], whose ToObject throws the TypeError (6.2.5.5, 7.1.18).
+    pub accessor_gets: std::collections::BTreeMap<(u32, String), (u32, String, bool)>,
     /// ONCHANGE2: this module's named method calls whose verdict is
     /// `Verdict::T0Mono` / `T0Set` with one callee body and a holder class: every receiver is an object
     /// (never a primitive, never ⊤) and the key's value at every receiver is

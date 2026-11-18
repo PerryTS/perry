@@ -172,12 +172,19 @@ pub(crate) fn try_lower_proven_setter(
     value: &Expr,
     offset: u32,
 ) -> Result<Option<String>> {
-    let Some(fn_name) =
+    let Some((fn_name, nullable)) =
         super::wpfacts_access::proven_accessor_fn(ctx, object, property, offset, true)
     else {
         return Ok(None);
     };
+    let strict = ctx.is_strict_fn;
     with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
+        // COVER3: the receiver can also be `undefined` / `null`: the one
+        // test sends it to the complete [[Set]], which throws the TypeError
+        // after the value was evaluated (13.15.2); the setter never runs.
+        if nullable {
+            emit_nullish_store_test(ctx, object, property, &recv_box, &val_double, strict);
+        }
         super::store_census::bump(ctx, super::store_census::CFIELD_SETTER);
         let _ = ctx.block().call(
             DOUBLE,
@@ -187,6 +194,49 @@ pub(crate) fn try_lower_proven_setter(
         Ok(val_double)
     })
     .map(Some)
+}
+
+/// CLS D3 / COVER3: the one receiver test of a proven store whose receiver
+/// is an object or `undefined` / `null`. The nullish edge is the complete
+/// [[Set]] (`js_put_value_set`), whose ToObject throws the TypeError
+/// (6.2.5.6 step 3.a) after the value was evaluated (13.15.2), so it never
+/// returns: the arm ends in `unreachable`. Leaves the current block on the
+/// object edge, where later accesses of the binding need no test.
+fn emit_nullish_store_test(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    recv_box: &str,
+    val_double: &str,
+    strict: bool,
+) {
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    let hit_idx = ctx.new_block("wpf.set.obj");
+    let miss_idx = ctx.new_block("wpf.set.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let _ = blk.call(
+        DOUBLE,
+        "js_put_value_set",
+        &[
+            (DOUBLE, recv_box),
+            (DOUBLE, &key_box),
+            (DOUBLE, val_double),
+            (DOUBLE, recv_box),
+            (I32, if strict { "1" } else { "0" }),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    super::wpfacts_access::note_tested(ctx, object);
 }
 
 fn lower_runtime_property_set_by_name(
@@ -1128,31 +1178,7 @@ fn emit_proven_class_field_store(
         // `[[Set]]`, which throws (after the value was evaluated, as the
         // specification orders it); a passing receiver stores into the slot.
         if wpf.is_some_and(|w| w.proof.nullable) {
-            let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-            let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-            let hit_idx = ctx.new_block("wpf.set.obj");
-            let miss_idx = ctx.new_block("wpf.set.nullish");
-            let hit_label = ctx.block_label(hit_idx);
-            let miss_label = ctx.block_label(miss_idx);
-            ctx.block()
-                .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
-            ctx.current_block = miss_idx;
-            let blk = ctx.block();
-            let key_box = blk.load(DOUBLE, &key_handle_global);
-            let _ = blk.call(
-                DOUBLE,
-                "js_put_value_set",
-                &[
-                    (DOUBLE, &recv_box),
-                    (DOUBLE, &key_box),
-                    (DOUBLE, &val_double),
-                    (DOUBLE, &recv_box),
-                    (I32, if strict { "1" } else { "0" }),
-                ],
-            );
-            blk.unreachable();
-            ctx.current_block = hit_idx;
-            super::wpfacts_access::note_tested(ctx, object);
+            emit_nullish_store_test(ctx, object, property, &recv_box, &val_double, strict);
         }
         let site_id = emit_typed_feedback_register_site(
             ctx,

@@ -1677,15 +1677,17 @@ mod tests;
 /// receiver's chain ends at one accessor property of the holder class's
 /// prototype with exactly one setter (`set`) or getter, so [[Set]] / [[Get]]
 /// call it with the receiver as `this` (10.1.9.2 step 3, 10.1.8.1). The call
-/// is direct: no guard, no fallback beside it. `None`: the site keeps its
-/// ordinary lowering.
+/// is direct, with no fallback beside it. The flag is `nullable` (COVER3):
+/// the receiver can also be `undefined` / `null`, and the caller keeps the
+/// one receiver test whose nullish edge is the complete operation (it
+/// throws). `None`: the site keeps its ordinary lowering.
 pub(crate) fn proven_accessor_fn(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     offset: u32,
     set: bool,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     // A scalar-replaced receiver is no object (`scalar_receiver`): its
     // accesses are the frame slots' own, never a call with a `this`.
     if ctx.wpfacts_off
@@ -1701,7 +1703,7 @@ pub(crate) fn proven_accessor_fn(
     } else {
         &ctx.wpfacts.accessor_gets
     };
-    let (cid, symbol) = map.get(&(offset, property.to_string()))?.clone();
+    let (cid, symbol, nullable) = map.get(&(offset, property.to_string()))?.clone();
     let prefix = if set { "__set_" } else { "__get_" };
     let member = format!("{prefix}{property}");
     // The symbol is the holder module's own (`program_facts.rs`
@@ -1745,7 +1747,7 @@ pub(crate) fn proven_accessor_fn(
         };
         ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
     }
-    Some(symbol)
+    Some((symbol, nullable))
 }
 
 /// ONCHANGE2: the method body a named call `object.property( ... )` at
@@ -1860,15 +1862,21 @@ pub(crate) fn proven_method_fn(
 
 /// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's
 /// direct call with the receiver as `this`; its result is the read's value.
+/// COVER3: a receiver that can be `undefined` / `null` keeps the one
+/// receiver test; its nullish edge is the complete [[Get]], whose ToObject
+/// throws the TypeError (6.2.5.5, 7.1.18) before any getter runs.
 pub(crate) fn try_lower_proven_getter(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     offset: u32,
 ) -> Result<Option<String>> {
-    let Some(fn_name) = proven_accessor_fn(ctx, object, property, offset, false) else {
+    let Some((fn_name, nullable)) = proven_accessor_fn(ctx, object, property, offset, false) else {
         return Ok(None);
     };
     let recv = lower_expr(ctx, object)?;
+    if nullable && !tested_in_block(ctx, object) {
+        emit_nullish_throw_test(ctx, object, &recv, property, offset, None);
+    }
     Ok(Some(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv)])))
 }
