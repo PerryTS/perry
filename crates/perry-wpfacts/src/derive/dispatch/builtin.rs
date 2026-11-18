@@ -166,6 +166,7 @@ fn module(hir: &Module, f: &mut impl FnMut(&Expr)) {
 pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConfig) {
     use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
     let args = arguments(g);
+    let mut strings = std::collections::HashSet::new();
     let mut maps = std::collections::HashSet::new();
     // Console subscribers can rewrite the formatter's input array. The
     // manifest's thread family owns diagnostics_channel and its producers.
@@ -222,7 +223,22 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                         && perry_hir::folded_call::fill_birth_value(call, len)
                             .is_some_and(|v| matches!(v, Expr::Integer(_) | Expr::Number(_)))
                 });
-            let safe = (map || fill) && selected
+            let string = namespace.is_none()
+                && !spread
+                && perry_hir::folded_call::direct_string_call(callee, arity)
+                && (arity == 0
+                    || args.get(&at).and_then(Option::as_ref).is_some_and(|p| {
+                        p.as_slice()
+                            == [if property == "indexOf" {
+                                prim::STR
+                            } else {
+                                prim::NUM
+                            }]
+                    }));
+            if string {
+                strings.insert((at, property.clone()));
+            }
+            let safe = (map || fill || string) && selected
                 || selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;
@@ -269,6 +285,35 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             .entry(((s.module, s.byte_offset), s.key.clone()))
             .or_insert(false) &=
             s.access == Access::Read && !s.top && (s.verdict == Verdict::NativeMember || exact);
+    }
+    for ((mi, offset), key) in strings {
+        let at = ((mi, offset), key.clone());
+        let mut twins = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && (s.module, s.byte_offset) == (mi, offset) && s.key == key)
+            .peekable();
+        if certified.get(&at) == Some(&true)
+            && twins.peek().is_some()
+            && twins.all(|s| {
+                s.verdict == Verdict::NativeMember
+                    && s.receiver_prims == prim::STR
+                    && s.receiver_values.is_empty()
+            })
+        {
+            let sites = &mut pf.bindings[mi as usize].method_sites;
+            use perry_hir::folded_call::SITE_DIRECT_STRING;
+            if let Some((_, _, flags)) = sites
+                .iter_mut()
+                .find(|(s, k, _)| *s == Site::Callee(offset) && *k == key)
+            {
+                *flags |= SITE_DIRECT_STRING;
+            } else {
+                sites.push((Site::Callee(offset), key, SITE_DIRECT_STRING));
+            }
+        } else {
+            certified.insert(at, false);
+        }
     }
     for ((mi, offset), key) in maps {
         let at = ((mi, offset), key.clone());

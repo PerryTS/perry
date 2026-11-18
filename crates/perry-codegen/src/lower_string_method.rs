@@ -102,6 +102,45 @@ pub(crate) fn lower_string_method(
     property: &str,
     args: &[Expr],
 ) -> Result<String> {
+    lower_string_method_with_proof(ctx, object, property, args, None)
+}
+
+pub(crate) fn try_lower_certified_string(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    use perry_hir::folded_call::{direct_string_call, Site, SITE_DIRECT_STRING};
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    if ctx.wpfacts_off
+        || !direct_string_call(callee, args.len())
+        || !ctx
+            .wpfacts
+            .method_sites
+            .get(&(Site::Callee(*byte_offset), property.clone()))
+            .is_some_and(|flags| flags & SITE_DIRECT_STRING != 0)
+    {
+        return Ok(None);
+    }
+    debug_assert!(ctx.wpfacts.native_member_calls.contains(byte_offset));
+    lower_string_method_with_proof(ctx, object, property, args, Some(StringProof::Proven)).map(Some)
+}
+
+fn lower_string_method_with_proof(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    proof: Option<StringProof>,
+) -> Result<String> {
     // A scalar-replaced uppercase local is only admitted when all reads are
     // covered by fused operations. Preserve the source value in its own slot
     // and perform `toUpperCase().indexOf("literal")` without allocating the
@@ -129,7 +168,7 @@ pub(crate) fn lower_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    let proof = string_proof_for(ctx, property, args);
+    let proof = proof.unwrap_or_else(|| string_proof_for(ctx, property, args));
     lower_string_method_from_box(ctx, object, property, args, recv_box, proof)
 }
 

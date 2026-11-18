@@ -69,6 +69,15 @@ pub const SITE_SET: u8 = 8;
 /// A named call whose receiver, member lookup and call form admit the direct Map entry.
 pub const SITE_DIRECT_MAP: u8 = 16;
 
+/// A named primitive String operation whose operand protocols have been discharged.
+pub const SITE_DIRECT_STRING: u8 = 32;
+
+pub fn direct_string_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("charAt" | "charCodeAt" | "indexOf", 1) | ("trim" | "toUpperCase" | "toLowerCase", 0)))
+}
+
 pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
     matches!(callee, Expr::PropertyGet { object, property, byte_offset, byte_end, .. }
         if *byte_offset != 0 && byte_end > byte_offset

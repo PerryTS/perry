@@ -599,6 +599,10 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(value) = property_get::try_lower_certified_map(ctx, callee, args)? {
         return Ok(value);
     }
+    if let Some(value) = crate::lower_string_method::try_lower_certified_string(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
     // b1: a call the facts prove a field element read is that read.
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);

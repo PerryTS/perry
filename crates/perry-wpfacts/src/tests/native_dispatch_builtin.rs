@@ -221,3 +221,13 @@ fn native_dispatch_fill_birth_requires_the_named_literal_allocation() {
     );
     assert_named("const a = [1]; a.fill(0);", "fill", true);
 }
+
+#[test]
+fn native_dispatch_string_protocol_inputs() {
+    assert_named(
+        "function f(s:string) { return s.charAt(1); } console.log(f('ab'));",
+        "charAt",
+        false,
+    );
+    assert_named("function f(s:string) { return s.charAt({valueOf() {return 1;}} as any); } console.log(f('ab'));", "charAt", true);
+}
