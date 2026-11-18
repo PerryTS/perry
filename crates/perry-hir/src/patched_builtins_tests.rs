@@ -48,7 +48,9 @@ fn scans_member_writes_on_namespaces() {
     assert!(s.contains(&pair("Number", "isNaN")));
     assert_array_iteration_facts(&s, &["elements", "write"]);
     assert_eq!(
-        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        s.iter()
+            .filter(|(ns, _)| ns != ARRAY_ITERATION && ns != NS_ESCAPED)
+            .count(),
         5,
         "{s:?}"
     );
@@ -402,7 +404,9 @@ fn scans_member_writes_through_a_namespace_alias() {
     assert!(s.contains(&pair("console", "info")), "{s:?}");
     assert_array_iteration_facts(&s, &["write"]);
     assert_eq!(
-        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        s.iter()
+            .filter(|(ns, _)| ns != ARRAY_ITERATION && ns != NS_ESCAPED)
+            .count(),
         2,
         "{s:?}"
     );
@@ -500,4 +504,132 @@ fn unreachable_namespace_call_has_no_guard() {
     let m = lower_with_patches("const r = Math.max(1, 2); const t = typeof JSON.parse;");
     assert!(!init_of(&m, 0).contains("NamespacePatched"));
     assert_eq!(init_of(&m, 1), "String(\"function\")");
+}
+
+/// The `Expr` statement at `idx` of the module init.
+fn expr_stmt_of(module: &crate::Module, idx: usize) -> String {
+    let exprs: Vec<_> = module
+        .init
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Expr(e) => Some(e),
+            _ => None,
+        })
+        .collect();
+    format!("{:?}", exprs[idx])
+}
+
+#[test]
+fn scans_global_function_rebinds() {
+    let s = scan(
+        r#"
+        (globalThis as any).setTimeout = (f: any) => 0;
+        global.setInterval = (f: any) => 0;
+        Object.defineProperty(globalThis, "clearTimeout", { value: () => {} });
+        Object.assign(globalThis, { queueMicrotask() {} });
+        setImmediate = (f: any) => 0;
+        const g = globalThis as any;
+        g.clearImmediate = () => {};
+        "#,
+    );
+    for name in [
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "queueMicrotask",
+        "setImmediate",
+        "clearImmediate",
+    ] {
+        assert!(s.contains(&pair(GLOBAL_FUNCTION, name)), "{name}: {s:?}");
+    }
+    assert!(
+        !s.contains(&pair(GLOBAL_FUNCTION, "clearInterval")),
+        "{s:?}"
+    );
+    // A read, or a store onto an ordinary object, rebinds nothing.
+    let s = scan("const t = globalThis.setTimeout; const o: any = {}; o.setTimeout = t;");
+    assert!(!s.iter().any(|(ns, _)| ns == GLOBAL_FUNCTION), "{s:?}");
+}
+
+#[test]
+fn rebound_timer_call_reads_the_global_binding() {
+    let m = lower_with_patches(
+        r#"
+        const orig = globalThis.setTimeout;
+        (globalThis as any).setTimeout = (f: any, ms: any) => orig(f, ms);
+        setTimeout(() => {}, 1);
+        setInterval(() => {}, 1);
+        queueMicrotask(() => {});
+        "#,
+    );
+    // Statement 0 is the store itself.
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        call.starts_with("Call { callee: PropertyGet {")
+            && call.contains("object: GlobalGet(0), property: \"setTimeout\""),
+        "rebound setTimeout reads the binding: {call}"
+    );
+    let untouched = expr_stmt_of(&m, 2);
+    assert!(
+        untouched.contains("ExternFuncRef { name: \"setInterval\""),
+        "unwritten sibling keeps the direct call: {untouched}"
+    );
+    let micro = expr_stmt_of(&m, 3);
+    assert!(micro.starts_with("QueueMicrotask("), "{micro}");
+}
+
+#[test]
+fn rebound_queue_microtask_call_reads_the_global_binding() {
+    let m = lower_with_patches(
+        r#"
+        globalThis.queueMicrotask = (f: any) => {};
+        queueMicrotask(() => {});
+        "#,
+    );
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        !call.starts_with("QueueMicrotask(") && call.contains("property: \"queueMicrotask\""),
+        "{call}"
+    );
+}
+
+#[test]
+fn unwritten_program_keeps_direct_timer_calls() {
+    let m = lower_with_patches(
+        r#"
+        setTimeout(() => {}, 1);
+        clearTimeout(0 as any);
+        queueMicrotask(() => {});
+        const k = typeof setTimeout;
+        "#,
+    );
+    let call = expr_stmt_of(&m, 0);
+    assert!(
+        call.contains("ExternFuncRef { name: \"setTimeout\""),
+        "{call}"
+    );
+    let clear = expr_stmt_of(&m, 1);
+    assert!(
+        clear.contains("ExternFuncRef { name: \"clearTimeout\""),
+        "{clear}"
+    );
+    assert!(expr_stmt_of(&m, 2).starts_with("QueueMicrotask("));
+    assert_eq!(init_of(&m, 0), "String(\"function\")");
+}
+
+#[test]
+fn non_static_global_store_rebinds_timers() {
+    let m = lower_with_patches(
+        r#"
+        const k: any = process.argv[2];
+        (globalThis as any)[k] = () => 0;
+        setTimeout(() => {}, 1);
+        "#,
+    );
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        call.contains("property: \"setTimeout\"")
+            && !call.contains("ExternFuncRef { name: \"setTimeout\""),
+        "{call}"
+    );
 }
