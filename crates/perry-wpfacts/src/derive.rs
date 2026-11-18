@@ -3261,6 +3261,11 @@ fn judge_store(
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }
+            // BIRTH1 rule GS: a program-owned key of the global object.
+            _ if global_user_sets(m, t, key, s.key) => {
+                receivers.push(m.tok_name(t));
+                sets += 1;
+            }
             // R9STORE5 (i): a builtin function value or an Array.
             _ if builtin_store_sets(m, t, key, s.key) => {
                 receivers.push(m.tok_name(t));
@@ -3443,6 +3448,43 @@ fn builtin_store_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
     };
     builtin_chain_plain(m, key, a) && (crate::builtins::builtin_value_sets(m, t, a) || array())
+}
+
+/// BIRTH1 rule GS: a named store of `key` (atom `a`) onto the global
+/// object `t` (`globalThis.k = v`, `g["k"] = v` with `g` the global object)
+/// where `key` is a program-owned global (`global_user_key`: neither the
+/// realm's `%Global%` declarations nor `Object.prototype` list it) adds or
+/// overwrites an own data property and runs no user code. The global
+/// object is an ordinary extensible object (ECMA-262 19, 9.1.1.4); 10.1.9.2
+/// OrdinarySetWithOwnDescriptor: its own `key`, if any, is a writable data
+/// property, since only program stores make it (the solver models each as
+/// the global's field, `solve/store.rs`, while `native_written` is false:
+/// no store into ⊤ and no unknown writer names the key; in whole-program
+/// mode an escaped global records no any-key write, owner decision
+/// 2026-11-18, closed world 11-14) and no accessor, definition, freeze,
+/// seal or preventExtensions reaches it (`accessors`, `accessor_keys`,
+/// `hard`); else the chain `%Object.prototype%` lacks the key
+/// and no program write or definition reaches a builtin prototype under it
+/// (`object_proto_unwritten`, `builtin_protos_unwritten`), so step 2.e
+/// CreateDataProperty creates it. Not `__proto__`, not a private name, no
+/// interpreted code, not unit mode (another unit's writes are unseen).
+fn global_user_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let star = m.atom_index.get(crate::STAR_KEY).copied();
+    crate::builtins::global_object(m, t)
+        && !m.unit_mode
+        && !m.interp_runs
+        && !m.is_private_atom(a)
+        && key != "__proto__"
+        && crate::builtins::global_user_key(m, key)
+        && !crate::builtins::native_written(m, t, a)
+        && !m.hard.contains_key(&t)
+        && !m.super_relink.contains(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys
+            .get(&t)
+            .is_none_or(|k| !k.iter().any(|&k| k == a || Some(k) == star))
+        && object_proto_unwritten(m, a)
+        && builtin_protos_unwritten(m, None, a).is_ok()
 }
 
 /// R9STORE6 item 3: `t.length = n`, `t` an Array exotic object
