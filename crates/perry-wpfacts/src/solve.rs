@@ -1878,12 +1878,15 @@ impl Model {
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
-        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`).
-        // and the formatter shows it running no trap (`proxy_inspect_shown`).
+        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
+        // the formatter shows it running no trap (`proxy_inspect_shown`),
+        // JSON serializes it through its internal methods (`proxy_json`).
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason),
                 Protocol::InspectShown => return self.proxy_inspect_shown(p, reason),
+                Protocol::Json => return self.proxy_json(p, reason),
+                Protocol::Inspect => return self.proxy_inspect(p, reason),
                 _ => {}
             }
         }
