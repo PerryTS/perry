@@ -2091,3 +2091,30 @@ console.log(holder.g2());
         "5\nhi p/hi q\n2\n3\n9"
     );
 }
+
+#[test]
+fn a_parameter_default_reads_the_method_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { k: 4, f: function (x = this.k) { return x; } };
+console.log(o.f());
+console.log(o.f(1));
+"#
+        ),
+        "4\n1"
+    );
+}
+
+#[test]
+fn reflect_apply_hands_this_to_a_function_expression() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const hi = function (this: any, p: string) { return p + this.name; };
+console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
+"#
+        ),
+        "hi o"
+    );
+}

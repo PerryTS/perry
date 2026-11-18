@@ -2220,13 +2220,11 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, callee.captures.length, args.map(__jsValueToBits));
     return __bitsToJsValue(fn(...callee.captures, ...padded));
   },
-  // `Reflect.apply`: a host function (a class method value) gets `thisArg`; a Perry
-  // closure has no `this` to give.
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
     if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
-    return __memDispatch.closure_call_spread(fn, argArr);
+    return __callClosureMethod(fn, thisArg, argArr);
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
