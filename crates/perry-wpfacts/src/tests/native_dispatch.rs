@@ -209,3 +209,287 @@ fn static_member_op_keys_are_the_real_js_names() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn numeric_literals_are_core_operations_without_dispatch_obligations() {
+    assert_eq!(
+        crate::member_ops::class(&perry_hir::Expr::Number(1.5)),
+        crate::member_ops::Op::Core,
+    );
+    let (pf, d) = dispatch("console.log(1.5);\n");
+    assert!(d.complete(), "{:?}\n{}", d.open, pf.dump_text());
+    assert!(pf.member_ops.iter().all(|o| o.op != "Number"));
+}
+
+#[test]
+fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
+    let (pf, _) = dispatch(
+        "class P { m() { return 7; } run() { return this.m(); } }\nconsole.log(new P().run());",
+    );
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.is_call && s.key == "m")
+        .expect("live call");
+    assert!(matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set));
+    assert!(
+        !s.dispatch_obligation().unwrap().redispatch,
+        "{}",
+        pf.dump_text()
+    );
+    // The same lookup verdict, without the route certificate, is no proof.
+    let mut missing = s.clone();
+    missing.method_call.as_mut().unwrap().dispatch = None;
+    assert!(missing.dispatch_obligation().unwrap().redispatch);
+    let (native, _) = dispatch("const s = 'abc'; console.log(s.charCodeAt(0));");
+    let s = native
+        .sites
+        .iter()
+        .find(|s| s.is_call && s.key == "charCodeAt")
+        .expect("native call");
+    assert_eq!(s.verdict, Verdict::NativeMember);
+    assert!(s.dispatch_obligation().unwrap().redispatch);
+}
+
+#[test]
+fn native_dispatch_named_negative_controls_keep_the_generic_route() {
+    for (key, src) in [
+        ("m", "const x = (globalThis as any).hostValue; x.m();"),
+        ("get", "const x: any = new Map(); x.get = function() { return 7; }; console.log(x.get('a'));"),
+        ("get", "(Map.prototype as any).get = function() { return 7; }; const x: any = new Map(); console.log(x.get('a'));"),
+        ("call", "const f = 'abc'.charCodeAt; console.log(f.call('abc', 0));"),
+        ("apply", "const f = 'abc'.charCodeAt; console.log(f.apply('abc', [0]));"),
+        ("charCodeAt", "const x: any = process.argv.length > 9 ? 'abc' : { charCodeAt(i: number) { return 7; } }; console.log(x.charCodeAt(0));"),
+        ("log", "console.log = function(x: any) {}; console.log(7);"),
+    ] {
+        let (pf, _) = dispatch(src);
+        let calls: Vec<_> = pf.sites.iter().filter(|s| s.is_call && s.key == key).collect();
+        assert!(!calls.is_empty(), "missing {key}: {src}\n{}", pf.dump_text());
+        for s in calls {
+            assert!(s.dispatch_obligation().unwrap().redispatch, "{src}\n{}", pf.dump_text());
+        }
+    }
+}
+
+#[test]
+fn native_dispatch_computed_and_spread_calls_have_no_direct_this_certificate() {
+    for src in [
+        "class P { m() { return 7; } run(k: string) { return (this as any)[k](); } } console.log(new P().run(process.argv[2]));",
+        "class P { m(...a: number[]) { return a.length; } run() { return this.m(...[1, 2]); } } console.log(new P().run());",
+    ] {
+        let (pf, _) = dispatch(src);
+        assert!(pf.sites.iter().filter(|s| s.is_call).all(|s| s.dispatch_obligation().unwrap().redispatch), "{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn native_dispatch_push_has_one_record_and_the_js_key() {
+    let (pf, _) = dispatch("class Bag { items: number[] = []; add() { return this.items.push(7); } } const b = new Bag(); console.log(b.add());");
+    let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+    assert_eq!(pushes.len(), 1, "{}", pf.dump_text());
+    assert_eq!(pushes[0].op, "NativeMethodCall");
+    assert!(!pushes[0].redispatch, "{}", pf.dump_text());
+    assert!(!pf
+        .member_ops
+        .iter()
+        .any(|o| o.key == "push_single" || o.key == "push_field_single"));
+}
+
+#[test]
+fn native_dispatch_push_receiver_and_override_controls_remain_open() {
+    for update in [
+        "b.items = { push(x: number) { return 9; } } as any;",
+        "(b.items as any).push = function(x: number) { return 9; };",
+        "Object.setPrototypeOf(b.items, { push(x: number) { return 9; } });",
+    ] {
+        let (pf, _) = dispatch(&format!("class Bag {{ items: number[] = []; add() {{ return this.items.push(7); }} }} const b = new Bag(); {update} console.log(b.add());"));
+        let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+        assert_eq!(pushes.len(), 1, "{update}\n{}", pf.dump_text());
+        assert!(pushes[0].redispatch, "{update}\n{}", pf.dump_text());
+    }
+}
+
+#[test]
+fn native_dispatch_fill_push_uses_the_fill_certificate() {
+    let (pf, _) = dispatch("class T { private tab: number[] = []; constructor() { for (let i = 0; i < 16; i++) this.tab.push(i | 0); } get(k: number) { return this.tab[k & 15] | 0; } } console.log(new T().get(7));");
+    let bindings = pf.bindings_for("main.ts").unwrap();
+    assert!(
+        !bindings.rest_pushes.is_empty(),
+        "fill route must be live\n{}",
+        pf.dump_text()
+    );
+    let pushes: Vec<_> = pf.member_ops.iter().filter(|o| o.key == "push").collect();
+    assert_eq!(pushes.len(), 1, "{}", pf.dump_text());
+    assert!(!pushes[0].redispatch, "{}", pf.dump_text());
+}
+
+#[test]
+fn native_dispatch_check_mode_retains_witness_routes() {
+    let src =
+        "class P { m() { return 7; } run() { return this.m(); } } console.log(new P().run());";
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).unwrap();
+    let hir = perry_hir::lower_module(&module, "main", &path).unwrap();
+    let cfg = FactsConfig {
+        verify_facts: true,
+        ..FactsConfig::default()
+    };
+    let pf = crate::compute(&[(path, &hir)], &cfg);
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.is_call && s.key == "m")
+        .expect("live call");
+    assert!(s.dispatch_obligation().unwrap().redispatch);
+}
+
+#[test]
+fn native_dispatch_refused_twin_clears_every_certificate() {
+    let (pf, _) = dispatch(
+        "class P { m() { return 7; } run() { return this.m(); } } console.log(new P().run());",
+    );
+    let proven = pf.sites.iter().find(|s| s.is_call && s.key == "m").unwrap();
+    assert!(!proven.dispatch_obligation().unwrap().redispatch);
+    let mut refused = proven.clone();
+    refused.method_call = None;
+    for mut twins in [
+        vec![proven.clone(), refused.clone()],
+        vec![refused, proven.clone()],
+    ] {
+        crate::derive::dispatch::agree(&mut twins);
+        assert!(twins.iter().all(|s| s.method_call_certificate().is_none()));
+        assert!(twins
+            .iter()
+            .all(|s| s.dispatch_obligation().unwrap().redispatch));
+    }
+}
+
+// ERVJ: four routes the runtime runs without its generic dispatcher.
+
+fn closed(src: &str) {
+    let (pf, d) = dispatch(src);
+    assert!(d.complete(), "{:?}\n{}", d.open, pf.dump_text());
+}
+
+#[test]
+fn ervj_uncaught_native_error_report_is_no_route() {
+    // node: prints `a` to stdout, then reports `Error: boom` and exits 1.
+    closed("console.log('a');\nthrow new Error('boom');\n");
+}
+
+#[test]
+fn ervj_regexp_split_converts_no_separator() {
+    // node: prints `3 2`.
+    closed(
+        "const re = /,/g;\n\
+         const r2 = new RegExp(re, 'g');\n\
+         console.log('a,b,c'.split(re).length, 'x,y'.split(r2).length);\n",
+    );
+}
+
+#[test]
+fn ervj_performance_now_at_its_named_site_is_no_route() {
+    // node: prints `number`.
+    closed("const t0 = performance.now();\nconsole.log(typeof t0);\n");
+}
+
+#[test]
+fn ervj_json_of_a_plain_record_is_no_route() {
+    // node: prints `{"a":1,"b":"x","c":[true]}`.
+    closed("console.log(JSON.stringify({ a: 1, b: 'x', c: [true] }));\n");
+}
+
+#[test]
+fn ervj_program_now_and_program_to_json_are_closed() {
+    // node: prints `1 {"v":2}`.
+    closed(
+        "const o = { now() { return 1; } };\n\
+         const r = { toJSON() { return { v: 2 }; } };\n\
+         console.log(o.now(), JSON.stringify(r));\n",
+    );
+}
+
+#[test]
+fn ervj_negative_controls_keep_the_fact_open() {
+    // (what, src, O3 expected): every control stays open; a control that
+    // installs a program function on a prototype reports the unknown
+    // function value it calls (O1): open, any reason.
+    let controls: &[(&str, &str, bool)] = &[
+        // node: prints `Error: m`.
+        (
+            "plain string concat of an Error",
+            "const e = new Error('m');\n\
+             console.log('' + e);\n",
+            true,
+        ),
+        // node: prints `T`.
+        (
+            "string concat of an Error with an overridden toString",
+            "const e = new Error('m');\n\
+             (Error.prototype as any).toString = function () { return 'T'; };\n\
+             console.log('' + e);\n",
+            false,
+        ),
+        // node: reports the thrown object, exits 1.
+        (
+            "uncaught program object with valueOf",
+            "throw { valueOf() { return 1; } };\n",
+            true,
+        ),
+        // node: prints `1`.
+        (
+            "patched RegExp.prototype[@@split] = undefined",
+            "(RegExp.prototype as any)[Symbol.split] = undefined;\n\
+             console.log('a,b'.split(/,/ as any).length);\n",
+            true,
+        ),
+        // node: prints `x`.
+        (
+            "patched RegExp.prototype[@@split] = fn",
+            "(RegExp.prototype as any)[Symbol.split] = function () { return ['x']; };\n\
+             console.log('a,b'.split(/,/ as any)[0]);\n",
+            false,
+        ),
+        // node: prints `2`.
+        (
+            "split separator object with toString",
+            "console.log('a,b'.split({ toString() { return ','; } } as any).length);\n",
+            true,
+        ),
+        // node: prints `1`.
+        (
+            "split limit object with valueOf",
+            "console.log('a,b'.split(',', { valueOf() { return 1; } } as any).length);\n",
+            true,
+        ),
+        // node: prints `1 number`.
+        (
+            "program now beside a borrowed performance.now",
+            "const o = { now() { return 1; } };\n\
+             const f = performance.now;\n\
+             console.log(o.now(), typeof f.call(performance));\n",
+            true,
+        ),
+        // node: prints `{"d":"1970-01-01T00:00:00.000Z"}`.
+        (
+            "Date in JSON",
+            "console.log(JSON.stringify({ d: new Date(0) }));\n",
+            true,
+        ),
+        // node: prints `{}`.
+        (
+            "toJSON accessor returning a native",
+            "const o = { get toJSON() { return Object.prototype.valueOf; } };\n\
+             console.log(JSON.stringify(o));\n",
+            true,
+        ),
+    ];
+    for (what, src, o3) in controls {
+        let (pf, d) = dispatch(src);
+        let why = d
+            .open
+            .unwrap_or_else(|| panic!("{what}: complete, expected open:\n{}", pf.dump_text()));
+        assert!(!*o3 || why.starts_with("O3:"), "{what}: {why}");
+        eprintln!("CONTROL {what}: {why}");
+    }
+}

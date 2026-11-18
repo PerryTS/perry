@@ -298,13 +298,18 @@ impl<'a> Gen<'a> {
                 self.str_index_bound(object, property, call);
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
-                    None => self.m.cons(
-                        o,
-                        Cons::MCall {
-                            key: Key::Named(a),
-                            call,
-                        },
-                    ),
+                    None => {
+                        if off != 0 {
+                            self.m.named_calls.insert(call, (a, o));
+                        }
+                        self.m.cons(
+                            o,
+                            Cons::MCall {
+                                key: Key::Named(a),
+                                call,
+                            },
+                        )
+                    }
                 }
                 ret
             }

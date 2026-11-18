@@ -274,6 +274,50 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
 }
 
 #[test]
+fn a_function_that_synthesizes_arguments_reaches_the_birth_site() {
+    const SITE: &[RealmEntry] = &[RealmEntry {
+        name: "%ArgumentsBirth%",
+        kind: RealmKind::BirthSite,
+        births: &["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"],
+        module: None,
+        facts: "{}",
+        effects: &[],
+        own: &[],
+        proto: None,
+    }];
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            for (source, reached) in [
+                ("function f() { return arguments.length; } f();", true),
+                (
+                    "const g = function () { return arguments[0]; }; g(1);",
+                    true,
+                ),
+                (
+                    "class C { m() { return arguments.length; } } new C().m();",
+                    true,
+                ),
+                (
+                    "function h(a) { return a; } h(1); const k = () => 1; k();",
+                    false,
+                ),
+            ] {
+                let module = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
+                let lowered = crate::lower_module(&module, "realm", "realm.cjs").unwrap();
+                let mut r = RealmReach::default();
+                scan_lowered(&lowered, SITE, &mut r);
+                for layout in ["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"] {
+                    assert_eq!(r.names.contains(layout), reached, "{source}: {layout}");
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn non_top_fixture_remains_partial_after_hir_lowering() {
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)

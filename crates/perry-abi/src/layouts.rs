@@ -332,6 +332,8 @@ pub const NATIVE_LAYOUT_RESERVED: &[&str] = &["CJS_MODULE_RECORD"];
 /// Union of native descriptor names across target/cfg variants, sorted.
 /// Rows 0..9 are intrinsic functions; rows 9 and 10 are weak collections.
 pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
+    "ARGUMENTS",
+    "ARGUMENTS_STRICT",
     "ARRAY_NAMED",
     "ARRAY_PROTOTYPE_NAMED",
     // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
@@ -588,7 +590,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 128);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 130);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);

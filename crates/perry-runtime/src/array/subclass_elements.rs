@@ -158,6 +158,7 @@ pub(crate) enum ElementsKey {
 /// # Safety
 /// `addr` must be a raw user pointer or a POINTER-tagged NaN-box; it is
 /// classified before any dereference.
+#[inline]
 pub(crate) unsafe fn backed(addr: usize) -> Option<(*mut ObjectHeader, *mut ArrayHeader)> {
     let bits = addr as u64;
     let raw = if (bits >> 48) == 0x7FFD {
@@ -174,6 +175,160 @@ pub(crate) unsafe fn backed(addr: usize) -> Option<(*mut ObjectHeader, *mut Arra
     let obj = raw as *mut ObjectHeader;
     let elements = elements_of(obj);
     (!elements.is_null()).then_some((obj, elements))
+}
+
+/// One object's own elements: `count` words from `ptr`, a hole is
+/// `TAG_HOLE`. An Array-subclass instance answers from its backing store
+/// (`store`, whose `length` is the exotic `length`); an arguments object from
+/// the words after its named record [length, callee, @@iterator] (`store`
+/// null, count from the GcHeader size word, `length` an ordinary named key).
+/// In an arguments object a word that points at a `GC_TYPE_BOX` is a mapped
+/// parameter cell: every element hand-out goes through [`view_get`].
+#[derive(Clone, Copy)]
+pub(crate) struct ElementsView {
+    pub owner: *mut ObjectHeader,
+    pub store: *mut ArrayHeader,
+    pub ptr: *mut u64,
+    pub count: u32,
+}
+
+impl ElementsView {
+    /// Does this view answer `key` itself? `length` only for a store.
+    #[inline]
+    pub(crate) fn admits(&self, key: ElementsKey) -> bool {
+        !matches!(key, ElementsKey::Length) || !self.store.is_null()
+    }
+
+    /// An inline (arguments) index the elements do not hold (its word is the
+    /// hole, or it is past the inline count): its property, if any, is own
+    /// key `index`, and the key path answers its descriptor and its delete.
+    pub(crate) unsafe fn keyed(&self, key: ElementsKey) -> bool {
+        matches!(key, ElementsKey::Index(index)
+            if self.store.is_null()
+                && (index >= self.count || *self.ptr.add(index as usize) == crate::value::TAG_HOLE))
+    }
+
+    #[inline]
+    pub(crate) fn store_backed(&self) -> bool {
+        !self.store.is_null()
+    }
+
+    /// The view of a validated store-backed instance.
+    ///
+    /// # Safety
+    /// `elements` is `owner`'s live store.
+    #[inline]
+    pub(crate) unsafe fn of_store(owner: *mut ObjectHeader, elements: *mut ArrayHeader) -> Self {
+        Self {
+            owner,
+            store: elements,
+            ptr: crate::array::array_elements_ptr(elements) as *mut u64,
+            count: (*elements).length,
+        }
+    }
+}
+
+/// Byte offset of an arguments object's first element from its user pointer:
+/// object header (16) plus the three named slots (length, callee, @@iterator).
+pub(crate) const ARGUMENTS_ELEMENTS_OFFSET: usize = 16 + 3 * 8;
+
+/// Is `obj` (an object whose header carries `OBJ_FLAG_ARGUMENTS`) laid out
+/// with inline elements, i.e. on one of the two arguments kinds?
+///
+/// # Safety
+/// `obj` is a live, unforwarded object.
+#[inline]
+pub(crate) unsafe fn arguments_inline_layout(obj: *const ObjectHeader) -> bool {
+    crate::object::shapes::shape_record_for_word(crate::codegen_abi::LayoutWord(
+        (*obj).shape_word(),
+    ))
+    .is_some_and(|record| {
+        record.kind_is(crate::object::shapes::ShapeObjectKind::Arguments)
+            || record.kind_is(crate::object::shapes::ShapeObjectKind::ArgumentsStrict)
+    })
+}
+
+/// The elements view of `addr` (see [`ElementsView`]), or `None`.
+///
+/// # Safety
+/// As [`backed`].
+#[inline]
+pub(crate) unsafe fn own_elements(addr: usize) -> Option<ElementsView> {
+    let bits = addr as u64;
+    let raw = if (bits >> 48) == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else {
+        addr
+    };
+    let header = crate::value::addr_class::try_read_gc_header(raw)?;
+    if crate::gc_type_is_not_object!(header.obj_type)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let obj = raw as *mut ObjectHeader;
+    if header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0 {
+        if let Some(view) = arguments_view(obj, header.size) {
+            return Some(view);
+        }
+    }
+    let elements = elements_of(obj);
+    (!elements.is_null()).then(|| ElementsView::of_store(obj, elements))
+}
+
+/// The inline-elements view of a flagged object on an arguments kind, `None`
+/// otherwise. Out of line: only arguments objects reach it.
+///
+/// # Safety
+/// `obj` is a live, unforwarded object of GcHeader size `size`.
+#[cold]
+#[inline(never)]
+unsafe fn arguments_view(obj: *mut ObjectHeader, size: u32) -> Option<ElementsView> {
+    if !arguments_inline_layout(obj) {
+        return None;
+    }
+    let payload = size as usize - crate::gc::GC_HEADER_SIZE;
+    Some(ElementsView {
+        owner: obj,
+        store: std::ptr::null_mut(),
+        ptr: (obj as usize + ARGUMENTS_ELEMENTS_OFFSET) as *mut u64,
+        count: (payload.saturating_sub(ARGUMENTS_ELEMENTS_OFFSET) / 8) as u32,
+    })
+}
+
+/// [`own_elements`] for a NaN-boxed value.
+#[inline]
+pub(crate) fn own_elements_value(value: f64) -> Option<ElementsView> {
+    if !crate::JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
+    unsafe { own_elements(value.to_bits() as usize) }
+}
+
+/// The value word of element `index`, `None` for a hole or out of range. The
+/// ONE element reader: a mapped arguments slot (a pointer to a
+/// `GC_TYPE_BOX`, never a JS value) reads through its parameter cell.
+///
+/// # Safety
+/// `view` is current (no allocation since [`own_elements`]).
+#[inline]
+pub(crate) unsafe fn view_get(view: ElementsView, index: u32) -> Option<u64> {
+    if index >= view.count {
+        return None;
+    }
+    let word = *view.ptr.add(index as usize);
+    if word == crate::value::TAG_HOLE {
+        return None;
+    }
+    if view.store.is_null() && (word >> 48) == 0x7FFD {
+        let cell = (word & crate::value::POINTER_MASK) as usize;
+        if crate::value::addr_class::try_read_gc_header(cell)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_BOX)
+        {
+            return Some(crate::r#box::js_box_get(cell as *mut crate::r#box::Box).to_bits());
+        }
+    }
+    Some(word)
 }
 
 /// [`backed`] for a NaN-boxed value.
@@ -248,16 +403,10 @@ unsafe fn slot_bits(elements: *const ArrayHeader, index: u32) -> u64 {
 ///
 /// # Safety
 /// `elements` must be the live store of a validated instance.
-pub(crate) unsafe fn get_by_key(elements: *const ArrayHeader, key: ElementsKey) -> Option<f64> {
+pub(crate) unsafe fn get_by_key(view: ElementsView, key: ElementsKey) -> Option<f64> {
     match key {
-        ElementsKey::Length => Some(f64::from((*elements).length)),
-        ElementsKey::Index(index) => {
-            if index >= (*elements).length {
-                return None;
-            }
-            let bits = slot_bits(elements, index);
-            (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
-        }
+        ElementsKey::Length => (!view.store.is_null()).then(|| f64::from((*view.store).length)),
+        ElementsKey::Index(index) => view_get(view, index).map(f64::from_bits),
     }
 }
 
@@ -346,11 +495,11 @@ pub(crate) unsafe fn set_length(
 
 /// # Safety
 /// `elements` must be a live store.
-pub(crate) unsafe fn has_own_key(elements: *const ArrayHeader, key: ElementsKey) -> bool {
+pub(crate) unsafe fn has_own_key(view: ElementsView, key: ElementsKey) -> bool {
     match key {
-        ElementsKey::Length => true,
+        ElementsKey::Length => !view.store.is_null(),
         ElementsKey::Index(index) => {
-            index < (*elements).length && slot_bits(elements, index) != crate::value::TAG_HOLE
+            index < view.count && *view.ptr.add(index as usize) != crate::value::TAG_HOLE
         }
     }
 }
@@ -360,15 +509,25 @@ pub(crate) unsafe fn has_own_key(elements: *const ArrayHeader, key: ElementsKey)
 ///
 /// # Safety
 /// `elements` must be a live store.
-pub(crate) unsafe fn delete_key(elements: *mut ArrayHeader, key: ElementsKey) -> i32 {
+pub(crate) unsafe fn delete_key(view: ElementsView, key: ElementsKey) -> i32 {
     match key {
         ElementsKey::Length => 0,
+        ElementsKey::Index(index) if index >= view.count => 1,
+        ElementsKey::Index(index) if !view.store.is_null() => {
+            crate::array::js_array_delete(view.store, index)
+        }
         ElementsKey::Index(index) => {
-            if index < (*elements).length {
-                crate::array::js_array_delete(elements, index)
-            } else {
-                1
+            let header = crate::gc::header_from_trusted_user_ptr(view.owner.cast());
+            let fixed = crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED;
+            if *view.ptr.add(index as usize) != crate::value::TAG_HOLE
+                && (*header)._reserved & fixed != 0
+            {
+                return 0;
             }
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel; a
+            // mapped box word is dropped with it (delete unmaps).
+            *view.ptr.add(index as usize) = crate::value::TAG_HOLE;
+            1
         }
     }
 }
@@ -377,11 +536,10 @@ pub(crate) unsafe fn delete_key(elements: *mut ArrayHeader, key: ElementsKey) ->
 ///
 /// # Safety
 /// `elements` must be a live store.
-pub(crate) unsafe fn own_index_keys(elements: *const ArrayHeader) -> Vec<u32> {
-    let length = (*elements).length;
+pub(crate) unsafe fn own_index_keys(view: ElementsView) -> Vec<u32> {
     let mut out = Vec::new();
-    for index in 0..length {
-        if slot_bits(elements, index) != crate::value::TAG_HOLE {
+    for index in 0..view.count {
+        if *view.ptr.add(index as usize) != crate::value::TAG_HOLE {
             out.push(index);
         }
     }
@@ -396,11 +554,11 @@ pub(crate) unsafe fn own_index_keys(elements: *const ArrayHeader) -> Vec<u32> {
 /// # Safety
 /// `elements` must be a live store; `shape_keys` a live array (or null).
 pub(crate) unsafe fn prepend_index_keys(
-    elements: *const ArrayHeader,
+    view: ElementsView,
     shape_keys: *mut ArrayHeader,
     with_length: bool,
 ) -> *mut ArrayHeader {
-    let indices = own_index_keys(elements);
+    let indices = own_index_keys(view);
     let scope = crate::gc::RuntimeHandleScope::new();
     let shape_h = scope.root_raw_mut_ptr(shape_keys);
     let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
@@ -414,12 +572,6 @@ pub(crate) unsafe fn prepend_index_keys(
         });
         out_h.set_raw_mut_ptr(grown);
     };
-    for index in indices {
-        push_key(index.to_string().as_bytes());
-    }
-    if with_length {
-        push_key(b"length");
-    }
     let shape_len = shape_h.with_mut_ptr(|p: *mut ArrayHeader| {
         if p.is_null() {
             0
@@ -427,13 +579,47 @@ pub(crate) unsafe fn prepend_index_keys(
             crate::array::js_array_length(p)
         }
     });
+    // OrdinaryOwnPropertyKeys: every index ascending (the elements' and the
+    // shape list's leading index keys merged), then `length`, then the rest.
+    let mut pending = indices.into_iter().peekable();
+    let mut indices_done = false;
     for i in 0..shape_len {
+        if !indices_done {
+            let key = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let key_index = crate::string::js_string_key_bytes(key, &mut sso)
+                .and_then(crate::object::canonical_array_index_bytes);
+            match key_index {
+                Some(n) => {
+                    while let Some(index) = pending.next_if(|&e| e < n) {
+                        push_key(index.to_string().as_bytes());
+                    }
+                }
+                None => {
+                    indices_done = true;
+                    for index in pending.by_ref() {
+                        push_key(index.to_string().as_bytes());
+                    }
+                    if with_length {
+                        push_key(b"length");
+                    }
+                }
+            }
+        }
         let key = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
         let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
             let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
             crate::array::js_array_push_f64(out, f64::from_bits(key.bits()))
         });
         out_h.set_raw_mut_ptr(grown);
+    }
+    if !indices_done {
+        for index in pending {
+            push_key(index.to_string().as_bytes());
+        }
+        if with_length {
+            push_key(b"length");
+        }
     }
     out_h.with_mut_ptr(|p| p)
 }
@@ -443,17 +629,16 @@ pub(crate) unsafe fn prepend_index_keys(
 ///
 /// # Safety
 /// `obj` must be a validated instance and `elements` its live store.
-pub(crate) unsafe fn own_property_descriptor(
-    obj: *const ObjectHeader,
-    elements: *const ArrayHeader,
-    key: ElementsKey,
-) -> Option<f64> {
-    let value = get_by_key(elements, key)?;
-    let frozen = crate::value::addr_class::try_read_gc_header(obj as usize)
-        .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_FROZEN != 0);
+pub(crate) unsafe fn own_property_descriptor(view: ElementsView, key: ElementsKey) -> Option<f64> {
+    let value = get_by_key(view, key)?;
+    let flags = crate::value::addr_class::try_read_gc_header(view.owner as usize)
+        .map_or(0, |h| h._reserved);
+    let frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+    // An inline (arguments) element is sealed by the header bit as well.
+    let fixed = frozen || (view.store.is_null() && flags & crate::gc::OBJ_FLAG_SEALED != 0);
     Some(match key {
         ElementsKey::Index(_) => {
-            crate::object::descriptors::build_data_descriptor(value, !frozen, true, !frozen)
+            crate::object::descriptors::build_data_descriptor(value, !frozen, true, !fixed)
         }
         ElementsKey::Length => {
             crate::object::descriptors::build_data_descriptor(value, !frozen, false, false)
@@ -482,7 +667,7 @@ pub(crate) unsafe fn deopt_to_shape(obj: *mut ObjectHeader) {
     // Detach first: the index stores below must not be routed back here.
     set_elements_head(obj, std::ptr::null_mut());
     let length = (*elements).length;
-    for index in own_index_keys(elements) {
+    for index in own_index_keys(ElementsView::of_store(obj, elements)) {
         let value =
             elements_h.with_mut_ptr(|e: *mut ArrayHeader| f64::from_bits(slot_bits(e, index)));
         let name = index.to_string();
@@ -502,106 +687,6 @@ pub(crate) fn deopt_value(value: f64) {
     if let Some((obj, _)) = backed_value(value) {
         unsafe { deopt_to_shape(obj) };
     }
-}
-
-/// A fresh values array: present elements (ascending), then every value of
-/// `shape_values` in order (`Object.values`).
-///
-/// # Safety
-/// `elements` must be a live store; `shape_values` a live array (or null).
-pub(crate) unsafe fn prepend_index_values(
-    elements: *const ArrayHeader,
-    shape_values: *mut ArrayHeader,
-) -> *mut ArrayHeader {
-    let indices = own_index_keys(elements);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let elements_h = scope.root_raw_const_ptr(elements);
-    let shape_h = scope.root_raw_mut_ptr(shape_values);
-    let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
-    let push = |value: f64| {
-        let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
-            let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
-            crate::array::js_array_push_f64(out, value)
-        });
-        out_h.set_raw_mut_ptr(grown);
-    };
-    for index in indices {
-        let value =
-            elements_h.with_const_ptr(|e: *const ArrayHeader| f64::from_bits(slot_bits(e, index)));
-        push(value);
-    }
-    let shape_len = shape_h.with_mut_ptr(|p: *mut ArrayHeader| {
-        if p.is_null() {
-            0
-        } else {
-            crate::array::js_array_length(p)
-        }
-    });
-    for i in 0..shape_len {
-        let value = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
-        push(f64::from_bits(value.bits()));
-    }
-    out_h.with_mut_ptr(|p| p)
-}
-
-/// A fresh entries array: `[String(index), element]` pairs for the present
-/// elements (ascending), then every pair of `shape_entries` in order
-/// (`Object.entries`).
-///
-/// # Safety
-/// `elements` must be a live store; `shape_entries` a live array (or null).
-pub(crate) unsafe fn prepend_index_entries(
-    elements: *const ArrayHeader,
-    shape_entries: *mut ArrayHeader,
-) -> *mut ArrayHeader {
-    let indices = own_index_keys(elements);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let elements_h = scope.root_raw_const_ptr(elements);
-    let shape_h = scope.root_raw_mut_ptr(shape_entries);
-    let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
-    let push = |value: f64| {
-        let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
-            let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
-            crate::array::js_array_push_f64(out, value)
-        });
-        out_h.set_raw_mut_ptr(grown);
-    };
-    for index in indices {
-        let name = index.to_string();
-        let (key, _) = out_h.across_mut::<ArrayHeader, _>(|| {
-            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-        });
-        let key_h = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
-        let (pair, _) = out_h.across_mut::<ArrayHeader, _>(|| crate::array::js_array_alloc(2));
-        let pair_h = scope.root_raw_mut_ptr(pair);
-        let (pair, _) = pair_h.across_mut::<ArrayHeader, _>(|| {
-            let pair: *mut ArrayHeader = pair_h.with_mut_ptr(|p| p);
-            crate::array::js_array_push_f64(pair, key_h.get_nanbox_f64())
-        });
-        pair_h.set_raw_mut_ptr(pair);
-        let value =
-            elements_h.with_const_ptr(|e: *const ArrayHeader| f64::from_bits(slot_bits(e, index)));
-        let (pair, _) = pair_h.across_mut::<ArrayHeader, _>(|| {
-            let pair: *mut ArrayHeader = pair_h.with_mut_ptr(|p| p);
-            crate::array::js_array_push_f64(pair, value)
-        });
-        pair_h.set_raw_mut_ptr(pair);
-        let pair_value =
-            pair_h.with_mut_ptr(|p: *mut ArrayHeader| crate::value::js_nanbox_pointer(p as i64));
-        push(pair_value);
-    }
-    let shape_len = shape_h.with_mut_ptr(|p: *mut ArrayHeader| {
-        if p.is_null() {
-            0
-        } else {
-            crate::array::js_array_length(p)
-        }
-    });
-    for i in 0..shape_len {
-        let value = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
-        push(f64::from_bits(value.bits()));
-    }
-    out_h.with_mut_ptr(|p| p)
 }
 
 // ---------------------------------------------------------------------------

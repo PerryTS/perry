@@ -75,6 +75,7 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
+pub use derive::dispatch::{elide_enabled, MethodCallCertificate};
 pub use derive::{
     Access, DispatchObligation, ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact,
     ReceiverValue, SiteFacts, TemplateFacts, Verdict,
@@ -1396,7 +1397,7 @@ fn compute_act<'a>(
         .is_some()
         .then(|| family_reach::derive_dispatch(&g, cfg));
     let member_ops = match native_dispatch {
-        Some(_) => derive::member_op_facts(&g),
+        Some(_) => derive::member_op_facts(&g, &bindings, interp_guard.is_some()),
         None => Vec::new(),
     };
     let mut pf = ProgramFacts {
@@ -1437,6 +1438,7 @@ fn compute_act<'a>(
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         module_digests: Vec::new(),
     };
+    derive::dispatch::certify(&mut pf, &g, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
 }

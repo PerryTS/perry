@@ -45,7 +45,7 @@ fn probe_map_registry(addr: usize) -> bool {
 /// after header-less TypedArray and Buffer receivers have been routed.
 /// A collection tag only selects a registry; registration still proves ownership.
 #[inline(always)]
-fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
+fn receiver_gc_tag(addr: usize) -> Option<(u8, u8, u16)> {
     unsafe {
         crate::value::addr_class::try_read_gc_header(addr).map(|header| {
             #[cfg(test)]
@@ -53,7 +53,7 @@ fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
                 let (maps, sets, header_reads) = counts.get();
                 counts.set((maps, sets, header_reads.wrapping_add(1)));
             });
-            (header.obj_type, header.gc_flags)
+            (header.obj_type, header.gc_flags, header._reserved)
         })
     }
 }
@@ -406,7 +406,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // read a word past the Proxy cell (React Flight's client-reference lookup
     // `bundlerConfig[id]` with a numeric module id read 0, so Next.js's
     // dynamic pages failed with "Could not find the module").
-    if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_PROXY) {
+    if receiver_tag.is_some_and(|(obj_type, _, _)| obj_type == crate::gc::GC_TYPE_PROXY) {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_nanbox_f64(value);
         // SAFETY: a NaN-boxed key; ToPropertyKey may run user code.
@@ -418,7 +418,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // expandos, then the recorded [[Prototype]] chain (`m["get"]`, a subclass
     // accessor). Reading the storage as an array answered `m[0]` with the
     // first entry and every other key with undefined.
-    if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
+    if receiver_tag.is_some_and(|(obj_type, _, _)| is_registered_collection(raw_ptr, obj_type)) {
         return collection_keyed_get(raw_ptr, index);
     }
     // Issue #63 / #321 (Effect.runSync→fork SIGBUS): the raw-I64 fallback
@@ -505,7 +505,11 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return crate::object::js_object_get_index_polymorphic(raw_ptr as i64, index);
     }
     let idx_i32 = index as i32;
-    if idx_i32 >= 0 {
+    // OBJ_FLAG_ARGUMENTS is set at an arguments object's birth: a receiver
+    // whose header lacks it is no arguments object.
+    if idx_i32 >= 0
+        && receiver_tag.is_some_and(|(_, _, flags)| flags & crate::gc::OBJ_FLAG_ARGUMENTS != 0)
+    {
         if let Some(value) = unsafe {
             crate::object::arguments_object_get_index(
                 raw_ptr as *const crate::object::ObjectHeader,
@@ -515,7 +519,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             return value;
         }
     }
-    if let Some((obj_type, gc_flags)) = receiver_tag {
+    if let Some((obj_type, gc_flags, _)) = receiver_tag {
         if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             || (gc_flags & crate::gc::GC_FLAG_FORWARDED) != 0
         {
@@ -615,7 +619,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // has an element to load. A receiver without a GC header (the allocator
     // does not vouch for the word) has no property to read: before, its
     // "slot" `raw_ptr + 8 + 8 * index` was loaded with no bound at all.
-    if idx_i32 < 0 || !receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type))
+    if idx_i32 < 0
+        || !receiver_tag.is_some_and(|(obj_type, _, _)| crate::gc_type_is_array!(obj_type))
     {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -851,7 +856,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // inherited setter runs with the receiver, otherwise an own property is
     // created (rejected on a frozen receiver). It is never a storage write,
     // and never dropped. (The read twin is `collection_keyed_get`.)
-    if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
+    if receiver_tag.is_some_and(|(obj_type, _, _)| is_registered_collection(raw_ptr, obj_type)) {
         let target = if jsval.is_pointer() {
             obj
         } else {
@@ -859,7 +864,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         };
         return crate::proxy::js_put_value_set(target, index, value, target, strict);
     }
-    if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
+    if receiver_tag.is_some_and(|(obj_type, _, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
         return unsafe {
             crate::json_hooks::set_lazy_index(raw_ptr as *mut _, index, value, strict)
         };
@@ -921,7 +926,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             return value;
         }
     }
-    let is_array = receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type));
+    let is_array = receiver_tag.is_some_and(|(obj_type, _, _)| crate::gc_type_is_array!(obj_type));
     if is_array {
         // #9394: this entry already carries the assignment's own `Throw`
         // flag (`js_dyn_index_set` passes 0 for the sloppy runtime callers);

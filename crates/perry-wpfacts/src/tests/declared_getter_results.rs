@@ -30,6 +30,11 @@ fn prims(pf: &ProgramFacts, k: &str) -> (bool, u16) {
 /// definite birth key names reads beside its value (`Model::load_from`).
 const BESIDE: u16 = prim::NUM | prim::UNDEF;
 
+/// The constructor's `0` alone beside a getter `RegExp.prototype` declares:
+/// that locked member is found past every own key (`locked_chain_defines`),
+/// so the read is never the chain end's `undefined`.
+const LOCKED_BESIDE: u16 = prim::NUM;
+
 #[test]
 fn regexp_accessors_read_their_declared_results() {
     let pf = kinds(
@@ -38,20 +43,22 @@ fn regexp_accessors_read_their_declared_results() {
     );
     assert_eq!(
         prims(&pf, "f"),
-        (false, BESIDE | prim::STR),
+        (false, LOCKED_BESIDE | prim::STR),
         "{}",
         pf.dump_text()
     );
     assert_eq!(
         prims(&pf, "s"),
-        (false, BESIDE | prim::STR),
+        (false, LOCKED_BESIDE | prim::STR),
         "{}",
         pf.dump_text()
     );
+    // The flag getters declare `bool | undefined` (`undefined` on
+    // `%RegExp.prototype%` itself): their own `undefined` stays.
     for k in ["g", "d"] {
         assert_eq!(
             prims(&pf, k),
-            (false, BESIDE | prim::BOOL),
+            (false, LOCKED_BESIDE | prim::BOOL | prim::UNDEF),
             "{k}: {}",
             pf.dump_text()
         );

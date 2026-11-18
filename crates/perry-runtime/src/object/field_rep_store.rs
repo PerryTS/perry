@@ -273,7 +273,7 @@ unsafe fn install_i32_lanes_learned(obj: *mut ObjectHeader, id: LayoutWord, mask
         || to.logical_key_count() != from.logical_key_count()
         || to.live_inline_slot_count() != from.live_inline_slot_count()
         || to.proto_id() != from.proto_id()
-        || to.object_kind() != from.object_kind()
+        || !to.same_kind_as(&from)
         || to.summary() != from.summary()
         || to.special_constfn_mask() != from.special_constfn_mask()
         || super::overflow::has_overflow(obj)

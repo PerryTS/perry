@@ -1543,8 +1543,10 @@ js_finalize_namespace	f64	f64
 js_finreg_new	ptr	f64
 js_finreg_register	f64	f64,f64,f64,f64
 js_finreg_unregister	f64	f64,f64
-js_for_in_keys_stable_value	ptr	f64
+js_for_in_key_live	f64	f64,f64,f64,i64
+js_for_in_begin	ptr	f64,ptr,ptr
 js_for_in_keys_value	ptr	f64
+js_for_in_loop_fact	i64	f64,ptr
 js_for_of_next	f64	f64
 js_for_of_to_array	f64	f64
 js_foreach_register	void	f64,i64,f64

@@ -100,6 +100,9 @@ impl<'a> Gen<'a> {
             recv: Some(recv),
             namespace: None,
             folded: true,
+            native_push: (op == "NativeMethodCall" && self.m.atoms[key as usize] == "push")
+                .then(|| perry_hir::folded_call::receiver_site(receiver))
+                .flatten(),
             form: crate::member_ops::MemberForm::Member,
         });
         if let Some(site) = perry_hir::folded_call::receiver_site(receiver) {

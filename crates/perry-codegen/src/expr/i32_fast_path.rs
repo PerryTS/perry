@@ -1393,6 +1393,19 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_i32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
+    // DYNP E18: a for-in bound (`__keys.length`) is an int32 by contract; its
+    // i32 is the begin call's word.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    {
+        if let (Expr::LocalGet(id), "length") = (object.as_ref(), property.as_str()) {
+            if let Some(len) = super::dispatch::for_in_bound_slot(ctx, *id) {
+                let n = ctx.block().load(crate::types::I64, &len);
+                return Ok(i32_lowered(ctx.block().trunc(crate::types::I64, &n, I32)));
+            }
+        }
+    }
     if can_lower_expr_as_i32_in_current_region(ctx, e) {
         if let Some(value) = try_lower_expr_native_i32_structural(ctx, e)? {
             let lowered = i32_lowered(value);

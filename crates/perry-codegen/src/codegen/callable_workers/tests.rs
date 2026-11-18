@@ -1,5 +1,44 @@
 use super::*;
 
+#[test]
+fn callable_workers_preserve_fixed_generator_controls() {
+    let mut source = String::new();
+    for i in 0..16 {
+        source.push_str(&format!("const pad{i} = (x: any) => x;\n"));
+    }
+    source.push_str("const gen = function* () { yield 1; yield 2; };\n");
+    for i in 16..63 {
+        source.push_str(&format!("const pad{i} = (x: any) => x;\n"));
+    }
+    source.push_str("console.log(gen().next().value);\n");
+    let ast = perry_parser::parse_typescript(&source, "generator-workers.ts").unwrap();
+    let mut hir =
+        perry_hir::lower_module(&ast, "generator-workers", "generator-workers.ts").unwrap();
+    perry_transform::transform_generators_without_private_frames(&mut hir);
+    // Four workers split 65 closures into chunks of 17. The wrapper is the
+    // last closure in the first chunk; its resume body starts the next one.
+    assert_eq!(
+        perry_hir::emitted_closures::emitted_closures(&hir).len(),
+        65
+    );
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(String::from_utf8_lossy(&serial).contains("fptosi double"));
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
+}
+
 fn module() -> perry_hir::Module {
     let mut source =
         String::from("const shared = 'shared'; const proto = { method() { return 'ok'; } };\n");

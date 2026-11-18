@@ -263,6 +263,9 @@ unsafe fn define_own_property_decoded_ordinary(
     {
         crate::array::subclass_elements::deopt_value(current);
     }
+    if crate::object::arguments::arguments_define_element(receiver, key, descriptor) {
+        return true;
+    }
     if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
         return crate::proxy_hooks::proxy_define_own_property_decoded(
             scope, receiver, key, descriptor,

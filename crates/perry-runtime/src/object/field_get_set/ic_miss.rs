@@ -265,12 +265,12 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
             if let Some(elements_key) =
                 unsafe { crate::array::subclass_elements::key_of_header(key) }
             {
-                if let Some((_, elements)) =
-                    unsafe { crate::array::subclass_elements::backed(obj as usize) }
+                if let Some(view) =
+                    unsafe { crate::array::subclass_elements::own_elements(obj as usize) }
                 {
-                    if let Some(value) = unsafe {
-                        crate::array::subclass_elements::get_by_key(elements, elements_key)
-                    } {
+                    if let Some(value) =
+                        unsafe { crate::array::subclass_elements::get_by_key(view, elements_key) }
+                    {
                         return value;
                     }
                 }

@@ -258,6 +258,17 @@ pub(crate) fn native_export_prototype_value(module: &str, export: &str) -> f64 {
 unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> Option<f64> {
     use crate::object::shapes as s;
     let record = s::shape_record_of_receiver((s::object_shape_stamp(obj)).0)?;
+    link_of_record(obj, record, default_only)
+}
+
+/// [`shape_link_prototype`] from `obj`'s live record, already read.
+#[inline(always)]
+unsafe fn link_of_record(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+    default_only: bool,
+) -> Option<f64> {
+    use crate::object::shapes as s;
     if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
         return None;
     }
@@ -293,6 +304,25 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     let proto = crate::array::object_prototype_addr_if_resolved();
     (proto != 0 && proto != obj as usize)
         .then(|| f64::from_bits(crate::value::js_nanbox_pointer(proto as i64).to_bits()))
+}
+
+/// DYNP E3: the [[Prototype]] link of an ordinary layout object as its shape
+/// states it, read from `obj`'s live record, already read by a caller that
+/// tests the same record (the for-in walk: one record per level). `None`: the
+/// shape does not state it (exotic kinds, a held record prototype, an unbuilt
+/// class holder, an unresolved realm default); the caller takes the generic
+/// walk.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell; `record` is `obj`'s live record.
+pub(crate) unsafe fn structural_prototype_link_of(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+) -> Option<f64> {
+    if record.proto_id() == crate::object::shapes::PROTO_ID_RECORD_HELD {
+        return None;
+    }
+    link_of_record(obj, record, false)
 }
 
 /// [`shape_link_prototype`] of a CLASS identity `pid`: a recorded prototype

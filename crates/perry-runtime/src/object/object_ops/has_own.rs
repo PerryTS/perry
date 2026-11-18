@@ -124,10 +124,12 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if obj_js.is_undefined() || obj_js.is_null() {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
-        if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
-            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value) {
+        if let Some(view) = crate::array::subclass_elements::own_elements_value(obj_value) {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
                 return f64::from_bits(
-                    if crate::array::subclass_elements::has_own_key(elements, elements_key) {
+                    if crate::array::subclass_elements::has_own_key(view, elements_key) {
                         TAG_TRUE
                     } else {
                         TAG_FALSE
