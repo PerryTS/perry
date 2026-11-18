@@ -366,6 +366,9 @@ unsafe fn table_born(
         ptr::null()
     };
     let words = crate::array::array_elements_ptr(keys);
+    // The source record's names are copied undecoded: the table's copy
+    // decodes them (`key_attrs::TABLE_KEY_HIDDEN`).
+    (*t).summary |= key_attrs::TABLE_KEY_HIDDEN;
     for position in 0..count as usize {
         let key = *words.add(position);
         let bits = *fields(src).add(source_slot(source_keys, position));

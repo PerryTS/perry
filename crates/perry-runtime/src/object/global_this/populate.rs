@@ -131,14 +131,13 @@ impl RealmPhases {
     fn core(self) -> bool {
         self != RealmPhases::Rest
     }
-    /// Does this pass bind the declared global `name`? The name is looked at
-    /// only in a phase of a two-phase realm.
+    /// Select a row whose phase is fixed by the ABI declaration at compile time.
     #[inline(always)]
-    fn binds(self, name: &str) -> bool {
+    fn binds(self, in_rest: bool) -> bool {
         match self {
             RealmPhases::Both => true,
-            RealmPhases::Core => !crate::codegen_abi::realm_rest_global(name),
-            RealmPhases::Rest => crate::codegen_abi::realm_rest_global(name),
+            RealmPhases::Core => !in_rest,
+            RealmPhases::Rest => in_rest,
         }
     }
 }
@@ -244,11 +243,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name = b"globalThis";
         let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             key,
             value,
-            "globalThis".to_string(),
+            b"globalThis",
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
@@ -260,11 +259,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name = b"global";
         let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             key,
             value,
-            "global".to_string(),
+            b"global",
             super::super::PropertyAttrs::new(true, true, true),
         );
     }
@@ -274,7 +273,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
     // Built by the pass that binds the typed arrays; phase A alone leaves it
     // to phase B (or to the first reader that asks for it on its own).
-    let typed_array_intrinsic_ctor = if phases.binds("Uint8Array") {
+    let typed_array_intrinsic_ctor = if phases.binds(const { super::phase_rows::in_rest("Uint8Array") }) {
         ensure_typed_array_intrinsic().0
     } else {
         std::ptr::null_mut()
@@ -301,7 +300,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     }
     for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
         let name = declaration.name;
-        if !phases.binds(name) {
+        if !phases.binds(declaration.phase_b) {
             continue;
         }
         if name == "Buffer" {
@@ -342,11 +341,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
                     );
                 }
             }
-            super::super::define_builtin_data_property(
+            super::super::descriptor_state::define_builtin_data_property_bytes(
                 singleton(),
                 name_key,
                 ctor_value,
-                name.to_string(),
+                name.as_bytes(),
                 super::super::PropertyAttrs::new(true, false, true),
             );
             continue;
@@ -358,11 +357,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             let (object_ctor, _) = object_intrinsics_for_realm(singleton());
             if !object_ctor.is_null() {
                 let name_key = super::global_name_key(b"Object");
-                super::super::define_builtin_data_property(
+                super::super::descriptor_state::define_builtin_data_property_bytes(
                     singleton(),
                     name_key,
                     crate::value::js_nanbox_pointer(object_ctor as i64),
-                    name.to_string(),
+                    name.as_bytes(),
                     super::super::PropertyAttrs::new(true, false, true),
                 );
             }
@@ -396,10 +395,14 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             // The replace-lock of a phase-B family prototype is set here,
             // before the global's slot can name its constructor: phase A's
             // realm seal has already run and will not come back for it.
-            crate::object::builtin_proto::seal_realm_family_of(declaration);
+            if declaration.realm_seals_prototype {
+                crate::object::builtin_proto::seal_realm_family_of(declaration);
+            }
             // A constructor that is also a builtin namespace (`Date`): its
             // member holder (the constructor's bag) is sealed with it.
-            super::super::builtin_namespace::seal_namespace_value(name, ctor_value.to_bits());
+            if declaration.realm_seals_namespace {
+                super::super::builtin_namespace::seal_namespace_value(name, ctor_value.to_bits());
+            }
         }
         if name == "Storage" {
             // Node: `localStorage` / `sessionStorage` are accessors whose
@@ -408,11 +411,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         }
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             ctor_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, false, true),
         );
         super::super::native_module::publish_worker_messaging_constructor(
@@ -425,10 +428,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // Error.prototype as its instance parent, but no Error constructor parent.
     // A lazy child links in its own birth (`link_interface_parent`).
     for (child, parent, constructor_inherits) in INTERFACE_PARENTS {
-        if crate::object::BuiltinConstructorIdentity::for_name(child)
-            .is_some_and(|identity| identity.declaration().lazy)
-            || !phases.binds(child)
-        {
+        let Some(identity) = crate::object::BuiltinConstructorIdentity::for_name(child) else {
+            continue;
+        };
+        let declaration = identity.declaration();
+        if declaration.lazy || !phases.binds(declaration.phase_b) {
             continue;
         }
         let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
@@ -461,8 +465,9 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     }
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
-    for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
-        if !phases.binds(name) {
+    const FUNCTIONS_IN_REST: u64 = super::phase_rows::rest_mask(GLOBAL_THIS_BUILTIN_FUNCTIONS);
+    for (index, name) in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied().enumerate() {
+        if !phases.binds(FUNCTIONS_IN_REST & (1 << index) != 0) {
             continue;
         }
         let (info, arity, enumerable) = match name {
@@ -606,11 +611,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         let name_bytes = name.as_bytes();
         let name_key = super::global_name_key(name_bytes);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             fn_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, enumerable, true),
         );
     }
@@ -627,8 +632,9 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         alias_number_static_to_global_function(singleton(), "parseInt");
     }
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
-    for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
-        if !phases.binds(name) {
+    const NAMESPACES_IN_REST: u64 = super::phase_rows::rest_mask(GLOBAL_THIS_BUILTIN_NAMESPACES);
+    for (index, name) in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied().enumerate() {
+        if !phases.binds(NAMESPACES_IN_REST & (1 << index) != 0) {
             continue;
         }
         let name_bytes = name.as_bytes();
@@ -686,25 +692,25 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             // slot can name it.
             super::super::builtin_namespace::seal_namespace_value(name, ns_value.to_bits());
         }
-        super::super::define_builtin_data_property(
+        super::super::descriptor_state::define_builtin_data_property_bytes(
             singleton(),
             name_key,
             ns_value,
-            name.to_string(),
+            name.as_bytes(),
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
     // node:perf_hooks `performance` global — bind it to the same singleton the
     // named import resolves to, so `globalThis.performance ===
     // require("perf_hooks").performance` (#1327). typeof stays "object".
-    if phases.binds("performance") {
+    if phases.binds(const { super::phase_rows::in_rest("performance") }) {
         let pname = b"performance";
         let pkey = super::global_name_key(pname);
         let pval = crate::perf_hook_slots::performance_namespace();
         js_object_set_field_by_name(singleton(), pkey, pval);
     }
     // Perf_hooks constructors are globals identical to the module exports.
-    for name in [
+    const PERFORMANCE_NAMES: &[&str] = &[
         "Performance",
         "PerformanceEntry",
         "PerformanceMark",
@@ -712,8 +718,10 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         "PerformanceObserver",
         "PerformanceObserverEntryList",
         "PerformanceResourceTiming",
-    ] {
-        if !phases.binds(name) {
+    ];
+    const PERFORMANCE_IN_REST: u64 = super::phase_rows::rest_mask(PERFORMANCE_NAMES);
+    for (index, name) in PERFORMANCE_NAMES.iter().copied().enumerate() {
+        if !phases.binds(PERFORMANCE_IN_REST & (1 << index) != 0) {
             continue;
         }
         let key = super::global_name_key(name);
@@ -725,7 +733,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // Performance.prototype -> EventTarget.prototype -> Object.prototype, and
     // `Performance` inherits EventTarget's statics, among them the
     // `Symbol.for("nodejs.event_target")` brand the listener methods check.
-    if phases.binds("Performance") {
+    if phases.binds(const { super::phase_rows::in_rest("Performance") }) {
         let scope = crate::gc::RuntimeHandleScope::new();
         let perf_ctor = scope.root_nanbox_f64(
             super::super::native_module::bound_native_callable_export_value(
@@ -814,21 +822,21 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             let non_writable = super::super::PropertyAttrs::new(false, false, false);
             for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
                 let key = super::global_name_key(name);
-                super::super::define_builtin_data_property(
+                super::super::descriptor_state::define_builtin_data_property_bytes(
                     singleton(),
                     key,
                     value,
-                    name.to_string(),
+                    name.as_bytes(),
                     non_writable,
                 );
             }
             let undef_key = super::global_name_key(b"undefined");
             let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
-            super::super::define_builtin_data_property(
+            super::super::descriptor_state::define_builtin_data_property_bytes(
                 singleton(),
                 undef_key,
                 undef_val,
-                "undefined".to_string(),
+                b"undefined",
                 super::super::PropertyAttrs::new(false, false, false),
             );
         }

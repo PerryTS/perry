@@ -38,6 +38,21 @@ a builtin outside the core completes the realm. If the first access requires
 the complete realm, the runtime populates it in one pass. Both entries refer to
 the same global object, and each retained copy is registered as a GC root.
 
+The deferred Web families are `DOMException`, `Event`, `CustomEvent`,
+`MessageEvent`, `AbortController`, and `AbortSignal`. Their constructors and
+prototypes use the same birth routines and property order in either phase.
+Runtime-created objects materialize their intrinsic family before exposing it.
+`EventTarget` stays in the core because `Performance` inherits from it;
+`Storage` and its global accessors also stay in the core. `Response`, `WebSocket`,
+`URL`, `URLSearchParams`, and `SubtleCrypto` stay in phase A while their prototype
+surfaces and property order need Node parity work.
+
+Population rows derive their phase and sealing eligibility from the canonical
+lists at compile time. Completing a realm reads those flags without matching
+each constructor name again or calling sealing helpers for ineligible families.
+Population passes borrowed name bytes to the descriptor installer instead of
+allocating temporary owned copies of the static names.
+
 To compile with one-pass population throughout, set the compiler environment:
 
 ```sh

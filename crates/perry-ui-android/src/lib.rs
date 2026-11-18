@@ -305,17 +305,14 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMain(
         __android_log_print(
             3,
             b"PerryJNI\0".as_ptr(),
-            b"nativeMain: main() returned, parking thread\0".as_ptr(),
+            b"nativeMain: main() returned\0".as_ptr(),
         );
     }
 
-    // Park this thread forever — do NOT let it exit.
-    // Module-level arrays/objects are allocated on this thread's arena.
-    // If the thread exits, the arena's Drop frees all blocks, turning
-    // every module-level pointer into a dangling reference. The UI thread's
-    // pump ticks call into compiled functions (getLevelInfo etc.) that read
-    // these pointers — segfault if the arena was freed.
-    loop {
-        std::thread::park();
-    }
+    // main() runs on the Activity's UI thread (PerryActivity.startNative), the
+    // same thread every later callback, pump tick and GC step uses, so the
+    // runtime state main() set up (arena, shadow stack, agent pointer block)
+    // stays the state JS sees. Return to the Looper: the UI thread lives as
+    // long as the process, so the arena that holds module-level values is
+    // never torn down underneath them.
 }

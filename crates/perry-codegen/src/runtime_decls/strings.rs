@@ -364,7 +364,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
-    module.declare_function("js_for_in_keys_fact", I64, &[DOUBLE, PTR]);
+    module.declare_function("js_for_in_begin", I64, &[DOUBLE, PTR, PTR]);
     module.declare_function("js_for_in_loop_fact", I64, &[DOUBLE, I64]);
     module.declare_function("js_for_in_key_live", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, I64]);
     module.declare_function("js_is_finite", DOUBLE, &[DOUBLE]);

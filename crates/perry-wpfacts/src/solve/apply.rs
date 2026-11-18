@@ -229,7 +229,7 @@ impl Model {
                     }
                 }
                 if let (Some(l), Some(r)) = (self.ledger.as_mut(), root) {
-                    l.cur = r;
+                    l.leave(r);
                 }
                 self.chain_escape = saved;
             }

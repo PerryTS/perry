@@ -282,7 +282,7 @@
     {
       "path": "crates/perry-runtime/src/object/layout_probe/computed.rs",
       "function": "append_admitted",
-      "body_sha256": "392c9dfab6b1270d7941ff729a585d6b784c86fc605c1f33d287d70584e11563",
+      "body_sha256": "b95bb5ff5e4e9974fae54e5faec44ca6607d59930e2c3bed8a8765300cef3149",
       "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name.",
       "rule": "mask-cast",
       "support_files": []
@@ -290,7 +290,7 @@
     {
       "path": "crates/perry-runtime/src/object/layout_probe/computed.rs",
       "function": "append_admitted",
-      "body_sha256": "392c9dfab6b1270d7941ff729a585d6b784c86fc605c1f33d287d70584e11563",
+      "body_sha256": "b95bb5ff5e4e9974fae54e5faec44ca6607d59930e2c3bed8a8765300cef3149",
       "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name.",
       "rule": "heap-tag-only",
       "support_files": []

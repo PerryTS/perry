@@ -251,6 +251,8 @@ pub(in crate::codegen) fn compile_static_method(
     let mut ctx = FnCtx {
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
