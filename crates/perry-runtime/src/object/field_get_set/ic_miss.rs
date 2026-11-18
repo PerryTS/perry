@@ -159,13 +159,6 @@ pub extern "C" fn js_object_set_field_by_property_id(
     js_object_set_field_by_name(obj, key, value);
 }
 
-pub(crate) fn is_array_method_value_name(key: &[u8]) -> bool {
-    matches!(
-        key,
-        b"pop" | b"push" | b"shift" | b"unshift" | b"splice" | b"slice"
-    )
-}
-
 /// A `Timeout` / `Immediate` handle method key, as a `'static` byte string:
 /// the literal out of this list, never a borrow of `key`.
 ///
@@ -282,11 +275,11 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 }
             }
         } else {
-            if gc_kind == Some(crate::gc_array_type_pat!())
-                && unsafe { key_bytes_are(key, b"length") }
-            {
-                let arr = obj as *const crate::array::ArrayHeader;
-                return crate::array::js_array_length(arr) as f64;
+            // An array is answered by its complete reader (`length` first).
+            if gc_kind.is_some_and(|kind| crate::gc_type_is_array!(kind)) {
+                return unsafe {
+                    f64::from_bits(super::array_canonical_read::get(obj, key).bits())
+                };
             }
             unsafe {
                 if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
@@ -294,6 +287,13 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 }
                 if super::has_property::closure_get_is_complete(obj as usize, key) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                if gc_kind == Some(crate::gc::GC_TYPE_SYMBOL) {
+                    return super::primitive_canonical_get(
+                        crate::value::js_nanbox_pointer(obj as i64),
+                        crate::value::js_nanbox_string(key as i64),
+                        "Symbol",
+                    );
                 }
                 let binary_receiver =
                     crate::typedarray_hook_slots::is_offheap_sidetable_alloc(obj as usize);

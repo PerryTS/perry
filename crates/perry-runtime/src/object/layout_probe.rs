@@ -2632,6 +2632,13 @@ mod computed;
 #[path = "layout_probe/keyed_delete.rs"]
 mod keyed_delete;
 use computed::computed_key;
+/// Existing atom canonicalization exposed to classified read continuations.
+///
+/// # Safety
+/// The key is a live value in this agent.
+pub(crate) unsafe fn canonical_key_for_read(bits: u64) -> Option<(u64, u64)> {
+    computed_key(bits)
+}
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;

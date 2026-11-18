@@ -232,6 +232,9 @@ mod exotic_named_read_tests;
 pub(crate) mod field_ops;
 mod get_field_by_name;
 mod get_slow;
+mod primitive_canonical_read;
+pub(crate) use primitive_canonical_read::primitive_canonical_get;
+mod array_canonical_read;
 pub(crate) use get_slow::get_field_by_name_of_value;
 pub use get_slow::{
     js_object_get_field_nonptr, js_object_get_field_site_slow, js_object_get_field_slow,
@@ -353,7 +356,7 @@ pub(crate) use ic_miss::private_member_access_hints_depth;
 pub(crate) use ic_miss::RuntimePrivateElement;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
-    current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,
+    current_private_lexical_brand_value, define_static_private_field,
     note_private_template_evaluated, private_evaluation_brand_value,
     private_lexical_brand_check_marks, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_push_at, private_lexical_brand_unwind_to,

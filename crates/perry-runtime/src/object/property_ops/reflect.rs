@@ -27,14 +27,32 @@ pub(crate) fn js_reflect_get_impl(
     receiver: f64,
     default_undefined: bool,
 ) -> f64 {
+    reflect_get_key::<false>(target, key, receiver, default_undefined)
+}
+
+/// Internal Get with an already-computed key and explicit receiver.
+pub(crate) fn canonical_get(target: f64, key: f64, receiver: f64) -> f64 {
+    reflect_get_key::<true>(target, key, receiver, false)
+}
+
+fn reflect_get_key<const CANONICAL: bool>(
+    target: f64,
+    key: f64,
+    receiver: f64,
+    default_undefined: bool,
+) -> f64 {
     // A data read has no observable receiver binding or key conversion. The
     // classifier accepts only already-string keys and proves every traversed
     // object ordinary before returning, so no handles are needed on a hit.
-    if let Some(value) = unsafe {
-        crate::object::native_get::try_data_get(
-            crate::value::JSValue::from_bits(target.to_bits()),
-            crate::value::JSValue::from_bits(key.to_bits()),
-        )
+    if let Some(value) = if CANONICAL {
+        None
+    } else {
+        unsafe {
+            crate::object::native_get::try_data_get(
+                crate::value::JSValue::from_bits(target.to_bits()),
+                crate::value::JSValue::from_bits(key.to_bits()),
+            )
+        }
     } {
         return f64::from_bits(value.bits());
     }
@@ -45,8 +63,12 @@ pub(crate) fn js_reflect_get_impl(
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
     let receiver_handle = scope.root_nanbox_f64(receiver);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
+    let property_key = if CANONICAL {
+        key_handle.get_nanbox_f64()
+    } else {
+        unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) }
+    };
+    let property_key_handle = scope.root_nanbox_f64(property_key);
     let target = target_handle.get_nanbox_f64();
     let property_key = property_key_handle.get_nanbox_f64();
     // Default receiver to target when undefined.
