@@ -1652,8 +1652,8 @@ const classParentTable = {};
 // Return values are plain JS values, converted back to BigInt bits by __jsValueToBits in mem_call.
 // The class name is non-enumerable, so Object.keys, for-in, spread and
 // JSON.stringify see only the fields the program declared.
-function __classInstance(className) {
-  return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
+function __classInstance(className, proto = Object.prototype) {
+  return Object.defineProperty(Object.create(proto), "__class__", { value: className, writable: true, configurable: true });
 }
 
 // An object or a function: a class value (see __classRef) is a host function, and
@@ -1673,34 +1673,107 @@ const __perryClassCtors = new WeakSet();
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
-    ctor = function (...args) {
-      if (new.target === undefined) {
-        throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
-      }
-      const self = __classInstance(className);
-      if (ctorIdx < 0) return self;
-      const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
-      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
-      // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
-      return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
-    };
-    Object.defineProperty(ctor, 'name', { value: className });
-    // Instances are `{__class__}` objects, not linked to ctor.prototype: host
-    // `instanceof` walks the class table as class_instanceof does.
-    Object.defineProperty(ctor, Symbol.hasInstance, {
-      value: (obj) => {
-        if (!obj || typeof obj !== 'object') return false;
-        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
-          if (c === className) return true;
-        }
-        return false;
-      },
-    });
-    __perryClassCtors.add(ctor);
+    ctor = __classCtor(className, ctorIdx, undefined);
     __classRefs.set(className, ctor);
   }
   return ctor;
+}
+
+// With `caps`, the constructor is one evaluation of a class expression
+// (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds the
+// class chain's methods bound to the evaluation, and its instances inherit from it.
+function __classCtor(className, ctorIdx, caps) {
+  const evaluated = caps !== undefined;
+  const ctor = function (...args) {
+    if (new.target === undefined) {
+      throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
+    }
+    const self = __classInstance(className, evaluated ? proto : undefined);
+    if (ctorIdx < 0) return self;
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
+    // The constructor's trailing params are the class's captures (see
+    // `synthesize_class_captures`): an evaluation passes its own.
+    const envCaps = evaluated ? __evaluationOf(ctor).caps : [];
+    if (envCaps.length) {
+      args = args.slice(0, impl.length - 1 - envCaps.length);
+      while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
+      args.push(...envCaps);
+    }
+    const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
+    return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+  };
+  Object.defineProperty(ctor, 'name', { value: className });
+  // Host `instanceof` walks the class table as class_instanceof does; an instance of
+  // an evaluated template answers for its evaluation, as class_instanceof_value does.
+  Object.defineProperty(ctor, Symbol.hasInstance, {
+    value: (obj) => {
+      if (!obj || typeof obj !== 'object') return false;
+      if (evaluated && obj.__class__ === className) {
+        return (__instanceEvaluationOf(obj) || __classTemplate(className).first) === ctor;
+      }
+      for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+        if (c === className) return true;
+      }
+      return false;
+    },
+  });
+  __perryClassCtors.add(ctor);
+  if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
+  const proto = { constructor: ctor };
+  for (let c = className; c; c = classParentTable[c] || null) {
+    for (const m of Object.keys(classMethodTable[c] || {})) {
+      if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+      proto[m] = __classMethodValue(c, m, evaluated ? ctor : undefined);
+    }
+  }
+  for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
+  if (evaluated) Object.defineProperty(proto, __evaluationTag, { value: ctor });
+  ctor.prototype = proto;
+  return ctor;
+}
+
+// Class environments (`Expr::ClassEnvGet` and friends). An evaluation is its
+// constructor, which owns its record `{template, caps}`. A member reads the captures of
+// the evaluation it runs in: the method value's it was called through, else the
+// receiver's, else the class's first evaluation (the template's `slots` serve a class
+// that never had one). An instance inherits its evaluation from the evaluation's
+// prototype rather than holding an own key, which host APIs that copy own keys (Node's
+// `new Headers(obj)`) would see.
+const __evaluationRecord = Symbol('perry.classEvaluationRecord');
+const __evaluationTag = Symbol('perry.classEvaluation');
+function __evaluationOf(ctor) {
+  return typeof ctor === 'function' ? ctor[__evaluationRecord] : undefined;
+}
+function __instanceEvaluationOf(obj) {
+  return obj !== null && typeof obj === 'object' ? obj[__evaluationTag] : undefined;
+}
+const __classTemplates = new Map();
+let __classEnvCall = null;
+function __classTemplate(className) {
+  let t = __classTemplates.get(className);
+  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [] }));
+  return t;
+}
+function __classEvaluate(className, ctorIdx, caps) {
+  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+  const t = __classTemplate(className);
+  if (t.first === undefined) t.first = ctor;
+  return ctor;
+}
+function __classEvaluationOf(receiver, className) {
+  const call = __classEnvCall;
+  if (call && call.receiver === receiver && __evaluationOf(call.evaluation).template === className) {
+    return call.evaluation;
+  }
+  const own = __instanceEvaluationOf(receiver);
+  if (own && __evaluationOf(own).template === className) return own;
+  return __classTemplate(className).first;
+}
+function __classEnvCaps(receiver, className) {
+  const ev = __classEvaluationOf(receiver, className);
+  return ev ? __evaluationOf(ev).caps : __classTemplate(className).slots;
 }
 
 // A lowered sync generator drives its resume record, a wasm closure taking
@@ -1946,13 +2019,8 @@ const __memDispatch = {
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
-  // at call time. A home that is not an object is unbound, and reads undefined.
-  object_super_get: (home, receiver, key) => {
-    if (!home || typeof home !== 'object') return undefined;
-    const proto = Object.getPrototypeOf(home);
-    if (proto === null) throw new TypeError(`Cannot read properties of null (reading '${String(key)}')`);
-    return Reflect.get(proto, key, receiver);
-  },
+  // at call time (see __superGet, which also takes a class method's home).
+  object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!__holdsProperties(obj)) return undefined;
@@ -2123,6 +2191,14 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, callee.captures.length, args.map(__jsValueToBits));
     return __bitsToJsValue(fn(...callee.captures, ...padded));
   },
+  // `Reflect.apply`: a host function (a class method value) gets `thisArg`; a Perry
+  // closure has no `this` to give.
+  reflect_apply: (fn, thisArg, args) => {
+    const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
+    if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
+    if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
+    return __memDispatch.closure_call_spread(fn, argArr);
+  },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (typeof closure === 'function') return __callHostFunction(closure, argArr);
@@ -2211,6 +2287,51 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
+  class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
+  // A refresh of a path that never evaluated the class gets `undefined`: a no-op.
+  class_env_refresh: (ctor, caps) => {
+    const evaluation = __evaluationOf(ctor);
+    if (evaluation && Array.isArray(caps)) evaluation.caps = caps;
+    return ctor;
+  },
+  class_env_get: (className, index, receiver) => __classEnvCaps(receiver, String(className))[index | 0],
+  // A constructor's publish of its capture params never overwrites a capture with
+  // a param the caller left out (see `class_env.rs` in perry-codegen).
+  class_env_set: (className, index, receiver, value, publish) => {
+    if (!(publish && value === undefined)) __classEnvCaps(receiver, String(className))[index | 0] = value;
+    return value;
+  },
+  class_env_stamp: (className, instance, evaluation) => {
+    const e = __evaluationOf(evaluation);
+    // class_new built `new C()` on the default prototype (or another evaluation's).
+    if (e && instance && typeof instance === 'object' && instance.__class__ === e.template) {
+      const proto = Object.getPrototypeOf(instance);
+      if (proto !== evaluation.prototype && (proto === Object.prototype || __instanceEvaluationOf(proto) !== undefined)) {
+        Object.setPrototypeOf(instance, evaluation.prototype);
+      }
+    }
+    return instance;
+  },
+  class_env_current: (className, receiver) => __classEvaluationOf(receiver, String(className)),
+  class_register_captures: (className, caps) => {
+    if (Array.isArray(caps)) __classTemplate(String(className)).slots = caps;
+  },
+  // The decl-site snapshot (`RegisterClassCaptures`) unless it is `undefined`, or the
+  // new-site param first when `preferFallback` says the param wins.
+  class_capture_value: (className, index, fallback, preferFallback) => {
+    const snapshot = __classTemplate(String(className)).slots[index | 0];
+    if (preferFallback) return fallback !== undefined ? fallback : snapshot;
+    return snapshot !== undefined ? snapshot : fallback;
+  },
+  // `obj instanceof C` where C is a class-expression evaluation: an instance of the
+  // template answers for the evaluation that built it.
+  class_instanceof_value: (classId, obj, ctor) => {
+    const e = __evaluationOf(ctor);
+    if (e && obj && typeof obj === 'object' && obj.__class__ === e.template) {
+      return (__instanceEvaluationOf(obj) || __classTemplate(e.template).first) === ctor;
+    }
+    return __memDispatch.class_instanceof(obj, classId) === 1;
+  },
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -2281,6 +2402,11 @@ const __memDispatch = {
     }
     return undefined;
   },
+  // A class method's [[HomeObject]] names its class and side: the class's prototype is
+  // its method table, not a host object (see __superGet).
+  class_method_home: (className, isStatic) => ({ __classHome__: String(className), isStatic: !!isStatic }),
+  // A null parent is `extends null`; the parent walks end there as at a root class.
+  class_extends_null: (className) => { classParentTable[String(className)] = null; },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (!__holdsProperties(obj)) return undefined;
@@ -2302,7 +2428,7 @@ const __memDispatch = {
         for (let c = obj.__class__; c; c = classParentTable[c] || null) {
           const methods = classMethodTable[c];
           if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
-            return __classMethodValue(c, fname);
+            return __classMethodValue(c, fname, __instanceEvaluationOf(obj));
           }
         }
       }
@@ -2351,25 +2477,8 @@ const __memDispatch = {
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
-  // `super[key]` in a method of `cls`: the lookup starts at cls's parent and the
-  // receiver stays `this`. As on a prototype chain, the nearest class defining an
-  // accessor or a method of that name wins; a setter-only accessor reads as
-  // undefined. Past the class chain the name resolves on Object.prototype.
-  class_super_get: (obj, cls, mname) => {
-    const name = String(mname);
-    const own = (methods, k) => Object.prototype.hasOwnProperty.call(methods, k);
-    for (let c = classParentTable[String(cls)] || null; c; c = classParentTable[c] || null) {
-      const methods = classMethodTable[c];
-      if (!methods) continue;
-      if (own(methods, '__get_' + name)) {
-        const getter = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
-        return __bitsToJsValue(getter(__jsValueToBits(obj)));
-      }
-      if (own(methods, '__set_' + name)) return undefined;
-      if (own(methods, name)) return __classMethodValue(c, name);
-    }
-    return Reflect.get(Object.prototype, name, obj);
-  },
+  // `super[key]` in an instance method of `cls`, with the receiver as `this`.
+  class_super_get: (obj, cls, mname) => __superGet({ __classHome__: String(cls), isStatic: false }, mname, obj),
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
   // method gets its arguments as Perry values; a non-callable throws, as in JS.
   class_super_call: (fn, obj, mname, args) => {
@@ -5353,24 +5462,74 @@ function __hostCallback(value) {
 // called with, as a JS method does (`f.call(other)` still runs this class's `m`).
 // `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
 // which call it with an undefined `this`, as JS does for a detached method.
+// A method of a class-expression evaluation (`evaluation`, see __classCtor) is one
+// value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
-function __classMethodValue(cls, mname) {
+function __classMethodValue(cls, mname, evaluation) {
   const key = cls + '\u0000' + mname;
-  let fn = __classMethodValues.get(key);
+  const cache = evaluation ? __evaluationOf(evaluation) : null;
+  const values = cache ? (cache.methods ||= new Map()) : __classMethodValues;
+  let fn = values.get(key);
   if (!fn) {
     const funcIdx = classMethodTable[cls][mname];
     fn = function (...args) {
       const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
       const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+      const outer = __classEnvCall;
+      if (evaluation) __classEnvCall = { receiver: this, evaluation };
+      try {
+        return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+      } finally {
+        __classEnvCall = outer;
+      }
     };
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
     __classMethodFns.add(fn);
-    __classMethodValues.set(key, fn);
+    values.set(key, fn);
   }
   return fn;
+}
+
+// `super[key]` read with `receiver` as `this`, from the prototype of the home object.
+// The instance side of a class home walks the parent chain's accessors and methods,
+// then the host base's prototype (or Object.prototype).
+function __superGet(home, key, receiver) {
+  const name = typeof key === 'symbol' ? key : String(key);
+  const own = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
+  if (home && home.__classHome__ !== undefined) {
+    const cls = home.__classHome__;
+    if (home.isStatic) {
+      for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
+        if (own(classStaticTable[c], name)) return classStaticTable[c][name];
+      }
+      return Reflect.get(Function.prototype, name, receiver);
+    }
+    if (classParentTable[cls] === null) __throwNullReceiver(null, name);
+    let last = null;
+    for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
+      last = c;
+      const methods = classMethodTable[c];
+      if (typeof name === 'string') {
+        if (own(methods, '__get_' + name)) {
+          const fn = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
+          return __bitsToJsValue(fn(__jsValueToBits(receiver)));
+        }
+        if (own(methods, '__set_' + name)) return undefined;
+        if (own(methods, name)) return __classMethodValue(c, name, __instanceEvaluationOf(receiver));
+      }
+      if (classParentTable[c] === null) return undefined;
+    }
+    const host = last && !classMethodTable[last] ? globalThis[last] : undefined;
+    const base = typeof host === 'function' ? host.prototype : Object.prototype;
+    return Reflect.get(base, name, receiver);
+  }
+  // A home that is not an object is unbound, and reads undefined.
+  if (!home || typeof home !== 'object') return undefined;
+  const proto = Object.getPrototypeOf(home);
+  if (proto === null) __throwNullReceiver(proto, name);
+  return Reflect.get(proto, name, receiver);
 }
 
 // `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into
