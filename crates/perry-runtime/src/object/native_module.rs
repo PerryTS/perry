@@ -16,12 +16,12 @@ use std::sync::{
     OnceLock, RwLock,
 };
 
-pub(crate) mod constant_getters;
 mod async_hooks_exports;
 mod callable_export_arity_table;
 mod callable_export_check;
 mod callable_export_table;
 pub(crate) mod callable_exports;
+pub(crate) mod constant_getters;
 mod perf_instance_bind;
 mod static_exports;
 pub(crate) use perf_instance_bind::instance_bound_perf_method;

@@ -304,9 +304,8 @@ fn stringify_shape_cache_scanner_is_registered() {
     crate::gc::gc_init();
     // Test gc_init installs all features. Remove that registration so this
     // assertion observes the formatting installer itself.
-    let previous = crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
-        std::mem::take(&mut *scanners.borrow_mut())
-    });
+    let previous = crate::gc::roots::MUTABLE_ROOT_SCANNERS
+        .with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
     crate::feature_hooks::js_runtime_install_json_format();
     let registered = crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow().iter().any(|entry| {

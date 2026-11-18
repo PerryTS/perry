@@ -273,11 +273,12 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // `OBJ_FLAG_TYPED_ARRAY_PROTO` for `Object.getPrototypeOf` resolution.
     // Built by the pass that binds the typed arrays; phase A alone leaves it
     // to phase B (or to the first reader that asks for it on its own).
-    let typed_array_intrinsic_ctor = if phases.binds(const { super::phase_rows::in_rest("Uint8Array") }) {
-        ensure_typed_array_intrinsic().0
-    } else {
-        std::ptr::null_mut()
-    };
+    let typed_array_intrinsic_ctor =
+        if phases.binds(const { super::phase_rows::in_rest("Uint8Array") }) {
+            ensure_typed_array_intrinsic().0
+        } else {
+            std::ptr::null_mut()
+        };
     // #3664: build the generator / async-generator intrinsic prototype towers
     // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
     // `%Generator(.prototype)%` chains resolve to real objects.

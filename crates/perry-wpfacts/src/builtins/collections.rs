@@ -188,7 +188,13 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 if let Some(&value) = c.arg(0) {
                     let k = m.atom("constructor");
                     let cn = m.node_l("promise-resolve-constructor");
-                    m.cons(value, Cons::Load { key: Key::Named(k), dst: cn });
+                    m.cons(
+                        value,
+                        Cons::Load {
+                            key: Key::Named(k),
+                            dst: cn,
+                        },
+                    );
                 }
             }
             // It rejects: the shared cell.

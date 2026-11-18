@@ -347,7 +347,10 @@ fn population_row_flags_match_the_abi_sets() {
             "{name} namespace seal"
         );
     }
-    for names in [GLOBAL_THIS_BUILTIN_FUNCTIONS, GLOBAL_THIS_BUILTIN_NAMESPACES] {
+    for names in [
+        GLOBAL_THIS_BUILTIN_FUNCTIONS,
+        GLOBAL_THIS_BUILTIN_NAMESPACES,
+    ] {
         let mask = super::phase_rows::rest_mask(names);
         for (index, name) in names.iter().enumerate() {
             assert_eq!(
