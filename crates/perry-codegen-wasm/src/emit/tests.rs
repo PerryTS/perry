@@ -240,8 +240,7 @@ console.log("b");
     );
 }
 
-/// A console call leaves `undefined` on the stack wherever it sits, so a
-/// conditional arm, an initializer and an arrow body holding one validate.
+/// A console call is `undefined` wherever it sits.
 #[test]
 fn console_call_is_undefined_in_every_expression_position() {
     assert_eq!(
@@ -258,8 +257,8 @@ console.log(f(3));
     );
 }
 
-/// With the whole-program facts on, `console.log(2)` lowers as the pair
-/// `NamespacePatched("console") ? <generic call> : <console call>` (#14876).
+/// With namespace pairs on, `console.log(2)` lowers as
+/// `NamespacePatched("console") ? <generic call> : <console call>`.
 #[test]
 fn namespace_pair_with_a_console_arm_validates() {
     let mut pairs = perry_hir::PatchedBuiltins::new();
@@ -274,6 +273,22 @@ fn namespace_pair_with_a_console_arm_validates() {
         module.init
     );
     assert_eq!(run_web_source(source), "2\n3");
+    perry_hir::clear_patched_builtins();
+}
+
+/// An unsupported `console` method still evaluates its arguments.
+#[test]
+fn unsupported_console_method_evaluates_its_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as c from "node:console";
+c.time(String(c.log("a")));
+c.log("b");
+"#
+        ),
+        "a\nb"
+    );
 }
 
 #[test]
