@@ -119,6 +119,7 @@ pub use nanbox::{
 };
 
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----
+pub(crate) use dynamic_arith::dyn_to_int32;
 pub use dynamic_arith::{
     js_add_throw_if_symbol, js_dynamic_add, js_dynamic_bitand, js_dynamic_bitor, js_dynamic_bitxor,
     js_dynamic_div, js_dynamic_mod, js_dynamic_mul, js_dynamic_neg, js_dynamic_pos, js_dynamic_pow,
