@@ -206,7 +206,7 @@ function buildImports() {
       math_log: (x) => Math.log(x),
       date_now: () => Date.now(),
       js_typeof: (val) => {
-        const t = typeof toJsValue(val);
+        const t = __typeOf(toJsValue(val));
         stringTable.push(t);
         return nanboxString(stringTable.length - 1);
       },
@@ -496,8 +496,7 @@ function buildImports() {
 
       // closure_new(func_table_idx, capture_count) -> handle
       closure_new: (funcIdx, captureCount) => {
-        const closure = { funcIdx: funcIdx, captures: new Array(captureCount | 0) };
-        return nanboxPointer(allocHandle(closure));
+        return nanboxPointer(allocHandle(new __PerryClosure(funcIdx, captureCount)));
       },
       // closure_set_capture(handle, idx, value) -> handle (chaining)
       // value is NaN-boxed f64 — convert to BigInt for WASM i64 ABI
@@ -1628,6 +1627,21 @@ function wrapImportsForI64(imports) {
   return wrapped;
 }
 
+// What closure_new makes. Its class, not its keys, tells a closure from a plain
+// object that has `funcIdx` / `captures` fields, at no per-closure cost.
+class __PerryClosure {
+  constructor(funcIdx, captureCount) {
+    this.funcIdx = funcIdx;
+    this.captures = new Array(captureCount | 0);
+  }
+}
+function __isPerryClosure(v) {
+  return v instanceof __PerryClosure;
+}
+function __typeOf(v) {
+  return __isPerryClosure(v) ? 'function' : typeof v;
+}
+
 // Class method/static/parent tables
 const classMethodTable = {};
 const classStaticTable = {};
@@ -1901,7 +1915,7 @@ const __memDispatch = {
   math_clz32: (x) => Math.clz32(x),
   math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
-  js_typeof: (val) => typeof val,
+  js_typeof: (val) => __typeOf(val),
   parse_int: (val) => parseInt(String(val), 10),
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
@@ -2059,7 +2073,7 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount) => ({ funcIdx: funcIdx, captures: new Array(captureCount | 0) }),
+  closure_new: (funcIdx, captureCount) => new __PerryClosure(funcIdx, captureCount),
   closure_set_capture: (closure, idx, value) => {
     if (closure) closure.captures[idx | 0] = __jsValueToBits(value);
     return closure;
@@ -5323,7 +5337,7 @@ const hostCallbacks = new WeakMap();
 
 // Host APIs require a stable function identity for Perry closure objects.
 function __hostCallback(value) {
-  if (!value || typeof value !== 'object' || typeof value.funcIdx === 'undefined') return value;
+  if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
     hostCallbacks.set(value, (...args) => {
       const result = callWasmClosure(value, ...args);
@@ -5403,8 +5417,13 @@ function __jsMethodInvoke(ref, args) {
     __memDispatch.propagate_exception(true);
     return result;
   }
+  if (__isPerryClosure(ref.f)) {
+    const result = __memDispatch.closure_call_spread(ref.f, args);
+    __memDispatch.propagate_exception(true);
+    return result;
+  }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
-  return ref.f.apply(ref.r, args);
+  return ref.f.apply(ref.r, args.map(__hostCallback));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.
@@ -5456,6 +5475,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       const method = objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
+      if (__isPerryClosure(method)) return __memDispatch.closure_call_spread(method, rawArgs);
     } catch (error) {
       if (tryDepth === 0) throw error;
       currentException = error;

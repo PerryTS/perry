@@ -1726,3 +1726,95 @@ console.log((U as any).tag);
         "class\n2\nbase"
     );
 }
+
+#[test]
+fn a_closure_used_as_a_value_is_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = () => 1;
+function named(): number { return 2; }
+console.log(typeof f + " " + typeof (() => 1) + " " + typeof named);
+const o: any = {}; o.h = f;
+console.log(typeof o.h + " " + o.h() + " " + ({ g(n: number) { return n + 1; } }).g(41));
+const fake: any = { funcIdx: 0, captures: [] };
+console.log(typeof fake);
+"#
+        ),
+        "function function function\nfunction 1 42\nobject"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_by_an_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() { console.log(typeof o.h + " " + o.h(21)); }
+main();
+"#
+        ),
+        "function 42"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_in_a_local() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() {
+  const f = o.h;
+  if (typeof f === "function") console.log(f(21));
+  const m: any = Math.max;
+  console.log(m(3, 7));
+  const from: any = Array.from;
+  console.log(from([1, 2], o.h).join(","));
+  const t = o.t;
+  t();
+}
+o.t = () => { throw new Error("boom"); };
+main().catch((e: any) => console.log("caught " + e.message));
+"#
+        ),
+        "42\n7\n2,4\ncaught boom"
+    );
+}
+
+#[test]
+fn an_async_body_keeps_the_receiver_of_a_computed_method_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { n: 2 }; o.h = (n: number) => n * 2;
+async function main() {
+  const a = [1, 2];
+  const k = "join";
+  const h = "h";
+  console.log(a[k]("-") + " " + o[h](21));
+}
+main();
+"#
+        ),
+        "1-2 42"
+    );
+}
+
+#[test]
+fn an_async_body_passes_a_closure_lookalike_to_a_host_function_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const fake: any = { funcIdx: 0, captures: [] };
+async function main() {
+  const of: any = Array.of;
+  console.log(typeof of(fake)[0]);
+}
+main();
+"#
+        ),
+        "object"
+    );
+}
