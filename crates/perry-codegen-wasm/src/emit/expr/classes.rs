@@ -50,7 +50,7 @@ impl<'a> FuncEmitCtx<'a> {
                         .iter()
                         .chain(mutable_captures.iter())
                         .map(|id| local_map.get(id).copied());
-                    let this_cap = captures_this.then_some(Some(self.this_local));
+                    let this_cap = captures_this.then_some(Some(self.this_local.unwrap_or(0)));
                     for (i, local) in cap_locals.chain(this_cap).enumerate() {
                         // Duplicate closure handle (it's returned by closure_new)
                         // closure_set_capture(handle, idx, value) -> handle (chaining)
@@ -363,7 +363,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
             Expr::This => {
-                func.instruction(&Instruction::LocalGet(self.this_local));
+                func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
             Expr::SuperCall(args) => {
                 // Call parent constructor: super(args)
@@ -784,7 +784,7 @@ impl<'a> FuncEmitCtx<'a> {
     /// The receiver a class-environment node resolves its evaluation from: `this`
     /// in a member.
     fn class_env_receiver(&self) -> Expr {
-        if self.this_is_local0 {
+        if self.this_local.is_some() {
             Expr::This
         } else {
             Expr::Undefined
