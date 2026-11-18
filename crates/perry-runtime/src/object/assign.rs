@@ -64,10 +64,12 @@ pub(super) unsafe fn object_assign_set_string_key(
         let target_value = crate::value::js_nanbox_pointer(target as i64);
         let key_value = f64::from_bits(JSValue::string_ptr(key_ptr as *mut _).bits());
         let inline_room = !target_is_array
-            && crate::value::addr_class::try_read_gc_header(target as usize).is_some_and(|header| {
-                crate::gc_type_is_object!(header.obj_type)
-                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            })
+            && crate::value::addr_class::try_read_gc_header(target as usize).is_some_and(
+                |header| {
+                    crate::gc_type_is_object!(header.obj_type)
+                        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                },
+            )
             && !super::overflow::has_overflow(target)
             && (super::object_keys(target).count() as usize)
                 < super::object_inline_capacity(target) as usize;
