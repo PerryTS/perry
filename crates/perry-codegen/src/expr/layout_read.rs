@@ -1260,17 +1260,25 @@ fn run_arm(
     this_bits: &str,
     property: &str,
 ) -> (Option<RunArm>, FamilyRun) {
+    // Lowering visits sibling arms sequentially, but a run established in
+    // one arm is not available in the other or beyond a bypassing join.
+    // Check after the RHS too: it may introduce control flow of its own.
+    // The bind watch is such a proof as well: `emit_bind_call` records it
+    // where ITS merge is, and the bind call can be one arm of a larger
+    // lowering (a method-dispatch tower over a program's own `bind` methods),
+    // whose other arms bypass it to reach this store.
+    let dominates = |ctx: &FnCtx<'_>, proof: &str| {
+        ctx.func.proof_dominates_block_end(proof, ctx.current_block)
+    };
     let watched = ctx
         .inline_ctor_return
         .last_mut()
         .and_then(|b| b.bind_watch.take())
-        .flatten();
-    // Lowering visits sibling arms sequentially, but a run established in
-    // one arm is not available in the other or beyond a bypassing join.
-    // Check after the RHS too: it may introduce control flow of its own.
-    let run_in = plan.run_in.filter(|r| {
-        plan.value != RunValue::Runs && ctx.func.proof_dominates_block_end(&r.ok, ctx.current_block)
-    });
+        .flatten()
+        .filter(|b| dominates(ctx, b));
+    let run_in = plan
+        .run_in
+        .filter(|r| plan.value != RunValue::Runs && dominates(ctx, &r.ok));
     let carried = match (plan.value, &run_in) {
         (RunValue::Free, Some(r)) => Some(r.clone()),
         (RunValue::Bind, Some(r)) => watched.map(|b| FamilyRun {
