@@ -216,7 +216,13 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
             if map {
                 maps.insert((at, property.clone()));
             }
-            let safe = map && selected
+            let fill = namespace.is_none()
+                && pf.bindings[mi].fill_births.iter().any(|&(o, len)| {
+                    o == *byte_offset
+                        && perry_hir::folded_call::fill_birth_value(call, len)
+                            .is_some_and(|v| matches!(v, Expr::Integer(_) | Expr::Number(_)))
+                });
+            let safe = (map || fill) && selected
                 || selected && !spread && args.get(&at).is_some_and(|a| {
                     let Some(a) = a else {
                         return false;

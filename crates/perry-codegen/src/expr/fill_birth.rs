@@ -74,18 +74,6 @@ fn sabotaged(arm: &str) -> bool {
     std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok(arm)
 }
 
-/// The integer a literal constructor argument is.
-fn literal_length(e: &Expr) -> Option<i64> {
-    match e {
-        Expr::Integer(k) => Some(*k),
-        Expr::Number(n) if n.fract() == 0.0 && n.abs() <= 4_294_967_295.0 => {
-            // `-0` is a length of 0 too.
-            Some(*n as i64)
-        }
-        _ => None,
-    }
-}
-
 /// The plan of `e` when the facts name it a fill birth and it is the shape
 /// they name: `new Array(<k>).fill(<v>)`.
 fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
@@ -94,7 +82,6 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
     }
     let Expr::Call {
         callee,
-        args,
         byte_offset,
         ..
     } = e
@@ -102,7 +89,6 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
         return None;
     };
     let Expr::PropertyGet {
-        object,
         property,
         byte_offset: member,
         ..
@@ -115,29 +101,8 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
         return None;
     }
     let len = *ctx.wpfacts.fill_births.get(&offset)?;
-    let refuse = |why: &str| -> Option<Plan<'e>> {
-        super::note_site(&format!("fill-birth-refused why={why} {}", ctx.func.name));
-        None
-    };
-    // The window this module proves itself: the call is the shape the facts
-    // describe, with the length they give.
-    let (
-        Expr::New {
-            class_name,
-            args: ctor_args,
-            ..
-        },
-        [value],
-    ) = (object.as_ref(), args.as_slice())
-    else {
-        return refuse("shape");
-    };
-    if class_name != "Array" || ctor_args.len() != 1 {
-        return refuse("shape");
-    }
-    if literal_length(&ctor_args[0]) != Some(i64::from(len)) {
-        return refuse("length");
-    }
+    let value = perry_hir::folded_call::fill_birth_value(e, len)?;
+    debug_assert_eq!(ctx.wpfacts.fill_births.get(&offset), Some(&len));
     let rest = ctx.wpfacts.rest_births.contains(&offset);
     let reserve = ctx
         .wpfacts

@@ -211,3 +211,13 @@ fn native_dispatch_map_needs_brand_and_exact_lookup() {
     );
     assert_named("class H { table = new Map(); run() { this.table.clear = function() {}; this.table.clear(); } } new H().run();", "clear", true);
 }
+
+#[test]
+fn native_dispatch_fill_birth_requires_the_named_literal_allocation() {
+    assert_named(
+        "const a = new Array(8).fill(0); console.log(a.length);",
+        "fill",
+        false,
+    );
+    assert_named("const a = [1]; a.fill(0);", "fill", true);
+}

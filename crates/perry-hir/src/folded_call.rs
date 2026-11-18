@@ -76,6 +76,39 @@ pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
             && matches!((property.as_str(), arity), ("clear", 0) | ("get", 1) | ("set", 2)))
 }
 
+/// The fill operand when this call can realize the published allocation length.
+pub fn fill_birth_value(call: &Expr, len: u32) -> Option<&Expr> {
+    let Expr::Call { callee, args, .. } = call else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let Expr::New {
+        class_name,
+        args: ctor,
+        ..
+    } = object.as_ref()
+    else {
+        return None;
+    };
+    let [value] = args.as_slice() else {
+        return None;
+    };
+    if class_name != "Array" || property != "fill" {
+        return None;
+    }
+    let length_matches = match ctor.as_slice() {
+        [Expr::Integer(k)] => *k == i64::from(len),
+        [Expr::Number(n)] => *n == f64::from(len),
+        _ => false,
+    };
+    length_matches.then_some(value)
+}
+
 /// The site of the unfolded call whose callee is `callee`, when it has a
 /// source offset.
 pub fn callee_site(callee: &Expr) -> Option<Site> {
