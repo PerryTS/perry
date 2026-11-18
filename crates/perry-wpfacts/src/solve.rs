@@ -908,6 +908,7 @@ impl Model {
                 // No flow: the recomputation has nothing to check.
                 Cons::Identity { .. }
                     | Cons::HasProp { .. }
+                    | Cons::OwnProp { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
