@@ -131,7 +131,12 @@ pub(crate) fn try_lower_certified_string(
         return Ok(None);
     }
     debug_assert!(ctx.wpfacts.native_member_calls.contains(byte_offset));
-    lower_string_method_with_proof(ctx, object, property, args, Some(StringProof::Proven)).map(Some)
+    let proof = if matches!(property.as_str(), "charAt" | "charCodeAt") {
+        StringProof::CertifiedEntry
+    } else {
+        StringProof::Proven
+    };
+    lower_string_method_with_proof(ctx, object, property, args, Some(proof)).map(Some)
 }
 
 fn lower_string_method_with_proof(
@@ -187,6 +192,9 @@ pub(crate) enum StringProof {
     /// No entry for the method and arity: the site tests the byte before its
     /// arguments and has a generic arm.
     Guard,
+    /// A solved member and operand certificate selects the unchecked entry,
+    /// including the inline ASCII character path used by string concatenation.
+    CertifiedEntry,
     /// The caller's branch already tested it.
     Proven,
 }
@@ -261,7 +269,7 @@ fn lower_string_method_from_box(
     let mut group = open_rooted_group(1);
     let recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, args_can_collect);
     let result = match proof {
-        StringProof::Entry | StringProof::EntryPreRead => {
+        StringProof::Entry | StringProof::EntryPreRead | StringProof::CertifiedEntry => {
             let patched_before = (proof == StringProof::EntryPreRead).then(|| {
                 crate::builtin_proto::emit_patched_test(
                     ctx,
@@ -276,7 +284,11 @@ fn lower_string_method_from_box(
                 property,
                 &recv_box,
                 &arg_values,
-                patched_before.as_deref(),
+                if proof == StringProof::CertifiedEntry {
+                    EntryGuard::Certified
+                } else {
+                    EntryGuard::from_pre_read(patched_before.as_deref())
+                },
                 None,
             );
             arg_group.release(ctx);
@@ -377,6 +389,18 @@ fn lower_string_method_pristine(
     Ok(ctx.block().phi(DOUBLE, &pairs))
 }
 
+pub(crate) enum EntryGuard<'a> {
+    Checked,
+    Before(&'a str),
+    Certified,
+}
+
+impl<'a> EntryGuard<'a> {
+    pub(crate) fn from_pre_read(patched: Option<&'a str>) -> Self {
+        patched.map_or(Self::Checked, Self::Before)
+    }
+}
+
 /// The string method through its entries (#11915), on operands the caller
 /// has evaluated (each rooted across the next) and re-read.
 ///
@@ -397,13 +421,13 @@ pub(crate) fn emit_string_entry_call(
     property: &str,
     recv_box: &str,
     arg_values: &[String],
-    patched_before: Option<&str>,
+    guard: EntryGuard<'_>,
     generic_label: Option<&str>,
 ) -> Result<String> {
     let checked = crate::builtin_proto::string_entry(property, arg_values.len())
         .expect("an entry proof is chosen only for a method with a checked entry");
     let body = checked.replacen("js_string_m_", "js_string_b_", 1);
-    let callee = if patched_before.is_some() {
+    let callee = if !matches!(guard, EntryGuard::Checked) {
         &body
     } else {
         &checked
@@ -421,7 +445,7 @@ pub(crate) fn emit_string_entry_call(
                 &idx_d,
                 callee,
                 arg_values,
-                patched_before.is_none(),
+                matches!(guard, EntryGuard::Checked),
             ) {
                 return value;
             }
@@ -438,7 +462,7 @@ pub(crate) fn emit_string_entry_call(
                 &idx_d,
                 callee,
                 arg_values,
-                patched_before.is_none(),
+                matches!(guard, EntryGuard::Checked),
             ) {
                 return value;
             }
@@ -447,7 +471,7 @@ pub(crate) fn emit_string_entry_call(
         operands.extend(arg_values.iter().map(|a| (DOUBLE, a.as_str())));
         ctx.block().call(DOUBLE, callee, &operands)
     };
-    let Some(patched) = patched_before else {
+    let EntryGuard::Before(patched) = guard else {
         return Ok(call(ctx));
     };
     let direct_idx = ctx.new_block("strentry.direct");

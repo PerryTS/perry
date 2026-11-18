@@ -269,7 +269,7 @@ fn lower_tag_guarded_string_entry(
         property,
         &recv,
         &arg_vals,
-        patched_before.as_deref(),
+        crate::lower_string_method::EntryGuard::from_pre_read(patched_before.as_deref()),
         Some(&generic_label),
     )?;
     let string_end = ctx.block().label.clone();
