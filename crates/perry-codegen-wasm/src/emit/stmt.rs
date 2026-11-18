@@ -1,8 +1,4 @@
-//! Statement emission extracted from emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move of `FuncEmitCtx::emit_stmt`, `FuncEmitCtx::expr_has_value`,
-//! and the free `has_return` helper. Methods stay on the same struct via
-//! a separate `impl<'a> FuncEmitCtx<'a>` block (idiomatic Rust).
+//! Statement emission: `FuncEmitCtx::emit_stmt` and the free `has_return` helper.
 
 use super::*;
 
@@ -161,18 +157,11 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Stmt::Expr(expr) => {
                 self.emit_expr(func, expr);
-                // Drop the result (expression statement)
-                // Check if expr produces a value
-                if self.expr_has_value(expr) {
-                    func.instruction(&Instruction::Drop);
-                }
+                func.instruction(&Instruction::Drop);
             }
             Stmt::Return(expr) => {
                 if let Some(expr) = expr {
                     self.emit_expr(func, expr);
-                    if !self.expr_has_value(expr) {
-                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    }
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -377,9 +366,7 @@ impl<'a> FuncEmitCtx<'a> {
 
                 if let Some(upd) = update {
                     self.emit_expr(func, upd);
-                    if self.expr_has_value(upd) {
-                        func.instruction(&Instruction::Drop);
-                    }
+                    func.instruction(&Instruction::Drop);
                 }
 
                 // Restart loop (block_depth == loop's depth, so rel=0).
@@ -550,35 +537,6 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
             Stmt::ReleaseBoxes(_) => {}
-        }
-    }
-
-    /// Check if an expression produces a value on the stack
-    pub(super) fn expr_has_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::NativeMethodCall { module, .. } => {
-                let normalized = module.strip_prefix("node:").unwrap_or(module);
-                if normalized == "console" {
-                    return false;
-                }
-                true
-            }
-            // console.log/warn/error via Call + PropertyGet pattern
-            Expr::Call { callee, .. } => {
-                if let Expr::PropertyGet {
-                    object, property, ..
-                } = callee.as_ref()
-                {
-                    if let Expr::GlobalGet(_) = object.as_ref() {
-                        if matches!(property.as_str(), "log" | "warn" | "error") {
-                            return false;
-                        }
-                    }
-                }
-                true
-            }
-            // ArrayForEach returns undefined but we emit it explicitly
-            _ => true,
         }
     }
 }

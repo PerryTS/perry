@@ -240,6 +240,57 @@ console.log("b");
     );
 }
 
+/// A console call is `undefined` wherever it sits.
+#[test]
+fn console_call_is_undefined_in_every_expression_position() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const c = Date.now() > 0;
+const r = c ? console.log("a") : 2;
+console.log(r);
+const f = (x: number) => console.log(x);
+console.log(f(3));
+"#
+        ),
+        "a\nundefined\n3\nundefined"
+    );
+}
+
+/// With namespace pairs on, `console.log(2)` lowers as
+/// `NamespacePatched("console") ? <generic call> : <console call>`.
+#[test]
+fn namespace_pair_with_a_console_arm_validates() {
+    let mut pairs = perry_hir::PatchedBuiltins::new();
+    pairs.namespace_pairs = true;
+    perry_hir::set_patched_builtins(std::sync::Arc::new(pairs));
+    let source = "console.log(2); console.log(Math.max(1, 3));";
+    let ast = perry_parser::parse_typescript(source, "pair.ts").unwrap();
+    let module = perry_hir::lower::lower_module(&ast, "pair", "pair.ts").unwrap();
+    assert!(
+        format!("{:?}", module.init).contains("NamespacePatched(\"console\")"),
+        "the console call must lower as the pair: {:?}",
+        module.init
+    );
+    assert_eq!(run_web_source(source), "2\n3");
+    perry_hir::clear_patched_builtins();
+}
+
+/// An unsupported `console` method still evaluates its arguments.
+#[test]
+fn unsupported_console_method_evaluates_its_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as c from "node:console";
+c.time(String(c.log("a")));
+c.log("b");
+"#
+        ),
+        "a\nb"
+    );
+}
+
 #[test]
 fn json_stringify_honors_value_replacer_and_space() {
     assert_eq!(
