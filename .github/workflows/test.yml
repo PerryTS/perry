@@ -431,9 +431,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cargo-xwin-bin"
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/cargo-xwin-bin"
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
-          # Pin the Windows SDK: the manifest's newest, Win11SDK_10.0.26100,
-          # has no x86_64 headers that cargo-xwin 0.23.0 can find, so its
-          # MSVC CRT setup fails before anything compiles.
+          # cargo-xwin 0.23.0 finds no x86_64 headers in the newest SDK, Win11SDK_10.0.26100.
           echo "XWIN_SDK_VERSION=10.0.22621" >> "$GITHUB_ENV"
 
       - name: Restore cargo-xwin MSVC sysroot
@@ -3758,9 +3756,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cargo-xwin-bin"
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/cargo-xwin-bin"
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
-          # Pin the Windows SDK: the manifest's newest, Win11SDK_10.0.26100,
-          # has no x86_64 headers that cargo-xwin 0.23.0 can find, so its
-          # MSVC CRT setup fails before anything compiles.
+          # cargo-xwin 0.23.0 finds no x86_64 headers in the newest SDK, Win11SDK_10.0.26100.
           echo "XWIN_SDK_VERSION=10.0.22621" >> "$GITHUB_ENV"
           echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-msvc
