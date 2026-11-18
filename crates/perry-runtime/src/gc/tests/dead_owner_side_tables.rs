@@ -310,6 +310,53 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     );
 }
 
+/// #12135: on a minor, an owner's physical generation decides, not its
+/// TENURED flag. An object can be TENURED while it still sits in a nursery
+/// block, and the minor sweep frees it there if unmarked; keeping its entry
+/// would hand it to the next object at that address.
+#[test]
+fn tenured_owner_still_in_the_nursery_is_pruned_on_a_minor() {
+    let _serialized = crate::array::test_serialize();
+    let _guard = GcTestIsolationGuard::new();
+
+    let dead = unsafe { alloc_nursery_test_array() } as usize;
+    let marked = unsafe { alloc_nursery_test_array() } as usize;
+    let old = unsafe { alloc_old_test_array(0) }.0 as usize;
+    for (owner, generation) in [
+        (dead, crate::arena::HeapGeneration::Nursery),
+        (marked, crate::arena::HeapGeneration::Nursery),
+        (old, crate::arena::HeapGeneration::Old),
+    ] {
+        assert_eq!(crate::arena::classify_heap_generation(owner), generation);
+        crate::array::test_seed_element_shape_record(owner);
+    }
+    let headers = [dead, marked, old]
+        .map(|owner| unsafe { header_from_user_ptr(owner as *const u8) as *mut GcHeader });
+    unsafe {
+        (*headers[0]).gc_flags |= GC_FLAG_TENURED;
+        (*headers[1]).gc_flags |= GC_FLAG_TENURED | GC_FLAG_MARKED;
+        (*headers[2]).gc_flags |= GC_FLAG_TENURED;
+    }
+
+    // The fan-out a non-copying minor runs after its trace.
+    crate::gc::dead_owner::prune_dead_owner_side_tables_post_trace(false, false);
+
+    let dead_kept = crate::array::test_element_shape_record_exists(dead);
+    let marked_kept = crate::array::test_element_shape_record_exists(marked);
+    let old_kept = crate::array::test_element_shape_record_exists(old);
+    unsafe { (*headers[1]).gc_flags &= !GC_FLAG_MARKED };
+    crate::array::prune_dead_element_shape_owners(&|_| true);
+    assert!(
+        !dead_kept,
+        "an unmarked TENURED owner still in the nursery is dead after a minor"
+    );
+    assert!(marked_kept, "a marked nursery owner is live");
+    assert!(
+        old_kept,
+        "a minor proves nothing about an old-generation owner"
+    );
+}
+
 #[test]
 fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
