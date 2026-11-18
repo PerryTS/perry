@@ -8,6 +8,10 @@ impl Model {
     /// effect is a change of a unit's contract check (DECISIONS 180).
     pub fn escape_changed(&mut self, t: Tok, reason: u32) -> bool {
         if self.is_escaped(t) {
+            // The ledger's root set: this root escapes `t` again.
+            if let Some(l) = self.ledger.as_mut() {
+                l.again(t, reason, std::panic::Location::caller());
+            }
             return false;
         }
         self.escape(t, reason);
@@ -16,10 +20,19 @@ impl Model {
 
     #[track_caller]
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if self.ledger.is_none() {
+            return self.escape_at(t, reason);
+        }
+        let again = self.is_escaped(t);
         let Some(l) = self.ledger.as_mut() else {
             return self.escape_at(t, reason);
         };
         let saved = l.enter_escape(t, reason, std::panic::Location::caller());
+        if again {
+            // The ledger's root set: another root escapes `t` again.
+            let r = l.cur;
+            l.again_root(t, r);
+        }
         self.escape_at(t, reason);
         if let Some(l) = self.ledger.as_mut() {
             l.cur = saved;
