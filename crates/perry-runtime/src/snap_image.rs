@@ -497,7 +497,8 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             );
             img.mint = mint.take().unwrap_or_default();
             let mint_notes = mint_capture(&w, &mut img.mint, &b.data.1, &b.pre_data, &b.shapes);
-            let (canon, canon_stops) = crate::object::canonical_keys::snap_image::snap_image_canon_capture(
+            // A torn-down trie leaves the record out: the replay needs it, so the image stops.
+            let canon = crate::object::canonical_keys::snap_image::snap_image_canon_capture(
                 &b.canon,
                 &mut |a| w.val(a as u64).unwrap_or_else(Val::Opaque),
             );
@@ -511,9 +512,11 @@ pub(crate) fn build(base: Option<&Baseline>, pre: Vec<(usize, usize)>, live: boo
             img.stops.extend(stops);
             img.stops.extend(mint_stop);
             img.stops.extend(mint_notes);
-            img.stops.extend(canon_stops);
-            img.stops.push(canon_stop(&canon));
-            img.canon = Some(canon);
+            if let Some((canon, canon_stops)) = canon {
+                img.stops.extend(canon_stops);
+                img.stops.push(canon_stop(&canon));
+                img.canon = Some(canon);
+            }
             img.registry = registry_record(&w, &mut img.stops);
         }
         None => img.pending = format::PENDING,

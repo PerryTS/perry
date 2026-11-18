@@ -251,27 +251,12 @@ pub(super) fn capture_of(
     (rec, stops)
 }
 
-/// The record and stops of this thread's trie at the cut.
+/// The record and stops of this thread's trie at the cut, or `None` once the trie is torn down.
 pub(crate) fn snap_image_canon_capture(
     b: &CanonBaseline,
     val: &mut dyn FnMut(usize) -> Val,
-) -> (CanonRec, Vec<Stop>) {
-    try_with_table(|t| capture_of(t, b, val)).unwrap_or_else(|| {
-        (
-            CanonRec {
-                begin_len: b.nodes.len() as u32,
-                cut_len: 0,
-                new: Vec::new(),
-                changed: Vec::new(),
-                last_addr: Val::Scalar(0),
-                last_len: 0,
-                last_node: NO_NODE,
-                minted: 0,
-                reaped: 0,
-            },
-            Vec::new(),
-        )
-    })
+) -> Option<(CanonRec, Vec<Stop>)> {
+    try_with_table(|t| capture_of(t, b, val))
 }
 
 #[cfg(test)]
