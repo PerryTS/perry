@@ -130,6 +130,8 @@ pub struct Image {
     pub registry: Vec<RegRec>,
     /// The shape records minted between the baseline and the cut, in mint order.
     pub mint: Vec<MintRec>,
+    /// The canonical trie state that appeared between the baseline and the cut.
+    pub canon: Option<CanonRec>,
 }
 
 fn put_val(o: &mut Vec<u8>, v: &Val) {
@@ -204,6 +206,13 @@ pub fn encode(img: &Image) -> Vec<u8> {
     o.extend(img.pending.to_le_bytes());
     o.extend(img.claims_from.to_le_bytes());
     o.extend(mint_blob(&img.mint));
+    match &img.canon {
+        None => o.push(0),
+        Some(c) => {
+            o.push(1);
+            o.extend(canon_blob(c));
+        }
+    }
     o.extend(registry_blob(&img.registry));
     o.extend(claims_blob(&img.claims));
 
@@ -318,6 +327,19 @@ pub const STOP_MINT_ROW_GAP: u8 = 18;
 /// A record minted by a slot-list successor (holes, or a key-list family that is not the
 /// set of records carrying the keys).
 pub const STOP_MINT_SUCCESSOR: u8 = 19;
+/// The canonical trie freed nodes between the baseline and the cut (a full trace pruned
+/// lists): the record cannot carry the free list (`cell` = the first old node a free
+/// touched, `off` = how many, `value` = nodes reaped).
+pub const STOP_CANON_FREE: u8 = 20;
+/// A trie node the record names whose backing is not an image cell (`cell` = the first
+/// node, `off` = how many, `value` = its address).
+pub const STOP_CANON_ADDR: u8 = 21;
+/// Trie nodes whose bucket links say they were not allocated in id order (`cell` = the
+/// first node, `off` = how many).
+pub const STOP_CANON_ORDER: u8 = 22;
+/// The canonical-keys record is written (`value` = new nodes | changed nodes << 32,
+/// `off` = its bytes, `cell` = 0 when it reads back equal, 1 when it does not).
+pub const STOP_CANON_RECORD: u8 = 23;
 
 /// How a record was minted: a dynamic row, a runtime layout's first birth, a lazy image
 /// row, or a compile-time shape id.
@@ -402,21 +424,28 @@ fn mint_tail_opt(b: &[u8], o: &mut usize) -> Option<Option<Val>> {
     if mint_tail(b, o, 1)?[0] == 0 {
         return Some(None);
     }
+    Some(Some(tail_val(b, o)?))
+}
+
+/// A value as `put_val` wrote it: the kind byte, then its fields (no derived words).
+fn tail_val(b: &[u8], o: &mut usize) -> Option<Val> {
     match mint_tail(b, o, 1)?[0] {
-        0 => Some(Some(Val::Scalar(mint_tail_u64(b, o)?))),
+        0 => Some(Val::Scalar(mint_tail_u64(b, o)?)),
         1 => {
             let hi = mint_tail_u16(b, o)?;
             let bare = mint_tail(b, o, 1)?[0] != 0;
             let index = mint_tail_u64(b, o)? as u32;
-            Some(Some(Val::Cell { hi, bare, index }))
+            Some(Val::Cell { hi, bare, index })
         }
         2 => {
             let hi = mint_tail_u16(b, o)?;
             let bare = mint_tail(b, o, 1)?[0] != 0;
             let region = mint_tail(b, o, 1)?[0];
             let off = mint_tail_u64(b, o)?;
-            Some(Some(Val::Ext { hi, bare, region, off }))
+            Some(Val::Ext { hi, bare, region, off })
         }
+        3 => Some(Val::Opaque(mint_tail_u64(b, o)?)),
+        4 => Some(Val::Sym(mint_tail_u64(b, o)?)),
         _ => None,
     }
 }
@@ -553,4 +582,133 @@ pub fn parse_mint_blob(b: &[u8]) -> Option<(Vec<MintRec>, usize)> {
         };
     }
     Some((v, o))
+}
+
+/// One trie node of the canonical-keys record. A changed node (one present at the
+/// baseline) carries its `parent`, `edge_hash` and `len` too: they are the node's
+/// identity, which the replay checks against the restored trie.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonNode {
+    pub id: u32,
+    pub parent: u32,
+    pub edge_hash: u64,
+    pub len: u32,
+    pub all_ptr: bool,
+    pub published: bool,
+    /// The backing (an image cell or binary data), or `Scalar(0)` for none.
+    pub addr: Val,
+    pub backing_slots: u32,
+    pub run: u32,
+    pub backing_owner: u32,
+}
+
+/// The canonical trie state that appeared between the baseline and the cut: the nodes
+/// minted since (in id order), the nodes present at the baseline whose fields changed,
+/// and the table scalars.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonRec {
+    /// Node count at the baseline and at the cut.
+    pub begin_len: u32,
+    pub cut_len: u32,
+    pub new: Vec<CanonNode>,
+    pub changed: Vec<CanonNode>,
+    /// The list the last append created: backing, count, node.
+    pub last_addr: Val,
+    pub last_len: u32,
+    pub last_node: u32,
+    pub minted: u64,
+    pub reaped: u64,
+}
+
+fn canon_node_put(o: &mut Vec<u8>, n: &CanonNode) {
+    o.extend(n.id.to_le_bytes());
+    o.extend(n.parent.to_le_bytes());
+    o.extend(n.edge_hash.to_le_bytes());
+    o.extend(n.len.to_le_bytes());
+    o.push(u8::from(n.all_ptr) | u8::from(n.published) << 1);
+    put_val(o, &n.addr);
+    for x in [n.backing_slots, n.run, n.backing_owner] {
+        o.extend(x.to_le_bytes());
+    }
+}
+
+/// The canonical-keys record as bytes: the two lengths, the new nodes, the changed
+/// nodes, then the scalars.
+pub fn canon_blob(c: &CanonRec) -> Vec<u8> {
+    let mut o = Vec::new();
+    o.extend(c.begin_len.to_le_bytes());
+    o.extend(c.cut_len.to_le_bytes());
+    for list in [&c.new, &c.changed] {
+        o.extend((list.len() as u32).to_le_bytes());
+        for n in list {
+            canon_node_put(&mut o, n);
+        }
+    }
+    put_val(&mut o, &c.last_addr);
+    o.extend(c.last_len.to_le_bytes());
+    o.extend(c.last_node.to_le_bytes());
+    o.extend(c.minted.to_le_bytes());
+    o.extend(c.reaped.to_le_bytes());
+    o
+}
+
+fn canon_u32(b: &[u8], o: &mut usize) -> Option<u32> {
+    Some(u32::from_le_bytes(mint_tail(b, o, 4)?.try_into().ok()?))
+}
+
+fn canon_node_get(b: &[u8], o: &mut usize) -> Option<CanonNode> {
+    let id = canon_u32(b, o)?;
+    let parent = canon_u32(b, o)?;
+    let edge_hash = mint_tail_u64(b, o)?;
+    let len = canon_u32(b, o)?;
+    let fl = mint_tail(b, o, 1)?.first().copied()?;
+    let addr = tail_val(b, o)?;
+    let backing_slots = canon_u32(b, o)?;
+    let run = canon_u32(b, o)?;
+    let backing_owner = canon_u32(b, o)?;
+    Some(CanonNode {
+        id,
+        parent,
+        edge_hash,
+        len,
+        all_ptr: fl & 1 != 0,
+        published: fl & 2 != 0,
+        addr,
+        backing_slots,
+        run,
+        backing_owner,
+    })
+}
+
+/// The canonical-keys record of a blob and the bytes it took.
+pub fn parse_canon_blob(b: &[u8]) -> Option<(CanonRec, usize)> {
+    let mut o = 0usize;
+    let begin_len = canon_u32(b, &mut o)?;
+    let cut_len = canon_u32(b, &mut o)?;
+    let mut lists = [Vec::new(), Vec::new()];
+    for list in lists.iter_mut() {
+        for _ in 0..canon_u32(b, &mut o)? {
+            list.push(canon_node_get(b, &mut o)?);
+        }
+    }
+    let [new, changed] = lists;
+    let last_addr = tail_val(b, &mut o)?;
+    let last_len = canon_u32(b, &mut o)?;
+    let last_node = canon_u32(b, &mut o)?;
+    let minted = mint_tail_u64(b, &mut o)?;
+    let reaped = mint_tail_u64(b, &mut o)?;
+    Some((
+        CanonRec {
+            begin_len,
+            cut_len,
+            new,
+            changed,
+            last_addr,
+            last_len,
+            last_node,
+            minted,
+            reaped,
+        },
+        o,
+    ))
 }

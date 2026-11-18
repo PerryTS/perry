@@ -108,7 +108,18 @@ pub fn decode(b: &[u8]) -> Result<Image, String> {
     let rest = r.take(r.left())?;
     let (mint, mint_used) = parse_mint_blob(rest).ok_or("bad mint record")?;
     img.mint = mint;
-    let rest = rest.get(mint_used..).ok_or("bad registry record")?;
+    let rest = rest.get(mint_used..).ok_or("bad canonical-keys record")?;
+    let (canon, canon_used) = match rest.first() {
+        Some(0) => (None, 1),
+        Some(1) => {
+            let (c, u) = parse_canon_blob(rest.get(1..).ok_or("bad canonical-keys record")?)
+                .ok_or("bad canonical-keys record")?;
+            (Some(c), 1 + u)
+        }
+        _ => return Err("bad canonical-keys record".into()),
+    };
+    img.canon = canon;
+    let rest = rest.get(canon_used..).ok_or("bad registry record")?;
     let (registry, used) = parse_registry_blob(rest).ok_or("bad registry record")?;
     img.registry = registry;
     img.claims =
