@@ -173,6 +173,13 @@ pub struct FamilyLayout {
     /// holds the constructor keys at the same slots as `keys`.
     pub discriminant: u32,
     pub variants: Vec<FamilyVariant>,
+    /// The class is born with its keys (`lower_call::new_alloc::
+    /// keys_defined_at_birth` of its declaration): its birth rep, not its
+    /// field definitions, would carry its I32 lanes, and a family birth has
+    /// none (`expr::rest_fields::class_lanes`). Decided once from the
+    /// defining module's class, so every module (the definer and each
+    /// importer, whose class is a stub without a constructor) reads the same.
+    pub born_with_keys: bool,
 }
 
 /// One layout of a family's creation split.
@@ -1922,6 +1929,7 @@ fn layouts_of(
                 init_count: own as u32,
                 discriminant,
                 variants: split,
+                born_with_keys: false,
             },
         );
     }
@@ -2124,7 +2132,8 @@ pub fn compute<'a>(
     }
     for (_, module) in &program {
         for class in &module.classes {
-            if layouts.families.contains_key(&class.id) {
+            if let Some(family) = layouts.families.get_mut(&class.id) {
+                family.born_with_keys = crate::lower_call::new_alloc::keys_defined_at_birth(class);
                 layouts
                     .family_owner
                     .entry(class.id)
@@ -2137,6 +2146,9 @@ pub fn compute<'a>(
     layouts.digest.hash(&mut hash);
     layouts.run_once_evaluated.hash(&mut hash);
     layouts.family_owner.hash(&mut hash);
+    for f in layouts.families.values() {
+        (f.class_id, f.born_with_keys).hash(&mut hash);
+    }
     layouts.digest = hash.finish();
     if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
         eprintln!("perry: canonical run-once evaluated classes: {} (closed module capabilities: {closed})", layouts.run_once_evaluated.len());
