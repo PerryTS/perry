@@ -2004,6 +2004,7 @@ class B {
   add = (c: any) => { this.children = c; };
   nested = () => { const f = () => this.n * 10; return f(); };
   later() { return () => this.n + 1; }
+  count(a: number) { let c = 0; const inc = (d: number) => { c += this.n + a + d; }; inc(10); return c; }
 }
 const b = new B();
 b.add([7]);
@@ -2014,8 +2015,9 @@ console.log(b.children);
 console.log(b.nested());
 const f = b.later();
 console.log(f());
+console.log(b.count(2));
 "#
         ),
-        "7\nd\n10\n2"
+        "7\nd\n10\n2\n13"
     );
 }
