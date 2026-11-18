@@ -1671,6 +1671,7 @@ mod lit_fact;
 mod local_versions;
 mod multi_run;
 mod native_dispatch;
+mod native_dispatch_builtin;
 mod navigator_decl;
 mod navigator_store;
 mod new_verdicts;
