@@ -2121,3 +2121,35 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 
 #[path = "class_eval_tests.rs"]
 mod class_eval;
+
+// `textfieldSetInputType(field, type)` sets the `<input>` type so phones show the
+// matching keyboard; a type outside the TextField set leaves a plain `text` input,
+// and a SecureField stays a password input.
+#[test]
+fn textfield_set_input_type_sets_the_input_type() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { SecureField, TextField, textfieldSetInputType } from "perry/ui";
+const phone = TextField("phone", (v: string) => {});
+textfieldSetInputType(phone, "tel");
+const email = TextField("email", (v: string) => {});
+textfieldSetInputType(email, "email");
+const count = TextField("count", (v: string) => {});
+textfieldSetInputType(count, "number");
+const box = TextField("box", (v: string) => {});
+textfieldSetInputType(box, "tel");
+textfieldSetInputType(box, "checkbox");
+const pin = SecureField("pin", (v: string) => {});
+textfieldSetInputType(pin, "number");
+"#,
+            r#"
+for (const name of ["phone", "email", "count", "box", "pin"]) {
+  const el = [...uiHandles.values()].find(e => e.placeholder === name);
+  console.log(name + " " + el.type);
+}
+"#
+        ),
+        "phone tel\nemail email\ncount number\nbox text\npin password"
+    );
+}

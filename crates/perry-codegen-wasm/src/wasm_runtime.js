@@ -4052,6 +4052,15 @@ function perry_ui_button_set_image_position() { /* no-op in web */ }
 function perry_ui_textfield_focus(h) { const el = uiGet(h); if (el) el.focus(); }
 function perry_ui_textfield_set_string(h, text) { const el = uiGet(h); if (el) el.value = String(text ?? ""); }
 function perry_ui_textfield_get_string(h) { const el = uiGet(h); return el ? el.value : ""; }
+// The input types that keep a TextField a single-line text field; each picks a phone
+// keyboard. Any other value falls back to "text", as HTML does for a type it does not
+// know, so a call cannot turn the field into a checkbox or a file picker. A password
+// input is a SecureField, and it stays masked.
+const TEXTFIELD_INPUT_TYPES = new Set(["text", "tel", "email", "number", "url", "search"]);
+function perry_ui_textfield_set_input_type(h, type) {
+  const el = uiGet(h);
+  if (el && el.tagName === "INPUT" && el.type !== "password") el.type = TEXTFIELD_INPUT_TYPES.has(String(type)) ? String(type) : "text";
+}
 function perry_ui_textfield_blur_all() { if (document.activeElement) document.activeElement.blur(); }
 function perry_ui_textfield_set_on_submit(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") callWasmClosure(callback); });
@@ -5483,6 +5492,7 @@ const __perryUiDispatch = {
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,
   perry_ui_textfield_focus, perry_ui_textfield_set_string, perry_ui_textfield_get_string,
   perry_ui_textfield_blur_all, perry_ui_textfield_set_on_submit, perry_ui_textfield_set_on_focus,
+  perry_ui_textfield_set_input_type,
   // ScrollView
   perry_ui_scrollview_set_child, perry_ui_scrollview_scroll_to,
   perry_ui_scrollview_get_offset, perry_ui_scrollview_set_offset,

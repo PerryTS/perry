@@ -154,6 +154,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "textfieldGetSelectionStart" => "perry_ui_textfield_get_selection_start",
         "textfieldGetSelectionEnd" => "perry_ui_textfield_get_selection_end",
         "textfieldSetString" => "perry_ui_textfield_set_string",
+        "textfieldSetInputType" => "perry_ui_textfield_set_input_type",
         "textfieldGetString" => "perry_ui_textfield_get_string",
         "textfieldBlurAll" => "perry_ui_textfield_blur_all",
         "textfieldSetOnSubmit" => "perry_ui_textfield_set_on_submit",

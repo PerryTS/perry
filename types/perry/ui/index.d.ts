@@ -1235,6 +1235,12 @@ export function textfieldSetOnSubmit(widget: Widget, callback: () => void): void
 export function textfieldSetOnFocus(widget: Widget, callback: () => void): void;
 export function textfieldSetBackgroundColor(widget: Widget, r: number, g: number, b: number, a: number): void;
 export function textfieldSetBorderless(widget: Widget, borderless: number): void;
+/**
+ * Web: set the field's input type so phones show the matching keyboard. One of
+ * "text" | "tel" | "email" | "number" | "url" | "search"; any other value makes it "text".
+ * Native backends accept the call and keep the field's keyboard.
+ */
+export function textfieldSetInputType(widget: Widget, type: string): void;
 export function textfieldSetFontSize(widget: Widget, size: number): void;
 export function textfieldSetTextColor(widget: Widget, r: number, g: number, b: number, a: number): void;
 export function textareaSetString(widget: Widget, text: string): void;
