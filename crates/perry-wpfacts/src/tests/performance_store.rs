@@ -66,3 +66,25 @@ fn computed_key_store_onto_performance_still_escapes() {
     ));
     assert!(!all_proven(&pf, "x"), "{}", pf.dump_text());
 }
+
+/// A value that truly escapes (a listener handed to the host through
+/// `process.on`, not an E20 store) reaches unknown code alone: that code may
+/// call it with anything (its parameter takes any value), and the realm stays
+/// the program's (premise, owner-approved 2026-11-19: unknown code never
+/// writes members of the intrinsics it reaches along the value's chain), so
+/// the class's sites stay proven.
+#[test]
+fn escaped_value_does_not_hand_over_the_realm() {
+    let pf = facts(&format!(
+        "{VEC}class H {{ v: any = 0; }}\n\
+         const h = new H();\n\
+         process.on(\"exit\", (v: any): number => {{ h.v = v; return 0; }});\n"
+    ));
+    let k = field(tmpl(&pf, "H"), "v").kind.clone();
+    assert!(k.top, "the escaped closure is called with any value: {k:?}");
+    let dump = pf.dump_text();
+    for key in ["x", "y", "add"] {
+        assert!(all_proven(&pf, key), "{key}\n{dump}");
+    }
+    assert!(dump.contains("MathSqrt key=sqrt"), "{dump}");
+}
