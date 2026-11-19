@@ -2187,6 +2187,9 @@ const __memDispatch = {
     return obj;
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
+  // Object.getPrototypeOf boxes a primitive; Reflect.getPrototypeOf throws for one.
+  object_get_prototype_of: (obj) => Object.getPrototypeOf(obj),
+  reflect_get_prototype_of: (obj) => Reflect.getPrototypeOf(obj),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
   // at call time (see __superGet, which also takes a class method's home).
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),

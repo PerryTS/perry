@@ -657,6 +657,20 @@ impl WasmModuleEmitter {
                     .unwrap_or_default();
                 format!("fromJsValue(toJsValue({}).join({}))", a, sep)
             }
+            Expr::ObjectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.object_get_prototype_of(toJsValue({})))",
+                    o
+                )
+            }
+            Expr::ReflectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.reflect_get_prototype_of(toJsValue({})))",
+                    o
+                )
+            }
             Expr::ObjectKeys(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.keys(toJsValue({})))", o)
