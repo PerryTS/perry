@@ -3007,7 +3007,9 @@ mod write;
 use write::hole_fill_admitted;
 pub(crate) use write::layouts_admit_add;
 use write::probe_add;
-pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut};
+pub(crate) use write::{
+    function_link_admits_add, function_put_plan, symbol_link_admits_add, FunctionPut,
+};
 
 #[path = "layout_probe/computed.rs"]
 mod computed;

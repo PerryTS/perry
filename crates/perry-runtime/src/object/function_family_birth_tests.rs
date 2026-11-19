@@ -284,6 +284,62 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
     }
 }
 
+/// The add at a family hole asks the receiver's [[Prototype]] link: a
+/// prototype that holds the symbol read-only intercepts the add, so the
+/// checked store declines (the complete `[[Set]]` then refuses it).
+#[test]
+fn family_symbol_add_declines_under_a_read_only_inherited_symbol() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = RuntimeHandleScope::new();
+    let c = crate::closure::js_closure_alloc(&INFO.base, 0);
+    let f = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(c as i64));
+    let p = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_plain(0) as i64,
+    ));
+    unsafe {
+        super::super::proto_validity::mark_object_as_prototype(
+            (p.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        )
+        .unwrap();
+        let sym = scope.root_nanbox_f64(crate::symbol::js_symbol_new(f64::from_bits(
+            crate::value::TAG_UNDEFINED,
+        )));
+        SYMBOL = sym.get_nanbox_u64();
+        let obj = scope.root_raw_mut_ptr(allocate(&f, &p).expect("family path must be live"));
+        let bag = crate::object::js_object_alloc(0, 2);
+        let value = b"value";
+        let value = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+        super::super::js_object_set_field_by_name(bag, value, 1.0);
+        crate::object::js_object_define_property(
+            p.get_nanbox_f64(),
+            sym.get_nanbox_f64(),
+            crate::value::js_nanbox_pointer(bag as i64),
+        );
+        let stored = obj.with_mut_ptr::<ObjectHeader, _>(|o| {
+            try_symbol_store(
+                std::ptr::addr_of!(LAYOUT),
+                0,
+                crate::value::js_nanbox_pointer(o as i64),
+                sym.get_nanbox_f64(),
+                11.0,
+            )
+        });
+        assert!(!stored, "a read-only inherited symbol intercepts the add");
+        obj.with_const_ptr::<ObjectHeader, _>(|o| {
+            assert_eq!(
+                *o.cast::<u8>()
+                    .add(std::mem::size_of::<ObjectHeader>())
+                    .cast::<u64>(),
+                crate::value::TAG_HOLE,
+                "the declined add leaves the hole"
+            );
+        });
+        SYMBOL = crate::value::TAG_UNDEFINED;
+    }
+}
+
 /// #5 (DPA review): per-evaluation function-constructor records are carried by
 /// their objects only. A loop of evaluations keeps the record count bounded
 /// across full GCs, and the worker seed holds none of the dead ones.
