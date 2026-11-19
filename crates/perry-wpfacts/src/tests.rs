@@ -184,6 +184,7 @@ mod map_identity_ops;
 mod map_values;
 mod mathb1;
 mod e20g_global_name;
+mod e20g2_self_store;
 mod member_heritage;
 mod memo_context;
 mod method_sites;
