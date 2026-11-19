@@ -90,7 +90,12 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     {
         return flags;
     }
-    let buckets = (count as usize * 2).next_power_of_two();
+    // At most a quarter of the buckets hold a key: a lookup's first bucket
+    // decides it (a hit, or an empty bucket proving the key absent) for all
+    // but a few keys, and only those continue to the collision loop
+    // (`indexed::continued`, out of line). A list's index is derived once and
+    // shared by every receiver of the record.
+    let buckets = (count as usize * 4).next_power_of_two();
     // The blocking entries' hashes (`KeyIndex::blocks`), every one of them.
     let mut blocking: Vec<u64> = Vec::new();
     let mut unknown = false;
