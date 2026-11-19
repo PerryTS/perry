@@ -341,3 +341,71 @@ fn nd_define_on_top_keeps_today() {
     assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
     assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
 }
+
+/// GDEL: unknown code holds the global object (`global_in_top`), then
+/// `body` runs on `u`, a value of unknown code; then `Math` and `Object`
+/// are read (`Math.max` is an intrinsic op, no site: `Math.max` is probed
+/// through a site of its value, `M.max`, and `Object` as in `e5_src`).
+fn gd_src(body: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        const unknown: any = (globalThis as any)[process.argv[2]];
+        unknown.take2(globalThis);
+        const u: any = unknown.get();
+        const k = String(process.argv[3]);
+        {body}
+        const M: any = (globalThis as any).Math; console.log(/*M*/ M.max(1, Number(process.argv[4])));
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);"
+    )
+}
+
+/// The `M.max` and `O.keys` sites see the intrinsic namespace (and,
+/// after a delete, `undefined`: the intrinsic op then refuses the site on
+/// its primitive, `namespace_callee`), not ⊤.
+fn gd_known(pf: &ProgramFacts) -> bool {
+    let probe = |key: &str, ns: &str| {
+        let ss: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
+        !ss.is_empty() && ss.iter().all(|s| !s.top && s.receivers.iter().all(|r| r == ns))
+    };
+    probe("max", "builtin:Math") && probe("keys", "builtin:Object")
+}
+
+/// RED (CHW16, the app's top global writer: `delete this.attributes[name]`
+/// through ⊤): a delete stores no value, so under any key through a value
+/// that may be the global object it leaves `Math` {the intrinsic,
+/// `undefined`}, never ⊤: `Math.max` stays proven.
+#[test]
+fn gd_any_key_delete_through_top_keeps_globals() {
+    let src = gd_src("delete u[k];");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+}
+
+/// RED: the same delete inside a function unknown code calls.
+#[test]
+fn gd_any_key_delete_in_handed_function_keeps_globals() {
+    let src = gd_src("unknown.take(function (o: any, kk: any) { delete o[kk]; });");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+}
+
+/// KEEP: a store through ⊤ under any key may write `Math`: ⊤ as before.
+#[test]
+fn gd_any_key_store_through_top_still_writes_globals() {
+    for body in ["u[k] = new A();", "delete u[k]; u[k] = new A();", "u[k] = new A(); delete u[k];"] {
+        let src = gd_src(body);
+        let pf = facts_mods(&[("main", &src)]);
+        assert!(!gd_known(&pf), "{body}: Math may be written\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a program `delete globalThis.x` and a read of it after: the read
+/// solves (the delete is the named one) and sees what was stored.
+#[test]
+fn gd_program_named_global_delete_reads() {
+    let src = gd_src(
+        "(globalThis as any).zq = new A(); delete (globalThis as any).zq; const z: any = (globalThis as any).zq; if (z) console.log(/*Z*/ z.zz);",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    let _ = verdict_in(&pf, &src, "zz", "/*Z*/");
+}
