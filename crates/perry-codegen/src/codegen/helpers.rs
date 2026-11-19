@@ -916,16 +916,22 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
         "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
-        "android" => Some("aarch64-unknown-linux-android".to_string()),
+        "android" => {
+            Some(concat!("aarch64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
         // #5742: Android x86_64 (emulator / x86_64 devices). Without this arm
         // `resolve_target_triple` returned None for `--target android-x86_64`,
         // so codegen fell back to the host triple (e.g. x86_64-pc-windows-msvc)
         // and emitted COFF objects, which the Android linker rejects with
         // `unknown file type`. Mirrors the `-unknown-` LLVM-triple form of the
         // arm64 `android` arm above (cf. harmonyos / harmonyos-simulator).
-        "android-x86_64" => Some("x86_64-unknown-linux-android".to_string()),
+        "android-x86_64" => {
+            Some(concat!("x86_64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
         // Wear OS is Android-on-a-watch: same arm64 Android object format.
-        "wearos" => Some("aarch64-unknown-linux-android".to_string()),
+        "wearos" => {
+            Some(concat!("aarch64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
         "linux" | "linux-x86_64" => Some("x86_64-unknown-linux-gnu".to_string()),
         "linux-aarch64" | "linux-arm64" => Some("aarch64-unknown-linux-gnu".to_string()),
         // musl targets — fully static binaries that run on Lambda
@@ -993,7 +999,9 @@ pub fn target_os_of(triple: &str) -> Option<&'static str> {
     if components.contains(&"ohos") || components.contains(&"harmonyos") {
         return Some("ohos");
     }
-    if components.contains(&"android")
+    if components
+        .iter()
+        .any(|c| *c == "android" || has_numeric_version_suffix(c, "android"))
         || components.contains(&"androideabi")
         || components.contains(&"wearos")
     {
@@ -1115,6 +1123,7 @@ mod target_os_tests {
             ("arm64-apple-xros1.0-simulator", "visionos"),
             ("aarch64-apple-visionos", "visionos"),
             ("aarch64-unknown-linux-android", "android"),
+            ("aarch64-unknown-linux-android29", "android"),
             ("armv7-linux-androideabi", "android"),
             ("aarch64-unknown-linux-ohos", "ohos"),
             ("macos", "macos"),
@@ -1555,11 +1564,11 @@ mod resolve_target_triple_tests {
         // LLVM form so the emitted objects are ELF for the right arch.
         assert_eq!(
             resolve_target_triple("android").as_deref(),
-            Some("aarch64-unknown-linux-android")
+            Some("aarch64-unknown-linux-android29")
         );
         assert_eq!(
             resolve_target_triple("android-x86_64").as_deref(),
-            Some("x86_64-unknown-linux-android")
+            Some("x86_64-unknown-linux-android29")
         );
         // Unknown targets still fall through to None.
         assert_eq!(resolve_target_triple("android-mips"), None);
