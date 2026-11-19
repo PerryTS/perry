@@ -913,7 +913,7 @@ fn object_like_iterator_result(value: f64) -> bool {
 /// facts prove no `Symbol.iterator` member was written and the iterator
 /// prototype was never named; with either bit set only the canonical `next`
 /// (and, for a member write, the protocol) keeps the element copy honest.
-fn intrinsic_array_like_iteration(member_is_own_intrinsic: bool) -> bool {
+pub(crate) fn intrinsic_array_like_iteration(member_is_own_intrinsic: bool) -> bool {
     let facts = super::array_iteration_facts();
     (member_is_own_intrinsic || facts & super::ITERATION_MEMBER_WRITABLE == 0)
         && (facts & super::ITERATION_NEXT_REACHABLE == 0

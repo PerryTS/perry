@@ -75,8 +75,10 @@ pub(crate) unsafe fn compiled_target_call(
     }
     // A packed ordinary Array (or `null` / `undefined`): its Gets run no
     // code, so the values are copied and the body entered with no
-    // collection between.
-    let mut packed = [f64::from_bits(crate::value::TAG_UNDEFINED); 6];
+    // collection between. Sixteen, the closure stack-call width: a
+    // forwarded `arguments` bundle (`js_arguments_bundle_call_spread`) of a
+    // WebGL call carries up to eleven.
+    let mut packed = [f64::from_bits(crate::value::TAG_UNDEFINED); 16];
     if let Some(n) = crate::closure::packed_apply_values(arg(1), &mut packed) {
         return Some(enter_compiled_body(closure, info, this, packed.as_ptr(), n));
     }
