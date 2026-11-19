@@ -207,6 +207,35 @@ pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
     top || own
 }
 
+/// [`global_value_written`] past the writes that only delete (ECMA-262
+/// 13.5.1.2, OrdinaryDelete 10.1.10): a delete stores no value and runs no
+/// code (a Proxy's `deleteProperty` trap is the handler's call, modeled at
+/// the delete), so under any key, through ⊤ that may be the global object
+/// included, it can only make the binding absent. True: a writer that may
+/// have stored a value (a store, a define, an accessor, a prototype) may
+/// have written the key: the read takes ⊤ as before.
+pub fn global_value_stored(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, true, &|w| {
+        w.opaque || !w.stored.is_empty() || w.accessor || !w.getters.is_empty() || !w.setters.is_empty()
+    });
+    top || own
+}
+
+/// A global binding read (`NativeMiss::Global` into `dst`) that only
+/// deletes may have reached ([`global_value_stored`] false): it reads
+/// {its prior values} ∪ {`undefined`}; the caller keeps the read parked,
+/// so a later writer of a value replays it. A non-configurable global
+/// (`undefined`, `NaN`, `Infinity`; ECMA-262 19.1) is never removed.
+pub fn global_maybe_deleted(m: &mut Model, np: Tok, a: Atom, dst: NodeId) {
+    if !global_value_written(m, np, a) {
+        return;
+    }
+    if matches!(m.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+        return;
+    }
+    m.add_prim(dst, prim::UNDEF);
+}
+
 fn written_by(
     m: &Model,
     np: Tok,
@@ -501,6 +530,9 @@ fn note_write(
             absent: false,
         });
     w.accessor |= accessor;
+    // A global read only deletes reached stays parked
+    // (`global_maybe_deleted`): this entry's first stored value replays it.
+    let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
     match value {
         WriteValue::Opaque => w.opaque = true,
         WriteValue::Value(n) => {
@@ -531,7 +563,7 @@ fn note_write(
     // `note_handed_to_unknown`), never on the other entries. Lookups parked
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
-    if fresh {
+    if fresh || first_value {
         replay_pending(m);
     }
 }
@@ -827,7 +859,13 @@ fn replay_pending(m: &mut Model) {
         for (np, a, miss) in pending {
             m.census_native_read(np, a, miss.clone());
             let written = match miss {
-                NativeMiss::Global(..) => global_value_written(m, np, a),
+                NativeMiss::Global(dst, _) => {
+                    let stored = global_value_stored(m, np, a);
+                    if !stored {
+                        global_maybe_deleted(m, np, a, dst);
+                    }
+                    stored
+                }
                 NativeMiss::Lookup(dst, setter) => {
                     let unknown = native_accessor_written(m, np, a);
                     if !unknown {
