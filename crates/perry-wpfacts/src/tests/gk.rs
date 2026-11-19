@@ -127,7 +127,10 @@ fn gk_keep() {
     {
         let store = "(Array.prototype as any).zz = (x: any) => x;";
         let (v, dump) = verdict(&program(store), "v", "/*A*/");
-        assert!(proven(&v), "{store}: console.warn is the realm's, got {v:?}\n{dump}");
+        assert!(
+            proven(&v),
+            "{store}: console.warn is the realm's, got {v:?}\n{dump}"
+        );
     }
     // Re-baselined (R-GLOBAL step 3, owner 2026-11-18): the key sets name
     // neither `console`, `forEach` nor N's @@hasInstance, so `n` stays proven.

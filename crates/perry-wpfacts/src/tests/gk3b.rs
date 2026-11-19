@@ -194,10 +194,12 @@ fn e5_src(defs: &str) -> String {
 
 /// The `g.zz` read may see a `B` (or ⊤).
 fn e5_g_sees_b(pf: &ProgramFacts) -> bool {
-    pf.sites
-        .iter()
-        .filter(|s| s.key == "zz")
-        .any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":B") || r.contains(":B#")))
+    pf.sites.iter().filter(|s| s.key == "zz").any(|s| {
+        s.top
+            || s.receivers
+                .iter()
+                .any(|r| r.ends_with(":B") || r.contains(":B#"))
+    })
 }
 
 fn e5_object_top(pf: &ProgramFacts) -> bool {
@@ -273,7 +275,10 @@ fn nd_nn(pf: &ProgramFacts, src: &str, marker: &str) -> (bool, bool) {
         .filter(|s| s.key == "nn" && s.byte_offset >= at)
         .min_by_key(|s| s.byte_offset)
         .unwrap_or_else(|| panic!("site .nn after {marker}\n{}", pf.dump_text()));
-    let n = s.receivers.iter().any(|r| r.ends_with(":N") || r.contains(":N#"));
+    let n = s
+        .receivers
+        .iter()
+        .any(|r| r.ends_with(":N") || r.contains(":N#"));
     (n, s.top)
 }
 

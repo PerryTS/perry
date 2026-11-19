@@ -1149,7 +1149,15 @@ impl<'a> Gen<'a> {
         let arr = self.new_arr_template(mi, "json");
         let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
         let mut tree = vec![obj, arr];
-        for what in ["Map", "Set", "Date", "RegExp", "Error", "ArrayBuffer", "TypedArray"] {
+        for what in [
+            "Map",
+            "Set",
+            "Date",
+            "RegExp",
+            "Error",
+            "ArrayBuffer",
+            "TypedArray",
+        ] {
             let (x, _) = self.bobj(mi, what);
             tree.push(x);
         }
