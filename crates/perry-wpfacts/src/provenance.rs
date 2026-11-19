@@ -78,6 +78,7 @@ impl Prov {
         let stop = match std::env::var("PERRY_FACTS_STOP").ok().as_deref() {
             Some("hold") => STOP_HOLD,
             Some("realm") => STOP_REALM,
+            Some("realm-all") => STOP_REALM_ALL,
             Some("wide") => STOP_WIDE,
             _ => STOP_NONE,
         };
@@ -361,6 +362,12 @@ pub(crate) const STOP_NONE: u8 = 0;
 pub(crate) const STOP_HOLD: u8 = 1;
 pub(crate) const STOP_REALM: u8 = 2;
 pub(crate) const STOP_WIDE: u8 = 3;
+/// `PERRY_FACTS_STOP=realm-all` (diagnostic): one `WHY ... HOLDSRC` line per
+/// hold source (kind, site, function, node, value, reason) and one
+/// `REALM-ALL` line at the flip; the solve goes on. Beside
+/// `PERRY_FACTS_LEDGER` (the realm is never held) it lists every source,
+/// not only those before the flip.
+pub(crate) const STOP_REALM_ALL: u8 = 4;
 
 /// A `PERRY_FACTS_WHY_AT` selector: `n<id>`, or `<fn-substring>#<label |
 /// parameter name | p<index>>`; `:prim` also stops at a non-string
@@ -1236,6 +1243,14 @@ impl Model {
     ) {
         let start = self.prov_rule.map(|(n, _)| n).unwrap_or(self.cur_src);
         let (rule0, work) = (self.prov_rule, self.work.get());
+        if self
+            .prov
+            .as_ref()
+            .and_then(|p| p.why.as_ref())
+            .is_some_and(|w| w.stop == STOP_REALM_ALL)
+        {
+            return self.why_hold_src(kind, call, t, reason, start, work);
+        }
         let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
             return;
         };
@@ -1282,6 +1297,34 @@ impl Model {
         self.why_emit(header, start, vals, stop);
     }
 
+    /// `STOP=realm-all`: one line for this hold source; the solve goes on.
+    fn why_hold_src(
+        &self,
+        kind: &'static str,
+        call: u32,
+        t: Option<Tok>,
+        reason: u32,
+        start: NodeId,
+        work: u64,
+    ) {
+        let solve = self
+            .prov
+            .as_ref()
+            .and_then(|p| p.why.as_ref())
+            .map_or(0, |w| w.solve);
+        let f = crate::unksrc::call_fn(self, call);
+        let fname = self
+            .funcs
+            .get(f as usize)
+            .map_or("-".to_string(), |fi| fi.name.clone());
+        let tok = t.map_or("-".to_string(), |t| self.why_val(WVal::Tok(t)));
+        eprintln!(
+            "WHY solve={solve} HOLDSRC kind={kind} site={} fn={fname} start=n{start} tok={tok} work={work} reason={}",
+            self.why_site(call),
+            self.reasons.get(reason as usize).map_or("-", |s| s.as_str()).replace(char::is_whitespace, "_")
+        );
+    }
+
     /// The values a hold's walk starts with at `start`: the value given
     /// (the callee token; an escaping token) and ⊤ when the node holds it
     /// beside it; with none given, ⊤ when the node holds it, else every
@@ -1317,6 +1360,11 @@ impl Model {
         let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
             return;
         };
+        if w.stop == STOP_REALM_ALL && !w.realm_done {
+            w.realm_done = true;
+            eprintln!("WHY solve={} REALM-ALL flip={flip} work={work}", w.solve);
+            return;
+        }
         if w.stop != STOP_REALM || w.realm_done {
             return;
         }
