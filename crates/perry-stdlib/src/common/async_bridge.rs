@@ -912,11 +912,29 @@ mod tests {
         fn js_run_stdlib_pump();
     }
 
+    const PUMP_CHILD_ENV: &str = "PERRY_STDLIB_AUX_PUMP_CHILD";
+
     /// The stdlib bridge settles its queue from the host pump whether or not
     /// an extension is linked; an extension pump registered with the runtime
-    /// runs on the same tick without the bridge naming it.
+    /// runs on the same tick without the bridge naming it. Aux pumps cannot be
+    /// unregistered, so the body runs in a re-executed child: it starts with
+    /// no extension pump and leaves none behind for other tests.
     #[test]
     fn host_pump_drives_the_bridge_with_and_without_a_registered_extension_pump() {
+        if std::env::var_os(PUMP_CHILD_ENV).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "common::async_bridge::tests::host_pump_drives_the_bridge_with_and_without_a_registered_extension_pump",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(PUMP_CHILD_ENV, "1")
+                .status()
+                .expect("re-run the test binary");
+            assert!(status.success(), "host pump child failed: {status}");
+            return;
+        }
         let _queues = own_pending_queues();
         ensure_pump_registered();
 

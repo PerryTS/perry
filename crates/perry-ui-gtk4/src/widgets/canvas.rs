@@ -309,23 +309,28 @@ mod tests {
 
     /// A canvas can be a program's first GTK call, so `create` initializes GTK
     /// before constructing its `DrawingArea` (#7995). The body runs in a
-    /// re-executed child so no other test has initialized GTK first.
+    /// re-executed child so no other test has initialized GTK first. Without a
+    /// display the child runs under `xvfb-run`; with neither, the test fails
+    /// rather than passing without exercising GTK.
     #[test]
     fn create_as_first_gtk_call_returns_a_drawing_area() {
-        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            eprintln!(
-                "SKIPPED (not a pass): no DISPLAY or WAYLAND_DISPLAY. Re-run as\n  \
-                 xvfb-run -a cargo test -p perry-ui-gtk4 --lib create_as_first_gtk_call"
-            );
-            return;
-        }
         if std::env::var_os(CHILD_ENV).is_some() {
             let handle = super::create(64.0, 32.0);
             let widget = super::super::get_widget(handle).expect("create returned no widget");
             assert!(widget.is::<gtk4::DrawingArea>());
             return;
         }
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let exe = std::env::current_exe().unwrap();
+        let has_display =
+            std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let mut child = if has_display {
+            std::process::Command::new(&exe)
+        } else {
+            let mut xvfb = std::process::Command::new("xvfb-run");
+            xvfb.arg("-a").arg(&exe);
+            xvfb
+        };
+        let status = child
             .args([
                 "--exact",
                 "widgets::canvas::tests::create_as_first_gtk_call_returns_a_drawing_area",
@@ -334,7 +339,9 @@ mod tests {
             ])
             .env(CHILD_ENV, "1")
             .status()
-            .expect("re-run the test binary");
+            .unwrap_or_else(|e| {
+                panic!("this test needs a display: no DISPLAY or WAYLAND_DISPLAY, and xvfb-run failed to start ({e})")
+            });
         assert!(
             status.success(),
             "canvas create as the first GTK call failed: {status}"
