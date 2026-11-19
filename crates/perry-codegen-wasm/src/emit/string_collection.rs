@@ -170,6 +170,7 @@ impl WasmModuleEmitter {
             "to_property_key",
             "reflect_apply",
             "class_set_method",
+            "class_set_static_method",
             "class_call_method",
             "class_super_get",
             "class_super_call",

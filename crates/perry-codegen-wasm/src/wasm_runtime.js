@@ -1659,6 +1659,8 @@ function __typeOf(v) {
 // Class method/static/parent tables
 const classMethodTable = {};
 const classStaticTable = {};
+// A class's named static methods: name -> function table index (`class_set_static_method`).
+const classStaticMethodTable = {};
 const classParentTable = {};
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
@@ -1754,6 +1756,13 @@ function __classCtor(className, ctorIdx, caps) {
     }
   }
   for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
+  // The static side inherits named static methods: the nearest class in the chain wins.
+  const statics = new Set();
+  for (let c = className; c; c = classParentTable[c] || null) {
+    for (const [m, idx] of Object.entries(classStaticMethodTable[c] || {})) {
+      if (!statics.has(m)) { statics.add(m); __classDefineStaticMethod(ctor, m, idx); }
+    }
+  }
   if (evaluated) Object.defineProperties(proto, { [__evaluationTag]: { value: ctor }, [__classTag]: { value: className } });
   ctor.prototype = proto;
   return ctor;
@@ -1816,6 +1825,18 @@ function __classDefiningTop() {
 }
 function __defineHidden(target, key, value) {
   Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
+}
+// A named static method as a property of a class value, non-enumerable as a class
+// definition makes it. The compiled method takes no receiver.
+function __classDefineStaticMethod(ctor, name, funcIdx) {
+  const fn = function (...args) {
+    const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+    const padded = __padBigintArgs(impl, 0, args.map(__jsValueToBits));
+    return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
+  };
+  Object.defineProperty(fn, 'name', { value: name });
+  __classMethodFns.add(fn);
+  __defineHidden(ctor, name, fn);
 }
 // A compiled member called on `self`, in `evaluation`'s capture environment.
 function __classMemberCall(funcIdx, evaluation, self, args) {
@@ -2501,6 +2522,13 @@ const __memDispatch = {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
     classMethodTable[cls][String(methodName)] = funcIdx | 0;
+  },
+  // Registration runs before any class value is made; a value made earlier gets it too.
+  class_set_static_method: (classId, methodName, funcIdx) => {
+    const cls = String(classId);
+    (classStaticMethodTable[cls] ||= {})[String(methodName)] = funcIdx | 0;
+    const ref = __classRefs.get(cls);
+    if (ref) __classDefineStaticMethod(ref, String(methodName), funcIdx | 0);
   },
   class_call_method: (obj, methodNameId, argsArr) => {
     // methodNameId is a plain number (string table index), not a decoded JS value
