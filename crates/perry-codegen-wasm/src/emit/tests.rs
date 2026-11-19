@@ -942,6 +942,34 @@ console.log(p + q);
     );
 }
 
+// A `for...of` over a value typed `Set` or `Map` takes the slot-cursor fast path. It visits
+// each entry once, sees entries deleted or added during the loop as Node does, and works
+// nested, after a `break`, and in an async body.
+#[test]
+fn for_of_over_a_typed_set_or_map_visits_every_entry() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function values(s: Set<number>) { let r = ""; for (const v of s) r += v; return r; }
+function pairs(m: Map<string, number>) { let r = ""; for (const [k, v] of m) r += k + v; return r; }
+function entries(m: Map<string, number>) { let r = ""; for (const e of m) r += e[0] + e[1]; return r; }
+function deleting(s: Set<number>) { let r = ""; for (const v of s) { r += v; if (v === 1) s.delete(2); } return r; }
+function adding(s: Set<number>) { let r = ""; for (const v of s) { r += v; if (v < 3) s.add(v + 1); } return r; }
+function nested(s: Set<number>) { let r = ""; for (const a of s) for (const b of s) r += a + "" + b + " "; return r; }
+function again(s: Set<number>) { let r = ""; for (const v of s) { if (v === 2) break; r += v; } for (const v of s) r += v; return r; }
+function mapDeleting(m: Map<string, number>) { let r = ""; for (const [k] of m) { r += k; if (k === "a") m.delete("b"); } return r; }
+async function inAsync(s: Set<number>, m: Map<string, number>) { let r = ""; for (const v of s) r += v; for (const e of m) r += e[0]; return r; }
+const ab = () => new Map<string, number>([["a", 1], ["b", 2], ["c", 3]]);
+console.log(values(new Set([1, 2, 3])) + " " + pairs(ab()) + " " + entries(ab()));
+console.log(deleting(new Set([1, 2, 3])) + " " + adding(new Set([1])) + " " + mapDeleting(ab()));
+console.log(nested(new Set([1, 2])) + "| " + again(new Set([1, 2, 3])) + " " + values(new Set()));
+inAsync(new Set([4, 5]), ab()).then((v) => console.log(v));
+"#
+        ),
+        "123 a1b2c3 a1b2c3\n13 123 ac\n11 12 21 22 | 1123 \n45abc"
+    );
+}
+
 // perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
 #[test]
 fn picker_on_change_is_called_with_the_chosen_index() {

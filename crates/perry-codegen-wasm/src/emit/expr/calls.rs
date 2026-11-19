@@ -166,6 +166,14 @@ impl<'a> FuncEmitCtx<'a> {
                         "js_object_literal_set_prototype" => {
                             Some(("object_literal_set_prototype", 2u32))
                         }
+                        // The Set/Map `for...of` fast path's cursor (`map_set_delete_safe_for_of`
+                        // in perry-hir).
+                        "js_set_cursor_next" | "js_map_cursor_next" => {
+                            Some(("collection_cursor_next", 3u32))
+                        }
+                        "js_set_compaction_epoch" | "js_map_compaction_epoch" => {
+                            Some(("collection_cursor_epoch", 1u32))
+                        }
                         _ => None,
                     };
                     if let Some((bridge, arity)) = timer {

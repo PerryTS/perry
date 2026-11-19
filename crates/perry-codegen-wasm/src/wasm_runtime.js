@@ -1685,6 +1685,14 @@ function __holdsProperties(v) {
   return v !== null && (typeof v === 'object' || typeof v === 'function');
 }
 
+// A Set/Map `for...of` cursor (see `collection_cursor_next`).
+const __collectionCursor = Symbol('perry.collectionCursor');
+function __collectionCursorValue(coll, idx) {
+  const cur = coll instanceof Set || coll instanceof Map ? coll[__collectionCursor] : undefined;
+  if (cur && cur.pos === idx) return cur.value;
+  return coll instanceof Set || coll instanceof Map ? [...coll][idx] : undefined;
+}
+
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
 // so `new` on it builds what `new K()` builds — an instance (see __classInstance) run
 // through the compiled constructor. `ctorIdx` is the constructor's
@@ -2698,6 +2706,36 @@ const __memDispatch = {
   set_size: (s) => (s instanceof Set) ? s.size : 0,
   set_clear: (s) => { if (s instanceof Set) s.clear(); },
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
+  // The Set/Map `for...of` fast path walks slots: `cursor_next(coll, i)` names the slot
+  // at or after `i`, -1 at the end, and the body reads it with `*_at(coll, slot)`. A
+  // host collection has no slots, so slot `i` is step `i` of a live iterator kept on the
+  // collection: entries added or deleted during the loop behave as in a host loop.
+  collection_cursor_next: (coll, idx) => {
+    if (!(coll instanceof Set || coll instanceof Map)) return -1;
+    let cur = coll[__collectionCursor];
+    if (idx === 0 || !cur || cur.pos !== idx - 1) {
+      // A new loop, or another loop over the same collection moved the cursor.
+      cur = { iter: coll[Symbol.iterator](), pos: -1, value: undefined };
+      __defineHidden(coll, __collectionCursor, cur);
+      while (cur.pos < idx - 1) {
+        if (cur.iter.next().done) return -1;
+        cur.pos++;
+      }
+    }
+    const step = cur.iter.next();
+    if (step.done) {
+      delete coll[__collectionCursor];
+      return -1;
+    }
+    cur.pos = idx;
+    cur.value = step.value;
+    return idx;
+  },
+  // Native compaction epochs keep slots stable across deletes; an iterator needs none.
+  collection_cursor_epoch: () => 0,
+  set_value_at: (s, idx) => __collectionCursorValue(s, idx),
+  map_entry_key_at: (m, idx) => (__collectionCursorValue(m, idx) || [])[0],
+  map_entry_value_at: (m, idx) => (__collectionCursorValue(m, idx) || [])[1],
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),

@@ -387,6 +387,27 @@ impl WasmModuleEmitter {
                             .cloned()
                             .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string())
                     }
+                    // The Set/Map `for...of` cursor calls the bridges the WASM arm calls.
+                    Expr::ExternFuncRef { name, .. }
+                        if matches!(
+                            name.as_str(),
+                            "js_set_cursor_next"
+                                | "js_map_cursor_next"
+                                | "js_set_compaction_epoch"
+                                | "js_map_compaction_epoch"
+                        ) =>
+                    {
+                        let bridge = if name.ends_with("cursor_next") {
+                            "collection_cursor_next"
+                        } else {
+                            "collection_cursor_epoch"
+                        };
+                        format!(
+                            "fromJsValue(__memDispatch.{}({}))",
+                            bridge,
+                            host_args(&args_js)
+                        )
+                    }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
                             let args_i64: Vec<String> =
@@ -669,6 +690,21 @@ impl WasmModuleEmitter {
                         }
                     }
                 }
+            }
+            Expr::SetValueAt { set: coll, idx }
+            | Expr::MapEntryKeyAt { map: coll, idx }
+            | Expr::MapEntryValueAt { map: coll, idx } => {
+                let bridge = match expr {
+                    Expr::SetValueAt { .. } => "set_value_at",
+                    Expr::MapEntryKeyAt { .. } => "map_entry_key_at",
+                    _ => "map_entry_value_at",
+                };
+                format!(
+                    "fromJsValue(__memDispatch.{}(toJsValue({}), toJsValue({})))",
+                    bridge,
+                    self.emit_js_expr(coll, locals),
+                    self.emit_js_expr(idx, locals)
+                )
             }
             Expr::ArrayJoin { array, separator } => {
                 let a = self.emit_js_expr(array, locals);
