@@ -243,7 +243,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ObjectSpread { parts } => Expr::ObjectSpread {
             parts: parts
                 .iter()
-                .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
+                .map(|part| match part {
+                    ObjectPart::Spread(v) => ObjectPart::Spread(substitute_expr(v, substitutions)),
+                    ObjectPart::Define(k, v) => {
+                        ObjectPart::Define(k.clone(), substitute_expr(v, substitutions))
+                    }
+                    ObjectPart::Computed { key, value } => ObjectPart::Computed {
+                        key: Box::new(substitute_expr(key, substitutions)),
+                        value: substitute_expr(value, substitutions),
+                    },
+                })
                 .collect(),
         },
         Expr::Array(elems, _) => Expr::Array(

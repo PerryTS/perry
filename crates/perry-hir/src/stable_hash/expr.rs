@@ -27,6 +27,17 @@ fn hash_with_set_fallback<H: StableHasher>(h: &mut H, fallback: &WithSetFallback
 }
 
 #[rustfmt::skip]
+impl SH for ObjectPart {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            ObjectPart::Spread(e) => { tag(h, 0); e.hash(h); }
+            ObjectPart::Define(k, e) => { tag(h, 1); k.hash(h); e.hash(h); }
+            ObjectPart::Computed { key, value } => { tag(h, 2); key.hash(h); value.hash(h); }
+        }
+    }
+}
+
+#[rustfmt::skip]
 impl SH for Expr {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         match self {

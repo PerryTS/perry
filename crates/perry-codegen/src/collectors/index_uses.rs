@@ -501,7 +501,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 walk_index_uses_in_expr(e, out);
             }
         }

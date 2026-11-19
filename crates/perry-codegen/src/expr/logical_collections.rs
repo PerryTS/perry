@@ -43,7 +43,7 @@
 
 use anyhow::{bail, Result};
 use perry_hir::types::Type as HirType;
-use perry_hir::Expr;
+use perry_hir::{Expr, ObjectPart};
 
 use crate::lower_conditional::lower_logical;
 use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};
@@ -1671,12 +1671,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // A leading spread births its result directly. Otherwise the
             // source-ordered prefix is built before the spread expression is
             // evaluated. The fresh accumulator cannot escape during building.
-            let initial = if parts.first().is_some_and(|(key, _)| key.is_none()) {
+            let initial = if matches!(parts.first(), Some(ObjectPart::Spread(_))) {
                 double_literal(f64::from_bits(TAG_UNDEFINED))
             } else {
                 let count = parts
                     .iter()
-                    .filter(|(key, _)| key.is_some())
+                    .filter(|part| part.defines_key())
                     .count()
                     .to_string();
                 let handle = ctx
@@ -1690,37 +1690,76 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &initial,
                 true,
                 |ctx, acc| {
-                    for (index, (key, value_expr)) in parts.iter().enumerate() {
-                        let value = lower_expr(ctx, value_expr)?;
-                        if let Some(key) = key {
-                            let key_idx = ctx.strings.intern(key);
-                            let global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                            let key_box = ctx.block().load(DOUBLE, &global);
-                            acc.call(
-                                ctx,
-                                DOUBLE,
-                                "js_object_literal_define",
-                                &[Arg::Plain(DOUBLE, &key_box), Arg::Plain(DOUBLE, &value)],
-                            );
-                        } else {
-                            // The helper returns the current (possibly new or
-                            // evacuated) accumulator; publish it in the root.
-                            // It is born with room for the keys the literal
-                            // defines after this part.
-                            let tail = parts[index + 1..]
-                                .iter()
-                                .filter(|(key, _)| key.is_some())
-                                .count()
-                                .to_string();
-                            acc.advance(
-                                ctx,
-                                if index == 0 {
-                                    "js_object_spread_fresh_leading"
-                                } else {
-                                    "js_object_spread_fresh"
-                                },
-                                &[Arg::Plain(DOUBLE, &value), Arg::Plain(I32, &tail)],
-                            );
+                    for (index, part) in parts.iter().enumerate() {
+                        match part {
+                            ObjectPart::Define(key, value_expr) => {
+                                let value = lower_expr(ctx, value_expr)?;
+                                let key_idx = ctx.strings.intern(key);
+                                let global =
+                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                                let key_box = ctx.block().load(DOUBLE, &global);
+                                acc.call(
+                                    ctx,
+                                    DOUBLE,
+                                    "js_object_literal_define",
+                                    &[Arg::Plain(DOUBLE, &key_box), Arg::Plain(DOUBLE, &value)],
+                                );
+                            }
+                            ObjectPart::Computed {
+                                key,
+                                value: value_expr,
+                            } => {
+                                // `[key]: value`: the key, its ONE ToPropertyKey
+                                // (a user `toString` / `Symbol.toPrimitive` runs
+                                // here, before the value), the value, then the
+                                // definition on the path static keys take. The
+                                // property key (a string or a symbol) is rooted
+                                // across the value's lowering.
+                                let key_value = lower_expr(ctx, key)?;
+                                let property_key = ctx.block().call(
+                                    DOUBLE,
+                                    "js_object_literal_to_property_key",
+                                    &[(DOUBLE, &key_value)],
+                                );
+                                rooting::with_rooted_accumulator(
+                                    ctx,
+                                    Repr::Boxed,
+                                    &property_key,
+                                    true,
+                                    |ctx, pk| {
+                                        let value = lower_expr(ctx, value_expr)?;
+                                        acc.call(
+                                            ctx,
+                                            DOUBLE,
+                                            "js_object_literal_define",
+                                            &[pk.as_arg(), Arg::Plain(DOUBLE, &value)],
+                                        );
+                                        Ok(())
+                                    },
+                                    |_ctx, _| Ok(()),
+                                )?;
+                            }
+                            ObjectPart::Spread(value_expr) => {
+                                let value = lower_expr(ctx, value_expr)?;
+                                // The helper returns the current (possibly new or
+                                // evacuated) accumulator; publish it in the root.
+                                // It is born with room for the keys the literal
+                                // defines after this part, static or computed.
+                                let tail = parts[index + 1..]
+                                    .iter()
+                                    .filter(|part| part.defines_key())
+                                    .count()
+                                    .to_string();
+                                acc.advance(
+                                    ctx,
+                                    if index == 0 {
+                                        "js_object_spread_fresh_leading"
+                                    } else {
+                                        "js_object_spread_fresh"
+                                    },
+                                    &[Arg::Plain(DOUBLE, &value), Arg::Plain(I32, &tail)],
+                                );
+                            }
                         }
                     }
                     Ok(())

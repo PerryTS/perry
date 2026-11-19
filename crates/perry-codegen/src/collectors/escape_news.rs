@@ -494,7 +494,7 @@ fn collect_used_new_fields_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter().flatten() {
                 collect_used_new_fields_in_expr(value, non_escaping_news, used);
             }
         }

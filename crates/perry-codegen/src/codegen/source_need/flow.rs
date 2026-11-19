@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use perry_hir::fx::{FxHashMap, FxHashSet};
-use perry_hir::{ArrayElement, CallArg, Class, Expr, Function, Module, Stmt};
+use perry_hir::{ArrayElement, CallArg, Class, Expr, Function, Module, ObjectPart, Stmt};
 
 /// Why a value may be stringified. Grouped by [`Reason::category`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1174,9 +1174,12 @@ impl<'a> Build<'a> {
                 vec![]
             }
             Expr::ObjectSpread { parts } => {
-                for (key, x) in parts {
-                    let v = self.expr(cx, x);
-                    if key.is_some() {
+                for part in parts {
+                    if let ObjectPart::Computed { key, .. } = part {
+                        self.expr(cx, key);
+                    }
+                    let v = self.expr(cx, part.value());
+                    if part.defines_key() {
                         self.sink_vals(&v, Reason::HeapStore, "object-literal");
                     }
                 }
@@ -1561,7 +1564,9 @@ fn defines_call_props(m: &Module) -> bool {
             Expr::PropertySet { property, .. } if named(property) => found = true,
             Expr::Object(props) if props.iter().any(|(k, _)| named(k)) => found = true,
             Expr::ObjectSpread { parts }
-                if parts.iter().any(|(k, _)| k.as_deref().is_some_and(named)) =>
+                if parts
+                    .iter()
+                    .any(|p| matches!(p, ObjectPart::Define(k, _) if named(k))) =>
             {
                 found = true
             }

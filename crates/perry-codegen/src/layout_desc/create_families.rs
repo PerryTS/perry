@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use perry_hir::{BinaryOp, Expr, Module, Stmt};
+use perry_hir::{BinaryOp, Expr, Module, ObjectPart, Stmt};
 
 use crate::expr::FnCtx;
 use crate::rooting::{self, Repr};
@@ -838,12 +838,17 @@ fn literal(a: &Analysis<'_>, e: &Expr) -> Option<Lit> {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (k, v) in parts {
-                match k {
-                    Some(k) => name(&mut lit, k),
-                    None => {
+            for part in parts {
+                match part {
+                    ObjectPart::Define(k, _) => name(&mut lit, k),
+                    ObjectPart::Spread(v) => {
                         lit.open = true;
                         copy_keys(&mut lit.image, a.source_image(v), false);
+                    }
+                    // A key known only at run time: no key image.
+                    ObjectPart::Computed { .. } => {
+                        lit.open = true;
+                        lit.image = None;
                     }
                 }
             }

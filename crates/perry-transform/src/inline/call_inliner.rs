@@ -1138,13 +1138,27 @@ pub fn inline_calls_in_expr(
         }
         Expr::ObjectSpread { parts } => {
             let mut earlier = EarlierOperands::default();
-            for (key, v) in parts {
-                hoisted.extend(ordered!(v, &mut earlier));
-                if key.is_none() {
-                    // Spreading copies own properties, which runs getters.
-                    earlier.note_effect();
+            for part in parts {
+                match &mut *part {
+                    perry_hir::ObjectPart::Spread(v) => {
+                        hoisted.extend(ordered!(v, &mut earlier));
+                        // Spreading copies own properties, which runs getters.
+                        earlier.note_effect();
+                    }
+                    perry_hir::ObjectPart::Define(_, v) => {
+                        hoisted.extend(ordered!(v, &mut earlier));
+                    }
+                    perry_hir::ObjectPart::Computed { key, value } => {
+                        hoisted.extend(ordered!(key, &mut earlier));
+                        // ToPropertyKey may run a user `toString` /
+                        // `Symbol.toPrimitive` before the value.
+                        earlier.note_effect();
+                        hoisted.extend(ordered!(value, &mut earlier));
+                    }
                 }
-                kill_referenced_exact_receivers(v, exact_receiver_facts);
+                for e in &mut *part {
+                    kill_referenced_exact_receivers(e, exact_receiver_facts);
+                }
             }
         }
         Expr::ArraySpread(elements) => {

@@ -1525,7 +1525,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 walk(e, out);
             }
         }

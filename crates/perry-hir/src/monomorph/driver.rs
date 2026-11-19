@@ -418,7 +418,7 @@ fn collect_instantiations_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 collect_instantiations_in_expr(v, ctx, module, idx);
             }
         }

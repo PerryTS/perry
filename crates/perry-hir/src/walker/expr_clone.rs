@@ -131,6 +131,21 @@ impl<K: Clone> Shallow for Vec<(K, Box<Expr>)> {
     }
 }
 
+impl Shallow for Vec<ObjectPart> {
+    fn shallow(&self, n: &mut usize) -> Vec<ObjectPart> {
+        self.iter()
+            .map(|part| match part {
+                ObjectPart::Spread(_) => ObjectPart::Spread(hole(n)),
+                ObjectPart::Define(k, _) => ObjectPart::Define(k.clone(), hole(n)),
+                ObjectPart::Computed { .. } => ObjectPart::Computed {
+                    key: Box::new(hole(n)),
+                    value: hole(n),
+                },
+            })
+            .collect()
+    }
+}
+
 impl Shallow for Vec<CallArg> {
     fn shallow(&self, n: &mut usize) -> Vec<CallArg> {
         self.iter()
