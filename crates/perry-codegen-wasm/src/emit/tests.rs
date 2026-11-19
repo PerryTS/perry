@@ -1471,6 +1471,31 @@ f(["a", "b"]).then((v) => console.log(v)).catch((e) => console.log("threw " + e)
     );
 }
 
+// Every binding pattern lowers through the iterator-record intrinsics, which the JS
+// emitter runs as the WASM emitter does (#15011). Expected output is Node's.
+#[test]
+fn async_body_runs_array_and_object_patterns() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const pairs: [string, number][] = [["a", 1], ["b", 2]];
+async function forOfArray() { const out: string[] = []; for (const [k, v] of pairs) out.push(k + v); return out.join(","); }
+async function constArray() { const [x, y] = [1, 2]; return x + y; }
+async function forOfObject() { const out: number[] = []; for (const { n } of [{ n: 1 }, { n: 2 }]) out.push(n); return out.join(","); }
+async function forOfEntries() { const out: string[] = []; for (const [k, v] of Object.entries({ a: 1 })) out.push(k + v); return out.join(","); }
+async function forOfPlain() { let s = 0; for (const v of [1, 2, 3]) s += v; return s; }
+function* g() { yield 1; yield 2; yield 3; }
+async function fromGenerator() { const [a, b] = g(); return a + "," + b; }
+function syncForOfArray() { const out: string[] = []; for (const [k, v] of pairs) out.push(k + v); return out.join(","); }
+const cases: [string, () => any][] = [["for-of [k, v]", forOfArray], ["const [x, y] =", constArray], ["for-of { n }", forOfObject], ["for-of [k, v] of Object.entries", forOfEntries], ["for-of v (no pattern)", forOfPlain], ["const [a, b] = generator", fromGenerator], ["sync for-of [k, v]", syncForOfArray]];
+async function main() { for (let i = 0; i < cases.length; i++) { const c = cases[i]; try { console.log(c[0] + ": " + (await c[1]())); } catch (e: any) { console.log(c[0] + ": threw " + e.message); } } }
+main();
+"#
+        ),
+        "for-of [k, v]: a1,b2\nconst [x, y] =: 3\nfor-of { n }: 1,2\nfor-of [k, v] of Object.entries: a1\nfor-of v (no pattern): 6\nconst [a, b] = generator: 1,2\nsync for-of [k, v]: a1,b2"
+    );
+}
+
 // The `try` lowering declares a flag inside the `try` block and reads it in the `catch`;
 // the JS body must declare it where both can see it (#14595).
 #[test]
@@ -1490,28 +1515,6 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
         ),
         "caught boom"
     );
-}
-
-// Iterating a non-array and destructuring are not emitted in an async body; they reject
-// with a TypeError instead of running on with undefined values.
-#[test]
-fn async_body_rejects_iteration_it_cannot_emit() {
-    let out = run_web_source(
-        r#"
-async function each(): Promise<string> {
-  let s = "";
-  for (const v of new Set(["x", "y"])) s = s + v;
-  return s;
-}
-async function pick(xs: number[]): Promise<string> {
-  const [a, b] = xs;
-  return a + "," + b;
-}
-each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
-pick([1, 2]).then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
-"#,
-    );
-    assert_eq!(out, "threw TypeError\nthrew TypeError");
 }
 
 // A logical operator in an async body evaluates its left operand once, and an `await`
