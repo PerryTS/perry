@@ -41,6 +41,14 @@ pub(crate) fn family_diag_init() {
     }
 }
 
+/// `process.exit()` skips atexit handlers (`process::terminate_without_atexit`):
+/// print the report there too. One relaxed load when the variable is unset.
+pub(crate) fn family_diag_report_before_immediate_exit() {
+    if RUN_DIAG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        family_diag_report();
+    }
+}
+
 /// `PERRY_FAMILY_DIAG=2`: count out-of-order fills by (family, key written,
 /// first later key present) and print the most frequent at exit (measurement
 /// only: which key orders the census gets wrong).
