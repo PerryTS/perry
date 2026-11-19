@@ -525,6 +525,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // receiver live and re-read its address after that allocation.
     if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
         || crate::buffer::is_uint8array_buffer(ptr as usize)
+        || crate::buffer::is_node_buffer(ptr as usize)
     {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver =

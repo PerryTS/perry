@@ -363,30 +363,8 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A Node `Buffer` inherits `constructor` from its actual
-                    // [[Prototype]] (`Buffer.prototype`, or a user subclass's
-                    // prototype). Ordinary [[Get]] through that link answers
-                    // the `Buffer` function itself; the namespace object this
-                    // arm used to synthesize is not callable, so axios-style
-                    // `val.constructor.isBuffer(val)` checks failed and
-                    // `buf.constructor === Buffer` was false.
-                    let scope = crate::gc::RuntimeHandleScope::new();
-                    let receiver_h = scope.root_raw_const_ptr(obj);
-                    let key_h = scope.root_raw_const_ptr(key);
-                    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
-                        receiver_h.with_const_ptr(|r: *const ObjectHeader| {
-                            crate::value::js_nanbox_pointer(r as i64)
-                        }),
-                    ));
-                    return receiver_h.with_const_ptr(|receiver: *const ObjectHeader| {
-                        key_h.with_const_ptr(|key: *const crate::StringHeader| {
-                            super::super::prototype_chain::resolve_inherited_field_from_prototype(
-                                receiver as usize,
-                                proto.get_nanbox_u64(),
-                                key,
-                            )
-                            .unwrap_or_else(JSValue::undefined)
-                        })
-                    });
+                    // [[Prototype]], so `buf.constructor === Buffer`.
+                    return buffer_inherited_field(obj, key);
                 }
                 if crate::buffer::is_secret_key(obj as usize) {
                     if key_bytes == b"type" {
@@ -443,6 +421,11 @@ pub(crate) fn get_field_by_name_object_tail(
                         let result = js_class_method_bind(this_f64, heap_name, key_bytes.len());
                         return JSValue::from_bits(result.to_bits());
                     }
+                }
+                // Every other name (`join`, `map`, ...) is inherited through
+                // `Uint8Array.prototype`.
+                if crate::buffer::is_node_buffer(obj as usize) {
+                    return buffer_inherited_field(obj, key);
                 }
             }
             return JSValue::undefined();
@@ -1735,4 +1718,30 @@ pub(crate) fn get_field_by_name_object_tail(
         // Key not found
         JSValue::undefined()
     }
+}
+
+/// `[[Get]]` of `key` through a buffer cell's actual `[[Prototype]]`
+/// (`Buffer.prototype`, a user subclass's prototype, or one set with
+/// `Object.setPrototypeOf`), with the cell as receiver.
+unsafe fn buffer_inherited_field(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_raw_const_ptr(obj);
+    let key_h = scope.root_raw_const_ptr(key);
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        receiver_h
+            .with_const_ptr(|r: *const ObjectHeader| crate::value::js_nanbox_pointer(r as i64)),
+    ));
+    receiver_h.with_const_ptr(|receiver: *const ObjectHeader| {
+        key_h.with_const_ptr(|key: *const crate::StringHeader| {
+            super::super::prototype_chain::resolve_inherited_field_from_prototype(
+                receiver as usize,
+                proto.get_nanbox_u64(),
+                key,
+            )
+            .unwrap_or_else(JSValue::undefined)
+        })
+    })
 }
