@@ -28,8 +28,8 @@ mod undeclared;
 pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
-    builtin_function, global_object, global_store_escapes, global_self_key, native_may_be, realm_reads_store,
-    plain_namespace_own_store, undeclared,
+    builtin_function, global_object, global_self_key, global_store_escapes, native_may_be,
+    plain_namespace_own_store, realm_reads_store, undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;
@@ -1258,10 +1258,11 @@ fn intrinsic_unwritten(
 
 /// [`intrinsic_miss`] for a lookup that passes the own prototype of builtin
 /// kind `holder` (`TmplKind::BObj::what`, `Array` for an array) before
-/// `Object.prototype`: that prototype is asked under its own identity
-/// (`TokKind::NativeProto`), so a write onto it, or unknown code holding
-/// the realm where the lock admits the store (`realm_replaced`), reaches
-/// this lookup, and `Object.prototype` stays under its lock.
+/// `Object.prototype`: that prototype and every native prototype past it
+/// ([`native_chain`]) are asked under their own identity
+/// (`TokKind::NativeProto`), so a write onto any of them, or unknown code
+/// holding the realm where the lock admits the store (`realm_replaced`),
+/// reaches this lookup, and `Object.prototype` stays under its lock.
 pub(crate) fn intrinsic_miss_on(
     m: &mut Model,
     holder: Option<&str>,
@@ -1269,20 +1270,48 @@ pub(crate) fn intrinsic_miss_on(
     miss: NativeMiss,
 ) -> bool {
     if let Some(what) = holder {
-        let np = m.tok(TokKind::native_proto(what));
-        let written = match miss {
-            NativeMiss::Lookup(_, _) => native_accessor_written(m, np, a),
-            _ => native_written(m, np, a),
-        };
-        if written {
-            if !native_protocol::answer_stored(m, np, a, miss.clone()) {
-                return false;
+        for name in native_chain(what) {
+            let np = m.tok(TokKind::native_proto(&name));
+            let written = match miss {
+                NativeMiss::Lookup(_, _) => native_accessor_written(m, np, a),
+                _ => native_written(m, np, a),
+            };
+            if written {
+                if !native_protocol::answer_stored(m, np, a, miss.clone()) {
+                    return false;
+                }
+            } else {
+                m.native_missing.push((np, a, miss.clone()));
             }
-        } else {
-            m.native_missing.push((np, a, miss.clone()));
         }
     }
     intrinsic_miss(m, a, miss)
+}
+
+/// The native prototypes a lookup that passes the own prototype of builtin
+/// kind `holder` passes before `Object.prototype`, each under its own
+/// identity: `holder` itself, then every [[Prototype]] the realm declares
+/// past it (a Buffer's: `Uint8Array.prototype`, `%TypedArray%.prototype`;
+/// OrdinaryGet, ECMA-262 10.1.8.1, walks them all). A program store onto
+/// any of them is a write this lookup sees, with or without the realm held.
+fn native_chain(holder: &str) -> Vec<String> {
+    let mut out = vec![holder.to_string()];
+    let own = loads::view_chain(Some(holder)).or_else(|| match holder.ends_with(".prototype") {
+        true => members::realm_entry(holder),
+        false => members::realm_entry(&format!("{holder}.prototype")),
+    });
+    let mut at = own.and_then(|e| e.proto).and_then(members::realm_entry);
+    while let Some(e) = at {
+        if e.name == "Object.prototype" {
+            break;
+        }
+        let name = e.name.strip_suffix(".prototype").unwrap_or(e.name);
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+        at = e.proto.and_then(members::realm_entry);
+    }
+    out
 }
 
 /// The own prototype a lookup on builtin receiver `t` passes before

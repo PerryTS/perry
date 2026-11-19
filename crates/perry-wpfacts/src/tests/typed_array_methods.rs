@@ -262,10 +262,27 @@ fn absent_key_on_a_buffer_chain_is_undefined() {
     }
 }
 /// Control: a program store onto `Buffer.prototype` is what the read finds.
+/// The store writes the prototypes past it as well (`Uint8Array.prototype`,
+/// `%TypedArray%.prototype`), and the call runs the stored method with `o`.
+/// It hands `o` to a declared native, the unknown code: the program's
+/// `hostTake` is a function on the global object that keeps nothing
+/// (R-GLOBAL).
 #[test]
 fn absent_key_written_on_buffer_prototype_is_read() {
     check(
-        "(Buffer.prototype as any).extras = function (x: any) { (globalThis as any).hostTake(x); }; \
+        "declare function sink2(x: any): void; \
+         (Buffer.prototype as any).extras = function (x: any) { sink2(x); }; \
+         const v: any = Buffer.from(\"x\"); v.extras(o);",
+        false,
+    );
+}
+/// The same store onto `Uint8Array.prototype`, past `Buffer.prototype` on
+/// the receiver's chain: the call runs it.
+#[test]
+fn absent_key_written_past_buffer_prototype_is_read() {
+    check(
+        "declare function sink2(x: any): void; \
+         (Uint8Array.prototype as any).extras = function (x: any) { sink2(x); }; \
          const v: any = Buffer.from(\"x\"); v.extras(o);",
         false,
     );
