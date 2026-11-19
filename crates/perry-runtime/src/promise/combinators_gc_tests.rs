@@ -270,11 +270,8 @@ extern "C-unwind" fn collecting_throwing_then(
     crate::exception::test_throw(13.0)
 }
 
-/// PromiseResolveThenableJob with a `then` that collects and then throws
-/// (#14683: an intrinsic `then` whose SpeciesConstructor runs an allocating
-/// `constructor` getter and fails): the job's abrupt-completion arm must read
-/// the guard array and the promise it rejects from after the call, not their
-/// pre-call addresses.
+/// A `then` that collects and then throws: the job rejects the moved promise
+/// through its guard, read after the call.
 #[test]
 fn thenable_job_rejects_the_live_promise_after_then_collects_and_throws() {
     let _gc = moving_gc();

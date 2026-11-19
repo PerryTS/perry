@@ -461,12 +461,8 @@ extern "C" fn promise_resolve_thenable_job(
         js_promise_resolve(promise, thenable);
         return 0.0;
     }
-    // The resolve/reject closures below may be invoked with zero arguments by
-    // the thenable's `then`; their infos declare 1, so the missing value pads
-    // to `undefined`.
-    // The guard and closure allocations and the `then` call (user code, or the
-    // intrinsic `then` whose SpeciesConstructor runs a `constructor` getter)
-    // can collect and move these values: each use reads it from its handle.
+    // The allocations below and the `then` call can collect: hold every value
+    // in a handle and read it at its use.
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
     let thenable = scope.root_nanbox_f64(thenable);
@@ -483,6 +479,8 @@ extern "C" fn promise_resolve_thenable_job(
             as *mut crate::array::ArrayHeader
     };
 
+    // `then` may call these with zero arguments; their infos declare 1, so the
+    // missing value pads to `undefined`.
     let resolve_closure = js_closure_alloc(&THENABLE_JOB_RESOLVE_FN_INFO, 2);
     crate::closure::closure_set_capture_ref(resolve_closure, 0, live_promise());
     crate::closure::closure_set_capture_ref(resolve_closure, 1, live_guard() as i64);
