@@ -756,8 +756,21 @@ pub fn note_global_in_top(m: &mut Model) {
     m.global_written_own |= !m.shared_replay;
     if !m.global_in_top {
         m.global_in_top = true;
+        let fields: Vec<NodeId> = m.global_fields.iter().map(|&(_, n)| n).collect();
+        for n in fields {
+            global_field_read_by_unknown(m, n);
+        }
         replay_native_missing(m);
     }
+}
+
+/// Unknown code that holds the global object (`global_in_top`) reads its
+/// properties: what the program stored in global `n` leaves. R-GLOBAL (owner
+/// decision 2026-11-18) drops only the any-key write by that code, not its
+/// reads.
+fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
+    let r = m.reason("global property read by unknown code that holds the global object");
+    m.sink_node(n, r);
 }
 
 /// Lookups that passed a native prototype (or read a program-owned global)
@@ -1467,6 +1480,9 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    if m.global_in_top {
+        global_field_read_by_unknown(m, n);
+    }
     super::loads::global_shaped_replay(m, a);
     if m.global_cells {
         m.global_late = true;
