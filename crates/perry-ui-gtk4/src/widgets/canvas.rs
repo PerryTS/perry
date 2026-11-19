@@ -301,6 +301,47 @@ pub fn create(width: f64, height: f64) -> i64 {
     handle
 }
 
+#[cfg(test)]
+mod tests {
+    use gtk4::prelude::*;
+
+    const CHILD_ENV: &str = "PERRY_GTK4_CANVAS_FIRST_CALL_CHILD";
+
+    /// A canvas can be a program's first GTK call, so `create` initializes GTK
+    /// before constructing its `DrawingArea` (#7995). The body runs in a
+    /// re-executed child so no other test has initialized GTK first.
+    #[test]
+    fn create_as_first_gtk_call_returns_a_drawing_area() {
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            eprintln!(
+                "SKIPPED (not a pass): no DISPLAY or WAYLAND_DISPLAY. Re-run as\n  \
+                 xvfb-run -a cargo test -p perry-ui-gtk4 --lib create_as_first_gtk_call"
+            );
+            return;
+        }
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let handle = super::create(64.0, 32.0);
+            let widget = super::super::get_widget(handle).expect("create returned no widget");
+            assert!(widget.is::<gtk4::DrawingArea>());
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "widgets::canvas::tests::create_as_first_gtk_call_returns_a_drawing_area",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .status()
+            .expect("re-run the test binary");
+        assert!(
+            status.success(),
+            "canvas create as the first GTK call failed: {status}"
+        );
+    }
+}
+
 /// Clear all drawing commands.
 pub fn clear(handle: i64) {
     CANVAS_COMMANDS.with(|cmds| {
