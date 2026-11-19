@@ -329,9 +329,25 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
     let refused = assert_plain_array_arm(&blocks, "pget.recv_real", true);
     assert_eq!(strip_suffix(&refused), "pget.array_other");
 
+    // After the byte-cell length arm, a typed array is answered from its
+    // structure (`typed_named`); every other receiver continues to the
+    // length probe.
+    let (_, array_other_body) = block(&blocks, "pget.byte_other");
+    let (_, typed_link, not_typed) = cond_br(array_other_body);
+    assert_eq!(
+        strip_suffix(&typed_link),
+        "tnamed.link",
+        "{array_other_body:?}"
+    );
+    assert_eq!(
+        strip_suffix(&not_typed),
+        "pget.typed_other",
+        "{array_other_body:?}"
+    );
+
     // The probe is the `length` flavour, reads this agent's directory, and
     // only its TAG_HOLE decline reaches the collecting exit.
-    let (other_label, other_body) = block(&blocks, "pget.byte_other");
+    let (other_label, other_body) = block(&blocks, "pget.typed_other");
     let probe = other_body
         .iter()
         .find(|l| l.contains(" = call double @perry_probe_get_length("))
@@ -341,8 +357,9 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
         "the length probe must receive the agent's own directory:\n{probe}"
     );
     assert!(
-        other_body
+        array_other_body
             .iter()
+            .chain(other_body.iter())
             .any(|l| l.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0")),
         "the directory is slot 0 of the agent block:\n{other_body:?}"
     );

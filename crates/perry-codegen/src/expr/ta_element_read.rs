@@ -280,7 +280,8 @@ fn emit_get(
     let access = if let Some(param) = proof {
         let admitted = ctx.new_block("ta.read.hoisted");
         let admitted_l = ctx.block_label(admitted);
-        ctx.block().cond_br(&param.valid_i1, &admitted_l, &other_kind_l);
+        ctx.block()
+            .cond_br(&param.valid_i1, &admitted_l, &other_kind_l);
         ctx.current_block = admitted;
         let len = ctx.block().load(I32, &param.length_slot);
         super::byte_cell::Access {
