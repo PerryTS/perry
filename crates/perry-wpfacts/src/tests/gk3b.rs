@@ -245,3 +245,94 @@ fn e5_later_non_constant_widens() {
         assert!(e5_g_sees_b(&pf), "{defs}: g may be B\n{}", pf.dump_text());
     }
 }
+
+/// CHW13 named define on the global object: `g` holds the program's `A`,
+/// then `{defs}`; `globalThis.Object`, `g`, `navigator` and `thing` are
+/// read after.
+fn nd_src(defs: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        class B {{ zz = \"b\"; }}
+        class N {{ nn = 1; }}
+        (globalThis as any).g = new A();
+        const gg = globalThis as Record<string, unknown>;
+        {defs}
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);
+        console.log((globalThis as any).g.zz);
+        console.log(/*NAV*/(globalThis as any).navigator.nn);
+        console.log(/*THING*/(globalThis as any).thing.nn);"
+    )
+}
+
+/// The first `.nn` read after `marker`: (it may be an `N`, it is ⊤).
+fn nd_nn(pf: &ProgramFacts, src: &str, marker: &str) -> (bool, bool) {
+    let at = src.find(marker).expect("marker") as u32;
+    let s = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "nn" && s.byte_offset >= at)
+        .min_by_key(|s| s.byte_offset)
+        .unwrap_or_else(|| panic!("site .nn after {marker}\n{}", pf.dump_text()));
+    let n = s.receivers.iter().any(|r| r.ends_with(":N") || r.contains(":N#"));
+    (n, s.top)
+}
+
+/// RED (CHW13): a value define on the global object under a constant key
+/// (`navigator`, as the app's browser shim does, and a fresh name) writes
+/// that key only: `g` stays the program's `A`, `globalThis.Object` the
+/// intrinsic, and a read of each defined key gets the defined `N`.
+#[test]
+fn nd_value_define_writes_that_key_only() {
+    let src = nd_src(
+        "Object.defineProperty(gg, \"navigator\", { configurable: true, enumerable: true, writable: true, value: new N() });
+        Object.defineProperty(globalThis, \"thing\", { value: new N(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+    for m in ["/*NAV*/", "/*THING*/"] {
+        let (n, top) = nd_nn(&pf, &src, m);
+        assert!(n && !top, "{m} reads the defined N\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: an accessor define under a constant key: its getter's result
+/// reaches the readers of that key (`navigator` too, whose native accessor
+/// a plain store would not replace).
+#[test]
+fn nd_accessor_define_getter_reaches_readers() {
+    let src = nd_src(
+        "Object.defineProperty(gg, \"navigator\", { get: () => new N(), configurable: true });
+        Object.defineProperty(gg, \"thing\", { get: () => new N(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    for m in ["/*NAV*/", "/*THING*/"] {
+        let (n, top) = nd_nn(&pf, &src, m);
+        assert!(n || top, "{m} may read the getter's N\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a define of `g` itself (value or getter) is what `g` reads.
+#[test]
+fn nd_define_of_the_read_name_is_read() {
+    for d in [
+        "Object.defineProperty(gg, \"g\", { value: new B(), configurable: true });",
+        "Object.defineProperty(gg, \"g\", { get: () => new B(), configurable: true });",
+    ] {
+        let pf = facts_mods(&[("main", &nd_src(d))]);
+        assert!(e5_g_sees_b(&pf), "{d}: g may be B\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a constant-key define on ⊤ that is not the global object keeps
+/// the ⊤ arm (`note_native_data_write` through ⊤ under the key): with the
+/// realm not in ⊤'s reach, `g` and `Object` stay as they were (as on base).
+#[test]
+fn nd_define_on_top_keeps_today() {
+    let src = nd_src(
+        "const u: any = JSON.parse(String(process.argv[2])); Object.defineProperty(u, \"g\", { value: new B(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+}
