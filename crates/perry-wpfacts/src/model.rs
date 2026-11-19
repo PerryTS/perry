@@ -2944,6 +2944,10 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// A module outside the program that is no builtin runs at load
+    /// (`Gen`'s import walk): code the closed world does not cover, which may
+    /// call the Function constructor it is handed (`escape_body`).
+    pub unseen_module_runs: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):
     /// it is reachable from a Worker entry module, or some Worker's entry
     /// is not named. A module past the end counts as one (unknown).
