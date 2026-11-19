@@ -1029,10 +1029,12 @@ pub(crate) fn lower_array_method(
             "toReversed" | "toSorted" | "toSpliced" => Ok(emit_array_method_on_values(
                 ctx, property, recv_box, arg_vals,
             )),
-            // #3148: TypedArray.prototype.set(source, offset?). Copies elements
-            // from an Array/TypedArray source into this typed array. The runtime
-            // helper no-ops for non-typed-array receivers, so it is safe under the
-            // broadened `is_array_expr` (which also routes plain arrays here).
+            // #3148: TypedArray.prototype.set(source, offset?). The runtime
+            // copies when `Get(recv, "set")` is the builtin (a typed array on
+            // its intrinsic chain) and otherwise calls whatever `set` the
+            // receiver has, with this site's argument count: a user `set`, or
+            // on a plain Array (the broadened `is_array_expr` routes those
+            // here too) the missing method's TypeError.
             "set" => {
                 let src_box = arg_or_undefined(arg_vals, 0);
                 let off_box = if args.len() >= 2 {
@@ -1040,12 +1042,16 @@ pub(crate) fn lower_array_method(
                 } else {
                     double_literal(0.0)
                 };
-                let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                Ok(blk.call(
+                let argc = args.len().min(2).to_string();
+                Ok(ctx.block().call(
                     DOUBLE,
-                    "js_typed_array_set_from",
-                    &[(I64, &recv_handle), (DOUBLE, &src_box), (DOUBLE, &off_box)],
+                    "js_typed_array_set_call",
+                    &[
+                        (DOUBLE, recv_box),
+                        (DOUBLE, &src_box),
+                        (DOUBLE, &off_box),
+                        (I32, &argc),
+                    ],
                 ))
             }
             // #3148: TypedArray.prototype.subarray(begin?, end?) — returns a new

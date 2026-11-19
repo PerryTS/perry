@@ -311,3 +311,32 @@ pub(crate) unsafe fn typed_array_constructor_has_instance(
     None
 }
 
+/// `recv.set(source, offset)` at a site the compiler folded to the typed-array
+/// copy (an Array- or TypedArray-typed receiver): the copy when
+/// `Get(recv, "set")` is `%TypedArray%.prototype.set` ([`builtin_set_receiver`]),
+/// else the ordinary method call of whatever `Get(recv, "set")` is, with the
+/// site's `argc` arguments (a user `set` on the receiver, its kind prototype
+/// or a relinked chain; on an Array, the missing method's TypeError).
+///
+/// # Safety
+/// `recv`, `source` and `offset` are NaN-boxed values; `argc` is 0, 1 or 2.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_typed_array_set_call(
+    recv: f64,
+    source: f64,
+    offset: f64,
+    argc: i32,
+) -> f64 {
+    if let Some(ta) = builtin_set_receiver(recv) {
+        let offset = if argc > 1 { offset } else { 0.0 };
+        return crate::typedarray_hook_slots::js_typed_array_set_from(ta, source, offset);
+    }
+    let args = [source, offset];
+    crate::object::js_native_call_method(
+        recv,
+        b"set".as_ptr() as *const i8,
+        3,
+        args.as_ptr(),
+        argc.clamp(0, 2) as usize,
+    )
+}

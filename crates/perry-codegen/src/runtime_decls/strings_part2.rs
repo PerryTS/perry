@@ -160,6 +160,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #3148: TypedArray.prototype.set(source, offset?) / subarray(begin?, end?).
     module.declare_function("js_typed_array_set_from", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function(
+        "js_typed_array_set_call",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
         "js_typed_array_subarray",
         I64,
         &[I64, I32, DOUBLE, I32, DOUBLE],
