@@ -59,6 +59,39 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// `ta[key]` (10.4.5.4 [[Get]] of an integer-indexed exotic object) for the
+/// typed array cell `raw` of any kind, which compiled code admitted by its
+/// type byte after the receiver missed the kind its read site expected
+/// (`ta_element_read` in perry-codegen): a Number `key` that is an integral
+/// in-bounds index reads that element, every other Number reads `undefined`
+/// (its CanonicalNumericIndexString is no valid integer index). Any other key
+/// takes the complete `[[Get]]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_typed_array_get_number_key(raw: i64, key: f64) -> f64 {
+    let ta = raw as usize as *const TypedArrayHeader;
+    if !crate::JSValue::from_bits(key.to_bits()).is_number() {
+        return crate::value::js_dyn_index_get(crate::value::js_nanbox_pointer(raw), key);
+    }
+    // The caller admitted the cell: its owner's type byte classifies the
+    // storage (a native arena view, a shared buffer) without a second proof.
+    let owner = crate::buffer::store::owner(ta as usize);
+    let owner_type = (*crate::buffer::store::header(owner)).obj_type;
+    if owner_type == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER
+        && crate::buffer::store::is_view(ta as usize)
+    {
+        crate::native_arena::validate_view_alive(
+            crate::native_arena::native_view_from_typed_array(ta),
+        );
+    }
+    let idx = key as i64;
+    if idx as f64 != key || idx < 0 || idx >= crate::typedarray::element_length(ta) as i64 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let shared = owner_type & !crate::codegen_abi::BYTES_TYPE_VIEW
+        == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER;
+    load_at_shared(ta, idx as usize, shared)
+}
+
 /// Read the exact raw lane bits of a BigInt64Array/BigUint64Array element.
 ///
 /// Cross-crate structured-clone snapshots use this instead of

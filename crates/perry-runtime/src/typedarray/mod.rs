@@ -302,12 +302,18 @@ pub(crate) fn element_bits(kind: u8, value: f64) -> u64 {
 
 /// Load a slot, returning a plain f64 (numeric, not NaN-boxed).
 pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
+    load_at_shared(ta, idx, typed_array_has_shared_backing(ta))
+}
+
+/// [`load_at`] for the typed-array cell `ta`, admitted by its caller, whose
+/// owner is (`shared`) or is not a SharedArrayBuffer.
+pub(crate) unsafe fn load_at_shared(ta: *const TypedArrayHeader, idx: usize, shared: bool) -> f64 {
     let kind = crate::typedarray::element_kind(ta);
     let elem_size =
         crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize;
     let base = data_ptr(ta);
     let off = idx * elem_size;
-    if typed_array_has_shared_backing(ta) {
+    if shared {
         return shared_access::load(base.add(off), kind);
     }
     match kind {
