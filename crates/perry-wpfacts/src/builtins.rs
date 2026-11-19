@@ -3274,6 +3274,33 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     ns_method_inner(m, ns, name, call, false)
 }
 
+/// R-HOSTREPORT: a call that may register a process listener (`process.on`
+/// and the other EventEmitter registrations on the one process object;
+/// any event, a computed key may name the method) hands the listener what
+/// the host reports and the process events.
+pub(crate) fn process_listener_registered(m: &mut Model, call: CallId) {
+    let (h, e) = (m.host_report, m.esc_raise);
+    m.edge(h, e);
+    // W-HOST: the listener is handed the process events too
+    // (`Model::process_event`).
+    let pe = m.process_event;
+    m.edge(pe, e);
+    // The listener itself runs with them (os_process_emitter.rs
+    // `emit_process_uncaught_exception`: listener(err, origin), this =
+    // process); another event name, or a computed one, may be any of
+    // them. Its own throw is the host's to report.
+    let c = m.calls[call as usize].clone();
+    if let Some(&cb) = c.arg(1) {
+        let arg = m.node_l("process-listener-arg");
+        m.edge(h, arg);
+        m.edge(pe, arg);
+        let p = m.tok(TokKind::Builtin(BuiltinNs::Process));
+        let this = m.node_l("process-listener-this");
+        m.add_tok(this, p);
+        let _ = collections::cb_call_in(m, call, cb, ThisArg::Node(this), vec![arg], h);
+    }
+}
+
 fn ns_method_inner(
     m: &mut Model,
     ns: BuiltinNs,
@@ -3319,26 +3346,7 @@ fn ns_method_inner(
             ),
         }
     {
-        let (h, e) = (m.host_report, m.esc_raise);
-        m.edge(h, e);
-        // W-HOST: the listener is handed the process events too
-        // (`Model::process_event`).
-        let pe = m.process_event;
-        m.edge(pe, e);
-        // The listener itself runs with them (os_process_emitter.rs
-        // `emit_process_uncaught_exception`: listener(err, origin), this =
-        // process); another event name, or a computed one, may be any of
-        // them. Its own throw is the host's to report.
-        let c = m.calls[call as usize].clone();
-        if let Some(&cb) = c.arg(1) {
-            let arg = m.node_l("process-listener-arg");
-            m.edge(h, arg);
-            m.edge(pe, arg);
-            let p = m.tok(TokKind::Builtin(BuiltinNs::Process));
-            let this = m.node_l("process-listener-this");
-            m.add_tok(this, p);
-            let _ = collections::cb_call_in(m, call, cb, ThisArg::Node(this), vec![arg], h);
-        }
+        process_listener_registered(m, call);
     }
 
     // A computed key may name any member, one no rule describes included

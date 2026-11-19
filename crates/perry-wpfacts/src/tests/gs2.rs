@@ -239,3 +239,15 @@ void main();\n";
 fn gs11_settled_resume_never_rejects() {
     assert!(mono(&calls(GS11_R, "traverse")));
 }
+
+/// `process.on` lowers to the HIR's receiver-less `NativeMethodCall`: the
+/// listener is handed the reported value, so its store reaches `b`.
+#[test]
+fn gs9_native_process_on_listener_store_reaches_the_report() {
+    let src = "process.on(\"uncaughtException\", (e: any) => { e.m = 0; });\n\
+class B { m(): number { return 1; } }\n\
+const b = new B();\n\
+if (process.argv[2] === \"z\") throw b;\n\
+b.m();\n";
+    assert!(!mono(&calls(src, "m")));
+}
