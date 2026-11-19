@@ -1726,30 +1726,6 @@ console.log((U as any).tag);
     );
 }
 
-// A named static method is a property of the class value, so a read that does not
-// resolve to the class statically finds it: an alias, a subclass, and a class an arrow
-// reads before its declaration (#14727). Expected output is Node's.
-#[test]
-fn a_class_value_carries_its_static_methods() {
-    assert_eq!(
-        run_web_source(
-            r#"
-function viaTag() { const read = () => C4.tag`x`; class C4 { static tag(s: TemplateStringsArray) { return "tagged"; } } return read(); }
-function plainCall() { const read = () => C7.tag("x"); class C7 { static tag(s: any) { return "called " + s; } } return read(); }
-class D { static twice(n: number) { return n * 2; } static v = 3; }
-class E extends D {}
-const K: any = D;
-const S: any = E;
-console.log("forward tag", viaTag());
-console.log("forward call", plainCall());
-console.log("alias", typeof K.twice, K.twice(4), K.v);
-console.log("inherited", S.twice(5));
-"#
-        ),
-        "forward tag tagged\nforward call called x\nalias function 8 3\ninherited 10"
-    );
-}
-
 #[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(
@@ -2145,6 +2121,9 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 
 #[path = "class_eval_tests.rs"]
 mod class_eval;
+
+#[path = "static_method_tests.rs"]
+mod static_method;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {

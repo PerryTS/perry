@@ -1660,7 +1660,8 @@ function __typeOf(v) {
 const classMethodTable = {};
 const classStaticTable = {};
 // A class's named static methods: name -> function table index (`class_set_static_method`).
-const classStaticMethodTable = {};
+// Null-prototype, so a method named `__proto__` is an own entry.
+const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
@@ -1756,12 +1757,10 @@ function __classCtor(className, ctorIdx, caps) {
     }
   }
   for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
-  // The static side inherits named static methods: the nearest class in the chain wins.
-  const statics = new Set();
-  for (let c = className; c; c = classParentTable[c] || null) {
-    for (const [m, idx] of Object.entries(classStaticMethodTable[c] || {})) {
-      if (!statics.has(m)) { statics.add(m); __classDefineStaticMethod(ctor, m, idx); }
-    }
+  // Own named static methods only: an inherited one is found along the class chain
+  // (`__classStaticGet`), where a nearer static field shadows it.
+  for (const [m, idx] of Object.entries(classStaticMethodTable[className] || {})) {
+    __defineHidden(ctor, m, evaluated ? __classStaticMethodFn(className, m, idx, ctor) : __classStaticMethodValue(className, m));
   }
   if (evaluated) Object.defineProperties(proto, { [__evaluationTag]: { value: ctor }, [__classTag]: { value: className } });
   ctor.prototype = proto;
@@ -1826,17 +1825,43 @@ function __classDefiningTop() {
 function __defineHidden(target, key, value) {
   Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
 }
-// A named static method as a property of a class value, non-enumerable as a class
-// definition makes it. The compiled method takes no receiver.
-function __classDefineStaticMethod(ctor, name, funcIdx) {
+// A named static method as a function value. The compiled method takes no receiver:
+// the class value it is called on is its static `this`, and `evaluation`, a class
+// expression's evaluation, supplies its captures. `funcIdx` and empty `captures` let
+// the array callback bridges call it directly.
+// shortcut: a direct `C.m()` inside the call also sees the armed `this`, so an
+// inherited call that names its own class reads the subclass; fixing it needs codegen
+// to pass static `this`.
+function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   const fn = function (...args) {
     const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
     const padded = __padBigintArgs(impl, 0, args.map(__jsValueToBits));
-    return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
+    const outerThis = __classStaticThis;
+    const outerCall = __classEnvCall;
+    if (typeof this === 'function') __classStaticThis = { template, value: this };
+    if (evaluation) __classEnvCall = { receiver: undefined, evaluation };
+    try {
+      return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
+    } finally {
+      __classStaticThis = outerThis;
+      __classEnvCall = outerCall;
+    }
   };
   Object.defineProperty(fn, 'name', { value: name });
+  fn.funcIdx = funcIdx;
+  fn.captures = [];
   __classMethodFns.add(fn);
-  __defineHidden(ctor, name, fn);
+  return fn;
+}
+// The one value of a declared class's static method, shared by every class value
+// that reaches it, so `Sub.m === Base.m`.
+const __classStaticMethodValues = new Map();
+function __classStaticMethodValue(cls, name) {
+  let byName = __classStaticMethodValues.get(cls);
+  if (!byName) __classStaticMethodValues.set(cls, (byName = new Map()));
+  let fn = byName.get(name);
+  if (!fn) byName.set(name, (fn = __classStaticMethodFn(cls, name, classStaticMethodTable[cls][name], undefined)));
+  return fn;
 }
 // A compiled member called on `self`, in `evaluation`'s capture environment.
 function __classMemberCall(funcIdx, evaluation, self, args) {
@@ -1871,8 +1896,15 @@ function __classStaticGet(cls, name, receiver, fallback) {
   for (let c = cls; c; c = classParentTable[c] || null) {
     const statics = classStaticTable[c];
     if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
+    // A class value's own properties hold its static methods (a deleted one stays
+    // deleted); a class with no value yet has them only in its table.
     const ref = __classRefs.get(c);
-    if (ref && Object.prototype.hasOwnProperty.call(ref, name)) return Reflect.get(ref, name, receiver);
+    if (ref) {
+      if (Object.prototype.hasOwnProperty.call(ref, name)) return Reflect.get(ref, name, receiver);
+    } else {
+      const methods = classStaticMethodTable[c];
+      if (methods && Object.prototype.hasOwnProperty.call(methods, name)) return __classStaticMethodValue(c, name);
+    }
   }
   return Reflect.get(fallback, name, receiver);
 }
@@ -2523,12 +2555,14 @@ const __memDispatch = {
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
     classMethodTable[cls][String(methodName)] = funcIdx | 0;
   },
-  // Registration runs before any class value is made; a value made earlier gets it too.
+  // A class value made before registration gets the method too.
   class_set_static_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
-    (classStaticMethodTable[cls] ||= {})[String(methodName)] = funcIdx | 0;
+    const name = String(methodName);
+    (classStaticMethodTable[cls] ||= Object.create(null))[name] = funcIdx | 0;
+    __classStaticMethodValues.get(cls)?.delete(name);
     const ref = __classRefs.get(cls);
-    if (ref) __classDefineStaticMethod(ref, String(methodName), funcIdx | 0);
+    if (ref) __defineHidden(ref, name, __classStaticMethodValue(cls, name));
   },
   class_call_method: (obj, methodNameId, argsArr) => {
     // methodNameId is a plain number (string table index), not a decoded JS value
@@ -5839,7 +5873,10 @@ function __classDispatch(objVal, mname, rawArgs) {
   }
   if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')) {
     try {
-      const method = objVal[mname];
+      // A class value's statics include its chain's (see __classStaticGet).
+      const method = typeof objVal === 'function'
+        ? __classStaticGet(objVal[__classRefName], mname, objVal, objVal)
+        : objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
       if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
     } catch (error) {
