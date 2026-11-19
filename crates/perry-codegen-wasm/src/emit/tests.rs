@@ -2149,6 +2149,9 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 #[path = "class_eval_tests.rs"]
 mod class_eval;
 
+#[path = "static_method_tests.rs"]
+mod static_method;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(

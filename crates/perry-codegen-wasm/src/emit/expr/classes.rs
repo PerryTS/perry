@@ -368,7 +368,10 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
             // In a static method or block, `this` is its class, or the evaluation a
-            // static block initializes.
+            // static block initializes; a static method read it on entry.
+            Expr::This if self.this_local.is_none() && self.static_this_local.is_some() => {
+                func.instruction(&Instruction::LocalGet(self.static_this_local.unwrap_or(0)));
+            }
             Expr::This if self.this_local.is_none() && self.static_class.is_some() => {
                 let class_name = self.static_class.clone().unwrap_or_default();
                 let ctor_slot = self.class_ctor_slot(&class_name);
@@ -789,7 +792,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// The table slot of `class_name`'s compiled constructor, or -1 without one.
-    pub(super) fn class_ctor_slot(&self, class_name: &str) -> f64 {
+    pub(in crate::emit) fn class_ctor_slot(&self, class_name: &str) -> f64 {
         self.emitter
             .class_ctor_map
             .get(class_name)
