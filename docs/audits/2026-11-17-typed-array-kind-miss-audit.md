@@ -39,7 +39,7 @@ section).
 | `Object.defineProperty(b, 9, {value: 1})` | `TypeError` | expando | `typed_array_define.rs:56` | fixed (brand PR) |
 | `Reflect.set(b, 1, 66)` / `Reflect.defineProperty(b, 0, …)` | writes the byte | ignored | owner-kind gate | fixed (brand PR) |
 | `Reflect.deleteProperty(b, 0)` | `false` | `true` | owner-kind gate | fixed (brand PR) |
-| `assert.deepEqual(Buffer.from([1,2]), new Uint8Array([1,2]))` | passes | `AssertionError` | `typed_array_equality.rs:25` | fixed (brand PR) |
+| `assert.deepEqual(Buffer.from([1,2]), new Uint8Array([1,2]))` | passes | `AssertionError` | `typed_array_equality.rs:25` | open: Perry's loose `assert.deepEqual` is prototype-sensitive, and admitting a `Buffer` to the byte comparison would also skip its named own properties |
 | `console.table(b)` | index/Values table | `<Buffer …>` | `table.rs:293` | fixed (brand PR) |
 | `new DatabaseSync(Buffer.from(":memory:"))` | opens | `TypeError` | `sqlite/database_sync.rs:646` | open: accepting the `Buffer` path also needs `DatabaseSync` to reject an explicit `undefined` options argument (node: `ERR_INVALID_ARG_TYPE`), which `node-suite/sqlite/database/options-validation` passes today only because the `Buffer` path is rejected first |
 | `typeof b.join` (also `map`, `filter`, `forEach`, `reduce`, `sort`, `findLast`, `with`, `toReversed`) | `"function"` | `"undefined"` | `get_field_by_name_tail.rs` buffer arm: no `[[Prototype]]` fallback (not a lookup site) | fixed (inherited-methods PR) |

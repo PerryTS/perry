@@ -214,9 +214,7 @@ fn atomics_view_arg(value: f64) -> AtomicView {
             kind,
         };
     }
-    // A Node `Buffer` is a `Uint8Array` (its type byte is not a typed-array
-    // brand, so the lookup above misses it); key material sharing the byte
-    // storage is not.
+    // A Node `Buffer` misses the typed-array lookup above but is a `Uint8Array`.
     if crate::buffer::is_uint8_view_buffer(raw) {
         return AtomicView::Uint8ArrayBuffer(raw as *mut crate::buffer::BufferHeader);
     }

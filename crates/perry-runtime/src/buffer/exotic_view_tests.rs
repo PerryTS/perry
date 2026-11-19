@@ -531,6 +531,9 @@ fn node_buffer_follows_integer_indexed_integrity_rules() {
     assert_eq!(crate::buffer::js_buffer_get(buf as *const _, 0), 9);
     let deleted = crate::object::property_ops::reflect::js_reflect_delete(boxed(buf), key);
     assert_eq!(deleted.to_bits(), crate::value::TAG_FALSE);
+    assert!(is_undefined(
+        crate::object::js_object_get_index_polymorphic(buf as i64, 5.0)
+    ));
 
     let empty = node_buffer(&[]);
     let threw = crate::exception::catch_js_throw(|| {
