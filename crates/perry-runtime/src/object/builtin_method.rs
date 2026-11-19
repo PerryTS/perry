@@ -788,11 +788,8 @@ pub unsafe extern "C-unwind" fn js_bm_get1(
         return crate::map::js_map_get(raw(recv).cast(), a0);
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::get(
-            recv,
-            a0,
-            crate::weakref::operations::Receiver::Folded(WEAKMAP),
-        );
+        // `weak_ok` read the receiver's birth-layout word: its brand.
+        return crate::weakref::operations::get_birth_layout(recv, a0);
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
