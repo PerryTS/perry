@@ -286,6 +286,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 TAG_FALSE
             });
         }
+        // A class function object had its `@@hasInstance` resolved above on
+        // its actual chain (`linked_chain_may_hook`, then the complete read).
+        // A class-ref immediate had only its own keys asked.
+        if rhs.closure.is_some() {
+            return super::static_dispatch::instanceof_class_resolved(
+                value,
+                class_id,
+                primitive,
+                lhs_non_proxy,
+            );
+        }
         return super::static_dispatch::instanceof_classified(
             value,
             class_id,
@@ -865,9 +876,18 @@ unsafe fn linked_chain_may_hook(
         };
         if crate::closure::is_closure_ptr(addr) {
             let hop = addr as *const crate::closure::ClosureHeader;
-            if crate::closure::shape::is_class_info((*hop).info)
-                || !(crate::closure::props::proves_no_symbols(hop as usize)
-                    || hi_sym != 0 && !crate::closure::props::owns_symbol(hop as usize, hi_sym))
+            // A function's own `@@hasInstance` is a key of its bag. A class
+            // hop may also hold one where `[[Get]]` on the function does not
+            // read it: its class's static-symbol table or its lifted
+            // `static [Symbol.hasInstance]` hook. Such a hop takes the full
+            // read and the class dispatch, as before; a hop with neither is
+            // answered by its bag like any function.
+            if crate::closure::shape::is_class_info((*hop).info) && class_hop_may_hook(hop, hi_sym)
+            {
+                return true;
+            }
+            if !(crate::closure::props::proves_no_symbols(hop as usize)
+                || hi_sym != 0 && !crate::closure::props::owns_symbol(hop as usize, hi_sym))
             {
                 return true;
             }
@@ -894,4 +914,25 @@ unsafe fn linked_chain_may_hook(
         }
     }
     true
+}
+
+/// May the class constructor `hop` hold an `@@hasInstance` outside its own
+/// bag: an entry of its class's static-symbol table (a computed static
+/// field, a static accessor, `Object.defineProperty(C, Symbol.hasInstance,
+/// …)`), or a lifted `static [Symbol.hasInstance]` method registered for its
+/// class id or a parent class id? Both registries are latched: an idle one
+/// answers with one load. A class whose id cannot be read may.
+///
+/// # Safety
+/// `hop` is a proven, live class constructor closure.
+unsafe fn class_hop_may_hook(hop: *const crate::closure::ClosureHeader, hi_sym: usize) -> bool {
+    if hi_sym == 0 {
+        return true;
+    }
+    let Some(class_id) = crate::object::class_value::class_closure_id_unchecked(hop) else {
+        return true;
+    };
+    let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+    crate::symbol::class_static_symbol_lookup(class_id, hi_f64).is_some()
+        || crate::object::lookup_has_instance_hook(class_id).is_some()
 }

@@ -57,7 +57,7 @@ pub(super) fn instanceof_with_constructor(
     class_id: u32,
     constructor: Option<f64>,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, constructor, None, false)
+    instanceof_dispatch(value, class_id, constructor, None, false, false)
 }
 
 /// Generic entry preparation has already classified the left operand.
@@ -68,7 +68,24 @@ pub(super) fn instanceof_classified(
     primitive: bool,
     lhs_non_proxy: bool,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy)
+    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, false)
+}
+
+/// [`instanceof_classified`] for a class constructor RHS whose `@@hasInstance`
+/// the dynamic entry has already resolved by `GetMethod` on the actual
+/// constructor and its actual chain (the complete `[[Get]]`, or a hop-by-hop
+/// proof that no hop owns the key): the class's own symbol store and its
+/// parents' are not read again, so a getter there runs once and a getter that
+/// returns `undefined` falls through to the ordinary walk. The lifted
+/// `static [Symbol.hasInstance]` hooks (Form 1) are still consulted.
+#[inline(always)]
+pub(super) fn instanceof_class_resolved(
+    value: f64,
+    class_id: u32,
+    primitive: bool,
+    lhs_non_proxy: bool,
+) -> f64 {
+    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, true)
 }
 
 #[inline(always)]
@@ -78,6 +95,7 @@ fn instanceof_dispatch(
     constructor: Option<f64>,
     primitive: Option<bool>,
     lhs_non_proxy: bool,
+    symbol_hook_resolved: bool,
 ) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -140,7 +158,7 @@ fn instanceof_dispatch(
     // The latch check is what keeps `well_known_symbol("hasInstance")` — a
     // string-keyed interning probe — off the path entirely in the (dominant)
     // case where no class in the program declares any static Symbol member.
-    if crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
+    if !symbol_hook_resolved && crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
         // Both lookups are Leaf: symbol interning uses native allocations,
         // and the static-symbol read cannot collect. The call owns its args;
         // a completed hook returns immediately, so no value crosses it here.
