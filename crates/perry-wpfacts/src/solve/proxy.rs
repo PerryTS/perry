@@ -618,6 +618,7 @@ impl Model {
             | Cons::NotNullish { .. }
             | Cons::NotUndefined { .. }
             | Cons::NotNull { .. }
+ | Cons::RecordEntry { .. }
             | Cons::TypeIs { .. }
             | Cons::Falsy { .. }
             | Cons::Objects { .. }

@@ -26,6 +26,7 @@ pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
 mod proto_first;
+mod record_steps;
 mod shared_closures;
 mod view;
 mod walk;
@@ -324,6 +325,14 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// Rule RP1 (`gen/record_steps.rs`): the address of the arguments of
+    /// each positional `arrayRecordIndex(c)` step read, with its index.
+    pub(crate) record_steps: FxHashMap<usize, u32>,
+    /// Rule RP2: the (module, local) of each guarded iterator record
+    /// source (`arrayRecordNeedsIterator(s = s)`) and payload
+    /// (`arrayRecordPayload(.., p = ..)`), whose protocol arm never sees a
+    /// held Array (`Cons::RecordEntry`).
+    pub(crate) record_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// The (module, local, value node, `Fx::guard`) of the last local
     /// write walked (`narrow::Gen::narrow_assigned`).
     pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
@@ -831,6 +840,8 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            record_steps: Default::default(),
+            record_locals: Default::default(),
             last_local_set: None,
             narrow: Vec::new(),
             def_collect: Vec::new(),

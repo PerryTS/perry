@@ -14,6 +14,7 @@ mod define;
 mod lookup;
 pub(crate) mod map_vals;
 mod own_read;
+mod record_entry;
 
 use crate::builtins;
 
@@ -350,6 +351,7 @@ impl Model {
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::RecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
@@ -1091,6 +1093,7 @@ impl Model {
                     && !self.settle_val_runs()
                     && !self.settle_define()
                     && !self.settle_proto_first()
+                    && !self.settle_record_entry()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;

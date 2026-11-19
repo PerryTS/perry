@@ -610,6 +610,27 @@ impl Model {
                 return;
             }
         }
+        // `undefined`, `NaN` and `Infinity` are non-writable,
+        // non-configurable own data properties of the global object
+        // (ECMA-262 19.1.1-19.1.4; the runtime installs them so, populate.rs):
+        // a [[Set]] of one writes nothing (10.1.9.2 OrdinarySetWithOwnDescriptor
+        // step 2.a; a strict store throws the runtime's TypeError) and no
+        // code can make it writable again (10.1.6.3 step 5), as for a store
+        // under an unknown String key (`global_any_names`). The entries loop
+        // of rule EK stores its done branch's `undefined` key so.
+        if let Key::Named(a) = key {
+            if !elem
+                && !theirs
+                && !self.unit_mode
+                && builtins::global_object(self, t)
+                && matches!(
+                    self.atoms[a as usize].as_str(),
+                    "undefined" | "NaN" | "Infinity"
+                )
+            {
+                return;
+            }
+        }
         // A [[Set]] that meets the realm's accessor without a setter
         // (`navigator` on the global object) writes nothing; in strict code
         // it throws the runtime's TypeError (`Model::thrown`). Until a

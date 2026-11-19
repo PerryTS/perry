@@ -272,17 +272,30 @@ impl<'a> Gen<'a> {
             // shape lookup of `return` on %ArrayIteratorPrototype%'s chain;
             // an accessor answers false without being called, so no program
             // code runs here; the close itself is `arrayRecordClose`'s model.
-            "arrayRecordNeedsIterator"
-            | "arrayRecordCloseAbsent"
+            // Rule RP2: the record's source local (`s` of `arrayRecordNeedsIterator(s = s)`).
+            "arrayRecordNeedsIterator" => {
+                if let Some(Expr::LocalSet(s, v)) = source_args.first() {
+                    if matches!(v.as_ref(), Expr::LocalGet(x) if x == s) {
+                        self.record_locals.insert((fx.module, *s));
+                    }
+                }
+                self.prim_node(prim::BOOL)
+            }
+            "arrayRecordCloseAbsent"
             | "arrayRecordForBound"
             | "hasPathModule"
             | "isBuiltin"
             | "typedArrayForOfAdmits" => self.prim_node(prim::BOOL),
             // What codegen lowers them to: the cursor itself, the payload's
             // length, and `mode ? 0 : update`.
-            "arrayRecordIndex" => match arg(0) {
-                Some(a) => a,
-                None => self.prim_node(prim::NUM),
+            // Rule RP1: a positional step reads its own index
+            // (`gen/record_steps.rs`).
+            "arrayRecordIndex" => match self.record_steps.get(&(source_args.as_ptr() as usize)) {
+                Some(&j) => self.num_literal(j as f64),
+                None => match arg(0) {
+                    Some(a) => a,
+                    None => self.prim_node(prim::NUM),
+                },
             },
             "arrayRecordLength" => self.prim_node(prim::NUM),
             "arrayRecordForUpdate" => {
@@ -334,6 +347,16 @@ impl<'a> Gen<'a> {
                 out
             }
             "arrayRecordPayload" | "arrayRecordForValue" => {
+                // Rule RP2: the payload of a guarded record of source `s`.
+                if let (Some(Expr::LocalGet(s)), Some(Expr::LocalSet(p, _))) =
+                    (source_args.first(), source_args.get(1))
+                {
+                    if method == "arrayRecordPayload"
+                        && self.record_locals.contains(&(fx.module, *s))
+                    {
+                        self.record_locals.insert((fx.module, *p));
+                    }
+                }
                 let out = self.tmp("glue-pass");
                 for a in &args {
                     self.m.edge(*a, out);
@@ -364,6 +387,15 @@ impl<'a> Gen<'a> {
             "iteratorStep" => {
                 let (Some(it), Some(next)) = (arg(0), arg(1)) else {
                     return self.prim_node(prim::BOOL);
+                };
+                // Rule RP2: the protocol arm of a guarded record steps its
+                // payload only when that is not an Array the runtime takes
+                // the array arm for.
+                let it = match source_args.first() {
+                    Some(Expr::LocalGet(p)) if self.record_locals.contains(&(fx.module, *p)) => {
+                        self.record_entry(it)
+                    }
+                    _ => it,
                 };
                 // IteratorStep is IteratorNext with no value: `Call(next,
                 // iterator, «»)` (ECMA-262 7.4.4, 7.4.7), as `js_iterator_step`

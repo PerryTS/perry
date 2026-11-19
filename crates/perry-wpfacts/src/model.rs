@@ -2417,6 +2417,14 @@ pub struct Model {
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
     /// source itself never makes that object).
     pub get_iterator_src: FxHashMap<TmplId, NodeId>,
+    /// Rule RP2: the templates whose objects are born ordinary Arrays with
+    /// `%Array.prototype%` (an array literal, a spread literal, an
+    /// `Object.entries` pair): never an iterator model.
+    pub ordinary_arrays: crate::pts::FxHashSet<TmplId>,
+    /// Rule RP2: (token, dst) of each `Cons::RecordEntry` that held the
+    /// token back (`record_entry_holds`), looked at again in
+    /// `settle_record_entry`.
+    pub record_entry_held: Vec<(Tok, NodeId)>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.
@@ -2787,6 +2795,11 @@ pub struct Model {
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
     pub for_in_named: Vec<(CallId, Tok, Tok)>,
+    /// Rule EK: (literal, key node) of each `Cons::OwnKeys` that gave the
+    /// literal's known keys (`own_keys_of`), checked again in
+    /// `settle_for_in`; the set dedups.
+    pub own_keys_on: Vec<(Tok, NodeId)>,
+    pub own_keys_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
     /// FORIN1: (key node, stored value, constant) of a for-in keyed store
     /// made per String constant of its key (`Cons::StoreKeyed`).
     pub keyed_named: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,

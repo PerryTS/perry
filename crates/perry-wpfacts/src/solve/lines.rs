@@ -13,6 +13,7 @@ impl Model {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
             }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
             Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
@@ -84,6 +85,7 @@ impl Model {
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::NotNull { dst } => format!("notnull {n} {dst}"),
+            Cons::RecordEntry { dst } => format!("recordentry {n} {dst}"),
             Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),

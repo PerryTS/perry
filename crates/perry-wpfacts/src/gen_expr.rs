@@ -519,6 +519,21 @@ impl<'a> Gen<'a> {
         dst
     }
 
+    /// The keys `Object.entries` reads from `recv` (`Cons::OwnKeys`).
+    pub(crate) fn own_keys(&mut self, recv: NodeId) -> NodeId {
+        let dst = self.tmp("ownkeys");
+        self.m.cons(recv, Cons::OwnKeys { dst });
+        dst
+    }
+
+    /// Rule RP2: what the protocol arm of a guarded iterator record sees of
+    /// `v` (`Cons::RecordEntry`).
+    pub(crate) fn record_entry(&mut self, v: NodeId) -> NodeId {
+        let dst = self.tmp("recordentry");
+        self.m.cons(v, Cons::RecordEntry { dst });
+        dst
+    }
+
     /// The static blocks of class expression `template` that one
     /// evaluation runs (`ClassFreshStaticInit::Block`, an index into the
     /// template's `__perry_static_init_N` functions in source order): a
@@ -1954,6 +1969,7 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true, true);
+                self.m.ordinary_arrays.insert(tm);
                 if let Some(h) = self.direct_arr.take() {
                     self.m.arr_birth_holder.insert(tm, h);
                 }
@@ -1982,6 +1998,7 @@ impl<'a> Gen<'a> {
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
                 let tm = self.new_arr_birth(mi, "spread", dense, true);
+                self.m.ordinary_arrays.insert(tm);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
