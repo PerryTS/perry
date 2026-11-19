@@ -119,7 +119,8 @@ fn w3h_k3_spawn_capture_mutated_after() {
 // nothing into it (perry-stdlib worker_threads worker_pump.rs,
 // thread/clone_write.rs; HTML Workers, StructuredSerialize).
 
-const LISTEN: &str = "(globalThis as any).g = new M(); console.log(String((globalThis as any).g.v));";
+const LISTEN: &str =
+    "(globalThis as any).g = new M(); console.log(String((globalThis as any).g.v));";
 
 // R2 (RED on base): an `onmessage` handler that stores a program object on
 // a global: the class sites stay proven.
@@ -129,7 +130,10 @@ fn w3h_r2_onmessage_listener_keeps_realm() {
         "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url), {{ type: \"module\" }});\n\
          w.onmessage = (e: any) => {{ {LISTEN} }};\n{TAIL}"
     ));
-    assert!(all_proven(&pf, "v"), "m.v / g.v proven beside an onmessage handler");
+    assert!(
+        all_proven(&pf, "v"),
+        "m.v / g.v proven beside an onmessage handler"
+    );
 }
 
 // R3 (RED on base): the same through `addEventListener`.
@@ -139,7 +143,10 @@ fn w3h_r3_add_event_listener_keeps_realm() {
         "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url), {{ type: \"module\" }});\n\
          w.addEventListener(\"message\", (e: any) => {{ {LISTEN} }});\n{TAIL}"
     ));
-    assert!(all_proven(&pf, "v"), "m.v / g.v proven beside addEventListener");
+    assert!(
+        all_proven(&pf, "v"),
+        "m.v / g.v proven beside addEventListener"
+    );
 }
 
 // R4 (RED on base): `event.data` is a clone, not a program object: a store
@@ -150,7 +157,10 @@ fn w3h_r4_event_data_is_not_a_program_object() {
         "{CORE}const w = new Worker(new URL(\"./b.ts\", import.meta.url));\n\
          w.onmessage = (e: any) => {{ e.data.v = \"s\"; e.data.list.push(e.target); }};\n{TAIL}"
     ));
-    assert!(all_proven(&pf, "v"), "m.v proven beside a store into event.data");
+    assert!(
+        all_proven(&pf, "v"),
+        "m.v proven beside a store into event.data"
+    );
 }
 
 // K4 (KEEP): `postMessage` clones its value: an own getter of the value

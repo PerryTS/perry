@@ -381,7 +381,14 @@ impl Model {
         self.proxy_trap(p, "getOwnPropertyDescriptor", vec![target, k], desc);
         self.proxy_result_reads(
             desc,
-            &["enumerable", "configurable", "value", "writable", "get", "set"],
+            &[
+                "enumerable",
+                "configurable",
+                "value",
+                "writable",
+                "get",
+                "set",
+            ],
             false,
             reason,
         );
@@ -455,7 +462,13 @@ impl Model {
         if elems {
             let dst = self.node_l("proxy-result-read");
             self.nodes[dst as usize].sink = true;
-            self.cons(r, Cons::Load { key: Key::any(), dst });
+            self.cons(
+                r,
+                Cons::Load {
+                    key: Key::any(),
+                    dst,
+                },
+            );
         }
     }
 

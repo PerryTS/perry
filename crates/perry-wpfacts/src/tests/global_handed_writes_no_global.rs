@@ -24,7 +24,6 @@ const READ_G: &str = "console.log((globalThis as any).g.zz);";
 // local so that `O.keys` is a site whose receiver is the global binding.
 const READ_OBJECT: &str = "const O: any = Object; console.log(O.keys(new A()).length);";
 
-
 fn sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a SiteFacts> {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     assert!(!s.is_empty(), "no site {key}\n{}", pf.dump_text());
@@ -39,19 +38,27 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
 
 /// The `g.zz` read may see a `B` (or ⊤): the program's value is there.
 fn g_sees_b(pf: &ProgramFacts) -> bool {
-    sites(pf, "zz")
-        .iter()
-        .any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":B") || r.contains(":B#")))
+    sites(pf, "zz").iter().any(|s| {
+        s.top
+            || s.receivers
+                .iter()
+                .any(|r| r.ends_with(":B") || r.contains(":B#"))
+    })
 }
 
 fn both_orders(hand: &str, body: &str) -> [String; 2] {
-    [format!("{PRE}{hand}\n{body}"), format!("{PRE}{body}\n{hand}")]
+    [
+        format!("{PRE}{hand}\n{body}"),
+        format!("{PRE}{body}\n{hand}"),
+    ]
 }
 
 /// No site through the read is ⊤: `O` is the intrinsic `Object`, `g` the
 /// program's `A`.
 fn known(pf: &ProgramFacts) -> bool {
-    sites(pf, "keys").iter().all(|s| !s.top) && sites(pf, "zz").iter().all(|s| !s.top) && !g_sees_b(pf)
+    sites(pf, "keys").iter().all(|s| !s.top)
+        && sites(pf, "zz").iter().all(|s| !s.top)
+        && !g_sees_b(pf)
 }
 
 /// RED: the global object handed, no store into ⊤: `Object` stays the
@@ -60,7 +67,10 @@ fn known(pf: &ProgramFacts) -> bool {
 /// code holding the realm replaced every key of it, `realm_replaced`.)
 #[test]
 fn a_global_read_stays_known_after_the_global_object_is_handed() {
-    for src in both_orders("unknown.take2(globalThis);", &format!("{READ_OBJECT}\n{READ_G}")) {
+    for src in both_orders(
+        "unknown.take2(globalThis);",
+        &format!("{READ_OBJECT}\n{READ_G}"),
+    ) {
         let pf = facts(&src);
         assert!(known(&pf), "{src}\n{}", pf.dump_text());
     }
@@ -95,7 +105,8 @@ fn a_namespace_member_stays_the_realm_s_after_an_unknown_native_call() {
         assert!(
             sites(&pf, "max")
                 .iter()
-                .all(|s| !s.top && matches!(s.verdict, Verdict::NativeMember | Verdict::IntrinsicCall)),
+                .all(|s| !s.top
+                    && matches!(s.verdict, Verdict::NativeMember | Verdict::IntrinsicCall)),
             "{src}\n{}",
             pf.dump_text()
         );
@@ -111,7 +122,9 @@ fn a_builtin_prototype_member_stays_refused_after_an_unknown_native_call() {
     for src in both_orders(call, body) {
         let pf = facts(&src);
         assert!(
-            sites(&pf, "xq").iter().all(|s| matches!(s.verdict, Verdict::No(_))),
+            sites(&pf, "xq")
+                .iter()
+                .all(|s| matches!(s.verdict, Verdict::No(_))),
             "{src}\n{}",
             pf.dump_text()
         );
@@ -129,7 +142,10 @@ fn a_program_namespace_store_keeps_its_value_with_the_realm_held() {
         let s = sites(&pf, "yy");
         assert!(
             s.iter().all(|s| !s.top)
-                && s.iter().any(|s| s.receivers.iter().any(|r| r.ends_with(":B") || r.contains(":B#"))),
+                && s.iter().any(|s| s
+                    .receivers
+                    .iter()
+                    .any(|r| r.ends_with(":B") || r.contains(":B#"))),
             "{src}\n{}",
             pf.dump_text()
         );
@@ -152,7 +168,8 @@ fn a_named_top_store_still_writes_the_handed_global() {
 /// object was handed.
 #[test]
 fn a_computed_top_store_still_writes_every_handed_global() {
-    let hand = "unknown.take2(globalThis); unknown.take(function (o: any, kk: any) { o[kk] = new B(); });";
+    let hand =
+        "unknown.take2(globalThis); unknown.take(function (o: any, kk: any) { o[kk] = new B(); });";
     for src in both_orders(hand, &format!("{READ_OBJECT}\n{READ_G}")) {
         let pf = facts(&src);
         assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
@@ -179,7 +196,10 @@ fn a_program_global_store_keeps_its_value_after_the_global_object_is_handed() {
 /// KEEP: dynamic code that may run still writes any global by name.
 #[test]
 fn dynamic_code_still_writes_any_global() {
-    for src in both_orders("unknown.take2(globalThis); new Function(process.argv[4])();", READ_OBJECT) {
+    for src in both_orders(
+        "unknown.take2(globalThis); new Function(process.argv[4])();",
+        READ_OBJECT,
+    ) {
         let pf = facts_with(&src, interp_cfg());
         assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
     }

@@ -2187,12 +2187,30 @@ fn worker_method(m: &mut Model, t: Tok, n: &str, call: CallId) -> bool {
             if let Some(&tl) = c.arg(1) {
                 let rb = m.reason("B3 transfer list");
                 let inner = m.node_l("worker-transfer");
-                m.cons(tl, Cons::Load { key: Key::any(), dst: inner });
+                m.cons(
+                    tl,
+                    Cons::Load {
+                        key: Key::any(),
+                        dst: inner,
+                    },
+                );
                 let ta = m.atom("transfer");
-                m.cons(tl, Cons::Load { key: Key::Named(ta), dst: inner });
+                m.cons(
+                    tl,
+                    Cons::Load {
+                        key: Key::Named(ta),
+                        dst: inner,
+                    },
+                );
                 let items = m.node_l("worker-transfer-item");
                 m.edge(inner, items);
-                m.cons(inner, Cons::Load { key: Key::any(), dst: items });
+                m.cons(
+                    inner,
+                    Cons::Load {
+                        key: Key::any(),
+                        dst: items,
+                    },
+                );
                 m.cons(
                     items,
                     Cons::Hard {
@@ -2203,7 +2221,11 @@ fn worker_method(m: &mut Model, t: Tok, n: &str, call: CallId) -> bool {
             }
             ret_prim(m, call, prim::UNDEF);
         }
-        "addEventListener" | "on" | "once" | "addListener" | "prependListener"
+        "addEventListener"
+        | "on"
+        | "once"
+        | "addListener"
+        | "prependListener"
         | "prependOnceListener" => {
             let web = n == "addEventListener";
             let slot = if web { "WorkerEvent" } else { "WorkerPayload" };
@@ -2227,7 +2249,11 @@ fn worker_method(m: &mut Model, t: Tok, n: &str, call: CallId) -> bool {
                 ret_tok(m, call, t);
             }
         }
-        "removeEventListener" | "off" | "removeListener" | "removeAllListeners" | "ref"
+        "removeEventListener"
+        | "off"
+        | "removeListener"
+        | "removeAllListeners"
+        | "ref"
         | "unref" => {
             if n == "removeEventListener" || n == "ref" || n == "unref" {
                 ret_prim(m, call, prim::UNDEF);

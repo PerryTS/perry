@@ -315,7 +315,10 @@ impl Model {
             }
         };
         for &a in atoms {
-            if matches!(self.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+            if matches!(
+                self.atoms[a as usize].as_str(),
+                "undefined" | "NaN" | "Infinity"
+            ) {
                 continue;
             }
             if !self.global_key_def_done.insert((d.id(), a)) {

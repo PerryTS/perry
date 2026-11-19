@@ -110,7 +110,11 @@ fn chw4_keep_defined_on_parent_runs() {
 #[test]
 fn chw4_keep_sunk_class_escapes() {
     let pf = run(&format!("{VALUE_EXTENDS}\nsink(A);"), "A");
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// KEEP: `setPrototypeOf(A, unknown)`: the lookup continues in unknown
@@ -118,10 +122,16 @@ fn chw4_keep_sunk_class_escapes() {
 #[test]
 fn chw4_keep_set_prototype_of_unknown_escapes() {
     let pf = run(
-        &format!("{VALUE_EXTENDS}\nObject.setPrototypeOf(A, (globalThis as any)[process.argv[4]]);"),
+        &format!(
+            "{VALUE_EXTENDS}\nObject.setPrototypeOf(A, (globalThis as any)[process.argv[4]]);"
+        ),
         "A",
     );
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// KEEP: a parent value unknown code supplies is ⊤ on the chain.
@@ -131,15 +141,26 @@ fn chw4_keep_unknown_parent_escapes() {
         "const P: any = (globalThis as any)[process.argv[4]];\nclass A extends P {}",
         "A",
     );
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// KEEP: unknown code that holds a plain function may define its
 /// `@@hasInstance`.
 #[test]
 fn chw4_keep_sunk_function_escapes() {
-    let pf = run("const F: any = function (this: any) { this.q = 1; };\nsink(F);", "F");
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    let pf = run(
+        "const F: any = function (this: any) { this.q = 1; };\nsink(F);",
+        "F",
+    );
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// KEEP: a builtin constructor as the parent value: unknown code that holds
@@ -151,6 +172,9 @@ fn chw4_keep_builtin_parent_value_escapes() {
         "const P: any = process.argv.length > 9 ? Error : TypeError;\nclass A extends P {}",
         "A",
     );
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
-

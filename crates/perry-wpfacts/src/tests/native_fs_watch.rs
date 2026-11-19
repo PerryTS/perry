@@ -198,7 +198,10 @@ fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
 fn a_value_not_on_the_handed_global_object_stays_proven() {
     for (store, hand) in [
         ("(globalThis as any).leak = p;", "hostSink(globalThis);"),
-        ("(globalThis as any).leak = p; (globalThis as any).keep = q;", "hostSink(p);"),
+        (
+            "(globalThis as any).leak = p; (globalThis as any).keep = q;",
+            "hostSink(p);",
+        ),
     ] {
         let pf = facts(&format!(
             r#"
@@ -212,8 +215,16 @@ fn a_value_not_on_the_handed_global_object_stays_proven() {
         console.log(p.x, q.y);
     "#
         ));
-        assert!(!field(tmpl(&pf, "P"), "x").readonly, "{store} {hand}\n{}", pf.dump_text());
-        assert!(field(tmpl(&pf, "Q"), "y").readonly, "{store} {hand}\n{}", pf.dump_text());
+        assert!(
+            !field(tmpl(&pf, "P"), "x").readonly,
+            "{store} {hand}\n{}",
+            pf.dump_text()
+        );
+        assert!(
+            field(tmpl(&pf, "Q"), "y").readonly,
+            "{store} {hand}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
