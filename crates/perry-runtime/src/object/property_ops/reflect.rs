@@ -109,16 +109,13 @@ fn reflect_get_key<const CANONICAL: bool>(
     )
 }
 
-/// The accessor half of `[[Get]](property_key, receiver)` when `receiver` is
-/// not `target`: find a getter anywhere on `target`'s chain and call it with
-/// `this = receiver`, or `None` when the key does not name an accessor (an own
-/// data property shadows inherited accessors). A builtin getter receives the
-/// receiver too, so its brand check sees it (`Reflect.get(u8, "length", {})`
-/// and a trap-less Proxy over a typed array both throw).
+/// The accessor step of `[[Get]](property_key, receiver)` for a `receiver`
+/// that is not `target`: a getter on `target`'s chain runs with
+/// `this = receiver`, so a builtin getter's brand check sees it. `None` when
+/// the key names no accessor (an own data property shadows inherited ones).
 ///
-/// #2766: object-literal getters capture `this` in a reserved closure slot,
-/// not only the `this` parameter, so plain forwarding would read the target's
-/// fields instead of the receiver's; the getter is cloned with `this` rebound.
+/// An object-literal getter captures `this` in a closure slot, so it is
+/// cloned with `this` rebound.
 pub(crate) fn call_getter_with_receiver(
     target: f64,
     property_key: f64,
@@ -136,6 +133,11 @@ pub(crate) fn call_getter_with_receiver(
         return Some(f64::from_bits(TAG_UNDEFINED));
     }
     let getter = scope.root_nanbox_f64(f64::from_bits(getter_bits));
+    // A sloppy getter sees a primitive receiver boxed; a strict one sees it raw.
+    let receiver = scope.root_nanbox_f64(crate::closure::coerce_call_this(
+        getter.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    ));
     let rebound = crate::closure::clone_closure_rebind_this(
         getter.get_nanbox_f64().to_bits(),
         receiver.get_nanbox_f64(),
@@ -144,6 +146,7 @@ pub(crate) fn call_getter_with_receiver(
     if closure.is_null() {
         return None;
     }
+    let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
     // Also pass the receiver as the `this` parameter for free-function
     // getters that read it rather than a slot.
     Some(crate::closure::js_closure_call0(
