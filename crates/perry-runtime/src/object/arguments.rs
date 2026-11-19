@@ -1155,7 +1155,7 @@ pub unsafe extern "C-unwind" fn js_arguments_call_spread(
             (bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
         )
         .is_some_and(|info| {
-            info.code == super::global_this::function_prototype_call_thunk as *const u8
+            info.code == super::global_this::js_function_prototype_call_body as *const u8
         });
     let next_owner = super::iterator_prototypes::array_iterator_prototype_addr();
     if intrinsic

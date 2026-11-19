@@ -67,6 +67,10 @@ macro_rules! runtime_atom {
     };
 }
 
+// The function family records' info keys (`length`, `name`).
+runtime_atom!(reuse FAMILY_ATOM_LENGTH, "length", "6c656e677468");
+runtime_atom!(reuse FAMILY_ATOM_NAME, "name", "6e616d65");
+
 const fn image_bytes<const N: usize>(bytes: &[u8]) -> ImageString<N> {
     assert!(bytes.len() == N);
     let mut result = [0; N];
@@ -1479,10 +1483,14 @@ const TEST_LAYOUT_ROWS: u32 = 0;
 /// descriptors (`decl_prototype_birth_tests`, `class_family_birth`,
 /// `hole_tests`). Counted from the native rows, so a native row added on
 /// either side of a merge moves the band instead of landing a test layout on
-/// a native row (the empty ordinary row is the last native one).
+/// a native row (the empty ordinary row is the last native one). The word
+/// carries the physical row minus [`LAYOUT_ROW_BIAS`] like every row word.
+///
+/// [`LAYOUT_ROW_BIAS`]: crate::codegen_abi::LAYOUT_ROW_BIAS
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const fn test_layout_word(k: u32) -> u32 {
-    crate::codegen_abi::LAYOUT_TAG | (crate::codegen_abi::NATIVE_LAYOUT_ROWS + k)
+    use crate::codegen_abi::{LAYOUT_ROW_BIAS, LAYOUT_ROW_MASK, LAYOUT_TAG, NATIVE_LAYOUT_ROWS};
+    LAYOUT_TAG | ((NATIVE_LAYOUT_ROWS + k).wrapping_sub(LAYOUT_ROW_BIAS) & LAYOUT_ROW_MASK)
 }
 
 /// Rows below this bound are runtime layouts (`runtime_layout!`): the

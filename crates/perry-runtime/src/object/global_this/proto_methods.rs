@@ -846,7 +846,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(#[realm(Function.prototype.call)] export native_args crate::object::global_this::array_error::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.call)] export native_args crate::object::global_this::array_error::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // `valueOf` and `toLocaleString` are inherited from

@@ -171,11 +171,11 @@ pub struct ClosureHeader {
     pub capture_count: u32,
     /// The function object's ShapeId.
     pub shape_id: u32,
+    /// The function object's own-property record (runtime-internal).
+    pub props: *mut u8,
     /// The body's static `JsFunctionInfo` (perry-abi): its code address and
     /// every fact the runtime needs about the body.
     pub info: *const perry_abi::JsFunctionInfo,
-    /// The function object's own-property record (runtime-internal).
-    pub props: *mut u8,
 }
 
 /// Opaque runtime-allocated Promise handle.

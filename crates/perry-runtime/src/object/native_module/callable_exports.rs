@@ -1506,6 +1506,29 @@ unsafe fn bound_native_export_metadata(
     }
 }
 
+/// A runtime-native non-constructor closure: a reified builtin (the GC header
+/// bit) or a body whose info is a runtime builtin without `[[Construct]]`.
+/// Compiled user bodies never carry `FN_BUILTIN`, so a user method (also a
+/// non-constructor) is not one: a slot holding it can never be a borrowed
+/// intrinsic such as `Array.prototype[method]`.
+pub(crate) fn builtin_closure_is_native_non_constructor_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let closure = jv.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(closure) }) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return false;
+    }
+    const NATIVE: u32 = crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR;
+    header._reserved & crate::gc::GC_CLOSURE_NON_CONSTRUCTABLE != 0
+        || crate::closure::closure_info(closure as *const crate::closure::ClosureHeader)
+            .is_some_and(|info| info.flags & NATIVE == NATIVE)
+}
+
 pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {

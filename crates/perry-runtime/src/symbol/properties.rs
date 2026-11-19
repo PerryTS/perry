@@ -167,8 +167,14 @@ pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f6
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
-    if let Some(object) = crate::object::shaped_symbols::owner(obj_key) {
-        return crate::object::shaped_symbols::position(object, sym_key).is_some();
+    match crate::object::shaped_symbols::owner(obj_key) {
+        Some(crate::object::descriptor_state::KeyTarget::Object(object)) => {
+            return crate::object::shaped_symbols::position(object, sym_key).is_some()
+        }
+        Some(crate::object::descriptor_state::KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_has(p, sym_key)
+        }
+        None => {}
     }
     accessors::has_own_symbol_accessor(obj_key, sym_key)
         || object_symbol_data_property_exists(obj_key, sym_key)

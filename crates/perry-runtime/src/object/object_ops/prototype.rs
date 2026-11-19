@@ -386,9 +386,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // Arrays, closures, handles, class and exotic identities
                 // decline without consulting their registries on this arm.
                 let id = unsafe { (*addr).shape_word() };
-                if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
-                    < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG
-                {
+                if crate::codegen_abi::is_ordinary_record_word(id) {
                     if let Some(proto) = unsafe { shape_link_prototype(addr, false) } {
                         return proto;
                     }

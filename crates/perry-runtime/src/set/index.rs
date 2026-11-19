@@ -30,32 +30,17 @@ pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
             if bag.is_null() {
                 return None;
             }
-            if create {
-                crate::object::object_meta_ensure(
-                    crate::meta_obj_runtime_born!(bag),
-                    crate::object::MetaReason::SetKeyIdentity,
-                )
-            } else {
-                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
-            }
+            crate::object::key_owner::meta_for(
+                bag as usize,
+                crate::object::MetaReason::SetKeyIdentity,
+                create,
+            )
         }
         crate::gc::GC_TYPE_CLOSURE => {
-            let bag = if create {
-                crate::closure::props::bag_ensure(addr)
-            } else {
-                crate::closure::props::bag_of(addr)
-            };
-            if bag.is_null() {
+            if !create && !crate::closure::props::fn_has_key_store(addr) {
                 return None;
             }
-            if create {
-                crate::object::object_meta_ensure(
-                    crate::meta_obj_runtime_born!(bag),
-                    crate::object::MetaReason::SetKeyIdentity,
-                )
-            } else {
-                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
-            }
+            crate::closure::props::meta_for(addr, crate::object::MetaReason::SetKeyIdentity, create)
         }
         _ => {
             let slot = crate::object::cell_meta_slot(addr)?;

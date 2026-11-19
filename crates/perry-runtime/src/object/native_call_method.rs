@@ -1782,12 +1782,12 @@ pub(crate) unsafe fn native_call_method_tower(
         // First Get the method through the trap. Only the actual Array
         // builtin may enter the generic engine; a trap's replacement must
         // be called with the original Proxy receiver.
-        if crate::object::builtin_closure_is_non_constructable_value(method_handle.get_nanbox_f64())
-            && crate::object::is_array_prototype_method_value(
-                method_handle.get_nanbox_f64(),
-                method_name,
-            )
-        {
+        if crate::object::native_module::builtin_closure_is_native_non_constructor_value(
+            method_handle.get_nanbox_f64(),
+        ) && crate::object::is_array_prototype_method_value(
+            method_handle.get_nanbox_f64(),
+            method_name,
+        ) {
             let args = refreshed_args();
             if let Some(result) = crate::array::dispatch_arraylike_read_method(
                 object(),

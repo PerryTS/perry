@@ -228,8 +228,7 @@ mod tests {
             // Every constructor own property, including prototype, fits the
             // initial bag. Prototype-chain reads must not gain a spill just
             // because length/name now carry their attributes in that bag.
-            let bag = unsafe { crate::closure::props::bag_of(ctor as usize) };
-            let layout = unsafe { super::super::shapes::object_shape_descriptor(bag) }
+            let layout = unsafe { crate::closure::props::shape_descriptor(ctor as usize) }
                 .expect("constructor own-property shape");
             assert!(layout.live_inline_slot_count >= layout.logical_key_count);
             // Complete before any realm global: statics, prototype methods.

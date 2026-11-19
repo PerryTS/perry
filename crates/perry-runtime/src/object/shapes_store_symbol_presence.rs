@@ -31,6 +31,43 @@ impl ShapeRecord {
 }
 
 impl ShapeRecord {
+    /// See [`RECORD_KEYS_NO_FUNCTION_METHODS`].
+    #[inline(always)]
+    pub(crate) fn proves_no_function_method_keys(&self) -> bool {
+        self.keys_node_and_element_kind & RECORD_KEYS_NO_FUNCTION_METHODS != 0
+    }
+
+    pub(super) fn refresh_function_method_absence(&mut self) {
+        let absent = (self.logical_key_count == 0 && self.keys == 0)
+            || unsafe {
+                let keys = self.keys as usize as *const crate::ArrayHeader;
+                if self.keys == 0 || !super::super::keys_prefix_is_immutable(keys) {
+                    false
+                } else {
+                    let (slots, available) = crate::object::keys_array_dense_slots(keys);
+                    available >= self.logical_key_count as usize
+                        && (0..self.logical_key_count as usize).all(|i| {
+                            let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+                            if !v.is_any_string() {
+                                return true;
+                            }
+                            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                            match crate::string::js_string_key_bytes(v, &mut scratch) {
+                                Some(b) => !matches!(b, b"call" | b"apply" | b"bind"),
+                                None => false,
+                            }
+                        })
+                }
+            };
+        self.keys_node_and_element_kind = (self.keys_node_and_element_kind
+            & !RECORD_KEYS_NO_FUNCTION_METHODS)
+            | if absent {
+                RECORD_KEYS_NO_FUNCTION_METHODS
+            } else {
+                0
+            };
+    }
+
     pub(super) fn refresh_element_kind(&mut self) {
         let kind: u8 = if self.summary() == 0 {
             0
@@ -96,6 +133,13 @@ impl ShapeRecord {
     }
 }
 
+/// Bit 7 of the packed field's low byte: an exact absence proof that this
+/// record's immutable key prefix names none of `%Function.prototype%`'s
+/// `call`, `apply` and `bind`. Derived once at slab publication from the
+/// key list, as `RECORD_KEYS_NO_SYMBOLS`; a key append, delete or rebuild
+/// publishes a new record with its own fact. Clear = not proven (an owned
+/// mutable list, a key whose bytes are not read here).
+const RECORD_KEYS_NO_FUNCTION_METHODS: u32 = 0x80;
 const RECORD_ELEMENT_KIND_MASK: u32 = 0x03;
 /// The key-prefix facts byte: the element kind (bits 0-1) and the E2
 /// enumeration bits (bits 2-4).

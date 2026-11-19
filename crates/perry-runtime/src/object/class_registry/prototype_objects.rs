@@ -126,11 +126,14 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
                     crate::value::js_nanbox_pointer(proto as i64)
                 }),
             );
-            set_builtin_property_attrs(
-                func_ptr,
-                "prototype".to_string(),
-                PropertyAttrs::new(true, false, false),
-            );
+            // The slot holds it with exactly these attributes.
+            if unsafe { crate::closure::props::prototype_slot_value(func_ptr) }.is_none() {
+                set_builtin_property_attrs(
+                    func_ptr,
+                    "prototype".to_string(),
+                    PropertyAttrs::new(true, false, false),
+                );
+            }
         }
     }
 

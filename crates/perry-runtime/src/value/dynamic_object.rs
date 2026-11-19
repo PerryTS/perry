@@ -548,7 +548,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
             && crate::closure::props::closure_has_generator_body(
                 ptr as *const crate::closure::ClosureHeader,
             )
-            && crate::closure::props::bag_of(ptr as usize).is_null()
+            && !crate::closure::props::has_store(ptr as usize)
         {
             if let Some(prototype) = crate::object::generator_function_prototype_of(ptr as usize) {
                 return prototype;

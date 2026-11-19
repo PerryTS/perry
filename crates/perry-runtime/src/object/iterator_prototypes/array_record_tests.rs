@@ -7,9 +7,10 @@ unsafe fn fixture() -> (f64, f64, f64) {
     let proto = crate::object::builtin_prototype_value("Array");
     let sym = js_nanbox_pointer(crate::symbol::well_known_symbol("iterator") as i64);
     let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-    let obj =
-        crate::object::shaped_symbols::owner(crate::value::js_nanbox_get_pointer(proto) as usize)
-            .unwrap();
+    let obj = crate::object::shaped_symbols::owner_object(
+        crate::value::js_nanbox_get_pointer(proto) as usize,
+    )
+    .unwrap();
     // Other runtime tests restore JS values after mutation, which leaves
     // ConstFn revoked. Isolate this test's entry fixture explicitly.
     super::super::shapes::learn_object_constfn_lanes(obj, |_, bits| bits == original.to_bits());
@@ -42,7 +43,7 @@ fn array_record_shape_carrier_survives_growth_and_rejects_wrong_body() {
         crate::object::own_override::as_builtin_definition(|| {
             crate::symbol::js_object_set_symbol_property(array, sym, 33.0)
         });
-        let owner = crate::object::shaped_symbols::owner(raw as usize).unwrap();
+        let owner = crate::object::shaped_symbols::owner_object(raw as usize).unwrap();
         assert!(super::super::shapes::object_shape_record(owner).is_some());
         let grown = crate::array::js_array_grow(crate::array::clean_arr_ptr_mut(raw), 100);
         assert_eq!(
@@ -56,9 +57,9 @@ fn array_record_shape_carrier_survives_growth_and_rejects_wrong_body() {
         crate::object::own_override::as_builtin_definition(|| {
             crate::symbol::js_object_set_symbol_property(proto, sym, wrong)
         });
-        let bag = crate::object::shaped_symbols::owner(
-            crate::value::js_nanbox_get_pointer(proto) as usize
-        )
+        let bag = crate::object::shaped_symbols::owner_object(crate::value::js_nanbox_get_pointer(
+            proto,
+        ) as usize)
         .unwrap();
         super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == wrong.to_bits());
         let fresh = js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
@@ -286,12 +287,12 @@ fn array_symbol_shape_carrier_is_a_rewritten_gc_child() {
             )
         });
         let raw = crate::value::js_nanbox_get_pointer(array.get_nanbox_f64()) as usize;
-        let before = super::super::shaped_symbols::owner(raw).unwrap() as usize;
+        let before = super::super::shaped_symbols::owner_object(raw).unwrap() as usize;
         let cycles = crate::gc::copying_minor_cycles();
         crate::gc::gc_collect_minor();
         assert!(crate::gc::copying_minor_cycles() > cycles);
         let raw = crate::value::js_nanbox_get_pointer(array.get_nanbox_f64()) as usize;
-        let after = super::super::shaped_symbols::owner(raw).unwrap() as usize;
+        let after = super::super::shaped_symbols::owner_object(raw).unwrap() as usize;
         assert_ne!(
             before, after,
             "carrier must be rewritten through its owning edge"
@@ -892,9 +893,9 @@ fn array_record_slot_restoration_rechecks_iterator_and_next_without_a_site_word(
         crate::object::own_override::as_builtin_definition(|| {
             crate::symbol::js_object_set_symbol_property(proto, sym, original)
         });
-        let bag = crate::object::shaped_symbols::owner(
-            crate::value::js_nanbox_get_pointer(proto) as usize
-        )
+        let bag = crate::object::shaped_symbols::owner_object(crate::value::js_nanbox_get_pointer(
+            proto,
+        ) as usize)
         .unwrap();
         super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);

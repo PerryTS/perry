@@ -760,6 +760,7 @@ impl ObjectHotTables {
 /// faster than the hash overhead (memory access, cache footprint).
 const KEYS_INDEX_THRESHOLD: u32 = 32;
 
+pub(crate) mod key_owner;
 #[path = "keys_lookup.rs"]
 mod keys_lookup;
 mod object_keys;

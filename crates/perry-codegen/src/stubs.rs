@@ -758,7 +758,7 @@ mod tests {
         };
         let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true, None);
         assert!(ll.contains("@perry_static_seed_constfn_0 = private constant [1 x { i32, ptr }] [{ i32, ptr } { i32 0, ptr @perry_closure_m__method$info }]"), "{ll}");
-        assert!(ll.contains("@perry_closure_m__method$info = external constant { ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }"), "{ll}");
+        assert!(ll.contains("@perry_closure_m__method$info = external constant { ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }"), "{ll}");
         assert!(ll.contains("{ i64 3, ptr @perry_layout_request_268435524, ptr @perry_static_seed_keys_0, ptr @perry_static_seed_atoms_0, ptr getelementptr (i8, ptr @perry_static_seed_list_0, i64 8), ptr @perry_static_seed_constfn_0, i32 7, i32 1, i32 1, i32 1 }"), "{ll}");
         let object = compile_ll_to_object(&ll, None).expect("body-aware seed LLVM compiles");
         assert!(object.len() > 64);

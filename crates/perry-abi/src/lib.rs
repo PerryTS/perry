@@ -299,12 +299,13 @@ pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 104;
 
 /// `closure::ClosureHeader` (LP64): the u32 capture count at 0, the ShapeId
 /// at 4 (the same word as `ObjectHeader`), the function's
-/// [`JsFunctionInfo`] pointer at 8, the shaped own-property record at 16,
-/// captures from 24. ILP32 targets shrink the two pointers: info at 8, props
-/// at 12, captures from 16 (derived in `perry-codegen/src/target_layout.rs`).
+/// own-property record (the meta word) at 8, as `ObjectHeader`'s meta, the
+/// function's [`JsFunctionInfo`] pointer at 16, captures from 24. ILP32
+/// targets shrink the two pointers: props at 8, info at 12, captures from 16
+/// (derived in `perry-codegen/src/target_layout.rs`).
 pub const CLOSURE_SHAPE_OFFSET: usize = 4;
-pub const CLOSURE_INFO_OFFSET: usize = 8;
-pub const CLOSURE_PROPS_OFFSET: usize = 16;
+pub const CLOSURE_PROPS_OFFSET: usize = 8;
+pub const CLOSURE_INFO_OFFSET: usize = 16;
 pub const CLOSURE_HEADER_SIZE: usize = 24;
 
 /// Reserved intrinsic function ShapeIds, seeded in each agent's authoritative
@@ -312,7 +313,7 @@ pub const CLOSURE_HEADER_SIZE: usize = 24;
 pub const FUNCTION_SHAPE_BASE: u32 = 0xB810_0000;
 /// Per-object dictionary prototype identity uses the plain kind band.
 pub const FUNCTION_DICTIONARY_SHAPE: u32 = 0xB800_0004;
-pub const FUNCTION_SHAPE_COUNT: u32 = 9;
+pub const FUNCTION_SHAPE_COUNT: u32 = FUNCTION_FAMILY_ROWS;
 pub const FUNCTION_SHAPE: u32 = FUNCTION_SHAPE_BASE;
 pub const ASYNC_FUNCTION_SHAPE: u32 = FUNCTION_SHAPE_BASE + 1;
 
@@ -689,7 +690,7 @@ js_body_types! {
 /// type.
 ///
 /// Layout (LP64, pinned by `JS_FUNCTION_INFO_*` below; codegen emits it as
-/// `{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }`).
+/// `{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct JsFunctionInfo {
@@ -740,6 +741,10 @@ pub struct JsFunctionInfo {
     /// idle word instead carries the signed 64-bit raw-source displacement,
     /// or the two 32-bit source-block parts licensed by FN_SOURCE_BLOCKS.
     pub versioned_boxed_mask: u64,
+    /// Slots every function object of this body carries after its captures
+    /// (the family's own keys, numbered from `1 + captures`). The collector
+    /// traces captures plus these; a birth sizes and initializes both.
+    pub own_slots: u16,
 }
 
 // SAFETY: immutable after construction; the pointers are code addresses.
@@ -911,7 +916,13 @@ pub const FN_CALL_ENTRY_SHIFT: u32 = 28;
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
 pub const JS_FUNCTION_INFO_PARAMS_OFFSET: usize = 8;
 pub const JS_FUNCTION_INFO_FLAGS_OFFSET: usize = 12;
-pub const JS_FUNCTION_INFO_SIZE: usize = 64;
+pub const JS_FUNCTION_INFO_OWN_SLOTS_OFFSET: usize = 64;
+pub const JS_FUNCTION_INFO_SIZE: usize = 72;
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(core::mem::offset_of!(JsFunctionInfo, own_slots) == JS_FUNCTION_INFO_OWN_SLOTS_OFFSET);
+    assert!(core::mem::size_of::<JsFunctionInfo>() == JS_FUNCTION_INFO_SIZE);
+};
 /// Former zero padding; nonzero records opt in to plain closure dispatch.
 pub const JS_FUNCTION_INFO_PLAIN_PARAMS_OFFSET: usize =
     core::mem::offset_of!(JsFunctionInfo, plain_params);
@@ -961,6 +972,7 @@ impl JsFunctionInfo {
             declared: 0,
             plain_params: 0,
             versioned_boxed_mask: 0,
+            own_slots: 0,
         }
     }
 

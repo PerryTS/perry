@@ -32,21 +32,16 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     } else {
         None
     };
-    let owner = crate::object::descriptor_state::descriptor_holder(addr);
-    if owner.is_null() {
-        return std::ptr::null_mut();
-    }
-    // A1_UNPROVEN: record-first: metadata owner may be the user object (kind-A/B question for S0f).
-    let mut meta = crate::meta_read!(crate::meta_obj_runtime_born!(owner as *mut _));
+    let target = crate::object::descriptor_state::owner_key_target(addr);
+    let mut meta = target.meta(crate::object::MetaReason::ReflectMetadata, false);
     if meta.is_null() {
         if !create {
             return std::ptr::null_mut();
         }
-        // A1_UNPROVEN: descriptor_holder(addr) may return the user object itself (record-first: the receiver layout word; kind-A/B question for S0f).
-        meta = crate::object::object_meta_ensure(
-            crate::meta_obj_runtime_born!(owner),
-            crate::object::MetaReason::ReflectMetadata,
-        );
+        meta = target.meta(crate::object::MetaReason::ReflectMetadata, true);
+        if meta.is_null() {
+            return std::ptr::null_mut();
+        }
     }
     if (*meta).reflect_metadata == 0 && create {
         let record = crate::object::js_object_alloc_null_proto(0, 0);

@@ -194,6 +194,15 @@ unsafe fn with_function_name_for_closure<R>(
     with_registered_name(info, |name| (!name.is_empty()).then(|| read(name))).flatten()
 }
 
+/// The closure's `name` is the empty string (no name, or an empty one), by
+/// the precedence of [`function_name_for_closure`], without allocating.
+///
+/// # Safety
+/// `closure` is null or live; its info owns the ranges licensed by its flags.
+pub(crate) unsafe fn function_name_is_empty(closure: *const crate::closure::ClosureHeader) -> bool {
+    with_function_name_for_closure(closure, str::is_empty).unwrap_or(true)
+}
+
 /// Non-allocating presence with the same UTF-8 and override precedence as
 /// registered-name reflection.
 pub(crate) fn function_has_registered_name(info: &crate::closure::JsFunctionInfo) -> bool {

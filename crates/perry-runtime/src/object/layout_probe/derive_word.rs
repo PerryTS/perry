@@ -77,11 +77,14 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         i as u32 >= rec.position_bound_raw()
             && (direct_position(rec, keys, i as u32) || slotted(i).is_some())
     };
+    // A function family record is always indexed: its entries are [`INFO_ENTRY`].
     // POSBOUND's raw loads cannot serve an encoded slot. The index already
     // expresses which other slots can be loaded or written directly.
+    let info = rec.object_kind().is_function_layout();
     if count <= SCAN_KEYS
         && !aliased
         && checked == 0
+        && !info
         && rec.i32_lanes() == 0
         && !(0..count as usize).any(unbounded)
     {
@@ -206,6 +209,11 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             | if *text { TEXT_ENTRY } else { 0 }
             | if alias { ALIAS_ENTRY } else { 0 }
             | if write { WRITE_ENTRY } else { 0 }
+            | if info && !direct && !slot_entry {
+                INFO_ENTRY
+            } else {
+                0
+            }
             | if direct {
                 DIRECT_ENTRY
             } else if slot_entry {

@@ -1011,8 +1011,7 @@ unsafe fn append_admitted(
         return false;
     }
     let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
-    if id.wrapping_sub(super::super::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
-    {
+    if id.wrapping_sub(super::super::SHAPE_ID_BASE) >= crate::codegen_abi::LAYOUT_RECORD_SPAN {
         return false;
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).

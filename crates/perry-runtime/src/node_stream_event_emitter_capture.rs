@@ -1,18 +1,6 @@
 //! Capture defaults use EventEmitter.prototype's ordinary symbol property.
 //! Site memos hold only layout facts; live values always come from those slots.
 use super::*;
-use std::cell::Cell;
-
-#[derive(Clone, Copy)]
-struct CaptureSite {
-    bag: u32,
-    proto: u32,
-    value_slot: u32,
-    value_live: u32,
-}
-thread_local! {
-    static CAPTURE_DEFAULT: Cell<Option<CaptureSite>> = const { Cell::new(None) };
-}
 
 pub(super) fn native_capture_key(ctor: f64) -> Option<f64> {
     let ptr = JSValue::from_bits(ctor.to_bits()).as_pointer::<ClosureHeader>();
@@ -51,30 +39,9 @@ pub(super) fn emitter_capture_default_with_birth(birth: Option<(f64, f64)>) -> b
         };
         ctor
     };
-    let closure = JSValue::from_bits(ctor.to_bits()).as_pointer::<ClosureHeader>();
-    let bag = unsafe { (*closure).props };
-    let stamp = unsafe { (*bag).shape_word() };
     let proto = birth
         .map(|(_, proto)| proto)
         .or_else(|| crate::node_stream::constructors::own_prototype_by_bag(ctor));
-    if let (Some(site), Some(proto)) = (CAPTURE_DEFAULT.with(Cell::get), proto) {
-        if site.bag == stamp {
-            if let Some(obj) =
-                crate::object::field_get_set::runtime_read_site::object_receiver(proto)
-            {
-                if unsafe { (*obj).parent_class_id } == site.proto {
-                    let value = unsafe {
-                        crate::object::object_field_at_with_live(
-                            obj,
-                            site.value_slot,
-                            site.value_live,
-                        )
-                    };
-                    return crate::value::js_is_truthy(f64::from_bits(value.bits())) != 0;
-                }
-            }
-        }
-    }
     read_default_slow(ctor, proto)
 }
 
@@ -108,17 +75,6 @@ fn read_default_slow(ctor: f64, proto: Option<f64>) -> bool {
                             shape.keys as usize as *const crate::array::ArrayHeader,
                             slot,
                         );
-                        let closure =
-                            JSValue::from_bits(ctor.get_nanbox_u64()).as_pointer::<ClosureHeader>();
-                        let bag = (*closure).props;
-                        CAPTURE_DEFAULT.with(|memo| {
-                            memo.set(Some(CaptureSite {
-                                bag: (*bag).shape_word(),
-                                proto: (*obj).shape_word(),
-                                value_slot: slot,
-                                value_live: shape.live_inline_slot_count,
-                            }))
-                        });
                         let value = crate::object::object_field_at_with_live(
                             obj,
                             slot,

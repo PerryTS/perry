@@ -6,6 +6,7 @@
 //! class dispatch and native constructor brand/prototype dispatch.
 
 use super::*;
+use crate::object::overflow::home::ObjHome;
 
 #[derive(Clone, Copy)]
 enum RhsKind {
@@ -122,14 +123,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     });
     let symbols_absent = !linked
         && rhs.closure.is_some_and(|(closure, _)| unsafe {
-            let bag = (*closure).props;
-            bag.is_null()
-                || !crate::object::overflow::shadowed(bag)
-                    && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
-                        // A legacy dictionary can have an ordinary keyless shape;
-                        // its private key list carries no immutable absence proof.
-                        record.keys() != 0 && record.proves_no_symbols()
-                    })
+            crate::closure::props::proves_no_symbols(closure as usize)
         });
     if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
@@ -141,12 +135,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // admission. Class immediates and other representations retain
             // their ordinary symbol query.
             let owns_hook = if let Some((closure, _)) = rhs.closure {
-                let bag = unsafe { (*closure).props };
                 linked
-                    || !bag.is_null()
-                        && unsafe {
-                            super::shaped_symbols::position(bag, hi_sym as usize).is_some()
-                        }
+                    || unsafe {
+                        crate::closure::props::owns_symbol(closure as usize, hi_sym as usize)
+                    }
             } else {
                 unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) }
             };
@@ -737,14 +729,15 @@ unsafe fn linked_chain_may_hook(
         let addr = v.as_pointer::<u8>() as usize;
         let proves = |bag: *mut ObjectHeader| {
             bag.is_null()
-                || !crate::object::overflow::shadowed(bag)
-                    && crate::object::shapes::object_shape_record(bag)
-                        .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
-                || hi_sym != 0 && super::shaped_symbols::position(bag, hi_sym).is_none()
+                || ObjHome::proves_no_symbols(bag as usize)
+                || hi_sym != 0 && ObjHome::own_symbol_position(bag as usize, hi_sym).is_none()
         };
         if crate::closure::is_closure_ptr(addr) {
             let hop = addr as *const crate::closure::ClosureHeader;
-            if crate::closure::shape::is_class_info((*hop).info) || !proves((*hop).props) {
+            if crate::closure::shape::is_class_info((*hop).info)
+                || !(crate::closure::props::proves_no_symbols(hop as usize)
+                    || hi_sym != 0 && !crate::closure::props::owns_symbol(hop as usize, hi_sym))
+            {
                 return true;
             }
             bits = match crate::closure::closure_static_prototype(addr) {

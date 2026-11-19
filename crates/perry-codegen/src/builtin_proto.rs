@@ -25,7 +25,7 @@
 //! per-site state, no name classification, and no second copy of the fact.
 
 use crate::block::LlBlock;
-use crate::types::{I1, I32, I64};
+use crate::types::{I1, I64};
 
 pub(crate) use perry_abi::BuiltinProto;
 
@@ -59,9 +59,8 @@ pub(crate) fn emit_prototype_written(
 
 /// The shadow bit of the agent's intrinsic prototype of `family`.
 fn emit_shadow_bit(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family as usize);
-    ctx.block().icmp_uge(I32, &word, &end)
+    crate::proto_constants::emit_word_patched(ctx.block(), &word)
 }
 
 /// Unlikely, and said so: a guard's generic arm must not cost the function's
@@ -97,9 +96,8 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
     let Some(family) = crate::runtime_abi::builtin_namespace_family(ns) else {
         return "true".to_string();
     };
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family);
-    let patched = ctx.block().icmp_uge(I32, &word, &end);
+    let patched = crate::proto_constants::emit_word_patched(ctx.block(), &word);
     ctx.block()
         .call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
 }

@@ -45,6 +45,7 @@ mod math_namespace;
 mod object_intrinsic;
 pub(super) mod phase_rows;
 mod populate;
+pub(crate) use populate::learn_prototype_lanes;
 mod proto_methods;
 pub(crate) mod proto_room;
 mod typed_array;
@@ -65,7 +66,7 @@ pub(crate) fn is_object_prototype_value_of_code(func: *const u8) -> bool {
 pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'static str> {
     if func == array_error::function_prototype_bind_thunk as *const u8 {
         Some("bind")
-    } else if func == array_error::function_prototype_call_thunk as *const u8 {
+    } else if func == array_error::js_function_prototype_call_body as *const u8 {
         Some("call")
     } else if func == array_error::function_prototype_apply_thunk as *const u8 {
         Some("apply")
@@ -76,7 +77,7 @@ pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'stati
 
 #[cfg(test)]
 pub(crate) fn function_prototype_call_thunk_for_test() -> *const crate::closure::JsFunctionInfo {
-    crate::fn_info!(native_args array_error::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
+    crate::fn_info!(native_args array_error::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN))
 }
 
 #[cfg(test)]
@@ -84,10 +85,12 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
     crate::fn_info!(native_args array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
 }
 
+pub(in crate::object) use array_error::has_own_property_call;
 pub(crate) use array_error::{
-    function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
-    generic_array_like_to_vec, global_this_rest_array_values, is_native_error_subclass_constructor,
-    object_prototype_to_string_thunk, object_prototype_value_of_thunk,
+    function_apply_proxy, function_prototype_apply_thunk, generic_array_like_to_vec,
+    global_this_rest_array_values, is_native_error_subclass_constructor,
+    js_function_prototype_call_body, object_prototype_to_string_thunk,
+    object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
@@ -129,9 +132,11 @@ pub use fetch_globals::{
 };
 #[cfg(test)]
 pub(crate) use generator::append_async_function_root_snapshot;
+#[cfg(test)]
+pub(crate) use generator::ensure_generator_intrinsics;
 pub(crate) use generator::function_kind_prototype_unwritten;
 pub(crate) use generator::{
-    ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
+    generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, generator_original_prototype, set_intrinsic_data_prop,
     set_intrinsic_to_string_tag, wire_function_intrinsic_parents,
 };
@@ -207,12 +212,4 @@ pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeade
         return atom as *mut crate::StringHeader;
     }
     crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
-}
-
-/// The code address of the realm's `Object.prototype.hasOwnProperty` body: a
-/// function value whose info names it is that builtin, whatever binding or
-/// property the program read it from.
-#[inline(always)]
-pub(crate) fn has_own_property_body() -> usize {
-    array_error::object_prototype_has_own_property_thunk as *const () as usize
 }

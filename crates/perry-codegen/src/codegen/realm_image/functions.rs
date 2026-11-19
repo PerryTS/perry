@@ -132,6 +132,10 @@ pub(crate) fn emit_function(
             capture_flags: header.capture_flags,
             props: has_bag.then_some(bag.as_str()),
             captures: &captures,
+            // A realm function's info is a runtime export, born with the ABI
+            // default `own_slots: 0` (perry-abi JsFunctionInfo): its own
+            // values (`prototype` among them) are image bag/state cells.
+            own_slots: 0,
         },
     ));
     Ok(fixups)

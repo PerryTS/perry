@@ -40,18 +40,22 @@ pub(crate) unsafe fn define_static_private_field(
     };
     let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
     if crate::closure::is_closure_ptr(addr) {
-        crate::closure::props::bag_ensure(addr);
+        crate::closure::props::ensure_key_store(addr);
     }
-    let holder = private_element_holder(receiver.get_nanbox_f64()).expect("private field holder");
-    let holder = scope.root_raw_mut_ptr(holder);
-    holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
-        crate::object::key_attrs::apply_edits(
-            holder,
-            &[crate::object::key_attrs::AttrsEdit::Private(
-                storage.as_bytes(),
-            )],
-        );
-    });
+    match private_element_holder(receiver.get_nanbox_f64()).expect("private field holder") {
+        KeyTarget::Object(holder) => {
+            let holder = scope.root_raw_mut_ptr(holder);
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+                crate::object::key_attrs::apply_edits(
+                    holder,
+                    &[crate::object::key_attrs::AttrsEdit::Private(
+                        storage.as_bytes(),
+                    )],
+                );
+            });
+        }
+        KeyTarget::Function(p) => crate::closure::props::fn_private_define(p, storage.as_bytes()),
+    }
     assert!(storage.set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()));
 }
 

@@ -115,8 +115,14 @@ const NO_PAIR: u64 = u64::MAX;
 /// entry word carries slot and attribute class). A fact of the immutable
 /// list and its attributes, derived with the index.
 const WRITE_ENTRY: u32 = 1 << 26;
+/// A bucket entry whose key is an info-derived own property of a function
+/// family record (`length`, `name`): the value is no slot of the receiver but
+/// a fact of the closure's `JsFunctionInfo`, answered by [`info_value`]. The
+/// key is non-writable, so never with [`WRITE_ENTRY`]; a store reaches the
+/// complete store path.
+const INFO_ENTRY: u32 = 1 << 25;
 /// The position bits of a bucket entry.
-const POS_BITS: u32 = WRITE_ENTRY - 1;
+const POS_BITS: u32 = INFO_ENTRY - 1;
 /// [`hit_value`]'s slot when the hit is no single load.
 const NO_LOAD: u32 = u32::MAX;
 /// The bits of a probe word that are not the position table's address.
@@ -532,6 +538,11 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
 /// per-object identity (`PROTO_ID_PER_OBJECT`) answers nothing.
 fn positional_layout(rec: &ShapeRecord) -> bool {
     let kind = rec.object_kind();
+    if kind.is_function_layout() {
+        // A function family record: its keys are info-derived (closures have
+        // no inline slots), answered from the closure's info record.
+        return rec.live_inline_slot_count == 0 && rec.proto_id != super::PROTO_ID_PER_OBJECT;
+    }
     kind.is_ordinary_layout()
         && (kind != super::ShapeObjectKind::NativeNamespace
             || super::complete_layout_generation(rec.semantic_generation))
@@ -643,6 +654,9 @@ unsafe fn bucket_matches(
 unsafe fn record_of(dir: *const u8, word: LayoutWord) -> *mut ShapeRecord {
     let base = *(dir.add(FLAT_BASE_OFFSET) as *const *mut ShapeRecord);
     let ids = *(dir.add(FLAT_BASE_OFFSET + 8) as *const usize);
+    // The directory starts at physical row LAYOUT_ROW_BIAS (index = row
+    // bits): the function family words (dictionary band) are not named here;
+    // every caller reads a closure through the null arm.
     let rel = (word.0 & crate::codegen_abi::LAYOUT_PROBE_INDEX_MASK)
         .wrapping_sub(crate::codegen_abi::LAYOUT_TAG) as usize;
     if rel >= ids {
@@ -746,11 +760,48 @@ unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) ->
         .unwrap_or_else(hole)
 }
 
+/// The value of info-derived position `pos` of a function family record
+/// ([`INFO_ENTRY`]) for closure `c`: the list is
+/// the function family info keys (`length`, `name`), read from
+/// `(*c).info` as [`function_own_intrinsic_keyed`] does; the hole marker for
+/// a name that is not an image string.
+#[cold]
+#[inline(never)]
+unsafe fn info_value(c: *const crate::closure::ClosureHeader, pos: u32) -> f64 {
+    let info = (*c).info;
+    if info.is_null() {
+        return hole();
+    }
+    if pos == crate::closure::shape::FAMILY_PROTOTYPE_POS {
+        // A constructing family's `prototype`: its own slot, which the
+        // materialize point fills on the first read; the hole until then.
+        return crate::closure::props::prototype_slot_value(c as usize).unwrap_or_else(hole);
+    }
+    if pos == crate::closure::shape::FAMILY_LENGTH_POS {
+        crate::closure::info_length(&*info)
+            .or_else(|| crate::closure::info_arity(&*info))
+            .unwrap_or(0) as f64
+    } else {
+        match crate::builtins::function_name_image(info) {
+            Some(s) => f64::from_bits(STRING_TAG | s as u64),
+            // An anonymous function's `name` is the empty string (the same
+            // precedence as reflection: image range, lazy builtin, registry).
+            None if crate::builtins::function_name_is_empty(c) => f64::from_bits(
+                STRING_TAG
+                    | &crate::string::PERRY_EMPTY_STRING as *const crate::StringHeader as u64,
+            ),
+            None => hole(),
+        }
+    }
+}
+
 /// The data value at key position `pos` of `obj` (record `r`): one load of
 /// inline slot `load` when the record's facts name it (the position for a
 /// [`DIRECT_ENTRY`] or below `POSBOUND` in an unindexed list, the index word
 /// of a [`SLOT_ENTRY`]), else ([`NO_LOAD`]) [`value_at`]. A hole is the
-/// slot's value either way, which the site treats as a decline.
+/// slot's value either way, which the site treats as a decline. A function
+/// family record's hit never comes here: its entries are all
+/// [`INFO_ENTRY`], read by [`family_hit`].
 #[inline(always)]
 unsafe fn hit_value(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32, load: u32) -> f64 {
     if load != NO_LOAD {
@@ -758,6 +809,22 @@ unsafe fn hit_value(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32, l
             as *const f64);
     }
     value_at(obj, r, pos)
+}
+
+/// The value of a hit at position `pos` of function family record `r` for
+/// closure `c`: every entry of a family record is an [`INFO_ENTRY`] (a
+/// closure has no inline slots, so the index names no load), and its value
+/// is a fact of the closure's info ([`info_value`]), never a slot.
+#[inline(always)]
+unsafe fn family_hit(
+    c: *const crate::closure::ClosureHeader,
+    r: *const ShapeRecord,
+    pos: u32,
+    load: u32,
+) -> f64 {
+    debug_assert!(load == NO_LOAD && (*r).object_kind().is_function_layout());
+    let _ = (r, load);
+    info_value(c, pos)
 }
 
 /// The slot [`hit_value`] loads for bucket entry `entry` (position `i`) of
@@ -847,6 +914,14 @@ pub unsafe extern "C" fn perry_probe_get_length(
     // Only an ordinary layout's receiver is an `ObjectHeader` to look into.
     let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     if r.is_null() {
+        // A function on a family word: `length` is a key of its family
+        // record (or of its bag), read by the exotic arm like any own key.
+        if !family_record_of(dir, LayoutWord((*obj).parent_class_id)).is_null()
+            && (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
+                == crate::gc::GC_TYPE_CLOSURE
+        {
+            return probe_get::<true>(dir, obj_biased, key_bits, hash);
+        }
         return hole();
     }
     // An arguments object (kinds 13/14) on its birth layout holds `length`
@@ -1303,18 +1378,17 @@ pub(super) unsafe fn bag_own(
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return Err(false);
     }
-    let bag = match (*header).obj_type {
+    let store = match (*header).obj_type {
         crate::gc_array_type_pat!() => {
             if hash == LENGTH_HASH {
                 return Err(false);
             }
-            (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader
+            OwnStore((*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader)
         }
-        crate::gc::GC_TYPE_CLOSURE => {
-            (*(obj as *const crate::closure::ClosureHeader)).props as *const ObjectHeader
-        }
+        crate::gc::GC_TYPE_CLOSURE => crate::closure::props::own_store_in(obj as usize),
         _ => return Err(false),
     };
+    let bag = store.0;
     if bag.is_null() {
         return Err(true);
     }
@@ -1332,6 +1406,119 @@ pub(super) unsafe fn bag_own(
         return Err(false);
     }
     list_position(r, pw, key_bits, hash).map(|(pos, load)| hit_value(bag, r, pos, load))
+}
+
+/// The own-key store [`bag_own`]'s one tail reads, once the
+/// receiver kind named it: an array's named bag, or a function's store as
+/// `closure::props::own_store_in` hands it over (also to [`exotic_get`]).
+/// Only this module opens it.
+#[derive(Clone, Copy)]
+pub(crate) struct OwnStore(*const ObjectHeader);
+
+impl OwnStore {
+    /// # Safety
+    /// `store` is null (no store) or a live ordinary store object.
+    #[inline(always)]
+    pub(crate) unsafe fn new(store: *const ObjectHeader) -> Self {
+        Self(store)
+    }
+}
+
+/// The own key `key_bits` (hash `hash`) of function `closure`, read from its
+/// bag by the ordinary own arm ([`bag_own`]), the arm an exotic receiver's
+/// read takes first. A bag record whose probe word is not derived yet is
+/// derived here, as [`probe_word`] does for any ordinary read.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline(never)]
+pub(crate) unsafe fn closure_bag_own(
+    closure: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Result<f64, bool> {
+    crate::closure::props::own_lookup(closure as usize, key_bits, hash)
+}
+
+/// Do the own keys of function `closure` provably lack `call`, `apply` and
+/// `bind`? Answered by structure, never by a lookup: a function without a
+/// store owns only its family's born keys, whose record carries the
+/// publication-time absence fact; a function with a store owns its store
+/// record's keys, whose record carries the same fact. `false` = not proven
+/// (the caller asks the store).
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn closure_own_keys_lack_function_methods(
+    closure: *const crate::closure::ClosureHeader,
+) -> bool {
+    let header = crate::gc::header_from_trusted_user_ptr(closure.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return false;
+    }
+    let bag = crate::closure::props::bag_of(closure as usize) as *const ObjectHeader;
+    if bag.is_null() {
+        if !crate::closure::shape::closure_on_plain_function_shape(closure) {
+            // No store and no family keys: nothing is own (`bagless_own`).
+            return true;
+        }
+        let r = family_record_of(super::ordinary_dir_addr(), (*closure).shape_id);
+        return !r.is_null() && (*r).proves_no_function_method_keys();
+    }
+    let word = (*bag).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        return false;
+    }
+    let r = record_of(super::ordinary_dir_addr(), LayoutWord(word));
+    !r.is_null() && (*r).proves_no_function_method_keys()
+}
+
+/// A bag-less plain function's own key: its family record holds its own keys
+/// (`length`, `name`; a constructor's `prototype` is not in it yet, and
+/// nothing materialized it without a store). `Err(true)` for any other closure.
+#[inline(always)]
+pub(crate) unsafe fn bagless_own(
+    closure: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Result<f64, bool> {
+    if crate::closure::shape::closure_on_plain_function_shape(closure) {
+        let r = family_record_of(super::ordinary_dir_addr(), (*closure).shape_id);
+        // No store holds nothing: a miss in the record is a miss in the store.
+        return match family_position(r, key_bits, hash) {
+            Ok((pos, load)) => Ok(family_hit(closure, r, pos, load)),
+            Err(_) => Err(true),
+        };
+    }
+    Err(true)
+}
+
+/// The own key of the ordinary store object `bag` (non-null), read through
+/// its record in the ordinary directory, deriving a probe word not derived
+/// yet, as [`probe_word`] does for any ordinary read. `None` when the
+/// record cannot answer (shadowed, no record, probe not ready); `Some` the
+/// record's answer.
+#[inline(always)]
+pub(crate) unsafe fn store_own_derived(
+    bag: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<Result<f64, bool>> {
+    let word = (*bag).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        return None;
+    }
+    let r = record_of(super::ordinary_dir_addr(), LayoutWord(word));
+    if r.is_null() {
+        return None;
+    }
+    let pw = probe_word(r);
+    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS
+    {
+        return None;
+    }
+    Some(list_position(r, pw, key_bits, hash).map(|(pos, load)| hit_value(bag, r, pos, load)))
 }
 
 #[inline(always)]
@@ -1374,6 +1561,14 @@ unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
         crate::gc::GC_TYPE_CLOSURE => {
             let c = obj as *const crate::closure::ClosureHeader;
             let plain = crate::closure::shape::closure_on_plain_function_shape(c);
+            // The function's own store, read first (`BAG`) by [`exotic_rest`]
+            // as it reads an array's bag.
+            let named = crate::closure::props::own_store_in(c as usize).0;
+            if plain && named.is_null() {
+                // A plain function without a store: its own keys are its
+                // family record's ([`bagless_function_get`]).
+                return bagless_function_get::<ABSENT>(dir, c, key_bits, hash);
+            }
             // A plain or bound function's [[Prototype]] is its shape's
             // identity (`%Function.prototype%` until a link moves it).
             // A bound function's intrinsic `name` and `length` are its
@@ -1385,10 +1580,60 @@ unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
             } else {
                 None
             };
-            ((*c).props as *const ObjectHeader, proto, plain)
+            // A plain function with a bag asks its intrinsic keys after the
+            // bag.
+            (named, proto, plain)
         }
         _ => return hole(),
     };
+    exotic_rest::<ABSENT, BAG>(dir, obj, named, proto, function, key_bits, hash)
+}
+
+/// A bag-less plain function's read: its family record is its first and
+/// only own check and the slab row holding its [[Prototype]] identity
+/// ([`family_own`]: a miss for any key but `length`, `name` and `prototype`
+/// is one hash test), then the chain from that prototype.
+#[inline(never)]
+unsafe fn bagless_function_get<const ABSENT: bool>(
+    dir: *const u8,
+    c: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let family = family_record_of(dir, (*c).shape_id);
+    if let Some(v) = family_own(family, c, key_bits, hash) {
+        return v;
+    }
+    let proto = if !family.is_null() {
+        Some((*family).proto_id)
+    } else {
+        crate::object::shapes::shape_proto_id((*c).shape_id)
+    };
+    exotic_rest::<ABSENT, false>(
+        dir,
+        c.cast(),
+        std::ptr::null(),
+        proto,
+        false,
+        key_bits,
+        hash,
+    )
+}
+
+/// [`exotic_get`] after the receiver's kind gave its bag `named`, its
+/// [[Prototype]] identity `proto` and whether it is a plain `function` with
+/// a bag: the bag's key (`BAG`), the function's intrinsic keys, the chain.
+#[inline(always)]
+unsafe fn exotic_rest<const ABSENT: bool, const BAG: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    named: *const ObjectHeader,
+    proto: Option<u64>,
+    function: bool,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
     if BAG && !named.is_null() {
         let word = (*named).parent_class_id;
         let r = record_of(dir, LayoutWord(word));
@@ -1423,7 +1668,7 @@ unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
         return hole();
     };
     if function {
-        // Not in the bag: the function layout's intrinsic own keys.
+        // Not in the bag: the function layout's own keys.
         if let Some(v) = function_own_intrinsic(obj.cast(), key_bits, hash) {
             return v;
         }
@@ -1559,6 +1804,112 @@ unsafe fn function_own_intrinsic(
         return None;
     }
     function_own_intrinsic_keyed(c, key_bits, hash)
+}
+
+/// The family record of function layout word `word` (the rows below
+/// `flat_base`, as `ShapeSlab::receiver_row_record_banded`), or null.
+#[inline(always)]
+unsafe fn family_record_of(dir: *const u8, word: LayoutWord) -> *mut ShapeRecord {
+    use crate::codegen_abi::{LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
+    let w = word.0 & !LAYOUT_SHADOW_BIT;
+    if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
+        return std::ptr::null_mut();
+    }
+    let row = (w.wrapping_add(crate::codegen_abi::LAYOUT_ROW_BIAS) & LAYOUT_ROW_MASK) as usize;
+    let family = crate::codegen_abi::FUNCTION_FAMILY_ROWS as usize;
+    if row >= family {
+        return std::ptr::null_mut();
+    }
+    let base = *(dir.add(FLAT_BASE_OFFSET) as *const *mut ShapeRecord);
+    base.wrapping_sub(family).wrapping_add(row)
+}
+
+/// The own key `key_bits` (hash `hash`) of bag-less plain function `c`
+/// whose family record is `r` (null: not on a family word): the record's
+/// INFO entries (`length`, `name`); a keyed record's miss proves the key
+/// absent except a constructor's `prototype`.
+#[inline(always)]
+unsafe fn family_own(
+    r: *mut ShapeRecord,
+    c: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<f64> {
+    use crate::object::runtime_layouts::atom_hash as h;
+    const NAME: u64 = h(b"name");
+    const LENGTH: u64 = h(b"length");
+    const PROTOTYPE: u64 = h(b"prototype");
+    // The record's keys are the INFO keys `length` and `name` and, for a
+    // constructing family, `prototype`. Any other hash is no own key of a
+    // bag-less function: the miss is this one test.
+    if !matches!(hash, NAME | LENGTH | PROTOTYPE) {
+        return None;
+    }
+    match family_position(r, key_bits, hash) {
+        Ok((pos, load)) => Some(family_hit(c, r, pos, load)),
+        // A keyed family record holds every own key of a bag-less
+        // function: its miss proves the key is no own key (`prototype` of a
+        // non-constructing family; a hash collision with `length`/`name`).
+        Err(true) => None,
+        Err(false) => function_own_intrinsic(c, key_bits, hash),
+    }
+}
+
+/// The position of own key `key_bits` (hash `hash`) in family record `r`
+/// (null: not on a family word) of a bag-less plain function: `Ok((pos,
+/// load))` an own key (its entry is an [`INFO_ENTRY`], [`family_hit`]),
+/// `Err(true)` no own key (a keyed family record lists every own key of a
+/// bag-less function, in their order), `Err(false)` the record cannot say.
+/// The one reader of a family record's keys: reads ([`family_own`],
+/// [`closure_bag_own`]) and presence ([`bagless_family_has_own`]).
+#[inline(always)]
+unsafe fn family_position(
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> Result<(u32, u32), bool> {
+    if r.is_null() {
+        return Err(false);
+    }
+    let pw = probe_word(r);
+    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
+        return Err(false);
+    }
+    match list_position(r, pw, key_bits, hash) {
+        // An unkeyed record (no key list) proves nothing.
+        Err(true) if (*r).logical_key_count == 0 => Err(false),
+        found => found,
+    }
+}
+
+/// Is `key_bits` (hash `hash`) an own key of closure `c`, answered from its
+/// family record: `Some(present)` for a bag-less plain function on a keyed
+/// family record (`length`, `name` and, for a constructing family,
+/// `prototype`, materialized or not), `None` when `c` has a bag or is not on
+/// a family record (the caller's general presence check answers).
+///
+/// # Safety
+/// `c` is a live closure cell.
+pub(crate) unsafe fn bagless_family_has_own(
+    c: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<bool> {
+    if crate::closure::props::has_store(c as usize)
+        || !crate::closure::shape::closure_on_plain_function_shape(c)
+    {
+        return None;
+    }
+    let header = crate::gc::header_from_trusted_user_ptr(c.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return None;
+    }
+    let r = family_record_of(super::ordinary_dir_addr(), (*c).shape_id);
+    match family_position(r, key_bits, hash) {
+        Ok(_) => Some(true),
+        Err(true) => Some(false),
+        Err(false) => None,
+    }
 }
 
 #[inline(never)]

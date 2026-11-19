@@ -584,13 +584,9 @@ fn object_set_static_prototype_impl_with(
     let _no_move = crate::gc::GcSuppressScope::new();
     let _edit = crate::object::descriptor_state::HolderEdit::new(obj_ptr);
     unsafe {
-        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
-        if !holder.is_null() {
-            // A1_UNPROVEN: descriptor_holder(obj_ptr) may return the user object itself (kind-A/B question for S0b-S0e).
-            let meta = crate::object::object_meta_ensure(
-                crate::meta_obj_runtime_born!(holder),
-                crate::object::MetaReason::PrototypeHolder,
-            );
+        let meta = crate::object::descriptor_state::owner_key_target(obj_ptr)
+            .meta(crate::object::MetaReason::PrototypeHolder, true);
+        if !meta.is_null() {
             // GC_STORE_AUDIT(BARRIERED): the bag owns this NaN-boxed prototype
             // edge; the exact metadata-slot barrier follows the store.
             (*meta).prototype = proto_bits;
@@ -670,12 +666,7 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
                 }
                 // A legacy holder record on its bag (`object_set_static_prototype`
                 // of a function): read the bag's record directly.
-                let bag = (*(obj_ptr as *const crate::closure::ClosureHeader)).props;
-                if bag.is_null() {
-                    return None;
-                }
-                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
-                return (!meta.is_null() && (*meta).prototype != 0).then(|| (*meta).prototype);
+                return crate::closure::props::store_meta_prototype(obj_ptr);
             }
             Some(kind)
                 if !owned_prototype_receiver_type(kind)
@@ -687,15 +678,12 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         }
     }
     unsafe {
-        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
-        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        if holder.is_null()
-            || crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _)).is_null()
-        {
+        let meta = crate::object::descriptor_state::owner_key_target(obj_ptr)
+            .meta(crate::object::MetaReason::PrototypeHolder, false);
+        if meta.is_null() {
             return None;
         }
-        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        let bits = (*crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _))).prototype;
+        let bits = (*meta).prototype;
         (bits != 0).then_some(bits)
     }
 }

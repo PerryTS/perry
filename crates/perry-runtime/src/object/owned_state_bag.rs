@@ -1,6 +1,5 @@
 //! Private, object-owned facts share an ordinary GC array. Slots are private
 //! runtime state, never public own properties or an owner-address registry.
-use super::ObjectHeader;
 use crate::array::ArrayHeader;
 
 pub(crate) const ASYNC_RESOURCE: u32 = 4;
@@ -38,20 +37,8 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
     } else {
         None
     };
-    let holder: *mut ObjectHeader = super::descriptor_state::descriptor_holder(owner);
-    if holder.is_null() {
-        return std::ptr::null_mut();
-    }
-    let meta = if create {
-        // A1_UNPROVEN: descriptor_holder(owner) may return the user object itself (kind-A/B question for S0b-S0e).
-        super::object_meta_ensure(
-            crate::meta_obj_runtime_born!(holder),
-            super::MetaReason::OwnedState,
-        )
-    } else {
-        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _))
-    };
+    let meta = super::descriptor_state::owner_key_target(owner)
+        .meta(super::MetaReason::OwnedState, create);
     if meta.is_null() {
         return std::ptr::null_mut();
     }

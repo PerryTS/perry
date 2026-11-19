@@ -337,20 +337,20 @@ pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
 }
 
 /// Byte offset of `ClosureHeader::info`, the function object's
-/// `JsFunctionInfo` pointer (8 on every target: the u32 capture count and u32
-/// ShapeId precede it).
-pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
-    crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
-}
-
-/// Byte offset of `ClosureHeader::props`, the pointer after `info`: 16 on
-/// LP64, 12 on ILP32.
-pub fn closure_props_offset_bytes(target_triple: &str) -> u64 {
+/// `JsFunctionInfo` pointer, the pointer after `props`: 16 on LP64, 12 on
+/// ILP32.
+pub fn closure_info_offset_bytes(target_triple: &str) -> u64 {
     if target_is_ilp32(target_triple) {
         12
     } else {
-        crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
+        crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
     }
+}
+
+/// Byte offset of `ClosureHeader::props`, the meta word (8 on every target:
+/// the u32 capture count and u32 ShapeId precede it, as in `ObjectHeader`).
+pub fn closure_props_offset_bytes(_target_triple: &str) -> u64 {
+    crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY

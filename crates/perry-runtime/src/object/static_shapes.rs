@@ -621,6 +621,8 @@ pub extern "C" fn js_shape_run_static_seed() {
     // under its atoms, and a by-names mint stores the atoms the pools find.
     // Descriptors still follow the seeds and share their ids.
     super::layout_desc::seed_static_atoms();
+    // The function family records take their info keys before any closure is observed.
+    crate::state::state().shapes.key_function_families();
     // SAFETY: a valid layout image names the program's table (never null).
     let program = unsafe { &*super::class_image::layout_image().program };
     install_image_seeds(program);
@@ -766,6 +768,44 @@ pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectK
         names.len() as u32,
     )
     .view()
+}
+
+/// The function family records' own keys `[length, name]`
+/// (`length`, `name`, in that order), each non-writable,
+/// non-enumerable and configurable: the keys node all nine family records
+/// share. The atoms are image strings, so the canonical list is the one
+/// allocation; `None` when the image does not carry them.
+///
+/// # Safety
+/// The agent's shape table exists; collection is suppressed.
+pub(crate) unsafe fn function_family_keys(constructing: bool) -> Option<super::ObjectKeys> {
+    use super::key_attrs::{ENTRY_NON_ENUMERABLE, ENTRY_NON_WRITABLE};
+    use super::layout_desc::{layout_key_off, PerryLayoutKey, StaticAtom};
+    const ATTRS: u8 = ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE;
+    let key = |atom: *const StaticAtom, slot: u32| PerryLayoutKey {
+        atom,
+        slot,
+        attrs: ATTRS,
+        _pad: 0,
+        off: layout_key_off(slot),
+    };
+    let keys = [
+        key(&raw const super::runtime_layouts::FAMILY_ATOM_LENGTH, 0),
+        key(&raw const super::runtime_layouts::FAMILY_ATOM_NAME, 1),
+        // A constructing family's `prototype`: writable, non-enumerable,
+        // non-configurable (`closure::shape::FAMILY_PROTOTYPE_POS`).
+        PerryLayoutKey {
+            attrs: ENTRY_NON_ENUMERABLE | super::key_attrs::ENTRY_NON_CONFIGURABLE,
+            ..key(&raw const super::runtime_layouts::BP_ATOM_PROTOTYPE, 2)
+        },
+    ];
+    let keys = if constructing { &keys[..] } else { &keys[..2] };
+    super::canonical_keys::static_seed::from_static_layout(
+        &super::canonical_keys::SharedLayout::shape_cache_entry(),
+        keys,
+        false,
+    )
+    .map(|c| c.view())
 }
 
 #[cfg(feature = "keepalive-anchors")]
