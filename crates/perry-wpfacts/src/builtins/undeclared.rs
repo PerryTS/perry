@@ -102,7 +102,9 @@ pub fn plain_namespace_own_store(m: &Model, t: Tok, key: Key) -> bool {
 /// metadata, the realm's own inheritance links, messaging), so a key the
 /// realm declares with a function value (or with no native value the model
 /// knows) keeps E20; so do the names `members::global_runtime_reads`
-/// declares. Any other named key (`globalThis`, an undeclared global such
+/// declares, `process` and the host objects. A declared object the runtime
+/// cannot call (`performance`, `Math`) is the program's field
+/// (`declared_callable`). Any other named key (`globalThis`, an undeclared global such
 /// as `web3d`) is an own property of the global object that only program
 /// code reads, through its field. A computed key may name any global.
 /// A named key the realm declares as the global object's reference to
@@ -140,14 +142,38 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     if p.native.is_none() && p.get.is_some() && p.set.is_none() {
         return false;
     }
-    let Some(identity) = p.native else {
+    // The declared value: its native identity, else the realm declaration
+    // the global is named after (`performance`, `Math`: a namespace row).
+    let identity = p.native.unwrap_or(name.as_str());
+    // `process` and the host objects (`console`) keep E20, as their own
+    // stores do (`plain_namespace_own_store`).
+    if ns_by_name(&name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns)) {
         return true;
-    };
-    let v = m.tok(TokKind::BuiltinFn(Native::Member {
-        identity,
-        holder: None,
-    }));
-    builtin_function(m, v)
+    }
+    declared_callable(identity)
+}
+
+/// Is the realm's declared value `identity` callable (a constructor, a
+/// function)? The runtime reads a callable global by name; a declared
+/// object it cannot call (`performance`, `Math`, `JSON`, `Reflect`, `Intl`,
+/// `Atomics`: a `Namespace` in the realm table) it reaches through its own
+/// cells, never by reading the global (the names it does read are
+/// `members::global_runtime_reads`). An identity the table does not list
+/// (no native value the model knows) keeps E20.
+fn declared_callable(identity: &str) -> bool {
+    use perry_hir::realm_manifest::RealmKind;
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == identity)
+        .is_none_or(|e| {
+            !matches!(
+                e.kind,
+                RealmKind::Namespace
+                    | RealmKind::Exotic
+                    | RealmKind::Prototype
+                    | RealmKind::Constant
+            )
+        })
 }
 
 /// A described built-in object and its chain declare no such program key.

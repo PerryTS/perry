@@ -1354,7 +1354,7 @@ pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
 pub(super) fn global_runtime_reads(name: &str) -> bool {
     matches!(
         name,
-        "Temporal" | "onmessage" | "onmessageerror" | "onerror"
+        "Temporal" | "WebAssembly" | "onmessage" | "onmessageerror" | "onerror"
     )
 }
 

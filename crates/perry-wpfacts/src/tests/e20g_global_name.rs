@@ -84,6 +84,9 @@ fn e20g_named_global_store_is_the_programs() {
         "(globalThis as any).web3d = n;",
         "(globalThis as any).__THREE__ = n;",
         "const g = globalThis as Record<string, unknown>; g[\"window\"] = n;",
+        "const g = globalThis as any; g[\"performance\"] = { now: () => 0, o: n };",
+        "(globalThis as any).performance = { now: () => 0, o: n };",
+        "(globalThis as any).Reflect = { o: n };",
     ] {
         if !v_proven(&plain(store)) {
             bad.push(format!("{store}: n.v not proven"));
@@ -115,6 +118,9 @@ fn e20g_runtime_read_globals_still_sink() {
         "(globalThis as any).Temporal = n;",
         "(globalThis as any).Array = n;",
         "(globalThis as any).Promise = n;",
+        "(globalThis as any).WebAssembly = n;",
+        "(globalThis as any).console = n;",
+        "(globalThis as any).process = n;",
         "(Promise.prototype as any).then = n;",
     ] {
         if v_proven(&program(store)) {
