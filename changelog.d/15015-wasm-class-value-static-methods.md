@@ -1,0 +1,1 @@
+`--target web`: a class value carries its named static methods, so a call through it works: `const K: any = C; K.m()`, a subclass value's inherited `m()`, and an arrow that calls a static method of a class declared after it (`` () => C.tag`x` ``). These evaluated to `undefined` before (#14727).
