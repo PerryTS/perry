@@ -2098,6 +2098,8 @@ const __memDispatch = {
   console_warn: (...args) => { console.warn(...args); },
   console_error: (...args) => { console.error(...args); },
   console_log_multi: (args) => { if (Array.isArray(args)) console.log(...args); },
+  // `console.<m>(...xs)`: the argument list arrives as one array.
+  console_call_spread: (name, args) => { console[name](...(Array.isArray(args) ? args : [])); },
 
   // String core — args are already decoded JS values via __bitsToJsValue
   string_concat: (a, b) => String(a) + String(b),
@@ -2132,6 +2134,8 @@ const __memDispatch = {
   math_log10: (x) => Math.log10(x),
   math_min: (a, b) => Math.min(a, b),
   math_max: (a, b) => Math.max(a, b),
+  math_min_spread: (src) => Math.min(...src),
+  math_max_spread: (src) => Math.max(...src),
   // Trig / exp / sign / trunc / cbrt / hypot / etc. (Issue #133 item 4)
   math_sin: (x) => Math.sin(x),
   math_cos: (x) => Math.cos(x),
@@ -2381,6 +2385,8 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, closure.captures.length, argArr.map(v => __jsValueToBits(v)));
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
+  // `obj.name(...xs)`: dispatched by name as a call with a fixed argument list is.
+  method_call_spread: (obj, name, args) => __classDispatch(obj, name, Array.isArray(args) ? args : []),
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
   array_map: (arr, cb) => {

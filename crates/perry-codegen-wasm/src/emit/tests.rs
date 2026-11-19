@@ -2050,6 +2050,32 @@ console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any)
     );
 }
 
+// A call with spread arguments passes the elements, in a sync and in an async body: to a
+// function, a closure, a method, `push`, `Math.max` / `Math.min`, a host static and
+// `console.log`. Expected output is Node's.
+#[test]
+fn a_spread_call_passes_the_spread_elements() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function sum3(a: number, b: number, c: number): number { return a + b + c; }
+const add = (a: number, b: number) => a + b;
+class K { base = 100; plus(a: number, b: number) { return this.base + a + b; } }
+const xs: number[] = [1, 2, 3];
+const anyXs: any = [4, 5, 6];
+const arr: number[] = [0];
+const n = arr.push(...xs, 9);
+console.log(sum3(...(xs as [number, number, number])) + " " + sum3(0, ...(xs.slice(1) as [number, number])) + " " + add(...(xs as [number, number])) + " " + new K().plus(...(xs as [number, number])));
+console.log(n + " " + arr.join(",") + " " + Math.max(...xs) + " " + Math.min(...anyXs) + " " + Math.max(0, ...xs) + " " + String.fromCharCode(...[72, 105]));
+console.log(...["a", "b"], 1);
+async function inAsync(): Promise<string> { const ys = [1, 2, 3]; const a2: number[] = []; a2.push(...ys); return Math.max(...ys) + ":" + a2.length + ":" + sum3(...(ys as [number, number, number])) + ":" + add(...(ys as [number, number])); }
+inAsync().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "6 5 3 103\n5 0,1,2,3,9 3 4 3 Hi\na b 1\n3:3:6:3"
+    );
+}
+
 // B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
 #[test]
 fn a_super_read_stops_at_a_setter_only_accessor() {

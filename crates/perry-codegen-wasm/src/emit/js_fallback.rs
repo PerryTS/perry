@@ -447,6 +447,61 @@ impl WasmModuleEmitter {
                     }
                 }
             }
+            // `f(a, ...xs)` / `o.m(a, ...xs)`: a JS spread over the host values, then the
+            // same method lookup and invocation as `Expr::Call`.
+            Expr::CallSpread { callee, args, .. } => {
+                let list = args
+                    .iter()
+                    .map(|arg| match arg {
+                        CallArg::Expr(e) => format!("toJsValue({})", self.emit_js_expr(e, locals)),
+                        CallArg::Spread(e) => {
+                            format!("...toJsValue({})", self.emit_js_expr(e, locals))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let direct = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
+                    _ => None,
+                };
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(
+                            property.as_str(),
+                            "log" | "info" | "warn" | "error" | "debug"
+                        ) =>
+                    {
+                        format!("(console.{property}({list}), u64ToF64(TAG_UNDEFINED))")
+                    }
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
+                            obj,
+                            js_string_literal(property),
+                            list
+                        )
+                    }
+                    // A compiled function takes NaN-boxed i64 arguments, one per parameter.
+                    _ if direct.is_some() => {
+                        let func_idx = direct.unwrap_or_default();
+                        format!(
+                            "((__f, __a) => u64ToF64(__f(...__padBigintArgs(__f, 0, __a.map((__v) => f64ToU64(fromJsValue(__v)))))))(wasmInstance.exports.__wasm_func_{func_idx}, [{list}])"
+                        )
+                    }
+                    _ => {
+                        let callee_js = self.emit_js_expr(callee, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({callee_js}) }}, [{list}]))"
+                        )
+                    }
+                }
+            }
             // The bridge the WASM arms call, so both send `fetch(url, { method, body,
             // headers: { Authorization } })`. Arguments evaluate in source order (url,
             // auth header, body); the result is the request's promise, for the caller
@@ -843,6 +898,14 @@ impl WasmModuleEmitter {
             Expr::MathAbs(x) => {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.abs({})", v)
+            }
+            Expr::MathMinSpread(src) => {
+                let v = self.emit_js_expr(src, locals);
+                format!("Math.min(...toJsValue({}))", v)
+            }
+            Expr::MathMaxSpread(src) => {
+                let v = self.emit_js_expr(src, locals);
+                format!("Math.max(...toJsValue({}))", v)
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),

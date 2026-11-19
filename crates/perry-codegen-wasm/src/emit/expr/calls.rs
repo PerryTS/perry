@@ -308,6 +308,65 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // `f(a, ...xs)` / `o.m(a, ...xs)`: the argument list is built as the array
+            // literal `[a, ...xs]` would be, then applied by the host.
+            Expr::CallSpread { callee, args, .. } => {
+                let list = Expr::ArraySpread(
+                    args.iter()
+                        .map(|arg| match arg {
+                            CallArg::Expr(e) => ArrayElement::Expr(e.clone()),
+                            CallArg::Spread(e) => ArrayElement::Spread(e.clone()),
+                        })
+                        .collect(),
+                );
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_ref()
+                {
+                    let name = Expr::String(property.clone());
+                    // HIR keeps `console.<m>` collapsed onto the unresolved global.
+                    let unresolved_global = matches!(object.as_ref(), Expr::GlobalGet(id)
+                        if !self.emitter.global_map.contains_key(id));
+                    if unresolved_global
+                        && matches!(
+                            property.as_str(),
+                            "log" | "info" | "warn" | "error" | "debug"
+                        )
+                    {
+                        self.emit_frame_begin(func, 2);
+                        self.emit_store_arg(func, 0, &name);
+                        self.emit_store_arg(func, 1, &list);
+                        self.emit_memcall(func, "console_call_spread", 2);
+                        return true;
+                    }
+                    if unresolved_global {
+                        self.emit_frame_begin(func, 0);
+                        self.emit_memcall(func, "global_receiver", 0);
+                        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                    }
+                    self.emit_frame_begin(func, 3);
+                    if unresolved_global {
+                        self.emit_slot_addr(func, 0);
+                        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    } else {
+                        self.emit_store_arg(func, 0, object);
+                    }
+                    self.emit_store_arg(func, 1, &name);
+                    self.emit_store_arg(func, 2, &list);
+                    self.emit_memcall(func, "method_call_spread", 3);
+                } else {
+                    self.emit_frame_begin(func, 2);
+                    self.emit_store_arg(func, 0, callee);
+                    self.emit_store_arg(func, 1, &list);
+                    self.emit_memcall(func, "closure_call_spread", 2);
+                }
+            }
+
             _ => return false,
         }
         true
