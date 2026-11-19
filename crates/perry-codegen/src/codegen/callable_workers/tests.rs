@@ -100,6 +100,7 @@ fn callable_workers_preserve_serial_ir() {
 /// the same compile emits an inactive body as a trap or in full.
 #[test]
 fn callable_workers_keep_dead_body_removal() {
+    crate::verify_facts::DCE_FOR_TESTS.store(true, std::sync::atomic::Ordering::Relaxed);
     let hir = module();
     let bodies: std::collections::BTreeMap<(u32, String), bool> = hir
         .functions

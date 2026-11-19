@@ -159,9 +159,19 @@ pub fn life_measure_requested() -> bool {
 /// opt-in because a reach that misses a call into program code turns that
 /// body into a silent SIGTRAP (#15042).
 pub fn dce_enabled() -> bool {
+    #[cfg(test)]
+    if DCE_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| dce_switch(std::env::var("PERRY_FACTS_DCE").ok().as_deref()))
 }
+
+/// Turns removal on for a test process: the first compile caches the
+/// environment's switch, and a test's worker threads must see it too.
+#[cfg(test)]
+pub(crate) static DCE_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// The value of `PERRY_FACTS_DCE` decides removal: on only when it is `1`.
 pub fn dce_switch(value: Option<&str>) -> bool {
