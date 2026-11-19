@@ -295,15 +295,14 @@ fn written_by(
 }
 
 /// Unknown code holds the realm (ECMA-262 9.3, `Model::realm_held`): it may
-/// have replaced (or made an accessor of) any member the realm declares on a
-/// namespace, a host object or the global object, which no `LockHolder`
-/// covers (perry-abi lock.rs locks prototypes only), with any function or
-/// value it made. A call of such a member is the realm's function or unknown
-/// code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`), a read
-/// is the realm's value or the opaque member. Monotone: `note_realm_held`
-/// replays the lookups parked before it held. The Object.prototype method
-/// namespaces (`builtin_function`: members of a locked prototype), the
-/// module's own `require` and the global object are not members it replaces.
+/// have replaced (or made an accessor of) a member of a built-in family's own
+/// prototype that the runtime's lock does not make final, with any function
+/// or value it made. A call of such a member is the realm's function or
+/// unknown code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`),
+/// a read is the realm's value or the opaque member. Monotone:
+/// `note_realm_held` replays the lookups parked before it held. A namespace
+/// member, the module's own `require` and the global object are not members
+/// it replaces (owner decisions 2026-11-18, closed world 11-14).
 fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if !m.realm_held {
         return false;
@@ -319,23 +318,15 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if let TokKind::NativeProto(what, _) = &m.toks[np as usize] {
         return !super::proto_read_final(m, what, a);
     }
-    let TokKind::Builtin(ns) = m.toks[np as usize] else {
-        return false;
-    };
-    if super::builtin_function(m, np) || ns == BuiltinNs::Require {
-        return false;
-    }
-    // The global object (`globalThis` included): owner decision 2026-11-18
+    // A namespace member (`Math.max`, `console.error`, any key of one) and
+    // the global object (`globalThis` included): owner decisions 2026-11-18
     // (closed world 11-14). The unknown code that holds the realm is the
-    // runtime's natives, which write no key of the global object. Its
-    // writes are the program's own stores and its stores into ⊤ once the
-    // global object is in ⊤'s reach (`Model::global_in_top`, the caller);
-    // interpreted code and unseen modules keep their any-key writes there.
-    if super::global_object(m, np) {
-        return false;
-    }
-    let name = m.atoms[a as usize].as_str();
-    name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_)))
+    // runtime's natives, which replace no member of an intrinsic namespace
+    // and write no key of the global object. Their writes are the program's
+    // own stores (`Math.foo = v`) and its stores into ⊤ once the object is in
+    // ⊤'s reach (`Model::global_in_top`, the caller); interpreted code and
+    // unseen modules keep their any-key writes there.
+    false
 }
 
 /// Unknown code now holds the realm: the lookups parked past a member it may

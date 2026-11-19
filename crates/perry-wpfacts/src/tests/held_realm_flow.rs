@@ -50,10 +50,11 @@ fn check(call: &str) {
     );
 }
 
-/// A global key (a program's or the realm's) with the realm held: the
-/// unknown code that holds it replaces no key of the global object (owner
-/// decision 2026-11-18, closed world 11-14), so the call is the realm's or
-/// the program's function: exact in both arms.
+/// A global key (a program's or the realm's) or a namespace member with the
+/// realm held: the unknown code that holds it replaces no key of the global
+/// object and no member of an intrinsic namespace (owner decisions
+/// 2026-11-18, closed world 11-14), so the call is the realm's or the
+/// program's function: exact in both arms.
 fn exact(call: &str) {
     let body = format!("{OBJ}{call};\nconst r = o.m();\n");
     let free = m_calls(&body);
@@ -88,12 +89,12 @@ fn fixed_op(call: &str) {
 }
 
 #[test]
-fn console_log_held() {
-    check("console.log(o)")
+fn console_log_exact() {
+    exact("console.log(o)")
 }
 #[test]
-fn console_warn_held() {
-    check("console.warn(o)")
+fn console_warn_exact() {
+    exact("console.warn(o)")
 }
 #[test]
 fn math_max_fixed_op() {
@@ -140,8 +141,8 @@ fn performance_mark_held() {
     held_only("performance.mark(o as any)")
 }
 #[test]
-fn math_max_value_call_held() {
-    check("const f = Math.max; f(o as any, 1)")
+fn math_max_value_call_exact() {
+    exact("const f = Math.max; f(o as any, 1)")
 }
 #[test]
 fn set_timeout_exact() {
@@ -149,14 +150,15 @@ fn set_timeout_exact() {
 }
 
 /// The realm is held by an event later in source order than the call: in a
-/// function run twice, the second `console.log(o)` runs after `sink(0)`.
+/// function run twice, the second `console.log(o)` runs after `sink(0)`,
+/// and is the realm's `console.log` (owner decision 2026-11-18).
 #[test]
-fn console_log_held_later_in_source() {
+fn console_log_exact_later_in_source() {
     let body = format!(
         "declare function sink(x: any): void;\n{OBJ}function f() {{ console.log(o); const r = o.m(); sink(0); }}\nf();\nf();\n"
     );
     let held = m_calls(&body);
-    assert!(!mono(&held), "held later in source: {held:?}");
+    assert!(mono(&held), "held later in source: {held:?}");
 }
 
 // HOSTHELD2 A: a method of a built-in object whose prototype no
