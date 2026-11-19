@@ -968,6 +968,18 @@ impl Model {
                                 ks.push(key);
                             }
                         }
+                        // A NAMED key on the global object (9.1.1.4: an
+                        // ordinary object whose own properties are the
+                        // global bindings) creates or replaces that one own
+                        // property (20.1.2.4 -> 10.1.6.3) and writes no other
+                        // key: a data descriptor's value is the named store
+                        // `define_by_data` emits (the binding's global field,
+                        // `global_field`), an accessor's get / set are
+                        // installed under that key by `Cons::Accessor`. No
+                        // any-key write of the global object.
+                        _ if builtins::global_object(self, t) && !self.unit_mode => {
+                            self.virt_revoke(t, Some(key));
+                        }
                         // A data descriptor under this NAMED key writes that
                         // key alone (rule D1): HARD, no unknown write of any
                         // other field (`mark_hard_as`).
