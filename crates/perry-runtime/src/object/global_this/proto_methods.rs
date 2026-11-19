@@ -1383,6 +1383,15 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
         "URLSearchParams" => {
             use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
 
+            // Node's own-key order and descriptors: `size`, then the WebIDL
+            // operations in interface order, all enumerable; then the
+            // symbols, `Symbol.toStringTag` before `Symbol.iterator`.
+            install_web_getter_accessor(
+                proto_obj,
+                "size",
+                crate::fn_info!(#[realm("URLSearchParams.prototype.size.<get>")] export crate::url::search_params::usp_proto_size_getter, 0; with_name("get size"), with_declared(0)),
+            );
+            let mut entries = f64::from_bits(crate::value::TAG_UNDEFINED);
             for (name, info, arity) in [
                 (
                     "append",
@@ -1393,16 +1402,6 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     "delete",
                     crate::fn_info!(#[realm(URLSearchParams.prototype.delete, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_delete_metadata))] export crate::url::search_params::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
                     realm_urlsearchparams_prototype_delete_metadata!(length),
-                ),
-                (
-                    "entries",
-                    crate::fn_info!(#[realm(URLSearchParams.prototype.entries)] export crate::url::search_params::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "forEach",
-                    crate::fn_info!(#[realm(URLSearchParams.prototype.forEach, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_foreach_metadata))] export crate::url::search_params::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    realm_urlsearchparams_prototype_foreach_metadata!(length),
                 ),
                 (
                     "get",
@@ -1420,11 +1419,6 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     realm_urlsearchparams_prototype_has_metadata!(length),
                 ),
                 (
-                    "keys",
-                    crate::fn_info!(#[realm(URLSearchParams.prototype.keys)] export crate::url::search_params::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
                     "set",
                     crate::fn_info!(#[realm(URLSearchParams.prototype.set)] export crate::url::search_params::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
                     2,
@@ -1435,8 +1429,18 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     0,
                 ),
                 (
-                    "toString",
-                    crate::fn_info!(#[realm(URLSearchParams.prototype.toString)] export crate::url::search_params::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    "entries",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.entries)] export crate::url::search_params::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "forEach",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.forEach, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_foreach_metadata))] export crate::url::search_params::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    realm_urlsearchparams_prototype_foreach_metadata!(length),
+                ),
+                (
+                    "keys",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.keys)] export crate::url::search_params::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
                     0,
                 ),
                 (
@@ -1444,22 +1448,24 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     crate::fn_info!(#[realm(URLSearchParams.prototype.values)] export crate::url::search_params::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
                     0,
                 ),
+                (
+                    "toString",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.toString)] export crate::url::search_params::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
             ] {
                 let value = install_proto_method(proto_obj, name, info, arity);
-                // WHATWG: URLSearchParams.prototype[Symbol.iterator] is the
-                // same function as `entries` (iterable<USVString, USVString>).
-                // Libraries test `typeof params[Symbol.iterator] === "function"`
-                // before iterating (Effect's UrlParams.fromInput).
+                make_proto_member_enumerable(proto_obj, name);
                 if name == "entries" {
-                    install_builtin_iterator_symbol(proto_obj, value);
+                    entries = value;
                 }
             }
-            install_web_getter_accessor(
-                proto_obj,
-                "size",
-                crate::fn_info!(#[realm("URLSearchParams.prototype.size.<get>")] export crate::url::search_params::usp_proto_size_getter, 0; with_name("get size"), with_declared(0)),
-            );
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
+            // WHATWG: URLSearchParams.prototype[Symbol.iterator] is the
+            // same function as `entries` (iterable<USVString, USVString>).
+            // Libraries test `typeof params[Symbol.iterator] === "function"`
+            // before iterating (Effect's UrlParams.fromInput).
+            install_builtin_iterator_symbol(proto_obj, entries);
         }
         "URLPattern" => {
             install_proto_method_rest(
