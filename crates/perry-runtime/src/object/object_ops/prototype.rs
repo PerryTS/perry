@@ -585,6 +585,10 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         if !crate::buffer::is_node_buffer(addr) {
             return None;
         }
+        // A link recorded by `Object.setPrototypeOf`, `null` included, wins.
+        if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
+            return Some(f64::from_bits(proto_bits));
+        }
         let proto = crate::object::builtin_prototype_value("Buffer");
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)

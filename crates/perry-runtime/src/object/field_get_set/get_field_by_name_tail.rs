@@ -363,12 +363,7 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A Node `Buffer` inherits `constructor` from its actual
-                    // [[Prototype]] (`Buffer.prototype`, or a user subclass's
-                    // prototype). Ordinary [[Get]] through that link answers
-                    // the `Buffer` function itself; the namespace object this
-                    // arm used to synthesize is not callable, so axios-style
-                    // `val.constructor.isBuffer(val)` checks failed and
-                    // `buf.constructor === Buffer` was false.
+                    // [[Prototype]], so `buf.constructor === Buffer`.
                     return buffer_inherited_field(obj, key);
                 }
                 if crate::buffer::is_secret_key(obj as usize) {
@@ -427,10 +422,8 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(result.to_bits());
                     }
                 }
-                // A `Buffer` inherits the rest of `%TypedArray%.prototype`
-                // (`join`, `map`, `forEach`, ...) through `Uint8Array.prototype`;
-                // the names above are only the ones `Buffer.prototype` answers
-                // natively.
+                // Every other name (`join`, `map`, ...) is inherited through
+                // `Uint8Array.prototype`.
                 if crate::buffer::is_node_buffer(obj as usize) {
                     return buffer_inherited_field(obj, key);
                 }

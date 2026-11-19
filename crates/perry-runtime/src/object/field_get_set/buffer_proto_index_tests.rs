@@ -108,4 +108,14 @@ fn node_buffer_reads_inherited_typed_array_methods() {
         object::value_is_callable(join),
         "dynamic Buffer.join must be a function"
     );
+    // node: `Object.setPrototypeOf(buf, null)` leaves `buf.join` undefined.
+    let bare = buffer::js_buffer_alloc(2, 0);
+    let bare_value = value::js_nanbox_pointer(bare as i64);
+    object::js_object_set_prototype_of(bare_value, f64::from_bits(crate::value::TAG_NULL));
+    assert_eq!(
+        object::js_object_get_prototype_of(bare_value).to_bits(),
+        crate::value::TAG_NULL
+    );
+    let bare = bare as *const crate::ObjectHeader;
+    assert!(object::js_object_get_field_by_name(bare, key("join")).is_undefined());
 }
