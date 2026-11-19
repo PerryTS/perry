@@ -669,6 +669,17 @@ impl WasmModuleEmitter {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
             }
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
+                let keys: Vec<String> = exclude_keys.iter().map(|k| js_string_literal(k)).collect();
+                format!(
+                    "fromJsValue(__memDispatch.object_rest(toJsValue({}), [{}]))",
+                    self.emit_js_expr(object, locals),
+                    keys.join(", ")
+                )
+            }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
                     let m_js = self.emit_js_expr(m, locals);

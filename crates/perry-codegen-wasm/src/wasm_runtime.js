@@ -2203,6 +2203,19 @@ const __memDispatch = {
   object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
+  // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
+  // included, except the statically named ones (CopyDataProperties).
+  object_rest: (obj, exclude) => {
+    const rest = {};
+    if (obj === null || obj === undefined) return rest;
+    const from = Object(obj);
+    for (const key of Reflect.ownKeys(from)) {
+      if (typeof key === 'string' && exclude.includes(key)) continue;
+      const desc = Object.getOwnPropertyDescriptor(from, key);
+      if (desc && desc.enumerable) rest[key] = from[key];
+    }
+    return rest;
+  },
   object_has_property: (obj, key) => {
     if (!__holdsProperties(obj)) return 0;
     return (key in obj) ? 1 : 0;
