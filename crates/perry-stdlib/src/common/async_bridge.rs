@@ -897,6 +897,54 @@ mod tests {
         (before - after) as i32
     }
 
+    static EXTENSION_PUMP_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn extension_pump() -> i32 {
+        EXTENSION_PUMP_RUNS.fetch_add(1, Ordering::AcqRel);
+        0
+    }
+
+    extern "C" fn extension_idle() -> i32 {
+        0
+    }
+
+    extern "C" {
+        fn js_run_stdlib_pump();
+    }
+
+    /// The stdlib bridge settles its queue from the host pump whether or not
+    /// an extension is linked; an extension pump registered with the runtime
+    /// runs on the same tick without the bridge naming it.
+    #[test]
+    fn host_pump_drives_the_bridge_with_and_without_a_registered_extension_pump() {
+        let _queues = own_pending_queues();
+        ensure_pump_registered();
+
+        let before_extension = crate::perry_ffi_async::perry_ffi_promise_new();
+        queue_deferred_resolution(before_extension as usize, true, || 1.0f64.to_bits());
+        unsafe { js_run_stdlib_pump() };
+        assert_eq!(
+            perry_runtime::promise::js_promise_state(before_extension),
+            1
+        );
+        assert_eq!(
+            perry_runtime::promise::js_promise_value(before_extension),
+            1.0
+        );
+        assert_eq!(EXTENSION_PUMP_RUNS.load(Ordering::Acquire), 0);
+
+        perry_ffi::register_aux_event_pump(extension_pump, extension_idle);
+        let with_extension = crate::perry_ffi_async::perry_ffi_promise_new();
+        queue_deferred_resolution(with_extension as usize, true, || 2.0f64.to_bits());
+        unsafe { js_run_stdlib_pump() };
+        assert_eq!(perry_runtime::promise::js_promise_state(with_extension), 1);
+        assert_eq!(
+            perry_runtime::promise::js_promise_value(with_extension),
+            2.0
+        );
+        assert!(EXTENSION_PUMP_RUNS.load(Ordering::Acquire) >= 1);
+    }
+
     #[test]
     fn async_bridge_pending_resolution_scanner_emits_promise_and_result_roots() {
         let _queues = own_pending_queues();

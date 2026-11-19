@@ -427,6 +427,80 @@ mod tests {
         assert!(refused >= 4, "the phase-B list lost its slotted families");
     }
 
+    /// DESIGN startup-realm, rule 7, on emitted code: a program that uses
+    /// phase-B families reads their agent slots for the layout word (+4, an
+    /// `i32`) and dereferences them nowhere else.
+    #[test]
+    fn generated_code_reads_only_the_layout_word_of_a_phase_b_slot() {
+        let src = r#"
+const k = {};
+const wm = new WeakMap<object, number>();
+wm.set(k, 1);
+const ws = new WeakSet<object>();
+ws.add(k);
+console.log(wm.get(k), wm.has(k), ws.has(k));
+const any: any = new Map<string, number>();
+console.log(any.size);
+"#;
+        let ast = perry_parser::parse_typescript(src, "main.ts").unwrap();
+        let module = perry_hir::lower_module(&ast, "main.ts", "main.ts").unwrap();
+        let mut opts = crate::expr::class_field_barrier_tests::ir_opts();
+        // The accessor form: every slot read is one `perry_intrinsic_proto` call.
+        opts.target = Some("aarch64-linux-android".into());
+        let ir = String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap();
+        // The lines of `body` that use register `reg` (not the one defining it).
+        let uses = |body: &str, reg: &str| -> Vec<String> {
+            body.lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with(&format!("{reg} =")))
+                .filter(|l| {
+                    l.match_indices(reg).any(|(at, _)| {
+                        !l[at + reg.len()..].starts_with(|c: char| c.is_ascii_alphanumeric())
+                    })
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for body in ir.split("\ndefine ") {
+            for line in body.lines() {
+                let Some((slot, family)) = line
+                    .trim()
+                    .strip_suffix(')')
+                    .and_then(|l| l.split_once(" = call ptr @perry_intrinsic_proto(i32 "))
+                else {
+                    continue;
+                };
+                let family: usize = family.parse().unwrap();
+                if intrinsic_slot_is_the_object(family) {
+                    continue;
+                }
+                seen.insert(family);
+                for site in uses(body, slot) {
+                    let at = site
+                        .strip_suffix(&format!(" = getelementptr i8, ptr {slot}, i64 4"))
+                        .unwrap_or_else(|| {
+                            panic!("family {family}'s slot used as the object: {site}")
+                        });
+                    for load in uses(body, at) {
+                        assert!(
+                            load.ends_with(&format!(" = load i32, ptr {at}")),
+                            "family {family}'s slot read beyond its layout word: {load}"
+                        );
+                    }
+                }
+            }
+        }
+        let expected = [
+            perry_abi::BuiltinProto::WeakMap as usize,
+            perry_abi::BuiltinProto::WeakSet as usize,
+        ];
+        assert!(
+            expected.iter().all(|f| seen.contains(f)),
+            "no phase-B slot read: {seen:?}"
+        );
+    }
+
     /// Local-exec only where the program is an ELF executable: Linux
     /// `executable` outputs. Android and OpenHarmony programs are shared
     /// objects whatever the output kind (`link/platform_cmd.rs` links them

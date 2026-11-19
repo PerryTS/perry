@@ -476,11 +476,17 @@ pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHea
 
 /// A zeroed typed-array cell that is a private workspace of the runtime and
 /// is never handed to JavaScript: the two index cells of a comparator sort of
-/// more than 64 elements (`array::sort`). It is no birth of a value, so it is
-/// the one entry that does not test the family claim: any program sorts.
+/// more than 64 elements (`array::sort`, the only module that can build the
+/// [`ScratchWorkspace`](crate::array::ScratchWorkspace) it takes). It is no
+/// birth of a value, so it is the one entry that does not test the family
+/// claim: any program sorts.
 /// `#[inline(never)]`: the births check cuts its walk at this symbol.
 #[inline(never)]
-pub(crate) fn store_alloc_scratch(kind: u8, len: u32) -> *mut BufferHeader {
+pub(crate) fn store_alloc_scratch(
+    _: crate::array::ScratchWorkspace,
+    kind: u8,
+    len: u32,
+) -> *mut BufferHeader {
     store_alloc_cell(
         crate::typedarray_hook_slots::type_for_kind(kind),
         len,
