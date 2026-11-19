@@ -1447,6 +1447,51 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
+// `new Set([...])`, `new Map([...])` and their methods inside an async body build and use
+// real collections (#14595).
+#[test]
+fn async_body_builds_and_uses_maps_and_sets() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const outer = new Set([1, 2, 3]);
+async function sets(): Promise<string> {
+  const s = new Set([1, 2, 3]);
+  const e = new Set<string>();
+  e.add("a");
+  e.add("a");
+  const d1 = s.delete(1);
+  const d2 = s.delete(1);
+  return [s.size, s.has(2), s.has(1), e.size, d1, d2, outer.has(3), typeof s].join(" ");
+}
+async function maps(): Promise<string> {
+  const m = new Map<string, number>([["a", 1]]);
+  const n = new Map<string, number>();
+  m.set("b", 2).set("c", 3);
+  n.set("x", 1);
+  const d1 = m.delete("a");
+  const d2 = m.delete("zz");
+  const before = [m.size, m.get("b"), m.get("a"), m.has("c"), m.has("a"), d1, d2, n.get("x")].join(" ");
+  m.clear();
+  return before + " " + m.size;
+}
+// A typed parameter's methods lower to the dedicated Map/Set nodes.
+async function typed(m: Map<string, number>, s: Set<number>): Promise<string> {
+  m.set("q", 5).set("r", 6);
+  const got = [m.get("q"), m.has("q"), m.delete("q"), m.delete("q"), m.size];
+  m.clear();
+  s.clear();
+  return got.join(" ") + " " + m.size + " " + s.size;
+}
+sets().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+maps().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+typed(new Map(), new Set([1])).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "2 true false 1 true false true object\n2 2  true false true false 1 0\n5 true true false 1 0 0"
+    );
+}
+
 // `for...of` over an array and `i++` / `k--` in an async body: the array check of the
 // for-of lowering and the update expression both reach the JS emitter (#14595).
 #[test]

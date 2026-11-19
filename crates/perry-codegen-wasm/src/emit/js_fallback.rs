@@ -867,6 +867,81 @@ impl WasmModuleEmitter {
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
+            // `new` on a constructor value (`new Map<K, V>([...])` among others) calls the
+            // bridge the WASM arm calls.
+            Expr::NewDynamic { callee, args, .. } => {
+                let mut parts = vec![self.emit_js_expr(callee, locals)];
+                parts.extend(args.iter().map(|a| self.emit_js_expr(a, locals)));
+                format!(
+                    "fromJsValue(__memDispatch.new_dynamic({}))",
+                    host_args(&parts)
+                )
+            }
+            // Map and Set call the bridges their WASM arms in `emit/expr/map_set.rs` call.
+            Expr::MapNew => "fromJsValue(__memDispatch.map_new())".to_string(),
+            Expr::SetNew => "fromJsValue(__memDispatch.set_new())".to_string(),
+            Expr::MapNewFromArray(a)
+            | Expr::SetNewFromArray(a)
+            | Expr::MapSize(a)
+            | Expr::SetSize(a)
+            | Expr::MapEntries(a)
+            | Expr::MapKeys(a)
+            | Expr::MapValues(a)
+            | Expr::SetValues(a) => {
+                let bridge = match expr {
+                    Expr::MapNewFromArray(_) => "map_new_from_array",
+                    Expr::SetNewFromArray(_) => "set_new_from_array",
+                    Expr::MapSize(_) => "map_size",
+                    Expr::SetSize(_) => "set_size",
+                    Expr::MapEntries(_) => "map_entries",
+                    Expr::MapKeys(_) => "map_keys",
+                    Expr::MapValues(_) => "map_values",
+                    _ => "set_values",
+                };
+                format!(
+                    "fromJsValue(__memDispatch.{}(toJsValue({})))",
+                    bridge,
+                    self.emit_js_expr(a, locals)
+                )
+            }
+            Expr::MapGet { map: c, key: k } => format!(
+                "fromJsValue(__memDispatch.map_get(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            // `has` and `delete` answer with a boolean, and `delete` says whether the
+            // entry was there.
+            Expr::MapHas { map: c, key: k } | Expr::SetHas { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.has(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            Expr::MapDelete { map: c, key: k } | Expr::SetDelete { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.delete(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            // `set` and `add` yield the collection.
+            Expr::MapSet { map, key, value } => format!(
+                "((m) => (__memDispatch.map_set(toJsValue(m), toJsValue({}), toJsValue({})), m))({})",
+                self.emit_js_expr(key, locals),
+                self.emit_js_expr(value, locals),
+                self.emit_js_expr(map, locals)
+            ),
+            Expr::SetAdd { set_id, value } => {
+                let set = self.emit_js_expr(&Expr::LocalGet(*set_id), locals);
+                format!(
+                    "(__memDispatch.set_add(toJsValue({}), toJsValue({})), {})",
+                    set,
+                    self.emit_js_expr(value, locals),
+                    set
+                )
+            }
+            Expr::MapClear(c) | Expr::SetClear(c) => format!(
+                "(__memDispatch.{}(toJsValue({})), u64ToF64(TAG_UNDEFINED))",
+                if matches!(expr, Expr::MapClear(_)) { "map_clear" } else { "set_clear" },
+                self.emit_js_expr(c, locals)
+            ),
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
