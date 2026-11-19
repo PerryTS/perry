@@ -887,6 +887,22 @@ mod tests {
         );
     }
 
+    /// Yoga places the root at its own margins plus its relative insets.
+    #[test]
+    fn root_is_offset_by_its_margins_and_insets() {
+        let root = sized_node(50.0, 50.0);
+        for (kind, edge, v) in [
+            (E_MARGIN, EDGE_LEFT, 10.0),
+            (E_MARGIN, EDGE_TOP, 4.0),
+            (E_POSITION, EDGE_LEFT, 5.0),
+            (E_POSITION, EDGE_TOP, 3.0),
+        ] {
+            js_yoga_set_edge(root, kind as f64, edge as f64, v, U_POINT as f64);
+        }
+        js_yoga_calculate_layout(root, 200.0, 200.0, 0.0);
+        assert_eq!((computed(root, C_LEFT), computed(root, C_TOP)), (15.0, 7.0));
+    }
+
     /// Taffy matches `stretch` by comparing the whole alignment value, safety
     /// included, so the mappings must produce taffy's own `STRETCH`.
     #[test]
