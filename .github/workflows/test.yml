@@ -4030,8 +4030,8 @@ jobs:
   # ---------------------------------------------------------------------------
   test262:
     # Every tier that runs test262 runs gap-suite-build (ci_plan.py
-    # self-test), whose build it links: the release's package graph. That
-    # build is its only prerequisite, so a failed `check` orders it but
+    # self-test), whose build it links: the release's package graph. Only
+    # the plan and that build gate it; a failed `check` orders it but
     # cannot skip it.
     needs: [plan, check, gap-suite-build]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.gap-suite-build.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.test262 }}
