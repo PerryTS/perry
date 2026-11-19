@@ -99,6 +99,7 @@ impl Prov {
                 stop,
                 held: false,
                 realm_done: false,
+                src_seen: Default::default(),
                 wide_done: false,
                 pending: None,
                 first: Default::default(),
@@ -368,6 +369,8 @@ pub(crate) const STOP_WIDE: u8 = 3;
 /// `PERRY_FACTS_LEDGER` (the realm is never held) it lists every source,
 /// not only those before the flip.
 pub(crate) const STOP_REALM_ALL: u8 = 4;
+/// At most this many distinct hold sources print under `STOP=realm-all`.
+const HOLDSRC_CAP: usize = 1 << 16;
 
 /// A `PERRY_FACTS_WHY_AT` selector: `n<id>`, or `<fn-substring>#<label |
 /// parameter name | p<index>>`; `:prim` also stops at a non-string
@@ -434,6 +437,9 @@ pub(crate) struct WhyRec {
     stop: u8,
     held: bool,
     realm_done: bool,
+    /// `STOP=realm-all`: the hold sources already printed (kind, node,
+    /// reason), so each prints once; bounded by [`HOLDSRC_CAP`].
+    src_seen: crate::pts::FxHashSet<(&'static str, NodeId, u32)>,
     wide_done: bool,
     pending: Option<Pending>,
     first: crate::pts::FxHashMap<(NodeId, WVal), Parent>,
@@ -1249,6 +1255,10 @@ impl Model {
             .and_then(|p| p.why.as_ref())
             .is_some_and(|w| w.stop == STOP_REALM_ALL)
         {
+            let w = self.prov.as_mut().and_then(|p| p.why.as_mut()).unwrap();
+            if w.src_seen.len() >= HOLDSRC_CAP || !w.src_seen.insert((kind, start, reason)) {
+                return;
+            }
             return self.why_hold_src(kind, call, t, reason, start, work);
         }
         let Some(w) = self.prov.as_mut().and_then(|p| p.why.as_mut()) else {
