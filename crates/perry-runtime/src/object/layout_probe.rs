@@ -2426,8 +2426,9 @@ pub unsafe extern "C" fn perry_probe_set(
 
 /// [`perry_probe_set`] restricted to a key the receiver already holds as an
 /// own plain writable data property: `true` when it stored. Never adds a key
-/// or fills a hole, so a key whose add needs the complete `[[Set]]` (an
-/// index key's place in the key order) is left to it.
+/// to the receiver's list (a hole fill only as the complete probe admits it),
+/// so a key whose add needs the complete `[[Set]]` (an index key's place in
+/// the key order) is left to it.
 ///
 /// # Safety
 /// As [`perry_probe_set`].
@@ -2444,6 +2445,13 @@ pub(crate) unsafe fn probe_set_existing(
             probe_set_slot_any(obj, address, slot, store_bits(value)) != 0
         }
         OwnSet::Table(t, address) => probe_set_table_barrier(t, address, store_bits(value)) != 0,
+        // A spilled slot, a lane the value widens, a receiver whose record
+        // the leaf does not take: the complete store probe up to the add
+        // (`set_plan`), which stores into an own key or declines.
+        OwnSet::Rest => match set_plan(dir, obj_bits, key_bits, hash, value) {
+            SetPlan::Stored(stored) => stored != 0,
+            SetPlan::Add(..) => false,
+        },
         _ => false,
     }
 }
