@@ -193,7 +193,7 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
         && method == "arrayRecordIndex"
         && matches!(args.as_slice(), [Expr::LocalGet(x)] if *x == c)
         && !expr_uses(object, c))
-    .then(|| args.as_ptr() as usize)
+    .then_some(args.as_ptr() as usize)
 }
 
 /// `x == true`: x.
