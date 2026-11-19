@@ -214,14 +214,26 @@ impl<'a> Gen<'a> {
             Expr::ObjectValues(x) => {
                 let v = self.expr(fx, x);
                 let el = self.own_values(v);
-                self.new_arr_from(mi, "values", &[el])
+                self.new_ordinary_arr_from(mi, "values", &[el])
             }
             Expr::ObjectEntries(x) => {
+                // Each entry is CreateArrayFromList(« key, value »)
+                // (ECMA-262 7.3.23 EnumerableOwnProperties step 4.a.ii.2.b):
+                // index 0 the key (`Cons::OwnKeys`, rule EK), index 1 the
+                // value, each its own slot (`Model::index_slot`). Keys and
+                // values are not paired: each key reads every value.
                 let v = self.expr(fx, x);
                 let el = self.own_values(v);
-                let s = self.prim_node(prim::STR);
-                let pair = self.new_arr_from(mi, "entry", &[el, s]);
-                self.new_arr_from(mi, "entries", &[pair])
+                let ks = self.own_keys(v);
+                let tm = self.new_arr_birth(mi, "entry", true, false);
+                self.m.ordinary_arrays.insert(tm);
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                let k0 = self.m.index_slot(t, 0);
+                self.m.edge(ks, k0);
+                let v1 = self.m.index_slot(t, 1);
+                self.m.edge(el, v1);
+                let pair = self.tok_node(t);
+                self.new_ordinary_arr_from(mi, "entries", &[pair])
             }
             e @ (Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn }) => {
                 let v = self.expr(fx, items);
@@ -294,6 +306,17 @@ impl<'a> Gen<'a> {
             }
             Expr::IteratorFrom(x) | Expr::GetIterator(x) | Expr::GetAsyncIterator(x) => {
                 let v = self.expr(fx, x);
+                // Rule RP2: the GetIterator of a guarded record's protocol
+                // arm never sees an Array the runtime takes the array arm for.
+                let v = match x.as_ref() {
+                    Expr::LocalGet(s)
+                        if matches!(e, Expr::GetIterator(_))
+                            && self.record_locals.contains(&(mi, *s)) =>
+                    {
+                        self.record_entry(v)
+                    }
+                    _ => v,
+                };
                 // The iterator yields what iterating `v` yields (holes
                 // included, `Model::hole` of `v`), and nothing else.
                 let it = self.iterate_closed(v);
