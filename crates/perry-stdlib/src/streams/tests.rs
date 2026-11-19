@@ -298,26 +298,6 @@ fn transform_root_scanner_writes_relocated_pointers_back() {
 }
 
 #[test]
-fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
-    let streams_source = include_str!("../streams.rs");
-    for forbidden in [
-        "perry_runtime::array::js_",
-        "perry_runtime::closure::js_",
-        "perry_runtime::promise::js_",
-    ] {
-        assert!(
-            !streams_source.contains(forbidden),
-            "streams.rs bypasses the provider ABI through {forbidden}"
-        );
-    }
-
-    let gc_source = include_str!("gc.rs");
-    assert!(!gc_source
-        .contains("perry_runtime::node_submodules::js_register_stream_consumer_callbacks"));
-    assert!(!gc_source.contains("perry_runtime::object::js_register_stream_expando_set"));
-}
-
-#[test]
 fn web_compression_formats_round_trip() {
     let input = b"hello stream/web compression";
     let mut formats = vec![

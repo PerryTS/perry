@@ -97,45 +97,6 @@ fn skin_shape_field_with_method_and_create() {
     );
 }
 
-/// (iii) Probe (not a gate): each Object static read under an unknown key,
-/// called as a value: which still hold the realm.
-#[test]
-fn valcall_probe_object_statics() {
-    for n in [
-        "assign",
-        "create",
-        "defineProperties",
-        "defineProperty",
-        "entries",
-        "freeze",
-        "fromEntries",
-        "getOwnPropertyDescriptor",
-        "getOwnPropertyDescriptors",
-        "getOwnPropertyNames",
-        "getOwnPropertySymbols",
-        "getPrototypeOf",
-        "groupBy",
-        "hasOwn",
-        "is",
-        "isExtensible",
-        "isFrozen",
-        "isSealed",
-        "keys",
-        "preventExtensions",
-        "seal",
-        "setPrototypeOf",
-        "values",
-    ] {
-        let b =
-            format!("const f: any = pick((Object as any).{n}); try {{ f(o, o); }} catch (e) {{}}");
-        eprintln!("VALCALL {n} (held,escapes)={:?}", run(&b));
-    }
-    eprintln!(
-        "VALCALL [argv] (held,escapes)={:?}",
-        run("const kk = process.argv[3]; const f: any = (Object as any)[kk]; try { f(o, o); } catch (e) {}")
-    );
-}
-
 /// (iv) Semantics of the direct call kept: the prototype given to create /
 /// setPrototypeOf answers a method call; a getter installed by defineProperty
 /// is called on read; groupBy calls its callback with the items.
@@ -190,35 +151,6 @@ fn controls_keep_todays_answer() {
             "{top} const f: any = pick(Object.create); const c: any = f(tp); console.log(c.zz);"
         ))
     );
-}
-
-/// Probe (not a gate): the direct calls beside the value calls.
-#[test]
-fn valcall_probe_direct() {
-    for b in [
-        "const d = Object.getOwnPropertyDescriptor({ k: o }, 'k'); console.log(d);",
-        "const d = Object.getOwnPropertyDescriptors({ k: o }); console.log(d);",
-        "const d = Object.fromEntries([['k', o]]); console.log(d);",
-    ] {
-        eprintln!("VALCALLD (held,escapes)={:?} {b}", run(b));
-    }
-    for b in [
-        "const d: any = Object.getOwnPropertyDescriptor({ k: new Svc() }, 'k'); console.log(d.value.marker);",
-        "const d: any = Object.fromEntries([['k', new Svc()]]); console.log(d.k.marker);",
-    ] {
-        eprintln!("VALCALLD proven={} {b}", proven(b, "marker"));
-    }
-}
-
-/// Probe (not a gate): the unknown-key call with the diagnostic on.
-#[test]
-fn valcall_probe_unksrc() {
-    std::env::set_var("PERRY_WPF_UNKSRC", "1");
-    eprintln!(
-        "VALCALLD [argv] {:?}",
-        run("const kk = process.argv[3]; const f: any = (Object as any)[kk]; try { f(o, o); } catch (e) {}")
-    );
-    std::env::remove_var("PERRY_WPF_UNKSRC");
 }
 
 /// SKINHOLD2 (three.js skin, AnimationAction::_update
