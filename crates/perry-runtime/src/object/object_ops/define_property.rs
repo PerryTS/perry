@@ -790,7 +790,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                 && crate::closure::props::closure_has_generator_body(
                     closure_ptr as *const crate::closure::ClosureHeader,
                 )
-                && crate::closure::props::bag_of(closure_ptr).is_null()
+                && !crate::closure::props::has_store(closure_ptr)
             {
                 let _ = crate::object::generator_function_prototype_of(closure_ptr);
                 closure_handle.get_raw_mut_ptr::<u8>() as usize

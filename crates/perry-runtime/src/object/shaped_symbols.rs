@@ -4,15 +4,34 @@ use super::*;
 
 pub(crate) const PRIVATE_ENTRY: u8 = 0x40;
 
-pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
+use descriptor_state::KeyTarget;
+
+/// The own-key target of `addr`'s symbol keys: an ordinary holder, or a
+/// function addressed by its closure (its store stays behind the
+/// `closure::props` leaves). `None` when it has no own-key storage yet.
+pub(crate) unsafe fn owner(addr: usize) -> Option<KeyTarget> {
     let bag = if crate::value::addr_class::is_proxy_cell(addr) {
         crate::proxy_hooks::property_bag(addr)
     } else if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
-        descriptor_state::descriptor_holder(addr)
+        match descriptor_state::holder_target(addr) {
+            KeyTarget::Object(bag) => bag,
+            KeyTarget::Function(p) => {
+                return crate::closure::props::fn_has_key_store(p).then_some(KeyTarget::Function(p))
+            }
+        }
     } else {
         super::handle_expando::handle_property_bag(addr as i64)
     };
-    (!bag.is_null()).then_some(bag)
+    (!bag.is_null()).then_some(KeyTarget::Object(bag))
+}
+
+/// The ordinary object holding `addr`'s symbol keys (a function's bag).
+#[cfg(test)]
+pub(crate) unsafe fn owner_object(addr: usize) -> Option<*mut ObjectHeader> {
+    Some(match owner(addr)? {
+        KeyTarget::Object(o) => o,
+        KeyTarget::Function(p) => crate::closure::props::bag_of(p),
+    })
 }
 
 pub(crate) unsafe fn position(obj: *const ObjectHeader, symbol: usize) -> Option<u32> {
@@ -29,7 +48,10 @@ pub(crate) unsafe fn position_in(keys: ObjectKeys, symbol: usize) -> Option<u32>
 }
 
 pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
-    let obj = owner(addr)?;
+    let obj = match owner(addr)? {
+        KeyTarget::Object(o) => o,
+        KeyTarget::Function(p) => return crate::closure::props::fn_sym_get(p, symbol),
+    };
     let (keys, live) = object_keys_and_live_slot_count(obj);
     let index = position_in(keys, symbol)?;
     let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
@@ -99,9 +121,23 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
     if _holder_edit.is_some() {
         crate::closure::shape::note_function_own_state_changed(addr);
     }
-    let Some(obj) = owner(addr) else {
-        return false;
+    let obj = match owner(addr) {
+        Some(KeyTarget::Object(o)) => o,
+        Some(KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_define(p, symbol, bits, entry)
+        }
+        None => return false,
     };
+    define_on(obj, symbol, bits, entry)
+}
+
+/// [`define`] on the resolved ordinary holder, after the owner's prologue.
+pub(crate) unsafe fn define_on(
+    obj: *mut ObjectHeader,
+    symbol: usize,
+    bits: u64,
+    entry: u8,
+) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
@@ -269,8 +305,12 @@ pub(crate) unsafe fn append(obj: *mut ObjectHeader, symbol: usize, bits: u64) ->
 }
 
 pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, u64)> {
-    let Some(obj) = owner(addr) else {
-        return Vec::new();
+    let obj = match owner(addr) {
+        Some(KeyTarget::Object(o)) => o,
+        Some(KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_entries(p, include_private)
+        }
+        None => return Vec::new(),
     };
     let (keys, live) = object_keys_and_live_slot_count(obj);
     let (slots, count) = keys.dense_slots();
@@ -294,7 +334,10 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
 }
 
 pub(crate) unsafe fn entry(addr: usize, symbol: usize) -> Option<u8> {
-    let obj = owner(addr)?;
+    let obj = match owner(addr)? {
+        KeyTarget::Object(o) => o,
+        KeyTarget::Function(p) => return crate::closure::props::fn_sym_entry(p, symbol),
+    };
     let (keys, live) = object_keys_and_live_slot_count(obj);
     let pos = position_in(keys, symbol)?;
     if object_key_field_at_with_keys(obj, keys.arr(), pos, live).bits() == crate::value::TAG_HOLE {
@@ -305,9 +348,18 @@ pub(crate) unsafe fn entry(addr: usize, symbol: usize) -> Option<u8> {
 
 pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
     let _holder_edit = descriptor_state::HolderEdit::new(addr);
-    let Some(obj) = owner(addr) else {
-        return;
+    let obj = match owner(addr) {
+        Some(KeyTarget::Object(o)) => o,
+        Some(KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_set_entry(p, symbol, entry)
+        }
+        None => return,
     };
+    set_entry_on(obj, symbol, entry)
+}
+
+/// [`set_entry`] on the resolved ordinary holder, after the owner's prologue.
+pub(crate) unsafe fn set_entry_on(obj: *mut ObjectHeader, symbol: usize, entry: u8) {
     let Some(pos) = position(obj, symbol) else {
         return;
     };
@@ -351,9 +403,23 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
     if _holder_edit.is_some() {
         crate::closure::shape::note_function_own_state_changed(addr);
     }
-    let Some(owner) = owner(addr) else {
-        return false;
+    let owner = match owner(addr) {
+        Some(KeyTarget::Object(o)) => o,
+        Some(KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_define_accessor(p, symbol, get, set)
+        }
+        None => return false,
     };
+    define_accessor_on(owner, symbol, get, set)
+}
+
+/// [`define_accessor`] on the resolved ordinary holder, after the owner's prologue.
+pub(crate) unsafe fn define_accessor_on(
+    owner: *mut ObjectHeader,
+    symbol: usize,
+    get: u64,
+    set: u64,
+) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(owner);
     let symbol = scope.root_nanbox_u64(crate::value::POINTER_TAG | symbol as u64);
@@ -412,9 +478,16 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
         "delete symbol",
     );
     let _holder_edit = descriptor_state::HolderEdit::new(addr);
-    let Some(obj) = owner(addr) else {
-        return false;
+    let obj = match owner(addr) {
+        Some(KeyTarget::Object(o)) => o,
+        Some(KeyTarget::Function(p)) => return crate::closure::props::fn_sym_delete(p, symbol),
+        None => return false,
     };
+    delete_on(addr, obj, symbol)
+}
+
+/// [`delete`] on the resolved ordinary holder, after the owner's prologue.
+pub(crate) unsafe fn delete_on(addr: usize, obj: *mut ObjectHeader, symbol: usize) -> bool {
     // Array.prototype's @@iterator is a fixed slot that array iteration
     // reads (object model step 7): while the object has no overflow, a delete
     // leaves the layout key and holes that slot, so a redefine refills it.

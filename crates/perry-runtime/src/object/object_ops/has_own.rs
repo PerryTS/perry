@@ -69,6 +69,17 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `hasOwnProperty.call(o, k)` at a call site whose `.call` value is the
+/// realm's `Function.prototype.call` body and whose target's info names the
+/// realm's `Object.prototype.hasOwnProperty` body (codegen `emit_call_lane`
+/// compares both code identities on every call): that body with `this = o`.
+/// `o` is an object, a function, null or undefined; a primitive `o` takes the
+/// call body in full.
+#[no_mangle]
+pub extern "C" fn js_object_prototype_has_own_property_call(this: f64, key: f64) -> f64 {
+    object_prototype_has_own_property(this, key)
+}
+
 /// `Object.prototype.hasOwnProperty(V)` with `this` (ECMA-262 20.1.3.2):
 /// ToPropertyKey(V) runs before ToObject(this), the reverse of
 /// `Object.hasOwn`. Only a nullish receiver can tell the two orders apart

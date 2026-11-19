@@ -22,7 +22,9 @@ fn assert_refused(owner: usize) {
         "install admitted an internal cell"
     );
     assert!(
-        refuses(owner, || unsafe { descriptor_route(owner).bag.is_null() }),
+        refuses(owner, || unsafe {
+            descriptor_route(owner).target.test_holder().is_null()
+        }),
         "query admitted an internal cell"
     );
     assert!(
@@ -113,7 +115,7 @@ fn descriptor_holder_refusal_reads_ignore_a_native_registry_collision() {
     // An allocator-owned capture is not an admitted native payload.
     assert!(super::super::handle_expando::handle_property_bag(capture as i64).is_null());
     let refused = refuses(capture, || unsafe {
-        descriptor_route(capture).bag.is_null()
+        descriptor_route(capture).target.test_holder().is_null()
     });
     super::super::handle_expando::handle_expando_clear(capture as i64);
     assert!(refused, "query used an address-keyed native bag");
@@ -141,13 +143,15 @@ fn forwarded_object_descriptor_holder_resolves_reads_and_writes() {
             PropertyAttrs::new(false, true, true),
         );
         for owner in [alias, middle, live] {
-            let bag = descriptor_route(owner as usize).bag;
+            let bag = descriptor_route(owner as usize).target.test_holder();
             assert_eq!(bag, live as *const ObjectHeader);
             assert!(!get_property_attrs(owner as usize, "x").unwrap().writable());
             assert!(super::super::handle_expando::handle_property_bag(owner as i64).is_null());
         }
         let edit = HolderEdit::new(alias as usize).expect("alias normalizes to live holder");
-        assert_eq!(edit.bag, live);
+        assert!(
+            matches!(edit.target, super::holder_edit::KeyTarget::Object(o) if o as usize == live as usize)
+        );
         drop(edit);
         *alias.cast::<u64>() = alias_payload;
         *middle.cast::<u64>() = middle_payload;
@@ -177,7 +181,7 @@ fn native_payload_descriptor_holder_uses_its_record() {
         .writable());
     super::super::handle_expando::handle_expando_clear(handle);
     assert!(
-        unsafe { descriptor_holder(handle as usize).is_null() },
+        matches!(unsafe { super::owner_key_target(handle as usize) }, super::KeyTarget::Object(o) if o.is_null()),
         "release drops the holder edge"
     );
 }
@@ -193,7 +197,7 @@ fn lazy_array_descriptor_holder_is_the_materialized_arrays_bag() {
     })
     .expect("valid array tape");
     unsafe {
-        let before = descriptor_route(lazy as usize).bag;
+        let before = descriptor_route(lazy as usize).target.test_holder();
         assert!(before.is_null());
         assert!(
             crate::json_tape::is_lazy_array(lazy),
@@ -208,7 +212,7 @@ fn lazy_array_descriptor_holder_is_the_materialized_arrays_bag() {
             !crate::json_tape::is_lazy_array(lazy),
             "installs normalize to an ordinary array"
         );
-        let bag = descriptor_route(lazy as usize).bag;
+        let bag = descriptor_route(lazy as usize).target.test_holder();
         assert_eq!(
             bag,
             crate::array::array_property_bag(lazy as *mut crate::array::ArrayHeader)

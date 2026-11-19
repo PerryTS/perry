@@ -282,22 +282,25 @@ mod tests {
     #[test]
     fn exact_raw_word_fixtures_and_checked_limits() {
         for (row, band, kind, expected) in [
-            (0, 0, 0, 0x80000000),
-            (1, 0, 2, 0x88000001),
-            (1, 0, 3, 0x8c000001),
-            (1, 1, 1, 0x94000001),
-            (0, 2, 1, 0xa4000000),
+            (10, 0, 0, 0x80000000),
+            (11, 0, 2, 0x88000001),
+            (11, 0, 3, 0x8c000001),
+            (11, 1, 1, 0x94000001),
+            (0, 1, 3, 0x9ffffff6),
         ] {
             assert_eq!(encode_layout_word(row, band, kind).unwrap(), expected);
         }
         assert_eq!(
-            encode_layout_word(0, 0, 0).unwrap() | 0x40000000,
+            encode_layout_word(10, 0, 0).unwrap() | 0x40000000,
             0xc0000000
         );
         for band in 0..3 {
             for kind in 0..4 {
                 let word = encode_layout_word((1 << 26) - 1, band, kind).unwrap();
-                assert_eq!(word & 0x03ffffff, (1 << 26) - 1);
+                assert_eq!(
+                    word & 0x03ffffff,
+                    (1 << 26) - 1 - perry_abi::LAYOUT_ROW_BIAS
+                );
                 assert_eq!((word >> 28) & 3, u32::from(band));
                 assert_eq!((word >> 26) & 3, u32::from(kind));
             }
@@ -383,7 +386,7 @@ pub const EMPTY_ORDINARY_NATIVE: &str = "EmptyOrdinary";
 pub fn native_inputs() -> Vec<OrdinalInput> {
     use perry_abi::*;
     let mut inputs = Vec::new();
-    for index in 0..9 {
+    for index in 0..FUNCTION_FAMILY_ROWS {
         let word = intrinsic_function_layout_word(index);
         inputs.push(OrdinalInput {
             key: LayoutKey::Native(format!("intrinsic_function_{index}")),

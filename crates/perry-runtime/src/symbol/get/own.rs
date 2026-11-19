@@ -41,7 +41,12 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     }
     // One holder resolution and one key scan answer both the accessor and
     // the data question.
-    let holder = crate::object::shaped_symbols::owner(obj_key)?;
+    let holder = match crate::object::shaped_symbols::owner(obj_key)? {
+        crate::object::descriptor_state::KeyTarget::Object(o) => o,
+        crate::object::descriptor_state::KeyTarget::Function(p) => {
+            return crate::closure::props::fn_sym_slot(p, sym_f64)
+        }
+    };
     let (keys, live) = crate::object::object_keys_and_live_slot_count(holder);
     let position = crate::object::shaped_symbols::position_in(keys, sym_key)?;
     let lane =

@@ -806,6 +806,7 @@ unsafe fn publish_key_add_rep(
 ///
 /// Mints, so it is a collection point: it reads `obj` only before the mint,
 /// and the caller re-reads its root for [`install_private_field_lanes`].
+#[inline(never)]
 pub(crate) unsafe fn private_field_lanes_target(
     obj: *mut ObjectHeader,
     slot: u32,
@@ -856,6 +857,7 @@ pub(crate) unsafe fn private_field_lanes_target(
 /// double first (a non-pointer under the current `Any` lane), then the shape
 /// (DESIGN §3.3 order). A receiver that changed shape in between keeps its
 /// shape.
+#[inline(never)]
 pub(crate) unsafe fn install_private_field_lanes(
     obj: *mut ObjectHeader,
     slot: u32,

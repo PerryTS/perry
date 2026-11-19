@@ -90,7 +90,7 @@ fn holder_is_live(p: *const ObjectHeader) -> bool {
 #[inline(always)]
 pub(crate) fn pristine(i: usize) -> bool {
     // SAFETY: the slot names a live holder of this agent or a static stand-in.
-    unsafe { (*holder(i)).parent_class_id < super::layout_desc::UNSHADOWED_WORD_END }
+    unsafe { crate::codegen_abi::is_unshadowed_record_word((*holder(i)).parent_class_id) }
 }
 
 /// The holder of a namespace VALUE: an ordinary object is its own holder, a
@@ -179,7 +179,7 @@ unsafe fn seal_namespace(i: usize, bits: u64) {
     if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
         && crate::closure::is_closure_ptr(addr)
     {
-        crate::closure::props::bag_ensure(addr);
+        crate::closure::props::ensure_key_store(addr);
     }
     let obj = holder_of_value(bits);
     if obj.is_null() {

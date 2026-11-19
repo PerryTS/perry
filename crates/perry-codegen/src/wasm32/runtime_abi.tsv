@@ -1724,6 +1724,7 @@ js_function_apply_proxy	f64	f64,f64,f64
 js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
 js_function_order_first_call	void	ptr
+js_function_prototype_call_body	f64	ptr,i64,ptr,usize
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
 js_gc_enter_unsafe_zone	void	
@@ -2842,6 +2843,7 @@ js_object_lookup_setter	f64	f64,f64
 js_object_mark_class	void	i64
 js_object_prevent_extensions	f64	f64
 js_object_property_is_enumerable	f64	f64,f64
+js_object_prototype_has_own_property_call	f64	f64,f64
 js_object_record_get_by_bytes	i64	ptr,ptr,usize
 js_object_record_set_by_bytes	i32s	ptr,ptr,usize,i64
 js_object_rest	ptr	ptr,ptr

@@ -210,7 +210,7 @@ mod tests {
         {
             assert_eq!(core::mem::size_of::<FunctionMetadataOwner>(), 24);
             assert_eq!(core::mem::size_of::<FunctionMetadataIdentity>(), 16);
-            assert_eq!(core::mem::size_of::<NativeFunctionInfo>(), 80);
+            assert_eq!(core::mem::size_of::<NativeFunctionInfo>(), 88);
         }
     }
 }

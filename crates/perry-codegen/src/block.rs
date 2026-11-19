@@ -1377,6 +1377,11 @@ impl LlBlock {
         self.counter.fn_info_ref(body)
     }
 
+    /// The body-kind flags recorded for the JS body `body` so far.
+    pub(crate) fn fn_info_flags(&self, body: &str) -> u32 {
+        self.counter.fn_info_flags(body)
+    }
+
     /// Record a fact about `body`, a JS body this module defines, in its
     /// `JsFunctionInfo`.
     pub(crate) fn note_fn_info(

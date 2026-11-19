@@ -407,6 +407,12 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    /// See [`ShapeRecord::proves_no_function_method_keys`].
+    #[inline(always)]
+    pub(crate) fn proves_no_function_method_keys(self) -> bool {
+        unsafe { (*self.0.as_ptr()).proves_no_function_method_keys() }
+    }
+
     #[inline]
     pub(crate) fn field_define_target(self) -> LayoutWord {
         unsafe { (*self.0.as_ptr()).field_define_target() }
@@ -1273,6 +1279,91 @@ impl ShapeTable {
         }
     }
 
+    /// Gives the nine function family records their own keys `[length,
+    /// name]` (INFO entries: `layout_probe::info_value` answers them from the
+    /// closure's info). Once per agent at realm set-up, after the table and
+    /// the image atoms exist and before user code runs: inside table
+    /// creation the list allocation would re-enter it.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn key_function_families(&self) {
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        // SAFETY: the table exists; collection is suppressed.
+        let Some(keys) = (unsafe { super::static_shapes::function_family_keys(false) }) else {
+            return;
+        };
+        let Some(ctor_keys) = (unsafe { super::static_shapes::function_family_keys(true) }) else {
+            return;
+        };
+        let mut inner = self.inner.borrow_mut();
+        for (id, kind, proto, summary) in crate::closure::shape::intrinsic_shapes() {
+            let index = id.wrapping_sub(crate::codegen_abi::FUNCTION_SHAPE_BASE);
+            let keys = if crate::closure::shape::family_lists_prototype(index) {
+                ctor_keys
+            } else {
+                keys
+            };
+            self.key_function_shape(&mut inner, ShapeId(id), kind, proto, summary, keys);
+        }
+    }
+
+    #[inline(never)]
+    fn key_function_shape(
+        &self,
+        inner: &mut ShapeTableInner,
+        id: ShapeId,
+        kind: ShapeObjectKind,
+        proto: u64,
+        summary: u8,
+        keys: super::ObjectKeys,
+    ) {
+        let rep = super::field_rep::REP_ANY;
+        let index = if id == ShapeId(crate::codegen_abi::FUNCTION_DICTIONARY_SHAPE) {
+            4
+        } else {
+            id.0 - crate::codegen_abi::FUNCTION_SHAPE_BASE
+        };
+        let word = LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(index));
+        let Some(r) = self.slab().handle_record_ptr(word) else {
+            return;
+        };
+        let facts = |node: u32, list: u64, count: u32, summary: u8| {
+            shapes_store::integrity_facts_key(
+                shapes_store::facts_key_proto_with_special(
+                    shapes_store::list_identity(node, list),
+                    count,
+                    0,
+                    0,
+                    kind,
+                    0,
+                    proto,
+                    summary,
+                    rep,
+                    &[],
+                    &[],
+                ),
+                0,
+            )
+        };
+        let root = crate::object::canonical_keys::ROOT_NODE;
+        inner.facts_remove(facts(root, 0, 0, summary), word);
+        inner.family_remove(root, 0, word);
+        let list = keys.arr() as u64;
+        // SAFETY: the record is this table's published family record; no
+        // reference into the slab is held.
+        let keyed = unsafe {
+            let keyed = summary | super::key_attrs::keys_summary(keys.arr(), keys.count());
+            (*r).keys = list;
+            (*r).logical_key_count = keys.count();
+            (*r).set_keys_node(keys.node());
+            (*r).probe = 0;
+            std::ptr::write(r, std::ptr::read(r).with_summary(keyed));
+            keyed
+        };
+        inner.facts_append_fresh(facts(keys.node(), list, keys.count(), keyed), word);
+        inner.family_append_fresh(keys.node(), list, word);
+    }
+
     // Keep one installer for all nine records: constant iteration facts must
     // not clone record construction and hashing into the startup function.
     #[inline(never)]
@@ -1540,7 +1631,7 @@ pub(crate) fn is_layout_word(v: u32) -> bool {
 /// accepts, so an emitted compare can never equal a dictionary receiver's word.
 #[inline]
 pub(crate) fn is_site_matchable_layout_word(v: u32) -> bool {
-    (crate::codegen_abi::LAYOUT_TAG..crate::codegen_abi::LAYOUT_ORDINARY_END).contains(&v)
+    crate::codegen_abi::is_ordinary_record_word(v)
 }
 
 /// [`is_site_matchable_layout_word`] for a per-site PIC TOKEN
@@ -1555,7 +1646,7 @@ pub(crate) fn is_site_matchable_token(token: u64) -> bool {
 /// the value alone.
 #[inline]
 pub(crate) fn is_exotic_layout_word(v: u32) -> bool {
-    (0xa000_0000..0xb000_0000).contains(&v)
+    crate::codegen_abi::is_exotic_or_family_word(v)
 }
 
 /// Lifts a ShapeId into the per-site PIC token space. MUST match the literal
@@ -2791,10 +2882,25 @@ pub(crate) fn shape_record_for_word(shape_id: LayoutWord) -> Option<ShapeRecordR
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
 }
 
+/// [`shape_record_for_word`] for a runtime layout word (no function family
+/// word): the flat rows only.
+#[inline]
+pub(crate) fn shape_record_for_runtime_layout_word(shape_id: LayoutWord) -> bool {
+    ShapeSlab::agent_record_for_flat_word_present(shape_id).is_some()
+}
+
 /// [`shape_record_for_word`] for a live receiver's own header word (unchecked).
 #[inline(always)]
 pub(crate) fn shape_record_of_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
     let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// [`shape_record_of_receiver`] for a live closure's own header word: one
+/// in-line read for every band (function words are not band 0).
+#[inline(always)]
+pub(crate) fn shape_record_of_function_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
+    let record = ShapeSlab::agent_record_for_function_receiver_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
 }
 

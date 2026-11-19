@@ -1398,7 +1398,8 @@ fn run_arm(
 /// family descriptor from the live record and verifies the requested family.
 fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
     let plan = crate::layout_ordinals::current_plan();
-    let base = crate::runtime_abi::LAYOUT_TAG | plan.family_first;
+    let base = (crate::runtime_abi::LAYOUT_TAG | plan.family_first)
+        .wrapping_sub(crate::runtime_abi::LAYOUT_ROW_BIAS);
     let rel = blk.sub(I32, word, &(base as i32).to_string());
     let in_static = blk.icmp_ult(I32, &rel, &plan.family_count.to_string());
     let kind = blk.and(

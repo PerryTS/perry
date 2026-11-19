@@ -182,6 +182,26 @@ pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option
     None
 }
 
+/// `f.apply(this, list)` whose lookup read the realm's own
+/// `Function.prototype.apply` (codegen `emit_apply_lane`, on the value's code
+/// identity): that body's semantics with `f` as its receiver. The value was
+/// read before the arguments, so nothing the arguments did to `f` is asked.
+///
+/// # Safety
+/// `recv`, `this` and `list` are live values.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_function_apply_read(recv: f64, this: f64, list: f64) -> f64 {
+    if let Some(value) = crate::closure::try_native_apply(recv, this, list) {
+        return value;
+    }
+    super::global_this::function_prototype_apply_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(recv),
+        this,
+        list,
+    )
+}
+
 #[inline(never)]
 unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
     let arr = raw(recv) as *mut crate::array::ArrayHeader;

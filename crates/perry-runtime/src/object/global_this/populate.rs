@@ -28,7 +28,7 @@ fn finish_builtin_prototype(
     unsafe {
         let learn = |obj: *mut ObjectHeader| {
             if !crate::object::runtime_layouts::on_declared_prototype_layout(obj) {
-                crate::object::shapes::learn_object_constfn_lanes(obj, |_, _| true);
+                learn_prototype_lanes(obj);
             }
         };
         if crate::value::addr_class::try_read_gc_header(proto_obj as usize)
@@ -36,16 +36,30 @@ fn finish_builtin_prototype(
         {
             learn(proto_obj);
         } else {
-            crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
+            learn_prototype_lanes(proto_obj);
         }
         // Some native prototypes own symbol slots through an ordinary
         // descriptor holder. Its members carry the same declarations.
-        if let Some(holder) = crate::object::shaped_symbols::owner(proto_obj as usize) {
-            if holder != proto_obj {
-                learn(holder);
+        match crate::object::shaped_symbols::owner(proto_obj as usize) {
+            Some(crate::object::descriptor_state::KeyTarget::Object(holder))
+                if holder != proto_obj =>
+            {
+                learn(holder)
             }
+            Some(crate::object::descriptor_state::KeyTarget::Function(p)) => {
+                crate::closure::props::fn_learn_constfn(p)
+            }
+            _ => {}
         }
     }
+}
+
+/// Every member of a native prototype's key holder `obj` that declares a
+/// permanent image gets its ConstFn lane: the prototype, its symbol holder
+/// and a prototype function's own store all learn through this one body.
+#[inline(never)]
+pub(crate) unsafe fn learn_prototype_lanes(obj: *mut ObjectHeader) {
+    crate::object::shapes::learn_object_constfn_lanes(obj, |_, _| true);
 }
 
 #[cfg(test)]
@@ -279,12 +293,9 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         } else {
             std::ptr::null_mut()
         };
-    // #3664: build the generator / async-generator intrinsic prototype towers
-    // so `Object.getPrototypeOf(function*(){})`, `g.constructor`, and the
-    // `%Generator(.prototype)%` chains resolve to real objects.
-    if phases.core() {
-        ensure_generator_intrinsics();
-    }
+    // The async / generator / async-generator towers are born at their first
+    // observation (`ensure_function_kind_tower`), not here: an unborn tower is
+    // unwritten by construction. Those born earlier are wired below.
     // Constructors: ClosureHeader-backed so typeof is "function".
     // #4533: native error subclasses must link to `Error` / `Error.prototype`.
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,

@@ -264,7 +264,10 @@ mod tests {
             .unwrap()
             .parse::<i32>()
             .unwrap() as u32;
-        let row = word.wrapping_sub(crate::runtime_abi::LAYOUT_TAG);
+        let row = word
+            .wrapping_sub(crate::runtime_abi::LAYOUT_TAG)
+            .wrapping_add(crate::runtime_abi::LAYOUT_ROW_BIAS)
+            & crate::runtime_abi::LAYOUT_ROW_MASK;
         assert!(
             row >= crate::runtime_abi::NATIVE_LAYOUT_ROWS
                 && row < crate::runtime_abi::LAYOUT_ROW_LIMIT,

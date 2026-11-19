@@ -304,12 +304,13 @@ pub(crate) fn class_static_set_defined_attrs_bytes(
         let ptr = crate::object::class_value::class_value_ptr(class_id) as usize;
         // SAFETY: this agent's live class function object; no collection in
         // this scope.
-        let bag = unsafe { crate::closure::props::bag_ensure(ptr) };
-        crate::object::descriptor_state::set_builtin_property_attrs_bytes(
-            bag as usize,
-            name,
-            crate::object::PropertyAttrs::new(writable, enumerable, configurable),
-        );
+        unsafe {
+            crate::closure::props::set_builtin_property_attrs(
+                ptr,
+                name,
+                crate::object::PropertyAttrs::new(writable, enumerable, configurable),
+            )
+        };
     }
     if let Ok(name) = std::str::from_utf8(name) {
         class_static_alias_sync(class_id, name);
@@ -325,11 +326,10 @@ pub(crate) fn class_static_clear_defined_attrs(class_id: u32, name: &str) {
         return;
     };
     // SAFETY: this agent's live class function object.
-    let bag = unsafe { crate::closure::props::bag_of(ptr as usize) };
-    if bag.is_null() {
+    if !unsafe { crate::closure::props::has_store(ptr as usize) } {
         return;
     }
-    crate::object::clear_property_attrs(bag as usize, name);
+    unsafe { crate::closure::props::store_clear_attrs(ptr as usize, name) };
     class_static_alias_sync(class_id, name);
 }
 
@@ -353,8 +353,7 @@ pub(crate) fn class_static_defined_attrs_bytes(
         {
             return None;
         }
-        let bag = crate::closure::props::bag_of(ptr);
-        let attrs = crate::object::descriptor_state::get_property_attrs_bytes(bag as usize, name)
+        let attrs = crate::closure::props::store_attrs(ptr, name)
             .unwrap_or(crate::object::PropertyAttrs::new(true, true, true));
         Some((attrs.writable(), attrs.enumerable(), attrs.configurable()))
     }

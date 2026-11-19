@@ -117,6 +117,9 @@ pub(super) fn emit_static_method_entry(
         f.set_length(e.spec_length);
         f.set_strict();
         set_fn_proto_kind(f, e.kind);
+        // A static method is a method definition: no [[Construct]] and so no
+        // own `prototype` (only construct-capable bodies get that key).
+        f.set_non_constructor();
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)

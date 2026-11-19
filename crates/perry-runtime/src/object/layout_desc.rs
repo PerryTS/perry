@@ -165,10 +165,7 @@ impl ObjectHeader {
 /// reach `GC_TYPE_OBJECT` receivers with ordinary layouts only.
 #[inline(always)]
 pub const fn carry_shadow(previous: u32, id: LayoutWord) -> LayoutWord {
-    if word_is_shadowed(previous)
-        && id.0 >= super::shapes::SHAPE_ID_BASE
-        && id.0 < crate::codegen_abi::LAYOUT_ORDINARY_END
-    {
+    if word_is_shadowed(previous) && crate::codegen_abi::is_ordinary_record_word(id.0) {
         LayoutWord(id.0 | crate::codegen_abi::LAYOUT_SHADOW_BIT)
     } else {
         id
@@ -1860,8 +1857,10 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
 #[inline(always)]
 pub(crate) fn word_in_layout_index(word: u32) -> bool {
     let image = super::class_image::agent_layout_image();
-    let base = crate::codegen_abi::LAYOUT_TAG | image.family_first;
-    word.wrapping_sub(base) < image.family_count
+    // Row bits = physical row - LAYOUT_ROW_BIAS (`family_first` >= the bias).
+    word.wrapping_sub(crate::codegen_abi::LAYOUT_TAG - crate::codegen_abi::LAYOUT_ROW_BIAS)
+        .wrapping_sub(image.family_first)
+        < image.family_count
 }
 
 /// A prototype transition moved an object from layout word `previous` to

@@ -30,8 +30,8 @@ mod tests;
 pub(crate) use alloc::closure_allocs_on_this_thread;
 pub use alloc::closure_set_capture_word;
 pub use alloc::{
-    closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
-    js_closure_alloc_empty, js_closure_alloc_fixed, js_closure_alloc_init,
+    closure_alloc_storage, closure_capture_slots_mut, closure_own_slot_count, closure_payload_size,
+    js_closure_alloc, js_closure_alloc_empty, js_closure_alloc_fixed, js_closure_alloc_init,
     js_closure_alloc_init_boxed, js_closure_alloc_singleton, js_closure_alloc_small,
     js_closure_alloc_with_captures_singleton, js_closure_get_capture_bits,
     js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_get_func,
