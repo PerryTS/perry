@@ -627,6 +627,35 @@ try {
     );
 }
 
+// An async body computes `**`, the bitwise and shift operators (compound assignments
+// included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
+// whose lowering uses `&` and `in`. Expected output is Node's.
+#[test]
+fn async_body_operators_and_for_in_match_sync_code() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function ops(a: number, b: number, u: any, o: any): Promise<string> {
+  let x = 12; x &= 10; let y = 1; y <<= 3; let z = 5; z |= 2; let w = 6; w ^= 3;
+  return [a & b, a | b, a ^ b, a << 2, a >> 1, -a >>> 28, ~a, 2 ** 10, +u, u & 7, x, y, z, w].join(",")
+    + " " + ["a" in o, "z" in o, 0 in [5], 1 in [5]].join(",");
+}
+async function keys(): Promise<string> {
+  const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = [];
+  for (const k in o) ks.push(k + "=" + o[k]);
+  for (const k in [7, 8]) ks.push(k);
+  for (const k in "xy") ks.push(k);
+  for (const k in null as any) ks.push(k);
+  return ks.join(",");
+}
+ops(12, 10, "13", { a: 1 }).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+keys().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "8,14,6,48,6,15,-13,1024,13,5,8,8,7,5 true,false,true,false\na=1,b=2,c=3,0,1,0,1"
+    );
+}
+
 // `r.run(shadow(r))` looks `run` up before it evaluates the argument: the argument gives
 // the instance an own, non-function `run`, which a lookup made afterwards would find.
 #[test]

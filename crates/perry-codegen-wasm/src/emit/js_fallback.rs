@@ -310,8 +310,33 @@ impl WasmModuleEmitter {
                     BinaryOp::Mul => format!("({} * {})", l, r),
                     BinaryOp::Div => format!("({} / {})", l, r),
                     BinaryOp::Mod => format!("({} % {})", l, r),
-                    _ => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
+                    BinaryOp::Pow
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr => {
+                        let js_op = match op {
+                            BinaryOp::Pow => "**",
+                            BinaryOp::BitAnd => "&",
+                            BinaryOp::BitOr => "|",
+                            BinaryOp::BitXor => "^",
+                            BinaryOp::Shl => "<<",
+                            BinaryOp::Shr => ">>",
+                            _ => ">>>",
+                        };
+                        format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
+                    }
                 }
+            }
+            // The same bridge as the WASM arm, so `in` agrees between sync and async bodies.
+            Expr::In { property, object } => {
+                let p = self.emit_js_expr(property, locals);
+                let o = self.emit_js_expr(object, locals);
+                format!(
+                    "(__memDispatch.object_has_property(toJsValue({o}), toJsValue({p})) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))"
+                )
             }
             Expr::Compare { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
@@ -352,7 +377,8 @@ impl WasmModuleEmitter {
                         "(toJsValue({}) ? u64ToF64(TAG_FALSE) : u64ToF64(TAG_TRUE))",
                         o
                     ),
-                    _ => o,
+                    UnaryOp::BitNot => format!("fromJsValue(~toJsValue({}))", o),
+                    UnaryOp::Pos => format!("fromJsValue(+toJsValue({}))", o),
                 }
             }
             Expr::Await(inner) => {
@@ -668,6 +694,15 @@ impl WasmModuleEmitter {
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
+            }
+            // `for (k in o)`'s key snapshot: the enumerable string keys of `o` and its
+            // prototype chain; a primitive is boxed and null/undefined have none.
+            Expr::ForInKeys(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(((__o) => {{ const __ks = []; if (__o !== null && __o !== undefined) for (const __k in Object(__o)) __ks.push(__k); return __ks; }})(toJsValue({})))",
+                    o
+                )
             }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
