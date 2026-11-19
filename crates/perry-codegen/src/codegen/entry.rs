@@ -1162,6 +1162,7 @@ pub(super) fn compile_module_entry(
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             arena_state_lazy: false,
+            agent_block: None,
             class_keys_slots: HashMap::new(),
             class_shape_slots: HashMap::new(),
             class_header_images: HashMap::new(),
@@ -1433,8 +1434,10 @@ pub(super) fn compile_module_entry(
                     cross_module.namespace_adopts_cjs_exports,
                 );
             }
+            crate::expr::agent_ptr::begin_activation(&mut ctx);
             stmt::lower_top_level_stmts(&mut ctx, main_init)
                 .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
+            crate::expr::agent_ptr::finish_activation(&mut ctx);
             init_static_fields_late(&mut ctx, hir)?;
 
             // Issue #100: populate `@__perry_ns_<module_prefix>` from the

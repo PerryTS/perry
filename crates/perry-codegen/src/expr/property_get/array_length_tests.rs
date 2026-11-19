@@ -357,10 +357,14 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
         "the length probe must receive the agent's own directory:\n{probe}"
     );
     assert!(
-        array_other_body
-            .iter()
-            .chain(other_body.iter())
-            .any(|l| l.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0")),
+        array_other_body.iter().chain(other_body.iter()).any(
+            |l| l.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0")
+                // The activation's one read of the block address
+                // (`agent_ptr.rs`), ELF or Apple.
+                || (l.contains("= getelementptr i8, ptr %")
+                    && l.ends_with(", i64 0")
+                    && ir.contains("@llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)"))
+        ),
         "the directory is slot 0 of the agent block:\n{other_body:?}"
     );
     let (cond, served, declined) = cond_br(other_body);
