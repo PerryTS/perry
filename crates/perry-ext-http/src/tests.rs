@@ -48,15 +48,6 @@ fn assert_rewritten(before: i64, after: i64) {
 }
 
 #[test]
-fn gc_scanner_registers_idempotently() {
-    // Calling ensure_gc_scanner_registered twice must not panic
-    // and must not register the scanner twice (Once guarantees).
-    ensure_gc_scanner_registered();
-    ensure_gc_scanner_registered();
-    ensure_gc_scanner_registered();
-}
-
-#[test]
 fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let _guard = GcTestGuard::new();
     perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);

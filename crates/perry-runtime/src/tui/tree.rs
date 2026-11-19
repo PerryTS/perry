@@ -225,47 +225,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual registry scaling benchmark"]
-    fn registry_scaling_benchmark() {
-        use std::hint::black_box;
-        use std::time::Instant;
-
-        for size in [100, 10_000, 100_000] {
-            while registry_len() < size {
-                text("unrelated");
-            }
-            let start = Instant::now();
-            let children = (0..32).map(|_| text("active")).collect();
-            let root = register(Node::Box {
-                children,
-                fg: Color::Default,
-                bg: Color::Default,
-                style: BoxStyle::default(),
-            });
-            let build = start.elapsed();
-            let start = Instant::now();
-            for _ in 0..10_000 {
-                black_box(lookup(root));
-            }
-            let lookup_time = start.elapsed();
-            let start = Instant::now();
-            let rects = super::super::layout::compute_layout(root, 80, 40);
-            let layout_time = start.elapsed();
-            let mut grid = Grid::new(80, 40);
-            let start = Instant::now();
-            for _ in 0..100 {
-                paint_with_layout(&mut grid, root, &rects);
-            }
-            eprintln!(
-                "registry={} build={build:?} lookup={lookup_time:?} layout={layout_time:?} paint={:?}",
-                registry_len(),
-                start.elapsed()
-            );
-            assert_eq!(grid.back[0].ch, 'a');
-        }
-    }
-
-    #[test]
     fn paint_single_text() {
         let h = register(Node::Text {
             content: "hello".to_string(),

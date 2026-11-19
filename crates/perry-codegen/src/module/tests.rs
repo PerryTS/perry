@@ -932,12 +932,6 @@ fn string_constant_escapes_nonprintable() {
     assert!(ir.contains("c\"a\\0Ab\\00\""), "got: {}", ir);
 }
 
-#[test]
-fn gep_unused_helper_imports_compile() {
-    // Smoke test that PTR, I64 are re-exported and compile alongside.
-    let _ = (PTR, I64);
-}
-
 /// Every thread-local the module names becomes local-exec, the runtime's
 /// `initialexec` block included (it is linked into the same executable); a
 /// plain global stays a plain global. The model is in the IR text the module renders, so

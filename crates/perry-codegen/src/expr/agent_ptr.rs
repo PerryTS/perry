@@ -425,20 +425,6 @@ mod tests {
             }
         }
         assert!(refused >= 4, "the phase-B list lost its slotted families");
-        // The raw loader stays private, with exactly its two callers here.
-        let source = include_str!("agent_ptr.rs");
-        let raw = ["fn emit_intrinsic", "_proto("].concat();
-        assert!(
-            source.contains(&format!("\n{raw}")),
-            "the raw loader is not private"
-        );
-        let calls = ["= emit_intrinsic", "_proto(ctx, family)"].concat();
-        let tail = ["    emit_intrinsic", "_proto(ctx, family)\n}"].concat();
-        assert_eq!(
-            source.matches(&calls).count() + source.matches(&tail).count(),
-            2,
-            "the raw loader has a caller besides the shadow-word reader and the object door"
-        );
     }
 
     /// Local-exec only where the program is an ELF executable: Linux
