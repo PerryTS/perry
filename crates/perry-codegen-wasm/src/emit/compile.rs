@@ -1573,6 +1573,10 @@ impl WasmModuleEmitter {
             }
 
             // Register class methods with the bridge and set up inheritance
+            let user_classes: std::collections::BTreeSet<&str> = modules
+                .iter()
+                .flat_map(|(_, m)| m.classes.iter().map(|c| c.name.as_str()))
+                .collect();
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
                 self.current_mod_idx = mod_idx; // see the globals loop above
@@ -1664,13 +1668,33 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        // A user parent's constructor slot, as `Expr::ClassRef` passes it, so
+                        // the child's class value inherits from the parent's; undefined for a
+                        // built-in parent (`extends Error`), which has no class value here.
+                        let parent_slot = if user_classes.contains(parent_name.as_str()) {
+                            let slot = self
+                                .class_ctor_map
+                                .get(parent_name.as_str())
+                                .and_then(|idx| self.func_to_table_idx.get(idx))
+                                .map_or(-1.0, |&slot| slot as f64);
+                            slot.to_bits()
+                        } else {
+                            TAG_UNDEFINED
+                        };
+                        func.instruction(&Instruction::I32Const(0xFF10));
+                        func.instruction(&Instruction::I64Const(parent_slot as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csp_id = self
                             .string_map
                             .get("class_set_parent")
                             .copied()
                             .unwrap_or(0);
                         func.instruction(&f64_const(csp_id as f64));
-                        func.instruction(&f64_const(2.0));
+                        func.instruction(&f64_const(3.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);

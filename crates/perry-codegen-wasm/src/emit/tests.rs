@@ -1753,6 +1753,29 @@ console.log((U as any).tag);
     );
 }
 
+// A subclass's class value has its parent's class value as [[Prototype]], so it
+// inherits the parent's static side; a built-in parent leaves it a plain function.
+// Expected output is Node's.
+#[test]
+fn a_subclass_value_inherits_from_its_parent_class_value() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const k = "made";
+class A { static [k]() { return "A"; } }
+class B extends A {}
+class C extends B {}
+class Plain {}
+class E extends Error {}
+const a: any = A, b: any = B, c: any = C, p: any = Plain, e: any = E;
+console.log((b.__proto__ === A) + " " + (c.__proto__ === B) + " " + (c.__proto__.__proto__ === A) + " " + (p.__proto__ === a.__proto__) + " " + (typeof e.__proto__));
+console.log((k in b) + " " + (k in c) + " " + c[k]() + " " + Object.prototype.hasOwnProperty.call(c, k) + " " + (new C() instanceof A));
+"#
+        ),
+        "true true true true function\ntrue true A false true"
+    );
+}
+
 #[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(
