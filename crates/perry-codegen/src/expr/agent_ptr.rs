@@ -377,6 +377,14 @@ pub(crate) struct ActivationBlock {
     used: bool,
 }
 
+impl ActivationBlock {
+    /// The edge [`finish_activation`] adds once the body is lowered: the
+    /// start's head (still open) to its body.
+    pub(crate) fn pending_edge(&self) -> (&str, &str) {
+        (&self.head, &self.body)
+    }
+}
+
 /// Open the body's start, at the point its statements begin. Sites lowered
 /// from here on use [`ActivationBlock::reg`]; [`finish_activation`] emits
 /// the read once the body is lowered, and only if a site used it.

@@ -11,7 +11,25 @@ impl LlFunction {
     /// Whether the existing i1 definition dominates the end of `use_block`.
     /// Unknown definitions and unreachable continuations refuse reuse.
     pub(crate) fn proof_dominates_block_end(&self, proof: &str, use_block: usize) -> bool {
+        self.proof_dominates_block_end_with(proof, use_block, None)
+    }
+
+    /// [`Self::proof_dominates_block_end`] with `pending`, an edge the
+    /// builder adds only after the body is lowered: an open block (`from`,
+    /// still unterminated) that will branch to `to`. A body's activation start
+    /// (`expr::agent_ptr::ActivationBlock`) is one: every later block is
+    /// reached through it, so without its edge nothing after it is reachable
+    /// and every proof is refused.
+    pub(crate) fn proof_dominates_block_end_with(
+        &self,
+        proof: &str,
+        use_block: usize,
+        pending: Option<(&str, &str)>,
+    ) -> bool {
         let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
+        if let Some((from, to)) = pending {
+            edges.entry(from).or_default().push(to);
+        }
         let mut definition = None;
         let mut use_label = None;
         for (index, block) in self.blocks.iter().enumerate() {
@@ -146,6 +164,24 @@ mod tests {
         f.block_mut(3).unwrap().emit_raw("caught:");
         assert!(!f.proof_dominates_block_end(&normal, 3));
         assert!(f.proof_dominates_block_end(&proof, 3));
+    }
+
+    #[test]
+    fn a_proof_after_an_open_activation_start_dominates_through_its_pending_edge() {
+        // entry -> head (open until the body is lowered) ... -> body -> next
+        let mut f = LlFunction::new("probe", VOID, vec![]);
+        f.create_block("entry");
+        f.create_block("head");
+        f.create_block("body");
+        f.create_block("next");
+        let labels: Vec<_> = f.blocks().iter().map(|b| b.label.clone()).collect();
+        f.block_mut(0).unwrap().br(&labels[1]);
+        let proof = f.block_mut(2).unwrap().icmp_eq(I1, "true", "true");
+        f.block_mut(2).unwrap().br(&labels[3]);
+        assert!(!f.proof_dominates_block_end(&proof, 3));
+        let pending = Some((labels[1].as_str(), labels[2].as_str()));
+        assert!(f.proof_dominates_block_end_with(&proof, 3, pending));
+        assert!(f.proof_dominates_block_end_with(&proof, 2, pending));
     }
 
     #[cfg(feature = "llvm-inprocess")]
