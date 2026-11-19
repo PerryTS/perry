@@ -175,3 +175,73 @@ fn gk3b_keep_cross_module_bare_name() {
         pf.dump_text()
     );
 }
+
+/// E5 exact key set: a `define(name, get)` helper over the global object;
+/// `g` holds the program's `A`, then `{defs}`; `globalThis.Object` and `g`
+/// are read after.
+fn e5_src(defs: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        class B {{ zz = \"b\"; }}
+        (globalThis as any).g = new A();
+        const gg = globalThis as Record<string, unknown>;
+        function define(name: string, get: () => unknown): void {{ Object.defineProperty(gg, name, {{ get, configurable: true }}); }}
+        {defs}
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);
+        console.log((globalThis as any).g.zz);"
+    )
+}
+
+/// The `g.zz` read may see a `B` (or ⊤).
+fn e5_g_sees_b(pf: &ProgramFacts) -> bool {
+    pf.sites
+        .iter()
+        .filter(|s| s.key == "zz")
+        .any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":B") || r.contains(":B#")))
+}
+
+fn e5_object_top(pf: &ProgramFacts) -> bool {
+    pf.sites.iter().filter(|s| s.key == "keys").any(|s| s.top)
+}
+
+/// RED (E5 exact key set): the helper called with three literal names
+/// defines those three globals and no other: `g` stays the program's `A`
+/// and `globalThis.Object` the intrinsic. (Was: every global binding read
+/// took what any computed-key define put there, the getters' `B`.)
+#[test]
+fn e5_exact_literal_names_write_only_those_keys() {
+    let src = e5_src(
+        "define(\"innerWidth\", () => new B()); define(\"innerHeight\", () => new B()); define(\"screen\", () => new B());",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+}
+
+/// KEEP: one of the literal names is `g`: its read sees the getter's `B`.
+#[test]
+fn e5_exact_defined_name_is_read() {
+    let src = e5_src("define(\"innerWidth\", () => 1); define(\"g\", () => new B());");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(e5_g_sees_b(&pf), "g may be B\n{}", pf.dump_text());
+}
+
+/// KEEP: a computed key from unknown input may be any name, `g` included.
+#[test]
+fn e5_unknown_key_stays_any_key() {
+    let src = e5_src("define(String(process.argv[3]), () => new B());");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(e5_g_sees_b(&pf), "g may be B\n{}", pf.dump_text());
+}
+
+/// KEEP: a non-constant key beside the literals, before or after them,
+/// widens the define to any key.
+#[test]
+fn e5_later_non_constant_widens() {
+    let lits = "define(\"innerWidth\", () => new B()); define(\"screen\", () => new B());";
+    let dynk = "define(String(process.argv[3]), () => new B());";
+    for defs in [format!("{lits}\n{dynk}"), format!("{dynk}\n{lits}")] {
+        let pf = facts_mods(&[("main", &e5_src(&defs))]);
+        assert!(e5_g_sees_b(&pf), "{defs}: g may be B\n{}", pf.dump_text());
+    }
+}
