@@ -58,6 +58,43 @@ pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
             .any(|n| m.key_may_name_str(key, n))
 }
 
+/// A named-key store on a non-callable built-in namespace object writes its
+/// own property, not one the realm reads (`realm_reads_store` for the
+/// callable ones): `performance`, `Math`, `JSON`, `Reflect`, a builtin
+/// module namespace. The runtime implements these natively and
+/// never reads a property of the object back by name, beside the statics
+/// `members::realm_read_statics` declares. Not the global object
+/// (R-GLOBAL-NAME, `global_store_escapes`), not `process` (the runtime reads
+/// `process.exitCode` and its streams by name), not an undescribed object
+/// (`Other`), not `Object.prototype`, not a host object (`console`, the
+/// stdio streams: node's console calls a replaced `process.stdout.write`).
+/// A computed key may name any member.
+pub fn plain_namespace_own_store(m: &Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return false;
+    };
+    if m.unit_mode
+        || global_object(m, t)
+        || members::ns_chain(ns) == Family::Function
+        || members::is_host(ns)
+        || matches!(
+            ns,
+            BuiltinNs::GlobalThis
+                | BuiltinNs::Other
+                | BuiltinNs::Process
+                | BuiltinNs::ObjectProtoOwn(_)
+                | BuiltinNs::ObjectProtoMethod
+        )
+    {
+        return false;
+    }
+    let name = &m.atoms[a as usize];
+    !members::realm_read_statics(ns).iter().any(|n| n == name)
+}
+
 /// R-GLOBAL-NAME: may a store under `key` on the global object `t` write a
 /// global the runtime itself reads by name? The runtime reads a built-in
 /// constructor's global by name (`js_get_global_this_builtin_value`,

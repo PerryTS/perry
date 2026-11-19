@@ -1187,9 +1187,19 @@ impl Model {
                 TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
                 _ => false,
             };
+        // A plain (non-callable) namespace object (`performance`, `console`,
+        // `Math`, a builtin module namespace) is the same: a named key the
+        // runtime never reads by name is that object's own property, which
+        // only program reads see (the field above and the native data write
+        // replayed on its reads). Closed world (owner 2026-11-14) and
+        // R-GLOBAL (owner 2026-11-18): only program code reads it by name, so
+        // the stored value reaches no unknown code and the realm stays the
+        // program's (no E20 sink, no `hold_realm`).
+        let plain_ns = !elem && builtins::plain_namespace_own_store(self, t, key);
         if (!builtins::builtin_function(self, t)
             || (namespace && builtins::realm_reads_store(self, t, key)))
             && !own_index
+            && !plain_ns
         {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }

@@ -1651,6 +1651,7 @@ mod native_dispatch;
 mod native_dispatch_builtin;
 mod navigator_decl;
 mod navigator_store;
+mod performance_store;
 mod new_verdicts;
 mod nocall1;
 mod not_unit;

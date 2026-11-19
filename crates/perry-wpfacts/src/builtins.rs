@@ -29,7 +29,7 @@ pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
     builtin_function, global_object, global_store_escapes, global_self_key, native_may_be, realm_reads_store,
-    undeclared,
+    plain_namespace_own_store, undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;
