@@ -58,13 +58,15 @@ fn navigator_user_agent_match_hands_nothing_to_unknown_code() {
     );
 }
 
-/// Control: a write the program does not make as a store (here
-/// `Object.defineProperty` on the global object) keeps the read ⊤.
+/// A data define of `navigator` on the global object replaces the realm's
+/// getter-only accessor with the program's value, which the runtime never
+/// reads by name: the read sees that value (the number) beside the realm's
+/// string, and nothing unknown.
 #[test]
-fn navigator_redefined_on_the_global_reads_top() {
+fn navigator_redefined_on_the_global_reads_the_value() {
     let k = stored(
         "Object.defineProperty(globalThis, \"navigator\", { value: { userAgent: 1 } });",
         "navigator.userAgent",
     );
-    assert!(k.top, "{k:?}");
+    assert!(!k.top && k.prims & crate::model::prim::NUM != 0, "{k:?}");
 }

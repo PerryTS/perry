@@ -130,6 +130,16 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     let Some(p) = m.native_property(t, &name) else {
         return false;
     };
+    // A key the realm declares as a getter-only accessor (`navigator`,
+    // perry-runtime global_this/populate.rs: `set: 0`): the runtime reaches
+    // its object through the getter it installed, never by reading the key.
+    // A [[Set]] runs no setter and writes nothing (ECMA-262 10.1.9.2), and a
+    // data define (20.1.2.4) replaces the accessor with the value it gives,
+    // which only program code reads, through the global's field
+    // (`declared_global_value`).
+    if p.native.is_none() && p.get.is_some() && p.set.is_none() {
+        return false;
+    }
     let Some(identity) = p.native else {
         return true;
     };
