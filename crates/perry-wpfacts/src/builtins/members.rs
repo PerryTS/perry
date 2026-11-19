@@ -1341,6 +1341,23 @@ pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
     }
 }
 
+/// The global object's own properties the runtime reads by name, beside
+/// its declared constructors (`undeclared::global_store_escapes`): the
+/// `Temporal` namespace its Temporal constructors are found through
+/// (`object/global_this/math_temporal.rs`, `js_object_get_field_by_name`
+/// of the global under "Temporal"), and a worker global's message
+/// handlers (`worker_threads/worker_surface.rs` `web_worker_global_handler`,
+/// read by `inbox.rs` and `channel_pump.rs`; `worker_pump.rs`'s
+/// `on<type>`). Every other key of the global object is read only by
+/// program code, through the global's fields (a declared global's load
+/// reads the field beside the realm's value, `declared_global_load`).
+pub(super) fn global_runtime_reads(name: &str) -> bool {
+    matches!(
+        name,
+        "Temporal" | "onmessage" | "onmessageerror" | "onerror"
+    )
+}
+
 /// The member `name` of a builtin namespace object: its own statics, then
 /// its chain: `Function.prototype` for a constructor, `Object.prototype`
 /// for a namespace object (`Math`, `JSON`, `Reflect`). Outer `None`: the
