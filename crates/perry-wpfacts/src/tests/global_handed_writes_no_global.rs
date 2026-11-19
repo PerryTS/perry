@@ -7,7 +7,8 @@
 //!
 //! Step 2 (owner decision 2026-11-18, closed world 11-14): unknown code
 //! that holds the realm (any unknown call) replaces no key of the global
-//! object either (`realm_replaced`), `globalThis` included.
+//! object either (`realm_replaced`), `globalThis` included. Step 3 (owner
+//! decision 2026-11-18): nor any member of an intrinsic namespace.
 
 use super::*;
 
@@ -77,6 +78,39 @@ fn a_global_read_stays_known_after_an_unknown_native_call() {
     for src in both_orders(call, &format!("{READ_GT_OBJECT}\n{READ_G}")) {
         let pf = facts(&src);
         assert!(known(&pf), "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// RED (step 3): a call of an unknown native holds the realm; it replaces
+/// no member of an intrinsic namespace (owner decision 2026-11-18): `M.max`
+/// stays the realm's function. (Was: the realm's function or the opaque
+/// member, `realm_replaced`'s namespace clause.) `Math.max(..)` itself is
+/// the compiled operation; read it off a local.
+#[test]
+fn a_namespace_member_stays_the_realm_s_after_an_unknown_native_call() {
+    let call = "declare function sink(x: any): void;\nsink(1);";
+    let body = "const M: any = Math; console.log(M.max(1, 2));";
+    for src in both_orders(call, body) {
+        let pf = facts(&src);
+        assert!(proven(&pf, "max"), "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP (step 3): the program's own store into a namespace stays an exact
+/// write of it with the realm held: `Math.gq` reads the program's `B`.
+#[test]
+fn a_program_namespace_store_keeps_its_value_with_the_realm_held() {
+    let call = "declare function sink(x: any): void;\nsink(1);";
+    let body = "(Math as any).gq = new B(); console.log((Math as any).gq.yy);";
+    for src in both_orders(call, body) {
+        let pf = facts(&src);
+        let s = sites(&pf, "yy");
+        assert!(
+            s.iter().all(|s| !s.top)
+                && s.iter().any(|s| s.receivers.iter().any(|r| r.ends_with(":B") || r.contains(":B#"))),
+            "{src}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
