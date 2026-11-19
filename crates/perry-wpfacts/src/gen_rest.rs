@@ -150,6 +150,21 @@ impl<'a> Gen<'a> {
                 });
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
+                // R-HOSTREPORT: `process.on(event, listener)` lowers here (the
+                // HIR's receiver-less `NativeMethodCall` on module `process`).
+                // The runtime calls the listener with what it reports as
+                // uncaught and with the process events
+                // (`process_listener_registered`).
+                if object.is_none()
+                    && m0 == "process"
+                    && matches!(
+                        method.as_str(),
+                        "on" | "once" | "addListener" | "prependListener" | "prependOnceListener"
+                    )
+                {
+                    let (call, _) = self.new_call(ThisArg::Undef, a.clone(), vec![]);
+                    crate::builtins::process_listener_registered(&mut self.m, call);
+                }
                 let key = if m0 == "array"
                     && matches!(method.as_str(), "push_single" | "push_field_single")
                 {
