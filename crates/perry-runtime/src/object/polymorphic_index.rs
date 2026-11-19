@@ -224,10 +224,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return value;
         }
     }
-    if let Some(value) =
-        unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
-    {
-        return value;
+    // A Node `Buffer` takes its own arm below, which also answers method and
+    // expando names.
+    if !crate::buffer::is_node_buffer(raw as usize) {
+        if let Some(value) =
+            unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
+        {
+            return value;
+        }
     }
     // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
     // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own
@@ -280,9 +284,10 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         };
-        let byte_val =
-            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, index);
-        return byte_val as f64;
+        return crate::buffer::js_buffer_index_get_value(
+            raw as *const crate::buffer::BufferHeader,
+            index,
+        );
     }
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some() {
         return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(

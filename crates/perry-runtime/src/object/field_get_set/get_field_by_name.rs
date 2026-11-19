@@ -989,8 +989,11 @@ fn get_field_by_name_past_data_probe(
     if matches!(read_kind, NamedReadKind::Native | NamedReadKind::Other) {
         #[cfg(test)]
         super::exotic_named_read::note_probe(0, obj);
+        // A Node `Buffer` reads its members through `Buffer.prototype` first,
+        // in the buffer arm of the object tail.
         if let Some(addr) =
             crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+                .filter(|&addr| !crate::buffer::is_node_buffer(addr))
         {
             if !key.is_null() {
                 unsafe {
