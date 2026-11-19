@@ -169,7 +169,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     // SAFETY: The runtime keeps the completion and its spans valid until this sink
                     // returns; these reads do not retain the borrowed metadata.
                     unsafe { event.code() }.unwrap_or("EIO"),
-                    &error_message(event),
+                    &error_message(event, None),
                 );
                 events::emit(owner.get(), "error", &[error]);
                 // SAFETY: The retained link belongs to this agent; projection checks family/open
@@ -267,13 +267,18 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             if ended_peer {
                 shutdown(owner.get(), event.user);
             } else {
-                let error = socket::error(
+                let target = connect_target(link, event);
+                let error = scope.root_nanbox(socket::error(
                     // SAFETY: The runtime keeps the completion and its spans valid until this sink
                     // returns; these reads do not retain the borrowed metadata.
                     unsafe { event.code() }.unwrap_or("EIO"),
-                    &error_message(event),
-                );
-                socket::destroy(owner.get(), error);
+                    &error_message(event, target.as_ref()),
+                ));
+                if let Some(target) = target {
+                    p::own_set(error.get(), "address", events::string(&target.address));
+                    p::own_set(error.get(), "port", f64::from(target.port));
+                }
+                socket::destroy(owner.get(), error.get());
             }
         }
         tl::NET_TIMER => {
@@ -288,8 +293,23 @@ pub(super) fn deliver_for_test(completion: &tl::NetCompletion) {
     sink(completion);
 }
 
-fn error_message(event: &tl::NetCompletion) -> String {
-    format!(
+/// The peer a failed `connect` was attempting, which Node puts in the message
+/// and on the error. A hostname whose every address failed has no handle left.
+fn connect_target(link: OwnerLink, event: &tl::NetCompletion) -> Option<tl::Endpoint> {
+    // SAFETY: The runtime keeps the completion and its spans valid until this sink returns.
+    if unsafe { event.syscall() } != Some("connect") {
+        return None;
+    }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+    // and the address read is callback-free.
+    unsafe {
+        let core = p::socket_core(link).ok()?;
+        tl::link_peer_address(&mut *core, link).filter(|peer| !peer.address.is_empty())
+    }
+}
+
+fn error_message(event: &tl::NetCompletion, target: Option<&tl::Endpoint>) -> String {
+    let message = format!(
         "{} {}",
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
@@ -297,7 +317,11 @@ fn error_message(event: &tl::NetCompletion) -> String {
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
         unsafe { event.code() }.unwrap_or("EIO")
-    )
+    );
+    match target {
+        Some(target) => format!("{message} {}:{}", target.address, target.port),
+        None => message,
+    }
 }
 
 pub(crate) fn connected(owner: f64) {
