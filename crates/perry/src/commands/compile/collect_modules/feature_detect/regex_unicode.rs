@@ -1,6 +1,6 @@
 //! Omit property membership only for closed, statically harmless producers.
 use perry_hir::walker::walk_expr_children;
-use perry_hir::{Expr, Module};
+use perry_hir::{Expr, Module, ObjectPart};
 
 fn pattern_needs_properties(pattern: &str, flags: &str) -> bool {
     flags.contains(['u', 'v'])
@@ -156,10 +156,16 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         Expr::Object(properties) if properties.iter().any(|(key, _)| consumer_key(key)) => {
             return true
         }
+        // A computed key may evaluate to a consumer key, so only a literal
+        // string key is proven absent.
         Expr::ObjectSpread { parts }
-            if parts
-                .iter()
-                .any(|(key, _)| key.as_deref().is_some_and(consumer_key)) =>
+            if parts.iter().any(|part| match part {
+                ObjectPart::Spread(_) => false,
+                ObjectPart::Define(key, _) => consumer_key(key),
+                ObjectPart::Computed { key, .. } => {
+                    !matches!(key.as_ref(), Expr::String(key) if !consumer_key(key))
+                }
+            }) =>
         {
             return true
         }
