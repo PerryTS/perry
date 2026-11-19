@@ -1584,6 +1584,23 @@ console.log(lit.out.join(","), lit instanceof Object);
     );
 }
 
+// `join` converts each element as Array.prototype.join does: a nested array joins with
+// ",", null and undefined are empty strings. Expected output is Node's.
+#[test]
+fn join_converts_nested_arrays_and_nullish_elements_as_js_does() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const nested = [[1, 2], [3]];
+const mixed: any = [[1, [2, 3]], "s", null, undefined, [true], { a: 1 }];
+function joinIn(xs: number[][]) { return xs.join(";"); }
+console.log(nested.join(";") + " | " + nested.join() + " | " + mixed.join("|") + " | " + joinIn([[4], [5, 6]]) + " | " + [1, 2].join(";"));
+"#
+        ),
+        "1,2;3 | 1,2,3 | 1,2,3|s|||true|[object Object] | 4;5,6 | 1;2"
+    );
+}
+
 #[test]
 fn an_array_bridge_call_opens_its_own_argument_frame() {
     // Only the neighbours are asserted: what these calls return is a separate matter.
