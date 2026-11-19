@@ -1868,6 +1868,30 @@ main();
     );
 }
 
+// `class A extends F` with a plain function: A's prototype inherits the `prototype` F
+// had when the class was defined, and a later `F.prototype = x` does not change it.
+// Expected output is Node's.
+#[test]
+fn a_class_extending_a_function_inherits_its_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function F() {}
+const o = (F as any).prototype;
+o.greet = function () { return "hi"; };
+// @ts-ignore
+class A extends F {}
+// @ts-ignore
+class B extends A {}
+(F as any).prototype = { later: true };
+const ap: any = A.prototype;
+console.log([ap.__proto__ === o, "greet" in ap, ap.greet(), (B.prototype as any).__proto__ === ap, "later" in ap].join(","));
+"#
+        ),
+        "true,true,hi,true,false"
+    );
+}
+
 // Each evaluation of a capturing class expression is its own constructor, and its
 // members read the captures of the evaluation that built the instance.
 #[test]

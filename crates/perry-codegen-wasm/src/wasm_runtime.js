@@ -1678,14 +1678,15 @@ const classCtorSlotTable = {};
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
 // That prototype is also the class value's `prototype`. It inherits from a user parent
-// class's prototype and holds the class's own methods, non-enumerable.
+// class's prototype, or from the `prototype` a function parent had when the class was
+// defined (`class A extends F`), and holds the class's own methods, non-enumerable.
 function __classProto(className) {
   const t = __classTemplate(className);
   if (t.proto) return t.proto;
   const parent = classParentTable[className];
   const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
     ? __classProto(parent)
-    : Object.prototype;
+    : __classFunctionParentProtos.get(className) || Object.prototype;
   t.proto = Object.create(base, { [__classTag]: { value: className } });
   for (const m of Object.keys(classMethodTable[className] || {})) {
     if (m.startsWith('__get_') || m.startsWith('__set_')) continue;
@@ -1693,6 +1694,8 @@ function __classProto(className) {
   }
   return t.proto;
 }
+// `class A extends F` with F a function value: F's `prototype` at definition time.
+const __classFunctionParentProtos = new Map();
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
   return Object.create(proto || __classProto(className));
@@ -2698,6 +2701,12 @@ const __memDispatch = {
   class_method_home: (className, isStatic) => ({ __classHome__: String(className), isStatic: !!isStatic }),
   // A null parent is `extends null`; the parent walks end there as at a root class.
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
+  // `class A extends F` with a user function F: A's prototype inherits F's current one.
+  class_extends_value: (className, value) => {
+    if (value instanceof __PerryClosure && __holdsProperties(value.prototype)) {
+      __classFunctionParentProtos.set(String(className), value.prototype);
+    }
+  },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (typeof obj === 'function') return __classStaticGet(obj[__classRefName], String(name), obj, obj);
