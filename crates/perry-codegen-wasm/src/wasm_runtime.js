@@ -1663,6 +1663,8 @@ const classStaticTable = {};
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
+// A user parent class's constructor slot (`class_set_parent`), for its class value.
+const classCtorSlotTable = {};
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
 // Args are decoded from NaN-boxed BigInt bits to plain JS values by __bitsToJsValue before dispatch.
@@ -1701,6 +1703,11 @@ function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
     ctor = __classCtor(className, ctorIdx, undefined);
+    // `class B extends A`: B's [[Prototype]] is A, so B inherits A's statics.
+    const parent = classParentTable[className];
+    if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
+      Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
+    }
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
   }
@@ -2727,7 +2734,10 @@ const __memDispatch = {
     const ctor = globalThis[target];
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
-  class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
+  class_set_parent: (childId, parentId, parentCtorIdx) => {
+    classParentTable[String(childId)] = String(parentId);
+    if (parentCtorIdx !== undefined) classCtorSlotTable[String(parentId)] = parentCtorIdx | 0;
+  },
   // `super[key]` in an instance method of `cls`, with the receiver as `this`.
   class_super_get: (obj, cls, mname) => __superGet({ __classHome__: String(cls), isStatic: false }, mname, obj),
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
