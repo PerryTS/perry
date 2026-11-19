@@ -13,6 +13,10 @@ use super::*;
 use perry_hir::Module;
 
 fn facts(src: &str) -> crate::ProgramFacts {
+    facts_cfg(src, None)
+}
+
+fn facts_cfg(src: &str, dynamic_code: Option<String>) -> crate::ProgramFacts {
     let path = "a.ts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "a", &path).expect("lowers");
@@ -22,6 +26,7 @@ fn facts(src: &str) -> crate::ProgramFacts {
         &list,
         &FactsConfig {
             unit_io: true,
+            dynamic_code,
             ..Default::default()
         },
     )
@@ -74,13 +79,18 @@ fn birth1_a_keep_frozen_global() {
 // KEEP (rule GS): code the program cannot see may overwrite a program-owned
 // global key: interpreted code (`new Function` of a run-time string) and,
 // in unit mode, the stores of another unit. R-GLOBAL (owner 2026-11-18)
-// covers only unknown code holding the realm in whole-program mode.
+// covers only unknown code holding the realm in whole-program mode. The
+// interpreter is linked (`dynamic_code`): without it no interpreted code
+// runs, and the refusal came from the call of the constructed value holding
+// the realm, which replaces no global under R-GLOBAL step 2 (owner
+// 2026-11-18, closed world 2026-11-14).
 #[test]
 fn birth1_a_keep_interpreted_code() {
-    let pf = facts(
+    let pf = facts_cfg(
         "const g = globalThis as Record<string, unknown>;\n\
          new Function(process.argv[2])();\n\
          g[\"myWindow\"] = 1;\n",
+        Some("BIRTH1 interpreted code".into()),
     );
     let v = verdicts(&pf, "myWindow", true);
     eprintln!("BIRTH1 A-keep-interp {v:?}");
