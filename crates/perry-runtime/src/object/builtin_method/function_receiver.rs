@@ -76,7 +76,15 @@ pub(super) unsafe fn lookup_value(recv: f64, name: &[u8], direct: f64) -> Option
         b"call" => 7,
         _ => return None,
     };
-    let proto = crate::agent_ptrs::intrinsic_proto(BuiltinProto::Function as usize);
+    // The realm's `Function.prototype`, born now when no code has named it
+    // yet: a function's [[Prototype]] exists as soon as the function does.
+    // The intrinsic slot names the static stand-in until the realm is sealed,
+    // and the stand-in has no fields. Nothing is held across the birth.
+    let proto = crate::closure::shape::function_prototype_ptr_materialized()
+        as *const crate::object::ObjectHeader;
+    if proto.is_null() {
+        return None;
+    }
     // Pristine: the prototype holds its static layout, whose apply, bind and
     // call are inline data slots holding the realm's own functions (pointer
     // words, never an I32 lane), so the slot's word is the value.
