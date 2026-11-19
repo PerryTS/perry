@@ -1639,6 +1639,8 @@ class __PerryClosure {
 // receiver of a method call through `closure_this` on entry.
 class __PerryReceiverClosure extends __PerryClosure {}
 let __closureReceiver;
+// One value per function declaration, keyed by its table index (`function_value`).
+const __functionValues = new Map();
 function __isPerryClosure(v) {
   return v instanceof __PerryClosure;
 }
@@ -2312,6 +2314,29 @@ const __memDispatch = {
   // __bitsToJsValue converts BigInt return values back to JS.
   closure_new: (funcIdx, captureCount, receivesThis) =>
     receivesThis ? new __PerryReceiverClosure(funcIdx, captureCount) : new __PerryClosure(funcIdx, captureCount),
+  // A function declaration used as a value: one closure per function, so it keeps its
+  // identity and properties across reads, with the `prototype` object an ordinary
+  // function has (`prototype.constructor` is the function).
+  function_value: (funcIdx) => {
+    let fn = __functionValues.get(funcIdx);
+    if (!fn) {
+      fn = new __PerryClosure(funcIdx, 0);
+      const prototype = {};
+      Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
+      Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
+      __functionValues.set(funcIdx, fn);
+    }
+    return fn;
+  },
+  // `F.prototype = proto`. A class's `prototype` is read-only: the store is ignored,
+  // or a TypeError in strict code.
+  function_set_prototype: (fn, proto, strict) => {
+    const isClass = typeof fn === 'function' && fn[__classRefName] !== undefined;
+    if ((isClass || !__holdsProperties(fn) || !Reflect.set(fn, 'prototype', proto)) && strict) {
+      throw new TypeError(`Cannot assign to read only property 'prototype' of ${typeof fn}`);
+    }
+    return proto;
+  },
   closure_this: () => {
     const receiver = __closureReceiver;
     __closureReceiver = undefined;
