@@ -245,8 +245,6 @@ pub struct ProgramLayouts {
     /// facts only; generated code adds no flag, table or observation state.
     pub run_once_evaluated: BTreeSet<u32>,
     /// Templates some module evaluates per expression (`ClassExprFresh`).
-    /// Their declarations name no member by its symbol
-    /// (`class_declarations::declared_symbol_member`).
     pub fresh_templates: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
