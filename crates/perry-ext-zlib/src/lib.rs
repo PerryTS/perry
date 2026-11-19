@@ -556,9 +556,7 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_ffi::{
-        alloc_closure, alloc_string, read_buffer_bytes, JsString, JsValue, RawClosureHeader,
-    };
+    use perry_ffi::{alloc_closure, read_buffer_bytes, JsValue, RawClosureHeader};
     use std::cell::Cell;
 
     thread_local! {
@@ -809,17 +807,6 @@ mod tests {
             1,
             "only the live thread's callback runs"
         );
-    }
-
-    // End-to-end TS smoke tests cover the FFI Buffer allocation path.
-    // Unit tests stay scoped to pure-Rust gzip / gunzip correctness above.
-    #[test]
-    #[allow(dead_code)]
-    fn _placeholder() {
-        // Compile-test only — the imports above stay live so a
-        // future contributor sees the full FFI surface even when
-        // the exec-end coverage moves into integration tests.
-        let _ = (alloc_string("x"), JsString::from_raw as *const ());
     }
 }
 

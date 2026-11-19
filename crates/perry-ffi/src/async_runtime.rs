@@ -410,16 +410,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    // The async surface depends on perry-stdlib symbols at link
-    // time, which aren't in the perry-ffi unit-test binary. Real
-    // integration testing happens in the wrapper crates that
-    // exercise the surface end-to-end (perry-ext-bcrypt,
-    // perry-ext-argon2). This stub guards against accidental
-    // module deletion + makes `cargo test -p perry-ffi` a no-op
-    // here rather than a link error.
-    #[test]
-    fn module_compiles() {}
-
     #[test]
     fn promise_boolean_resolution_uses_javascript_boolean_tags() {
         assert_eq!(

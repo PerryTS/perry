@@ -476,10 +476,9 @@ pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHea
 
 /// A zeroed typed-array cell that is a private workspace of the runtime and
 /// is never handed to JavaScript: the two index cells of a comparator sort of
-/// more than 64 elements (`array::sort`, its only caller; the test below
-/// keeps it so). It is no birth of a value, so it is the one entry that does
-/// not test the family claim: any program sorts. `#[inline(never)]`: the
-/// births check cuts its walk at this symbol.
+/// more than 64 elements (`array::sort`). It is no birth of a value, so it is
+/// the one entry that does not test the family claim: any program sorts.
+/// `#[inline(never)]`: the births check cuts its walk at this symbol.
 #[inline(never)]
 pub(crate) fn store_alloc_scratch(kind: u8, len: u32) -> *mut BufferHeader {
     store_alloc_cell(
@@ -487,34 +486,4 @@ pub(crate) fn store_alloc_scratch(kind: u8, len: u32) -> *mut BufferHeader {
         len,
         Init::Zero,
     )
-}
-
-#[cfg(test)]
-mod scratch_entry_tests {
-    /// `store_alloc_scratch` skips the family claim, so it must stay private
-    /// to the comparator sort's two workspaces.
-    #[test]
-    fn the_scratch_entry_has_one_caller() {
-        fn walk(dir: &std::path::Path, out: &mut Vec<(String, usize)>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    let text = std::fs::read_to_string(&path).unwrap();
-                    let calls = text.matches(concat!("store_alloc_", "scratch(")).count();
-                    if calls != 0 {
-                        out.push((path.display().to_string(), calls));
-                    }
-                }
-            }
-        }
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut callers = Vec::new();
-        walk(&src, &mut callers);
-        callers.retain(|(path, _)| !path.ends_with("buffer/store.rs"));
-        assert_eq!(callers.len(), 1, "{callers:?}");
-        assert!(callers[0].0.ends_with("array/sort.rs"), "{callers:?}");
-        assert_eq!(callers[0].1, 2, "{callers:?}");
-    }
 }

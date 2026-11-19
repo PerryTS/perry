@@ -1413,16 +1413,6 @@ mod tests {
     }
 
     #[test]
-    fn isatty_zero_for_pipe() {
-        // In test runner stdin is not a TTY (cargo test pipes stdin).
-        // Note: this is more of a smoke test; the real value is
-        // test-environment-dependent.
-        let _ = js_tty_isatty(0.0);
-        let _ = js_tty_isatty(1.0);
-        let _ = js_tty_isatty(2.0);
-    }
-
-    #[test]
     fn columns_undefined_when_not_tty() {
         // In test runner stdout is not a TTY → columns/rows return TAG_UNDEFINED.
         let cols = js_process_stdout_columns();

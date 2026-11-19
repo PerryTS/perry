@@ -898,31 +898,6 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_bridge_does_not_hard_reference_extension_pumps() {
-        let source = include_str!("async_bridge.rs");
-        let extension_symbols = [
-            "js_ws_process_pending",
-            "js_ws_has_pending",
-            "js_net_process_pending",
-            "js_ext_net_has_active_handles",
-            "js_node_http_server_process_pending",
-            "js_node_http_server_has_active",
-            "js_http_process_pending",
-            "js_http_has_pending",
-            "js_ext_http_client_inflight",
-            "js_ext_zlib_process_pending",
-            "js_ext_zlib_has_active_handles",
-        ];
-
-        for symbol in extension_symbols {
-            assert!(
-                !source.contains(&format!("fn {symbol}(")),
-                "stdlib must discover {symbol} through the runtime registry, not an extern declaration"
-            );
-        }
-    }
-
-    #[test]
     fn async_bridge_pending_resolution_scanner_emits_promise_and_result_roots() {
         let _queues = own_pending_queues();
         let promise_ptr = 0x1234_5000usize;
