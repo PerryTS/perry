@@ -1485,14 +1485,21 @@ async function forOfObject() { const out: number[] = []; for (const { n } of [{ 
 async function forOfEntries() { const out: string[] = []; for (const [k, v] of Object.entries({ a: 1 })) out.push(k + v); return out.join(","); }
 async function forOfPlain() { let s = 0; for (const v of [1, 2, 3]) s += v; return s; }
 function* g() { yield 1; yield 2; yield 3; }
+let closed = 0;
+function* h() { try { yield 1; yield 2; yield 3; } finally { closed++; } }
+async function restFromGenerator() { const [a, ...rest] = g(); return a + "|" + rest.join(","); }
+async function defaults() { const [p = 5, q = 6] = [1]; return p + "," + q; }
+async function closesAfterPattern() { const before = closed; const [a] = h(); return a + " closed " + (closed - before); }
+async function breakCloses() { const before = closed; for (const v of h()) { if (v === 2) break; } return "closed " + (closed - before); }
+async function throwCloses() { const before = closed; try { for (const v of h()) { throw new Error("boom " + v); } } catch (e: any) { return e.message + ", closed " + (closed - before); } return "no throw"; }
 async function fromGenerator() { const [a, b] = g(); return a + "," + b; }
 function syncForOfArray() { const out: string[] = []; for (const [k, v] of pairs) out.push(k + v); return out.join(","); }
-const cases: [string, () => any][] = [["for-of [k, v]", forOfArray], ["const [x, y] =", constArray], ["for-of { n }", forOfObject], ["for-of [k, v] of Object.entries", forOfEntries], ["for-of v (no pattern)", forOfPlain], ["const [a, b] = generator", fromGenerator], ["sync for-of [k, v]", syncForOfArray]];
+const cases: [string, () => any][] = [["for-of [k, v]", forOfArray], ["const [x, y] =", constArray], ["for-of { n }", forOfObject], ["for-of [k, v] of Object.entries", forOfEntries], ["for-of v (no pattern)", forOfPlain], ["const [a, b] = generator", fromGenerator], ["sync for-of [k, v]", syncForOfArray], ["const [a, ...rest] = generator", restFromGenerator], ["const [p = 5, q = 6] =", defaults], ["const [a] = generator closes", closesAfterPattern], ["break closes", breakCloses], ["throw closes", throwCloses]];
 async function main() { for (let i = 0; i < cases.length; i++) { const c = cases[i]; try { console.log(c[0] + ": " + (await c[1]())); } catch (e: any) { console.log(c[0] + ": threw " + e.message); } } }
 main();
 "#
         ),
-        "for-of [k, v]: a1,b2\nconst [x, y] =: 3\nfor-of { n }: 1,2\nfor-of [k, v] of Object.entries: a1\nfor-of v (no pattern): 6\nconst [a, b] = generator: 1,2\nsync for-of [k, v]: a1,b2"
+        "for-of [k, v]: a1,b2\nconst [x, y] =: 3\nfor-of { n }: 1,2\nfor-of [k, v] of Object.entries: a1\nfor-of v (no pattern): 6\nconst [a, b] = generator: 1,2\nsync for-of [k, v]: a1,b2\nconst [a, ...rest] = generator: 1|2,3\nconst [p = 5, q = 6] =: 1,6\nconst [a] = generator closes: 1 closed 1\nbreak closes: closed 1\nthrow closes: boom 1, closed 1"
     );
 }
 
@@ -1515,6 +1522,23 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
         ),
         "caught boom"
     );
+}
+
+// An expression the JS emitter has no arm for must reject, not run on with `undefined`:
+// `new Set([...])` has no arm, so iterating it throws.
+#[test]
+fn async_body_rejects_iteration_it_cannot_emit() {
+    let out = run_web_source(
+        r#"
+async function each(): Promise<string> {
+  let s = "";
+  for (const v of new Set(["x", "y"])) s = s + v;
+  return s;
+}
+each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
+"#,
+    );
+    assert_eq!(out, "threw TypeError");
 }
 
 // A logical operator in an async body evaluates its left operand once, and an `await`
