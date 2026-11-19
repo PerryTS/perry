@@ -355,6 +355,13 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // lineage (`shapes::stamp_born_prototype_root`) already carries a
         // shape no ordinary object carries, and nothing has seen it yet: the
         // private lineage the transition would mint is the one it has.
+        // An inherited read walks layouts: a prototype keeps its index keys
+        // in its layout, so a plain elements store moves there first.
+        let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+                crate::array::plain_elements::leave(object);
+            }
+        });
         let born = flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
             && crate::object::shapes::object_on_born_prototype_lineage(object);
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {

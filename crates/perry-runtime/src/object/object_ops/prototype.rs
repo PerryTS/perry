@@ -269,7 +269,9 @@ unsafe fn link_of_record(
     default_only: bool,
 ) -> Option<f64> {
     use crate::object::shapes as s;
-    if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
+    // An index store changes no link: `OrdinaryIndexed` reads its link as
+    // the ordinary layouts do.
+    if !record.object_kind().is_ordinary_family() || record.weak_collection_brand().is_some() {
         return None;
     }
     let pid = record.proto_id();

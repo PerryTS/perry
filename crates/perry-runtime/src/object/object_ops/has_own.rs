@@ -594,6 +594,28 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             (f64::from_bits(obj_handle.get_nanbox_u64()), key_value)
         };
 
+        // A plain object's index keys live in its elements store, where every
+        // present element is an enumerable own property.
+        if let Some(view) =
+            crate::array::subclass_elements::own_elements_value(obj_value).filter(|view| view.plain)
+        {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
+                return f64::from_bits(
+                    if matches!(
+                        elements_key,
+                        crate::array::subclass_elements::ElementsKey::Index(_)
+                    ) && crate::array::subclass_elements::has_own_key(view, elements_key)
+                    {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
+            }
+        }
+
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather
         // than dereferencing the fake pointer. (Proxy crash cluster.)

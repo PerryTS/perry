@@ -67,6 +67,14 @@ macro_rules! define_shape_object_kind {
             /// A strict (or non-simple-parameter) arguments object: as
             /// `Arguments`, `callee` is the %ThrowTypeError% accessor pair.
             ArgumentsStrict,
+            /// The ordinary layout of a plain object whose array-index keys
+            /// live in an elements store (`ObjectMeta::elements` under
+            /// `OBJECT_META_FLAG_PLAIN_ELEMENTS`), not in its layout: its
+            /// layout names no index key, so no reader may take a layout
+            /// miss of an index key as absence, and no store is admitted on
+            /// its ShapeId. Entered and left only by installing and removing
+            /// the store (`array::subclass_elements`).
+            OrdinaryIndexed,
         }
 
         impl ShapeObjectKind {
@@ -100,6 +108,14 @@ macro_rules! define_shape_object_kind {
                         | ShapeObjectKind::FunctionBoundApply
                         | ShapeObjectKind::FunctionBound
                 )
+            }
+
+            /// The kinds a mint re-derives from its receiver
+            /// (`shapes_store_kind::mint_kind`): the ordinary layouts and
+            /// [`ShapeObjectKind::OrdinaryIndexed`].
+            #[inline]
+            pub fn is_ordinary_family(self) -> bool {
+                self.is_ordinary_layout() || matches!(self, Self::OrdinaryIndexed)
             }
 
             /// The ordinary object LAYOUT: every kind whose receiver reads exactly as
@@ -139,6 +155,7 @@ macro_rules! define_shape_object_kind {
                     ShapeObjectKind::OrdinaryUnmarkedNativeAlias => 12,
                     ShapeObjectKind::Arguments => 13,
                     ShapeObjectKind::ArgumentsStrict => 14,
+                    ShapeObjectKind::OrdinaryIndexed => 15,
                 }
             }
         }

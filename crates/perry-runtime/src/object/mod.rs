@@ -1791,7 +1791,10 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 
 pub(crate) mod meta_flags;
 pub(crate) use meta_flags::OBJECT_META_FLAG_NATIVE_ALIAS;
-pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE};
+pub(crate) use meta_flags::{
+    OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE,
+    OBJECT_META_FLAG_PLAIN_ELEMENTS,
+};
 
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;

@@ -513,6 +513,8 @@ fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
 #[inline]
 pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> bool {
     crate::object::shapes::object_is_plain_record(obj)
+        // A plain object's index store holds keys its layout does not name.
+        && !crate::object::shapes::store_kind::receiver_has_plain_elements(obj)
         && crate::object::key_attrs::object_summary(obj)
             & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0

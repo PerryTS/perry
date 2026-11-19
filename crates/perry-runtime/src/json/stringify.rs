@@ -79,6 +79,10 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         return true;
     }
     let obj = ptr as *const crate::ObjectHeader;
+    // A plain object's index keys live in its elements store, not its keys.
+    if !crate::array::plain_elements::store_of(obj).is_null() {
+        return true;
+    }
     let potential_keys_ptr = crate::object::object_keys(obj).arr() as u64;
     if crate::object::overflow::is_table(potential_keys_ptr as *const crate::ArrayHeader) {
         return true;
@@ -146,6 +150,10 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // `process.env`: its own keys are the environment, not its field mirror,
     // which only the object walk refreshes. An empty mirror is no empty object.
     if crate::process::is_process_env_ptr(ptr as usize) {
+        return false;
+    }
+    // A plain object's index keys live in its elements store, not its keys.
+    if !crate::array::plain_elements::store_of(ptr.cast()).is_null() {
         return false;
     }
     let table = crate::object::overflow::table(ptr.cast());

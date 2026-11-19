@@ -258,10 +258,33 @@ unsafe fn define_own_property_decoded_ordinary(
         return true;
     }
     let current = f64::from_bits(receiver.get_nanbox_u64());
-    if crate::array::subclass_elements::backed_value(current).is_some()
-        && crate::array::subclass_elements::key_of_value(key.get_nanbox_f64()).is_some()
-    {
-        crate::array::subclass_elements::deopt_value(current);
+    match crate::array::subclass_elements::key_of_value(key.get_nanbox_f64()) {
+        Some(_) if crate::array::subclass_elements::backed_value(current).is_some() => {
+            crate::array::subclass_elements::deopt_value(current);
+        }
+        // A complete default data definition of an index key on a plain
+        // object with an elements store is its element (CreateDataProperty of
+        // an extensible object's writable, enumerable, configurable key).
+        // Any other definition is the layout's: the store moves there first.
+        Some(crate::array::subclass_elements::ElementsKey::Index(index)) => {
+            let default_data = descriptor.has(DESC_VALUE)
+                && !descriptor.has(DESC_GET)
+                && !descriptor.has(DESC_SET)
+                && descriptor.flag(b"writable") == Some(true)
+                && descriptor.flag(b"enumerable") == Some(true)
+                && descriptor.flag(b"configurable") == Some(true);
+            if default_data
+                && crate::array::plain_elements::define_default_value(
+                    current,
+                    index,
+                    f64::from_bits(descriptor.read(DESC_VALUE).bits()),
+                )
+            {
+                return true;
+            }
+            crate::array::plain_elements::leave_value(current);
+        }
+        _ => {}
     }
     if crate::object::arguments::arguments_define_element(receiver, key, descriptor) {
         return true;

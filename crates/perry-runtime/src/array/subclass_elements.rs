@@ -84,7 +84,8 @@ impl Drop for ArraySubclassRepresentationGuard {
 }
 
 /// The elements store of a live `GC_TYPE_OBJECT`, or null when it has none
-/// (no meta record, or not an elements-backed Array subclass instance).
+/// (no meta record, or not an elements-backed Array subclass instance; a
+/// plain object's index store is `super::plain_elements`').
 ///
 /// # Safety
 /// `obj` must be a live `GC_TYPE_OBJECT` user pointer.
@@ -92,7 +93,7 @@ impl Drop for ArraySubclassRepresentationGuard {
 pub(crate) unsafe fn elements_of(obj: *const ObjectHeader) -> *mut ArrayHeader {
     // A1_UNPROVEN: record-first: layout word of the Array-subclass instance (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if meta.is_null() {
+    if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_PLAIN_ELEMENTS != 0 {
         return std::ptr::null_mut();
     }
     (*meta).elements as *mut ArrayHeader
@@ -190,13 +191,22 @@ pub(crate) struct ElementsView {
     pub store: *mut ArrayHeader,
     pub ptr: *mut u64,
     pub count: u32,
+    /// A plain object's index store (`super::plain_elements`): no `length`,
+    /// and its owner's layout names no index key.
+    pub plain: bool,
 }
 
 impl ElementsView {
     /// Does this view answer `key` itself? `length` only for a store.
     #[inline]
     pub(crate) fn admits(&self, key: ElementsKey) -> bool {
-        !matches!(key, ElementsKey::Length) || !self.store.is_null()
+        !matches!(key, ElementsKey::Length) || self.exotic_length()
+    }
+
+    /// Does this view own an exotic `length` (an Array subclass's store)?
+    #[inline]
+    pub(crate) fn exotic_length(&self) -> bool {
+        !self.store.is_null() && !self.plain
     }
 
     /// An inline (arguments) index the elements do not hold (its word is the
@@ -224,6 +234,19 @@ impl ElementsView {
             store: elements,
             ptr: crate::array::array_elements_ptr(elements) as *mut u64,
             count: (*elements).length,
+            plain: false,
+        }
+    }
+
+    /// The view of a plain object's live index store.
+    ///
+    /// # Safety
+    /// `store` is `owner`'s live plain elements store.
+    #[inline]
+    pub(crate) unsafe fn of_plain(owner: *mut ObjectHeader, store: *mut ArrayHeader) -> Self {
+        Self {
+            plain: true,
+            ..Self::of_store(owner, store)
         }
     }
 }
@@ -272,6 +295,10 @@ pub(crate) unsafe fn own_elements(addr: usize) -> Option<ElementsView> {
             return Some(view);
         }
     }
+    let plain = super::plain_elements::store_of(obj);
+    if !plain.is_null() {
+        return Some(ElementsView::of_plain(obj, plain));
+    }
     let elements = elements_of(obj);
     (!elements.is_null()).then(|| ElementsView::of_store(obj, elements))
 }
@@ -293,6 +320,7 @@ unsafe fn arguments_view(obj: *mut ObjectHeader, size: u32) -> Option<ElementsVi
         store: std::ptr::null_mut(),
         ptr: (obj as usize + ARGUMENTS_ELEMENTS_OFFSET) as *mut u64,
         count: (payload.saturating_sub(ARGUMENTS_ELEMENTS_OFFSET) / 8) as u32,
+        plain: false,
     })
 }
 
@@ -405,7 +433,9 @@ unsafe fn slot_bits(elements: *const ArrayHeader, index: u32) -> u64 {
 /// `elements` must be the live store of a validated instance.
 pub(crate) unsafe fn get_by_key(view: ElementsView, key: ElementsKey) -> Option<f64> {
     match key {
-        ElementsKey::Length => (!view.store.is_null()).then(|| f64::from((*view.store).length)),
+        ElementsKey::Length => view
+            .exotic_length()
+            .then(|| f64::from((*view.store).length)),
         ElementsKey::Index(index) => view_get(view, index).map(f64::from_bits),
     }
 }
@@ -497,7 +527,7 @@ pub(crate) unsafe fn set_length(
 /// `elements` must be a live store.
 pub(crate) unsafe fn has_own_key(view: ElementsView, key: ElementsKey) -> bool {
     match key {
-        ElementsKey::Length => !view.store.is_null(),
+        ElementsKey::Length => view.exotic_length(),
         ElementsKey::Index(index) => {
             index < view.count && *view.ptr.add(index as usize) != crate::value::TAG_HOLE
         }
@@ -559,6 +589,7 @@ pub(crate) unsafe fn prepend_index_keys(
     with_length: bool,
 ) -> *mut ArrayHeader {
     let indices = own_index_keys(view);
+    let with_length = with_length && view.exotic_length();
     let scope = crate::gc::RuntimeHandleScope::new();
     let shape_h = scope.root_raw_mut_ptr(shape_keys);
     let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
@@ -686,7 +717,9 @@ pub(crate) unsafe fn deopt_to_shape(obj: *mut ObjectHeader) {
 pub(crate) fn deopt_value(value: f64) {
     if let Some((obj, _)) = backed_value(value) {
         unsafe { deopt_to_shape(obj) };
+        return;
     }
+    super::plain_elements::leave_value(value);
 }
 
 // ---------------------------------------------------------------------------
