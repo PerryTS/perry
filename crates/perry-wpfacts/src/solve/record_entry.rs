@@ -18,6 +18,7 @@
 //!   numeric String, never `@@iterator`, ECMA-262 7.1.19) and its chain is
 //!   the one it was born with,
 //! - and `array_iteration_writes()` is `(None, None)`.
+//!
 //! Once one of them fails, `settle_record_entry` passes the token
 //! (monotone: a released token stays released).
 use crate::model::*;
