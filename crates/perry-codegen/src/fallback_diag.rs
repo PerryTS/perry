@@ -604,6 +604,7 @@ fn generic_helper(helper: &str) -> bool {
                 | "js_class_static_method_call"
                 | "js_private_method_call"
                 | "js_arguments_call_spread"
+                | "js_arguments_bundle_call_spread"
         )
         || helper.starts_with("js_method_")
         || helper.starts_with("js_object_has")

@@ -1217,6 +1217,54 @@ pub unsafe extern "C-unwind" fn js_arguments_call_spread(
     )
 }
 
+/// G8: typed `f.call(x, ...arguments)` in a function whose Arguments object
+/// codegen elided (perry-codegen `codegen/arguments.rs`): `bundle` is the
+/// caller's private argument Array, holding exactly the values the object
+/// would hold. Spreading the object walks its own @@iterator
+/// (%Array.prototype.values% from birth), so with `%ArrayIteratorPrototype%.next`
+/// the builtin the spread list is the bundle's elements, and the intrinsic
+/// `call` enters the target as `apply(x, bundle)` does. Any other method or
+/// a patched `next` gets the object the binding stands for, rebuilt here, on
+/// [`js_arguments_call_spread`]'s complete path.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_arguments_bundle_call_spread(
+    method: f64,
+    target: f64,
+    method_id: i64,
+    receiver: f64,
+    bundle: f64,
+) -> f64 {
+    let bits = method.to_bits();
+    let intrinsic = bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
+        && crate::closure::closure_info(
+            (bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
+        )
+        .is_some_and(|info| {
+            info.code == super::global_this::js_function_prototype_call_body as *const u8
+        });
+    if intrinsic && crate::array::intrinsic_array_like_iteration(true) {
+        let pair = [receiver, bundle];
+        if let Some(result) =
+            super::native_call_method::run_function_intrinsic(target, "apply", pair.as_ptr(), 2)
+        {
+            return result;
+        }
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let method = scope.root_nanbox_f64(method);
+    let target = scope.root_nanbox_f64(target);
+    let receiver = scope.root_nanbox_f64(receiver);
+    let obj = js_arguments_object_alloc(bundle, f64::from_bits(crate::value::TAG_UNDEFINED), 0);
+    js_arguments_call_spread(
+        method.get_nanbox_f64(),
+        target.get_nanbox_f64(),
+        method_id,
+        receiver.get_nanbox_f64(),
+        crate::value::js_nanbox_pointer(obj as i64),
+    )
+}
+
 /// Exact shape admits the length SLOT; a mutated or mistyped receiver keeps
 /// the ordinary Get. Return the JS value, rather than a ToLength conversion.
 #[no_mangle]

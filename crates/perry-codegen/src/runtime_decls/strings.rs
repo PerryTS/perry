@@ -1231,6 +1231,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
+        "js_arguments_bundle_call_spread",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
         "js_arguments_forward_apply",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],

@@ -128,6 +128,10 @@ pub(crate) fn emit_spread_append(
     operand: &Expr,
     part_box: &str,
 ) {
+    if crate::codegen::arguments::is_elided_arguments_spread(ctx, operand) {
+        crate::codegen::arguments::emit_elided_arguments_spread_append(ctx, acc, part_box);
+        return;
+    }
     let site = acc
         .is_rooted()
         .then(|| crate::proto_constants::iterator_member_site(ctx, operand))
@@ -159,6 +163,36 @@ pub(crate) fn emit_spread_append(
     );
     ctx.block().br(&merge_l);
     ctx.current_block = merge;
+}
+
+/// G8, the closure-callee arm's single spread source: the handle
+/// `js_closure_call_apply_with_spread` copies its spread arguments from.
+fn emit_elided_arguments_spread_handle(ctx: &mut FnCtx<'_>, bundle: &str) -> String {
+    use crate::codegen::arguments::{emit_elided_arguments_object, emit_elided_spread_admitted};
+    let Some(admitted) = emit_elided_spread_admitted(ctx, bundle) else {
+        return super::unbox_to_i64(ctx.block(), bundle);
+    };
+    let fast = ctx.new_block("argspread.copy");
+    let slow = ctx.new_block("argspread.walk");
+    let merge = ctx.new_block("argspread.merge");
+    let fast_l = ctx.block_label(fast);
+    let slow_l = ctx.block_label(slow);
+    let merge_l = ctx.block_label(merge);
+    ctx.block().cond_br(&admitted, &fast_l, &slow_l);
+    ctx.current_block = fast;
+    let copied = super::unbox_to_i64(ctx.block(), bundle);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = slow;
+    let obj = emit_elided_arguments_object(ctx, bundle);
+    let walked = ctx
+        .block()
+        .call(I64, "js_array_like_to_array", &[(DOUBLE, &obj)]);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
+    ctx.block()
+        .phi(I64, &[(&copied, &fast_end), (&walked, &slow_end)])
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -195,6 +229,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object")
                         && super::method_site::method_site_enabled(ctx, property, 2)
                     {
+                        let bundle =
+                            crate::codegen::arguments::is_elided_arguments_spread(ctx, list);
                         return rooting::with_rooted_group(ctx, 4, |ctx, group| {
                             let target = group.lower(ctx, object, true)?;
                             let target_value = group.reread(ctx, target)?;
@@ -216,9 +252,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let method = group.reread_emitted(ctx, method);
                             let receiver = group.reread(ctx, receiver)?;
                             let list = group.reread(ctx, list)?;
+                            // G8: an elided binding's operand is its bundle.
+                            let helper = if bundle {
+                                "js_arguments_bundle_call_spread"
+                            } else {
+                                "js_arguments_call_spread"
+                            };
                             Ok(ctx.block().call(
                                 DOUBLE,
-                                "js_arguments_call_spread",
+                                helper,
                                 &[
                                     (DOUBLE, &method),
                                     (DOUBLE, &target),
@@ -702,8 +744,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         })
                         .expect("spread_count == 1 guarantees one Spread");
                     let arr_box = lower_expr(ctx, spread_expr)?;
-                    let blk = ctx.block();
-                    blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
+                    if crate::codegen::arguments::is_elided_arguments_spread(ctx, spread_expr) {
+                        // G8: the bundle itself when the walk is the element
+                        // copy (the helper below copies the elements out),
+                        // else the drain over the rebuilt Arguments object.
+                        emit_elided_arguments_spread_handle(ctx, &arr_box)
+                    } else {
+                        let blk = ctx.block();
+                        blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
+                    }
                 } else {
                     // Concat all spread sources into a fresh array. Same
                     // escaped-register argument as the interleaved arm above:
