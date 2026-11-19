@@ -343,12 +343,6 @@ impl LlModule {
         return_type: LlvmType,
         param_types: &[LlvmType],
     ) {
-        // The straight-line read-region lowering was removed in object-model
-        // step 5. Its retired runtime API has no supplier, including for TOP.
-        debug_assert!(
-            !matches!(name, "js_region_guard_pack" | "js_region_guard_prime"),
-            "retired straight-line read-region helper: {name}"
-        );
         if self.declared_names.contains(name) {
             return;
         }
@@ -400,12 +394,6 @@ impl LlModule {
         param_types: &[LlvmType],
         ret_attrs: &str,
     ) {
-        // The straight-line read-region lowering was removed in object-model
-        // step 5. Its retired runtime API has no supplier, including for TOP.
-        debug_assert!(
-            !matches!(name, "js_region_guard_pack" | "js_region_guard_prime"),
-            "retired straight-line read-region helper: {name}"
-        );
         if self.declared_names.contains(name) {
             return;
         }

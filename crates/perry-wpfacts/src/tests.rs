@@ -530,42 +530,6 @@ fn sabotage_plants_the_fact() {
     assert_ne!(pf.digest_for("t.ts"), pf2.digest_for("t.ts"));
 }
 
-/// Writes `<dir>/t.facts` and `<dir>/t.facts.rel` for the checker scripts
-/// when `WPFACTS_TEST_DUMP_DIR` is set (developer aid; a no-op otherwise).
-#[test]
-fn write_dump_for_checker() {
-    let Some(dir) = std::env::var_os("WPFACTS_TEST_DUMP_DIR") else {
-        return;
-    };
-    let src = std::env::var("WPFACTS_TEST_SRC").unwrap_or_else(|_| {
-        r#"
-        class P { x: number; y = "s"; constructor(x: number) { this.x = x; } m() { return this.x; } }
-        class Q extends P { z = 1; get g() { return this.z; } }
-        function f(p: P) { return p.x + p.m(); }
-        const o = { a: 1, b: [1, 2] };
-        const q = new Q(2);
-        q.z = 3;
-        console.log(f(new P(1)), f(q), q.g, o.a, o.b.length);
-        "#
-        .to_string()
-    });
-    let pf = facts_with(
-        &src,
-        FactsConfig {
-            relations: true,
-            sabotage: std::env::var("WPFACTS_TEST_SABOTAGE").ok(),
-            dynamic_code: None,
-            budget_secs: None,
-            profile: false,
-            max_pts: None,
-            ..Default::default()
-        },
-    );
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::write(dir.join("t.facts"), pf.dump_text()).unwrap();
-    std::fs::write(dir.join("t.facts.rel"), pf.relations_text().unwrap()).unwrap();
-}
-
 /// Decision 150: dynamic code naming the global scope is no kill. The class
 /// keeps its facts; the program's proofs are guarded by the runtime's
 /// interpreted-prototype-write word instead.

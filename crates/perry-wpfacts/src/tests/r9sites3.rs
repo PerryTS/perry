@@ -86,17 +86,6 @@ w( 'y', a );
     assert!(r.is_empty(), "FK3 toJSON runs: {r:?}");
 }
 
-// FK0 control: no console call: does `toJSON` run?
-#[test]
-fn r9sites3_fk0_control_no_console() {
-    let pf = facts("class A { tj: any; constructor() { this.tj = { q: Number( process.argv.length ) }; } toJSON() { return this.tj; } }\nconst a = new A();\nconsole.log( a instanceof A );\n");
-    let r = recv_p(&pf, "tj");
-    eprintln!("R9SITES3 FK0 tj recv={r:?}");
-    let pf = facts("class A { tj: any; constructor() { this.tj = { q: Number( process.argv.length ) }; } toJSON() { return this.tj; } }\nconst a = new A();\nconsole.warn( \"x\", a );\n");
-    let r = recv_p(&pf, "tj");
-    eprintln!("R9SITES3 FK0b tj recv={r:?}");
-}
-
 // R9SITES4 (the r9b / r9a / r6 totals): with the old any-String template rule
 // a message `T.${ x }` could hold `%j`, so the formatter serialized the later
 // arguments and every `toJSON` was reached (three.js `warn` / `error`: the
