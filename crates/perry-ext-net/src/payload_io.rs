@@ -293,10 +293,8 @@ pub(super) fn deliver_for_test(completion: &tl::NetCompletion) {
     sink(completion);
 }
 
-/// The address a failed `connect` was attempting: Node names it in the
-/// message (`connect ECONNREFUSED 127.0.0.1:27017`) and as `err.address` /
-/// `err.port`. The runtime still holds the attempt's handle when it reports
-/// the failure; a hostname whose every address failed has none left.
+/// The peer a failed `connect` was attempting, which Node puts in the message
+/// and on the error. A hostname whose every address failed has no handle left.
 fn connect_target(link: OwnerLink, event: &tl::NetCompletion) -> Option<tl::Endpoint> {
     // SAFETY: The runtime keeps the completion and its spans valid until this sink returns.
     if unsafe { event.syscall() } != Some("connect") {
