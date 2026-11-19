@@ -39,6 +39,33 @@
 //! In every inline form a null slot means "not published yet" and takes the
 //! accessor call, which publishes it; so the inline forms and the call are
 //! equivalent by construction.
+//!
+//! ## One block address per activation
+//!
+//! The block's ADDRESS is a per-thread constant (a `#[thread_local]` with no
+//! destructor, valid for the thread's whole life); only the slots' CONTENTS
+//! change (a directory or prototype published later). So a site reads the
+//! address its activation computed once and loads the slot itself:
+//!
+//! * ELF executables: one `llvm.threadlocal.address` in the entry block
+//!   ([`crate::function::LlFunction::entry_tls_address`]), shared by every
+//!   site of the function.
+//! * Apple aarch64: a body with a start ([`begin_activation`]: functions, closures,
+//!   methods and module top-level code) reads it once there, through the TSD path, or through the
+//!   thread-local itself when the direct path is unavailable
+//!   ([`finish_activation`]), so the value is never null and a site is the
+//!   slot load alone. A body without one keeps the per-site lookup.
+//!
+//! It is exact because a compiled activation runs start to finish on one
+//! thread. Perry has no in-frame suspension: `await` and `yield` are lowered
+//! by `perry-transform` (`async_to_generator`, `generator`) into state
+//! machines whose every resume is a NEW call of the step function, which
+//! computes its own address; an `await` that stays in a body
+//! (`expr/fs_await.rs`) is a loop of runtime calls that return on the same
+//! thread. A worker, a native callback or a closure called on another thread
+//! is a new activation on that thread. A throw unwinds to a landing pad of the
+//! same frame (`stmt/try_stmt.rs`), which the entry value dominates; wasm
+//! (setjmp transport) takes the accessor call and hoists nothing.
 
 use super::FnCtx;
 use crate::types::PTR;
@@ -139,6 +166,9 @@ pub(crate) fn emit_agent_ptr_or(ctx: &mut FnCtx<'_>, slot: usize, absent: &str) 
     debug_assert!(slot < AGENT_PTR_SLOTS);
     let slot_off = (slot * 8).to_string();
     let access = agent_ptr_access(ctx);
+    if let Some(at) = activation_slot_addr(ctx, access, &slot_off) {
+        return ctx.block().load(PTR, &at);
+    }
     match access {
         AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb => {
             let at = emit_slot_addr(ctx, access, &slot_off);
@@ -229,7 +259,11 @@ fn emit_intrinsic_proto(ctx: &mut FnCtx<'_>, family: usize) -> String {
     let slot = crate::runtime_abi::AGENT_PTR_INTRINSIC_PROTO + family;
     debug_assert!(slot < AGENT_PTR_SLOTS);
     let slot_off = (slot * 8).to_string();
-    match agent_ptr_access(ctx) {
+    let access = agent_ptr_access(ctx);
+    if let Some(at) = activation_slot_addr(ctx, access, &slot_off) {
+        return ctx.block().load(PTR, &at);
+    }
+    match access {
         access @ (AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb) => {
             let at = emit_slot_addr(ctx, access, &slot_off);
             ctx.block().load(PTR, &at)
@@ -310,6 +344,106 @@ pub(crate) fn emit_slot_addr(
     blk.gep(crate::types::I8, &block, &[(crate::types::I64, slot_off)])
 }
 
+/// The address of the slot `slot_off` bytes into the block, from this
+/// activation's one read of the block address (module docs), or `None` when
+/// the site must read the address itself.
+fn activation_slot_addr(
+    ctx: &mut FnCtx<'_>,
+    access: AgentPtrAccess,
+    slot_off: &str,
+) -> Option<String> {
+    let block = match access {
+        AgentPtrAccess::ExecutableTls => ctx.func.entry_tls_address(AGENT_PTRS_SYMBOL),
+        AgentPtrAccess::AppleTsd => {
+            let site = ctx.agent_block.as_mut()?;
+            site.used = true;
+            site.reg.clone()
+        }
+        AgentPtrAccess::WindowsTeb | AgentPtrAccess::Call => return None,
+    };
+    Some(
+        ctx.block()
+            .gep(crate::types::I8, &block, &[(crate::types::I64, slot_off)]),
+    )
+}
+
+/// The start of a body whose activation reads the block address once
+/// (Apple aarch64): an empty block every later block of the body is reached
+/// through, and the register the read will define there.
+pub(crate) struct ActivationBlock {
+    head: String,
+    body: String,
+    reg: String,
+    used: bool,
+}
+
+/// Open the body's start, at the point its statements begin. Sites lowered
+/// from here on use [`ActivationBlock::reg`]; [`finish_activation`] emits
+/// the read once the body is lowered, and only if a site used it.
+pub(crate) fn begin_activation(ctx: &mut FnCtx<'_>) {
+    if agent_ptr_access(ctx) != AgentPtrAccess::AppleTsd || ctx.block().is_terminated() {
+        return;
+    }
+    let head = ctx.new_block("agent_block.head");
+    let body = ctx.new_block("agent_block.body");
+    let head_label = ctx.block_label(head);
+    ctx.block().br(&head_label);
+    ctx.current_block = body;
+    let reg = ctx.block().next_reg();
+    ctx.agent_block = Some(ActivationBlock {
+        head: head_label,
+        body: ctx.block_label(body),
+        reg,
+        used: false,
+    });
+}
+
+/// Close the body's start: the TSD lookup of `HotTls::agent_ptrs`, or, when
+/// the direct path is unavailable (no key, cache not published), the address
+/// of the thread-local itself (`_tlv_get_addr`): both name this thread's
+/// block, so the register is never null. An unused start is a branch.
+pub(crate) fn finish_activation(ctx: &mut FnCtx<'_>) {
+    let Some(site) = ctx.agent_block.take() else {
+        return;
+    };
+    // Find the start by label: a pass may have inserted blocks before it.
+    let index_of = |ctx: &FnCtx<'_>, label: &str| {
+        ctx.func
+            .blocks()
+            .iter()
+            .position(|b| b.label == label)
+            .expect("the body start is a block of this function")
+    };
+    let resume = ctx.current_block;
+    ctx.current_block = index_of(ctx, &site.head);
+    let body_label = site.body;
+    if site.used {
+        let lookup = super::hot_tls::emit_hot_tls_lookup(ctx, "agent_block");
+        let field =
+            super::hot_tls::hot_tls_field(ctx, &lookup.hot, &HOT_TLS_AGENT_PTRS_OFFSET.to_string());
+        let fast = ctx.block().load(PTR, &field);
+        let fast_pred = ctx.block().label.clone();
+        let join_idx = ctx.new_block("agent_block.join");
+        let join_label = ctx.block_label(join_idx);
+        ctx.block().br(&join_label);
+        ctx.current_block = lookup.slow_idx;
+        let slow = ctx.block().call(
+            PTR,
+            crate::function::TLS_ADDRESS_INTRINSIC,
+            &[(PTR, &format!("@{AGENT_PTRS_SYMBOL}"))],
+        );
+        let slow_pred = ctx.block().label.clone();
+        ctx.block().br(&join_label);
+        ctx.current_block = join_idx;
+        ctx.block().emit_raw(format!(
+            "  {} = phi ptr [ {fast}, %{fast_pred} ], [ {slow}, %{slow_pred} ]",
+            site.reg
+        ));
+    }
+    ctx.block().br(&body_label);
+    ctx.current_block = resume;
+}
+
 /// The `gc-leaf` runtime accessor of per-agent pointer `slot`.
 fn agent_ptr_accessor(slot: usize) -> &'static str {
     match slot {
@@ -329,44 +463,45 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
         return ctx.block().call(PTR, fallback_fn, &[]);
     }
     let slot_off = (slot * 8).to_string();
-    let (fast_pred, fast_val, slow_idx) = match access {
-        AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb => {
-            let slow_idx = ctx.new_block("agent_ptr.slow");
-            let fast_idx = ctx.new_block("agent_ptr.fast");
-            let at = emit_slot_addr(ctx, access, &slot_off);
-            let blk = ctx.block();
-            let val = blk.load(PTR, &at);
-            let ok = blk.icmp_ne(PTR, &val, "null");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            ctx.block().cond_br(&ok, &fast_label, &slow_label);
-            ctx.current_block = fast_idx;
-            (ctx.block().label.clone(), val, slow_idx)
-        }
-        AgentPtrAccess::AppleTsd => {
-            let lookup = super::hot_tls::emit_hot_tls_lookup(ctx, "agent_ptr");
-            let fast_idx = ctx.new_block("agent_ptr.fast");
-            let field = super::hot_tls::hot_tls_field(
-                ctx,
-                &lookup.hot,
-                &HOT_TLS_AGENT_PTRS_OFFSET.to_string(),
-            );
-            let blk = ctx.block();
-            let block_ptr = blk.load(PTR, &field);
-            let at = blk.gep(
-                crate::types::I8,
-                &block_ptr,
-                &[(crate::types::I64, &slot_off)],
-            );
-            let val = blk.load(PTR, &at);
-            let ok = blk.icmp_ne(PTR, &val, "null");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(lookup.slow_idx);
-            ctx.block().cond_br(&ok, &fast_label, &slow_label);
-            ctx.current_block = fast_idx;
-            (ctx.block().label.clone(), val, lookup.slow_idx)
-        }
-        AgentPtrAccess::Call => unreachable!(),
+    let hoisted = activation_slot_addr(ctx, access, &slot_off);
+    let (fast_pred, fast_val, slow_idx) = if hoisted.is_some()
+        || matches!(
+            access,
+            AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb
+        ) {
+        let slow_idx = ctx.new_block("agent_ptr.slow");
+        let fast_idx = ctx.new_block("agent_ptr.fast");
+        let at = match hoisted {
+            Some(at) => at,
+            None => emit_slot_addr(ctx, access, &slot_off),
+        };
+        let blk = ctx.block();
+        let val = blk.load(PTR, &at);
+        let ok = blk.icmp_ne(PTR, &val, "null");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        ctx.block().cond_br(&ok, &fast_label, &slow_label);
+        ctx.current_block = fast_idx;
+        (ctx.block().label.clone(), val, slow_idx)
+    } else {
+        let lookup = super::hot_tls::emit_hot_tls_lookup(ctx, "agent_ptr");
+        let fast_idx = ctx.new_block("agent_ptr.fast");
+        let field =
+            super::hot_tls::hot_tls_field(ctx, &lookup.hot, &HOT_TLS_AGENT_PTRS_OFFSET.to_string());
+        let blk = ctx.block();
+        let block_ptr = blk.load(PTR, &field);
+        let at = blk.gep(
+            crate::types::I8,
+            &block_ptr,
+            &[(crate::types::I64, &slot_off)],
+        );
+        let val = blk.load(PTR, &at);
+        let ok = blk.icmp_ne(PTR, &val, "null");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(lookup.slow_idx);
+        ctx.block().cond_br(&ok, &fast_label, &slow_label);
+        ctx.current_block = fast_idx;
+        (ctx.block().label.clone(), val, lookup.slow_idx)
     };
     let join_idx = ctx.new_block("agent_ptr.join");
     let join_label = ctx.block_label(join_idx);

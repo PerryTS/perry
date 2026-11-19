@@ -475,6 +475,7 @@ pub(super) fn compile_module_init(
         shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -709,8 +710,10 @@ pub(super) fn compile_module_init(
             cross_module.namespace_adopts_cjs_exports,
         );
     }
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
     if hir.async_init_function.is_none() {
         init_static_fields_late(&mut ctx, hir)?;
     }
