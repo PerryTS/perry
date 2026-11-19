@@ -43,8 +43,10 @@ console.log("F", Object.getPrototypeOf(f) === F.prototype, f instanceof File, f 
   f.name, f.size, f.type, f.lastModified, f.kind(), Object.prototype.toString.call(f));
 const plain = new File(["xy"], "p.txt");
 console.log("plain File", plain.name, plain.size, plain.type === "", plain instanceof Blob);
+console.log("Blob parts", new Blob([b, f]).size);
 (async () => {
   const rs: any = Reflect.construct(Response, ["text body"], NT);
   console.log("Response text", await Response.prototype.text.call(rs));
   console.log("F text", await f.text(), await b.text());
+  console.log("parts text", await new Blob([f, b]).text());
 })();

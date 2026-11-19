@@ -113,17 +113,13 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
 unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
     let bits = part.to_bits();
     let top16 = bits >> 48;
-    if top16 == (perry_runtime::value::HANDLE_TAG >> 48) {
-        let id = handle_id(part);
-        if let Some(body) = blob_bytes_clone(id) {
+    // A Blob subclass instance keeps its native handle in its backing.
+    let native = perry_runtime::object::js_fetch_unwrap_handle(part);
+    if top16 == (perry_runtime::value::HANDLE_TAG >> 48) || native.to_bits() != bits {
+        if let Some(body) = blob_bytes_clone(handle_id(native)) {
             out.extend_from_slice(&body);
-        } else {
-            let ptr = perry_runtime::value::js_jsvalue_to_string(part);
-            if let Some(text) = string_from_header(ptr) {
-                out.extend_from_slice(text.as_bytes());
-            }
+            return;
         }
-        return;
     }
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;

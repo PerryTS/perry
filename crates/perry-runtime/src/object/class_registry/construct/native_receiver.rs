@@ -49,14 +49,10 @@ pub(super) unsafe fn apply_prototype(result: f64, proto: Option<crate::gc::Runti
     }
 }
 
-/// `Reflect.construct(F, args, newTarget)` for a WHATWG Fetch base `F` whose
-/// constructor returned a registry handle (`result`), when
-/// `newTarget.prototype` is not `F.prototype`. A bare handle's [[Prototype]]
-/// is always its interface's, so the instance is instead an ordinary object
-/// born from `newTarget` that owns `proto` and keeps the handle in the private
-/// element a `class X extends F` instance uses, which also roots it. Reads,
-/// methods and brand checks reach the native state through that element.
-/// `None` leaves `result` as the instance.
+/// A Fetch handle's [[Prototype]] is fixed to its interface's, so when
+/// `newTarget.prototype` differs the instance is an ordinary object born from
+/// `newTarget` holding the handle in the subclass backing element, which also
+/// roots it. `None` keeps `result` as the instance.
 pub(super) unsafe fn fetch_backed_object(
     scope: &crate::gc::RuntimeHandleScope,
     result: f64,
