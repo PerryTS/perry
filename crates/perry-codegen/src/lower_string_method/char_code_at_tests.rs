@@ -24,37 +24,37 @@ fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
         body: prelude
             .into_iter()
             .chain([Stmt::For {
-            init: Some(Box::new(Stmt::Let {
-                id: 2,
-                name: "i".into(),
-                ty: Type::Number,
-                mutable: true,
-                init: Some(Expr::Integer(0)),
-            })),
-            condition: Some(Expr::Compare {
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(2)),
-                right: Box::new(Expr::Integer(20)),
-            }),
-            update: Some(Expr::Update {
-                id: 2,
-                op: UpdateOp::Increment,
-                prefix: false,
-            }),
-            body: vec![Stmt::Expr(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    property: "charCodeAt".into(),
-                    byte_offset: 0,
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".into(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::Integer(20)),
                 }),
-                args: vec![Expr::LocalGet(2)],
-                type_args: vec![],
-                byte_offset: 0,
-            })],
-        }])
-        .collect(),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "charCodeAt".into(),
+                        byte_offset: 0,
+                    }),
+                    args: vec![Expr::LocalGet(2)],
+                    type_args: vec![],
+                    byte_offset: 0,
+                })],
+            }])
+            .collect(),
         is_async: false,
         is_generator: false,
         is_strict: true,
