@@ -68,6 +68,20 @@ pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
 /// declares. Any other named key (`globalThis`, an undeclared global such
 /// as `web3d`) is an own property of the global object that only program
 /// code reads, through its field. A computed key may name any global.
+/// A named key the realm declares as the global object's reference to
+/// itself (`globalThis`, `global`). The runtime reaches the global object
+/// through `js_get_global_this`, never by reading these names, but a bare
+/// `globalThis` / `global` read is the global object in the model
+/// (`ns_by_name`), so only the global object itself may be stored there
+/// without escaping (`tok_store`).
+pub fn global_self_key(m: &Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let name = &m.atoms[a as usize];
+    matches!(ns_by_name(name), Some(BuiltinNs::GlobalThis)) && m.native_property(t, name).is_some()
+}
+
 pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     let Key::Named(a) = key else {
         return true;
