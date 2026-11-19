@@ -53,6 +53,15 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 2, key);
                 self.emit_memcall(func, "object_super_get", 3);
             }
+            Expr::ObjectCreate(proto, props) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, proto);
+                match props {
+                    Some(props) => self.emit_store_arg(func, 1, props),
+                    None => self.emit_store_const(func, 1, f64::from_bits(TAG_UNDEFINED)),
+                }
+                self.emit_memcall(func, "object_create", 2);
+            }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, obj);

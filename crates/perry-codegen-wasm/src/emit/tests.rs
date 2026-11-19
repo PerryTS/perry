@@ -824,6 +824,30 @@ console.log(table.querySelector("thead tr").textContent + " " + rows.length + " 
     );
 }
 
+// `Object.create` builds an object on the given prototype, with or without property
+// descriptors, in a synchronous and in an async body. Expected output is Node's.
+#[test]
+fn object_create_builds_an_object_on_the_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const base: any = { k: 1 };
+const o: any = Object.create(base);
+o.own = 2;
+const bare: any = Object.create(null);
+bare.x = 1;
+const withProps: any = Object.create(base, { p: { value: 5, enumerable: true } });
+let threw = "no";
+try { Object.create(5 as any); } catch (e: any) { threw = e.name; }
+async function inAsync() { const a: any = Object.create(base); return a.k; }
+console.log([typeof o, o.k, Object.keys(o).join("+"), typeof bare, bare.x, "toString" in bare, withProps.p, withProps.k, Object.keys(withProps).join("+"), threw].join(","));
+inAsync().then((v) => console.log("async " + v));
+"#
+        ),
+        "object,1,own,object,1,false,5,1,p,TypeError\nasync 1"
+    );
+}
+
 #[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(

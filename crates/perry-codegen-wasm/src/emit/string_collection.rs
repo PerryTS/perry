@@ -57,6 +57,7 @@ impl WasmModuleEmitter {
             "object_delete_dynamic",
             "object_keys",
             "object_values",
+            "object_create",
             "object_entries",
             "object_has_property",
             "object_assign",

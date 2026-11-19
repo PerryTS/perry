@@ -2202,6 +2202,8 @@ const __memDispatch = {
   object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
   object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
+  // Object.create keeps its own checks: a proto that is neither an object nor null throws.
+  object_create: (proto, props) => (props === undefined ? Object.create(proto) : Object.create(proto, props)),
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   object_has_property: (obj, key) => {
     if (!__holdsProperties(obj)) return 0;
