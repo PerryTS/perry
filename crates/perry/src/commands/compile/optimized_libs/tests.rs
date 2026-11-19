@@ -1158,3 +1158,34 @@ fn json_install_selection_keeps_native_producers_and_formatting_roots() {
         );
     }
 }
+
+#[test]
+fn regex_unicode_install_selection_covers_external_producers() {
+    if ran_in_isolated_child("regex_unicode_install_selection_covers_external_producers") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected = |ctx: &CompilationContext| {
+        auto_optimized_cross_features(ctx, &BTreeSet::new(), &[])
+            .contains(&"perry-runtime/regex-unicode".to_string())
+    };
+    assert!(!selected(&ctx));
+    ctx.uses_regex = true;
+    assert!(
+        !selected(&ctx),
+        "the engine alone does not require membership tables"
+    );
+    ctx.uses_regex_unicode = true;
+    assert!(selected(&ctx));
+    ctx.uses_regex_unicode = false;
+    for producer in ["v8", "worker_threads", "module", "url", "fs"] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx), "{producer}");
+    }
+    ctx.native_module_imports.clear();
+    ctx.uses_proc_ipc = true;
+    assert!(selected(&ctx));
+    ctx.uses_proc_ipc = false;
+    ctx.uses_get_builtin_module = true;
+    assert!(selected(&ctx));
+}

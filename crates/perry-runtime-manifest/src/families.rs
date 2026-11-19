@@ -132,6 +132,13 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         modules: &["util.types", "util/types", "v8", "worker_threads"],
     },
     RuntimeFamily {
+        id: "regex_unicode",
+        requires: &["regex_engine"],
+        holders: &[],
+        members: &[],
+        modules: &[],
+    },
+    RuntimeFamily {
         id: "url_engine",
         requires: &[],
         holders: &["URL", "URLPattern", "URLSearchParams"],
@@ -927,6 +934,14 @@ mod tests {
             assert_ne!(closed & family_bit(id), 0, "{id}");
         }
         assert_eq!(closed & family_bit("regex_engine"), 0);
+        assert_eq!(
+            close_requires(family_bit("regex_unicode")),
+            family_bit("regex_unicode") | family_bit("regex_engine")
+        );
+        assert_eq!(
+            close_requires(family_bit("regex_engine")) & family_bit("regex_unicode"),
+            0
+        );
         assert_eq!(close_requires(0), 0);
     }
 }

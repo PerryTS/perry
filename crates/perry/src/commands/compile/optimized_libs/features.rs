@@ -220,6 +220,20 @@ pub(crate) fn auto_optimized_cross_features(
     let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
         || ctx.native_module_imports.contains("vm")
         || ctx.uses_data_url_dynamic_import;
+    // Native producers can compile patterns or deserialize programs without a
+    // RegExp HIR node. Their inputs are open unless the whole source is owned.
+    if ctx.uses_regex_unicode
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.uses_worker_threads
+        || ctx.needs_ui
+        || ctx.needs_plugins
+        || !ctx.native_addons.is_empty()
+        || !ctx.native_module_imports.is_empty()
+        || needs_dyn_eval
+    {
+        cross_features.push("perry-runtime/regex-unicode".to_string());
+    }
     // A native addon reaches what its Node-API imports reach: an open one
     // every global subsystem, a closed one the subsystems of the values it
     // creates (`node_api_host_symbols.txt`). The Node-API host itself is

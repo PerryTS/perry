@@ -198,6 +198,8 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_intl_datetime();
     #[cfg(feature = "regex-engine")]
     js_runtime_install_regex_engine();
+    #[cfg(feature = "regex-engine")]
+    js_runtime_install_regex_unicode();
     #[cfg(feature = "url-engine")]
     js_runtime_install_url_engine();
     js_runtime_install_string_normalize();
@@ -361,6 +363,14 @@ pub extern "C" fn js_runtime_install_regex_engine() {
     perry_install_once!({
         crate::regex::install_iterator_hooks();
     });
+}
+
+/// Selected independently of the engine: ASCII-only literal programs do not
+/// retain the Unicode membership database through the common regex installer.
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
+pub extern "C" fn js_runtime_install_regex_unicode() {
+    perex::install_unicode_properties();
 }
 
 /// URL value operations are available in every archive. Native module
