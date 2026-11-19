@@ -880,6 +880,53 @@ pub(crate) fn lower_property_site_tail(
             arm
         });
 
+    // A typed array owner's `.length` from its header: an untyped
+    // `for (…; i < b.length; …)` over a `Uint8Array` or `Buffer` otherwise
+    // misses the probe and takes the complete read per iteration. Views take
+    // the probe, whose admission proves the cell before following its link.
+    let byte_length_arm = array_length_arm.is_some().then(|| {
+        let load_idx = ctx.new_block("pget.byte_length");
+        let load_label = ctx.block_label(load_idx);
+        let probe_idx = ctx.new_block("pget.byte_other");
+        let probe_label = ctx.block_label(probe_idx);
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let not_forwarded = {
+            let blk = ctx.block();
+            let flags_addr = blk.sub(I64, &handle, "7");
+            let flags_ptr = blk.inttoptr(I64, &flags_addr);
+            let flags = blk.load(I8, &flags_ptr);
+            let forwarded = blk.and(I8, &flags, "128");
+            blk.icmp_eq(I8, &forwarded, "0")
+        };
+        let gc_type = {
+            let blk = ctx.block();
+            let type_addr = blk.sub(I64, &handle, "8");
+            let type_ptr = blk.inttoptr(I64, &type_addr);
+            blk.load(I8, &type_ptr)
+        };
+        super::byte_length::emit_byte_cell_length_guard(
+            ctx,
+            &handle,
+            &gc_type,
+            &not_forwarded,
+            &load_label,
+            &probe_label,
+            "pget",
+            false,
+        );
+        ctx.current_block = load_idx;
+        let len = {
+            let blk = ctx.block();
+            let len_ptr = blk.inttoptr(I64, &handle);
+            let len_i32 = blk.load(I32, &len_ptr);
+            blk.uitofp(I32, &len_i32, DOUBLE)
+        };
+        let end_label = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        ctx.current_block = probe_idx;
+        (len, end_label)
+    });
+
     // §3.7 case 3: the receiver's own layout answers (`perry_probe_get`,
     // perry-runtime `object/layout_probe.rs`) from the key's atom and its
     // compile-time hash. A `length` site asks `perry_probe_get_length`,
@@ -983,6 +1030,9 @@ pub(crate) fn lower_property_site_tail(
     }
     if let Some((len, array_end_label)) = array_length_arm.as_ref() {
         incoming.push((len, array_end_label));
+    }
+    if let Some((len, byte_end_label)) = byte_length_arm.as_ref() {
+        incoming.push((len, byte_end_label));
     }
     Ok(ctx.block().phi(DOUBLE, &incoming))
 }

@@ -293,8 +293,9 @@ fn assert_length_load(load_body: &[String], live: &str) {
 /// The header is read on the object path only, after the receiver is proved a
 /// real heap object (`pget.recv_obj` -> `pget.recv_real`), and a live plain
 /// Array is answered without reaching the probe or the slow call. Everything
-/// the arm refuses continues to the length probe (`pget.array_other`), whose
-/// own decline is the one collecting exit.
+/// the arm refuses continues to the byte-cell arm (`pget.array_other`) and then
+/// to the length probe (`pget.byte_other`), whose own decline is the one
+/// collecting exit.
 #[test]
 fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
     let ir = emit_read("length");
@@ -323,13 +324,14 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
     assert_eq!(strip_suffix(&on_false), "pget.slow", "{obj_body:?}");
 
     // Everything the arm refuses — any other kind, or a forwarding stub it
-    // cannot heal in one edge — continues to the length probe.
+    // cannot heal in one edge — continues to the byte-cell arm, and what that
+    // refuses to the length probe.
     let refused = assert_plain_array_arm(&blocks, "pget.recv_real", true);
     assert_eq!(strip_suffix(&refused), "pget.array_other");
 
     // The probe is the `length` flavour, reads this agent's directory, and
     // only its TAG_HOLE decline reaches the collecting exit.
-    let (other_label, other_body) = block(&blocks, "pget.array_other");
+    let (other_label, other_body) = block(&blocks, "pget.byte_other");
     let probe = other_body
         .iter()
         .find(|l| l.contains(" = call double @perry_probe_get_length("))
@@ -387,6 +389,87 @@ fn only_length_grows_the_array_arm() {
         assert!(
             !ir.contains("pget.array_kind") && !ir.contains("pget.array_length"),
             "`.{key}` must not grow the array-length arm:\n{ir}"
+        );
+    }
+}
+
+/// What the plain-Array arm refuses is offered to the typed-array owner arm
+/// before the probe. A `Uint8Array`, `Buffer` or numeric typed array owner
+/// (type byte 64..=76, no bag, not forwarded) answers `length` from its
+/// payload word +0 while the default metadata accessor proof holds. Everything
+/// else, views included, reaches the probe: a view's link is not followed on a
+/// receiver whose cell is unproven.
+#[test]
+fn a_length_read_serves_a_typed_array_owner_from_its_header() {
+    let ir = emit_read("length");
+    let blocks = blocks_of(&ir, "\npget.slow");
+
+    let (_, other_body) = block(&blocks, "pget.array_other");
+    let (cond, owner, rest) = cond_br(other_body);
+    assert_eq!(strip_suffix(&owner), "pget.byte_header", "{other_body:?}");
+    assert_eq!(strip_suffix(&rest), "pget.byte_other", "{other_body:?}");
+    assert!(
+        !ir.contains("pget.view_check") && !ir.contains("pget.view_header"),
+        "an untyped receiver must not follow a view's link:\n{ir}"
+    );
+    let range = def(other_body, &cond);
+    let parts: Vec<&str> = range["and i1 ".len()..].split(", ").collect();
+    assert!(
+        def(other_body, parts[0]).starts_with("icmp uge i8 ")
+            && def(other_body, parts[0]).ends_with(", 64")
+            && def(other_body, parts[1]).starts_with("icmp ule i8 ")
+            && def(other_body, parts[1]).ends_with(", 76"),
+        "the owner test is the indexed byte-cell type range:\n{other_body:?}"
+    );
+    assert!(
+        !other_body.iter().any(|l| l.contains(" call ")),
+        "the arm's test must not call out:\n{other_body:?}"
+    );
+
+    // The admission requires the metadata accessor proof and leaves to the
+    // probe otherwise.
+    let (_, body) = block(&blocks, "pget.byte_header");
+    assert!(
+        body.iter()
+            .any(|l| l.contains("load atomic i8, ptr @PERRY_TYPED_NAMED_PROPS_INVALIDATED")),
+        "`pget.byte_header` must test the named-props withdrawal:\n{body:?}"
+    );
+    let (_, hit, miss) = cond_br(body);
+    assert_eq!(strip_suffix(&hit), "pget.byte_length", "{body:?}");
+    assert_eq!(strip_suffix(&miss), "pget.byte_other", "{body:?}");
+
+    // The hit loads the u32 at the receiver's payload offset 0, with no call,
+    // and the merge takes it.
+    let (load_label, load_body) = block(&blocks, "pget.byte_length");
+    assert!(
+        !load_body.iter().any(|l| l.contains(" call ")),
+        "{load_body:?}"
+    );
+    let value = load_body
+        .iter()
+        .find(|l| l.contains(" = uitofp i32 "))
+        .and_then(|l| l.split_once(" = "))
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| panic!("the length word is converted: {load_body:?}"));
+    let (_, merge_body) = block(&blocks, "pget.recv_merge");
+    let phi = merge_body
+        .iter()
+        .find(|l| l.contains(" = phi double "))
+        .unwrap();
+    assert!(
+        phi.contains(&format!("[ {value}, %{load_label} ]")),
+        "the merge must take the byte-cell length:\n{phi}"
+    );
+}
+
+/// Only `.length` grows the byte-cell arm.
+#[test]
+fn only_length_grows_the_byte_length_arm() {
+    for key in ["foo", "size", "byteLength"] {
+        let ir = emit_read(key);
+        assert!(
+            !ir.contains("pget.byte_length") && !ir.contains("pget.byte_header"),
+            "`.{key}` must not grow the byte-length arm:\n{ir}"
         );
     }
 }
