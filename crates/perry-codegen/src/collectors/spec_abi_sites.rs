@@ -182,6 +182,17 @@ pub(crate) fn rebound_locals(stmts: &[Stmt]) -> HashSet<u32> {
     ids
 }
 
+/// Parameters whose slot holds the value they entered with for the whole
+/// invocation ([`rebound_locals`] names none of them).
+pub(crate) fn unrebound_params(params: &[Param], body: &[Stmt]) -> HashSet<u32> {
+    let rebound = rebound_locals(body);
+    params
+        .iter()
+        .map(|param| param.id)
+        .filter(|id| !rebound.contains(id))
+        .collect()
+}
+
 /// Callee-side demotion for a specialized entry: which parameters of `f` must
 /// keep the boxed protocol.
 ///

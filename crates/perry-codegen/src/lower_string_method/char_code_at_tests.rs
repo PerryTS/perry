@@ -1,6 +1,11 @@
 use perry_hir::{types::Type, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 
 fn scanner_ir(receiver_type: Type) -> String {
+    scanner_ir_with(receiver_type, vec![])
+}
+
+/// The scanner with `prelude` before its loop.
+fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
     let mut m = Module::new("char_scanner");
     m.functions.push(Function {
         id: 1,
@@ -16,7 +21,9 @@ fn scanner_ir(receiver_type: Type) -> String {
             arguments_object: None,
         }],
         return_type: Type::Any,
-        body: vec![Stmt::For {
+        body: prelude
+            .into_iter()
+            .chain([Stmt::For {
             init: Some(Box::new(Stmt::Let {
                 id: 2,
                 name: "i".into(),
@@ -46,7 +53,8 @@ fn scanner_ir(receiver_type: Type) -> String {
                 type_args: vec![],
                 byte_offset: 0,
             })],
-        }],
+        }])
+        .collect(),
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -115,4 +123,32 @@ fn declared_and_untyped_scanners_share_one_character_emitter() {
         );
         assert!(!ir.contains("STRING_CACHE") && !ir.contains("CHAR_CACHE"));
     }
+}
+
+#[test]
+fn a_parameter_scan_reads_unicode_through_one_zeroed_cursor() {
+    let ir = scanner_ir(Type::String);
+    assert!(
+        ir.contains("store [3 x i32] zeroinitializer"),
+        "the cursor must read zero before its first use"
+    );
+    assert!(ir.contains("call i32 @js_string_utf16_unit_at_cursor"));
+    assert!(
+        ir.contains("cca.cursor_hit"),
+        "a found unit must answer without the decoder"
+    );
+    assert!(
+        ir.contains("cca.slow"),
+        "a declined read keeps the complete charCodeAt"
+    );
+}
+
+#[test]
+fn a_rebound_parameter_has_no_cursor() {
+    // `s = "x"` makes the parameter's slot hold a second string, which could
+    // reuse the first one's offsets.
+    let rebind = Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::String("x".into()))));
+    let ir = scanner_ir_with(Type::String, vec![rebind]);
+    assert!(!ir.contains("call i32 @js_string_utf16_unit_at_cursor"));
+    assert!(ir.contains("cca.slow"));
 }
