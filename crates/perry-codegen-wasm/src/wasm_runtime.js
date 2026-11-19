@@ -1826,19 +1826,16 @@ function __defineHidden(target, key, value) {
   Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
 }
 // A named static method as a function value. The compiled method takes no receiver:
-// the class value it is called on is its static `this`, and `evaluation`, a class
-// expression's evaluation, supplies its captures. `funcIdx` and empty `captures` let
-// the array callback bridges call it directly.
-// shortcut: a direct `C.m()` inside the call also sees the armed `this`, so an
-// inherited call that names its own class reads the subclass; fixing it needs codegen
-// to pass static `this`.
+// the receiver it is called with is armed for that one method, which takes it on
+// entry (`class_static_method_this`), so a direct `C.m()` it makes sees `C`.
+// `evaluation`, a class expression's evaluation, supplies its captures.
 function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   const fn = function (...args) {
     const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
     const padded = __padBigintArgs(impl, 0, args.map(__jsValueToBits));
     const outerThis = __classStaticThis;
     const outerCall = __classEnvCall;
-    if (typeof this === 'function') __classStaticThis = { template, value: this };
+    if (this !== undefined) __classStaticThis = { template, method: name, value: this, outer: outerThis };
     if (evaluation) __classEnvCall = { receiver: undefined, evaluation };
     try {
       return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
@@ -1848,10 +1845,19 @@ function __classStaticMethodFn(template, name, funcIdx, evaluation) {
     }
   };
   Object.defineProperty(fn, 'name', { value: name });
-  fn.funcIdx = funcIdx;
-  fn.captures = [];
   __classMethodFns.add(fn);
   return fn;
+}
+// The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
+// after its captures, or a class method value with no table entry of its own through
+// its host wrapper, which supplies its `this` and class evaluation.
+function __arrayCallback(cb) {
+  if (typeof cb === 'function' && cb.funcIdx === undefined && __classMethodFns.has(cb)) {
+    return (...bits) => __jsValueToBits(cb(...bits.map(__bitsToJsValue)));
+  }
+  if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
+  const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
+  return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
 }
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
@@ -2378,17 +2384,15 @@ const __memDispatch = {
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
   array_map: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return [];
-    return arr.map((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr))));
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return [];
+    return arr.map((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr))));
   },
   array_filter: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return [];
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return [];
     return arr.filter((v, i) => {
-      const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
+      const r = call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
       const rv = __bitsToJsValue(r);
       if (rv === true) return true;
       if (rv === false || rv === null || rv === undefined) return false;
@@ -2396,57 +2400,50 @@ const __memDispatch = {
     });
   },
   array_forEach: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return;
-    arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return;
+    arr.forEach((v, i) => call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
   },
   array_reduce: (arr, cb, initial) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return undefined;
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return undefined;
     let acc = initial === undefined ? __jsValueToBits(arr[0]) : __jsValueToBits(initial);
     const startIdx = initial === undefined ? 1 : 0;
-    for (let i = startIdx; i < arr.length; i++) acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
+    for (let i = startIdx; i < arr.length; i++) acc = call(acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
     return __bitsToJsValue(acc);
   },
   array_find: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return undefined;
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return undefined;
     for (let i = 0; i < arr.length; i++) {
       const vBits = __jsValueToBits(arr[i]);
-      if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
+      if (__bitsToJsValue(call(vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
     }
     return undefined;
   },
   array_find_index: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return -1;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return -1;
-    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return -1;
+    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
-    if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) { arr.sort(); return arr; }
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) { arr.sort(); return arr; }
-    arr.sort((a, b) => { const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
+    const call = __arrayCallback(cb);
+    if (!call) { arr.sort(); return arr; }
+    arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
   array_some: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return 0;
-    return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return 0;
+    return arr.some((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
   array_every: (arr, cb) => {
-    if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
-    const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-    if (!fn) return 0;
-    return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return 0;
+    return arr.every((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
@@ -2489,9 +2486,21 @@ const __memDispatch = {
     }
   },
   class_static_this: (className, ctorIdx) => {
-    const armed = __classStaticThis;
+    let armed = __classStaticThis;
+    // A receiver armed for one static method (`method`) is that method's alone.
+    while (armed && armed.method !== undefined) armed = armed.outer;
     if (armed && armed.template === String(className)) return armed.value;
     return __classRef(String(className), ctorIdx | 0);
+  },
+  // A static method's `this`, read once on entry: the receiver armed for it, which it
+  // consumes, else what class_static_this answers.
+  class_static_method_this: (className, ctorIdx, methodName) => {
+    const armed = __classStaticThis;
+    if (armed && armed.method === String(methodName) && armed.template === String(className)) {
+      __classStaticThis = armed.outer;
+      return armed.value;
+    }
+    return __memDispatch.class_static_this(className, ctorIdx);
   },
   // A computed instance field: its key is the hidden slot its class definition
   // resolved, on the instance's evaluation or on the class.

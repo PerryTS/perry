@@ -1587,7 +1587,13 @@ impl WasmModuleEmitter {
                     // Register instance methods in classMethodTable (including getters/setters),
                     // and named static methods, which a class value carries as properties.
                     let methods = self.class_method_map.get(&class.name).into_iter().flatten();
-                    let statics = self.class_static_map.get(&class.name).into_iter().flatten();
+                    // A static block (`__perry_static_init_N`) is not a property of the class.
+                    let statics = self
+                        .class_static_map
+                        .get(&class.name)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(name, _)| !name.starts_with("__perry_static_init_"));
                     let registrations: Vec<(&str, String, u32)> = methods
                         .map(|(name, &idx)| ("class_set_method", name.clone(), idx))
                         .chain(

@@ -130,3 +130,67 @@ console.log("proto", Object.prototype.hasOwnProperty.call(KZ, "__proto__"));
         "proto true"
     );
 }
+
+// `Reflect.apply` hands a static method the receiver it names.
+#[test]
+fn a_static_method_applied_to_an_object_has_it_as_this() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class F { static who() { return this.name; } }
+const KF: any = F;
+console.log("reflect", Reflect.apply(KF.who, { name: "other" }, []));
+"#
+        ),
+        "reflect other"
+    );
+}
+
+// Only the method a class value is called on sees that value as `this`: a direct
+// call it makes by class name sees the named class.
+#[test]
+fn a_direct_static_call_inside_an_inherited_call_sees_its_named_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class F { static who() { return this.name; } static explicit() { return F.who(); } }
+class G extends F {}
+const KG: any = G;
+console.log("nested", KG.who(), KG.explicit());
+"#
+        ),
+        "nested G F"
+    );
+}
+
+// An array callback that is a class expression's static method reads its own
+// evaluation's captures.
+#[test]
+fn a_static_method_callback_reads_its_own_evaluations_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(n: number) { return class { static read(x: number) { return n + x; } }; }
+const P: any = make(1);
+const Q: any = make(2);
+console.log("evalmap", [10].map(P.read).join(","), [10].map(Q.read).join(","), Q.read(10));
+"#
+        ),
+        "evalmap 11 12 12"
+    );
+}
+
+// A static block is not a property of its class value.
+#[test]
+fn a_static_block_is_not_a_static_method() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { static v = 1; static { K.v = 2; } static m() { return 3; } }
+const KK: any = K;
+console.log("block", typeof KK.__perry_static_init_0, Object.prototype.hasOwnProperty.call(KK, "__perry_static_init_0"), KK.v);
+"#
+        ),
+        "block undefined false 2"
+    );
+}

@@ -26,7 +26,7 @@ pub(super) fn closure_this(captures_this: bool, is_arrow: bool, body: &[Stmt]) -
 }
 
 /// `expr` reads its function's own `this`; a nested closure does only by capturing it.
-fn reads_this(expr: &Expr) -> bool {
+pub(super) fn reads_this(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
         Expr::Closure { captures_this, .. } => *captures_this,
