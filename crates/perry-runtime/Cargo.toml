@@ -422,6 +422,13 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 # `mi_collect` can. The Apple-only VM-tag retag (#6882) uses the same crate.
 libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 
+# Android (API 29, native ELF thread-locals): the program is a shared library the app
+# process dlopens, and bionic refuses initial-exec TLS there ("TLS symbol ... in dlopened
+# ... using IE access model"). mimalloc's C thread-locals default to initial-exec
+# (`-ftls-model=initial-exec`); `local_dynamic_tls` builds them local-dynamic.
+[target.'cfg(target_os = "android")'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended", "local_dynamic_tls"], optional = true }
+
 # #6882: mimalloc tags its OS mappings with VM tag 100, which macOS tooling
 # (vmmap, Instruments' VM Tracker, `footprint`) decodes as `IOAccelerator` —
 # the entire JS heap renders as GPU-driver memory. `js_gc_init` retags to
