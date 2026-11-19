@@ -364,7 +364,9 @@ fn private_shape_proof_learn(
 // element's presence is a fact of the shape — a private field is an
 // `ENTRY_PRIVATE` entry of its key list, a brand is in its brand list, and
 // neither is ever removed — so a hit is a header check and one compare: no
-// slot read, no TLS, no hashing, no string.
+// TLS, no hashing, no string. A class family's field is the exception: the
+// shape lists it as optional, and a field word's hit also reads the slot,
+// which holds the hole until the field's definition fills it.
 //
 // The template bit is re-checked on every hit, so the first class object of
 // that template turns every site of it back to the full checks. The word holds
@@ -383,12 +385,19 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     if word == 0 || private_template_may_be_evaluated(class_id) {
         return false;
     }
-    let Some((_, shape_id)) = private_plain_receiver_shape(obj) else {
+    let Some((object, shape_id)) = private_plain_receiver_shape(obj) else {
         return false;
     };
     // A field site's word also carries the slot (see
     // [`private_field_site_word`]); the ShapeId is its low half.
-    shape_id == LayoutWord(word as u32)
+    if shape_id != LayoutWord(word as u32) {
+        return false;
+    }
+    // A class family's element is present only while its slot holds no hole
+    // (`private_element_present`), so a field word's hit reads this object's
+    // slot. A method site's word is a bare ShapeId and has no slot bits.
+    let off = (word >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK;
+    off == 0 || *((object as *const u8).add(off as usize) as *const u64) != crate::value::TAG_HOLE
 }
 
 /// Publish a proven receiver shape to `site`.
@@ -423,6 +432,10 @@ const PRIVATE_FIELD_SITE_MAX_SLOT: u32 = 0xFFFF;
 /// inline bound, the slot's lane), so the word holds for every receiver the
 /// inline compare admits. A lane that is neither `Any` nor `F64` (deprecated
 /// or ConstFn) publishes nothing; such receivers keep the runtime path.
+///
+/// A class family lists the element as optional (`ENTRY_OPTIONAL`): the
+/// ShapeId then proves the slot, and the field's presence is the slot holding
+/// no hole, which every hit tests on the object it reads (#10501).
 unsafe fn private_field_site_word(
     object: *const ObjectHeader,
     shape_id: LayoutWord,
@@ -452,6 +465,7 @@ unsafe fn private_field_site_word(
         return 0;
     };
     if crate::object::key_attrs::keys_entry(keys.arr(), slot)
+        & !crate::object::key_attrs::ENTRY_OPTIONAL
         != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
     {
         return 0;
