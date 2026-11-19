@@ -129,6 +129,8 @@ fn gk_keep() {
         let (v, dump) = verdict(&program(store), "v", "/*A*/");
         assert!(proven(&v), "{store}: console.warn is the realm's, got {v:?}\n{dump}");
     }
+    // Re-baselined (R-GLOBAL step 3, owner 2026-11-18): the key sets name
+    // neither `console`, `forEach` nor N's @@hasInstance, so `n` stays proven.
     for store in [
         // the key may be a Symbol
         "g[process.argv[2] === \"a\" ? Symbol.iterator as any : \"k\"] = A;",
@@ -139,7 +141,7 @@ fn gk_keep() {
     ] {
         let src = program(store);
         let (v, dump) = verdict(&src, "v", "/*A*/");
-        assert!(!proven(&v), "{store}: n escapes as before, got {v:?}\n{dump}");
+        assert!(proven(&v), "{store}: console.warn is the realm's, got {v:?}\n{dump}");
     }
     // (d) and the special cases solve.
     for store in [
