@@ -772,11 +772,13 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(index);
             }
             Expr::ObjectSpread { parts } => {
-                for (key_opt, val) in parts {
-                    if let Some(k) = key_opt {
+                for part in parts {
+                    if let ObjectPart::Define(k, _) = part {
                         self.intern_string(k);
                     }
-                    self.collect_strings_in_expr(val);
+                    for e in part {
+                        self.collect_strings_in_expr(e);
+                    }
                 }
             }
             Expr::ArraySpread(elements) => {

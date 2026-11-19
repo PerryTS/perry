@@ -200,7 +200,7 @@ fn widen_mutable_captures_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter_mut().flatten() {
                 widen_mutable_captures_expr(v, scope_mutable);
             }
         }
@@ -515,7 +515,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 collect_closure_assigned_expr(v, out);
             }
         }
@@ -825,7 +825,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 collect_closure_captures_expr(v, out);
             }
         }
@@ -1258,7 +1258,7 @@ fn collect_closure_assigned_in_body_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 collect_closure_assigned_in_body_expr(v, out);
             }
         }

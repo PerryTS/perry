@@ -657,7 +657,7 @@ pub fn check_escapes_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }

@@ -102,8 +102,22 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::ObjectSpread { parts } => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "object_new", 0);
-                for (key_opt, val) in parts {
-                    if let Some(key) = key_opt {
+                for part in parts {
+                    if let ObjectPart::Computed { key, value } = part {
+                        // `[key]: value`: key, then value, then the store.
+                        self.emit_frame_begin(func, 3);
+                        func.instruction(&Instruction::LocalSet(self.temp_local));
+                        self.emit_slot_addr(func, 0);
+                        func.instruction(&Instruction::LocalGet(self.temp_local));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        self.emit_store_arg(func, 1, key);
+                        self.emit_store_arg(func, 2, value);
+                        self.emit_memcall(func, "object_set", 3);
+                    } else if let ObjectPart::Define(key, val) = part {
                         let key_id = self
                             .emitter
                             .string_map
@@ -123,7 +137,7 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_store_const(func, 1, f64::from_bits(key_bits));
                         self.emit_store_arg(func, 2, val);
                         self.emit_memcall(func, "object_set", 3);
-                    } else {
+                    } else if let ObjectPart::Spread(val) = part {
                         self.emit_frame_begin(func, 2);
                         func.instruction(&Instruction::LocalSet(self.temp_local));
                         self.emit_slot_addr(func, 0);

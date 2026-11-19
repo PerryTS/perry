@@ -629,7 +629,7 @@ pub fn fix_class_field_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_class_field_expr(value, class_field_natives, user_classes, current_class);
             }
         }
@@ -1177,7 +1177,7 @@ pub fn fix_native_instance_expr_with_locals(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
             }
         }

@@ -305,7 +305,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, val) in parts {
+            for val in parts.iter_mut().flatten() {
                 fill_defaults_in_expr(val, cx);
             }
         }
