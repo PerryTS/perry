@@ -50,6 +50,18 @@ fn check(call: &str) {
     );
 }
 
+/// A global key (a program's or the realm's) with the realm held: the
+/// unknown code that holds it replaces no key of the global object (owner
+/// decision 2026-11-18, closed world 11-14), so the call is the realm's or
+/// the program's function: exact in both arms.
+fn exact(call: &str) {
+    let body = format!("{OBJ}{call};\nconst r = o.m();\n");
+    let free = m_calls(&body);
+    assert!(mono(&free), "free: {call}: {free:?}");
+    let held = m_calls(&format!("{HELD}{body}"));
+    assert!(mono(&held), "held: {call} is not replaced: {held:?}");
+}
+
 /// A member whose own rule already hands `o` to unknown code (the stream
 /// keeps its chunk; a native module's argument): exact in both arms.
 fn held_only(call: &str) {
@@ -104,8 +116,8 @@ fn parse_int_fixed_op() {
     fixed_op("parseInt(o as any)")
 }
 #[test]
-fn global_this_parse_int_held() {
-    check("globalThis.parseInt(o as any)")
+fn global_this_parse_int_exact() {
+    exact("globalThis.parseInt(o as any)")
 }
 #[test]
 fn symbol_for_fixed_op() {
@@ -132,8 +144,8 @@ fn math_max_value_call_held() {
     check("const f = Math.max; f(o as any, 1)")
 }
 #[test]
-fn set_timeout_held() {
-    check("setTimeout(() => {}, 0, o)")
+fn set_timeout_exact() {
+    exact("setTimeout(() => {}, 0, o)")
 }
 
 /// The realm is held by an event later in source order than the call: in a
@@ -225,10 +237,10 @@ fn locked(call: &str) {
 }
 /// `new Map()` reads the live global binding `Map` (perry-hir
 /// lower/expr_new.rs: global_property_new_dynamic), which unknown code that
-/// holds the realm may replace: the loss is real.
+/// holds the realm does not replace (owner decision 2026-11-18): exact.
 #[test]
-fn new_map_set_held() {
-    held_only("new Map().set(1, o)")
+fn new_map_set_exact() {
+    exact("new Map().set(1, o)")
 }
 #[test]
 fn array_index_of_locked() {
@@ -237,22 +249,23 @@ fn array_index_of_locked() {
 
 // HOSTHELD2 B: a program-owned property of the global object (ECMA-262
 // 9.1.1.4, the object record of the global environment): unknown code that
-// holds the realm holds `globalThis` and may replace it; a call of it may
-// then call unknown code with `o`. A module's own `var`, `function`, `let`,
+// holds the realm holds `globalThis` but replaces no key of it (owner
+// decision 2026-11-18, closed world 11-14): a call of it is the program's
+// function, exact. A module's own `var`, `function`, `let`,
 // `const` and `class` live in the module environment record (16.2.1.6.4
 // InitializeEnvironment), which no other code reaches.
 const GF: &str = "(globalThis as any).gf = (x: any) => 0;\n";
 #[test]
-fn global_this_member_held() {
-    held_only(&format!("{GF}(globalThis as any).gf(o)"))
+fn global_this_member_exact() {
+    exact(&format!("{GF}(globalThis as any).gf(o)"))
 }
 #[test]
-fn global_this_bare_held() {
-    check(&format!("{GF}(gf as any)(o)"))
+fn global_this_bare_exact() {
+    exact(&format!("{GF}(gf as any)(o)"))
 }
 #[test]
-fn global_this_read_value_held() {
-    check(&format!("{GF}const g = (globalThis as any).gf; g(o)"))
+fn global_this_read_value_exact() {
+    exact(&format!("{GF}const g = (globalThis as any).gf; g(o)"))
 }
 #[test]
 fn module_var_exact() {

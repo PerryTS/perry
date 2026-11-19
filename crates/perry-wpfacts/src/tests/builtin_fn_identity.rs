@@ -314,12 +314,15 @@ fn unknown_global_key_store_keeps_timer_value_unproven() {
 }
 
 #[test]
-fn global_exposure_keeps_timer_value_unproven() {
+fn global_exposure_keeps_the_timer_body_model() {
+    // The global object handed to unknown code: no key of it is written
+    // (R-GLOBAL and step 2, owner decision 2026-11-18): `setTimeout` is the
+    // realm's timer.
     verdict(
         &timer_source("external(globalThis);", "const t=setTimeout; t(cb,0);"),
         "// CALLBACK",
         "field",
-        false,
+        true,
     );
 }
 

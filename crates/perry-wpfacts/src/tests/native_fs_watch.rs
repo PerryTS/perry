@@ -177,10 +177,11 @@ fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
         r#"
         class P { x: any; constructor(x: number) { this.x = x; } }
         const p = new P(1);
+        declare function hostSink(x: any): void;
         function sys(path: string) {
             const _fs: typeof import("fs") = require("fs");
             _fs.watch(path, { persistent: false } as any, (ev: any) => { (globalThis as any).leak = p; });
-            (globalThis as any).structuredClone(globalThis);
+            hostSink(globalThis);
         }
         sys(process.argv[1]);
         console.log(p.x);

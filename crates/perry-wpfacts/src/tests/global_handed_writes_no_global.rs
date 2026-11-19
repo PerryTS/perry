@@ -4,6 +4,10 @@
 //! recorded under its own key; the program's own stores of a global keep
 //! their values. node: `unknown.take2(globalThis)` with no such store
 //! leaves `Object` the intrinsic and `g` the program's `A`.
+//!
+//! Step 2 (owner decision 2026-11-18, closed world 11-14): unknown code
+//! that holds the realm (any unknown call) replaces no key of the global
+//! object either (`realm_replaced`), `globalThis` included.
 
 use super::*;
 
@@ -19,8 +23,6 @@ const READ_G: &str = "console.log((globalThis as any).g.zz);";
 // local so that `O.keys` is a site whose receiver is the global binding.
 const READ_OBJECT: &str = "const O: any = Object; console.log(O.keys(new A()).length);";
 
-const READ_INF: &str =
-    "const inf: any = (globalThis as any).Infinity; console.log(inf.toFixed(1));";
 
 fn sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a SiteFacts> {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
@@ -45,21 +47,36 @@ fn both_orders(hand: &str, body: &str) -> [String; 2] {
     [format!("{PRE}{hand}\n{body}"), format!("{PRE}{body}\n{hand}")]
 }
 
-/// RED: the global object handed, no store into ⊤: its non-writable
-/// `Infinity` (ECMA-262 19.1.2) stays the number. (Was: ⊤, the escape
-/// recorded an any-key unmodeled write of the global object.) `Object` and
-/// `g` are no test of this rule yet: any call of unknown code holds the
-/// realm, and code that holds the realm may replace every other key of the
-/// global object (`realm_replaced`), handed or not.
+/// No site through the read is ⊤: `O` is the intrinsic `Object`, `g` the
+/// program's `A`.
+fn known(pf: &ProgramFacts) -> bool {
+    sites(pf, "keys").iter().all(|s| !s.top) && sites(pf, "zz").iter().all(|s| !s.top) && !g_sees_b(pf)
+}
+
+/// RED: the global object handed, no store into ⊤: `Object` stays the
+/// intrinsic, `g` the program's `A`. (Was: ⊤, the escape recorded an
+/// any-key unmodeled write of the global object, and the call of unknown
+/// code holding the realm replaced every key of it, `realm_replaced`.)
 #[test]
 fn a_global_read_stays_known_after_the_global_object_is_handed() {
-    for src in both_orders("unknown.take2(globalThis);", READ_INF) {
+    for src in both_orders("unknown.take2(globalThis);", &format!("{READ_OBJECT}\n{READ_G}")) {
         let pf = facts(&src);
-        assert!(
-            sites(&pf, "toFixed").iter().all(|s| !s.top),
-            "{src}\n{}",
-            pf.dump_text()
-        );
+        assert!(known(&pf), "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// RED (step 2): a call of an unknown native holds the realm; it replaces
+/// no key of the global object (owner decision 2026-11-18): `globalThis.Object`
+/// stays the intrinsic and `globalThis.g` the program's `A`. (Was: ⊤,
+/// "globalThis.Object written by unmodeled code".)
+#[test]
+fn a_global_read_stays_known_after_an_unknown_native_call() {
+    const READ_GT_OBJECT: &str =
+        "const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);";
+    let call = "declare function sink(x: any): void;\nsink(1);";
+    for src in both_orders(call, &format!("{READ_GT_OBJECT}\n{READ_G}")) {
+        let pf = facts(&src);
+        assert!(known(&pf), "{src}\n{}", pf.dump_text());
     }
 }
 
