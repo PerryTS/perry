@@ -1561,6 +1561,7 @@ mod string_iter_lock;
 mod string_methods;
 mod string_results;
 mod string_this;
+mod global_handed_writes_no_global;
 mod top_store_handed_builtins;
 mod typed_array_methods;
 mod typed_locale_args;

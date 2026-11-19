@@ -246,16 +246,19 @@ impl Model {
                 self.note_shared(SharedWrite::Unmodeled(s));
             }
         }
+        // The global object given to unknown code puts ⊤ in reach of the
+        // program's stores into ⊤ (`global_in_top`): each is recorded with
+        // its own key, a computed one under every key (`written_by`). It is
+        // no write of the global object under any key: whole program, the
+        // unknown code that holds it is program code, whose stores into ⊤
+        // those are, or the runtime's own operations, which write no global
+        // by an arbitrary name. Dynamic code records its own any-key write
+        // (`interpreted_code_runs`), as does an unseen module.
+        // Owner decision 2026-11-18 (R-GLOBAL, under the 2026-11-14 closed
+        // world: no eval or dynamic code): no built-in or native operation
+        // writes an arbitrary global name.
         if builtins::global_object(self, t) {
             crate::builtins::note_global_in_top(self);
-            if !self.unit_mode {
-                crate::builtins::note_native_write(
-                    self,
-                    t,
-                    None,
-                    "global object given to unknown code",
-                );
-            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));
