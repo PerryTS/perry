@@ -1,0 +1,1 @@
+Check mode (PERRY_VERIFY_FACTS=1): the field witness compares a family layout slot with the key stored there (slots are a permutation of key positions), and admits a receiver by membership in the site's whole proven class set instead of its first four ids.
