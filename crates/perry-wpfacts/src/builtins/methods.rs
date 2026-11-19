@@ -46,6 +46,12 @@ pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
 
 pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
     crate::family_reach::tok(m, t, _key);
+    // R-GLOBAL-NAME: a named global the runtime never reads by name is the
+    // program's own property of the global object (its field, written by
+    // the store); no E20 sink.
+    if !m.unit_mode && super::global_object(m, t) && !super::global_store_escapes(m, t, _key) {
+        return;
+    }
     match m.toks[t as usize] {
         // Object.prototype members are reachable from every object the
         // runtime handles: unknown code may call them with any receiver.

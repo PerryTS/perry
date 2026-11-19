@@ -32,7 +32,8 @@ mod undeclared;
 pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
-    builtin_function, global_object, native_may_be, realm_reads_store, undeclared,
+    builtin_function, global_object, global_store_escapes, native_may_be, realm_reads_store,
+    undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;

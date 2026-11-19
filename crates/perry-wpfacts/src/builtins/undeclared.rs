@@ -58,6 +58,37 @@ pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
             .any(|n| m.key_may_name_str(key, n))
 }
 
+/// R-GLOBAL-NAME: may a store under `key` on the global object `t` write a
+/// global the runtime itself reads by name? The runtime reads a built-in
+/// constructor's global by name (`js_get_global_this_builtin_value`,
+/// `builtin_value_core`, `builtin_prototype_value`: instanceof, class
+/// metadata, the realm's own inheritance links, messaging), so a key the
+/// realm declares with a function value (or with no native value the model
+/// knows) keeps E20; so do the names `members::global_runtime_reads`
+/// declares. Any other named key (`globalThis`, an undeclared global such
+/// as `web3d`) is an own property of the global object that only program
+/// code reads, through its field. A computed key may name any global.
+pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return true;
+    };
+    let name = m.atoms[a as usize].clone();
+    if members::global_runtime_reads(&name) {
+        return true;
+    }
+    let Some(p) = m.native_property(t, &name) else {
+        return false;
+    };
+    let Some(identity) = p.native else {
+        return true;
+    };
+    let v = m.tok(TokKind::BuiltinFn(Native::Member {
+        identity,
+        holder: None,
+    }));
+    builtin_function(m, v)
+}
+
 /// A described built-in object and its chain declare no such program key.
 pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     if t == TOP || !field_key(m, a) {
