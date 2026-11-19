@@ -1309,6 +1309,30 @@ console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof 
     );
 }
 
+// A class value's static fields are its own enumerable keys, as in Node: declared ones,
+// one a subclass declares (not its parent's), and one assigned later through the value.
+#[test]
+fn a_class_values_static_fields_are_its_own_keys() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static x = 1; static y = "s"; static m() { return 1; } z = 3; }
+class B extends A { static w = 2; }
+const C = class { static k = 5; };
+const K: any = A;
+const D: any = class {};
+D.dyn = 7;
+console.log(JSON.stringify(Object.keys(A)) + " " + JSON.stringify(Object.keys(B)) + " " + JSON.stringify(Object.keys(C)));
+console.log(JSON.stringify(Object.entries(K)) + " " + JSON.stringify(Object.keys(D)));
+console.log(("x" in K) + " " + Object.prototype.hasOwnProperty.call(K, "y"));
+K.x = 10;
+console.log(A.x + " " + K.x + " " + JSON.stringify(Object.keys(new A())));
+"#
+        ),
+        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]"
+    );
+}
+
 // `new` on a class value yields what [[Construct]] yields: the instance, unless the
 // constructor returns an object. A bare `return;` keeps the initialized instance.
 #[test]
