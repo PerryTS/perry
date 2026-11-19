@@ -1675,9 +1675,21 @@ const classCtorSlotTable = {};
 // `{}`. `proto` is a class-expression evaluation's prototype (see __classCtor).
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
+// That prototype is also the class value's `prototype`. It inherits from a user parent
+// class's prototype and holds the class's own methods, non-enumerable.
 function __classProto(className) {
   const t = __classTemplate(className);
-  return t.proto || (t.proto = Object.create(Object.prototype, { [__classTag]: { value: className } }));
+  if (t.proto) return t.proto;
+  const parent = classParentTable[className];
+  const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
+    ? __classProto(parent)
+    : Object.prototype;
+  t.proto = Object.create(base, { [__classTag]: { value: className } });
+  for (const m of Object.keys(classMethodTable[className] || {})) {
+    if (m.startsWith('__get_') || m.startsWith('__set_')) continue;
+    __defineHidden(t.proto, m, __classMethodValue(className, m, undefined));
+  }
+  return t.proto;
 }
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
@@ -1756,14 +1768,20 @@ function __classCtor(className, ctorIdx, caps) {
   });
   __perryClassCtors.add(ctor);
   if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
-  const proto = { constructor: ctor };
-  for (let c = className; c; c = classParentTable[c] || null) {
-    for (const m of Object.keys(classMethodTable[c] || {})) {
-      if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
-      proto[m] = __classMethodValue(c, m, evaluated ? ctor : undefined);
+  // A declared class's value shares its instances' prototype (see __classProto). An
+  // evaluation has its own, holding the chain's methods bound to it.
+  const proto = evaluated ? { constructor: ctor } : __classProto(className);
+  if (evaluated) {
+    for (let c = className; c; c = classParentTable[c] || null) {
+      for (const m of Object.keys(classMethodTable[c] || {})) {
+        if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+        proto[m] = __classMethodValue(c, m, ctor);
+      }
     }
+    for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
+  } else {
+    __defineHidden(proto, 'constructor', ctor);
   }
-  for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
   // Own named static methods only: an inherited one is found along the class chain
   // (`__classStaticGet`), where a nearer static field shadows it.
   for (const [m, idx] of Object.entries(classStaticMethodTable[className] || {})) {
