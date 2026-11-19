@@ -1132,6 +1132,9 @@ pub(crate) struct FnCtx<'a> {
     /// The by-name store being lowered was a 2c member of the run
     /// (`layout_read::RunTransparency::Store`).
     pub recv_run_store_member: bool,
+    /// The run of `this` stores in flight in an ordinary function
+    /// constructor's body (`layout_desc::function_families::run_arm`).
+    pub fn_ctor_run: Option<crate::expr::layout_read::FamilyRun>,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.

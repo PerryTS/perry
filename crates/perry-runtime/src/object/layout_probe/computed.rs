@@ -134,6 +134,107 @@ pub unsafe extern "C" fn perry_probe_get_value(
             i32::from(admits)
         }
 
+        /// [`perry_family_run_admits`] for an ordinary function constructor's
+        /// run of `this.k = v` stores: may the run, from the store of key
+        /// position `pos` of constructor layout `desc` on, write each key's slot
+        /// in place? It holds when `obj` carries exactly the layout its birth
+        /// from `desc` gave it (`function_family_birth::function_birth_record`:
+        /// no key added, deleted or redefined since, no overflow), extensible
+        /// and not a prototype; every key from `pos` on is a plain optional
+        /// slot of its own position with no slot representation; from `pos` on
+        /// no key is present after a hole; and no prototype intercepts an add
+        /// of any of the layout's keys ([`chain_admits_family`]). The run's
+        /// stores then fill holes in key order, or overwrite present data.
+        ///
+        /// GC leaf: no allocation, no collection, no user code, no throw.
+        ///
+        /// # Safety
+        /// `dir` as for [`perry_probe_get`]; `desc` a function constructor
+        /// layout descriptor of this image; `obj_bits` any NaN-boxed value.
+        #[no_mangle]
+        pub unsafe extern "C" fn perry_function_run_admits(
+            dir: *const u8,
+            desc: *const crate::object::layout_desc::PerryLayoutDesc,
+            obj_bits: u64,
+            pos: u32,
+        ) -> i32 {
+            if obj_bits & TAG_MASK != POINTER_TAG {
+                return 0;
+            }
+            let payload = (obj_bits & POINTER_MASK) as usize;
+            if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+                return 0;
+            }
+            let Some(gc) = crate::value::addr_class::try_read_gc_header(payload) else {
+                return 0;
+            };
+            if crate::gc_type_is_not_object!(gc.obj_type)
+                || gc._reserved & crate::codegen_abi::OBJ_FLAGS_REFUSE_FAMILY_RUN != 0
+            {
+                return 0;
+            }
+            let obj = payload as *mut ObjectHeader;
+            let d = &*desc;
+            if d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
+                || pos >= d.key_count
+                || d.keys.is_null()
+            {
+                return 0;
+            }
+            // The common refusal first: a receiver no birth from `desc` made
+            // (a method's object literal or class instance) holds its keys as
+            // present entries, where a constructor layout's are all optional.
+            let word = (*obj).parent_class_id;
+            if word & crate::object::overflow::SHADOW_BIT != 0 {
+                return 0;
+            }
+            let Some(record) = crate::object::shapes::shape_record_of_receiver(word) else {
+                return 0;
+            };
+            let record_keys = record.keys() as *const crate::array::ArrayHeader;
+            if record_keys.is_null()
+                || record.logical_key_count() != d.key_count
+                || crate::object::key_attrs::keys_entry(record_keys, pos)
+                    != crate::object::key_attrs::ENTRY_OPTIONAL
+            {
+                return 0;
+            }
+            if d.slot_count > crate::object::object_inline_capacity(obj)
+                || crate::object::proto_validity::object_is_marked_prototype(payload)
+            {
+                return 0;
+            }
+            let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
+            let mut hole = false;
+            for (i, k) in keys.iter().enumerate().skip(pos as usize) {
+                if k.attrs != crate::codegen_abi::LAYOUT_KEY_OPTIONAL
+                    || k.slot != i as u32
+                    || (i < 32 && (d.rep >> (2 * i)) & 0b11 != 0)
+                {
+                    return 0;
+                }
+                let present =
+                    *crate::object::header::object_slot_at(obj, u32::from(k.off)) != TAG_HOLE;
+                if present && hole {
+                    return 0;
+                }
+                hole |= !present;
+            }
+            if crate::object::function_family_birth::function_birth_record(obj, d).is_none() {
+                return 0;
+            }
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj));
+            if !meta.is_null()
+                && ((*meta).overflow != 0
+                    || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0)
+            {
+                return 0;
+            }
+            let r = record_of(dir, LayoutWord((*obj).parent_class_id));
+            i32::from(!r.is_null() && chain_admits_family(dir, obj, r, d))
+        }
+
         /// `PERRY_PROBE_VERIFY`: the witness of a compiled family slot access
         /// ([`verify::slot`]), emitted only by a compile with the knob set.
         /// GC leaf.

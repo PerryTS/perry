@@ -355,7 +355,7 @@ fn colouring_disabled() -> bool {
 pub const MAX_COLOURED_KEYS: usize = 127;
 
 /// Visit every statement and expression of `body`, closures included.
-fn visit_stmts<'a>(
+pub(crate) fn visit_stmts<'a>(
     body: &'a [Stmt],
     on_stmt: &mut dyn FnMut(&'a Stmt),
     on_expr: &mut dyn FnMut(&'a Expr),
@@ -460,7 +460,7 @@ fn visit_expr<'a>(
 }
 
 /// Every function body of a module: init, functions, class members.
-fn module_bodies(hir: &HirModule) -> Vec<&[Stmt]> {
+pub(crate) fn module_bodies(hir: &HirModule) -> Vec<&[Stmt]> {
     let mut out: Vec<&[Stmt]> = vec![hir.init.as_slice()];
     for f in &hir.functions {
         out.push(&f.body);

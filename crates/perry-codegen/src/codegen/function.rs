@@ -1460,6 +1460,7 @@ pub(super) fn compile_function(
         inline_ctor_return: Vec::new(),
         recv_run: None,
         recv_run_store_member: false,
+        fn_ctor_run: None,
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
