@@ -410,6 +410,12 @@ impl<'a> FuncEmitCtx<'a> {
                 );
             }
 
+            // `for (k in o)` walks the snapshot this returns (see `lower/stmt_loops.rs`).
+            Expr::ForInKeys(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "for_in_keys", 1);
+            }
             Expr::ObjectKeys(obj) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, obj);

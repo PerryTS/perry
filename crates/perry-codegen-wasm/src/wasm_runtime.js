@@ -2200,6 +2200,13 @@ const __memDispatch = {
   },
   object_delete: (obj, key) => { if (__holdsProperties(obj)) delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
+  // `for (k in o)`: the enumerable string keys of o and its prototype chain, in the
+  // order a `for...in` visits them. A primitive is boxed, so a string yields its indices.
+  for_in_keys: (obj) => {
+    const keys = [];
+    if (obj !== null && obj !== undefined) for (const k in Object(obj)) keys.push(k);
+    return keys;
+  },
   object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
