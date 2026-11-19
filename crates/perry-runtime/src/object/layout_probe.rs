@@ -778,9 +778,10 @@ unsafe fn info_value(c: *const crate::closure::ClosureHeader, pos: u32) -> f64 {
         return crate::closure::props::prototype_slot_value(c as usize).unwrap_or_else(hole);
     }
     if pos == crate::closure::shape::FAMILY_LENGTH_POS {
-        crate::closure::info_length(&*info)
-            .or_else(|| crate::closure::info_arity(&*info))
-            .unwrap_or(0) as f64
+        // Reflection's precedence (`closure_length`): a builtin's declared
+        // length (an unborn lazy family's constructor included) before the
+        // info's own length and arity.
+        crate::closure::closure_length(c).unwrap_or(0) as f64
     } else {
         match crate::builtins::function_name_image(info) {
             Some(s) => f64::from_bits(STRING_TAG | s as u64),
@@ -1939,9 +1940,7 @@ unsafe fn function_own_intrinsic_keyed(
     }
     let info = (*c).info;
     Some(match text {
-        b"length" => crate::closure::info_length(&*info)
-            .or_else(|| crate::closure::info_arity(&*info))
-            .unwrap_or(0) as f64,
+        b"length" => crate::closure::closure_length(c).unwrap_or(0) as f64,
         b"name" => match crate::builtins::function_name_image(info) {
             Some(s) => f64::from_bits(STRING_TAG | s as u64),
             None => hole(),
