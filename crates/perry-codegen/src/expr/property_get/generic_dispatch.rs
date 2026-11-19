@@ -597,6 +597,17 @@ pub(crate) fn lower_property_site_tail(
             let (len, len_end) =
                 emit_plain_array_length_arm(ctx, &entry_handle, &call_label, &done_label, false);
             ctx.current_block = call_idx;
+            let full_idx = ctx.new_block("pget.outline_length_full");
+            let full_label = ctx.block_label(full_idx);
+            let (typed_len, typed_end) = super::typed_named::emit_typed_named_arm(
+                ctx,
+                &entry_handle,
+                super::typed_named::TypedNamed::Length,
+                None,
+                &full_label,
+                &done_label,
+            );
+            ctx.current_block = full_idx;
             let object_value = ctx
                 .block()
                 .call(DOUBLE, "js_object_get_field_value", &entry_args);
@@ -623,6 +634,7 @@ pub(crate) fn lower_property_site_tail(
                 DOUBLE,
                 &[
                     (&len, &len_end),
+                    (&typed_len, &typed_end),
                     (&object_value, &object_end),
                     (&string_value, &string_end),
                     (&primitive_value, &primitive_end),
@@ -962,6 +974,29 @@ pub(crate) fn lower_property_site_tail(
         (I64, key_bits.as_str()),
         (I64, hash.as_str()),
     ];
+    // A typed array's metadata and its kind prototype's data, from the cell's
+    // structure (`typed_named`); every other receiver reaches the probe.
+    let typed_named_arm = super::typed_named::TypedNamed::of(property)
+        .filter(|_| !global_binding && !crate::expr::typed_feedback_emission_enabled())
+        .map(|which| {
+            let other_idx = ctx.new_block("pget.typed_other");
+            let other_label = ctx.block_label(other_idx);
+            let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+            let arm = super::typed_named::emit_typed_named_arm(
+                ctx,
+                &handle,
+                which,
+                Some(super::typed_named::ProtoProbe {
+                    dir: &dir,
+                    key_bits: &key_bits,
+                    hash: &hash,
+                }),
+                &other_label,
+                &merge_label,
+            );
+            ctx.current_block = other_idx;
+            arm
+        });
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
         DOUBLE,
@@ -1033,6 +1068,9 @@ pub(crate) fn lower_property_site_tail(
     }
     if let Some((len, byte_end_label)) = byte_length_arm.as_ref() {
         incoming.push((len, byte_end_label));
+    }
+    if let Some((value, end)) = typed_named_arm.as_ref() {
+        incoming.push((value, end));
     }
     Ok(ctx.block().phi(DOUBLE, &incoming))
 }

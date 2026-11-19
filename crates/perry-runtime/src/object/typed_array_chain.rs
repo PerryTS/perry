@@ -11,7 +11,7 @@ use crate::value::{POINTER_MASK, POINTER_TAG};
 
 /// The intrinsic prototype of typed-array element kind `kind`, if the realm
 /// has bound it.
-fn kind_prototype(kind: u8) -> Option<usize> {
+pub(crate) fn kind_prototype(kind: u8) -> Option<usize> {
     use super::BuiltinConstructorIdentity as I;
     use crate::typedarray as k;
     let identity = match kind {

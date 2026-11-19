@@ -5347,6 +5347,7 @@ perry_store_or_put	f64	ptr,i64,i64,i64,f64,i32s
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr
 perry_tui_state_setter_trampoline	f64	ptr,i64,f64
+perry_typed_array_proto_get	f64	ptr,i64,i64,i64
 perry_update_notify_startup	void	ptr,i32s
 perry_updater_check_headers	ptr	f64
 perry_updater_check_url	ptr	f64

@@ -66,6 +66,16 @@ pub extern "C-unwind" fn js_object_get_field_slow(
         return super::ic_miss::get_field_miss(obj, key);
     }
     unsafe {
+        // A typed array that owns no property: its metadata, `buffer` and
+        // `BYTES_PER_ELEMENT` from structure (`typedarray_named`).
+        let key_bytes =
+            std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+        if let Some(value) = crate::typedarray_named::try_get_named(
+            crate::value::JSValue::pointer(obj as *const u8),
+            key_bytes,
+        ) {
+            return value;
+        }
         let key_bits = crate::value::STRING_TAG | key as u64;
         let verify = crate::object::layout_probe::verify::on();
         if verify {
