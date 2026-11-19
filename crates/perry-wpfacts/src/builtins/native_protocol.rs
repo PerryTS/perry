@@ -266,17 +266,28 @@ fn written_by(
     let num_read = m.atoms[a as usize] == crate::model::NUM_KEY;
     // A named write onto the global object that only a program store made:
     // its value is in the global's field.
-    let stored = |t: Tok| {
+    let stored_key = |t: Tok, k: Atom| {
         field_carries_stores
             && super::global_object(m, t)
-            && !m.accessors.contains_key(&(t, a))
+            && !m.accessors.contains_key(&(t, k))
             && !m.native_given.iter().any(|&(w, _)| w == t)
+    };
+    let stored = |t: Tok| stored_key(t, a);
+    // A computed read of the global object takes the field of each named
+    // key it may spell (`global_shaped_read`, `global_shaped_replay`): a
+    // named program store it may name is one of those fields, not a write
+    // of a value the read misses (`g["globalThis"] = globalThis`).
+    let field_named = |t: Tok, k: Option<Atom>| {
+        k.is_some_and(|k| {
+            let n = &m.atoms[k as usize];
+            n != crate::STAR_KEY && n != crate::model::NUM_KEY && stored_key(t, k)
+        })
     };
     let hit = |t: Tok| {
         has(t, None)
             || (has(t, Some(a)) && !stored(t))
             || num.is_some_and(|n| has(t, Some(n)))
-            || (any && any_on(t, &|_| true))
+            || (any && any_on(t, &|k| !field_named(t, k)))
             || (num_read
                 && any_on(t, &|k| {
                     k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
