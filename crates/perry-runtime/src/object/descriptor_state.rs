@@ -871,11 +871,21 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     );
     note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
+    let mut slot_keeps_attrs = false;
     if let Some(edit) = &byte_edit {
         // Other attributes for a function's `prototype` live with its key in
         // its bag: the slot gives the key up before they are recorded there.
-        if key == "prototype" && attrs.bits != PropertyAttrs::new(true, false, false).bits {
-            edit.prototype_leaves_slot();
+        // The birth attributes stay with a slot that holds the key, so the bag
+        // records nothing: a bag entry would shadow the slot's value.
+        if key == "prototype" {
+            if attrs.bits != PropertyAttrs::new(true, false, false).bits {
+                edit.prototype_leaves_slot();
+            } else {
+                slot_keeps_attrs = unsafe {
+                    crate::closure::is_closure_ptr(obj)
+                        && crate::closure::props::prototype_slot_holds_key(obj)
+                };
+            }
         }
     }
     let target = HolderEdit::target_of(&byte_edit, obj);
@@ -883,7 +893,9 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     // Charter step 3: the attributes live with the holder's keys (recorded by
     // the funnel) and nowhere else.
-    target.note_edits(&[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
+    if !slot_keeps_attrs {
+        target.note_edits(&[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
+    }
 }
 
 /// Install a group of data descriptors without exposing intermediate states.
