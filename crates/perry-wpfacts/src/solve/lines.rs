@@ -267,8 +267,9 @@ impl Model {
                 site,
                 reason,
                 accessor,
+                desc,
             } => format!(
-                "defineanykey {n} {o} {key} {value} {get} {set} {site} {reason} {}",
+                "defineanykey {n} {o} {key} {value} {get} {set} {site} {reason} {} {desc}",
                 *accessor as u8
             ),
             Cons::AccessorKeyed { holder, f, setter } => {

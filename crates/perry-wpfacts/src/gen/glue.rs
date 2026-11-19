@@ -74,6 +74,7 @@ impl<'a> Gen<'a> {
                 site,
                 reason: r,
                 accessor,
+                desc: NO_NODE,
             };
             for n in [o, kn, set] {
                 self.m.cons(n, c);

@@ -2208,6 +2208,7 @@ impl Model {
                 site,
                 reason,
                 accessor,
+                desc,
             } => {
                 let d = crate::model::DefineAny {
                     o,
@@ -2218,6 +2219,7 @@ impl Model {
                     site,
                     reason,
                     accessor,
+                    desc,
                 };
                 self.define_computed_key(d);
             }

@@ -199,6 +199,34 @@ impl Model {
         if kn.prim == 0 && kn.pts.is_empty() {
             return;
         }
+        // A value call (`desc`): a key of String constants defines each by
+        // name, as the direct call does; any other key the computed-key path
+        // on every receiver, as before (the named defines kept beside it).
+        if d.desc != NO_NODE {
+            match self.const_str_keys(d.key) {
+                Some(atoms) => {
+                    for a in atoms {
+                        if self.global_key_def_done.insert((d.id(), a)) {
+                            let c = Cons::DefineDesc {
+                                o: d.o,
+                                key: a,
+                                site: d.site,
+                                reason: d.reason,
+                            };
+                            self.cons(d.desc, c);
+                        }
+                    }
+                }
+                None => {
+                    let star = self.atom(crate::STAR_KEY);
+                    self.define_on.insert((d.o, star, true));
+                    for t in self.nodes[d.o as usize].pts.to_sorted() {
+                        self.define_any_old(d, t);
+                    }
+                }
+            }
+            return;
+        }
         let str_key = kn.pts.is_empty() && kn.prim & prim::SYMBOL == 0;
         // A `set` that is not callable (nor undefined) makes the define
         // throw (ToPropertyDescriptor 6.2.6.5 step 15.b): no define.
@@ -269,6 +297,17 @@ impl Model {
     /// node only grows: a later non-constant makes the define computed
     /// (`define_computed_key` runs again), the named writes kept beside it.
     fn exact_global_keys(&self, k: NodeId) -> Option<Vec<Atom>> {
+        let atoms = self.const_str_keys(k)?;
+        let named = |a: &Atom| {
+            let n = &self.atoms[*a as usize];
+            n != "navigator" && n != crate::STAR_KEY
+        };
+        atoms.iter().all(named).then_some(atoms)
+    }
+
+    /// The keys key node `k` may be when it holds only String constants,
+    /// finitely many (`Node::strs`, exact: `STRS_K` is unbounded); else `None`.
+    fn const_str_keys(&self, k: NodeId) -> Option<Vec<Atom>> {
         let kn = &self.nodes[k as usize];
         if !kn.pts.is_empty() || kn.prim != prim::STR {
             return None;
@@ -276,12 +315,7 @@ impl Model {
         if kn.strs & !crate::model::STRS_RUN < crate::model::STRS_SET0 {
             return None;
         }
-        let atoms = self.str_atoms(kn.strs).to_vec();
-        let named = |a: &Atom| {
-            let n = &self.atoms[*a as usize];
-            n != "navigator" && n != crate::STAR_KEY
-        };
-        atoms.iter().all(named).then_some(atoms)
+        Some(self.str_atoms(kn.strs).to_vec())
     }
 
     /// E5 exact key set (`Cons::DefineAnyKey` whose key is one of finitely

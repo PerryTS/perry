@@ -684,6 +684,9 @@ pub enum Cons {
     /// global object returns join the global's any-key field. Any other
     /// receiver or key: E5 HARD, a store of `value` under any key and the
     /// computed-key accessors, as before.
+    /// `desc`: the descriptor node of a call of `Object.defineProperty` as a
+    /// value (`NO_NODE`: the direct call): a key of String constants defines
+    /// each by name as the direct call does (`Cons::DefineDesc`).
     DefineAnyKey {
         o: NodeId,
         key: NodeId,
@@ -693,6 +696,7 @@ pub enum Cons {
         site: SiteId,
         reason: u32,
         accessor: bool,
+        desc: NodeId,
     },
     /// The node is the key of a store into `o` in a for-in body: a run's one
     /// key stores under that key; any other under the keys the loop's

@@ -1654,6 +1654,7 @@ mod navigator_store;
 mod performance_store;
 mod global_self_store;
 mod global_define_navigator;
+mod global_define_value_call;
 mod new_verdicts;
 mod nocall1;
 mod not_unit;

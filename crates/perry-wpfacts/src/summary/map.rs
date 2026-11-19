@@ -442,6 +442,7 @@ pub fn map_cons(
             site,
             reason,
             accessor,
+            desc,
         } => DefineAnyKey {
             o: n(o),
             key: n(key),
@@ -451,6 +452,7 @@ pub fn map_cons(
             site,
             reason,
             accessor,
+            desc: if desc == NO_NODE { NO_NODE } else { n(desc) },
         },
         Arith { dst, other } => Arith {
             dst: n(dst),

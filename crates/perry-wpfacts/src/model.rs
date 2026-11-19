@@ -790,6 +790,8 @@ pub struct DefineAny {
     pub site: SiteId,
     pub reason: u32,
     pub accessor: bool,
+    /// The descriptor node of a value call (`NO_NODE`: the direct call).
+    pub desc: NodeId,
 }
 
 impl DefineAny {
