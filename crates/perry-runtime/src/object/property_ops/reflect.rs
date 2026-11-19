@@ -81,49 +81,9 @@ fn reflect_get_key<const CANONICAL: bool>(
     if lookup(target).is_some() {
         return proxy_get_with_receiver(target, property_key, recv);
     }
-    // #2766: if `key` resolves to an accessor *getter* on `target`, rebind its
-    // `this` to the receiver and invoke it - object-literal getters capture
-    // `this` in a reserved closure slot (not only the `this` parameter), so plain
-    // forwarding would read the target's fields, not the receiver's. When the
-    // receiver equals the target we can skip the clone and use the ordinary
-    // read.
     if recv.to_bits() != target.to_bits() {
-        let getter_bits = if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
-            unsafe { crate::symbol::reflect_symbol_getter_closure_bits(target, property_key) }
-        } else {
-            crate::object::reflect_getter_closure_bits(target, property_key)
-        };
-        if let Some(getter_bits) = getter_bits {
-            if getter_bits == 0 {
-                // Accessor with no getter -> undefined.
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-            let getter = scope.root_nanbox_f64(f64::from_bits(getter_bits));
-            let recv = if default_undefined
-                && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED
-            {
-                target_handle.get_nanbox_f64()
-            } else {
-                receiver_handle.get_nanbox_f64()
-            };
-            let rebound =
-                crate::closure::clone_closure_rebind_this(getter.get_nanbox_f64().to_bits(), recv);
-            let closure = closure_from(f64::from_bits(rebound));
-            if !closure.is_null() {
-                // Also pass the receiver as the `this` parameter for
-                // free-function getters that read it rather than a slot.
-                let recv = if default_undefined
-                    && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED
-                {
-                    target_handle.get_nanbox_f64()
-                } else {
-                    receiver_handle.get_nanbox_f64()
-                };
-                return crate::closure::js_closure_call0(
-                    closure,
-                    crate::closure::JsThis::from_f64(recv),
-                );
-            }
+        if let Some(value) = call_getter_with_receiver(target, property_key, recv) {
+            return value;
         }
     }
     let recv = if default_undefined && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
@@ -147,6 +107,52 @@ fn reflect_get_key<const CANONICAL: bool>(
         target_handle.get_nanbox_f64(),
         property_key_handle.get_nanbox_f64(),
     )
+}
+
+/// The accessor step of `[[Get]](property_key, receiver)` for a `receiver`
+/// that is not `target`: a getter on `target`'s chain runs with
+/// `this = receiver`, so a builtin getter's brand check sees it. `None` when
+/// the key names no accessor (an own data property shadows inherited ones).
+///
+/// An object-literal getter captures `this` in a closure slot, so it is
+/// cloned with `this` rebound.
+pub(crate) fn call_getter_with_receiver(
+    target: f64,
+    property_key: f64,
+    receiver: f64,
+) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let getter_bits = if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
+        unsafe { crate::symbol::reflect_symbol_getter_closure_bits(target, property_key) }
+    } else {
+        crate::object::reflect_getter_closure_bits(target, property_key)
+    }?;
+    if getter_bits == 0 {
+        // Accessor with no getter -> undefined.
+        return Some(f64::from_bits(TAG_UNDEFINED));
+    }
+    let getter = scope.root_nanbox_f64(f64::from_bits(getter_bits));
+    // A sloppy getter sees a primitive receiver boxed; a strict one sees it raw.
+    let receiver = scope.root_nanbox_f64(crate::closure::coerce_call_this(
+        getter.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    ));
+    let rebound = crate::closure::clone_closure_rebind_this(
+        getter.get_nanbox_f64().to_bits(),
+        receiver.get_nanbox_f64(),
+    );
+    let closure = closure_from(f64::from_bits(rebound));
+    if closure.is_null() {
+        return None;
+    }
+    let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
+    // Also pass the receiver as the `this` parameter for free-function
+    // getters that read it rather than a slot.
+    Some(crate::closure::js_closure_call0(
+        closure,
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+    ))
 }
 
 /// `Reflect.set(target, key, value, receiver?)` - returns the boolean result

@@ -1092,6 +1092,13 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
             return None;
         }
         let current = f64::from_bits(current_handle.get_nanbox_u64());
+        // A typed array answers a canonical numeric key itself, never from its chain.
+        let owner = unsafe { extract_obj_ptr(current) } as usize;
+        if crate::typedarray_props::is_typed_array_owner(owner)
+            && crate::typedarray_props::typed_array_canonical_index_validity(owner, &name).is_some()
+        {
+            return None;
+        }
         let proto = crate::object::js_object_get_prototype_of(current);
         if unsafe { extract_obj_ptr(proto) }.is_null() {
             return None;
