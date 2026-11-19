@@ -808,6 +808,59 @@ mod tests {
             "only the live thread's callback runs"
         );
     }
+
+    /// Codegen links all four entry points of every family by name, so a
+    /// missing export is an undefined symbol in user programs; naming each
+    /// one here turns that into a build failure of this test.
+    #[test]
+    fn exports_the_full_binding_abi_for_every_family() {
+        let _abi: [*const (); 44] = [
+            js_zlib_gzip_sync as *const (),
+            js_zlib_gzip as *const (),
+            js_zlib_create_gzip as *const (),
+            js_zlib_gzip_init as *const (),
+            js_zlib_gunzip_sync as *const (),
+            js_zlib_gunzip as *const (),
+            js_zlib_create_gunzip as *const (),
+            js_zlib_gunzip_init as *const (),
+            js_zlib_deflate_sync as *const (),
+            js_zlib_deflate as *const (),
+            js_zlib_create_deflate as *const (),
+            js_zlib_deflate_init as *const (),
+            js_zlib_inflate_sync as *const (),
+            js_zlib_inflate as *const (),
+            js_zlib_create_inflate as *const (),
+            js_zlib_inflate_init as *const (),
+            js_zlib_deflate_raw_sync as *const (),
+            js_zlib_deflate_raw as *const (),
+            js_zlib_create_deflate_raw as *const (),
+            js_zlib_deflate_raw_init as *const (),
+            js_zlib_inflate_raw_sync as *const (),
+            js_zlib_inflate_raw as *const (),
+            js_zlib_create_inflate_raw as *const (),
+            js_zlib_inflate_raw_init as *const (),
+            js_zlib_unzip_sync as *const (),
+            js_zlib_unzip as *const (),
+            js_zlib_create_unzip as *const (),
+            js_zlib_unzip_init as *const (),
+            js_zlib_brotli_compress_sync as *const (),
+            js_zlib_brotli_compress as *const (),
+            js_zlib_create_brotli_compress as *const (),
+            js_zlib_brotli_compress_init as *const (),
+            js_zlib_brotli_decompress_sync as *const (),
+            js_zlib_brotli_decompress as *const (),
+            js_zlib_create_brotli_decompress as *const (),
+            js_zlib_brotli_decompress_init as *const (),
+            js_zlib_zstd_compress_sync as *const (),
+            js_zlib_zstd_compress as *const (),
+            js_zlib_create_zstd_compress as *const (),
+            js_zlib_zstd_compress_init as *const (),
+            js_zlib_zstd_decompress_sync as *const (),
+            js_zlib_zstd_decompress as *const (),
+            js_zlib_create_zstd_decompress as *const (),
+            js_zlib_zstd_decompress_init as *const (),
+        ];
+    }
 }
 
 #[cfg(test)]

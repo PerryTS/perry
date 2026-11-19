@@ -123,6 +123,11 @@ impl<'s> RootedArrayElems<'s> {
     }
 }
 
+/// The proof [`crate::buffer::store::store_alloc_scratch`] asks for. Only this
+/// module can build one, so the two workspaces below stay the only cells born
+/// without the family claim.
+pub(crate) struct ScratchWorkspace(());
+
 /// Sort indices into the rooted source instead of moving GC values during
 /// comparisons. The source is private to this sort, so callbacks can move its
 /// objects but cannot mutate its slots. No copied heap value survives a call.
@@ -150,10 +155,12 @@ unsafe fn with_sorted_indices<R>(
     #[cfg(perry_gc_instruments)]
     let scratch_cells = crate::wpfacts_check::family::Scratch::enter();
     let order_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
     let scratch_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));

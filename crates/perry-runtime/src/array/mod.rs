@@ -83,6 +83,7 @@ mod shift_queue_tests;
 #[cfg(test)]
 mod small_capacity_tests;
 mod sort;
+pub(crate) use sort::ScratchWorkspace;
 mod sort_numeric;
 pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
 #[cfg(test)]

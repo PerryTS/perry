@@ -491,6 +491,33 @@ mod tests {
                 (value.to_bits() & POINTER_MASK) as usize
             });
         }
+        // Every other runtime producer of a family moves the same bucket.
+        assert_fixture_migrated(ReceiverReprFamily::Text, || {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            crate::text::js_text_decoder_new(undefined, undefined, undefined) as usize
+        });
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            let content = crate::string::js_string_from_bytes(b"receiver-repr".as_ptr(), 13);
+            crate::tui::ffi::js_perry_tui_text(content) as usize
+        });
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            // A fresh slot: `useRef` constructs only when its slot owns no handle.
+            crate::tui::hooks::test_seed_hook_slot_roots(crate::value::TAG_UNDEFINED);
+            crate::tui::hooks::js_perry_tui_use_ref(0.0) as usize
+        });
+        for make in [
+            crate::tui::hooks::js_perry_tui_use_app,
+            crate::tui::hooks::js_perry_tui_use_stdout,
+            crate::tui::hooks::js_perry_tui_use_focus_manager,
+        ] {
+            assert_fixture_migrated(ReceiverReprFamily::Tui, || make() as usize);
+        }
+        assert_fixture(ReceiverReprFamily::SymbolGlobal, || {
+            let key = crate::string::js_string_from_bytes(b"receiverReprFixtureFor".as_ptr(), 22);
+            let key = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+            let symbol = unsafe { crate::symbol::js_symbol_for(key) };
+            ((symbol.to_bits() & POINTER_MASK) as usize, false)
+        });
         // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
         assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
             (crate::object::js_unresolved_namespace_stub().to_bits() & crate::value::POINTER_MASK)
