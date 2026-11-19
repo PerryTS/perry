@@ -169,6 +169,10 @@ impl Model {
         if let Some(&w) = self.enum_key_watch.get(&t) {
             self.edge(n, w);
         }
+        // Every copy of `t`'s own keys (`spread_into`) stores this one too.
+        for (d, site) in self.spread_to.get(&t).cloned().unwrap_or_default() {
+            self.store_into(d, Key::Any(s), n, site);
+        }
         n
     }
 

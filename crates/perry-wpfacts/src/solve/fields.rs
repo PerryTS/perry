@@ -455,6 +455,15 @@ impl Model {
             }
             self.store_into(d, Key::Named(a), f, site);
         }
+        // A computed key of the source with a known shape (`s["k" + i] = v`)
+        // is stored apart from its any-key field (`key_store_node`): the copy
+        // stores it under that shape on the target, meeting the setters it
+        // can name. Later ones replay from `key_store_node`.
+        for (sh, n, store) in self.shaped_of.get(&s).cloned().unwrap_or_default() {
+            if store {
+                self.store_into(d, Key::Any(sh), n, site);
+            }
+        }
         let fa_s = self.field_any(s);
         self.edge(fa_s, fa_d);
         // A key of the source the model does not name (computed, symbol) is
