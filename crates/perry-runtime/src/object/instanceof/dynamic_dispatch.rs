@@ -84,6 +84,16 @@ impl InstanceofRhs {
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // A typed array against the realm's typed-array constructor, answered from
+    // structure before any other classification (none of which concerns them).
+    if let Some(matched) = unsafe { typed_array_instanceof_front(value, type_ref) } {
+        return f64::from_bits(if matched {
+            crate::value::TAG_TRUE
+        } else {
+            TAG_FALSE
+        });
+    }
     // Proxy ids are registry handles, not closure headers. Resolve their
     // observable @@hasInstance/prototype reads before any constructor probe
     // or unwrapping of the left operand (#10364).
@@ -91,7 +101,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     if matches!(rhs.kind, RhsKind::Proxy) {
         return super::proxy_rhs::proxy_instanceof(value, type_ref);
     }
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     // The realm's typed-array constructor whose `@@hasInstance` is the default
     // one: OrdinaryHasInstance from structure, before every probe below (none
     // of which concerns this constructor).
@@ -761,6 +770,61 @@ unsafe fn bag_lacks_symbol(bag: *mut ObjectHeader, hi_sym: usize) -> bool {
         || super::shaped_symbols::position(bag, hi_sym).is_none()
 }
 
+/// `value instanceof C` (ECMA-262 13.10.2 InstanceofOperator) for `value` a
+/// typed array and `C` the realm's typed-array constructor of some kind:
+///
+/// * `C` is a function cell whose immutable constructor identity
+///   (`declaration_of_constructor`) names a typed-array kind;
+/// * GetMethod(C, @@hasInstance) is `%Function.prototype%[@@hasInstance]`
+///   (neither writable nor configurable): `C` owns no `@@hasInstance` and no
+///   hop of its linked chain before `%Function.prototype%` does. That method
+///   is OrdinaryHasInstance(C, value), and `C.prototype` (neither writable nor
+///   configurable) is the kind's intrinsic prototype;
+/// * `typed_array_chain::typed_array_has_instance` answers that from the
+///   value's structure when its chain is the default one.
+///
+/// `None` for every other operand pair or chain: the complete operation.
+/// Reads no property through a getter and runs no code.
+///
+/// # Safety
+/// Both operands are any NaN-boxed values.
+#[inline]
+unsafe fn typed_array_instanceof_front(value: f64, type_ref: f64) -> Option<bool> {
+    use crate::value::{POINTER_MASK, POINTER_TAG};
+    let (vb, rb) = (value.to_bits(), type_ref.to_bits());
+    if vb & !POINTER_MASK != POINTER_TAG || rb & !POINTER_MASK != POINTER_TAG {
+        return None;
+    }
+    // The left operand first: the cheap refusal for every value that is no
+    // typed array (one header read).
+    let vaddr = (vb & POINTER_MASK) as usize;
+    let vty = crate::value::addr_class::try_read_gc_header(vaddr)?.obj_type;
+    if !crate::gc::is_typed_array_type(vty) {
+        return None;
+    }
+    let closure = (rb & POINTER_MASK) as *const crate::closure::ClosureHeader;
+    let info = crate::closure::closure_info(closure)?;
+    use super::super::global_this_tables::BuiltinInstanceIdentity;
+    let declaration = super::super::global_this_tables::declaration_of_constructor(closure, info)?;
+    let Some(BuiltinInstanceIdentity::Class(class_id)) = declaration.instance_identity else {
+        return None;
+    };
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    // GetMethod(C, @@hasInstance): C's own key list, then its linked chain.
+    let hi_sym = crate::symbol::well_known_symbol("hasInstance") as usize;
+    if hi_sym == 0 {
+        return None;
+    }
+    if !bag_lacks_symbol((*closure).props, hi_sym) || linked_chain_may_hook(closure, hi_sym) {
+        return None;
+    }
+    crate::object::typed_array_chain::typed_array_has_instance(value, class_id)
+}
+
 /// Can the chain a linked function `closure` names supply an `@@hasInstance`
 /// other than `%Function.prototype%`'s default? Walks the hops before that
 /// default (or null): each must prove it owns no `@@hasInstance` (`hi_sym`),
@@ -780,6 +844,7 @@ unsafe fn linked_chain_may_hook(
     let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
         return false;
     };
+    // `%Function.prototype%` itself, by identity (no by-name realm lookup).
     let fp = crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr(
         crate::object::BuiltinConstructorIdentity::Function,
     ) as i64)
