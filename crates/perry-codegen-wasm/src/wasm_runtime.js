@@ -3326,7 +3326,7 @@ html, body { width: 100vw; height: 100vh; overflow: hidden;
 button { cursor: pointer; padding: 6px 16px; border: 1px solid #ccc; border-radius: 6px; background: transparent; font: inherit; color: inherit; }
 button:hover { opacity: 0.85; }
 button:active { opacity: 0.7; }
-input[type="text"], input[type="password"], select, textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+input[type="text"], input[type="tel"], input[type="email"], input[type="number"], input[type="url"], input[type="search"], input[type="password"], select, textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
 input[type="range"] { width: 100%; }
 hr { border: none; border-top: 1px solid #ddd; margin: 4px 0; }
 fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
@@ -4052,10 +4052,7 @@ function perry_ui_button_set_image_position() { /* no-op in web */ }
 function perry_ui_textfield_focus(h) { const el = uiGet(h); if (el) el.focus(); }
 function perry_ui_textfield_set_string(h, text) { const el = uiGet(h); if (el) el.value = String(text ?? ""); }
 function perry_ui_textfield_get_string(h) { const el = uiGet(h); return el ? el.value : ""; }
-// The input types that keep a TextField a single-line text field; each picks a phone
-// keyboard. Any other value falls back to "text", as HTML does for a type it does not
-// know, so a call cannot turn the field into a checkbox or a file picker. A password
-// input is a SecureField, and it stays masked.
+// Any other type falls back to "text", so a TextField never becomes another control.
 const TEXTFIELD_INPUT_TYPES = new Set(["text", "tel", "email", "number", "url", "search"]);
 function perry_ui_textfield_set_input_type(h, type) {
   const el = uiGet(h);
