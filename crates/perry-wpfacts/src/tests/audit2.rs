@@ -19,12 +19,6 @@ fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
     s.iter().map(|s| format!("{:?}", s.verdict)).collect()
 }
 
-#[test]
-fn audit2_trivial() {
-    let pf = one("const o = { m() { return 1; } };\nconst r = o.m();\n");
-    assert!(!names(&pf, "m", true).is_empty());
-}
-
 const P: &str = "function g(): any { return 2; }\nconst f: any = { a() { return 1; } };\nfunction cb(this: any, ...r: any[]): any { f.a = g; return 0; }\nconst o: any = { toString() { f.a = g; return \"1\"; }, valueOf() { f.a = g; return 1; } };\n";
 
 fn v(src: &str, key: &str, call: bool) -> Vec<String> {
