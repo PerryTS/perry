@@ -2261,7 +2261,7 @@ fn judge(
         }
         if !m.unit_mode {
             if let Some(name) = intrinsic_callee(m, toks, prim) {
-                if !m.realm_held {
+                if !m.realm_held || !intrinsic_replaceable(m, toks) {
                     return (
                         vec![name],
                         false,
@@ -4419,6 +4419,28 @@ fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
 /// [`Verdict::IntrinsicCall`]: the callee set is one `BuiltinFn` token of a
 /// named native (closed markers stand for their callers' values beside
 /// them), no ⊤, no primitive. Its name. The caller adds `!realm_held`.
+/// May unknown code that holds the realm (`realm_held`) replace the
+/// intrinsic callee in `toks` (`intrinsic_callee`)? A built-in prototype's
+/// member, yes. A namespace member (`Math.max`), no: under the closed world
+/// (owner 2026-11-14) that code is the runtime's natives, which replace no
+/// member of a namespace (owner decision 2026-11-18, R-GLOBAL step 3); only
+/// interpreted code or an unseen module does.
+fn intrinsic_replaceable(m: &Model, toks: &[Tok]) -> bool {
+    if m.interp_runs || m.unseen_module_runs {
+        return true;
+    }
+    !toks.iter().all(|&t| {
+        m.closed_marker(t)
+            || matches!(
+                m.toks[t as usize],
+                TokKind::BuiltinFn(Native::Member { identity, .. })
+                    if identity
+                        .rsplit_once('.')
+                        .is_some_and(|(n, _)| crate::builtins::ns_by_name(n).is_some())
+            )
+    })
+}
+
 fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
     if prim != 0 {
         return None;
@@ -4525,9 +4547,12 @@ pub(crate) fn namespace_callee(
     if m.unit_mode {
         return no("units mode: the facts-off rule decides");
     }
-    // CLOSED-WORLD PREMISE (owner 2026-11-14).
-    if m.realm_held {
-        return no("unknown code holds the realm and may replace the member");
+    // CLOSED-WORLD PREMISE (owner 2026-11-14): unknown code that holds the
+    // realm is the runtime's natives, which replace no namespace member
+    // (owner decision 2026-11-18, R-GLOBAL step 3); interpreted code and an
+    // unseen module may.
+    if m.realm_held && (m.interp_runs || m.unseen_module_runs) {
+        return no("interpreted code holds the realm and may replace the member");
     }
     if !crate::builtins::members::ns_declares(ns, &member) {
         return no("not a member the realm declares on the namespace");
