@@ -684,8 +684,13 @@ pub(crate) unsafe fn bag_define_value_in_bag(ptr: usize, key: &[u8], value: f64)
         // A NEW property — including one `delete` removed earlier: it is
         // appended as any new key is, so it enumerates last. The in-place
         // store below would find the deleted key's tombstoned entry and
-        // bring the property back at its old position.
-        object_own_set_bytes(bag, key, value);
+        // bring the property back at its old position. This is
+        // [[DefineOwnProperty]], validated by the caller, so the bag's
+        // extensibility is not consulted: the `prototype` slot giving its key
+        // up to a non-extensible function's bag moves an existing own key, it
+        // does not add one.
+        let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
         declared_value_replaced_bytes(ptr, key, declared);
         return;
     }
