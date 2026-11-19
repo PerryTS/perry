@@ -686,8 +686,9 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
         }
-        _ => {}
+        _ => return,
     }
+    object::set_intrinsic_to_string_tag(proto, builtin_name);
 }
 
 fn message_port_object() -> *mut ObjectHeader {

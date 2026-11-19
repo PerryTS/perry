@@ -1,0 +1,1 @@
+`MessageChannel.prototype`, `MessagePort.prototype` and `BroadcastChannel.prototype` carry Node's `Symbol.toStringTag`, so `Object.prototype.toString.call(new MessageChannel())` is `[object MessageChannel]` instead of `[object Object]` (#12629).
