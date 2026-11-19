@@ -1,9 +1,6 @@
-//! #10501: a compiled `this.#x` site's word hit tests the slot for the hole
-//! before it reads or overwrites it. The runtime publishes a word for a class
-//! family's private field, whose layout lists the element as optional: the
-//! ShapeId proves the slot, and the field is present only once its
-//! definition has filled it, so a hole slot is a failed brand check that the
-//! miss (`js_private_field_site_get` / `_set`) throws.
+//! A compiled `this.#x` site's word hit sends a hole slot to the miss before
+//! it reads or overwrites it: a class family's optional private field is
+//! absent until its definition fills the slot.
 
 fn compile(source: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "pfield_site.ts").unwrap();

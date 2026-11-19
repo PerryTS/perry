@@ -385,7 +385,7 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     if word == 0 || private_template_may_be_evaluated(class_id) {
         return false;
     }
-    let Some((_, shape_id)) = private_plain_receiver_shape(obj) else {
+    let Some((object, shape_id)) = private_plain_receiver_shape(obj) else {
         return false;
     };
     // A field site's word also carries the slot (see
@@ -397,10 +397,7 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     // (`private_element_present`), so a field word's hit reads this object's
     // slot. A method site's word is a bare ShapeId and has no slot bits.
     let off = (word >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK;
-    off == 0 || {
-        let addr = (obj.to_bits() & crate::value::POINTER_MASK) as usize + off as usize;
-        *(addr as *const u64) != crate::value::TAG_HOLE
-    }
+    off == 0 || *((object as *const u8).add(off as usize) as *const u64) != crate::value::TAG_HOLE
 }
 
 /// Publish a proven receiver shape to `site`.
