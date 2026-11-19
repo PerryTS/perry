@@ -95,7 +95,10 @@ impl Model {
             && (self.unit_mode
                 || self.unseen_module_runs
                 || self.interp_runs
-                || self.reasons[reason as usize].starts_with("E20"));
+                || self
+                    .reasons
+                    .get(reason as usize)
+                    .is_some_and(|r| r.starts_with("E20")));
         if crate::unksrc::on() {
             let why = format!(
                 "{} [tok {t} {:?}]",
