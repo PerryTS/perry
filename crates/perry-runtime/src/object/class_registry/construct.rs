@@ -1003,6 +1003,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                         proto,
                     );
                 }
+                if let Some(object) = native_receiver::fetch_backed_object(
+                    &scope,
+                    result.get_nanbox_f64(),
+                    &nt,
+                    proto,
+                ) {
+                    return object;
+                }
                 native_receiver::apply_prototype(result.get_nanbox_f64(), proto);
                 return result.get_nanbox_f64();
             }
