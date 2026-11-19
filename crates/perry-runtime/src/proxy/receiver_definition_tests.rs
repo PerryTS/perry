@@ -144,3 +144,44 @@ fn trapless_proxy_get_passes_proxy_to_typed_array_getter() {
         assert_eq!(read(ta, key(b"length")), 4.0);
     }
 }
+
+static GETTER_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn counting_getter(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    GETTER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    99.0
+}
+
+/// A typed array's `[[Get]]` answers a canonical numeric key itself: node reads
+/// `undefined` for `new Proxy(u8, {})["9"]` and never runs a `"9"` getter on
+/// the prototype. A named getter there still runs.
+#[test]
+fn trapless_proxy_get_reads_a_typed_array_index_without_its_prototype() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::gc_init();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let proto = object();
+    let getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+        crate::fn_info!(counting_getter, 0),
+        0,
+    ) as i64);
+    for name in [b"9".as_slice(), b"g"] {
+        crate::object::js_object_define_getter(proto, key(name), getter);
+    }
+    let ta = crate::value::js_nanbox_pointer(crate::typedarray::js_typed_array_new_empty(
+        crate::typedarray::KIND_UINT8 as i32,
+        1,
+    ) as i64);
+    crate::object::js_object_set_prototype_of(ta, proto);
+    let proxy = js_proxy_new(ta, object());
+    GETTER_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        JSValue::from_bits(super::get::js_proxy_get(proxy, key(b"9")).to_bits()).is_undefined()
+    );
+    assert_eq!(GETTER_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(super::get::js_proxy_get(proxy, key(b"g")), 99.0);
+    assert_eq!(GETTER_CALLS.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
