@@ -302,8 +302,8 @@ fn written_by(
 /// code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`), a read
 /// is the realm's value or the opaque member. Monotone: `note_realm_held`
 /// replays the lookups parked before it held. The Object.prototype method
-/// namespaces (`builtin_function`: members of a locked prototype) and the
-/// module's own `require` are not members of the realm.
+/// namespaces (`builtin_function`: members of a locked prototype), the
+/// module's own `require` and the global object are not members it replaces.
 fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if !m.realm_held {
         return false;
@@ -325,20 +325,17 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if super::builtin_function(m, np) || ns == BuiltinNs::Require {
         return false;
     }
-    let name = m.atoms[a as usize].as_str();
-    if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
-        return true;
+    // The global object (`globalThis` included): owner decision 2026-11-18
+    // (closed world 11-14). The unknown code that holds the realm is the
+    // runtime's natives, which write no key of the global object. Its
+    // writes are the program's own stores and its stores into ⊤ once the
+    // global object is in ⊤'s reach (`Model::global_in_top`, the caller);
+    // interpreted code and unseen modules keep their any-key writes there.
+    if super::global_object(m, np) {
+        return false;
     }
-    // The global object is an ordinary extensible object (ECMA-262 19.1,
-    // 9.1.1.4 its object record) that unknown code holding the realm holds:
-    // its [[Set]] (10.1.9.2) defines or replaces any key but the
-    // non-writable `undefined`, `NaN` and `Infinity` (19.1.1-19.1.4): a
-    // function the realm or the program declares, a key the program owns
-    // (`global_user_key`: `globalThis.gf = f`), and a key nobody declares
-    // (rule G reads it as absent, `undefined`, only while no unknown code
-    // holds the realm). A module's own bindings live in the module
-    // environment record, which no other code reaches.
-    super::global_object(m, np) && !matches!(name, "undefined" | "NaN" | "Infinity")
+    let name = m.atoms[a as usize].as_str();
+    name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_)))
 }
 
 /// Unknown code now holds the realm: the lookups parked past a member it may
