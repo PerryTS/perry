@@ -102,7 +102,16 @@ impl Model {
         // the program is closed, and no native returns the constructor; the
         // token enters a value only as the global `Function`, a function's
         // `constructor` (a computed key that may be it included), or here.
-        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function)) {
+        // Whole program under the closed world (owner 2026-11-14: no eval or
+        // dynamic code), the unknown code that holds it is program code, whose
+        // calls of it are the program's own call sites (E14), or the runtime,
+        // which never calls it: holding it runs nothing. Per unit, another
+        // unit's code may call it; an unseen module is outside the closed
+        // world. (R-GLOBAL, owner 2026-11-18: only program stores write a
+        // global; interpreted code that runs writes any.)
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+            && (self.unit_mode || self.unseen_module_runs)
+        {
             crate::builtins::interpreted_code_runs(self);
         }
         // Another unit's function the census broke, forwarded where no

@@ -162,3 +162,36 @@ fn dynamic_code_still_writes_any_global() {
         assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
     }
 }
+
+/// RED (closed world, owner 2026-11-14; R-GLOBAL 2026-11-18): whole program,
+/// the interpreter linked (a member named `Function`), the Function
+/// constructor given to unknown code, or reached by unknown code that holds
+/// the realm (`Function.prototype.constructor`), runs no interpreted code:
+/// the code that holds it is the program's or the runtime's, and neither
+/// builds a function from source. `globalThis.Object` stays the intrinsic
+/// and `g` the program's `A`. (Was: the escape of the constructor ran
+/// interpreted code, an any-key write of every global.)
+#[test]
+fn a_global_read_stays_known_when_unknown_code_holds_the_function_constructor() {
+    let read = "const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);";
+    for hand in [
+        "unknown.take2(Function);",
+        "declare function sink(x: any): void;\nsink(1);",
+    ] {
+        for src in both_orders(hand, &format!("{read}\n{READ_G}")) {
+            let pf = facts_with(&src, interp_cfg());
+            assert!(known(&pf), "{src}\n{}", pf.dump_text());
+        }
+    }
+}
+
+/// KEEP: a real source site of interpreted code still writes any global,
+/// beside the constructor handed to unknown code.
+#[test]
+fn a_source_site_beside_the_handed_constructor_still_writes_any_global() {
+    let hand = "unknown.take2(Function); new Function(process.argv[4])();";
+    for src in both_orders(hand, READ_OBJECT) {
+        let pf = facts_with(&src, interp_cfg());
+        assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
+    }
+}

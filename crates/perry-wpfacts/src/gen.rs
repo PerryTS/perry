@@ -1046,6 +1046,7 @@ impl<'a> Gen<'a> {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let what = format!("module {} runs unseen", imp.source);
                     crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                    self.m.unseen_module_runs = true;
                     crate::builtins::note_global_in_top(&mut self.m);
                 }
                 for spec in &imp.specifiers {

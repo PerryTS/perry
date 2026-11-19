@@ -152,3 +152,15 @@ fn an_element_of_a_top_value_is_not_the_constructor() {
     );
     assert!(proven(&v), "{v:?}");
 }
+
+/// KEEP: a real source site still runs interpreted code beside the handed
+/// constructor (node: prints `16 4`).
+#[test]
+fn the_constructor_given_to_unknown_code_with_a_source_site_runs_interpreted_code() {
+    let v = verdict(
+        r#"const unknown: any = (globalThis as any)[process.argv[2]];
+if (unknown) unknown(Function);"#,
+        true,
+    );
+    assert!(!proven(&v), "{v:?}");
+}
