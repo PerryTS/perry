@@ -2930,6 +2930,12 @@ pub struct Model {
     /// GLOBK3: the defines already taken onto the global object, by
     /// `DefineAny::id`.
     pub global_def_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// E5 exact key set: per computed-key define on the global object
+    /// (`DefineAny::id`), the node its `get` call returns into
+    /// (`Model::define_global_keys`).
+    pub global_key_def_ret: crate::pts::FxHashMap<(NodeId, NodeId), NodeId>,
+    /// E5 exact key set: the (define, key) pairs already written.
+    pub global_key_def_done: crate::pts::FxHashSet<((NodeId, NodeId), Atom)>,
     /// GLOBK3: the holder node of a computed-key define's old path (E5
     /// HARD), by `DefineAny::id`: two defines under one key node (one local
     /// key) each install their own descriptor.
