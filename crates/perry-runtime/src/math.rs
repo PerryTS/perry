@@ -62,11 +62,9 @@ pub extern "C" fn js_math_sign(value: f64) -> f64 {
 
 fn js_math_to_int32(value: f64) -> i32 {
     let n = js_math_to_number(value);
-    if !n.is_finite() || n == 0.0 {
-        return 0;
-    }
-    const TWO_32: f64 = 4_294_967_296.0;
-    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+    // ES ToInt32 without a floating-point remainder (#10511): one
+    // truncating conversion for |n| < 2^63, the exponent rule beyond.
+    crate::value::dyn_to_int32(n)
 }
 
 /// Math.imul(a, b) -> number
