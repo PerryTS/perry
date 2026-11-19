@@ -282,6 +282,10 @@ fn value_length_property(value: f64) -> f64 {
             6,
         );
     }
+    // A typed array on its default chain: its live length, from structure.
+    if let Some(length) = unsafe { crate::typedarray_named::try_get(jsval, b"length") } {
+        return length;
+    }
 
     if jsval.is_string() {
         return crate::string::js_string_length(jsval.as_string_ptr()) as f64;

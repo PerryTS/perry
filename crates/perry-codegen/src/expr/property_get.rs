@@ -50,6 +50,7 @@ pub(crate) mod globalget;
 mod helpers;
 
 mod composed_ics;
+pub(crate) mod typed_named;
 use composed_ics::emit_array_subclass_length_ic;
 #[cfg(test)]
 mod tests;

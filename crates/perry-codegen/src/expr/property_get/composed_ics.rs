@@ -60,10 +60,12 @@ pub(super) fn emit_record_length(
     );
     let check = ctx.new_block("plen.check_gc");
     let fast = ctx.new_block("plen.fast");
+    let typed = ctx.new_block("plen.typed");
     let slow = ctx.new_block("plen.slow");
     let merge = ctx.new_block("plen.merge");
     let cl = ctx.block_label(check);
     let fl = ctx.block_label(fast);
+    let tl = ctx.block_label(typed);
     let sl = ctx.block_label(slow);
     let ml = ctx.block_label(merge);
     ctx.block().cond_br(&valid, &cl, &sl);
@@ -76,15 +78,27 @@ pub(super) fn emit_record_length(
     let word = ctx.block().load(crate::types::I16, &header);
     let kind = ctx.block().and(crate::types::I16, &word, "33023");
     let live = ctx.block().icmp_eq(crate::types::I16, &kind, "1");
-    ctx.block().cond_br(&live, &fl, &sl);
+    ctx.block().cond_br(&live, &fl, &tl);
     ctx.current_block = fast;
     let ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &ptr);
     let length = ctx.block().uitofp(I32, &length, DOUBLE);
     let fp = ctx.block().label.clone();
     ctx.block().br(&ml);
+    // A typed array (an `is_array_expr` receiver may be one): its live
+    // length word, from structure (`typed_named`).
+    ctx.current_block = typed;
+    let (typed_len, tp) = super::typed_named::emit_typed_named_arm(
+        ctx,
+        &handle,
+        super::typed_named::TypedNamed::Length,
+        None,
+        &sl,
+        &ml,
+    );
     ctx.current_block = slow;
     let (cold, sp) = emit_record_length_cold(ctx, recv_box, &ml);
     ctx.current_block = merge;
-    ctx.block().phi(DOUBLE, &[(&length, &fp), (&cold, &sp)])
+    ctx.block()
+        .phi(DOUBLE, &[(&length, &fp), (&typed_len, &tp), (&cold, &sp)])
 }
