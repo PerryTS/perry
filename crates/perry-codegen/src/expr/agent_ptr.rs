@@ -119,9 +119,9 @@ pub(crate) fn program_tls_is_local_exec(triple: &str, output_type: &str) -> bool
 /// process loads (`perry`'s `link/platform_cmd.rs` links it `-shared`)
 /// whatever the output kind, so its thread-locals have no fixed offset from
 /// the thread pointer, and local-exec relocations (`R_X86_64_TPOFF32`,
-/// `R_AARCH64_TLSLE_*`) cannot be linked `-shared`. Their runtime archives
-/// also use emulated TLS (`inprocess::optimize_emit::emulated_tls`), whose
-/// blocks only the runtime's accessors reach.
+/// `R_AARCH64_TLSLE_*`) cannot be linked `-shared`. OpenHarmony's runtime
+/// archives also use emulated TLS (`inprocess::optimize_emit::emulated_tls`),
+/// whose blocks only the runtime's accessors reach.
 fn elf_executable_target(triple: &str) -> bool {
     triple.contains("linux")
         && !triple.contains("android")
