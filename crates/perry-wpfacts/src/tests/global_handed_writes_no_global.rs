@@ -92,7 +92,29 @@ fn a_namespace_member_stays_the_realm_s_after_an_unknown_native_call() {
     let body = "const M: any = Math; console.log(M.max(1, 2));";
     for src in both_orders(call, body) {
         let pf = facts(&src);
-        assert!(proven(&pf, "max"), "{src}\n{}", pf.dump_text());
+        assert!(
+            sites(&pf, "max")
+                .iter()
+                .all(|s| !s.top && matches!(s.verdict, Verdict::NativeMember | Verdict::IntrinsicCall)),
+            "{src}\n{}",
+            pf.dump_text()
+        );
+    }
+}
+
+/// KEEP (step 3 covers namespaces only): a built-in prototype's member read
+/// with the realm held stays refused: unknown code may replace it.
+#[test]
+fn a_builtin_prototype_member_stays_refused_after_an_unknown_native_call() {
+    let call = "declare function sink(x: any): void;\nsink(1);";
+    let body = "const P: any = Array.prototype; console.log(P.xq);";
+    for src in both_orders(call, body) {
+        let pf = facts(&src);
+        assert!(
+            sites(&pf, "xq").iter().all(|s| matches!(s.verdict, Verdict::No(_))),
+            "{src}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
