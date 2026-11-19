@@ -171,10 +171,10 @@ pub(crate) unsafe fn builtin_set_receiver(recv: f64) -> Option<*mut TypedArrayHe
 /// `value` is a typed array on its default chain `K.prototype`,
 /// `%TypedArray%.prototype`, ...:
 ///
-/// * the same kind: `P` is the first link, `true`;
-/// * another kind, while `K.prototype` links to `%TypedArray%.prototype` and
-///   that to `%Object.prototype%` (whose `[[Prototype]]` is immutably null):
-///   the whole chain is those three objects, none of them `P`, `false`.
+/// the chain is walked link by link from `K.prototype` while each hop is a
+/// kind prototype or `%TypedArray%.prototype` (intrinsics whose link the
+/// realm records, relinked or not): `P` met is `true`; `%Object.prototype%`
+/// (whose `[[Prototype]]` is immutably null) or null met is `false`.
 ///
 /// `None` for every other value or chain. Reads no property and runs no code.
 ///
@@ -190,15 +190,124 @@ pub(crate) unsafe fn typed_array_has_instance(value: f64, class_id: u32) -> Opti
     if bits & !POINTER_MASK != POINTER_TAG {
         return None;
     }
-    let (kind, kind_proto) = default_chain((bits & POINTER_MASK) as usize)?;
-    let target = (class_id - first) as u8;
-    if kind == target {
-        return Some(true);
-    }
+    let (_, kind_proto) = default_chain((bits & POINTER_MASK) as usize)?;
+    let target = kind_prototype((class_id - first) as u8)?;
+    // The chain from `K.prototype`, link by link, while each hop is one of the
+    // intrinsics whose link the realm records (a kind prototype or
+    // `%TypedArray%.prototype`, relinked or not); `%Object.prototype%`'s
+    // `[[Prototype]]` is immutably null. A hop elsewhere is the complete walk's.
     let ta_proto = typed_array_prototype()?;
     let object_proto = crate::array::object_prototype_addr_if_resolved();
-    (object_proto != 0
-        && prototype_link(kind_proto)? == POINTER_TAG | ta_proto as u64
-        && prototype_link(ta_proto)? == POINTER_TAG | object_proto as u64)
-        .then_some(false)
+    let mut hop = kind_proto;
+    for step in 0..16 {
+        if hop == target {
+            return Some(true);
+        }
+        if object_proto != 0 && hop == object_proto {
+            return Some(false);
+        }
+        // The first hop is the value's own kind prototype.
+        if step != 0 && hop != ta_proto && !is_kind_prototype(hop) {
+            return None;
+        }
+        let link = prototype_link(hop)?;
+        if link == crate::value::TAG_NULL {
+            return Some(false);
+        }
+        if link & !POINTER_MASK != POINTER_TAG {
+            return None;
+        }
+        hop = (link & POINTER_MASK) as usize;
+    }
+    None
 }
+
+/// Is `addr` one of the realm's typed-array kind prototypes?
+fn is_kind_prototype(addr: usize) -> bool {
+    use crate::typedarray as k;
+    [
+        k::KIND_INT8,
+        k::KIND_UINT8,
+        k::KIND_UINT8_CLAMPED,
+        k::KIND_INT16,
+        k::KIND_UINT16,
+        k::KIND_INT32,
+        k::KIND_UINT32,
+        k::KIND_FLOAT16,
+        k::KIND_FLOAT32,
+        k::KIND_FLOAT64,
+        k::KIND_BIGINT64,
+        k::KIND_BIGUINT64,
+    ]
+    .into_iter()
+    .any(|kind| kind_prototype(kind) == Some(addr))
+}
+
+/// [`typed_array_has_instance`] for every value a typed-array constructor
+/// meets in practice, answered from structure (`P`, its kind's intrinsic
+/// prototype, is a typed-array prototype: no other object is it):
+///
+/// * a primitive: OrdinaryHasInstance step 3, `false`;
+/// * a typed array on its default chain: [`typed_array_has_instance`];
+/// * an Array with no recorded `[[Prototype]]`: its chain is
+///   `%Array.prototype%` (a locked intrinsic, never relinked) and
+///   `%Object.prototype%` (immutably null-linked), neither `P`: `false`;
+/// * a plain record (no class surface) whose shape names the realm's
+///   `%Object.prototype%` and which records no other link: `false`.
+///
+/// `None` for every other value (a proxy, a class instance, a relinked
+/// object, a function): the complete operation answers.
+///
+/// # Safety
+/// `value` is any NaN-boxed value.
+pub(crate) unsafe fn typed_array_constructor_has_instance(
+    value: f64,
+    class_id: u32,
+) -> Option<bool> {
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    let bits = value.to_bits();
+    if bits & !POINTER_MASK != POINTER_TAG {
+        // No heap pointer: a Number, a boolean, nullish, a short string, an
+        // INT32 word (a class reference is a function: refused below by
+        // its tag, never answered here).
+        let js = crate::JSValue::from_bits(bits);
+        return (js.is_number() && bits >> 48 != 0
+            || js.is_bool()
+            || js.is_null()
+            || js.is_undefined()
+            || js.is_short_string())
+        .then_some(false);
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    if let Some(answer) = typed_array_has_instance(value, class_id) {
+        return Some(answer);
+    }
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return None;
+    }
+    if crate::gc_type_is_array!(header.obj_type) {
+        return super::prototype_chain::object_static_prototype(addr)
+            .is_none()
+            .then_some(false);
+    }
+    if crate::gc_type_is_object!(header.obj_type) {
+        let obj = addr as *const ObjectHeader;
+        let record = super::shapes::object_shape_record(obj)?;
+        return (record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
+            || record.kind_is(super::shapes::ShapeObjectKind::OrdinaryIndexed))
+        .then_some(())
+        .filter(|_| {
+            record.proto_id() == super::shapes::PROTO_ID_DEFAULT
+                && super::shapes::object_prototype_word(obj as *mut ObjectHeader) == 0
+                && super::shapes::object_is_plain_record(obj)
+        })
+        .map(|_| false);
+    }
+    None
+}
+

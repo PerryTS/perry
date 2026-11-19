@@ -92,6 +92,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         return super::proxy_rhs::proxy_instanceof(value, type_ref);
     }
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // The realm's typed-array constructor whose `@@hasInstance` is the default
+    // one: OrdinaryHasInstance from structure, before every probe below (none
+    // of which concerns this constructor).
+    if let (RhsKind::Native, Some((closure, info))) = (rhs.kind, rhs.closure) {
+        if let Some(matched) = unsafe { typed_array_constructor_instanceof(value, closure, info) } {
+            return f64::from_bits(if matched {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
+    }
     // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
     // trap) forwards to the target — so it is equivalent to `target instanceof
     // C`. The proxy itself is a small registered id with no class chain, so
@@ -698,6 +710,57 @@ mod tests {
     }
 }
 
+/// `value instanceof C` for `C` the realm's typed-array constructor `closure`
+/// (its intrinsic body and identity, `declaration_of_constructor`), when
+/// GetMethod(C, @@hasInstance) is `%Function.prototype%`'s
+/// (`Function.prototype[@@hasInstance]` is neither writable nor
+/// configurable): `C` owns no `@@hasInstance` and no hop of its linked chain
+/// before `%Function.prototype%` does. That method is OrdinaryHasInstance(C,
+/// value), and `C.prototype` (neither writable nor configurable) is its kind's
+/// intrinsic prototype: `typed_array_chain::typed_array_constructor_has_instance`
+/// answers it from structure. `None` for every other case.
+///
+/// # Safety
+/// `closure` is a live closure cell and `info` its admitted info.
+unsafe fn typed_array_constructor_instanceof(
+    value: f64,
+    closure: *const crate::closure::ClosureHeader,
+    info: &'static crate::closure::JsFunctionInfo,
+) -> Option<bool> {
+    use super::super::global_this_tables::BuiltinInstanceIdentity;
+    let declaration = super::super::global_this_tables::declaration_of_constructor(closure, info)?;
+    let Some(BuiltinInstanceIdentity::Class(class_id)) = declaration.instance_identity else {
+        return None;
+    };
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    let hi_sym = crate::symbol::well_known_symbol("hasInstance") as usize;
+    if hi_sym == 0 || !bag_lacks_symbol((*closure).props, hi_sym) {
+        return None;
+    }
+    if linked_chain_may_hook(closure, hi_sym) {
+        return None;
+    }
+    crate::object::typed_array_chain::typed_array_constructor_has_instance(value, class_id)
+}
+
+/// Does the property bag `bag` (null: none) own no `hi_sym` key? From its
+/// shape (no symbol key at all) or its key list (no entry for that symbol).
+///
+/// # Safety
+/// `bag` is null or a live `GC_TYPE_OBJECT` cell.
+#[inline]
+unsafe fn bag_lacks_symbol(bag: *mut ObjectHeader, hi_sym: usize) -> bool {
+    bag.is_null()
+        || !crate::object::overflow::shadowed(bag)
+            && crate::object::shapes::object_shape_record(bag)
+                .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+        || super::shaped_symbols::position(bag, hi_sym).is_none()
+}
+
 /// Can the chain a linked function `closure` names supply an `@@hasInstance`
 /// other than `%Function.prototype%`'s default? Walks the hops before that
 /// default (or null): each must prove it owns no `@@hasInstance` (`hi_sym`),
@@ -717,7 +780,10 @@ unsafe fn linked_chain_may_hook(
     let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
         return false;
     };
-    let fp = crate::object::builtin_prototype_value("Function").to_bits();
+    let fp = crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::Function,
+    ) as i64)
+    .to_bits();
     for _ in 0..32 {
         let v = crate::JSValue::from_bits(bits);
         if bits == fp || v.is_null() {
