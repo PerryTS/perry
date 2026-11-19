@@ -169,16 +169,10 @@ fn test_array_named_materialized_iterator_brands_follow_live_moves() {
 
 #[test]
 fn materialized_map_brand_moves_with_private_bag() {
-    check_materialized_map_brand(false);
+    check_materialized_map_brand();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Map iterator brand"]
-fn negative_control_objtables_map_iterator() {
-    check_materialized_map_brand(true);
-}
-
-fn check_materialized_map_brand(erase: bool) {
+fn check_materialized_map_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let map = crate::map::js_map_alloc(0);
     let original = crate::map::js_map_entries(map) as usize;
@@ -186,12 +180,6 @@ fn check_materialized_map_brand(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(original, moved);
-    if erase {
-        unsafe {
-            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
-            (*(*bag).meta).native_state = 0;
-        }
-    }
     assert!(util_types_is_map_iterator(moved));
     let fresh = crate::array::js_array_alloc(0) as usize;
     assert!(!util_types_is_map_iterator(fresh));
@@ -200,16 +188,10 @@ fn check_materialized_map_brand(erase: bool) {
 
 #[test]
 fn materialized_set_brand_moves_with_private_bag() {
-    check_materialized_set_brand(false);
+    check_materialized_set_brand();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Set iterator brand"]
-fn negative_control_objtables_set_iterator() {
-    check_materialized_set_brand(true);
-}
-
-fn check_materialized_set_brand(erase: bool) {
+fn check_materialized_set_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let set = crate::set::js_set_alloc(0);
     let original = crate::set::js_set_to_array(set) as usize;
@@ -217,12 +199,6 @@ fn check_materialized_set_brand(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(original, moved);
-    if erase {
-        unsafe {
-            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
-            (*(*bag).meta).native_state = 0;
-        }
-    }
     assert!(util_types_is_set_iterator(moved));
     let fresh = crate::array::js_array_alloc(0) as usize;
     assert!(!util_types_is_set_iterator(fresh));
@@ -574,16 +550,10 @@ mod regexp_expandos;
 
 #[test]
 fn console_private_streams_move_with_the_instance() {
-    check_objtables_console(false);
+    check_objtables_console();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_console() {
-    check_objtables_console(true);
-}
-
-fn check_objtables_console(erase_invariant: bool) {
+fn check_objtables_console() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -603,11 +573,6 @@ fn check_objtables_console(erase_invariant: bool) {
     assert!(copying_minor_cycles() > cycles);
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     assert_ne!(moved, obj);
-    if erase_invariant {
-        unsafe {
-            (*(*moved).meta).native_state = 0;
-        }
-    }
     unsafe {
         assert_ne!(
             (*(*moved).meta).native_state,
@@ -641,16 +606,10 @@ fn check_objtables_console(erase_invariant: bool) {
 
 #[test]
 fn boxed_string_payload_moves_as_a_private_child_slot() {
-    check_objtables_boxed_payload(false);
+    check_objtables_boxed_payload();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_boxed_payload() {
-    check_objtables_boxed_payload(true);
-}
-
-fn check_objtables_boxed_payload(erase_invariant: bool) {
+fn check_objtables_boxed_payload() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -666,12 +625,6 @@ fn check_objtables_boxed_payload(erase_invariant: bool) {
     assert!(copying_minor_cycles() > cycles);
     let moved = f64::from_bits(js_shadow_slot_get(0));
     assert_ne!(moved.to_bits(), value.to_bits(), "wrapper must move");
-    if erase_invariant {
-        unsafe {
-            let obj = (moved.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
-            (*(*obj).meta).boxed_primitive = crate::value::TAG_UNDEFINED;
-        }
-    }
     let (_, payload) = crate::builtins::boxed_primitive_payload(moved).unwrap();
     assert_ne!(
         payload.to_bits(),
@@ -814,16 +767,10 @@ fn test_live_transition_cache_entry_survives_full_gc() {
 
 #[test]
 fn reflect_metadata_record_moves_as_a_private_owner_child() {
-    check_reflect_metadata_record(false);
+    check_reflect_metadata_record();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Reflect metadata record"]
-fn negative_control_objtables_reflect_metadata() {
-    check_reflect_metadata_record(true);
-}
-
-fn check_reflect_metadata_record(erase: bool) {
+fn check_reflect_metadata_record() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let owner = crate::object::js_object_alloc(0, 0);
     let value = crate::object::js_object_alloc(0, 0);
@@ -838,11 +785,6 @@ fn check_reflect_metadata_record(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     assert_ne!(moved, owner);
-    if erase {
-        unsafe {
-            (*(*moved).meta).reflect_metadata = 0;
-        }
-    }
     let result = crate::proxy::metadata::js_reflect_get_own_metadata(
         key,
         f64::from_bits(ptr_bits(moved as usize)),

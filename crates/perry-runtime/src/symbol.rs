@@ -220,13 +220,6 @@ pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: 
         (*cell).description_text = Some(std::sync::Arc::from(description));
     }
 }
-#[cfg(test)]
-pub(crate) fn test_clear_persistent_description(sym_ptr: usize) {
-    unsafe {
-        let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
-        (*cell).description_text = None;
-    }
-}
 
 // Pre-allocated well-known symbols (Symbol.toPrimitive, Symbol.hasInstance,
 // Symbol.match, Symbol.toStringTag, Symbol.iterator, Symbol.asyncIterator,

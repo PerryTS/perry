@@ -569,14 +569,9 @@ fn a_traced_promotion_keeps_the_live_map_and_reclaims_the_dead_one() {
 /// A weak value witness prevents stale mapped test pages from faking liveness.
 #[test]
 fn map_store_owned_edge_retains_values_after_moving_owner() {
-    owned_edge_witness(false);
+    owned_edge_witness();
 }
-#[test]
-#[ignore = "negative control: erase the Map's only strong store edge"]
-fn negative_control_objtables_map_store() {
-    owned_edge_witness(true);
-}
-fn owned_edge_witness(erase: bool) {
+fn owned_edge_witness() {
     let _guard = CopyingNurseryTestGuard::new(3);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -601,12 +596,6 @@ fn owned_edge_witness(erase: bool) {
         store,
         "the store moves too"
     );
-    if erase {
-        // GC_STORE_AUDIT(TEST): intentional edge deletion is the control.
-        unsafe {
-            std::ptr::write((moved as *mut u8).add(16).cast::<usize>(), 0);
-        }
-    }
     full_collection();
     let retained = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1)));
     assert_ne!(
