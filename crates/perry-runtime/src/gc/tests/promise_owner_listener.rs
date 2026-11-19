@@ -10,15 +10,10 @@ extern "C" fn handler(
 
 #[test]
 fn listener_children_follow_the_owner() {
-    check_owned_listener(false);
-}
-#[test]
-#[ignore = "negative control: erase the moved Promise's listener list"]
-fn negative_control_objtables_promise_listener() {
-    check_owned_listener(true);
+    check_owned_listener();
 }
 
-fn check_owned_listener(erase: bool) {
+fn check_owned_listener() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::promise::js_promise_new();
@@ -33,11 +28,6 @@ fn check_owned_listener(erase: bool) {
     let moved =
         (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut crate::promise::Promise;
     assert_ne!(moved, owner);
-    if erase {
-        unsafe {
-            (*(*moved).meta).owned_state = 0;
-        }
-    }
     let (cb_after, context_after) = {
         let records = crate::promise::reactions::promise_take_settle_listeners(moved);
         assert_eq!(records.len(), 1);

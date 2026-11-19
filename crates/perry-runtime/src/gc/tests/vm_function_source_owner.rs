@@ -6,14 +6,9 @@ extern "C" fn callback(_: *const crate::closure::ClosureHeader, _: crate::closur
 }
 #[test]
 fn vm_function_source_follows_the_moved_closure() {
-    check_source(false);
+    check_source();
 }
-#[test]
-#[ignore = "negative control: erase the moved closure's private source slot"]
-fn negative_control_objtables_vm_function_source() {
-    check_source(true);
-}
-fn check_source(erase: bool) {
+fn check_source() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::closure::js_closure_alloc(crate::fn_info!(callback, 0), 0);
@@ -22,9 +17,6 @@ fn check_source(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        crate::node_vm::owned_state::clear_function_source(moved);
-    }
     assert_eq!(
         crate::node_vm::compiled_function_source_for_closure(moved).as_deref(),
         Some("function () { return 37; }")

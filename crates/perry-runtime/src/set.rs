@@ -12,8 +12,7 @@ mod index;
 pub(crate) use index::key_identity;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_has_index, test_index_buckets, test_key_identity,
-    test_snapshot as test_index_snapshot,
+    test_has_index, test_index_buckets, test_key_identity, test_snapshot as test_index_snapshot,
 };
 
 #[cfg(test)]

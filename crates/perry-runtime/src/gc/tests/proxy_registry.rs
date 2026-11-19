@@ -124,14 +124,9 @@ fn observing_an_outer_proxy_recursively_keeps_its_proxy_target_live() {
 
 #[test]
 fn proxy_target_and_handler_copy_without_moving_proxy_identity() {
-    check_owned_proxy(false);
+    check_owned_proxy();
 }
-#[test]
-#[ignore = "negative control: clear the proxy target edge"]
-fn negative_control_objtables_proxies() {
-    check_owned_proxy(true);
-}
-fn check_owned_proxy(erase: bool) {
+fn check_owned_proxy() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -164,9 +159,6 @@ fn check_owned_proxy(erase: bool) {
         js_shadow_slot_set(0, proxy.to_bits());
         let scope = RuntimeHandleScope::new();
         let weak = scope.root_nanbox_f64(f64::from_bits(ptr_bits(weak as usize)));
-        if erase {
-            state.target = 0.0;
-        }
         full_collect();
         assert_ne!(
             crate::weakref::js_weakref_deref(weak.get_nanbox_f64()).to_bits(),
