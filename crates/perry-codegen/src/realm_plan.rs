@@ -653,6 +653,23 @@ mod tests {
     }
 
     #[test]
+    fn a_global_worker_construction_reaches_the_worker_threads_worker() {
+        // `new Worker(...)` with no import lowers to node:worker_threads'
+        // WorkerNew; minting that constructor mints its [[Prototype]],
+        // EventEmitter, so R holds both constructor bags.
+        let global = reach("const w = new Worker(new URL('./w.js', import.meta.url)); w.terminate();");
+        assert!(!global.is_full());
+        assert!(global.names.contains("node:worker_threads.Worker"));
+        let plan = RealmPlan::from_reach(&global).unwrap();
+        assert!(plan
+            .runtime_layouts
+            .contains_key("%Layout:NATIVE_CTOR_EVENT_EMITTER%"));
+        // A program class named Worker is not the builtin.
+        let local = reach("class Worker {} new Worker();");
+        assert!(!local.names.contains("node:worker_threads.Worker"));
+    }
+
+    #[test]
     fn worker_diagnostic_capabilities_own_only_their_shared_result_layouts() {
         let worker_reach =
             reach("import { Worker } from 'node:worker_threads'; new Worker('', { eval: true });");

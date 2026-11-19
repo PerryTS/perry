@@ -972,6 +972,15 @@ impl Visit for Scan<'_> {
 
     fn visit_new_expr(&mut self, expression: &ast::NewExpr) {
         self.primitive_prototypes();
+        // A free `new Worker(...)` (the Bun/browser global) lowers to the same
+        // WorkerNew node as node:worker_threads.Worker (lower/expr_new.rs), so
+        // it constructs that cell, and R reaches its prototype chain
+        // (EventEmitter) and births through it. No global `Worker` cell exists.
+        if let ast::Expr::Ident(callee) = crate::patched_builtins::peel(&expression.callee) {
+            if self.free(callee) && &*callee.sym == "Worker" {
+                self.add("node:worker_threads.Worker");
+            }
+        }
         expression.visit_children_with(self);
     }
 
