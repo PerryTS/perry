@@ -73,6 +73,12 @@ impl Model {
             }
             _ => None,
         };
+        // Rule TA-LEN: a typed array's construction length while it holds.
+        let birth = birth.or_else(|| {
+            let k = self.ta_fixed_len(t)?;
+            self.ta_len_watch.push(t);
+            Some(k)
+        });
         let iv = birth.map_or(Iv::TOP, |k| Iv::int(k, k));
         self.nodes[n as usize].range = iv;
         self.add_prim(n, prim::NUM);
@@ -154,6 +160,12 @@ impl Model {
     /// never drops below it) or the length is ⊤. Any other Array may get a
     /// hole at once (`mark_hole`).
     pub(crate) fn index_hole_in(&mut self, t: Tok, key: NodeId) {
+        // A typed array has no holes: a store under an invalid index is a
+        // no-op (10.4.5.5, TypedArraySetElement), and `mark_hole` marks
+        // Arrays only.
+        if t == TOP || !self.is_arr(t) {
+            return;
+        }
         if !self.elem_undef_watched(t) {
             self.mark_hole(t);
             return;
@@ -328,7 +340,19 @@ impl Model {
     /// this unit whose birth recorded a length and whose length is not ⊤
     /// yet. Any other token's read adds it at once, as before.
     pub(crate) fn elem_undef_watched(&mut self, t: Tok) -> bool {
-        if !self.elem_undef || t == TOP || !self.is_arr(t) || self.is_marker(t) {
+        if !self.elem_undef || t == TOP || self.is_marker(t) {
+            return false;
+        }
+        // Rule TA-LEN: a typed array whose length never moves from its
+        // construction length reads `undefined` past it only.
+        if self.typed_array_elements(t) {
+            if self.ta_fixed_len(t).is_none() {
+                return false;
+            }
+            let n = self.arr_len(t);
+            return !self.nodes[n as usize].range.is_top();
+        }
+        if !self.is_arr(t) {
             return false;
         }
         let TokKind::Obj(tm, _) = self.toks[t as usize] else {
@@ -359,6 +383,106 @@ impl Model {
         if self.elem_in_floor(t, key) == Some(false) {
             self.add_prim(dst, prim::UNDEF);
         }
+    }
+
+    /// Rule TA-LEN: the length typed array `t` keeps for its whole life, if
+    /// it is known. ECMA-262 10.4.5.4 / 10.4.5.15: a [[Get]] under a
+    /// numeric key never reaches the prototype; it is `undefined` exactly
+    /// when the key is no valid integer index (not an integer, negative, at
+    /// or past the length, or the buffer detached), else a Number or
+    /// BigInt. A view that does not track its length over a buffer that is
+    /// not resizable keeps its construction length until the buffer is
+    /// detached. So the length is the birth length (`ta_birth_len`, a fresh
+    /// buffer) while
+    /// - `t` is a typed array of this program (not foreign, no marker, not
+    ///   a per-unit solve), neither escaped nor HARD (B1 `.buffer` read and
+    ///   every other mark);
+    /// - every buffer it views (`VIEWED_BUFFER`) is an ArrayBuffer of the
+    ///   program neither escaped nor HARD: a detach is a `transfer` (B2) or
+    ///   a transfer list (B3) on the buffer itself, also when another view
+    ///   (`subarray`) exposed it;
+    /// - each Array literal it was built from still iterates intrinsically
+    ///   (`record_entry_holds`: its own and inherited `@@iterator` and
+    ///   `%ArrayIteratorPrototype%.next` are the builtins), so the
+    ///   construction listed exactly its elements.
+    /// Every condition only turns false during a solve (`settle_ta_len`).
+    pub(crate) fn ta_fixed_len(&self, t: Tok) -> Option<i64> {
+        if t == TOP
+            || self.unit_mode
+            || !self.typed_array_elements(t)
+            || self.is_marker(t)
+            || self.is_escaped(t)
+            || self.hard.contains_key(&t)
+        {
+            return None;
+        }
+        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+            return None;
+        };
+        if self.foreign.contains_key(&tm) {
+            return None;
+        }
+        let (len, srcs) = self.ta_birth_len.get(&tm)?;
+        if *len < 0 {
+            return None;
+        }
+        let vb = self
+            .atom_index
+            .get(VIEWED_BUFFER)
+            .and_then(|a| self.fields.get(&(t, *a)));
+        if let Some(&f) = vb {
+            let nd = &self.nodes[f as usize];
+            if nd.prim != 0 {
+                return None;
+            }
+            for b in nd.pts.to_sorted() {
+                let fresh = b != TOP
+                    && matches!(self.toks[b as usize], TokKind::Obj(bm, _)
+                        if matches!(self.tmpls[bm as usize].kind,
+                            TmplKind::BObj { what: "ArrayBuffer", .. })
+                            && !self.foreign.contains_key(&bm))
+                    && !self.is_marker(b)
+                    && !self.is_escaped(b)
+                    && !self.hard.contains_key(&b);
+                if !fresh {
+                    return None;
+                }
+            }
+        }
+        for &s in srcs {
+            let nd = &self.nodes[s as usize];
+            if nd.prim != 0
+                || nd
+                    .pts
+                    .to_sorted()
+                    .into_iter()
+                    .any(|v| !self.record_entry_holds(v))
+            {
+                return None;
+            }
+        }
+        Some(*len)
+    }
+
+    /// Once the worklist is empty: every typed array whose length rule
+    /// TA-LEN no longer fixes gets a ⊤ length, which re-runs the reads
+    /// watching it (`Cons::ElemUndef`). Monotone: a widened length stays ⊤.
+    pub(crate) fn settle_ta_len(&mut self) -> bool {
+        if self.ta_len_watch.is_empty() {
+            return false;
+        }
+        let watch = std::mem::take(&mut self.ta_len_watch);
+        let mut kept = Vec::with_capacity(watch.len());
+        for t in watch {
+            if self.ta_fixed_len(t).is_some() {
+                kept.push(t);
+            } else {
+                let n = self.arr_len(t);
+                self.arr_len_grow(n, Iv::TOP);
+            }
+        }
+        self.ta_len_watch = kept;
+        !self.wl.is_empty()
     }
 
     /// The in-bounds read (`Cons::IdxLoad` with `kept`; gen compared the
