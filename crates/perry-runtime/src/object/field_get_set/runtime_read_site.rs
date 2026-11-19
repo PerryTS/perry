@@ -340,6 +340,10 @@ pub(crate) unsafe fn store_integer_key(obj_bits: u64, key: f64, value: f64) -> b
     {
         return false;
     }
+    // An element of a plain object's index store: its own data property.
+    if crate::array::plain_elements::set_existing_number_key(obj, key, value) {
+        return true;
+    }
     let Some(n) = integer_key(key) else {
         return false;
     };

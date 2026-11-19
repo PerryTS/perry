@@ -27,7 +27,8 @@ impl ShapeRecord {
             11 => ShapeObjectKind::CallableOrdinary,
             12 => ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
             13 => ShapeObjectKind::Arguments,
-            _ => ShapeObjectKind::ArgumentsStrict,
+            14 => ShapeObjectKind::ArgumentsStrict,
+            _ => ShapeObjectKind::OrdinaryIndexed,
         }
     }
 

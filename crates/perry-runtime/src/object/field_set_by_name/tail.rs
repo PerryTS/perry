@@ -58,6 +58,11 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
     }
+    // A plain object's index key lives in its elements store (or takes one):
+    // no index key becomes a layout property beside a store.
+    if unsafe { crate::array::plain_elements::set_by_name(obj, key, value) } {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);

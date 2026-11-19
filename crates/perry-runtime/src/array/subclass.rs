@@ -44,7 +44,7 @@ pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_lo
 //     bit 2       compact nonnegative-int entity proof (mode 2)
 //     bit 3       sealed intrinsic prototype (#11915; family in bits 8..13,
 //                 image key count + 1 in bits 16..31: DEC 250)
-//     bit 4       free
+//     bit 4       plain-object index store (never on an Array subclass)
 //     bit 5       object is a prototype
 //     bit 6       exotic read receiver
 //     bits 8..31  verified prefix bound (24 bits, max 16,000,000)

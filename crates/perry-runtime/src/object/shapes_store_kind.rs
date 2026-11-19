@@ -25,6 +25,10 @@
 //! | `NativeNamespace` | not admitted | clear |
 //! | `OrdinaryNativeAlias` | admitted | clear |
 //! | `OrdinaryUnmarkedNativeAlias` | refused | clear |
+//! | `OrdinaryIndexed` | not admitted | clear |
+//!
+//! `OrdinaryIndexed` is F-C: a plain receiver whose index keys live in its
+//! elements store, not its layout (`array::subclass_elements`).
 //!
 //! Ordinary and OrdinaryNativeAlias shapes admit stores. The native alias
 //! affects read fallback; its writable own slots follow the same store rules.
@@ -118,10 +122,27 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
             ShapeObjectKind::OrdinaryUnmarkedNativeAlias
         }
     } else if receiver_admits_plain_store(obj) {
-        ShapeObjectKind::Ordinary
+        // F-C: a plain object whose index keys live in its elements store.
+        if receiver_has_plain_elements(obj) {
+            ShapeObjectKind::OrdinaryIndexed
+        } else {
+            ShapeObjectKind::Ordinary
+        }
     } else {
         ShapeObjectKind::OrdinaryUnmarked
     }
+}
+
+/// F-C from the per-object record: `ObjectMeta::elements` is a plain
+/// object's index store (`OBJECT_META_FLAG_PLAIN_ELEMENTS`).
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn receiver_has_plain_elements(obj: *const ObjectHeader) -> bool {
+    // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PLAIN_ELEMENTS != 0
 }
 
 /// R2: the kind a mint for `obj` publishes, given the kind its lineage (or
@@ -135,7 +156,7 @@ pub(crate) unsafe fn mint_kind(
     lineage: ShapeObjectKind,
     obj: *const ObjectHeader,
 ) -> ShapeObjectKind {
-    if lineage.is_ordinary_layout() && !obj.is_null() && crate::object::object_is_shaped(obj) {
+    if lineage.is_ordinary_family() && !obj.is_null() && crate::object::object_is_shaped(obj) {
         receiver_ordinary_kind(obj)
     } else {
         lineage
@@ -163,7 +184,7 @@ pub(crate) unsafe fn store_facts_agree(obj: *const ObjectHeader) -> bool {
         return false;
     }
     let proof = receiver_carries_numeric_proof(obj);
-    if !kind.is_ordinary_layout() {
+    if !kind.is_ordinary_family() {
         return !proof;
     }
     let expected = if proof {
@@ -267,7 +288,7 @@ pub(crate) unsafe fn restamp_object_store_kind(obj: *mut ObjectHeader) {
     let Some(kind) = super::shape_object_kind_of_receiver((id).0) else {
         return;
     };
-    if !kind.is_ordinary_layout() {
+    if !kind.is_ordinary_family() {
         return;
     }
     let target = receiver_ordinary_kind(obj);

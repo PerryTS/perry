@@ -35,6 +35,8 @@ pub(crate) enum MetaReason {
     WasmWrapper,
     RuntimeHandle,
     ArraySubclassElements,
+    /// A plain object's index store (`array::plain_elements`).
+    PlainElements,
     ArrayIteratorBrand,
     ClosureProps,
     CellExpando,
@@ -99,6 +101,7 @@ impl MetaReason {
             MetaReason::WasmWrapper => Fact(P1),
             MetaReason::RuntimeHandle => RuntimeBornOnly,
             MetaReason::ArraySubclassElements => Fact(P4),
+            MetaReason::PlainElements => Fact(P3),
             MetaReason::ArrayIteratorBrand => RuntimeBornOnly,
             MetaReason::ClosureProps => RuntimeBornOnly,
             MetaReason::CellExpando => RuntimeBornOnly,

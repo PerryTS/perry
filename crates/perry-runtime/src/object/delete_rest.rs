@@ -50,6 +50,17 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_named::note_named_mutation(owner, bytes);
         }
     }
+    // A plain object's index key is an element of its store: deleting it
+    // leaves a hole (its layout names no index key).
+    if let Some(view) = unsafe { crate::array::subclass_elements::own_elements(obj as usize) }
+        .filter(|view| view.plain)
+    {
+        if let Some(elements_key @ crate::array::subclass_elements::ElementsKey::Index(_)) =
+            unsafe { crate::array::subclass_elements::key_of_header(key) }
+        {
+            return unsafe { crate::array::subclass_elements::delete_key(view, elements_key) };
+        }
+    }
     if let Some(result) = crate::web_storage::storage_delete_field(obj, key) {
         return result;
     }

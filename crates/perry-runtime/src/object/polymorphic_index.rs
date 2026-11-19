@@ -127,6 +127,26 @@ fn numeric_key_i32_index(value: f64) -> Option<i32> {
 /// garbage f64 values.
 #[no_mangle]
 pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> f64 {
+    // A plain object's index key is an element of its store: answered here,
+    // ahead of the receiver ladder's frame.
+    let bits = obj_handle as u64;
+    let tag = bits >> 48;
+    if tag == 0x7FFD || tag == 0 {
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+            crate::value::POINTER_TAG | (bits & crate::value::POINTER_MASK),
+        )) {
+            if let Some(value) = unsafe { crate::array::plain_elements::get_number_key(obj, idx) } {
+                return value;
+            }
+        }
+    }
+    get_index_polymorphic_rest(obj_handle, idx)
+}
+
+/// [`js_object_get_index_polymorphic`] for every receiver its store arm does
+/// not answer.
+#[inline(never)]
+fn get_index_polymorphic_rest(obj_handle: i64, idx: f64) -> f64 {
     let raw = if (obj_handle as u64) >> 48 >= 0x7FF8 {
         // NaN-boxed: only POINTER_TAG (0x7FFD) and STRING_TAG (0x7FFF) carry a
         // heap pointer in the low 48 bits. INT32 (0x7FFE) is usually a primitive
@@ -566,6 +586,12 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // `packed[sparse[x]] = last` that was an allocation per swap).
         if let Some(index) = numeric_key_u32_index(idx) {
             if crate::array::array_subclass_fast_index_set(boxed, index, value) {
+                return;
+            }
+        }
+        // An element of a plain object's index store: its own data property.
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(boxed) {
+            if unsafe { crate::array::plain_elements::set_existing_number_key(obj, idx, value) } {
                 return;
             }
         }

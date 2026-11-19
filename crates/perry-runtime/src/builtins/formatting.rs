@@ -1271,6 +1271,26 @@ unsafe fn format_object_as_json(
 
     let mut string_parts: Vec<(String, String)> = Vec::with_capacity(key_count);
 
+    // A plain object's index store holds its index keys (ascending), which
+    // its layout does not name: they print first, as `Object.keys` lists them.
+    if let Some(view) = crate::array::subclass_elements::own_elements(obj_addr) {
+        if view.plain {
+            for index in crate::array::subclass_elements::own_index_keys(view) {
+                // Re-read per element: formatting a value can run user code.
+                let Some(bits) = crate::array::subclass_elements::own_elements(obj_addr)
+                    .filter(|view| view.plain)
+                    .and_then(|view| crate::array::subclass_elements::view_get(view, index))
+                else {
+                    continue;
+                };
+                let key_str = index.to_string();
+                let value_str = format_jsvalue_for_json(f64::from_bits(bits), depth + 1);
+                let rendered = format!("{}: {}", format_inspect_property_key(&key_str), value_str);
+                string_parts.push((key_str, rendered));
+            }
+        }
+    }
+
     for i in 0..key_count {
         // Get the key (NaN-boxed string pointer)
         let key_val = crate::array::js_array_get(keys_array, i as u32);
