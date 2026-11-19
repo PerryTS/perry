@@ -198,6 +198,29 @@ fn lower(src: &str) -> HirModule {
         .unwrap()
 }
 
+/// [`lower`] with the program's builtin-patch scan installed, as the
+/// driver installs it: a direct namespace call that a program write may
+/// replace lowers to its guarded pair.
+fn lower_with_patches(src: &str) -> HirModule {
+    let src = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let mut cache = perry_diagnostics::SourceCache::new();
+            let parsed =
+                perry_parser::parse_typescript_with_cache(&src, "test.ts", &mut cache).unwrap();
+            let mut set = perry_hir::patched_builtins::PatchedBuiltins::new();
+            perry_hir::patched_builtins::scan_module(&parsed.module, &mut set);
+            perry_hir::patched_builtins::set_patched_builtins(std::sync::Arc::new(set));
+            let module = perry_hir::lower_module(&parsed.module, "test", "test.ts").unwrap();
+            perry_hir::patched_builtins::clear_patched_builtins();
+            module
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
 #[test]
 fn a_constructor_lists_its_keys_in_the_class_reservation_order() {
     // `this.b = (this.d = .., 2)` and `this.b = this.d = 7` create `d`
@@ -316,4 +339,53 @@ fn a_constructor_definition_is_a_family_key_with_its_attributes() {
         ]
     );
     assert_eq!(keys("Mixed"), [("a".to_string(), 0), ("b".to_string(), 0)]);
+}
+
+/// In a program that may replace a member of `Object` (here: a computed-key
+/// store onto the global object), a direct `Object.defineProperty(this, …)`
+/// lowers to the guarded pair
+/// `NamespacePatched("Object") ? globalThis.Object.defineProperty(…) :
+/// <intrinsic>`: its keys stay family keys with the definition's attributes
+/// (the runtime fills them only from the original builtin), and the
+/// statement ends the initialization, since a replacement runs with the
+/// receiver.
+#[test]
+fn a_guarded_constructor_definition_is_a_family_key_with_its_attributes() {
+    let hir = lower_with_patches(
+        "let n = 0;\n\
+         class Dp { [k: string]: any; constructor(v: number) { this.first = v; Object.defineProperty(this, \"id\", { value: n++ }); this.k = 1; Object.defineProperties(this, { position: { configurable: true, enumerable: true, value: v } }); this.name = \"n\"; } }\n\
+         const g: any = globalThis;\n\
+         for (const k of [\"a\", \"b\"]) g[k] = 1;\n",
+    );
+    let c = hir.classes.iter().find(|c| c.name == "Dp").unwrap();
+    let ctor = c.constructor.as_ref().unwrap();
+    assert!(
+        ctor.body.iter().any(|s| matches!(
+            s,
+            Stmt::Expr(Expr::Conditional { condition, .. })
+                if matches!(condition.as_ref(), Expr::NamespacePatched(ns) if ns == "Object")
+        )),
+        "the fixture must lower its definitions to the guarded pair: {:?}",
+        ctor.body
+    );
+    let own = own_keys(c, false, false, &literal_shapes(hir.classes.iter())).unwrap();
+    let keys: Vec<(String, u8, bool)> = own
+        .keys
+        .iter()
+        .map(|(k, init)| (k.name().unwrap().to_string(), k.attrs(), *init))
+        .collect();
+    let nw = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE;
+    let ne = crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE;
+    let nc = crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+    assert_eq!(
+        keys,
+        [
+            ("first".to_string(), 0, true),
+            ("id".to_string(), nw | ne | nc, false),
+            ("k".to_string(), 0, false),
+            ("position".to_string(), nw, false),
+            ("name".to_string(), 0, false),
+        ]
+    );
+    assert!(own.leaks, "a replacement may observe the receiver");
 }
