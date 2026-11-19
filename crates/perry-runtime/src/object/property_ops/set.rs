@@ -156,6 +156,26 @@ pub(crate) fn target_set(target: f64, key: f64, value: f64) {
     crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
 }
 
+/// [`target_set`] for `[[Set]]`'s ordinary data store once its interception
+/// checks proved nothing on the chain intercepts `key`
+/// ([`ordinary_set_with_receiver`]'s fast arm): a plain object's index key
+/// may take an elements store here (`array::plain_elements`). Definitions
+/// never come this way, so no attribute is recorded for a key the store took.
+fn target_set_admitting_elements(target: f64, key: f64, value: f64) {
+    let bits = target.to_bits();
+    let key_js = crate::JSValue::from_bits(key.to_bits());
+    // A heap-string property key (what `js_to_property_key` hands this arm
+    // for a Number) is read in place: no coercion, no allocation.
+    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && key_js.is_string() {
+        let obj = (bits & crate::value::POINTER_MASK) as *mut crate::ObjectHeader;
+        let key_ptr = key_js.as_string_ptr();
+        if unsafe { crate::array::plain_elements::set_by_name_admitting(obj, key_ptr, value) } {
+            return;
+        }
+    }
+    target_set(target, key, value);
+}
+
 pub(crate) fn raw_ptr_from_value(value: f64) -> Option<usize> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
@@ -1193,7 +1213,7 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                         // KEY and payload — all three were rooted across
                         // whichever coercion the arm above performed.
                         if fast_safe {
-                            target_set(cur_target(), cur_key(), cur_value());
+                            target_set_admitting_elements(cur_target(), cur_key(), cur_value());
                             return true;
                         }
                     }

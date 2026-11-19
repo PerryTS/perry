@@ -145,104 +145,10 @@ pub(super) fn utf16_boundary_at(s: *const StringHeader, idx: usize) -> Option<(u
     utf16_index::boundary_at(s, idx)
 }
 
-/// SSO-safe `s[key]`: takes the receiver as a **NaN-boxed JSValue** rather than
-/// an already-unboxed `StringHeader*`.
-///
-/// Codegen's `s[i]` fast path used to `unbox_to_i64` the receiver — masking off
-/// the low 48 bits — and hand that to [`js_string_index_get`]. That is only
-/// correct for a heap `STRING_TAG` value. A short string is an inline
-/// `SHORT_STRING_TAG` value whose payload IS the characters, not an address, so
-/// masking produced a garbage pointer and the read segfaulted. Concatenation is
-/// the common way to produce one (`"ab" + "c"`), which made plain
-/// `for (const ch of a + b)` / `(a + b)[0]` crash while the same operations on a
-/// string literal or a `join()` result were fine.
-///
-/// Short receivers are materialized to a heap `StringHeader` and delegated, so
-/// the CanonicalNumericIndexString key semantics below stay in exactly one
-/// place. That costs a small arena allocation per index on an SSO receiver;
-/// worth revisiting if it shows up hot, but the alternative was a crash.
-#[no_mangle]
-pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
-    const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    if jsval.is_short_string() {
-        // Reading one character out of an ASCII short string needs neither the
-        // heap nor a handle scope: the bytes are in the value. Without this,
-        // every `s[i]` on a short string allocated a `StringHeader` for the
-        // receiver just to index it.
-        if let Some(character) = short_string_index_get(jsval, key) {
-            return character;
-        }
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let key = scope.root_nanbox_f64(key);
-        let hdr = crate::string::js_string_materialize_to_heap(value);
-        if hdr.is_null() {
-            return UNDEFINED;
-        }
-        let own = js_string_index_get(hdr, key.get_nanbox_f64());
-        return if own.to_bits() != crate::value::TAG_UNDEFINED {
-            own
-        } else {
-            string_property_get_miss(value, key.get_nanbox_f64())
-        };
-    }
-    // A receiver that is not a string at all reaches this string-specialised
-    // entry when codegen only guessed the type (the name-only `.message` /
-    // `.name` → String heuristic in type_analysis/strings.rs). The guess is a
-    // speculation, so the value decides: anything that is not a string takes
-    // the ordinary `[[Get]]`. `js_string_index_get` below already delegated a
-    // non-string *heap object*, but a Proxy (a registered id, not a heap
-    // cell) failed its pointer check and read `undefined`: a Solid store's
-    // `store.session.message[sessionID]` lost every message in opencode.
-    if !jsval.is_any_string() {
-        return crate::value::js_dyn_index_get(value, key);
-    }
-    // Heap strings keep the existing behavior: `js_string_index_get` guards
-    // invalid pointers and indexes the characters.
-    let own = js_string_index_get(
-        (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader,
-        key,
-    );
-    if !jsval.is_string() || own.to_bits() != crate::value::TAG_UNDEFINED {
-        return own;
-    }
-    string_property_get_miss(value, key)
-}
-
-/// Complete a primitive string Get after its own character lookup misses.
-/// Keep the raw index helper own-only: boxed strings also use it while walking
-/// their own properties, before consulting their potentially custom prototype.
-fn string_property_get_miss(value: f64, key: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(value);
-    let key = scope.root_nanbox_f64(key);
-    let key =
-        scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(key.get_nanbox_f64()) });
-    // Object / bigint keys can coerce to an own index or to `length`.
-    if let Some(name) = crate::builtins::jsvalue_string_content(key.get_nanbox_f64()) {
-        let value = receiver.get_nanbox_f64();
-        if name == "length" {
-            let bits = value.to_bits();
-            if crate::value::JSValue::from_bits(bits).is_short_string() {
-                return crate::value::JSValue::from_bits(bits).short_string_utf16_len() as f64;
-            }
-            let string = (bits & crate::value::POINTER_MASK) as *const StringHeader;
-            return unsafe { (*string).utf16_len as f64 };
-        }
-        if canonical_string_index(&name).is_some() {
-            let string = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-            let own = js_string_index_get(string, key.get_nanbox_f64());
-            if own.to_bits() != crate::value::TAG_UNDEFINED {
-                return own;
-            }
-        }
-    }
-    // Reflect.get preserves the original function value (no binding wrapper),
-    // and gives inherited accessors the primitive as their receiver. Both
-    // operands stay rooted across lazy prototype creation and user code.
-    let prototype = crate::object::builtin_prototype_value("String");
-    crate::proxy::js_reflect_get(prototype, key.get_nanbox_f64(), receiver.get_nanbox_f64())
-}
+#[path = "property_get.rs"]
+mod property_get;
+pub use property_get::js_string_index_get_boxed;
+pub(crate) use property_get::string_property_get_canonical;
 
 /// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
 /// (#3987): returns the single-UTF-16-code-unit string at `key` only when `key`

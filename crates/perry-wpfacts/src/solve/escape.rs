@@ -102,7 +102,16 @@ impl Model {
         // the program is closed, and no native returns the constructor; the
         // token enters a value only as the global `Function`, a function's
         // `constructor` (a computed key that may be it included), or here.
-        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function)) {
+        // Whole program under the closed world (owner 2026-11-14: no eval or
+        // dynamic code), the unknown code that holds it is program code, whose
+        // calls of it are the program's own call sites (E14), or the runtime,
+        // which never calls it: holding it runs nothing. Per unit, another
+        // unit's code may call it; an unseen module is outside the closed
+        // world. (R-GLOBAL, owner 2026-11-18: only program stores write a
+        // global; interpreted code that runs writes any.)
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+            && (self.unit_mode || self.unseen_module_runs)
+        {
             crate::builtins::interpreted_code_runs(self);
         }
         // Another unit's function the census broke, forwarded where no
@@ -246,16 +255,19 @@ impl Model {
                 self.note_shared(SharedWrite::Unmodeled(s));
             }
         }
+        // The global object given to unknown code puts ⊤ in reach of the
+        // program's stores into ⊤ (`global_in_top`): each is recorded with
+        // its own key, a computed one under every key (`written_by`). It is
+        // no write of the global object under any key: whole program, the
+        // unknown code that holds it is program code, whose stores into ⊤
+        // those are, or the runtime's own operations, which write no global
+        // by an arbitrary name. Dynamic code records its own any-key write
+        // (`interpreted_code_runs`), as does an unseen module.
+        // Owner decision 2026-11-18 (R-GLOBAL, under the 2026-11-14 closed
+        // world: no eval or dynamic code): no built-in or native operation
+        // writes an arbitrary global name.
         if builtins::global_object(self, t) {
             crate::builtins::note_global_in_top(self);
-            if !self.unit_mode {
-                crate::builtins::note_native_write(
-                    self,
-                    t,
-                    None,
-                    "global object given to unknown code",
-                );
-            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));

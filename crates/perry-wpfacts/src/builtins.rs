@@ -32,7 +32,8 @@ mod undeclared;
 pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
-    builtin_function, global_object, native_may_be, realm_reads_store, undeclared,
+    builtin_function, global_object, global_store_escapes, global_self_key, native_may_be, realm_reads_store,
+    undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;
@@ -878,6 +879,32 @@ pub(crate) fn promise_result_atom(m: &mut Model) -> Atom {
     effects::internal_atom(m, "PromiseResult")
 }
 
+/// A host Worker's internal slots: `[[WorkerPayload]]` (the clone tree a
+/// message delivers) and `[[WorkerEvent]]` (the event its listeners get).
+pub(crate) fn worker_slot_atom(m: &mut Model, name: &str) -> Atom {
+    effects::internal_atom(m, name)
+}
+
+/// W-HOST step 5: the construct queues the `worker` process event
+/// (worker_surface.rs `queue_process_worker_event`: [[Get]](process,
+/// "nextTick") called with a host callback capturing `w`, which does
+/// [[Get]](process, "emit") and calls it with ("worker", w); this =
+/// process). Unwritten, both are the realm's natives: `nextTick` queues
+/// the callback, `emit` hands `w` to the process listeners
+/// (`Model::process_event`). A key the program or unknown code wrote
+/// (`opaque_written`): a stored function is called, an opaque write is the
+/// unknown call (the replay). `tick` passes `w` itself for the callback
+/// (its one capture). `emit` = ("worker", w), `tick` = (w).
+pub(crate) fn process_worker_event(m: &mut Model, w: NodeId, emit: CallId, tick: CallId) {
+    let p = m.tok(TokKind::Builtin(BuiltinNs::Process));
+    let pe = m.process_event;
+    m.edge(w, pe);
+    for (k, call) in [("emit", emit), ("nextTick", tick)] {
+        let a = m.atom(k);
+        let _ = opaque_written(m, p, a, NativeMiss::Call(p, call));
+    }
+}
+
 /// The settled-value field of a promise token.
 fn promise_value(m: &mut Model, p: Tok) -> NodeId {
     let a = promise_result_atom(m);
@@ -1323,6 +1350,22 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             };
             return image_member(m, holder, &m.atoms[a as usize]);
         }
+    }
+    // Rule HI: `@@hasInstance` on a class object, whatever its `extends`.
+    // The lookup passes the class's own keys and those of its parents
+    // (program tokens or ⊤: the chain walk reads them, and a `setPrototypeOf`
+    // or `__proto__` store is a parent there), then ends at
+    // `%Function.prototype%`: a superclass is a constructor or null (ECMA-262
+    // 15.7.14), and every constructor's chain ends there unless a program
+    // set its [[Prototype]]. There `@@hasInstance` is non-writable and
+    // non-configurable (20.2.3.6), an image member the runtime refuses to
+    // replace (DEC 250); a plain store of the key on the class or a parent
+    // fails against it (10.1.9.2 step 2.a), so only a define installs one,
+    // as an own key the walk reads. The intrinsic end is final.
+    if matches!(m.toks[t as usize], TokKind::ClassObj(_))
+        && m.atoms[a as usize] == crate::model::WK_HAS_INSTANCE
+    {
+        return true;
     }
     let what = match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -3232,6 +3275,33 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     ns_method_inner(m, ns, name, call, false)
 }
 
+/// R-HOSTREPORT: a call that may register a process listener (`process.on`
+/// and the other EventEmitter registrations on the one process object;
+/// any event, a computed key may name the method) hands the listener what
+/// the host reports and the process events.
+pub(crate) fn process_listener_registered(m: &mut Model, call: CallId) {
+    let (h, e) = (m.host_report, m.esc_raise);
+    m.edge(h, e);
+    // W-HOST: the listener is handed the process events too
+    // (`Model::process_event`).
+    let pe = m.process_event;
+    m.edge(pe, e);
+    // The listener itself runs with them (os_process_emitter.rs
+    // `emit_process_uncaught_exception`: listener(err, origin), this =
+    // process); another event name, or a computed one, may be any of
+    // them. Its own throw is the host's to report.
+    let c = m.calls[call as usize].clone();
+    if let Some(&cb) = c.arg(1) {
+        let arg = m.node_l("process-listener-arg");
+        m.edge(h, arg);
+        m.edge(pe, arg);
+        let p = m.tok(TokKind::Builtin(BuiltinNs::Process));
+        let this = m.node_l("process-listener-this");
+        m.add_tok(this, p);
+        let _ = collections::cb_call_in(m, call, cb, ThisArg::Node(this), vec![arg], h);
+    }
+}
+
 fn ns_method_inner(
     m: &mut Model,
     ns: BuiltinNs,
@@ -3277,8 +3347,7 @@ fn ns_method_inner(
             ),
         }
     {
-        let (h, e) = (m.host_report, m.esc_raise);
-        m.edge(h, e);
+        process_listener_registered(m, call);
     }
 
     // A computed key may name any member, one no rule describes included
@@ -3541,7 +3610,13 @@ fn ns_method_inner(
         (BuiltinNs::Object, "hasOwn") => {
             if let Some(o) = arg(m, call, 0) {
                 let idx = arg(m, call, 1).unwrap_or(NO_NODE);
-                m.cons(o, Cons::OwnProp { key: Key::any(), idx });
+                m.cons(
+                    o,
+                    Cons::OwnProp {
+                        key: Key::any(),
+                        idx,
+                    },
+                );
             }
             ret_prim(m, call, prim::BOOL);
         }
@@ -3945,6 +4020,23 @@ fn ns_method_inner(
         // `ArrayBuffer.isView(a)` (ECMA-262 25.1.5.1): a Boolean; it reads
         // only the argument's [[ViewedArrayBuffer]] slot and runs no code.
         (BuiltinNs::ArrayBuffer, "isView") => ret_prim(m, call, prim::BOOL),
+        // The Date statics called through the constructor (a program that
+        // writes one of them lowers each call as `Date.m(…)`, perry-hir
+        // `try_patched_builtin_call`): the realm's own functions, the steps
+        // of the intrinsic forms (`Expr::DateNow` / `DateParse` / `DateUtc`,
+        // gen_rest.rs; perry-runtime date_proto_thunks.rs
+        // `date_now_static` / `date_parse_static` / `date_utc_static`).
+        // ECMA-262 21.4.3.1 `now`: a Number, no argument read, `this`
+        // ignored. 21.4.3.2 `parse`: ToString of the one operand. 21.4.3.4
+        // `UTC`: ToNumber of each component. A value the program stored
+        // under the key is bound as the callee besides (the ordinary read),
+        // and a write unknown code may make holds the realm where the read
+        // gives ⊤.
+        (BuiltinNs::Date, "now") => ret_prim(m, call, prim::NUM),
+        (BuiltinNs::Date, "parse" | "UTC") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::NUM);
+        }
         // A key the namespace's description (its own keys and its chain)
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).

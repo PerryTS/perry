@@ -423,7 +423,17 @@ pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
     if crate::object::overflow::is_table(keys) {
         return crate::object::overflow::entry_attrs(keys, pos);
     }
+    layout_keys_entry(keys, pos)
+}
 
+/// [`keys_entry`] of a layout keys array (never a Table): the attributes
+/// array beside the keys, with no Table branch.
+///
+/// # Safety
+/// As [`keys_attrs`]; `keys` is not a Table.
+#[inline(always)]
+pub(crate) unsafe fn layout_keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
+    debug_assert!(!crate::object::overflow::is_table(keys));
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return 0;
@@ -1138,6 +1148,16 @@ pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> u8 {
+    crate::object::overflow::home::ObjHome::key_summary(obj as usize)
+}
+
+/// [`KeyOwner::key_summary`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: its overflow's summary, else its layout's.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_summary(obj: *const crate::object::ObjectHeader) -> u8 {
     let t = crate::object::overflow::table(obj);
     if !t.is_null() {
         return (*t).summary as u8;
@@ -1153,14 +1173,35 @@ pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> 
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: inlining it into its callers moved two
+// matrix rows (dyn__spread +20, solo__lit_delete +4 on the per-op matrix).
+#[inline(never)]
 pub(crate) unsafe fn object_key_is_private(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
-        return false;
-    }
+    key_is_private(obj as usize, key)
+}
+
+/// [`object_key_is_private`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_is_private(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE != 0
+        && crate::object::overflow::home::ObjHome::private_only(owner, key)
+}
+
+/// `KeyOwner::private_only` of an ordinary object: its key list.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_private_only(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
     let keys = crate::object::object_keys(obj);
     !keys.is_null()
         && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
@@ -1168,13 +1209,36 @@ pub(crate) unsafe fn object_key_is_private(
 }
 
 /// Private-field presence, independent of an equally spelled public property.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_has_private_entry(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
-        return false;
-    }
+    has_private_entry(obj as usize, key)
+}
+
+/// [`object_key_has_private_entry`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn has_private_entry(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE != 0
+        && crate::object::overflow::home::ObjHome::private_present(owner, key)
+}
+
+/// `KeyOwner::private_present` of an ordinary object: its key list, then
+/// the element's slot when the list holds it as optional.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_private_present(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
     let keys = crate::object::object_keys(obj);
     if keys.is_null() {
         return false;
@@ -1194,11 +1258,39 @@ pub(crate) unsafe fn object_key_has_private_entry(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_optional_private_slot(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> Option<u32> {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 || crate::object::overflow::has_overflow(obj) {
+    optional_private_slot(obj as usize, key)
+}
+
+/// [`object_optional_private_slot`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn optional_private_slot(owner: usize, key: &[u8]) -> Option<u32> {
+    if crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE == 0 {
+        return None;
+    }
+    crate::object::overflow::home::ObjHome::optional_private_slot(owner, key)
+}
+
+/// `KeyOwner::optional_private_slot` of an ordinary object: none with an
+/// overflow (its table lists present keys only), else its key list.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_optional_private_slot(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> Option<u32> {
+    if crate::object::overflow::has_overflow(obj) {
         return None;
     }
     let keys = crate::object::object_keys(obj);
@@ -1259,18 +1351,58 @@ pub(crate) unsafe fn private_element_word(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, key: &[u8]) -> u8 {
+    key_entry(obj as usize, key)
+}
+
+/// The entry `owner`'s own key `key` carries, through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_entry(owner: usize, key: &[u8]) -> u8 {
+    crate::object::overflow::home::ObjHome::entry_of(owner, key, false)
+}
+
+/// Is `owner`'s own key `key` an accessor, through the owner's hook?
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_is_accessor(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::entry_of(owner, key, true) & ENTRY_ACCESSOR != 0
+}
+
+/// [`KeyOwner::entry_of`](crate::object::key_owner::KeyOwner) of an ordinary
+/// object: the layout summary filter (the accessor bit alone for `accessor`),
+/// then the key list's entry.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_entry(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+    accessor: bool,
+) -> u8 {
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return 0;
     };
-    if record.summary() & SUMMARY_KEY_BITS == 0 && !crate::object::overflow::has_overflow(obj) {
+    let filter = if accessor {
+        SUMMARY_ACCESSOR
+    } else {
+        SUMMARY_KEY_BITS
+    };
+    if record.summary() & filter == 0 && !crate::object::overflow::has_overflow(obj) {
         return 0;
     }
     object_key_entry_filtered(
         crate::object::object_keys_from_shape_record(obj, record),
         key,
-        false,
+        accessor,
     )
 }
 
@@ -1279,23 +1411,14 @@ pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, k
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_is_accessor(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
-        return false;
-    };
-    if record.summary() & SUMMARY_ACCESSOR == 0 && !crate::object::overflow::has_overflow(obj) {
-        return false;
-    }
-    object_key_entry_filtered(
-        crate::object::object_keys_from_shape_record(obj, record),
-        key,
-        true,
-    ) & ENTRY_ACCESSOR
-        != 0
+    key_is_accessor(obj as usize, key)
 }
 
 #[inline(never)]
@@ -1320,12 +1443,36 @@ unsafe fn object_key_entry_filtered(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_accessor_key_names(
     obj: *const crate::object::ObjectHeader,
 ) -> Vec<String> {
-    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+    accessor_key_names(obj as usize)
+}
+
+/// The owner's own accessor keys, sorted: empty unless its summary has an
+/// accessor, else the owner's `accessor_names`.
+///
+/// # Safety
+/// `owner` is a live owner of home `H`.
+#[inline(always)]
+pub(crate) unsafe fn accessor_key_names(owner: usize) -> Vec<String> {
+    if crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_ACCESSOR == 0 {
         return Vec::new();
     }
+    let mut out = crate::object::overflow::home::ObjHome::accessor_names(owner);
+    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
+    out
+}
+
+/// [`KeyOwner::accessor_names`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: the accessor keys of its key list, in list order.
+#[inline(always)]
+pub(crate) unsafe fn object_home_accessor_names(
+    obj: *const crate::object::ObjectHeader,
+) -> Vec<String> {
     let keys = crate::object::object_keys(obj);
     let (slots, available) = crate::object::keys_array_dense_slots(keys.arr());
     let mut out = Vec::new();
@@ -1339,7 +1486,6 @@ pub(crate) unsafe fn object_accessor_key_names(
             out.push(String::from_utf8_lossy(bytes).into_owned());
         }
     }
-    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
     out
 }
 
@@ -1576,12 +1722,26 @@ unsafe fn fold_edits(
 ///
 /// # Safety
 /// `obj` is a live `GC_TYPE_OBJECT` that is not a typed array.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &[AttrsEdit<'_>]) {
-    if edits.is_empty() || !crate::object::object_is_shaped(obj) {
+    edit_keys(obj as usize, edits)
+}
+
+/// [`apply_edits`] over any key owner: absent keys are claimed with their
+/// folded entry through the owner's `claim_absent`, the edits reach the
+/// present keys through its `edit_present`.
+///
+/// # Safety
+/// `owner` is a live owner of home `H` whose keys may be edited.
+#[inline(always)]
+pub(crate) unsafe fn edit_keys(owner: usize, edits: &[AttrsEdit<'_>]) {
+    if edits.is_empty() || !crate::object::overflow::home::ObjHome::keys_editable(owner) {
         return;
     }
     #[cfg(feature = "attr-census")]
-    crate::object::attr_census::note_kind("edit.apply", obj as usize);
+    crate::object::attr_census::note_kind("edit.apply", owner);
     let _no_move = crate::gc::GcSuppressScope::new();
     // 1. Claim absent keys, each with its folded entry.
     for (i, edit) in edits.iter().enumerate() {
@@ -1591,15 +1751,11 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         if (0..i).any(|j| same_key(edits, j, i)) {
             continue; // folded with its first occurrence
         }
-        let keys = crate::object::object_keys(obj);
-        if !keys.is_null()
-            && (if matches!(edit, AttrsEdit::Private(_)) {
-                crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
-            } else {
-                crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
-            })
-            .is_some()
-        {
+        if crate::object::overflow::home::ObjHome::key_present(
+            owner,
+            key,
+            matches!(edit, AttrsEdit::Private(_)),
+        ) {
             continue;
         }
         let entry = edits
@@ -1613,10 +1769,58 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             continue;
         }
         #[cfg(feature = "attr-census")]
-        crate::object::attr_census::note_kind("edit.claim_absent_key", obj as usize);
-        let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, name, entry);
+        crate::object::attr_census::note_kind("edit.claim_absent_key", owner);
+        crate::object::overflow::home::ObjHome::claim_absent(owner, key, entry);
     }
+    crate::object::overflow::home::ObjHome::edit_present(owner, edits);
+}
+
+/// [`KeyOwner::keys_editable`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: it is shaped.
+#[inline(always)]
+pub(crate) unsafe fn object_home_keys_editable(obj: *mut crate::object::ObjectHeader) -> bool {
+    crate::object::object_is_shaped(obj)
+}
+
+/// [`KeyOwner::key_present`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: `key` (a private name with `private`) is in its key list.
+#[inline(always)]
+pub(crate) unsafe fn object_home_key_present(
+    obj: *mut crate::object::ObjectHeader,
+    key: &[u8],
+    private: bool,
+) -> bool {
+    let keys = crate::object::object_keys(obj);
+    !keys.is_null()
+        && (if private {
+            crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
+        } else {
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
+        })
+        .is_some()
+}
+
+/// [`KeyOwner::claim_absent`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: the key enters its list with `entry`, in insertion order.
+#[inline(always)]
+pub(crate) unsafe fn object_home_claim_absent(
+    obj: *mut crate::object::ObjectHeader,
+    key: &[u8],
+    entry: u8,
+) {
+    let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, name, entry);
+}
+
+/// [`KeyOwner::edit_present`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: its present keys take `edits` (a shared layout is
+/// rebuilt from the first changed position, a dictionary edits its private
+/// list in place).
+#[inline(always)]
+pub(crate) unsafe fn object_home_edit_present(
+    obj: *mut crate::object::ObjectHeader,
+    edits: &[AttrsEdit<'_>],
+) {
     // 2. Existing keys: which positions change, and to what.
     let keys = crate::object::object_keys(obj);
     if keys.is_null() {

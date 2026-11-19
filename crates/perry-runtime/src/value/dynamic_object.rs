@@ -282,6 +282,10 @@ fn value_length_property(value: f64) -> f64 {
             6,
         );
     }
+    // A typed array on its default chain: its live length, from structure.
+    if let Some(length) = unsafe { crate::typedarray_named::try_get(jsval, b"length") } {
+        return length;
+    }
 
     if jsval.is_string() {
         return crate::string::js_string_length(jsval.as_string_ptr()) as f64;
@@ -525,6 +529,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // receiver live and re-read its address after that allocation.
     if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
         || crate::buffer::is_uint8array_buffer(ptr as usize)
+        || crate::buffer::is_node_buffer(ptr as usize)
     {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver =
@@ -548,7 +553,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
             && crate::closure::props::closure_has_generator_body(
                 ptr as *const crate::closure::ClosureHeader,
             )
-            && crate::closure::props::bag_of(ptr as usize).is_null()
+            && !crate::closure::props::has_store(ptr as usize)
         {
             if let Some(prototype) = crate::object::generator_function_prototype_of(ptr as usize) {
                 return prototype;

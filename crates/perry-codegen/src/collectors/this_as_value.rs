@@ -500,7 +500,8 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             .any(|(_, v)| expr_uses_this_as_value(v, fields)),
         Expr::ObjectSpread { parts } => parts
             .iter()
-            .any(|(_, e)| expr_uses_this_as_value(e, fields)),
+            .flatten()
+            .any(|e| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
         Expr::NewDynamic { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)

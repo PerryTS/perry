@@ -69,6 +69,17 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `hasOwnProperty.call(o, k)` at a call site whose `.call` value is the
+/// realm's `Function.prototype.call` body and whose target's info names the
+/// realm's `Object.prototype.hasOwnProperty` body (codegen `emit_call_lane`
+/// compares both code identities on every call): that body with `this = o`.
+/// `o` is an object, a function, null or undefined; a primitive `o` takes the
+/// call body in full.
+#[no_mangle]
+pub extern "C" fn js_object_prototype_has_own_property_call(this: f64, key: f64) -> f64 {
+    object_prototype_has_own_property(this, key)
+}
+
 /// `Object.prototype.hasOwnProperty(V)` with `this` (ECMA-262 20.1.3.2):
 /// ToPropertyKey(V) runs before ToObject(this), the reverse of
 /// `Object.hasOwn`. Only a nullish receiver can tell the two orders apart
@@ -582,6 +593,28 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             let key_value = super::super::js_to_property_key(key_value);
             (f64::from_bits(obj_handle.get_nanbox_u64()), key_value)
         };
+
+        // A plain object's index keys live in its elements store, where every
+        // present element is an enumerable own property.
+        if let Some(view) =
+            crate::array::subclass_elements::own_elements_value(obj_value).filter(|view| view.plain)
+        {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
+                return f64::from_bits(
+                    if matches!(
+                        elements_key,
+                        crate::array::subclass_elements::ElementsKey::Index(_)
+                    ) && crate::array::subclass_elements::has_own_key(view, elements_key)
+                    {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
+            }
+        }
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather

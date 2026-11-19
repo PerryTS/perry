@@ -173,6 +173,13 @@ pub struct FamilyLayout {
     /// holds the constructor keys at the same slots as `keys`.
     pub discriminant: u32,
     pub variants: Vec<FamilyVariant>,
+    /// The class is born with its keys (`lower_call::new_alloc::
+    /// keys_defined_at_birth` of its declaration): its birth rep, not its
+    /// field definitions, would carry its I32 lanes, and a family birth has
+    /// none (`expr::rest_fields::class_lanes`). Decided once from the
+    /// defining module's class, so every module (the definer and each
+    /// importer, whose class is a stub without a constructor) reads the same.
+    pub born_with_keys: bool,
 }
 
 /// One layout of a family's creation split.
@@ -244,6 +251,8 @@ pub struct ProgramLayouts {
     /// Structurally run-once, closed-world evaluated declarations. Compile
     /// facts only; generated code adds no flag, table or observation state.
     pub run_once_evaluated: BTreeSet<u32>,
+    /// Templates some module evaluates per expression (`ClassExprFresh`).
+    pub fresh_templates: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
     /// Literal prototype identity and source-ordered base slots; compile facts only.
@@ -700,9 +709,10 @@ type DefineStore<'a> = (&'a str, u8, Vec<&'a Expr>);
 /// `Object.defineProperty(this, "k", L)` or
 /// `Object.defineProperties(this, {k: L, ...})` and every `L` is a literal
 /// data descriptor (`create_families::literal_descriptor_attrs`), in
-/// definition order. `None` for any other statement, an accessor, a computed
-/// or array-index key (`defineProperties` defines index keys first).
-fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<Vec<DefineStore<'a>>> {
+/// definition order, and whether the definition may run program code first
+/// (see [`define_call`]). `None` for any other statement, an accessor, a
+/// computed or array-index key (`defineProperties` defines index keys first).
+fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<(Vec<DefineStore<'a>>, bool)> {
     let one = |k: &'a str, d: &'a Expr| -> Option<DefineStore<'a>> {
         if k.parse::<u32>().is_ok() {
             return None;
@@ -714,18 +724,18 @@ fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<Vec<DefineStore
         }
         Some((k, attrs, fields.into_iter().map(|(_, v)| v).collect()))
     };
-    match s {
-        Stmt::Expr(Expr::ObjectDefineProperty(target, key, desc))
-            if matches!(target.as_ref(), Expr::This) =>
-        {
-            let Expr::String(k) = key.as_ref() else {
+    let Stmt::Expr(e) = s else {
+        return None;
+    };
+    let (call, may_run_code) = define_call(e)?;
+    let defs = match call {
+        DefineCall::One(key, desc) => {
+            let Expr::String(k) = key else {
                 return None;
             };
-            Some(vec![one(k.as_str(), desc)?])
+            vec![one(k.as_str(), desc)?]
         }
-        Stmt::Expr(Expr::ObjectDefineProperties(target, props))
-            if matches!(target.as_ref(), Expr::This) =>
-        {
+        DefineCall::Many(props) => {
             let fields = literal_fields(props, shapes)?;
             let mut out: Vec<DefineStore<'a>> = Vec::with_capacity(fields.len());
             for (k, d) in fields {
@@ -734,8 +744,88 @@ fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<Vec<DefineStore
                 }
                 out.push(one(k, d)?);
             }
-            Some(out)
+            out
         }
+    };
+    Some((defs, may_run_code))
+}
+
+/// The receiver definition a constructor statement makes: the key and
+/// descriptor of `Object.defineProperty(this, key, desc)`, or the property
+/// map of `Object.defineProperties(this, props)`.
+enum DefineCall<'a> {
+    One(&'a Expr, &'a Expr),
+    Many(&'a Expr),
+}
+
+/// The definition `e` makes on the receiver, and whether program code may
+/// run in its place:
+///
+/// * the intrinsic (`Expr::ObjectDefineProperty` / `ObjectDefineProperties`
+///   on `this`): no code runs;
+/// * the guarded pair `NamespacePatched("Object") ? <generic> : <intrinsic>`
+///   that a direct namespace call lowers to when a program write may replace
+///   a member of `Object` (`perry_hir::patched_builtins`), and the generic
+///   call `globalThis.Object.defineProperty(this, …)` the facts lowering
+///   keeps of such a pair: the member read may find a replacement, which
+///   runs with the receiver.
+///
+/// The layout's key is only where the definition lands when the original
+/// builtin defines it (the runtime fills the hole only for exactly those
+/// attributes and in key order, `layout_desc::family_define_own`); any
+/// other run of the statement adds its keys by the ordinary rules. So a
+/// definition that may run code keys the layout the same way, and the caller
+/// treats the statement as code that may observe the receiver.
+fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
+    match e {
+        Expr::ObjectDefineProperty(target, key, desc) if matches!(target.as_ref(), Expr::This) => {
+            Some((DefineCall::One(key, desc), false))
+        }
+        Expr::ObjectDefineProperties(target, props) if matches!(target.as_ref(), Expr::This) => {
+            Some((DefineCall::Many(props), false))
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } if matches!(condition.as_ref(), Expr::NamespacePatched(ns) if ns == "Object") => {
+            let (call, _) = define_call(else_expr)?;
+            // The generic arm must be the same member's call on the same
+            // operands; otherwise the statement is not this definition.
+            generic_define_call(then_expr)?;
+            Some((call, true))
+        }
+        _ => generic_define_call(e).map(|call| (call, true)),
+    }
+}
+
+/// `globalThis.Object.defineProperty(this, key, desc)` or
+/// `globalThis.Object.defineProperties(this, props)`, the generic arm of a
+/// guarded namespace pair (`perry_hir::namespace_pairs::pair_callee`).
+fn generic_define_call(e: &Expr) -> Option<DefineCall<'_>> {
+    let Expr::Call { callee, args, .. } = e else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object: g,
+        property: ns,
+        ..
+    } = object.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(g.as_ref(), Expr::GlobalThisExpr) || ns != "Object" {
+        return None;
+    }
+    match (property.as_str(), args.as_slice()) {
+        ("defineProperty", [Expr::This, key, desc]) => Some(DefineCall::One(key, desc)),
+        ("defineProperties", [Expr::This, props]) => Some(DefineCall::Many(props)),
         _ => None,
     }
 }
@@ -953,7 +1043,10 @@ fn own_keys(
             open &= inert(v, &params);
             continue;
         }
-        if let Some(defs) = define_stores(s, shapes) {
+        if let Some((defs, may_run_code)) = define_stores(s, shapes) {
+            // A definition whose member read may find a replacement runs
+            // that code with the receiver: the initialization ends here.
+            open &= !may_run_code;
             // The descriptor literals are evaluated before any definition.
             open &= defs
                 .iter()
@@ -1318,6 +1411,19 @@ fn param_keys(class: &Class) -> Vec<(u32, String)> {
 
 mod parents;
 
+/// The class ids of every `ClassExprFresh` template in `modules`.
+fn fresh_template_ids<'a>(modules: impl Iterator<Item = &'a HirModule>) -> BTreeSet<u32> {
+    modules
+        .flat_map(|hir| {
+            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
+            hir.classes
+                .iter()
+                .filter(move |c| templates.contains(&c.name))
+                .map(|c| c.id)
+        })
+        .collect()
+}
+
 /// Every class chain is resolved over the whole program, with the owning
 /// module retained at every step (local ids and names are module scoped).
 /// The classes that are not families because `Reflect.construct(Q, args, P)`
@@ -1393,16 +1499,7 @@ fn program_families(
     let accessor = |c: &Class, k: &str| {
         c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k)
     };
-    let fresh: BTreeSet<u32> = modules
-        .iter()
-        .flat_map(|(_, hir)| {
-            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
-            hir.classes
-                .iter()
-                .filter(move |c| templates.contains(&c.name))
-                .map(|c| c.id)
-        })
-        .collect();
+    let fresh = fresh_template_ids(modules.iter().map(|(_, hir)| *hir));
     let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
     let reflect_made = reflect_construct_classes(modules);
     let mut out = Vec::new();
@@ -1922,6 +2019,7 @@ fn layouts_of(
                 init_count: own as u32,
                 discriminant,
                 variants: split,
+                born_with_keys: false,
             },
         );
     }
@@ -2043,6 +2141,7 @@ pub fn compute<'a>(
         }
     }
     literal::finish(&mut layouts, &literal_ids);
+    layouts.fresh_templates = fresh_template_ids(modules.iter().copied());
     layouts.late_total = late as u32;
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache
@@ -2124,7 +2223,8 @@ pub fn compute<'a>(
     }
     for (_, module) in &program {
         for class in &module.classes {
-            if layouts.families.contains_key(&class.id) {
+            if let Some(family) = layouts.families.get_mut(&class.id) {
+                family.born_with_keys = crate::lower_call::new_alloc::keys_defined_at_birth(class);
                 layouts
                     .family_owner
                     .entry(class.id)
@@ -2137,6 +2237,9 @@ pub fn compute<'a>(
     layouts.digest.hash(&mut hash);
     layouts.run_once_evaluated.hash(&mut hash);
     layouts.family_owner.hash(&mut hash);
+    for f in layouts.families.values() {
+        (f.class_id, f.born_with_keys).hash(&mut hash);
+    }
     layouts.digest = hash.finish();
     if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
         eprintln!("perry: canonical run-once evaluated classes: {} (closed module capabilities: {closed})", layouts.run_once_evaluated.len());

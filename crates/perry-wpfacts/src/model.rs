@@ -2417,6 +2417,14 @@ pub struct Model {
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
     /// source itself never makes that object).
     pub get_iterator_src: FxHashMap<TmplId, NodeId>,
+    /// Rule RP2: the templates whose objects are born ordinary Arrays with
+    /// `%Array.prototype%` (an array literal, a spread literal, an
+    /// `Object.entries` pair): never an iterator model.
+    pub ordinary_arrays: crate::pts::FxHashSet<TmplId>,
+    /// Rule RP2: (token, dst) of each `Cons::RecordEntry` that held the
+    /// token back (`record_entry_holds`), looked at again in
+    /// `settle_record_entry`.
+    pub record_entry_held: Vec<(Tok, NodeId)>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.
@@ -2557,6 +2565,12 @@ pub struct Model {
     /// runtime's; it reaches `esc_raise` only when the program may register
     /// a process listener, which is handed the value.
     pub host_report: NodeId,
+    /// W-HOST: what the realm's `process.emit` hands process listeners
+    /// beside reports (the `worker` event's Worker, worker_surface.rs
+    /// `emit_process_worker_event`). No reader of its own: it reaches
+    /// `esc_raise` where the program may register a process listener (the
+    /// R-HOSTREPORT call set) and once unknown code holds the realm.
+    pub process_event: NodeId,
     /// The accessor functions of escaped values (unknown code reads them
     /// with `Object.getOwnPropertyDescriptor`): sunk, no one reads it.
     pub esc_accessors: NodeId,
@@ -2781,6 +2795,11 @@ pub struct Model {
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
     pub for_in_named: Vec<(CallId, Tok, Tok)>,
+    /// Rule EK: (literal, key node) of each `Cons::OwnKeys` that gave the
+    /// literal's known keys (`own_keys_of`), checked again in
+    /// `settle_for_in`; the set dedups.
+    pub own_keys_on: Vec<(Tok, NodeId)>,
+    pub own_keys_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
     /// FORIN1: (key node, stored value, constant) of a for-in keyed store
     /// made per String constant of its key (`Cons::StoreKeyed`).
     pub keyed_named: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
@@ -2924,6 +2943,12 @@ pub struct Model {
     /// GLOBK3: the defines already taken onto the global object, by
     /// `DefineAny::id`.
     pub global_def_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// E5 exact key set: per computed-key define on the global object
+    /// (`DefineAny::id`), the node its `get` call returns into
+    /// (`Model::define_global_keys`).
+    pub global_key_def_ret: crate::pts::FxHashMap<(NodeId, NodeId), NodeId>,
+    /// E5 exact key set: the (define, key) pairs already written.
+    pub global_key_def_done: crate::pts::FxHashSet<((NodeId, NodeId), Atom)>,
     /// GLOBK3: the holder node of a computed-key define's old path (E5
     /// HARD), by `DefineAny::id`: two defines under one key node (one local
     /// key) each install their own descriptor.
@@ -2938,6 +2963,10 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// A module outside the program that is no builtin runs at load
+    /// (`Gen`'s import walk): code the closed world does not cover, which may
+    /// call the Function constructor it is handed (`escape_body`).
+    pub unseen_module_runs: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):
     /// it is reachable from a Worker entry module, or some Worker's entry
     /// is not named. A module past the end counts as one (unknown).

@@ -61,15 +61,91 @@ pub(crate) const BAG_ROOM: u32 = 2;
 
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
+/// The tombstone of a deleted info-derived own key (`length`, `name`): the
+/// entry the function's info answers is gone for good, so a bag entry of
+/// that key defined after the delete is a later key (it lists after the
+/// birth keys), not the birth entry.
+const TOMBSTONE_PREFIX: &str = "t:";
 const INTERNAL_PREFIX: &str = "i:";
 
 /// The bag of the closure at `ptr` (null when it never had an own property).
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn bag_of(ptr: usize) -> *mut ObjectHeader {
     (*(ptr as *const ClosureHeader)).props
+}
+
+/// The function's own symbol value: the bag's own route reaches the same
+/// `shaped_symbols::get` body as an ordinary holder.
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_get(ptr: usize, symbol: usize) -> Option<u64> {
+    crate::object::shaped_symbols::get(bag_of(ptr) as usize, symbol)
+}
+
+/// A symbol data definition on the function's store, after the caller ran
+/// the owner's prologue once (`shaped_symbols::define`).
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_define(ptr: usize, symbol: usize, bits: u64, entry: u8) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && crate::object::shaped_symbols::define_on(bag, symbol, bits, entry)
+}
+
+/// A symbol key's attribute byte edit on the function's store.
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_set_entry(ptr: usize, symbol: usize, entry: u8) {
+    let bag = bag_of(ptr);
+    if !bag.is_null() {
+        crate::object::shaped_symbols::set_entry_on(bag, symbol, entry)
+    }
+}
+
+/// A symbol accessor definition on the function's store.
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_define_accessor(ptr: usize, symbol: usize, get: u64, set: u64) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && crate::object::shaped_symbols::define_accessor_on(bag, symbol, get, set)
+}
+
+/// A symbol key delete on the function's store.
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_delete(ptr: usize, symbol: usize) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && crate::object::shaped_symbols::delete_on(ptr, bag, symbol)
+}
+
+/// The function's own symbol slot (`own_symbol_slot` on its store).
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_slot(ptr: usize, symbol: f64) -> Option<crate::symbol::OwnSymbolSlot> {
+    crate::symbol::own_symbol_slot(crate::value::js_nanbox_pointer(bag_of(ptr) as i64), symbol)
+}
+
+/// Does the function's store own `symbol`?
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_has(ptr: usize, symbol: usize) -> bool {
+    crate::object::shaped_symbols::position(bag_of(ptr), symbol).is_some()
+}
+
+/// Learn the ConstFn lanes of a native prototype function's own store.
+#[inline(never)]
+pub(crate) unsafe fn fn_learn_constfn(ptr: usize) {
+    let bag = bag_of(ptr);
+    if !crate::object::runtime_layouts::on_declared_prototype_layout(bag) {
+        crate::object::global_this::learn_prototype_lanes(bag);
+    }
+}
+
+/// The function's own symbol entries (`shaped_symbols::entries` on the bag).
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_entries(ptr: usize, include_private: bool) -> Vec<(usize, u64)> {
+    crate::object::shaped_symbols::entries(bag_of(ptr) as usize, include_private)
+}
+
+/// The function's own symbol entry byte (`shaped_symbols::entry` on the bag).
+#[inline(never)]
+pub(crate) unsafe fn fn_sym_entry(ptr: usize, symbol: usize) -> Option<u8> {
+    crate::object::shaped_symbols::entry(bag_of(ptr) as usize, symbol)
 }
 
 /// Is `key` a declared static of the closure at `ptr` while it is an unborn
@@ -104,6 +180,23 @@ unsafe fn unborn_bag_for_read(ptr: usize, key: Option<&[u8]>) -> *mut ObjectHead
         bag_of(ptr)
     } else {
         std::ptr::null_mut()
+    }
+}
+
+/// The holder of a function's own-key attributes, accessors and private
+/// elements (DESIGN_FR step 1): today its bag (`create`: allocated on the
+/// first attribute, accessor or private definition). Step 2 makes the
+/// function itself the holder; every such site of a function reaches its
+/// holder here.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn key_holder(ptr: usize, create: bool) -> *mut ObjectHeader {
+    if create {
+        bag_ensure(ptr)
+    } else {
+        bag_of(ptr)
     }
 }
 
@@ -374,11 +467,130 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     Some(f64::from_bits(value.bits()))
 }
 
+/// The function's `prototype` slot (its first own slot, after its
+/// captures), or null when its family has none or its cell was born
+/// without it (`alloc::closure_own_slot_count`).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn prototype_slot(ptr: usize) -> *mut u64 {
+    let c = ptr as *mut super::ClosureHeader;
+    if super::alloc::closure_own_slot_count(c) == 0 {
+        return std::ptr::null_mut();
+    }
+    super::alloc::closure_capture_slots_mut(c)
+        .add(super::real_capture_count((*c).capture_count) as usize)
+}
+
+/// The function's materialized `prototype` held in its slot (a hole: not
+/// made yet, or given up to the bag by a redefinition).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn prototype_slot_value(ptr: usize) -> Option<f64> {
+    let slot = prototype_slot(ptr);
+    if slot.is_null() || *slot == crate::value::TAG_HOLE {
+        return None;
+    }
+    Some(f64::from_bits(*slot))
+}
+
+/// Does the function's bag itself hold `prototype` (a redefinition with
+/// other attributes moved it there from the slot)?
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_holds_prototype(ptr: usize) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && object_own_get(bag, b"prototype").is_some()
+}
+
+/// Does the function's `prototype` slot hold the key: its value, or the hole
+/// of a `prototype` not made yet (a redefinition that moved it to the bag
+/// leaves the hole with the key in the bag)? Its attributes are then the
+/// birth ones (writable, not enumerable, not configurable).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn prototype_slot_holds_key(ptr: usize) -> bool {
+    let slot = prototype_slot(ptr);
+    !slot.is_null() && (*slot != crate::value::TAG_HOLE || !bag_holds_prototype(ptr))
+}
+
+/// The function's `prototype` taken out of its slot (left a hole), when the
+/// slot holds it.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn prototype_slot_take(ptr: usize) -> Option<f64> {
+    let value = prototype_slot_value(ptr)?;
+    *prototype_slot(ptr) = crate::value::TAG_HOLE;
+    Some(value)
+}
+
+/// Store `prototype` in the function's slot: false (nothing stored) when it
+/// has no slot or its bag holds the key (a redefinition with other
+/// attributes moved it there).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn prototype_slot_store(ptr: usize, value: f64) -> bool {
+    let slot = prototype_slot(ptr);
+    if slot.is_null() {
+        return false;
+    }
+    if *slot == crate::value::TAG_HOLE && bag_holds_prototype(ptr) {
+        return false;
+    }
+    let c = ptr as *mut super::ClosureHeader;
+    *slot = value.to_bits();
+    super::alloc::note_closure_capture_slot(
+        c,
+        super::real_capture_count((*c).capture_count) as usize,
+        value.to_bits(),
+    );
+    true
+}
+
+/// `key` is `prototype` and the function's slot holds its value: that value.
+/// Out of line, so the bag paths of user keys stay as they were.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[cold]
+#[inline(never)]
+unsafe fn prototype_slot_get(ptr: usize, key: &[u8]) -> Option<f64> {
+    if key != b"prototype" {
+        return None;
+    }
+    prototype_slot_value(ptr)
+}
+
+/// `key` is `prototype` and the function's slot stored `value`
+/// ([`prototype_slot_store`]). Out of line, as [`prototype_slot_get`].
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[cold]
+#[inline(never)]
+unsafe fn prototype_slot_set(ptr: usize, key: &[u8], value: f64) -> bool {
+    key == b"prototype" && prototype_slot_store(ptr, value)
+}
+
 /// The function's own data property `key`, if present.
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
+    // Only a nine-byte key can be `prototype`: every other key takes the
+    // bag path with one length compare.
+    if key.len() == 9 {
+        if let Some(value) = prototype_slot_get(ptr, key) {
+            return Some(value);
+        }
+    }
     let mut bag = bag_of(ptr);
     if bag.is_null() {
         // Reading a declared static of an unborn lazy constructor births its
@@ -413,6 +625,9 @@ pub(crate) unsafe fn bag_set(ptr: usize, key: &str, value: f64) {
 }
 
 pub(crate) unsafe fn bag_set_bytes(ptr: usize, key: &[u8], value: f64) {
+    if key.len() == 9 && prototype_slot_set(ptr, key, value) {
+        return;
+    }
     let _no_move = crate::gc::GcSuppressScope::new();
     let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
     let bag = bag_ensure(ptr);
@@ -441,6 +656,18 @@ pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
 }
 
 pub(crate) unsafe fn bag_define_value_bytes(ptr: usize, key: &[u8], value: f64) {
+    if key.len() == 9 && prototype_slot_set(ptr, key, value) {
+        return;
+    }
+    bag_define_value_in_bag(ptr, key, value);
+}
+
+/// [`bag_define_value_bytes`] into the bag itself: the `prototype` slot
+/// gives its value up to the bag (`HolderEdit::materialize_data_keys`).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_define_value_in_bag(ptr: usize, key: &[u8], value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
     // Only a new bag needs a UTF-8 key for its birth declaration. Existing
     // bags use byte keys below, so their updates need no UTF-8 validation.
@@ -457,8 +684,13 @@ pub(crate) unsafe fn bag_define_value_bytes(ptr: usize, key: &[u8], value: f64) 
         // A NEW property — including one `delete` removed earlier: it is
         // appended as any new key is, so it enumerates last. The in-place
         // store below would find the deleted key's tombstoned entry and
-        // bring the property back at its old position.
-        object_own_set_bytes(bag, key, value);
+        // bring the property back at its old position. This is
+        // [[DefineOwnProperty]], validated by the caller, so the bag's
+        // extensibility is not consulted: the `prototype` slot giving its key
+        // up to a non-extensible function's bag moves an existing own key, it
+        // does not add one.
+        let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
         declared_value_replaced_bytes(ptr, key, declared);
         return;
     }
@@ -482,6 +714,21 @@ pub(crate) unsafe fn bag_define_data_with_attrs_bytes(
     value: f64,
     attrs: u8,
 ) {
+    if key == b"prototype" {
+        // The slot holds `prototype` with its birth attributes (writable,
+        // not enumerable, not configurable); other attributes live with the
+        // key in the bag, and the slot gives the value up to it.
+        if attrs == crate::object::PropertyAttrs::new(true, false, false).bits {
+            if prototype_slot_store(ptr, value) {
+                return;
+            }
+        } else {
+            let slot = prototype_slot(ptr);
+            if !slot.is_null() {
+                *slot = crate::value::TAG_HOLE;
+            }
+        }
+    }
     let _no_move = crate::gc::GcSuppressScope::new();
     // UTF-8 is required only by the bag's birth declaration. Once the
     // function owns a bag, its shape and byte-key operations are sufficient.
@@ -556,6 +803,9 @@ pub(crate) unsafe fn bag_remove_bytes(ptr: usize, key: &[u8]) -> bool {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
+    if key.len() == 9 && prototype_slot_get(ptr, key).is_some() {
+        return true;
+    }
     let bag = bag_of(ptr);
     if bag.is_null() {
         return is_declared_static(ptr, key);
@@ -777,6 +1027,23 @@ pub(crate) unsafe fn state_is_deleted_bytes(ptr: usize, key: &[u8]) -> bool {
     object_own_get(state, &marker).is_some()
 }
 
+/// Was the info-derived own key `key` (`length`, `name`) of the closure at
+/// `ptr` deleted and defined again ([`TOMBSTONE_PREFIX`])? Its bag entry is
+/// then a later key, not a birth key.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn state_is_tombstoned_bytes(ptr: usize, key: &[u8]) -> bool {
+    let state = state_of(ptr);
+    if state.is_null() {
+        return false;
+    }
+    let mut marker = Vec::with_capacity(TOMBSTONE_PREFIX.len() + key.len());
+    marker.extend_from_slice(TOMBSTONE_PREFIX.as_bytes());
+    marker.extend_from_slice(key);
+    object_own_get(state, &marker).is_some()
+}
+
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn state_mark_deleted(ptr: usize, key: &str) {
@@ -806,6 +1073,14 @@ pub(crate) unsafe fn state_clear_deleted_bytes(ptr: usize, key: &[u8]) {
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     let state = state_of(ptr);
+    if matches!(key, b"length" | b"name") {
+        // The deleted info-derived entry leaves its tombstone: the key now
+        // being defined again is a later key.
+        let mut tomb = Vec::with_capacity(TOMBSTONE_PREFIX.len() + key.len());
+        tomb.extend_from_slice(TOMBSTONE_PREFIX.as_bytes());
+        tomb.extend_from_slice(key);
+        object_own_set_bytes(state, &tomb, f64::from_bits(crate::value::TAG_TRUE));
+    }
     let mut marker = Vec::with_capacity(DELETED_PREFIX.len() + key.len());
     marker.extend_from_slice(DELETED_PREFIX.as_bytes());
     marker.extend_from_slice(key);
@@ -928,4 +1203,760 @@ pub(crate) unsafe fn state_key_count(ptr: usize) -> usize {
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn has_state(ptr: usize) -> bool {
     !state_of(ptr).is_null()
+}
+
+// ---- The props API surface for callers outside this file (F2y). Every reader
+// of a function's own-key store goes through these, so the store's
+// representation is named here and in the GC trace arm only.
+
+/// Whether the function has materialized its own-key store.
+#[inline(always)]
+pub(crate) unsafe fn has_store(ptr: usize) -> bool {
+    !bag_of(ptr).is_null()
+}
+
+/// A newborn function: no own-key store yet.
+#[inline(always)]
+pub(crate) unsafe fn clear_store(closure: *mut ClosureHeader) {
+    (*closure).props = std::ptr::null_mut();
+}
+
+/// The layout word of the own-key store (`None` without one).
+#[inline(always)]
+pub(crate) unsafe fn store_stamp_word(ptr: usize) -> Option<u32> {
+    let bag = bag_of(ptr);
+    (!bag.is_null()).then(|| crate::object::shapes::object_shape_stamp(bag).0)
+}
+
+/// The key-attribute entry of `key` in the own-key store (`None` without one).
+#[inline(always)]
+pub(crate) unsafe fn store_key_entry(ptr: usize, key: &[u8]) -> Option<u8> {
+    let bag = bag_of(ptr);
+    (!bag.is_null()).then(|| crate::object::key_attrs::object_key_entry(bag, key))
+}
+
+/// The attributes the own-key store records for `key`.
+#[inline(always)]
+pub(crate) unsafe fn store_attrs(ptr: usize, key: &[u8]) -> Option<crate::object::PropertyAttrs> {
+    crate::object::descriptor_state::get_property_attrs_bytes(bag_of(ptr) as usize, key)
+}
+
+/// Clears the attributes the own-key store records for `key`.
+#[inline(always)]
+pub(crate) unsafe fn store_clear_attrs(ptr: usize, key: &str) {
+    let bag = bag_of(ptr);
+    if !bag.is_null() {
+        crate::object::clear_property_attrs(bag as usize, key);
+    }
+}
+
+/// Moves the own-key store's layout to its semantics-changed state.
+#[inline(always)]
+pub(crate) unsafe fn store_transition_semantics(ptr: usize) {
+    let _ = crate::object::shapes::transition_object_shape_semantics(bag_of(ptr));
+}
+
+/// A legacy `[[Prototype]]` recorded on the own-key store's meta record.
+#[inline(always)]
+pub(crate) unsafe fn store_meta_prototype(ptr: usize) -> Option<u64> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        return None;
+    }
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+    (!meta.is_null() && (*meta).prototype != 0).then(|| (*meta).prototype)
+}
+
+// ---- S2a seam (FR12): operations on a function's own-key store, addressed by the
+// closure. Callers outside this file name the operation, not the bag; the
+// representation swap (S2c) changes these bodies only.
+
+/// `builtin_proto::note_write` for the function at `ptr` (a no-op without a store).
+#[inline(always)]
+pub(crate) unsafe fn note_write(
+    ptr: usize,
+    mutation: crate::object::builtin_proto::Mutation<'_>,
+    site: &'static str,
+) {
+    crate::object::builtin_proto::note_write(bag_of(ptr), mutation, site)
+}
+
+/// Is a write of `key` to the function at `ptr` refused by a builtin seal?
+#[inline(always)]
+pub(crate) unsafe fn sealed_write_refused(ptr: usize, key: f64) -> bool {
+    crate::object::builtin_proto::sealed_write_refused(bag_of(ptr), key)
+}
+
+/// The function's own keys are proven to hold no symbol (no store proves it).
+#[inline(always)]
+pub(crate) unsafe fn proves_no_symbols(ptr: usize) -> bool {
+    let bag = bag_of(ptr);
+    bag.is_null() || crate::object::overflow::home::ObjHome::proves_no_symbols(bag as usize)
+}
+
+/// Does the function at `ptr` own symbol key `symbol`?
+#[inline(always)]
+pub(crate) unsafe fn owns_symbol(ptr: usize, symbol: usize) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null()
+        && crate::object::overflow::home::ObjHome::own_symbol_position(bag as usize, symbol)
+            .is_some()
+}
+
+/// The shape descriptor of the function's own-key store.
+#[cfg(test)]
+#[inline(always)]
+pub(crate) unsafe fn shape_descriptor(
+    ptr: usize,
+) -> Option<crate::object::shapes::ShapeDescriptor> {
+    crate::object::shapes::object_shape_descriptor(bag_of(ptr))
+}
+
+/// [`shape_descriptor`]'s record, borrowed in place.
+#[inline(always)]
+pub(crate) unsafe fn shape_record(ptr: usize) -> Option<crate::object::shapes::ShapeRecordRef> {
+    crate::object::shapes::object_shape_record(bag_of(ptr))
+}
+
+/// `[[Set]]` of `name` when it is an own key of the function: `None` when the
+/// function has no store or no such own key (the store is an add), else
+/// whether the key was a writable data key and took `value`. `Some(false)`
+/// (a non-writable or accessor own key) leaves the store to the full
+/// `[[Set]]`; it is never an add.
+#[inline(always)]
+pub(crate) unsafe fn overwrite_own_data(
+    ptr: usize,
+    key: f64,
+    name: &[u8],
+    value: f64,
+) -> Option<bool> {
+    let bag = bag_of(ptr);
+    if bag.is_null() || !bag_has_own(ptr, name) {
+        return None;
+    }
+    Some(crate::object::try_existing_own_data_overwrite_by_content(
+        bag, key, name, value,
+    ))
+}
+
+/// Give the function its own-key store when it has none (no value returned).
+#[inline(always)]
+pub(crate) unsafe fn ensure_key_store(ptr: usize) {
+    key_holder(ptr, true);
+}
+
+/// The function's own accessor `name` with its (enumerable, configurable) flags.
+pub(crate) unsafe fn own_accessor(
+    ptr: usize,
+    name: &[u8],
+) -> Option<(crate::object::accessor_pair::Accessor, bool, bool)> {
+    use crate::object::key_attrs as ka;
+    let bag = key_holder(ptr, false);
+    if bag.is_null() {
+        return None;
+    }
+    let entry = ka::object_key_entry(bag, name);
+    if entry & ka::ENTRY_ACCESSOR == 0 {
+        return None;
+    }
+    let acc = crate::object::accessor_pair::own_accessor(bag as usize, name)?;
+    Some((
+        acc,
+        entry & ka::ENTRY_NON_ENUMERABLE == 0,
+        entry & ka::ENTRY_NON_CONFIGURABLE == 0,
+    ))
+}
+
+/// Install builtin accessor `name` on the function (creating its store).
+pub(crate) unsafe fn set_builtin_accessor_pair(
+    ptr: usize,
+    name: &[u8],
+    acc: crate::object::accessor_pair::Accessor,
+    attrs: crate::object::PropertyAttrs,
+) {
+    let bag = key_holder(ptr, true);
+    crate::object::descriptor_state::set_builtin_accessor_pair_bytes(
+        bag as usize,
+        name,
+        acc,
+        attrs,
+    );
+}
+
+/// Set builtin attributes of own key `name` on the function (creating its store).
+pub(crate) unsafe fn set_builtin_property_attrs(
+    ptr: usize,
+    name: &[u8],
+    attrs: crate::object::PropertyAttrs,
+) {
+    let bag = key_holder(ptr, true);
+    crate::object::descriptor_state::set_builtin_property_attrs_bytes(bag as usize, name, attrs);
+}
+
+/// fr20 op 5: the meta record of the function's store for `reason`, made
+/// with the store when `create`; null when the function has no store.
+#[inline(always)]
+pub(crate) unsafe fn meta_for(
+    ptr: usize,
+    reason: crate::object::MetaReason,
+    create: bool,
+) -> *mut crate::object::ObjectMeta {
+    let bag = if create { bag_ensure(ptr) } else { bag_of(ptr) };
+    if bag.is_null() {
+        return std::ptr::null_mut();
+    }
+    crate::object::key_owner::meta_for(bag as usize, reason, create)
+}
+
+/// fr20 op 6: what the function's store says about its layout, by value.
+pub(crate) enum StoreShape {
+    /// The function never had an own key.
+    NoStore,
+    /// The store's shape descriptor (None: not described, a dictionary).
+    Store(Option<crate::object::shapes::ShapeDescriptor>),
+}
+
+#[inline(always)]
+pub(crate) unsafe fn store_shape(ptr: usize) -> StoreShape {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        StoreShape::NoStore
+    } else {
+        StoreShape::Store(crate::object::shapes::object_shape_descriptor(bag))
+    }
+}
+
+/// fr20 op 9: the intrinsic serial a sealed native constructor's store
+/// carries (None for every other function).
+#[inline(always)]
+pub(crate) unsafe fn sealed_serial(ptr: usize) -> Option<u64> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        return None;
+    }
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+    if meta.is_null() {
+        return None;
+    }
+    Some((*meta).proto_serial)
+}
+
+/// fr20 op 9: the sealed store's live layout word is `word` (its contents
+/// and link are the static layout's).
+///
+/// # Safety
+/// `sealed_serial(ptr)` answered Some.
+#[inline(always)]
+pub(crate) unsafe fn sealed_intact(ptr: usize, word: u32) -> bool {
+    (*bag_of(ptr)).parent_class_id == word
+}
+
+/// fr20 op 10: the constructor's own keys become the sealed static layout
+/// `desc` (its prototype image), keeping its private state edge.
+#[inline(always)]
+pub(crate) unsafe fn seal_to_layout(
+    ptr: usize,
+    desc: *const crate::object::layout_desc::PerryLayoutDesc,
+    serial: u64,
+    module: &str,
+    name: &str,
+) {
+    let old = bag_of(ptr);
+    let built = crate::value::js_nanbox_pointer(old as i64);
+    let Some(image) = crate::object::layout_desc::prototype_image(&*desc, built, serial, &[])
+    else {
+        eprintln!("Perry internal error: native constructor bag {module}.{name} differs from its static layout");
+        std::process::abort();
+    };
+    let bag = crate::value::js_nanbox_get_pointer(image) as *mut crate::object::ObjectHeader;
+    // The recorded constructor parent (and other private state) remains
+    // an owned edge. It is never a JS property of this null-prototype bag.
+    if !crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _)).is_null() {
+        let state = (*crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _))).expando;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+        // GC_STORE_AUDIT(BARRIERED): metadata-record child edge.
+        (*meta).expando = state;
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            &(*meta).expando as *const _ as usize,
+            state,
+        );
+    }
+    crate::object::builtin_proto::seal_runtime_prototype(bag, serial);
+    install_bag(ptr, bag);
+}
+
+/// fr20 op 8: a class's computed static method is an own data property of
+/// the function: the ordinary force-store and attribute edit on its store.
+#[inline(never)]
+pub(crate) unsafe fn fn_define_force_attrs(
+    ptr: usize,
+    key: f64,
+    value: f64,
+    name: &[u8],
+    attrs: u8,
+) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let bag = bag_ensure(ptr);
+    let key_header = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    crate::object::object_ops::define_property_force_store_value(bag, key_header, value);
+    crate::object::key_attrs::apply_edits(
+        bag,
+        &[crate::object::key_attrs::AttrsEdit::Data(name, attrs)],
+    );
+}
+
+// ---- S2b C6a: own-key read and write ops. Callers outside this file address
+// the function by its closure; none receives the store object. S2c swaps the
+// bodies (family record, then the Table) and nothing else.
+
+/// The own key `key_bits` (hash `hash`) of the function at `ptr`: `Ok(value)`
+/// a hit, `Err(true)` proven absent, `Err(false)` the store cannot answer here
+/// (forwarded cell, shadowed store, no ordinary record, probe not ready).
+/// A store record whose probe word is not derived yet is derived here.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn own_lookup(ptr: usize, key_bits: u64, hash: u64) -> Result<f64, bool> {
+    let closure = ptr as *const ClosureHeader;
+    let header = crate::gc::header_from_trusted_user_ptr(closure.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return Err(false);
+    }
+    let bag = bag_of(ptr) as *const ObjectHeader;
+    if bag.is_null() {
+        return crate::object::layout_probe::bagless_own(closure, key_bits, hash);
+    }
+    match crate::object::layout_probe::store_own_derived(bag, key_bits, hash) {
+        None => Err(false),
+        Some(Ok(v)) => Ok(v),
+        // A function with a store keeps its `prototype` in its own slot.
+        Some(Err(miss)) => {
+            use crate::object::runtime_layouts::atom_hash as h;
+            const PROTOTYPE: u64 = h(b"prototype");
+            if hash == PROTOTYPE {
+                let atom = crate::object::runtime_layouts::BP_ATOM_PROTOTYPE.string as usize as u64
+                    | crate::value::STRING_TAG;
+                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if key_bits == atom
+                    || crate::string::js_string_key_bytes(
+                        crate::JSValue::from_bits(key_bits),
+                        &mut scratch,
+                    ) == Some(b"prototype".as_slice())
+                {
+                    if let Some(v) = prototype_slot_value(ptr) {
+                        return Ok(v);
+                    }
+                }
+            }
+            Err(miss)
+        }
+    }
+}
+
+/// The store [`own_lookup`] reads, for the exotic own arm
+/// (`layout_probe::bag_own`) and the exotic read (`layout_probe::exotic_get`),
+/// which read it as they read an array's named bag.
+///
+/// # Safety
+/// `ptr` is a live closure cell whose header is not forwarded.
+#[inline(always)]
+pub(crate) unsafe fn own_store_in(ptr: usize) -> crate::object::layout_probe::OwnStore {
+    crate::object::layout_probe::OwnStore::new(bag_of(ptr) as *const ObjectHeader)
+}
+
+/// The function's own data `prototype` read through its store's shape (a
+/// function's `prototype` is non-configurable, so no accessor or deletion
+/// stands in front of the value). `None` when the shape does not answer.
+///
+/// # Safety
+/// `ptr` is a live closure cell.
+pub(crate) unsafe fn own_data_prototype(ptr: usize) -> Option<f64> {
+    use crate::codegen_abi::LayoutWord;
+    let bag = bag_of(ptr);
+    let bag_header = crate::value::addr_class::try_read_gc_header(bag as usize)?;
+    if crate::gc_type_is_not_object!(bag_header.obj_type)
+        || bag_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    const SPILL: u32 = 1 << 31;
+    let encoded = {
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+        if !meta.is_null() && (*meta).elements != 0 {
+            return None;
+        }
+        let id = (*bag).shape_word();
+        if !crate::object::shapes::is_site_matchable_layout_word(id) {
+            return None;
+        }
+        let record = crate::object::shapes::shape_record_for_word(LayoutWord(id))?;
+        let pos = record.own_data_position_of_value(0, b"prototype")??;
+        pos | if pos >= record.live_inline_slot_count() {
+            SPILL
+        } else {
+            0
+        }
+    };
+    // The shape assigns the slot's canonical storage.
+    let slot = (encoded & !SPILL) as usize;
+    let bits = if encoded & SPILL == 0 {
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
+        *fields.add(slot)
+    } else {
+        let spill = (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).spill
+            as *const crate::array::ArrayHeader;
+        *crate::array::array_elements_ptr(spill).add(slot)
+    };
+    (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+}
+
+/// `[[Set]]`/DefineOwnProperty of the non-intrinsic string key `key`
+/// (`key_value` its value form) on the function at `ptr`, whose admission
+/// tests the caller ran (`function_own_put`): the first key gives birth to the
+/// store, an existing data key is overwritten, a new key is added on the
+/// store's chain, and the closure's ShapeId follows the add. `link` is the
+/// function's [[Prototype]] word for `[[Set]]` (`define` false).
+///
+/// # Safety
+/// `ptr` is a live closure cell; no collection runs (the caller suppresses it).
+#[inline(always)]
+pub(crate) unsafe fn put_own(
+    ptr: usize,
+    key: *const crate::StringHeader,
+    key_value: f64,
+    value: f64,
+    link: u64,
+    define: bool,
+) -> Option<f64> {
+    use crate::object::function_own_put::closure_shape_key_added;
+    use crate::object::layout_probe::FunctionPut;
+    let c = ptr as *mut ClosureHeader;
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        // The first own key: the bag is born holding the intrinsic slots and
+        // this key in one shape (`props::bag_born_with_attrs`).
+        if !define && !crate::object::layout_probe::function_link_admits_add(link, key) {
+            return None;
+        }
+        let name = crate::string::header_str_checked(key)?;
+        let prev = (*c).shape_id;
+        if !bag_born_with_room(ptr, &[(name, value)], &[]) {
+            return None;
+        }
+        // The born bag lists the intrinsic slots and `key`: the closure's
+        // next shape is `prev`'s key-add edge for `key`, as for any add.
+        closure_shape_key_added(c, prev, key);
+        return Some(value);
+    }
+    match crate::object::layout_probe::function_put_plan(bag, link, key, define) {
+        FunctionPut::Decline => None,
+        FunctionPut::Overwrite => {
+            let bytes = std::slice::from_raw_parts(
+                crate::string::string_data(key),
+                (*key).byte_len as usize,
+            );
+            crate::object::try_existing_own_data_overwrite_by_content(bag, key_value, bytes, value)
+                .then_some(value)
+        }
+        FunctionPut::Add => {
+            let prev = (*c).shape_id;
+            if !crate::object::leaf_key_add(bag, key, value.to_bits()) {
+                if crate::object::shapes::object_shape_record(bag)?.object_kind()
+                    == crate::object::shapes::ShapeObjectKind::OrdinaryUnmarked
+                {
+                    crate::object::alloc_plain::mark_object_plain_ordinary(bag);
+                }
+                let mut refresh = None;
+                crate::object::object_set_field_by_name_transition_chain_proven_value(
+                    bag,
+                    key,
+                    value,
+                    &mut refresh,
+                )?;
+            }
+            closure_shape_key_added(c, prev, key);
+            Some(value)
+        }
+    }
+}
+
+/// `[[Set]]` fast store of an existing own writable data key of the function
+/// at `ptr` (`shape_store::try_own_store`); false when it has no store or the
+/// store's shape does not answer.
+///
+/// # Safety
+/// `ptr` is a live, unforwarded closure cell.
+#[inline(always)]
+pub(crate) unsafe fn put_own_overwrite(
+    ptr: usize,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && crate::object::shape_store::try_own_store(bag, key, value)
+}
+
+/// DefineOwnProperty of the chain-proven new data key `key_root` on the
+/// function `owner` (`shape_store::try_function_store`): the store takes the
+/// key on its chain (or by the forced store), the key's deletion mark clears
+/// and the closure's ShapeId follows. The handles are the caller's, rooted in
+/// its `scope`; the store's root joins that scope.
+///
+/// # Safety
+/// `owner` holds a live closure; collection may run.
+#[inline(always)]
+pub(crate) unsafe fn put_own_define_proven(
+    scope: &crate::gc::RuntimeHandleScope,
+    owner: &crate::gc::RuntimeHandle<'_>,
+    key_root: &crate::gc::RuntimeHandle<'_>,
+    value_root: &crate::gc::RuntimeHandle<'_>,
+) -> Option<f64> {
+    use crate::object::shapes;
+    let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+    let bag = bag_ensure(ptr);
+    let bag_root = scope.root_raw_mut_ptr(bag);
+    if shapes::object_shape_record(bag)?.kind_is(shapes::ShapeObjectKind::OrdinaryUnmarked) {
+        crate::object::alloc_plain::mark_object_plain_ordinary(bag);
+    }
+    let key_ptr = key_root.get_raw_const_ptr::<crate::StringHeader>();
+    let mut refresh = None;
+    if crate::object::object_set_field_by_name_transition_chain_proven_value(
+        bag,
+        key_ptr,
+        value_root.get_nanbox_f64(),
+        &mut refresh,
+    )
+    .is_none()
+    {
+        crate::object::object_ops::define_property_force_store_value(
+            bag_root.get_raw_mut_ptr::<ObjectHeader>(),
+            key_root.get_raw_const_ptr::<crate::StringHeader>(),
+            value_root.get_nanbox_f64(),
+        );
+    }
+    let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+    // The ordinary function writer also revives a deleted configurable key.
+    // The bag's new data binding and the function's deletion state must agree.
+    let name =
+        crate::string::header_str_checked(key_root.get_raw_const_ptr::<crate::StringHeader>())?;
+    state_clear_deleted(ptr, name);
+    crate::closure::shape::refresh_closure_shape(ptr);
+    Some(value_root.get_nanbox_f64())
+}
+
+// ---- S2b C6b: descriptor key leaves for `KeyTarget::Function`. Each is one
+// call on the function's store; S2c swaps the bodies and nothing else.
+use crate::object::accessor_pair::Accessor as FnAccessor;
+use crate::object::descriptor_state::AttrsEdit as FnAttrsEdit;
+use crate::object::overflow::home::ObjHome as FnObjHome;
+
+/// The attribute entry of own key `key` (0 when absent or default).
+#[inline(never)]
+pub(crate) unsafe fn fn_key_entry(ptr: usize, key: &[u8]) -> u8 {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        0
+    } else {
+        crate::object::key_attrs::object_key_entry(bag, key)
+    }
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_key_is_accessor(ptr: usize, key: &[u8]) -> bool {
+    let bag = bag_of(ptr);
+    !bag.is_null() && crate::object::key_attrs::object_key_is_accessor(bag, key)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_summary(ptr: usize) -> u8 {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        0
+    } else {
+        crate::object::key_attrs::object_summary(bag)
+    }
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_accessor_names(ptr: usize) -> Vec<String> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        Vec::new()
+    } else {
+        crate::object::key_attrs::object_accessor_key_names(bag)
+    }
+}
+/// `Some(entry)` when `key` is an own key (entry 0: default attributes).
+#[inline(never)]
+pub(crate) unsafe fn fn_own_key_entry(ptr: usize, key: &[u8]) -> Option<u8> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        return None;
+    }
+    let entry = crate::object::key_attrs::object_key_entry(bag, key);
+    let keys = crate::object::object_keys(bag);
+    (entry != 0
+        || crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some())
+    .then_some(entry)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_own_accessor_entry(ptr: usize, key: &[u8]) -> Option<FnAccessor> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        None
+    } else {
+        crate::object::accessor_pair::own_accessor(bag as usize, key)
+    }
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_note_edits(ptr: usize, edits: &[FnAttrsEdit<'_>]) {
+    crate::object::descriptor_state::note_descriptor_target_edits(bag_of(ptr) as usize, edits)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_accessor_replaced(
+    ptr: usize,
+    key: &[u8],
+    previous: Option<FnAccessor>,
+    now: FnAccessor,
+) {
+    crate::object::descriptor_state::note_accessor_function_replaced_bytes(
+        bag_of(ptr) as usize,
+        key,
+        previous,
+        now,
+    )
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_note_named_mutation(ptr: usize, key: &[u8]) {
+    crate::typedarray_named::note_named_mutation(bag_of(ptr) as usize, key)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_note_descriptors(ptr: usize, edits: &[FnAttrsEdit<'_>]) {
+    FnObjHome::note_descriptors(bag_of(ptr) as usize, edits)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_own_accessor_pair(ptr: usize, key: &[u8]) -> Option<FnAccessor> {
+    FnObjHome::own_accessor_pair(bag_of(ptr) as usize, key)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_store_accessor_pair(ptr: usize, key: &[u8], pair: Option<FnAccessor>) {
+    FnObjHome::store_accessor_pair(bag_of(ptr) as usize, key, pair)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_attrs_live_in_keys(ptr: usize) -> bool {
+    FnObjHome::attrs_live_in_keys(bag_of(ptr) as usize)
+}
+#[cfg(test)]
+#[inline(never)]
+pub(crate) unsafe fn fn_clear_descriptors(ptr: usize) {
+    let bag = bag_of(ptr);
+    if !bag.is_null() {
+        crate::object::descriptor_state::clear_object_descriptors(bag as usize)
+    }
+}
+
+// ---- S2b C6c: private elements. A function's private elements live in its
+// own-key store; callers outside this file address the function by its
+// closure, and each leaf re-enters the ordinary holder's body on the store.
+use crate::object::field_get_set::ic_miss::{PrivatePlace, PrivateStorageKey};
+
+/// `KeyTarget::meta` for a function: its store's meta record.
+#[inline(never)]
+pub(crate) unsafe fn fn_meta(
+    ptr: usize,
+    reason: crate::object::MetaReason,
+    create: bool,
+) -> *mut crate::object::ObjectMeta {
+    crate::object::descriptor_state::KeyTarget::object_meta(bag_of(ptr), reason, create)
+}
+
+/// `KeyTarget::restrict` for a function: the level applied to its store.
+#[inline(never)]
+pub(crate) unsafe fn fn_restrict(ptr: usize, level: crate::object::descriptor_state::Restrict) {
+    crate::object::descriptor_state::KeyTarget::restrict_object(bag_of(ptr), level)
+}
+
+/// `KeyTarget::satisfies` for a function: its store's integrity level.
+#[inline(never)]
+pub(crate) unsafe fn fn_satisfies(ptr: usize, frozen: bool) -> bool {
+    crate::object::descriptor_state::KeyTarget::object_satisfies(bag_of(ptr), frozen)
+}
+
+/// Does the function have an own-key store (where its private elements live)?
+#[inline(always)]
+pub(crate) unsafe fn fn_has_key_store(ptr: usize) -> bool {
+    !bag_of(ptr).is_null()
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_has_brand(ptr: usize, brand: u64) -> bool {
+    crate::object::shapes::object_has_brand(bag_of(ptr), brand)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_add_brand(ptr: usize, brand: u64) -> bool {
+    crate::object::shapes::transition_object_shape_add_brand(bag_of(ptr), brand)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_set(
+    ptr: usize,
+    storage: &PrivateStorageKey,
+    present: bool,
+    obj: f64,
+    value: f64,
+) -> bool {
+    crate::object::field_get_set::ic_miss::private_element_set_on(
+        bag_of(ptr),
+        storage,
+        present,
+        obj,
+        value,
+    )
+}
+/// The place of private field `storage`'s value in the function's store (the
+/// private-storage lookup answered here: the place, never the store).
+#[inline(never)]
+pub(crate) unsafe fn fn_private_lookup(
+    ptr: usize,
+    storage: &PrivateStorageKey,
+) -> Option<PrivatePlace> {
+    storage.locate_on(bag_of(ptr))
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_read(ptr: usize, place: PrivatePlace) -> u64 {
+    place.read(bag_of(ptr))
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_store(ptr: usize, place: PrivatePlace, value: f64) -> bool {
+    place.store_on(bag_of(ptr), value)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_fill_optional(
+    ptr: usize,
+    storage: &PrivateStorageKey,
+    value: f64,
+) -> bool {
+    storage.fill_optional_on(bag_of(ptr), value)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_has_entry(ptr: usize, key: &[u8]) -> bool {
+    crate::object::key_attrs::object_key_has_private_entry(bag_of(ptr), key)
+}
+#[inline(never)]
+pub(crate) unsafe fn fn_private_define(ptr: usize, key: &[u8]) {
+    crate::object::key_attrs::apply_edits(
+        bag_of(ptr),
+        &[crate::object::key_attrs::AttrsEdit::Private(key)],
+    );
+}
+/// A runtime intrinsic's private element on the function (`None` when the
+/// function has no store or no such element).
+#[inline]
+pub(crate) unsafe fn fn_private_intrinsic_read(
+    ptr: usize,
+    site: &crate::object::IntrinsicPrivateReadSite,
+) -> Option<f64> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        return None;
+    }
+    site.read(crate::value::js_nanbox_pointer(bag as i64))
 }

@@ -897,7 +897,18 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             left,
             right,
         } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
-        Expr::Call { .. } => crate::expr::facts_number::closed_number_call(ctx, e),
+        // A Number-returning `String.prototype` method on a proven string
+        // lowers to a real double whose only NaN is the canonical quiet NaN
+        // (`string_method_returns_number`), so it holds without the facts:
+        // `u8[i] = s.charCodeAt(i)` needs no ToNumber call per store.
+        Expr::Call { callee, .. } => {
+            crate::expr::facts_number::closed_number_call(ctx, e)
+                || matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, property, .. }
+                        if string_method_call_returns_number(ctx, object, property)
+                )
+        }
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)

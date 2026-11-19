@@ -306,9 +306,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             render_table(&headers, &rows);
             return;
         }
-        if crate::buffer::is_uint8array_buffer(raw_addr) {
+        if crate::buffer::is_uint8_view_buffer(raw_addr) {
             let buf = raw_addr as *const crate::buffer::BufferHeader;
-            let length = crate::buffer::store::raw_length(buf as usize) as usize;
+            let length = crate::buffer::store::length(buf as usize);
             let headers = vec!["(index)".to_string(), "Values".to_string()];
             let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
             for i in 0..length {

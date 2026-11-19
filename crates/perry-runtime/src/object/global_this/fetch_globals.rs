@@ -846,7 +846,7 @@ unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
 /// the NaN-boxed pointer-tagged value the Request/Response thunk returns) on a
 /// subclass instance's `this` under `__perry_fetch_handle__`. Stored as a
 /// pointer-tagged value so the collector traces its registry ownership.
-unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
+pub(crate) unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
     if subclass_this_object_ptr(this_box).is_some() {
         crate::object::field_get_set::FETCH_SUBCLASS_EVER
             .store(true, std::sync::atomic::Ordering::Relaxed);

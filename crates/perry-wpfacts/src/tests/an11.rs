@@ -13,7 +13,7 @@
 //! link to an Array (`holder.o = { o: [], push: 0 }`). Unknowns from
 //! `process.argv`.
 use super::box_computed_read::{run as witness, SETUP_ARGV};
-use crate::model::{TmplKind, TokKind};
+use crate::model::TokKind;
 
 fn solved(src: &str) -> crate::gen::Gen<'static> {
     let src: &'static str = Box::leak(src.to_string().into_boxed_str());
@@ -36,30 +36,6 @@ fn solved(src: &str) -> crate::gen::Gen<'static> {
 fn held_work(src: &str) -> (bool, u64) {
     let g = solved(src);
     (g.m.realm_held, g.m.work.get())
-}
-
-/// Whether the any-field of a program literal or a JSON object holds a
-/// built-in function (a chain member copied as a value).
-fn copies_builtin_fn(src: &str) -> bool {
-    let mut g = solved(src);
-    let m = &mut g.m;
-    let objs: Vec<u32> = (0..m.toks.len() as u32)
-        .filter(|&t| match &m.toks[t as usize] {
-            TokKind::Obj(tm, _) => matches!(
-                m.tmpls[*tm as usize].kind,
-                TmplKind::Lit { .. } | TmplKind::BObj { what: "json", .. }
-            ),
-            _ => false,
-        })
-        .collect();
-    objs.into_iter().any(|t| {
-        let fa = m.field_any(t);
-        m.nodes[fa as usize]
-            .pts
-            .to_sorted()
-            .iter()
-            .any(|&v| matches!(m.toks[v as usize], TokKind::BuiltinFn(..)))
-    })
 }
 
 /// Whether some value set holds `Array.prototype.push` (read through the

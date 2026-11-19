@@ -504,3 +504,41 @@ fn a_data_view_keeps_non_canonical_numeric_keys_as_properties() {
     );
     assert_eq!(crate::buffer::canonical_index_key(key("x")), None);
 }
+
+/// A node `Buffer` is a `Uint8Array`, so it is an integer-indexed exotic
+/// object: node answers `TypeError` for `Object.freeze(Buffer.from([1]))`
+/// ("Cannot freeze array buffer views with elements"), stores the byte for
+/// `Reflect.set(buf, 0, 9)`, and refuses `Reflect.deleteProperty(buf, 0)`.
+/// The empty `Buffer` is the control: it has no element to protect, so
+/// freezing it succeeds.
+#[test]
+fn node_buffer_follows_integer_indexed_integrity_rules() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::gc_init();
+    let buf = node_buffer(&[1, 2]);
+    assert!(crate::buffer::is_node_buffer(buf));
+    let threw = crate::exception::catch_js_throw(|| {
+        crate::object::js_object_freeze(boxed(buf));
+    })
+    .is_err();
+    assert!(threw, "freezing a non-empty Buffer must throw");
+    let key = crate::value::js_nanbox_string(
+        crate::string::js_string_from_bytes(b"0".as_ptr(), 1) as i64
+    );
+    let stored =
+        crate::object::property_ops::reflect::js_reflect_set(boxed(buf), key, 9.0, boxed(buf));
+    assert_eq!(stored.to_bits(), crate::value::TAG_TRUE);
+    assert_eq!(crate::buffer::js_buffer_get(buf as *const _, 0), 9);
+    let deleted = crate::object::property_ops::reflect::js_reflect_delete(boxed(buf), key);
+    assert_eq!(deleted.to_bits(), crate::value::TAG_FALSE);
+    assert!(is_undefined(
+        crate::object::js_object_get_index_polymorphic(buf as i64, 5.0)
+    ));
+
+    let empty = node_buffer(&[]);
+    let threw = crate::exception::catch_js_throw(|| {
+        crate::object::js_object_freeze(boxed(empty));
+    })
+    .is_err();
+    assert!(!threw, "freezing an empty Buffer succeeds");
+}

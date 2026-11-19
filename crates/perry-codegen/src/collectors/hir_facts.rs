@@ -1,4 +1,4 @@
-use perry_hir::{ArrayElement, Expr, Stmt};
+use perry_hir::{ArrayElement, Expr, ObjectPart, Stmt};
 use std::collections::{HashMap, HashSet};
 
 /// Native specialization facts collected once per lowered HIR region.
@@ -1613,11 +1613,19 @@ impl ArrayFactCollector {
                 }
             }
             Expr::ObjectSpread { parts } => {
-                for (key, value) in parts {
-                    if key.is_some() {
-                        self.mark_array_identity_exposure(value);
+                for part in parts {
+                    match part {
+                        ObjectPart::Spread(value) => self.collect_expr(value),
+                        ObjectPart::Define(_, value) => {
+                            self.mark_array_identity_exposure(value);
+                            self.collect_expr(value);
+                        }
+                        ObjectPart::Computed { key, value } => {
+                            self.collect_expr(key);
+                            self.mark_array_identity_exposure(value);
+                            self.collect_expr(value);
+                        }
                     }
-                    self.collect_expr(value);
                 }
             }
             Expr::ArrayCopyWithin {

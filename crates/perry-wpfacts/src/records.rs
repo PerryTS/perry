@@ -270,6 +270,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NotBuffer { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
+ | Cons::RecordEntry { .. }
         | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -385,6 +386,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::EnumKeyStore { .. }
         | Cons::EnumKeyAny { .. }
         | Cons::OwnValues { .. }
+        | Cons::OwnKeys { .. }
         | Cons::OwnDescValues { .. } => Reject(R5Iterate(c.kind_name().into())),
         // Accessors.
         Cons::Accessor { .. }
@@ -416,6 +418,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::NotBuffer { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
+        | Cons::RecordEntry { .. }
         | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -1328,6 +1331,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::NotBuffer { .. }
                                     | Cons::NotRegExp { .. }
                                     | Cons::NotNull { .. }
+                                    | Cons::RecordEntry { .. }
                                     | Cons::TypeIs { .. }
                                     | Cons::NotUndefined { .. }
                                     | Cons::Guard { .. }
@@ -1894,6 +1898,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::NotBuffer { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::NotNull { .. }
+                | Cons::RecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Guard { .. }

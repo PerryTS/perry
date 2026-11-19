@@ -66,6 +66,16 @@ pub extern "C-unwind" fn js_object_get_field_slow(
         return super::ic_miss::get_field_miss(obj, key);
     }
     unsafe {
+        // A typed array that owns no property: its metadata, `buffer` and
+        // `BYTES_PER_ELEMENT` from structure (`typedarray_named`).
+        let key_bytes =
+            std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+        if let Some(value) = crate::typedarray_named::try_get_named(
+            crate::value::JSValue::pointer(obj as *const u8),
+            key_bytes,
+        ) {
+            return value;
+        }
         let key_bits = crate::value::STRING_TAG | key as u64;
         let verify = crate::object::layout_probe::verify::on();
         if verify {
@@ -144,9 +154,20 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
     let bits = obj_bits as u64;
     let tag = bits >> 48;
     let obj_unmasked = bits as usize as *const ObjectHeader;
-    if tag == crate::value::STRING_TAG >> 48 {
-        let masked = (bits & crate::value::POINTER_MASK) as usize as *const ObjectHeader;
-        return super::js_object_get_field_by_name_f64(masked, key);
+    let receiver = crate::value::JSValue::from_bits(bits);
+    let key_value = crate::value::js_nanbox_string(key as i64);
+    if receiver.is_any_string() {
+        return crate::string::string_property_get_canonical(f64::from_bits(bits), key_value);
+    }
+    if receiver.is_number() || receiver.is_bool() || receiver.is_bigint() {
+        let intrinsic = if receiver.is_number() {
+            "Number"
+        } else if receiver.is_bool() {
+            "Boolean"
+        } else {
+            "BigInt"
+        };
+        return super::primitive_canonical_get(f64::from_bits(bits), key_value, intrinsic);
     }
     if tag == crate::value::POINTER_TAG >> 48 {
         // A small native handle (or a Proxy cell) below the heap band.

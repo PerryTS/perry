@@ -73,7 +73,7 @@ pub use stmt::{CatchClause, Stmt, SwitchCase};
 // ---- expr.rs ----
 pub use expr::{
     ArrayBirthLayout, ArrayLikeSource, BirthLayout, BoxedPrimitiveKind, ClassFreshStaticInit, Expr,
-    PathWin32Method, ProcessStdinLifecycleMethod, WithSetFallback,
+    ObjectPart, PathWin32Method, ProcessStdinLifecycleMethod, WithSetFallback,
 };
 
 // ---- ops.rs ----

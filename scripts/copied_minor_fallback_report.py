@@ -500,10 +500,12 @@ def check_old_page_accounting(
         errors.append(
             f"{name}:{line_number}: old-page selected bytes reported with no selected pages"
         )
-    if old_page_moved > selected_live:
+    # The pass moves whole source blocks, dead and unselected occupants included,
+    # so the selection's live bytes are a floor, not a ceiling.
+    if 0 < old_page_moved < selected_live:
         errors.append(
             f"{name}:{line_number}: evacuation.old_page_moved_bytes({old_page_moved}) "
-            f"> evacuation_policy.old_page_selected_live_bytes({selected_live})"
+            f"< evacuation_policy.old_page_selected_live_bytes({selected_live})"
         )
     if old_page_moved > released:
         errors.append(

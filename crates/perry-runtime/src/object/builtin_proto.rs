@@ -142,8 +142,8 @@ pub fn pristine(family: BuiltinProto) -> bool {
         } else {
             (*crate::agent_ptrs::intrinsic_proto(BuiltinProto::Object as usize)).parent_class_id
         };
-        own < super::layout_desc::UNSHADOWED_WORD_END
-            && parent < super::layout_desc::UNSHADOWED_WORD_END
+        crate::codegen_abi::is_unshadowed_record_word(own)
+            && crate::codegen_abi::is_unshadowed_record_word(parent)
     }
 }
 
@@ -155,8 +155,9 @@ pub fn pristine(family: BuiltinProto) -> bool {
 pub fn prototype_unwritten(family: BuiltinProto) -> bool {
     // SAFETY: as in `pristine`.
     unsafe {
-        (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id
-            < super::layout_desc::UNSHADOWED_WORD_END
+        crate::codegen_abi::is_unshadowed_record_word(
+            (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id,
+        )
     }
 }
 
@@ -1099,11 +1100,7 @@ pub(crate) fn note_write_addr(addr: usize, mutation: Mutation<'_>, site: &'stati
         },
         crate::gc_array_type_pat!() => note_array_prototype_write(addr, mutation, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
-            note_write(
-                (*(addr as *const crate::closure::ClosureHeader)).props,
-                mutation,
-                site,
-            );
+            crate::closure::props::note_write(addr, mutation, site);
         },
         _ => {}
     }
@@ -1181,9 +1178,7 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 }
                 sealed_write_refused(crate::array::array_property_bag(live), key)
             }
-            crate::gc::GC_TYPE_CLOSURE => {
-                sealed_write_refused((*(addr as *const crate::closure::ClosureHeader)).props, key)
-            }
+            crate::gc::GC_TYPE_CLOSURE => crate::closure::props::sealed_write_refused(addr, key),
             _ => false,
         }
     }
@@ -1194,16 +1189,43 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
-unsafe fn sealed_write_refused(obj: *const ObjectHeader, key: f64) -> bool {
-    if obj.is_null() || super::own_override::in_builtin_definition() {
+#[inline(always)]
+pub(crate) unsafe fn sealed_write_refused(obj: *const ObjectHeader, key: f64) -> bool {
+    sealed_write_refused_in(obj as usize, key)
+}
+
+/// The owner of a locked intrinsic's keys, as the lock gate sees it
+/// (integrity, DESIGN_FR step 1).
+impl super::overflow::home::ObjHome {
+    /// A redefinition of `key` on the owner writes a member its lock refuses
+    /// (`meta`: the owner's sealed-intrinsic meta).
+    #[inline(always)]
+    pub(crate) unsafe fn redefine_violates(
+        owner: usize,
+        meta: *mut super::ObjectMeta,
+        key: f64,
+    ) -> bool {
+        locked_violation(
+            owner as *const ObjectHeader,
+            meta,
+            Mutation::Redefine(Key::Value(key)),
+        )
+        .is_some()
+    }
+}
+
+/// [`sealed_write_refused`] on an owner of home kind `H` (`owner` 0: none).
+#[inline]
+unsafe fn sealed_write_refused_in(owner: usize, key: f64) -> bool {
+    if owner == 0 || super::own_override::in_builtin_definition() {
         return false;
     }
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    let meta = super::overflow::home::ObjHome::meta(owner);
     if meta.is_null() || (*meta).flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC == 0 {
         return false;
     }
     locked_family(sealed_family((*meta).flags))
-        && locked_violation(obj, meta, Mutation::Redefine(Key::Value(key))).is_some()
+        && super::overflow::home::ObjHome::redefine_violates(owner, meta, key)
 }
 
 /// Is the property key `key` an array index (a canonical decimal in
@@ -1633,6 +1655,23 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    // `ta.set(source, offset)` whose `Get` structure answers: the builtin's
+    // body, as the typed-array tower runs it (a missing offset is 0).
+    if mode == GENERIC_RECEIVER && name == b"set" {
+        if let Some(ta) = super::typed_array_chain::builtin_set_receiver(recv) {
+            let source = if argc > 0 && !args.is_null() {
+                *args
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let offset = if argc > 1 && !args.is_null() {
+                *args.add(1)
+            } else {
+                0.0
+            };
+            return crate::typedarray_hook_slots::js_typed_array_set_from(ta, source, offset);
+        }
+    }
     // The name may live in `scratch`; own it across the calls below.
     let name: Vec<u8> = name.to_vec();
     let family = match mode {

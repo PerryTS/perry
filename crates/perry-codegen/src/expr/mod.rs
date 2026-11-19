@@ -124,6 +124,8 @@ pub(crate) fn literal_descriptor_worker_ir() -> String {
 mod map_entry_at_tests;
 #[cfg(test)]
 mod member_update_class_field_tests;
+#[cfg(test)]
+mod rest_fields_tests;
 pub(crate) mod stack_guard;
 #[cfg(test)]
 mod stack_guard_leaf_tests;
@@ -293,6 +295,8 @@ mod index_set_barrier_tests;
 mod instanceof_imported_rhs_tests;
 #[cfg(test)]
 mod method_value_shape_tests;
+#[cfg(test)]
+mod private_field_site_tests;
 #[cfg(test)]
 mod proven_view_guarded_tests;
 mod record_value;

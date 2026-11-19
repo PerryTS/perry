@@ -193,6 +193,12 @@ impl Model {
     /// and the computed-key accessors (`define_any_old`), as before.
     pub(crate) fn define_computed_key(&mut self, d: DefineAny) {
         let kn = &self.nodes[d.key as usize];
+        // A key node with no value yet: no define has run (the rule runs
+        // again when it grows). Deciding now would take the computed path
+        // before the first String constant arrives.
+        if kn.prim == 0 && kn.pts.is_empty() {
+            return;
+        }
         let str_key = kn.pts.is_empty() && kn.prim & prim::SYMBOL == 0;
         // A `set` that is not callable (nor undefined) makes the define
         // throw (ToPropertyDescriptor 6.2.6.5 step 15.b): no define.
@@ -206,11 +212,17 @@ impl Model {
                     || crate::builtins::accessor_callable(self, t)
             });
         let ok = str_key && no_set && !self.unit_mode && !self.global_any_off;
+        // E5 exact key set: a key that is one of finitely many String
+        // constants defines exactly those keys (each as a named define does).
+        let exact = match no_set && !self.unit_mode {
+            true => self.exact_global_keys(d.key),
+            false => None,
+        };
         // Per receiver: `o` may also hold what a read of `globalThis`
         // yields after such a define (`globalThis` is configurable).
         let mut glob = None;
         for t in self.nodes[d.o as usize].pts.to_sorted() {
-            match crate::builtins::global_object(self, t) && ok {
+            match crate::builtins::global_object(self, t) && (ok || exact.is_some()) {
                 true => glob = Some(t),
                 false => self.define_any_old(d, t),
             }
@@ -218,6 +230,10 @@ impl Model {
         let Some(g) = glob else {
             return;
         };
+        if let Some(atoms) = exact {
+            self.define_global_keys(d, g, &atoms);
+            return;
+        }
         if !self.global_def_done.insert(d.id()) {
             return;
         }
@@ -242,6 +258,80 @@ impl Model {
         });
         self.why_mint(call, Some(g), u32::MAX);
         self.cons(d.get, Cons::Call { call });
+    }
+
+    /// E5 exact key set: the keys a define's key node `k` may be, when it
+    /// holds only String constants, finitely many (`Node::strs`, exact:
+    /// `STRS_K` is unbounded). ToPropertyKey of a String is that String
+    /// (ECMA-262 7.1.19), so the define names one of them (20.1.2.4 step 2).
+    /// `navigator` keeps the computed path (its reads take the define field,
+    /// `global_def_nav_read`); any other node: `None`, a computed key. The
+    /// node only grows: a later non-constant makes the define computed
+    /// (`define_computed_key` runs again), the named writes kept beside it.
+    fn exact_global_keys(&self, k: NodeId) -> Option<Vec<Atom>> {
+        let kn = &self.nodes[k as usize];
+        if !kn.pts.is_empty() || kn.prim != prim::STR {
+            return None;
+        }
+        if kn.strs & !crate::model::STRS_RUN < crate::model::STRS_SET0 {
+            return None;
+        }
+        let atoms = self.str_atoms(kn.strs).to_vec();
+        let named = |a: &Atom| {
+            let n = &self.atoms[*a as usize];
+            n != "navigator" && n != crate::STAR_KEY
+        };
+        atoms.iter().all(named).then_some(atoms)
+    }
+
+    /// E5 exact key set (`Cons::DefineAnyKey` whose key is one of finitely
+    /// many String constants, no setter, whole program): on the global
+    /// object (9.1.1.4) the define creates or replaces the own property
+    /// under one of `atoms` and writes no other key (10.1.6.3
+    /// ValidateAndApplyPropertyDescriptor). Each key's global field takes
+    /// the descriptor's `value` and what a call of its `get` with `this` =
+    /// the global object returns, as a named define does; no any-key write.
+    /// `undefined` / `NaN` / `Infinity` are non-configurable (19.1): the
+    /// define throws a TypeError and writes nothing there.
+    fn define_global_keys(&mut self, d: DefineAny, g: Tok, atoms: &[Atom]) {
+        let ret = match self.global_key_def_ret.get(&d.id()) {
+            Some(&r) => r,
+            None => {
+                let ret = self.node_l("global-define-named-get-ret");
+                self.global_key_def_ret.insert(d.id(), ret);
+                let call = self.calls.len() as CallId;
+                self.calls.push(CallSite {
+                    first_arg_fixed: false,
+                    this: ThisArg::Tok(g),
+                    args: vec![],
+                    spread: vec![],
+                    ret,
+                    site: call,
+                    region: self.thrown,
+                });
+                self.why_mint(call, Some(g), u32::MAX);
+                self.cons(d.get, Cons::Call { call });
+                ret
+            }
+        };
+        for &a in atoms {
+            if matches!(
+                self.atoms[a as usize].as_str(),
+                "undefined" | "NaN" | "Infinity"
+            ) {
+                continue;
+            }
+            if !self.global_key_def_done.insert((d.id(), a)) {
+                continue;
+            }
+            let f = crate::builtins::global_field(self, g, a);
+            if !d.accessor {
+                self.edge(d.value, f);
+            }
+            // An accessor without `get` reads `undefined` (10.1.8.1 step 6).
+            self.add_prim(f, prim::UNDEF);
+            self.edge(ret, f);
+        }
     }
 
     /// GLOBK3: the old path of a computed-key define for receiver `t`: the

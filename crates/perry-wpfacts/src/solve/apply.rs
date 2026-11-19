@@ -87,6 +87,15 @@ impl Model {
                     self.own_values_of(t, dst);
                 }
             }
+            Cons::OwnKeys { dst } => {
+                // A String's own keys are its index names: any String.
+                if prim & prim::STR != 0 {
+                    self.add_prim(dst, prim::STR);
+                }
+                for &t in toks {
+                    self.own_keys_of(t, dst);
+                }
+            }
             Cons::OwnDescValues { dst } => {
                 // A String's own properties: its characters and `length`.
                 if prim & prim::STR != 0 {
@@ -502,6 +511,25 @@ impl Model {
                             self.beside_guard.entry(t).or_default().push((from, dst));
                         }
                     }
+                }
+            }
+            // Rule RP2: an ordinary Array the runtime takes the array arm
+            // for is held back (`solve/record_entry.rs`).
+            Cons::RecordEntry { dst } => {
+                for &t in toks {
+                    if self.record_entry_holds(t) {
+                        if !self.record_entry_held.contains(&(t, dst)) {
+                            self.record_entry_held.push((t, dst));
+                        }
+                    } else {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
                 }
             }
             Cons::Defined { dst }
@@ -967,6 +995,18 @@ impl Model {
                             if !ks.contains(&key) {
                                 ks.push(key);
                             }
+                        }
+                        // A NAMED key on the global object (9.1.1.4: an
+                        // ordinary object whose own properties are the
+                        // global bindings) creates or replaces that one own
+                        // property (20.1.2.4 -> 10.1.6.3) and writes no other
+                        // key: a data descriptor's value is the named store
+                        // `define_by_data` emits (the binding's global field,
+                        // `global_field`), an accessor's get / set are
+                        // installed under that key by `Cons::Accessor`. No
+                        // any-key write of the global object.
+                        _ if builtins::global_object(self, t) && !self.unit_mode => {
+                            self.virt_revoke(t, Some(key));
                         }
                         // A data descriptor under this NAMED key writes that
                         // key alone (rule D1): HARD, no unknown write of any

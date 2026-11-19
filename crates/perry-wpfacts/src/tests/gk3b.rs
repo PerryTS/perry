@@ -175,3 +175,237 @@ fn gk3b_keep_cross_module_bare_name() {
         pf.dump_text()
     );
 }
+
+/// E5 exact key set: a `define(name, get)` helper over the global object;
+/// `g` holds the program's `A`, then `{defs}`; `globalThis.Object` and `g`
+/// are read after.
+fn e5_src(defs: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        class B {{ zz = \"b\"; }}
+        (globalThis as any).g = new A();
+        const gg = globalThis as Record<string, unknown>;
+        function define(name: string, get: () => unknown): void {{ Object.defineProperty(gg, name, {{ get, configurable: true }}); }}
+        {defs}
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);
+        console.log((globalThis as any).g.zz);"
+    )
+}
+
+/// The `g.zz` read may see a `B` (or ⊤).
+fn e5_g_sees_b(pf: &ProgramFacts) -> bool {
+    pf.sites.iter().filter(|s| s.key == "zz").any(|s| {
+        s.top
+            || s.receivers
+                .iter()
+                .any(|r| r.ends_with(":B") || r.contains(":B#"))
+    })
+}
+
+fn e5_object_top(pf: &ProgramFacts) -> bool {
+    pf.sites.iter().filter(|s| s.key == "keys").any(|s| s.top)
+}
+
+/// RED (E5 exact key set): the helper called with three literal names
+/// defines those three globals and no other: `g` stays the program's `A`
+/// and `globalThis.Object` the intrinsic. (Was: every global binding read
+/// took what any computed-key define put there, the getters' `B`.)
+#[test]
+fn e5_exact_literal_names_write_only_those_keys() {
+    let src = e5_src(
+        "define(\"innerWidth\", () => new B()); define(\"innerHeight\", () => new B()); define(\"screen\", () => new B());",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+}
+
+/// KEEP: one of the literal names is `g`: its read sees the getter's `B`.
+#[test]
+fn e5_exact_defined_name_is_read() {
+    let src = e5_src("define(\"innerWidth\", () => 1); define(\"g\", () => new B());");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(e5_g_sees_b(&pf), "g may be B\n{}", pf.dump_text());
+}
+
+/// KEEP: a computed key from unknown input may be any name, `g` included.
+#[test]
+fn e5_unknown_key_stays_any_key() {
+    let src = e5_src("define(String(process.argv[3]), () => new B());");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(e5_g_sees_b(&pf), "g may be B\n{}", pf.dump_text());
+}
+
+/// KEEP: a non-constant key beside the literals, before or after them,
+/// widens the define to any key.
+#[test]
+fn e5_later_non_constant_widens() {
+    let lits = "define(\"innerWidth\", () => new B()); define(\"screen\", () => new B());";
+    let dynk = "define(String(process.argv[3]), () => new B());";
+    for defs in [format!("{lits}\n{dynk}"), format!("{dynk}\n{lits}")] {
+        let pf = facts_mods(&[("main", &e5_src(&defs))]);
+        assert!(e5_g_sees_b(&pf), "{defs}: g may be B\n{}", pf.dump_text());
+    }
+}
+
+/// CHW13 named define on the global object: `g` holds the program's `A`,
+/// then `{defs}`; `globalThis.Object`, `g`, `navigator` and `thing` are
+/// read after.
+fn nd_src(defs: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        class B {{ zz = \"b\"; }}
+        class N {{ nn = 1; }}
+        (globalThis as any).g = new A();
+        const gg = globalThis as Record<string, unknown>;
+        {defs}
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);
+        console.log((globalThis as any).g.zz);
+        console.log(/*NAV*/(globalThis as any).navigator.nn);
+        console.log(/*THING*/(globalThis as any).thing.nn);"
+    )
+}
+
+/// The first `.nn` read after `marker`: (it may be an `N`, it is ⊤).
+fn nd_nn(pf: &ProgramFacts, src: &str, marker: &str) -> (bool, bool) {
+    let at = src.find(marker).expect("marker") as u32;
+    let s = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "nn" && s.byte_offset >= at)
+        .min_by_key(|s| s.byte_offset)
+        .unwrap_or_else(|| panic!("site .nn after {marker}\n{}", pf.dump_text()));
+    let n = s
+        .receivers
+        .iter()
+        .any(|r| r.ends_with(":N") || r.contains(":N#"));
+    (n, s.top)
+}
+
+/// RED (CHW13): a value define on the global object under a constant key
+/// (`navigator`, as the app's browser shim does, and a fresh name) writes
+/// that key only: `g` stays the program's `A`, `globalThis.Object` the
+/// intrinsic, and a read of each defined key gets the defined `N`.
+#[test]
+fn nd_value_define_writes_that_key_only() {
+    let src = nd_src(
+        "Object.defineProperty(gg, \"navigator\", { configurable: true, enumerable: true, writable: true, value: new N() });
+        Object.defineProperty(globalThis, \"thing\", { value: new N(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+    for m in ["/*NAV*/", "/*THING*/"] {
+        let (n, top) = nd_nn(&pf, &src, m);
+        assert!(n && !top, "{m} reads the defined N\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: an accessor define under a constant key: its getter's result
+/// reaches the readers of that key (`navigator` too, whose native accessor
+/// a plain store would not replace).
+#[test]
+fn nd_accessor_define_getter_reaches_readers() {
+    let src = nd_src(
+        "Object.defineProperty(gg, \"navigator\", { get: () => new N(), configurable: true });
+        Object.defineProperty(gg, \"thing\", { get: () => new N(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    for m in ["/*NAV*/", "/*THING*/"] {
+        let (n, top) = nd_nn(&pf, &src, m);
+        assert!(n || top, "{m} may read the getter's N\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a define of `g` itself (value or getter) is what `g` reads.
+#[test]
+fn nd_define_of_the_read_name_is_read() {
+    for d in [
+        "Object.defineProperty(gg, \"g\", { value: new B(), configurable: true });",
+        "Object.defineProperty(gg, \"g\", { get: () => new B(), configurable: true });",
+    ] {
+        let pf = facts_mods(&[("main", &nd_src(d))]);
+        assert!(e5_g_sees_b(&pf), "{d}: g may be B\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a constant-key define on ⊤ that is not the global object keeps
+/// the ⊤ arm (`note_native_data_write` through ⊤ under the key): with the
+/// realm not in ⊤'s reach, `g` and `Object` stay as they were (as on base).
+#[test]
+fn nd_define_on_top_keeps_today() {
+    let src = nd_src(
+        "const u: any = JSON.parse(String(process.argv[2])); Object.defineProperty(u, \"g\", { value: new B(), configurable: true });",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(!e5_g_sees_b(&pf), "g is A\n{}", pf.dump_text());
+    assert!(!e5_object_top(&pf), "Object known\n{}", pf.dump_text());
+}
+
+/// GDEL: unknown code holds the global object (`global_in_top`), then
+/// `body` runs on `u`, a value of unknown code; then `Math` and `Object`
+/// are read (`Math.max` is an intrinsic op, no site: `Math.max` is probed
+/// through a site of its value, `M.max`, and `Object` as in `e5_src`).
+fn gd_src(body: &str) -> String {
+    format!(
+        "class A {{ zz = 1; }}
+        const unknown: any = (globalThis as any)[process.argv[2]];
+        unknown.take2(globalThis);
+        const u: any = unknown.get();
+        const k = String(process.argv[3]);
+        {body}
+        const M: any = (globalThis as any).Math; console.log(/*M*/ M.max(1, Number(process.argv[4])));
+        const O: any = (globalThis as any).Object; console.log(O.keys(new A()).length);"
+    )
+}
+
+/// The `M.max` and `O.keys` sites see the intrinsic namespace (and,
+/// after a delete, `undefined`: the intrinsic op then refuses the site on
+/// its primitive, `namespace_callee`), not ⊤.
+fn gd_known(pf: &ProgramFacts) -> bool {
+    let probe = |key: &str, ns: &str| {
+        let ss: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
+        !ss.is_empty() && ss.iter().all(|s| !s.top && s.receivers.iter().all(|r| r == ns))
+    };
+    probe("max", "builtin:Math") && probe("keys", "builtin:Object")
+}
+
+/// RED (CHW16, the app's top global writer: `delete this.attributes[name]`
+/// through ⊤): a delete stores no value, so under any key through a value
+/// that may be the global object it leaves `Math` {the intrinsic,
+/// `undefined`}, never ⊤: `Math.max` stays proven.
+#[test]
+fn gd_any_key_delete_through_top_keeps_globals() {
+    let src = gd_src("delete u[k];");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+}
+
+/// RED: the same delete inside a function unknown code calls.
+#[test]
+fn gd_any_key_delete_in_handed_function_keeps_globals() {
+    let src = gd_src("unknown.take(function (o: any, kk: any) { delete o[kk]; });");
+    let pf = facts_mods(&[("main", &src)]);
+    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+}
+
+/// KEEP: a store through ⊤ under any key may write `Math`: ⊤ as before.
+#[test]
+fn gd_any_key_store_through_top_still_writes_globals() {
+    for body in ["u[k] = new A();", "delete u[k]; u[k] = new A();", "u[k] = new A(); delete u[k];"] {
+        let src = gd_src(body);
+        let pf = facts_mods(&[("main", &src)]);
+        assert!(!gd_known(&pf), "{body}: Math may be written\n{}", pf.dump_text());
+    }
+}
+
+/// KEEP: a program `delete globalThis.x` and a read of it after: the read
+/// solves (the delete is the named one) and sees what was stored.
+#[test]
+fn gd_program_named_global_delete_reads() {
+    let src = gd_src(
+        "(globalThis as any).zq = new A(); delete (globalThis as any).zq; const z: any = (globalThis as any).zq; if (z) console.log(/*Z*/ z.zz);",
+    );
+    let pf = facts_mods(&[("main", &src)]);
+    let _ = verdict_in(&pf, &src, "zz", "/*Z*/");
+}

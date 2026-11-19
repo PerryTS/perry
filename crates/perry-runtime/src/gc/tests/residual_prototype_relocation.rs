@@ -218,7 +218,11 @@ fn prototype_edge(erase: bool) {
     assert_ne!(moved, owner);
     if erase {
         unsafe {
-            let bag = crate::object::descriptor_state::descriptor_holder(moved);
+            let crate::object::descriptor_state::KeyTarget::Object(bag) =
+                crate::object::descriptor_state::owner_key_target(moved)
+            else {
+                panic!("an object owner")
+            };
             (*(*bag).meta).prototype = 0;
         }
     }

@@ -1044,3 +1044,73 @@ fn unknown_collection_method_recursion_throws_the_stack_range_error() {
         );
     }
 }
+
+#[test]
+fn a_locked_function_owner_refuses_the_write() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    extern "C" fn empty_body(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+    unsafe {
+        let key = |b: &[u8]| {
+            crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+                b.as_ptr(),
+                b.len() as u32,
+            ) as i64)
+        };
+        let f =
+            crate::closure::js_closure_alloc(crate::fn_info!(empty_body, 0; with_declared(0)), 0);
+        let bag = crate::closure::props::bag_ensure(f as usize);
+        let k = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
+        crate::object::js_object_set_field_by_name(bag, k, 1.0);
+        let fv = crate::value::js_nanbox_pointer(f as i64);
+        assert!(
+            !lock_refuses_write(fv, key(b"zz")),
+            "premise: an unlocked function"
+        );
+        seal_object(bag, BuiltinProto::Object);
+        assert!(
+            lock_refuses_write(fv, key(b"zz")),
+            "an add on a function whose key owner is add-locked (closure arm)"
+        );
+    }
+}
+
+#[test]
+fn a_function_holds_its_static_private_element() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    extern "C" fn empty_body(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+    unsafe {
+        let f =
+            crate::closure::js_closure_alloc(crate::fn_info!(empty_body, 0; with_declared(0)), 0);
+        assert!(
+            crate::closure::props::key_holder(f as usize, false).is_null(),
+            "premise: a function with no own key has no key holder"
+        );
+        let key = crate::string::js_string_from_bytes(b"#x".as_ptr(), 2);
+        crate::object::field_get_set::define_static_private_field(
+            crate::value::js_nanbox_pointer(f as i64),
+            key,
+            7.0,
+        );
+        let holder = crate::closure::props::key_holder(f as usize, false);
+        assert!(
+            !holder.is_null(),
+            "a static private definition gives the function its key holder"
+        );
+        assert!(
+            crate::object::key_attrs::object_summary(holder) != 0,
+            "the function's key holder records the static private element"
+        );
+    }
+}

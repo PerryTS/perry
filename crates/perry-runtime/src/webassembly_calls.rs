@@ -323,26 +323,53 @@ pub(super) fn make_instance_result(module: *mut c_void, inst: *mut c_void, impor
 const MAX_WASM_ARGS: usize = 16;
 const MAX_WASM_RESULTS: usize = 16;
 
+/// Exported functions take their parameter types from the host, so each
+/// argument crosses as a BigInt (`i64`), or as the Number that ToNumber gives
+/// it: an exact int32 as `I32`, anything else as `F64`, which the host
+/// narrows with ToInt32 or a float cast.
 fn encode_wasm_args(
     args: &[f64],
     kinds: &mut [u8; MAX_WASM_ARGS],
     bits: &mut [u64; MAX_WASM_ARGS],
 ) {
-    for (index, value) in args.iter().take(MAX_WASM_ARGS).enumerate() {
-        if let Some(i64_bits) = js_to_wasm_i64_bits(*value) {
+    let args = &args[..args.len().min(MAX_WASM_ARGS)];
+    // ToNumber can run a `valueOf` that collects, so every argument still
+    // waiting for its turn must be rooted across the earlier ones.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64_slice(args);
+    for (index, value) in rooted.iter().enumerate() {
+        let value = value.get_nanbox_f64();
+        if let Some(i64_bits) = js_to_wasm_i64_bits(value) {
             kinds[index] = WASM_VAL_KIND_I64;
             bits[index] = i64_bits;
             continue;
         }
-        let as_i32 = *value as i32;
-        if (as_i32 as f64) == *value && value.is_finite() {
+        let number = crate::builtins::js_number_coerce(value);
+        let as_i32 = number as i32;
+        if (as_i32 as f64) == number && number.is_finite() {
             kinds[index] = WASM_VAL_KIND_I32;
             bits[index] = as_i32 as u32 as u64;
         } else {
             kinds[index] = WASM_VAL_KIND_F64;
-            bits[index] = value.to_bits();
+            bits[index] = number.to_bits();
         }
     }
+}
+
+/// The WebAssembly JS API's ToWebAssemblyValue for the numeric types: what
+/// an import result, a `Global` value, or a `Global` initial value becomes.
+/// `i32` is ToInt32 of ToNumber, so `true` is 1, `"7"` is 7 and 2^32 - 1 is
+/// -1; the float types are ToNumber. Returns `None` for a non-numeric kind.
+pub(crate) fn js_to_wasm_numeric_bits(kind: u8, value: f64) -> Option<u64> {
+    Some(match kind {
+        WASM_VAL_KIND_I32 => {
+            crate::value::dyn_to_int32(crate::builtins::js_number_coerce(value)) as u32 as u64
+        }
+        WASM_VAL_KIND_I64 => js_to_wasm_i64_bits(value).unwrap_or(value as i64 as u64),
+        WASM_VAL_KIND_F32 => (crate::builtins::js_number_coerce(value) as f32).to_bits() as u64,
+        WASM_VAL_KIND_F64 => crate::builtins::js_number_coerce(value).to_bits(),
+        _ => return None,
+    })
 }
 
 pub(crate) fn js_to_wasm_i64_bits(value: f64) -> Option<u64> {

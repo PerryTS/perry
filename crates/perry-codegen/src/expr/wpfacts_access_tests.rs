@@ -77,7 +77,19 @@ fn a_key_missing_from_one_class_is_refused() {
 fn an_unknown_or_large_receiver_set_is_refused() {
     let f = facts();
     assert!(facts_read(&f, &recv(&[]), "x").is_err());
-    assert!(facts_read(&f, &recv(&[3, 4, 5, 6, 7]), "x").is_err());
+    // Five classes holding `x` at one slot, unguarded: one bare load.
+    assert_eq!(facts_read(&f, &recv(&[3, 4, 5, 6, 7]), "x"), Ok(true));
+    // Guarded, the site would compare five class ids: refused.
+    let mut checked = recv(&[3, 4, 5, 6, 7]);
+    checked.checked = true;
+    assert!(facts_read(&f, &checked, "x").is_err());
+    let mut interp = facts();
+    interp.interp_guard = true;
+    assert!(facts_read(&interp, &recv(&[3, 4, 5, 6, 7]), "x").is_err());
+    // Five classes that disagree on the slot would need a five-way select.
+    let mut g = facts();
+    g.classes.get_mut(&7).unwrap().fields[0].slot = 1;
+    assert!(facts_read(&g, &recv(&[3, 4, 5, 6, 7]), "x").is_err());
 }
 
 #[test]

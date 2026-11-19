@@ -1507,6 +1507,10 @@ fn stop_summary(stops: &[format::Stop]) -> String {
             format::STOP_CANON_FREE => format!("the canonical trie freed {value} node(s) between the baseline and the cut (a full trace pruned lists; {off} node(s) present at the baseline were touched, the first {cell}); the record cannot carry the free list"),
             format::STOP_CANON_ADDR => format!("trie node {cell}: its backing is not an image cell (address {value:#x}; {off} node(s) in all)"),
             format::STOP_CANON_ORDER => format!("trie node {cell} was allocated out of id order ({off} node(s) in all)"),
+            format::STOP_CANON_REPLAY if cell == 0 => {
+                format!("the canonical-keys replay rebuilds the trie at the cut ({value} node(s))")
+            }
+            format::STOP_CANON_REPLAY => format!("the canonical-keys replay does not rebuild the trie at the cut (trie node {off} differs; {value} node(s))"),
             format::STOP_CANON_RECORD => format!(
                 "the canonical-keys record was written ({off} byte(s)) and {}; trie: new {}, changed {}",
                 if cell == 0 { "reads back equal" } else { "does not read back equal" },

@@ -737,7 +737,14 @@ fn elision_for(
                 let set = matches!(s.access, perry_wpfacts::derive::Access::Set { .. });
                 // The one accessor body (`target_fns`) names the holder's
                 // module; its symbol comes from that module's class.
+                // COVER3: a receiver that can be `undefined` / `null` beside
+                // the objects keeps its receiver test (`nullable`): the
+                // nullish base takes the complete operation, which throws.
+                // Any other primitive receiver is no direct call.
+                let nullish = s.receiver_prims & (prim::NULL | prim::UNDEF) != 0;
+                let other_prim = s.receiver_prims & !(prim::NULL | prim::UNDEF) != 0;
                 let holder = match (&s.verdict, set, s.holder_class, s.target_fns.as_slice()) {
+                    _ if other_prim => None,
                     (perry_wpfacts::Verdict::AccessorSet, true, Some(cid), &[(m, f)])
                     | (perry_wpfacts::Verdict::AccessorGet, false, Some(cid), &[(m, f)]) => pf
                         .module_paths
@@ -746,7 +753,7 @@ fn elision_for(
                             let member = if set { Member::Set } else { Member::Get };
                             holder_symbol(p, cid, f, &s.key, member)
                         })
-                        .map(|(sym, _)| (cid, sym)),
+                        .map(|(sym, _)| (cid, sym, nullish)),
                     _ => None,
                 };
                 let map = if set {

@@ -349,6 +349,16 @@ fn spill_safepoint(obj_ptr: usize) {
 #[inline]
 fn spill_safepoint(_obj_ptr: usize) {}
 
+/// Power-of-two spill capacity, at least 8, that holds `field_index`:
+/// the same value as `(field_index + 1).next_power_of_two().max(8)`. Setting
+/// the low three bits first makes the floor of 8 part of the rounding, so the
+/// value is the next power of two above `field_index | 7` with no separate
+/// clamp.
+#[inline(always)]
+fn spill_grown_capacity(field_index: usize) -> usize {
+    ((field_index | 7) + 1).next_power_of_two()
+}
+
 /// Allocation path: ensure the meta record and a buffer wide enough for
 /// `field_index`, then store. Roots the owner AND the incoming value across
 /// the allocations.
@@ -394,7 +404,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         if spill.is_null() || ((*spill).capacity as usize) < needed {
             // Lengths are u32. Keep ordinary power-of-two growth, falling
             // back to exact capacity when rounding would exceed that range.
-            let new_cap = u32::try_from(needed.next_power_of_two().max(8))
+            let new_cap = u32::try_from(spill_grown_capacity(field_index))
                 .unwrap_or_else(|_| u32::try_from(needed).expect("spill index checked"));
             // length == capacity and every slot TAG_HOLE from birth, so the
             // GC element range covers the whole buffer and in-range
@@ -564,9 +574,8 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// own property bags before reaching shaped-object field storage.
 #[inline]
 pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if unsafe {
-        super::overflow::store_index(obj_ptr as *mut ObjectHeader, field_index as u32, vbits)
-    } {
+    if unsafe { super::overflow::home::store_index_in::<false>(obj_ptr, field_index as u32, vbits) }
+    {
         return;
     }
     assert!(
@@ -584,6 +593,24 @@ pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spill_grown_capacity_is_the_clamped_next_power_of_two() {
+        let old = |f: usize| (f + 1).next_power_of_two().max(8);
+        for f in 0..=(1usize << 20) {
+            assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+        }
+        for k in 3..40 {
+            let p = 1usize << k;
+            for f in [p - 2, p - 1, p, p + 1, p + 7, p + 8] {
+                assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+            }
+        }
+        let top = u32::MAX as usize;
+        for f in [top - 1, top] {
+            assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+        }
+    }
+
     use super::*;
 
     #[test]

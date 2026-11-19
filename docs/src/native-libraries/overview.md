@@ -149,8 +149,9 @@ NaN-box ↔ f64 ABI shim, string-pointer extraction, etc.).
 Those manifest entries are native ABI descriptors, not TypeScript
 types. A descriptor like `f32` or `usize` chooses the native slot used
 for the C call and still appears to user code as a JavaScript
-`number`; `buffer+len` consumes one Buffer/Uint8Array-shaped argument
-and emits `(ptr, usize)` native slots; `handle<T>` and `promise<T>`
+`number`; `buffer+len` consumes one `ArrayBuffer` or `ArrayBufferView`
+(any typed array, `DataView`, `Buffer`) and emits `(ptr, usize)` native
+slots: the view's first byte and its byte length, with no copy; `handle<T>` and `promise<T>`
 carry metadata while remaining opaque runtime handles at the boundary.
 See [`manifest-v1.md`](manifest-v1.md) for the full descriptor
 vocabulary and the legacy string aliases that remain accepted.

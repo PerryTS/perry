@@ -265,9 +265,16 @@ pub enum NativeAbiType {
     /// [`NativeAbiType::Handle`]: it carries an integer id inside POD bytes
     /// and does not participate in GC handle unwrapping.
     HandleId,
-    /// Native-call convenience descriptor: one JavaScript Buffer/Uint8Array
-    /// argument lowers to two ABI slots, `(ptr, usize)`.
-    BufferAndLen,
+    /// Native-call convenience descriptor: one JavaScript byte-bearing
+    /// argument (`ArrayBuffer`, `SharedArrayBuffer`, or any `ArrayBufferView`:
+    /// `Buffer`, every typed-array kind, `DataView`, subarrays) lowers to two
+    /// ABI slots, `(ptr, usize)`: the view's first byte and its BYTE length.
+    /// With `nullable`, `null`/`undefined` lower to `(NULL, 0)`; without it
+    /// they throw a `TypeError`.
+    BufferAndLen {
+        /// `null`/`undefined` lower to `(NULL, 0)` instead of throwing.
+        nullable: bool,
+    },
     /// Opaque native handle with runtime ownership, nullability, and thread
     /// validation metadata.
     Handle(NativeHandleAbi),
@@ -308,7 +315,7 @@ impl NativeAbiType {
             "ptr" => Ok(Self::Ptr),
             "buffer_len" => Ok(Self::BufferLen),
             "handle_id" => Ok(Self::HandleId),
-            "buffer+len" => Ok(Self::BufferAndLen),
+            "buffer+len" => Ok(Self::BufferAndLen { nullable: false }),
             "handle" => Ok(Self::Handle(NativeHandleAbi::borrowed(None))),
             "promise" => Ok(Self::Promise(NativePromiseAbi::direct(Self::JsValue))),
             "void" => Ok(Self::Void),
@@ -371,7 +378,7 @@ impl NativeAbiType {
             Self::Ptr => "ptr",
             Self::BufferLen => "buffer_len",
             Self::HandleId => "handle_id",
-            Self::BufferAndLen => "buffer+len",
+            Self::BufferAndLen { .. } => "buffer+len",
             Self::Handle(_) => "handle",
             Self::Promise(_) => "promise",
             Self::Pod(_) => "pod",
@@ -384,7 +391,7 @@ impl NativeAbiType {
     pub fn abi_slot_count(&self) -> usize {
         match self {
             Self::Void => 0,
-            Self::BufferAndLen | Self::PodAndCount(_) => 2,
+            Self::BufferAndLen { .. } | Self::PodAndCount(_) => 2,
             _ => 1,
         }
     }
@@ -475,7 +482,11 @@ impl NativeAbiType {
     pub fn is_valid_return(&self) -> bool {
         !matches!(
             self,
-            Self::BufferAndLen | Self::Pod(_) | Self::PodAndCount(_) | Self::HandleId | Self::Json
+            Self::BufferAndLen { .. }
+                | Self::Pod(_)
+                | Self::PodAndCount(_)
+                | Self::HandleId
+                | Self::Json
         )
     }
 
@@ -490,7 +501,8 @@ impl NativeAbiType {
             Self::Handle(_) | Self::Ptr | Self::JsValue | Self::Json => "any",
             Self::Pod(_) => "object",
             Self::PodAndCount(_) => "PerryPodView<any>",
-            Self::BufferAndLen => "Buffer",
+            Self::BufferAndLen { nullable: false } => "ArrayBuffer | ArrayBufferView",
+            Self::BufferAndLen { nullable: true } => "ArrayBuffer | ArrayBufferView | null",
             Self::I8
             | Self::I16
             | Self::I32
@@ -517,6 +529,9 @@ impl fmt::Display for NativeAbiType {
                 None => f.write_str("handle"),
             },
             Self::Promise(abi) => write!(f, "promise<{}>", abi.result),
+            // Distinct from the strict spelling: the object cache keys native
+            // signatures by this text, and the two lower to different guards.
+            Self::BufferAndLen { nullable: true } => f.write_str("buffer+len?"),
             Self::Pod(pod) => write!(f, "{pod}"),
             Self::PodAndCount(pod) => {
                 if let Some(name) = pod.name.as_deref() {

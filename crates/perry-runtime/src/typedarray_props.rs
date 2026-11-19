@@ -30,8 +30,12 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
     let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(owner) }?.obj_type;
     if crate::gc::is_typed_array_type(obj_type) {
         lookup_typed_array_kind(owner).map(|_| TypedArrayOwnerKind::TypedArray)
-    } else if crate::gc::is_uint8array_buffer_type(obj_type) {
-        crate::buffer::is_uint8array_buffer(owner).then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    } else if crate::gc::is_uint8array_buffer_type(obj_type)
+        || obj_type & !0x20 == crate::gc::GC_TYPE_BUFFER
+    {
+        // A Node `Buffer` is a `Uint8Array`: an integer-indexed exotic object.
+        crate::buffer::is_byte_indexed_buffer(owner)
+            .then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
     } else {
         None
     }

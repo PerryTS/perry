@@ -55,7 +55,7 @@ fetch_getter_bodies! {
     fetch_redirected => "redirected", crate::fn_info!(#[realm("Response.prototype.redirected.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_redirected, 0; with_name("get redirected"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_status => "status", crate::fn_info!(#[realm("Response.prototype.status.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::proto_methods::fetch_status, 0; with_name("get status"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_status_text => "statusText", crate::fn_info!(#[realm("Response.prototype.statusText.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) })] export crate::object::global_this::proto_methods::fetch_status_text, 0; with_name("get statusText"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-    fetch_type => "type", crate::fn_info!(#[realm("Response.prototype.type.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_type, 0; with_name("get type"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_type => "type", crate::fn_info!(#[realm(realm_decl! { "Response.prototype.type.<get>", provider = intrinsic_closure; "Blob.prototype.type.<get>", provider = intrinsic_closure; })] export crate::object::global_this::proto_methods::fetch_type, 0; with_name("get type"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_url => "url", crate::fn_info!(#[realm(realm_decl! { "Request.prototype.url.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) }; "Response.prototype.url.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) }; })] export crate::object::global_this::proto_methods::fetch_url, 0; with_name("get url"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_cache => "cache", crate::fn_info!(#[realm("Request.prototype.cache.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_cache, 0; with_name("get cache"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_credentials => "credentials", crate::fn_info!(#[realm("Request.prototype.credentials.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_credentials, 0; with_name("get credentials"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
@@ -69,6 +69,9 @@ fetch_getter_bodies! {
     fetch_referrer => "referrer", crate::fn_info!(#[realm("Request.prototype.referrer.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_referrer, 0; with_name("get referrer"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_referrer_policy => "referrerPolicy", crate::fn_info!(#[realm("Request.prototype.referrerPolicy.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_referrer_policy, 0; with_name("get referrerPolicy"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
     fetch_signal => "signal", crate::fn_info!(#[realm("Request.prototype.signal.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_signal, 0; with_name("get signal"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_size => "size", crate::fn_info!(#[realm("Blob.prototype.size.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_size, 0; with_name("get size"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_name => "name", crate::fn_info!(#[realm("File.prototype.name.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_name, 0; with_name("get name"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_last_modified => "lastModified", crate::fn_info!(#[realm("File.prototype.lastModified.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_last_modified, 0; with_name("get lastModified"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
 }
 unsafe fn install_fetch_prototype_getter(proto: *mut ObjectHeader, name: &str) {
     // Realm installation runs no user code. Keep the receiver and the new
@@ -846,7 +849,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(#[realm(Function.prototype.call)] export native_args crate::object::global_this::array_error::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.call)] export native_args crate::object::global_this::array_error::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // `valueOf` and `toLocaleString` are inherited from
@@ -1653,6 +1656,19 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     ("text", realm_noop_text_0_metadata!(length)),
                 ],
             );
+            // A File inherits `size`/`type` from Blob.prototype. These getters
+            // are how an instance whose native handle sits in its backing
+            // (a subclass, or a custom new.target) reaches that state.
+            let accessors: &[&str] = if builtin_name == "Blob" {
+                &["type", "size"]
+            } else {
+                &["name", "lastModified"]
+            };
+            unsafe {
+                for name in accessors {
+                    install_fetch_prototype_getter(proto_obj, name);
+                }
+            }
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "FormData" => {

@@ -187,6 +187,20 @@ impl<'a> Gen<'a> {
         self.new_arr_of(mi, what, elems, true).1
     }
 
+    /// `new_arr_from` of an ordinary Array with `%Array.prototype%`
+    /// (CreateArrayFromList), never an iterator model: rule RP2 may hold it
+    /// back from a guarded record's protocol arm (`Model::ordinary_arrays`).
+    pub(crate) fn new_ordinary_arr_from(
+        &mut self,
+        mi: u32,
+        what: &str,
+        elems: &[NodeId],
+    ) -> NodeId {
+        let (tm, n) = self.new_arr_of(mi, what, elems, false);
+        self.m.ordinary_arrays.insert(tm);
+        n
+    }
+
     /// `new_dense_arr_from`, with the birth's template.
     pub(crate) fn new_dense_arr_tmpl(
         &mut self,

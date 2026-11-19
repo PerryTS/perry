@@ -214,7 +214,7 @@ pub extern "C" fn js_async_generator_create(step: f64, owner: *const ClosureHead
         owner as *mut ClosureHeader
     };
     let owner = scope.root_raw_const_ptr(owner);
-    ensure_generator_intrinsics();
+    ensure_generator_kind_tower(true);
     // GetPrototypeFromConstructor, read from the owner's declared slot
     // without materializing it.
     let holder = owner

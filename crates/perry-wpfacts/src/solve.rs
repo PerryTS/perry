@@ -14,6 +14,7 @@ mod define;
 mod lookup;
 pub(crate) mod map_vals;
 mod own_read;
+mod record_entry;
 
 use crate::builtins;
 
@@ -350,6 +351,7 @@ impl Model {
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::RecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
@@ -1091,6 +1093,7 @@ impl Model {
                     && !self.settle_val_runs()
                     && !self.settle_define()
                     && !self.settle_proto_first()
+                    && !self.settle_record_entry()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;
@@ -1878,12 +1881,15 @@ impl Model {
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
-        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`).
-        // and the formatter shows it running no trap (`proxy_inspect_shown`).
+        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
+        // the formatter shows it running no trap (`proxy_inspect_shown`),
+        // JSON serializes it through its internal methods (`proxy_json`).
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason),
                 Protocol::InspectShown => return self.proxy_inspect_shown(p, reason),
+                Protocol::Json => return self.proxy_json(p, reason),
+                Protocol::Inspect => return self.proxy_inspect(p, reason),
                 _ => {}
             }
         }

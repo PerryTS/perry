@@ -168,6 +168,13 @@ pub(crate) fn emit_word_unshadowed(blk: &mut crate::block::LlBlock, word: &str) 
     blk.icmp_ult(I32, word, &end.to_string())
 }
 
+/// `i1`: the layout word `word` is shadowed, dictionary or exotic, or a
+/// function family record (no [`emit_word_unshadowed`]).
+pub(crate) fn emit_word_patched(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let end = crate::runtime_abi::LAYOUT_ORDINARY_END as i32;
+    blk.icmp_uge(I32, word, &end.to_string())
+}
+
 /// `i1`: the receiver whose packed header word is `packed` (`class_id |
 /// layout word << 32`, as `emit_inline_direct_method_word_probe` loads it;
 /// 0 for a non-object) carries no shadow bit. `"true"` when the program needs

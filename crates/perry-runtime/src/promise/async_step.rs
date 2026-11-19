@@ -1681,7 +1681,9 @@ mod tests {
     unsafe fn copy_closure_to_old(
         source: *const crate::closure::ClosureHeader,
     ) -> *mut crate::closure::ClosureHeader {
-        let size = crate::closure::closure_payload_size((*source).capture_count as usize);
+        let size = crate::closure::closure_payload_size(
+            (*source).capture_count as usize + crate::closure::closure_own_slot_count(source),
+        );
         let destination = crate::arena::arena_alloc_gc_old(
             size,
             std::mem::align_of::<crate::closure::ClosureHeader>(),

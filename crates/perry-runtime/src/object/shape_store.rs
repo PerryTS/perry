@@ -2,7 +2,9 @@
 
 use super::{shapes, ObjectHeader};
 
-/// Traced Array/Function named-property holder; ordinary-band ids already prove ObjectHeaders.
+/// Traced Array named-property holder (a function's store is reached through
+/// `closure::props`); ordinary-band ids already prove ObjectHeaders.
+#[inline(never)]
 pub(crate) unsafe fn named_bag(
     receiver: *const ObjectHeader,
     key_bits: u64,
@@ -25,12 +27,6 @@ pub(crate) unsafe fn named_bag(
             }
             bag
         }
-        crate::gc::GC_TYPE_CLOSURE => {
-            if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-                return None;
-            }
-            (*(receiver as *const crate::closure::ClosureHeader)).props
-        }
         _ => return None,
     };
     (!bag.is_null()).then_some(bag.cast_const())
@@ -46,7 +42,7 @@ unsafe fn ordinary_receiver_record(obj: *const ObjectHeader) -> Option<shapes::S
         return None;
     }
     let id = shapes::object_shape_stamp(obj);
-    if id.0.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
+    if id.0.wrapping_sub(shapes::SHAPE_ID_BASE) >= crate::codegen_abi::LAYOUT_RECORD_SPAN {
         return None;
     }
     shapes::shape_record_for_word(id)
@@ -78,8 +74,7 @@ pub(crate) unsafe fn try_own_store(
             {
                 return false;
             }
-            return named_bag(obj, crate::JSValue::string_ptr(key as *mut _).bits())
-                .is_some_and(|bag| try_own_store(bag.cast_mut(), key, value));
+            return crate::closure::props::put_own_overwrite(obj as usize, key, value);
         }
         if crate::gc_type_is_array!(header.obj_type) {
             let arr = crate::array::clean_arr_ptr_mut(obj.cast());
@@ -504,7 +499,7 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
         return None;
     }
     let id = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT) {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= crate::codegen_abi::LAYOUT_RECORD_SPAN {
         return None;
     }
     // A live object's own header word: the receiver carries its row.
@@ -1011,10 +1006,12 @@ unsafe fn try_function_store(
     if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
         return None;
     }
-    let bag = (*closure).props;
-    if !bag.is_null() && crate::closure::props::bag_has_own(ptr, name.as_bytes()) {
-        return super::try_existing_own_data_overwrite_by_content(bag, key, name.as_bytes(), value)
-            .then_some(value);
+    // An own key is overwritten in place or left to the full `[[Set]]` (a
+    // non-writable or accessor key); only an absent key reaches the add below.
+    if let Some(written) =
+        crate::closure::props::overwrite_own_data(ptr, key, name.as_bytes(), value)
+    {
+        return written.then_some(value);
     }
     // A bound function keeps its own keys in the same bag as any function
     // (its intrinsic `name`/`length` were declined above), and its shape
@@ -1068,36 +1065,7 @@ unsafe fn try_function_store(
             return None;
         }
     }
-    let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-    let bag = crate::closure::props::bag_ensure(ptr);
-    let bag_root = scope.root_raw_mut_ptr(bag);
-    if shapes::object_shape_record(bag)?.kind_is(shapes::ShapeObjectKind::OrdinaryUnmarked) {
-        super::alloc_plain::mark_object_plain_ordinary(bag);
-    }
-    let key_ptr = key_root.get_raw_const_ptr::<crate::StringHeader>();
-    let mut refresh = None;
-    if super::object_set_field_by_name_transition_chain_proven_value(
-        bag,
-        key_ptr,
-        value_root.get_nanbox_f64(),
-        &mut refresh,
-    )
-    .is_none()
-    {
-        super::object_ops::define_property_force_store_value(
-            bag_root.get_raw_mut_ptr::<ObjectHeader>(),
-            key_root.get_raw_const_ptr::<crate::StringHeader>(),
-            value_root.get_nanbox_f64(),
-        );
-    }
-    let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-    // The ordinary function writer also revives a deleted configurable key.
-    // The bag's new data binding and the function's deletion state must agree.
-    let name =
-        crate::string::header_str_checked(key_root.get_raw_const_ptr::<crate::StringHeader>())?;
-    crate::closure::props::state_clear_deleted(ptr, name);
-    crate::closure::shape::refresh_closure_shape(ptr);
-    Some(value_root.get_nanbox_f64())
+    crate::closure::props::put_own_define_proven(&scope, &owner, &key_root, &value_root)
 }
 
 /// Prototype key summaries are the proof: ordinary writable data cannot

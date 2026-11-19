@@ -121,10 +121,6 @@ pub(super) fn host_member(
     let name = &m.atoms[s.key as usize];
     let mut receivers = Vec::new();
     let mut native = true;
-    // A builtin namespace or constructor that is no host object (`Math`,
-    // `Promise`, `Array`): the realm's own member, unwritten
-    // (`builtins::ns_native`, BNSRECV).
-    let mut realm_ns = false;
     for &t in toks {
         let TokKind::Builtin(ns) = m.toks[t as usize] else {
             return None;
@@ -135,7 +131,6 @@ pub(super) fn host_member(
                 receivers.push(format!("host:{h:?}"));
             }
             None if crate::builtins::ns_native(m, t, ns, s.key, s.is_call) => {
-                realm_ns = true;
                 receivers.push(m.tok_name(t));
             }
             None => {
@@ -155,19 +150,15 @@ pub(super) fn host_member(
     if !native {
         return Some(Err("host member undescribed or written".into()));
     }
-    // Interpreted code (DEC 150) names every global and may write the key;
-    // no namespace object is a lock holder, so nothing refuses the write.
-    if realm_ns && m.interp_runs {
+    // Interpreted code (DEC 150) or an unseen module names every global and
+    // may write the key; no namespace object is a lock holder, so nothing
+    // refuses the write. Unknown code that merely holds the realm
+    // (`realm_held`) does not: under the closed world (owner 2026-11-14) it
+    // is the runtime's natives, which replace no member of a namespace (owner
+    // decision 2026-11-18, R-GLOBAL step 3; `realm_replaced`).
+    if m.interp_runs || m.unseen_module_runs {
         return Some(Err(
             "namespace member: interpreted code may write the key".into()
-        ));
-    }
-    // Unknown code holds the realm (9.3, `realm_held`): a host object's
-    // members are writable, and the solve does not replay unknown code's
-    // replacement of one (`realm_hold_tok`), as for `Verdict::IntrinsicCall`.
-    if m.realm_held {
-        return Some(Err(
-            "host member: unknown code holds the realm and may replace the member".into(),
         ));
     }
     receivers.sort();

@@ -2067,3 +2067,86 @@ console.log(b.count(2));
         "7\nd\n10\n2\n13"
     );
 }
+
+#[test]
+fn a_function_expression_called_as_a_method_reads_its_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o = { k: 5, g() { return this.k; } };
+console.log(o.g());
+const p: any = { name: "p", hi: function () { return "hi " + this.name; } };
+const q: any = { name: "q" };
+q.hi = p.hi;
+console.log(p.hi() + "/" + q.hi());
+const counter = { c: 0, inc() { this.c = this.c + 1; return this; } };
+counter.inc().inc();
+console.log(counter.c);
+const r: any = { v: 3, outer() { return () => this.v; } };
+console.log(r.outer()());
+const holder = { k: 9, g2: o.g };
+console.log(holder.g2());
+"#
+        ),
+        "5\nhi p/hi q\n2\n3\n9"
+    );
+}
+
+#[test]
+fn a_parameter_default_reads_the_method_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { k: 4, f: function (x = this.k) { return x; } };
+console.log(o.f());
+console.log(o.f(1));
+"#
+        ),
+        "4\n1"
+    );
+}
+
+#[test]
+fn reflect_apply_hands_this_to_a_function_expression() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const hi = function (this: any, p: string) { return p + this.name; };
+console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
+"#
+        ),
+        "hi o"
+    );
+}
+
+#[path = "class_eval_tests.rs"]
+mod class_eval;
+
+#[test]
+fn textfield_set_input_type_sets_the_input_type() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { SecureField, TextField, textfieldSetInputType } from "perry/ui";
+const phone = TextField("phone", (v: string) => {});
+textfieldSetInputType(phone, "tel");
+const email = TextField("email", (v: string) => {});
+textfieldSetInputType(email, "email");
+const count = TextField("count", (v: string) => {});
+textfieldSetInputType(count, "number");
+const box = TextField("box", (v: string) => {});
+textfieldSetInputType(box, "tel");
+textfieldSetInputType(box, "checkbox");
+const pin = SecureField("pin", (v: string) => {});
+textfieldSetInputType(pin, "number");
+"#,
+            r#"
+for (const name of ["phone", "email", "count", "box", "pin"]) {
+  const el = [...uiHandles.values()].find(e => e.placeholder === name);
+  console.log(name + " " + el.type);
+}
+"#
+        ),
+        "phone tel\nemail email\ncount number\nbox text\npin password"
+    );
+}

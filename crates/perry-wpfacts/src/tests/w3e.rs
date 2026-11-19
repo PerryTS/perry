@@ -101,11 +101,14 @@ console.log(z);
 #[test]
 fn w3e_keep_empty_list_is_today() {
     // The knob off (`PERRY_FACTS_NATIVE_EXTERN=0`, an empty list): the loop
-    // calls are unknown code again and `p` given to `console.log` escapes.
+    // calls are unknown code again. Re-baselined under R-GLOBAL step 3
+    // (owner 2026-11-18; closed world 2026-11-14): that code replaces no
+    // intrinsic namespace member, so `console.log(p)` is the realm's and
+    // `p.v` stays proven.
     let pf = facts_of(LOOP, &[]);
     assert!(pf.native_extern_sites.is_empty());
     let v = verdict(&pf, LOOP, "v", "const z");
-    assert!(!proven(&v), "p.v with the assumption off: {v:?}");
+    assert!(proven(&v), "p.v with the assumption off: {v:?}");
 }
 
 #[test]

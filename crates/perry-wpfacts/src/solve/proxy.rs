@@ -20,7 +20,11 @@
 //! ToPropertyKey) reads and calls `@@toPrimitive`, `valueOf` and `toString`
 //! through [[Get]] with `this` = the Proxy (`proxy_to_primitive`). PROXY7:
 //! the runtime's formatter showing the Proxy runs no trap
-//! (`proxy_inspect_shown`). Every other operation on the token, and
+//! (`proxy_inspect_shown`). PROXY11: SerializeJSONProperty (`JSON.stringify`,
+//! the formatter's `%j`) runs the `toJSON` [[Get]], [[OwnPropertyKeys]],
+//! [[GetOwnProperty]] and the member [[Get]]s (`proxy_json`); a console
+//! argument runs that, ToPrimitive and the unwrapped show (`proxy_inspect`).
+//! Every other operation on the token, and
 //! an escape of it, takes the path the solver had before (`degrade`): the
 //! target is hard E9 and goes to ⊤, the handler escapes, and the operation
 //! sees ⊤. The hold's reason names that first operation.
@@ -63,6 +67,11 @@ pub enum ProxyOp {
     DelTrap(Atom),
     /// The forward of one delete (`key`, its reason) to the target.
     DelFwd(Atom, u32),
+    /// [[OwnPropertyKeys]] and [[GetOwnProperty]] of every key: the
+    /// `ownKeys` / `getOwnPropertyDescriptor` traps and the target's own.
+    OwnKeys,
+    /// [[GetPrototypeOf]]: the `getPrototypeOf` trap (a for-in walk).
+    ProtoTrap,
 }
 
 impl Model {
@@ -280,6 +289,199 @@ impl Model {
         }
     }
 
+    /// SerializeJSONProperty (ECMA-262 25.5.2.2) of Proxy `p` (perry-runtime
+    /// json/stringify_proxy.rs `try_stringify`), what `JSON.stringify` and the
+    /// formatter's `%j` run on it. `toJSON` is a [[Get]] of the Proxy
+    /// (`proxy_get`), a callable result called with `this` = the Proxy and the
+    /// key, its result serialized in turn. IsCallable and IsArray read the
+    /// target's kind and run nothing. An array's `length` is a [[Get]], then
+    /// ToNumber. An object's EnumerableOwnProperties (7.3.23) runs
+    /// [[OwnPropertyKeys]] (10.5.11: trap `ownKeys( t )`, its result read by
+    /// CreateListFromArrayLike 7.3.19: `length` and the elements) and per
+    /// string key [[GetOwnProperty]] (10.5.5: trap
+    /// `getOwnPropertyDescriptor( t, key )`, its result read by
+    /// ToPropertyDescriptor 6.2.6.5: has and get of its six fields); with no
+    /// trap, and for the invariant checks, the same internal methods run on
+    /// the target (`Implicit OwnKeys` on it: nothing on an ordinary object, a
+    /// Proxy target's own rule). Each member is a [[Get]] of the Proxy (any
+    /// key: the get trap and the forward), serialized in turn. Once per Proxy.
+    pub(crate) fn proxy_json(&mut self, p: u32, reason: u32) {
+        let t = self.tok(TokKind::Proxy(p));
+        if !self.implicit_done.insert((t, Protocol::Json)) {
+            return;
+        }
+        // toJSON( key ) with this = the Proxy.
+        let ret = self.node_l("implicit-ret");
+        self.nodes[ret as usize].sink = true;
+        let arg = self.node_l("implicit-arg");
+        self.add_prim(arg, prim::ALL);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Tok(t),
+            args: vec![arg; 4],
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.thrown,
+        });
+        self.protocol_calls.insert(call);
+        self.why_mint(call, Some(t), reason);
+        let a = self.atom("toJSON");
+        let f = self.proxy_get(p, Key::Named(a), NO_NODE);
+        self.cons(f, Cons::Call { call });
+        self.cons(
+            ret,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Json,
+            },
+        );
+        // An array's `length`, ToNumber'd.
+        let a = self.atom("length");
+        let len = self.proxy_get(p, Key::Named(a), NO_NODE);
+        self.cons(
+            len,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+        self.proxy_own_props(p, reason);
+        // Each member, serialized in turn.
+        let m = self.proxy_get(p, Key::any(), NO_NODE);
+        self.cons(
+            m,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Json,
+            },
+        );
+    }
+
+    /// [[OwnPropertyKeys]] (10.5.11) and [[GetOwnProperty]] (10.5.5) of
+    /// every key of Proxy `p`: the `ownKeys` trap with the list read off its
+    /// result (CreateListFromArrayLike 7.3.18), the
+    /// `getOwnPropertyDescriptor` trap with the descriptor read off its
+    /// result (ToPropertyDescriptor 6.2.6.5), and, without a trap and for
+    /// the invariant checks, the target's own (`Implicit OwnKeys` on it).
+    /// Once per Proxy.
+    fn proxy_own_props(&mut self, p: u32, reason: u32) {
+        if self.proxy_made(p, ProxyOp::OwnKeys) {
+            return;
+        }
+        let target = self.proxies[p as usize].target;
+        // [[OwnPropertyKeys]]: the trap, the list read off its result.
+        let keys = self.node_l("proxy-ownkeys-ret");
+        self.proxy_trap(p, "ownKeys", vec![target], keys);
+        self.proxy_result_reads(keys, &["length"], true, reason);
+        // [[GetOwnProperty]] of each key: the trap, the descriptor read.
+        let k = self.proxy_key_arg(Key::any(), NO_NODE);
+        let desc = self.node_l("proxy-gopd-ret");
+        self.proxy_trap(p, "getOwnPropertyDescriptor", vec![target, k], desc);
+        self.proxy_result_reads(
+            desc,
+            &[
+                "enumerable",
+                "configurable",
+                "value",
+                "writable",
+                "get",
+                "set",
+            ],
+            false,
+            reason,
+        );
+        // Without a trap, and for the invariant checks: the target's own.
+        self.cons(
+            target,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::OwnKeys,
+            },
+        );
+    }
+
+    /// The own keys of Proxy `p` (`Protocol::OwnKeys`: Object.keys,
+    /// Object.getOwnPropertyNames / Symbols, Reflect.ownKeys, for-in):
+    /// its [[OwnPropertyKeys]] and [[GetOwnProperty]] (`proxy_own_props`;
+    /// EnumerableOwnProperties 7.3.23 reads both, Reflect.ownKeys the
+    /// first), and for-in's walk (EnumerateObjectProperties 14.7.5.9:
+    /// [[GetPrototypeOf]], 10.5.1, the `getPrototypeOf(t)` trap; without
+    /// it the target's, inside its own `Implicit OwnKeys`), whose result's
+    /// own keys are enumerated in turn. Nothing else runs.
+    pub(crate) fn proxy_own_keys(&mut self, p: u32, reason: u32) {
+        self.proxy_own_props(p, reason);
+        if self.proxy_made(p, ProxyOp::ProtoTrap) {
+            return;
+        }
+        let target = self.proxies[p as usize].target;
+        let proto = self.node_l("proxy-getprototypeof-ret");
+        self.proxy_trap(p, "getPrototypeOf", vec![target], proto);
+        self.cons(
+            proto,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::OwnKeys,
+            },
+        );
+    }
+
+    /// What the runtime reads off a trap result `r`: HasProperty and [[Get]]
+    /// of `keys` (getters run in the load), and with `elems` every element
+    /// (CreateListFromArrayLike); a `length` read is ToNumber'd.
+    fn proxy_result_reads(&mut self, r: NodeId, keys: &[&str], elems: bool, reason: u32) {
+        for k in keys {
+            let a = self.atom(k);
+            let dst = self.node_l("proxy-result-read");
+            self.nodes[dst as usize].sink = true;
+            self.cons(
+                r,
+                Cons::HasProp {
+                    key: Key::Named(a),
+                    idx: NO_NODE,
+                },
+            );
+            self.cons(
+                r,
+                Cons::Load {
+                    key: Key::Named(a),
+                    dst,
+                },
+            );
+            if *k == "length" {
+                self.cons(
+                    dst,
+                    Cons::Implicit {
+                        reason,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+            }
+        }
+        if elems {
+            let dst = self.node_l("proxy-result-read");
+            self.nodes[dst as usize].sink = true;
+            self.cons(
+                r,
+                Cons::Load {
+                    key: Key::any(),
+                    dst,
+                },
+            );
+        }
+    }
+
+    /// The formatter on a console argument that is Proxy `p` (`Inspect`):
+    /// `%j` serializes it (`proxy_json`), `%s` / `%d` / `%i` / `%f` run
+    /// ToPrimitive (`proxy_to_primitive`), and the value is shown unwrapped
+    /// (`proxy_inspect_shown`).
+    pub(crate) fn proxy_inspect(&mut self, p: u32, reason: u32) {
+        self.proxy_json(p, reason);
+        self.proxy_to_primitive(p, reason);
+        self.proxy_inspect_shown(p, reason);
+    }
+
     /// The runtime's formatter showing Proxy `p` (`InspectShown`: a console
     /// argument or a value it shows; perry-runtime builtins/formatting.rs
     /// `format_proxy_value`, Node lib/internal/util/inspect.js `formatValue`).
@@ -429,9 +631,17 @@ impl Model {
             | Cons::NotNullish { .. }
             | Cons::NotUndefined { .. }
             | Cons::NotNull { .. }
+ | Cons::RecordEntry { .. }
             | Cons::TypeIs { .. }
             | Cons::Falsy { .. }
             | Cons::Objects { .. }
+            // Rule G1/G2 (`x && x.key`, `x.key === b`): the test reads
+            // `x.key` = p.[[Get]](key) (10.5.8, `proxy_get`: the get trap
+            // and the forward), then ToBoolean (7.1.2) or IsStrictlyEqual
+            // (7.2.16) of the result, which run no trap. The ordinary rule
+            // is exactly that: a Load of `key` on a node holding the Proxy
+            // token (it reaches the Load arm above) and the Guard on it.
+            | Cons::FieldTruthy { .. }
             // The interval of an arithmetic or string operand (`range`):
             // an object operand's is ⊤; its ToPrimitive is its own rule
             // (`Cons::Implicit`, below).
@@ -466,6 +676,40 @@ impl Model {
                 reason,
                 proto: Protocol::InspectShown,
             } => self.proxy_inspect_shown(p, reason),
+            // SerializeJSONProperty (`proxy_json`) and the formatter on a
+            // console argument (`proxy_inspect`).
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Json,
+            } => self.proxy_json(p, reason),
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Inspect,
+            } => self.proxy_inspect(p, reason),
+            // The own keys (`proxy_own_keys`).
+            Cons::Implicit {
+                reason,
+                proto: Protocol::OwnKeys,
+            } => self.proxy_own_keys(p, reason),
+            // A for-in body over the Proxy (14.7.5.9
+            // EnumerateObjectProperties): its keys are whatever the traps
+            // return, so the body runs once with every String key
+            // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
+            // arm), the enumeration itself `proxy_own_keys`.
+            Cons::ForInKeys { ft, call } => self.for_in_every_key(call, ft),
+            // Another protocol touch: its hold names the protocol and the
+            // touch's own reason.
+            Cons::Implicit { reason, proto } => {
+                let cause = format!("implicit {proto:?}: {}", self.reasons[reason as usize]);
+                self.proxy_degrade(p, &cause);
+                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+            }
+            // A hard operation: its hold names the kind and the reason.
+            Cons::Hard { kind, reason } => {
+                let cause = format!("hard {}: {}", kind.code(), self.reasons[reason as usize]);
+                self.proxy_degrade(p, &cause);
+                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+            }
             _ => {
                 self.proxy_degrade(p, c.kind_name());
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);

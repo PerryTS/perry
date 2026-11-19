@@ -278,6 +278,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let private_site =
                 super::private_field_site::private_field_site(ctx, object, property, 1)
                     .filter(|site| site.is_static);
+            // Any other named receiver: evaluated once into a scoped temp,
+            // then the same `[[Get]]`/`[[Set]]` lowerings `o.f = o.f + 1`
+            // takes, rather than the by-name get and `js_put_value_set`.
+            if private_site.is_none() && !property.starts_with('#') {
+                let receiver = lower_expr(ctx, object)?;
+                return crate::rooting::with_scoped_values(
+                    ctx,
+                    &[(receiver.as_str(), None)],
+                    |ctx, reads| {
+                        update_by_get_and_set(ctx, &reads[0], property, *op, *prefix, *strict)
+                    },
+                );
+            }
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let field_read = Expr::PropertyGet {
@@ -709,7 +722,24 @@ fn class_field_update(
     if super::private_field_site::private_field_site(ctx, object, property, 1).is_some() {
         return Ok(None);
     }
+    update_by_get_and_set(ctx, object, property, op, prefix, strict).map(Some)
+}
 
+/// `o.f++` / `--o.f` as `[[Get]]`, `ToNumeric`, step, `[[Set]]`, in that
+/// order and once each, through the ordinary `PropertyGet`/`PropertySet`
+/// lowerings of `receiver`, with the step inline for a plain double and the
+/// runtime `js_to_numeric`/`js_numeric_step` pair on a cold arm for anything
+/// else (an INT32 box, a string, a BigInt, an object with `valueOf`).
+/// `receiver` is read twice, so it must denote one value across a `valueOf`:
+/// `this`, a local nothing can rebind, or a scoped temp.
+fn update_by_get_and_set(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    op: BinaryOp,
+    prefix: bool,
+    strict: bool,
+) -> Result<String> {
     let field_read = Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(object.clone()),
@@ -800,5 +830,5 @@ fn class_field_update(
         super::property_set::lower(ctx, &store, strict)?;
         lower_expr(ctx, reads.last().expect("one value at least"))
     })?;
-    Ok(Some(out))
+    Ok(out)
 }

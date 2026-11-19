@@ -76,6 +76,8 @@ fn decode_rejects_a_truncated_or_foreign_file() {
     assert!(decode(b"not an image").is_err());
 }
 
+// Captures classify words against /proc/self/maps, which only Linux has.
+#[cfg(target_os = "linux")]
 fn string_cell(img: &Image, needle: &[u8]) -> Option<usize> {
     img.cells.iter().position(|c| {
         c.obj_type == crate::gc::GC_TYPE_STRING
@@ -83,6 +85,7 @@ fn string_cell(img: &Image, needle: &[u8]) -> Option<usize> {
     })
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn array_cell_names_its_string_and_zeroes_the_slot() {
     let text = b"image-run probe string, long enough to stay a heap cell";
@@ -127,6 +130,7 @@ fn native_payload_types_have_no_image_form() {
     assert!(!no_form(crate::gc::GC_TYPE_STRING));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn shaped_object_keeps_its_slots_inside_the_cell() {
     let o = crate::object::js_object_alloc(0, 0);
@@ -162,9 +166,12 @@ fn shaped_object_keeps_its_slots_inside_the_cell() {
     std::hint::black_box(o);
 }
 
+// The data window is `[__data_start, _end)`, which only ELF links define.
+#[cfg(target_os = "linux")]
 #[used]
 static mut PROBE: u64 = 0x1234_5678;
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     let text = b"root word probe string, long enough to stay a heap cell!!";
@@ -235,6 +242,11 @@ fn maps_text_is_parsed_and_merged() {
         merged(parse_maps(t)),
         vec![(0x40_0000, 0x46_0000), (0x7ffc_0000_0000, 0x7ffc_0000_1000)]
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_running_process_has_memory_mappings() {
     assert!(read_maps().len() > 3, "this process has mappings");
 }
 
@@ -466,10 +478,12 @@ fn a_claim_key_over_four_kib_stops_the_image() {
     assert_eq!(s.map(|s| s.cell), Some(i));
 }
 
+#[cfg(target_os = "linux")]
 fn forms_of(img: &Image, t: u8) -> Vec<&Cell> {
     img.cells.iter().filter(|c| c.obj_type == t).collect()
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
     let key = crate::string::js_string_from_bytes(b"map-form-key".as_ptr(), 12);
@@ -505,6 +519,7 @@ fn a_map_with_string_and_number_keys_has_a_self_contained_form() {
     let _ = m;
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn an_untraced_raw_address_stops_the_image_and_a_zero_word_does_not() {
     let mut m = crate::map::js_map_alloc(2);
@@ -607,7 +622,7 @@ fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
         crate::module_require::js_register_path_init(
             key.as_ptr(),
             key.len() as i64,
-            registry_probe_init as usize as i64,
+            registry_probe_init as *const () as usize as i64,
         );
     }
     let (b, _) = probe_baseline();
@@ -618,7 +633,10 @@ fn module_inits_registered_in_the_path_registry_become_a_replay_record() {
         .find(|r| r.key == key)
         .expect("the entry is in the record");
     let exe = std::ptr::addr_of!(__executable_start) as usize;
-    assert_eq!(r.init_off, (registry_probe_init as usize - exe) as u64);
+    assert_eq!(
+        r.init_off,
+        (registry_probe_init as *const () as usize - exe) as u64
+    );
     assert_eq!((r.status, r.exports.clone()), (0, None));
     let blob = registry_blob(&img.registry);
     let (back, used) = parse_registry_blob(&blob).expect("parses");
@@ -678,9 +696,14 @@ fn full_mint_rec(n: u32) -> MintRec {
         edges: vec![9, 10, 11],
         route: MINT_ROUTE_LAZY,
         node: 9,
-        keys_ref: Some(Val::Cell { hi: 0, bare: true, index: 4 }),
+        keys_ref: Some(Val::Cell {
+            hi: 0,
+            bare: true,
+            index: 4,
+        }),
         proto_ref: Some(Val::Scalar(0x7FFC_0000_0000_0002)),
         desc_off: Some(16),
+        fam_serial: 0x99,
     }
 }
 
@@ -737,8 +760,17 @@ fn mint_record_round_trips_route_and_refs() {
     let mut r = full_mint_rec(3);
     r.route = MINT_ROUTE_RUNTIME;
     r.node = 7;
-    r.keys_ref = Some(Val::Cell { hi: 0, bare: true, index: 5 });
-    r.proto_ref = Some(Val::Ext { hi: 0x7FFD, bare: false, region: REGION_EXE, off: 0x40 });
+    r.keys_ref = Some(Val::Cell {
+        hi: 0,
+        bare: true,
+        index: 5,
+    });
+    r.proto_ref = Some(Val::Ext {
+        hi: 0x7FFD,
+        bare: false,
+        region: REGION_EXE,
+        off: 0x40,
+    });
     r.desc_off = Some(0x1230);
     let mut d = full_mint_rec(4);
     d.keys_ref = Some(Val::Scalar(0));
@@ -750,14 +782,31 @@ fn mint_record_round_trips_route_and_refs() {
     assert_eq!(back[0].route, MINT_ROUTE_RUNTIME);
     assert_eq!(back[0].node, 7);
     assert_eq!(back[0].desc_off, Some(0x1230));
-    assert!(matches!(back[0].keys_ref, Some(Val::Cell { index: 5, .. })), "{:?}", back[0].keys_ref);
-    assert!(matches!(back[0].proto_ref, Some(Val::Ext { off: 0x40, region: REGION_EXE, .. })), "{:?}", back[0].proto_ref);
+    assert!(
+        matches!(back[0].keys_ref, Some(Val::Cell { index: 5, .. })),
+        "{:?}",
+        back[0].keys_ref
+    );
+    assert!(
+        matches!(
+            back[0].proto_ref,
+            Some(Val::Ext {
+                off: 0x40,
+                region: REGION_EXE,
+                ..
+            })
+        ),
+        "{:?}",
+        back[0].proto_ref
+    );
     assert_eq!(back[1].desc_off, None);
     assert_eq!(back[1].keys_ref, None);
     assert_eq!(back[2].keys_ref, Some(Val::Scalar(0)));
     assert_eq!(back[2].desc_off, None);
     assert_eq!(back, recs);
     assert_eq!(mint_without_refs(&back[0]).desc_off, None);
+    assert_eq!(back[0].fam_serial, 0x99);
+    assert_eq!(mint_without_refs(&back[0]).fam_serial, 0);
     assert_eq!(mint_without_refs(&back[0]).route, MINT_ROUTE_RUNTIME);
 }
 
@@ -779,8 +828,22 @@ fn mint_where(extra: Option<usize>) -> Where {
 #[test]
 fn mint_refs_accept_an_image_cell_or_binary_data_and_refuse_a_heap_address() {
     let w = mint_where(None);
-    assert!(matches!(mint_ref(&w, 0x7000_0000_1010, false), Some(Val::Cell { index: 0, bare: true, .. })));
-    assert!(matches!(mint_ref(&w, 0x40_0100, false), Some(Val::Ext { region: REGION_EXE, off: 0x100, .. })));
+    assert!(matches!(
+        mint_ref(&w, 0x7000_0000_1010, false),
+        Some(Val::Cell {
+            index: 0,
+            bare: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        mint_ref(&w, 0x40_0100, false),
+        Some(Val::Ext {
+            region: REGION_EXE,
+            off: 0x100,
+            ..
+        })
+    ));
     assert_eq!(mint_ref(&w, 0x7000_0000_4000, false), None);
     assert_eq!(mint_ref(&w, 0x7000_0000_4000, true), None);
     assert_eq!(mint_ref(&w, 0, false), Some(Val::Scalar(0)));
@@ -792,7 +855,10 @@ fn mint_refs_accept_an_image_cell_or_binary_data_and_refuse_a_heap_address() {
 #[test]
 fn a_runtime_layout_descriptor_is_found_by_its_changed_shape_id_word() {
     use crate::object::layout_desc::PerryLayoutDesc;
-    let (so, lo) = (std::mem::offset_of!(PerryLayoutDesc, shape_id), std::mem::offset_of!(PerryLayoutDesc, layout_id));
+    let (so, lo) = (
+        std::mem::offset_of!(PerryLayoutDesc, shape_id),
+        std::mem::offset_of!(PerryLayoutDesc, layout_id),
+    );
     let size = std::mem::size_of::<PerryLayoutDesc>();
     let mut was = vec![0u8; 3 * size];
     let mut now = was.clone();
@@ -815,20 +881,32 @@ fn a_runtime_layout_descriptor_is_found_by_its_changed_shape_id_word() {
     assert_eq!(mint_desc_matches(&was, &now, 901, 77).0, 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     let good: u64 = 0x1234;
     let bad: u64 = 0x7000_0000_4000;
     let w = mint_where(Some(std::ptr::addr_of!(bad) as usize));
     let begin = crate::object::shapes::snap_image_shape_state();
-    let mk = |id: u32, route: u8| MintRec { id, route, node: u32::MAX, keys: 0x7000_0000_1010, ..MintRec::default() };
-    let mut recs = vec![mk(10, MINT_ROUTE_DYNAMIC), mk(11, MINT_ROUTE_RUNTIME), mk(12, MINT_ROUTE_STATIC), mk(13, MINT_ROUTE_STATIC)];
+    let mk = |id: u32, route: u8| MintRec {
+        id,
+        route,
+        node: u32::MAX,
+        keys: 0x7000_0000_1010,
+        ..MintRec::default()
+    };
+    let mut recs = vec![
+        mk(10, MINT_ROUTE_DYNAMIC),
+        mk(11, MINT_ROUTE_RUNTIME),
+        mk(12, MINT_ROUTE_STATIC),
+        mk(13, MINT_ROUTE_STATIC),
+    ];
     recs[0].proto_cell = std::ptr::addr_of!(good) as u64;
     recs[1].keys = 0x7000_0000_4000;
     recs[2].proto_cell = std::ptr::addr_of!(bad) as u64;
     recs[3].node = 3;
     recs[3].keys = 0x7000_0000_1010;
-    let stops = mint_capture(&w, &mut recs, &[], &[], &begin);
+    let stops = mint_capture(&w, &mut recs, 0, &[], &[], &begin);
     let by = |k: u8| stops.iter().filter(|s| s.kind == k).collect::<Vec<_>>();
     let one = |k: u8| {
         let v = by(k);
@@ -839,7 +917,10 @@ fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     assert_eq!(one(STOP_MINT_NO_DESC), (1, 11, 1));
     assert_eq!(one(STOP_MINT_PROTO_WORD), (2, 12, 1));
     assert_eq!(one(STOP_MINT_CANONICAL), (3, 13, 1));
-    assert!(by(STOP_MINT_ROW_GAP).is_empty() && by(STOP_MINT_SUCCESSOR).is_empty(), "{stops:?}");
+    assert!(
+        by(STOP_MINT_ROW_GAP).is_empty() && by(STOP_MINT_SUCCESSOR).is_empty(),
+        "{stops:?}"
+    );
     assert_eq!(recs[0].proto_ref, Some(Val::Scalar(0x1234)));
     assert!(matches!(recs[0].keys_ref, Some(Val::Cell { index: 0, .. })));
     assert!(matches!(recs[2].keys_ref, Some(Val::Cell { index: 0, .. })));
@@ -847,20 +928,31 @@ fn the_capture_names_each_reason_replay_cannot_rebuild_and_counts_routes() {
     assert_eq!(recs[1].desc_off, None);
     let t = mint_census_text(&stops).expect("a census");
     assert!(t.contains("routes dynamic 1, runtime 1, lazy 0, static 2; canonical key lists 1; successor mints 0; row gaps 0;"), "{t}");
-    assert!(t.contains("key lists as image cells 3, as binary data 0; runtime-layout descriptor cells found 0"), "{t}");
+    assert!(
+        t.contains(
+            "key lists as image cells 3, as binary data 0; runtime-layout descriptor cells found 0"
+        ),
+        "{t}"
+    );
     // No records, no stops.
-    assert!(mint_capture(&w, &mut [], &[], &[], &begin).is_empty());
+    assert!(mint_capture(&w, &mut [], 0, &[], &[], &begin).is_empty());
 }
 
 #[test]
 fn the_census_line_names_every_item_in_order() {
     let mut stops = Vec::new();
     for i in 0..MINT_CENSUS_ITEMS {
-        stops.push(Stop { cell: 0, obj_type: i as u8, kind: STOP_MINT_CENSUS, off: 0, value: (i as u64 + 1) * 10 });
+        stops.push(Stop {
+            cell: 0,
+            obj_type: i as u8,
+            kind: STOP_MINT_CENSUS,
+            off: 0,
+            value: (i as u64 + 1) * 10,
+        });
     }
     let t = mint_census_text(&stops).expect("a census");
     assert!(
-        t.contains("routes dynamic 10, runtime 20, lazy 30, static 40; canonical key lists 50; successor mints 60; row gaps 70; prototype ids default 80, class 90, mixed 100, unique 110, other 120; unique-prototype counter moved 130, prototype-serial counter moved 140; key lists as image cells 150, as binary data 160; runtime-layout descriptor cells found 170"),
+        t.contains("routes dynamic 10, runtime 20, lazy 30, static 40; canonical key lists 50; successor mints 60; row gaps 70; prototype ids default 80, class 90, mixed 100, unique 110, other 120; unique-prototype counter moved 130, prototype-serial counter moved 140; key lists as image cells 150, as binary data 160; runtime-layout descriptor cells found 170; runtime-layout births that draw the prototype serial 180"),
         "{t}"
     );
     assert_eq!(mint_census_text(&[]), None);
@@ -870,8 +962,15 @@ fn the_census_line_names_every_item_in_order() {
 fn mint_stop_verifies_records_that_carry_references() {
     let before = crate::object::shapes::snap_image_shape_state();
     let o = crate::object::js_object_alloc(0, 0);
-    crate::object::js_object_set_field_by_name(o, crate::string::js_string_from_bytes(b"snapimgmintrefs".as_ptr(), 15u32), 1.0);
-    let delta = crate::object::shapes::snap_image_shape_delta(&before, &crate::object::shapes::snap_image_shape_state());
+    crate::object::js_object_set_field_by_name(
+        o,
+        crate::string::js_string_from_bytes(b"snapimgmintrefs".as_ptr(), 15u32),
+        1.0,
+    );
+    let delta = crate::object::shapes::snap_image_shape_delta(
+        &before,
+        &crate::object::shapes::snap_image_shape_state(),
+    );
     let mut recs = crate::object::shapes::snap_image_mint_collect(&before);
     assert!(!recs.is_empty());
     for r in recs.iter_mut() {
@@ -891,7 +990,11 @@ fn full_canon_node(id: u32) -> CanonNode {
         len: id + 1,
         all_ptr: true,
         published: true,
-        addr: Val::Cell { hi: 0, bare: true, index: 40 + id },
+        addr: Val::Cell {
+            hi: 0,
+            bare: true,
+            index: 40 + id,
+        },
         backing_slots: 8,
         run: 3,
         backing_owner: id - 1,
@@ -905,7 +1008,11 @@ fn full_canon_node(id: u32) -> CanonNode {
 fn canon_record_round_trips_a_changed_node_below_the_root() {
     let changed = CanonNode {
         published: false,
-        addr: Val::Cell { hi: 0, bare: true, index: 7 },
+        addr: Val::Cell {
+            hi: 0,
+            bare: true,
+            index: 7,
+        },
         ..full_canon_node(2)
     };
     let c = CanonRec {
@@ -939,7 +1046,12 @@ fn canon_record_round_trips_every_field() {
         cut_len: 5,
         new: vec![full_canon_node(3), full_canon_node(4)],
         changed: vec![changed],
-        last_addr: Val::Ext { hi: 0, bare: true, region: REGION_LAYOUTS, off: 64 },
+        last_addr: Val::Ext {
+            hi: 0,
+            bare: true,
+            region: REGION_LAYOUTS,
+            off: 64,
+        },
         last_len: 5,
         last_node: 4,
         minted: 9,
@@ -953,4 +1065,32 @@ fn canon_record_round_trips_every_field() {
     assert_eq!(decode(&encode(&img)).expect("parses"), img);
     img.canon = None;
     assert_eq!(decode(&encode(&img)).expect("parses"), img);
+}
+
+#[test]
+fn a_runtime_layout_birth_records_the_family_serial_it_drew_once() {
+    use crate::object::layout_desc as ld;
+    let data_lo = 0x7000_0000_0000_usize;
+    let fam_off = 0x100_usize;
+    let serial_at = fam_off + ld::SNAP_IMAGE_FAMILY_SERIAL_OFFSET;
+    let proto_at = std::mem::offset_of!(ld::PerryLayoutDesc, proto);
+    let put = |b: &mut Vec<u8>, at: usize, v: u64| b[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    let mut was = vec![0u8; 0x200];
+    let mut now = was.clone();
+    put(&mut now, 0x10 + proto_at, (data_lo + fam_off) as u64);
+    put(&mut now, 0x40 + proto_at, (data_lo + fam_off) as u64);
+    put(&mut now, 0x70 + proto_at, 3);
+    put(&mut now, serial_at, 7);
+    let mut families = Vec::new();
+    assert_eq!(mint_fam_serial(&was, &now, data_lo, 0x10, &mut families), 7);
+    assert_eq!(mint_fam_serial(&was, &now, data_lo, 0x40, &mut families), 0);
+    assert_eq!(
+        mint_fam_serial(&was, &now, data_lo, 0x70, &mut Vec::new()),
+        0
+    );
+    put(&mut was, serial_at, 7);
+    assert_eq!(
+        mint_fam_serial(&was, &now, data_lo, 0x10, &mut Vec::new()),
+        0
+    );
 }

@@ -1258,8 +1258,8 @@ fn detect_optional_feature_usage_with_capabilities(
         }
         // Direct serialization needs its cache roots, but cannot create a
         // parsed value or lazy tape. Namespace values still select the engine.
-        ctx.uses_json_format |= hir_debug.contains("JsonStringify")
-            || hir_debug.contains("JsonIsRawJson");
+        ctx.uses_json_format |=
+            hir_debug.contains("JsonStringify") || hir_debug.contains("JsonIsRawJson");
         if hir_debug.contains("JsonParse")
             || hir_debug.contains("requireJsonDisk")
             || hir_debug.contains("JsonRawJson")

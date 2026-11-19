@@ -185,8 +185,10 @@ fn round(st: &St, m: &Module, units: &[Unit<'_>], anon: &HashMap<&str, Vec<&str>
                 }
             }
             Expr::ObjectSpread { parts } => {
-                for (k, v) in parts {
-                    if let Some(k) = k {
+                // A computed key names no property here (as `IndexSet`):
+                // these sets are candidates, never proofs.
+                for part in parts {
+                    if let ObjectPart::Define(k, v) = part {
                         psets.push((k.clone(), val(v, st)));
                     }
                 }

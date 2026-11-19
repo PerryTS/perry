@@ -1714,7 +1714,7 @@ fn classify_own_slot(v: f64, method: &str) -> OwnSlot {
     // Require the slot to hold the actual `Array.prototype[method]`; anything
     // else is a foreign builtin that must reach its own reflective thunk via
     // the normal dispatch, which binds `this` to the receiver.
-    if crate::object::builtin_closure_is_non_constructable_value(v)
+    if crate::object::native_module::builtin_closure_is_native_non_constructor_value(v)
         && crate::object::is_array_prototype_method_value(v, method)
     {
         return OwnSlot::BorrowedBuiltin;

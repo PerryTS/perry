@@ -8,7 +8,7 @@
 
 use crate::gen::{Fx, Gen, ReadSite};
 use crate::model::*;
-use perry_hir::{ArrayElement, CallArg, CompareOp, Expr, LogicalOp, UnaryOp};
+use perry_hir::{ArrayElement, CallArg, CompareOp, Expr, LogicalOp, ObjectPart, UnaryOp};
 
 /// The sink reason of an unmodeled construct's operands (`Gen::fail_closed`).
 pub(crate) const UNMODELED_OPERAND: &str = "operand of unmodeled HIR construct";
@@ -516,6 +516,21 @@ impl<'a> Gen<'a> {
     pub(crate) fn own_values(&mut self, recv: NodeId) -> NodeId {
         let dst = self.tmp("ownvalues");
         self.m.cons(recv, Cons::OwnValues { dst });
+        dst
+    }
+
+    /// The keys `Object.entries` reads from `recv` (`Cons::OwnKeys`).
+    pub(crate) fn own_keys(&mut self, recv: NodeId) -> NodeId {
+        let dst = self.tmp("ownkeys");
+        self.m.cons(recv, Cons::OwnKeys { dst });
+        dst
+    }
+
+    /// Rule RP2: what the protocol arm of a guarded iterator record sees of
+    /// `v` (`Cons::RecordEntry`).
+    pub(crate) fn record_entry(&mut self, v: NodeId) -> NodeId {
+        let dst = self.tmp("recordentry");
+        self.m.cons(v, Cons::RecordEntry { dst });
         dst
     }
 
@@ -1883,8 +1898,14 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::ObjectSpread { parts } => {
-                let named: Vec<&str> = parts.iter().filter_map(|(k, _)| k.as_deref()).collect();
-                let has_spread = parts.iter().any(|(k, _)| k.is_none());
+                let named: Vec<&str> = parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ObjectPart::Define(k, _) => Some(k.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                let has_spread = parts.iter().any(|p| !matches!(p, ObjectPart::Define(..)));
                 let (tm, t) = self.new_lit(mi, e, if has_spread { &[] } else { &named });
                 let obj = self.tok_node(t);
                 if has_spread {
@@ -1897,10 +1918,36 @@ impl<'a> Gen<'a> {
                         },
                     );
                 }
-                for (k, v) in parts {
-                    let vn = self.expr(fx, v);
-                    match k {
-                        Some(k) => {
+                if parts
+                    .iter()
+                    .any(|p| matches!(p, ObjectPart::Computed { .. }))
+                {
+                    // A computed key defines a key known only at run time
+                    // (as `js_object_literal_set_computed` on the builder).
+                    let tmpl = &mut self.m.tmpls[tm as usize];
+                    tmpl.birth_keys.clear();
+                    tmpl.definite.clear();
+                    tmpl.has_computed_members = true;
+                }
+                for part in parts {
+                    if let ObjectPart::Computed { key, value } = part {
+                        // As the builder: the key, then ToPropertyKey
+                        // (`js_object_literal_to_property_key`: an object
+                        // key's `@@toPrimitive` / `toString` / `valueOf` is
+                        // program code), then the value, then the define of a
+                        // run-time key (`js_object_literal_set_computed`,
+                        // with its U8 own computed key).
+                        let kn = self.expr(fx, key);
+                        self.to_property_key(kn);
+                        let vn = self.expr(fx, value);
+                        self.store(fx, obj, Key::any(), vn, "lit[]".into(), Some(tm), true);
+                        self.m.cons(obj, Cons::OwnComputedKey { key: kn, val: vn });
+                        continue;
+                    }
+                    let vn = self.expr(fx, part.value());
+                    match part {
+                        ObjectPart::Computed { .. } => unreachable!("handled above"),
+                        ObjectPart::Define(k, _) => {
                             let a = self.m.atom(k);
                             self.store(
                                 fx,
@@ -1912,7 +1959,7 @@ impl<'a> Gen<'a> {
                                 true,
                             );
                         }
-                        None => {
+                        ObjectPart::Spread(_) => {
                             // Own enumerable keys of the source, key by key
                             // (getters run): `Cons::Spread`.
                             let site = self.store_site(mi, fx.f, "lit...".into(), Some(tm), true);
@@ -1954,6 +2001,7 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true, true);
+                self.m.ordinary_arrays.insert(tm);
                 if let Some(h) = self.direct_arr.take() {
                     self.m.arr_birth_holder.insert(tm, h);
                 }
@@ -1982,6 +2030,7 @@ impl<'a> Gen<'a> {
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
                 let tm = self.new_arr_birth(mi, "spread", dense, true);
+                self.m.ordinary_arrays.insert(tm);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

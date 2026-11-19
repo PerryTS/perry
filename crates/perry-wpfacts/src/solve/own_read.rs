@@ -376,26 +376,33 @@ impl Model {
     /// `t` written under a key no name lists (its any-key field, a shaped
     /// computed-key store)? Read without making the watch node.
     pub(crate) fn enum_any_written(&self, t: Tok) -> bool {
-        let held = |n: NodeId| {
-            let nd = &self.nodes[n as usize];
-            !nd.pts.is_empty() || nd.prim != 0
-        };
-        let any = match self.is_elem_array(t) {
-            true => self.named_any.get(&t),
-            false => self.field_any.get(&t),
-        };
         // The numeric range (`numeric_field`): a Number or BigInt key's
         // store names a numeric string no name lists (7.1.19).
         let numeric = self
             .atom_index
             .get(crate::model::NUM_KEY)
             .and_then(|&a| self.fields.get(&(t, a)));
-        any.is_some_and(|&n| held(n))
-            || numeric.is_some_and(|&n| held(n))
+        self.any_key_written(t) || numeric.is_some_and(|&n| self.node_held(n))
+    }
+
+    /// Was `t` written under a String or Symbol key no name lists: its
+    /// any-key field or a shaped computed-key store (`enum_any_written`
+    /// without the numeric range)?
+    pub(crate) fn any_key_written(&self, t: Tok) -> bool {
+        let any = match self.is_elem_array(t) {
+            true => self.named_any.get(&t),
+            false => self.field_any.get(&t),
+        };
+        any.is_some_and(|&n| self.node_held(n))
             || self
                 .shaped_of
                 .get(&t)
-                .is_some_and(|v| v.iter().any(|&(_, n, store)| store && held(n)))
+                .is_some_and(|v| v.iter().any(|&(_, n, store)| store && self.node_held(n)))
+    }
+
+    fn node_held(&self, n: NodeId) -> bool {
+        let nd = &self.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
     }
 
     /// ENUM3: is `a` a key a for-in may yield? String keys only (ECMA-262

@@ -63,7 +63,10 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     // %Object% and %Object.prototype% are the realm's, whichever init first
     // reads them (SNAP census, design §2.10.20).
     let _realm = crate::snap_census::realm_build();
-    let built = build_object_intrinsics();
+    // The runtime's own definition, whichever operation reaches it first: as
+    // program writes, its installs of names the program uses (`__proto__`)
+    // would seal it shadowed and withdraw `Pristine` from every family.
+    let built = crate::object::own_override::as_builtin_definition(build_object_intrinsics);
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
@@ -225,8 +228,7 @@ mod tests {
             // Every constructor own property, including prototype, fits the
             // initial bag. Prototype-chain reads must not gain a spill just
             // because length/name now carry their attributes in that bag.
-            let bag = unsafe { crate::closure::props::bag_of(ctor as usize) };
-            let layout = unsafe { super::super::shapes::object_shape_descriptor(bag) }
+            let layout = unsafe { crate::closure::props::shape_descriptor(ctor as usize) }
                 .expect("constructor own-property shape");
             assert!(layout.live_inline_slot_count >= layout.logical_key_count);
             // Complete before any realm global: statics, prototype methods.

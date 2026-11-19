@@ -204,6 +204,16 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             param_types,
             return_type,
         })
+    } else if crate::patched_builtins::global_function_patched(&name) {
+        // The program may rebind this global function
+        // (`globalThis.setTimeout = f`): read the binding, as
+        // `globalThis.setTimeout` does, instead of binding the runtime entry.
+        Ok(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::GlobalGet(0)),
+            property: name,
+        })
     } else if is_builtin_function(&name) && !is_builtin_global_value_name(&name) {
         // Built-in global function (setTimeout, etc.). One that is also a
         // global value reads that value below.

@@ -127,6 +127,26 @@ fn numeric_key_i32_index(value: f64) -> Option<i32> {
 /// garbage f64 values.
 #[no_mangle]
 pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> f64 {
+    // A plain object's index key is an element of its store: answered here,
+    // ahead of the receiver ladder's frame.
+    let bits = obj_handle as u64;
+    let tag = bits >> 48;
+    if tag == 0x7FFD || tag == 0 {
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+            crate::value::POINTER_TAG | (bits & crate::value::POINTER_MASK),
+        )) {
+            if let Some(value) = unsafe { crate::array::plain_elements::get_number_key(obj, idx) } {
+                return value;
+            }
+        }
+    }
+    get_index_polymorphic_rest(obj_handle, idx)
+}
+
+/// [`js_object_get_index_polymorphic`] for every receiver its store arm does
+/// not answer.
+#[inline(never)]
+fn get_index_polymorphic_rest(obj_handle: i64, idx: f64) -> f64 {
     let raw = if (obj_handle as u64) >> 48 >= 0x7FF8 {
         // NaN-boxed: only POINTER_TAG (0x7FFD) and STRING_TAG (0x7FFF) carry a
         // heap pointer in the low 48 bits. INT32 (0x7FFE) is usually a primitive
@@ -170,6 +190,22 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     } else {
         obj_handle as u64
     };
+    // An ordinary object (no arguments object, whose mapped indices are its
+    // own): an integral key its layouts hold answers before the exotic
+    // receiver ladder below, none of whose kinds is a `GC_TYPE_OBJECT` cell.
+    // The probe itself declines Array-subclass instances and objects with an
+    // elements store.
+    if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+        crate::value::POINTER_TAG | raw,
+    )) {
+        let flags =
+            unsafe { (*crate::gc::header_from_trusted_user_ptr(obj as *const u8))._reserved };
+        if flags & crate::gc::OBJ_FLAG_ARGUMENTS == 0 {
+            if let Ok(value) = integer_key_probe(obj as u64, idx) {
+                return value;
+            }
+        }
+    }
     // Array.from's array-like fallback can receive a Proxy record. Its id is
     // not a heap header; route it inside the existing low-address guard so
     // ordinary heap receivers do not perform a proxy registry lookup.
@@ -208,10 +244,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return value;
         }
     }
-    if let Some(value) =
-        unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
-    {
-        return value;
+    // A Node `Buffer` takes its own arm below, which also answers method and
+    // expando names.
+    if !crate::buffer::is_node_buffer(raw as usize) {
+        if let Some(value) =
+            unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
+        {
+            return value;
+        }
     }
     // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
     // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own
@@ -264,9 +304,10 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         };
-        let byte_val =
-            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, index);
-        return byte_val as f64;
+        return crate::buffer::js_buffer_index_get_value(
+            raw as *const crate::buffer::BufferHeader,
+            index,
+        );
     }
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some() {
         return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
@@ -545,6 +586,12 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // `packed[sparse[x]] = last` that was an allocation per swap).
         if let Some(index) = numeric_key_u32_index(idx) {
             if crate::array::array_subclass_fast_index_set(boxed, index, value) {
+                return;
+            }
+        }
+        // An element of a plain object's index store: its own data property.
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(boxed) {
+            if unsafe { crate::array::plain_elements::set_existing_number_key(obj, idx, value) } {
                 return;
             }
         }

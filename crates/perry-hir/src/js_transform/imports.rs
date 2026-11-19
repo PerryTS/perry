@@ -823,7 +823,7 @@ pub fn transform_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }

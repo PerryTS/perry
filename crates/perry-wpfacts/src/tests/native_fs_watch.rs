@@ -177,16 +177,55 @@ fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
         r#"
         class P { x: any; constructor(x: number) { this.x = x; } }
         const p = new P(1);
+        declare function hostSink(x: any): void;
         function sys(path: string) {
             const _fs: typeof import("fs") = require("fs");
             _fs.watch(path, { persistent: false } as any, (ev: any) => { (globalThis as any).leak = p; });
-            (globalThis as any).structuredClone(globalThis);
+            hostSink(globalThis);
         }
         sys(process.argv[1]);
         console.log(p.x);
     "#,
     );
     assert!(!field(tmpl(&pf, "P"), "x").readonly, "{}", pf.dump_text());
+}
+
+/// RED (R-GLOBAL, owner 2026-11-18): the global object given to unknown code
+/// gives it what the program stored on that object, nothing else: a module
+/// binding never stored there, and a global stored while the global object
+/// stays the program's, keep their facts.
+#[test]
+fn a_value_not_on_the_handed_global_object_stays_proven() {
+    for (store, hand) in [
+        ("(globalThis as any).leak = p;", "hostSink(globalThis);"),
+        (
+            "(globalThis as any).leak = p; (globalThis as any).keep = q;",
+            "hostSink(p);",
+        ),
+    ] {
+        let pf = facts(&format!(
+            r#"
+        class P {{ x: any; constructor(x: number) {{ this.x = x; }} }}
+        class Q {{ y: any; constructor(y: number) {{ this.y = y; }} }}
+        const p = new P(1);
+        const q = new Q(2);
+        declare function hostSink(x: any): void;
+        {store}
+        {hand}
+        console.log(p.x, q.y);
+    "#
+        ));
+        assert!(
+            !field(tmpl(&pf, "P"), "x").readonly,
+            "{store} {hand}\n{}",
+            pf.dump_text()
+        );
+        assert!(
+            field(tmpl(&pf, "Q"), "y").readonly,
+            "{store} {hand}\n{}",
+            pf.dump_text()
+        );
+    }
 }
 
 /// Named control: `watch` called through an alias of fs that is ⊤ (what an

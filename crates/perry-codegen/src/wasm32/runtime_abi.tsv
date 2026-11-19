@@ -505,6 +505,9 @@ js_bm_codePointAt1	f64	i64,f64,i64,i64,f64
 js_bm_concat0	f64	i64,f64,i64,i64
 js_bm_concat1	f64	i64,f64,i64,i64,f64
 js_bm_concat2	f64	i64,f64,i64,i64,f64,f64
+js_bm_copyWithin1	f64	i64,f64,i64,i64,f64
+js_bm_copyWithin2	f64	i64,f64,i64,i64,f64,f64
+js_bm_copyWithin3	f64	i64,f64,i64,i64,f64,f64,f64
 js_bm_delete1	f64	i64,f64,i64,i64,f64
 js_bm_endsWith0	f64	i64,f64,i64,i64
 js_bm_endsWith1	f64	i64,f64,i64,i64,f64
@@ -867,6 +870,7 @@ js_class_static_call_guard	i32s	i32s,i32s,ptr,i64,i64,ptr
 js_class_static_field_get	f64	i32s,ptr,i64
 js_class_static_field_put	void	i32s,ptr,i64,f64
 js_class_static_method_call	f64	f64,ptr,usize,ptr,usize
+js_class_static_super_call_guard	i32s	i32s,i32s,ptr,i64,i64,ptr
 js_class_static_value_call_guard	i32s	f64,i32s,ptr,i64,i64,ptr
 js_class_super_construct_apply	f64	f64,f64,f64
 js_class_super_parent	f64	i32u
@@ -1720,6 +1724,7 @@ js_function_apply_proxy	f64	f64,f64,f64
 js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
 js_function_order_first_call	void	ptr
+js_function_prototype_call_body	f64	ptr,i64,ptr,usize
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
 js_gc_enter_unsafe_zone	void	
@@ -2171,6 +2176,8 @@ js_native_abi_check_i32	i32s	f64
 js_native_abi_check_i64	i64	f64
 js_native_abi_check_i8	i8s	f64
 js_native_abi_check_isize	isize	f64
+js_native_abi_check_nullable_buffer_byte_len	usize	f64
+js_native_abi_check_nullable_buffer_data_ptr	ptr	f64
 js_native_abi_check_pod_object	i64	f64
 js_native_abi_check_pod_view_data_ptr	ptr	f64,i64
 js_native_abi_check_pod_view_record_count	usize	f64,i64
@@ -2836,6 +2843,7 @@ js_object_lookup_setter	f64	f64,f64
 js_object_mark_class	void	i64
 js_object_prevent_extensions	f64	f64
 js_object_property_is_enumerable	f64	f64,f64
+js_object_prototype_has_own_property_call	f64	f64,f64
 js_object_record_get_by_bytes	i64	ptr,ptr,usize
 js_object_record_set_by_bytes	i32s	ptr,ptr,usize,i64
 js_object_rest	ptr	ptr,ptr
@@ -4373,6 +4381,7 @@ js_typed_array_find_last_index	f64	ptr,ptr
 js_typed_array_for_each	f64	ptr,ptr
 js_typed_array_for_of_admits	f64	f64
 js_typed_array_get	f64	ptr,i32s
+js_typed_array_get_number_key	f64	i64,f64
 js_typed_array_index_get_dynamic	f64	ptr,f64
 js_typed_array_index_set_dynamic	f64	ptr,f64,f64
 js_typed_array_join	ptr	ptr,ptr
@@ -4389,6 +4398,7 @@ js_typed_array_reduce	f64	ptr,ptr,i32s,f64
 js_typed_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_typed_array_reverse	ptr	ptr
 js_typed_array_set	void	ptr,i32s,f64
+js_typed_array_set_call	f64	f64,f64,f64,i32s
 js_typed_array_set_from	f64	ptr,f64,f64
 js_typed_array_slice	ptr	ptr,i32s,i32s
 js_typed_array_some	f64	ptr,ptr
@@ -5339,6 +5349,7 @@ perry_store_or_put	f64	ptr,i64,i64,i64,f64,i32s
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr
 perry_tui_state_setter_trampoline	f64	ptr,i64,f64
+perry_typed_array_proto_get	f64	ptr,i64,i64,i64
 perry_update_notify_startup	void	ptr,i32s
 perry_updater_check_headers	ptr	f64
 perry_updater_check_url	ptr	f64

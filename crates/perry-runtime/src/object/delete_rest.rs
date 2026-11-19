@@ -50,6 +50,17 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_named::note_named_mutation(owner, bytes);
         }
     }
+    // A plain object's index key is an element of its store: deleting it
+    // leaves a hole (its layout names no index key).
+    if let Some(view) = unsafe { crate::array::subclass_elements::own_elements(obj as usize) }
+        .filter(|view| view.plain)
+    {
+        if let Some(elements_key @ crate::array::subclass_elements::ElementsKey::Index(_)) =
+            unsafe { crate::array::subclass_elements::key_of_header(key) }
+        {
+            return unsafe { crate::array::subclass_elements::delete_key(view, elements_key) };
+        }
+    }
     if let Some(result) = crate::web_storage::storage_delete_field(obj, key) {
         return result;
     }
@@ -87,8 +98,9 @@ pub extern "C" fn js_object_delete_field(
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
+                // A class's `prototype` is non-configurable (ClassDefinitionEvaluation).
                 if super::class_registry::class_name_for_id(class_id).is_some()
-                    && class_delete_own_key(class_id, name) == 0
+                    && (name == "prototype" || class_delete_own_key(class_id, name) == 0)
                 {
                     return 0;
                 }
@@ -247,25 +259,28 @@ pub extern "C" fn js_object_delete_field(
         // user-attached props are dropped from the dynamic-prop table outright.
         if crate::closure::is_closure_ptr(obj as usize) {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // A function's own `prototype` (a constructor's, a class's, a
+                // generator's) is non-configurable from birth, materialized
+                // or not (ECMA-262 MakeConstructor, ClassDefinitionEvaluation):
+                // the delete fails. A function without one (arrow, method,
+                // async, bound, builtin) has nothing to delete. The intrinsic's
+                // presence: a bag-less function's family record, else the
+                // function's kind (a user `prototype` on an arrow is configurable).
+                // (test262 Proxy/deleteProperty/*-target-is-proxy exercise
+                // `delete funcProxy.prototype` in strict mode.)
+                if name == "prototype"
+                    && super::has_own_helpers::family_key_present(obj as usize, name)
+                        .unwrap_or_else(|| {
+                            super::class_registry::function_would_have_own_prototype(
+                                crate::value::js_nanbox_pointer(obj as i64),
+                            )
+                        })
+                {
+                    return 0;
+                }
                 // A class constructor: [[Delete]] on its own property.
                 if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
                     return class_delete_own_key(class_id, name);
-                }
-                // A plain (non-arrow, non-bound) function's `prototype` is a
-                // non-configurable own property. `get_property_attrs` only knows
-                // about it once #3655 has lazily registered a descriptor (on first
-                // access), so a fresh `function(){}` whose prototype was never
-                // read would otherwise report a successful delete. Reject it up
-                // front. (test262 Proxy/deleteProperty/*-target-is-proxy exercise
-                // `delete funcProxy.prototype` in strict mode.)
-                if name == "prototype" {
-                    let closure = obj as *const crate::closure::ClosureHeader;
-                    if !crate::closure::closure_is_arrow(closure)
-                        && !crate::closure::closure_is_bound_method(closure)
-                        && !crate::closure::closure_body_is_non_constructor(closure)
-                    {
-                        return 0;
-                    }
                 }
                 // A non-configurable slot — e.g. a constructor's `prototype`,
                 // which #3655 registers as `{configurable:false}` — can't be

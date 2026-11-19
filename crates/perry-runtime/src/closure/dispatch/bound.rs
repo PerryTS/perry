@@ -822,10 +822,7 @@ pub unsafe extern "C" fn js_function_bind(
             if info
                 .as_ref()
                 .is_some_and(|info| info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0)
-                && (*closure).shape_id
-                    == crate::closure::shape::function_base_shape(
-                        crate::closure::shape::FunctionProtoKind::Function,
-                    )
+                && crate::closure::shape::is_plain_base_shape((*closure).shape_id)
             {
                 let receiver = if args_len == 0 || args_ptr.is_null() {
                     crate::value::TAG_UNDEFINED

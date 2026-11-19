@@ -74,10 +74,11 @@ fn an_any_receiver_of_an_unknown_call_leaves_console_modeled() {
 }
 
 /// Control c0_global: the global object handed to a function read off it
-/// under a computed key. Unknown code holds the global object, so what was
-/// stored there is unknown.
+/// under a computed key. The unknown code that holds it writes no key of it
+/// (R-GLOBAL and step 2, owner decision 2026-11-18, closed world 11-14):
+/// `box` is the program's store.
 #[test]
-fn the_global_object_handed_to_unknown_code_stays_unproven() {
+fn the_global_object_handed_to_unknown_code_keeps_the_program_store() {
     let src = format!(
         "{K}(globalThis as any).box = o;\n\
          const u: any = (globalThis as any)[process.argv[2]];\n\
@@ -85,7 +86,7 @@ fn the_global_object_handed_to_unknown_code_stays_unproven() {
          const b: any = (globalThis as any).box;\n\
          console.log(b.k.m()); // SITE\n"
     );
-    assert_site(&src, false);
+    assert_site(&src, true);
 }
 
 /// Control c3_consolehook: `console` replaced by an object whose `log` is a

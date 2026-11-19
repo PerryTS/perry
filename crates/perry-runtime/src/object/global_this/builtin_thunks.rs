@@ -100,11 +100,9 @@ fn math_number_arg(value: f64) -> f64 {
 
 fn math_to_int32(value: f64) -> i32 {
     let n = math_number_arg(value);
-    if !n.is_finite() || n == 0.0 {
-        return 0;
-    }
-    const TWO_32: f64 = 4_294_967_296.0;
-    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+    // ES ToInt32 without a floating-point remainder (#10511): one
+    // truncating conversion for |n| < 2^63, the exponent rule beyond.
+    crate::value::dyn_to_int32(n)
 }
 
 fn math_to_uint32(value: f64) -> u32 {

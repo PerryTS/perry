@@ -480,6 +480,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_function_bind", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_length", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_typed_array_proto_get", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_keyed", DOUBLE, &[PTR, I64, I64]);
     // Object rest destructuring: copy all properties from src except excluded keys.

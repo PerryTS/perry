@@ -28,12 +28,43 @@ unsafe fn native_args<'a>(args: *const f64, len: usize) -> &'a [f64] {
     }
 }
 
+/// `hasOwnProperty.call(o, k)`: the target VALUE is the realm's
+/// `Object.prototype.hasOwnProperty` (its info names that body), so the call is
+/// that body with `this = o`. Asked of the callee on every call; nothing is
+/// kept. An object or nullish `o` only: a primitive takes the intrinsic.
+#[inline(always)]
+pub(in crate::object) unsafe fn has_own_property_call(target: f64, args: &[f64]) -> Option<f64> {
+    let closure =
+        (target.to_bits() & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    let info = (*closure).info.as_ref()?;
+    if !std::ptr::eq(
+        info.code,
+        object_prototype_has_own_property_thunk as *const u8,
+    ) {
+        return None;
+    }
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let this = args.first().copied().unwrap_or(undef);
+    let bits = this.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        && bits != crate::value::TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+    {
+        return None;
+    }
+    let key = args.get(1).copied().unwrap_or(undef);
+    Some(crate::object::object_ops::has_own::object_prototype_has_own_property(this, key))
+}
+
 /// `Function.prototype.call` as a value: takes its arguments in place
 /// (`FN_REST_NATIVE_ARGS`, no rest array) and runs the one `call` body
 /// (`run_function_intrinsic`) the method form runs, so both see the same
 /// class-constructor TypeError, static bound-method receiver and native
 /// construction aliases.
-pub(crate) unsafe extern "C" fn function_prototype_call_thunk(
+// Codegen names this body by its symbol to dispatch `f.call(..)` on the
+// value found (`emit_call_lane`).
+#[no_mangle]
+pub(crate) unsafe extern "C" fn js_function_prototype_call_body(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     args: *const f64,
@@ -41,10 +72,30 @@ pub(crate) unsafe extern "C" fn function_prototype_call_thunk(
 ) -> f64 {
     let target = f64::from_bits(this.bits());
     let args_ptr = if len == 0 { std::ptr::null() } else { args };
+    // This body IS `Function.prototype.call`: a call site that read this
+    // value calls it, so a closure target is entered here, whatever found it.
+    // The plain call first, as the method form runs it.
     if let Some(result) =
         crate::object::native_call_method::run_function_intrinsic(target, "call", args_ptr, len)
     {
         return result;
+    }
+    let tb = target.to_bits();
+    if tb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((tb & crate::value::POINTER_MASK) as usize)
+    {
+        let all = native_args(args, len);
+        if let Some(value) = has_own_property_call(target, all) {
+            return value;
+        }
+        if let Some(value) = crate::object::native_call_method::compiled_target_call(
+            false,
+            target,
+            all.as_ptr(),
+            all.len(),
+        ) {
+            return value;
+        }
     }
     // A callable the intrinsic does not model (a native function handle).
     let args = native_args(args, len);
@@ -285,6 +336,10 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
     crate::value::js_nanbox_string(string as i64)
 }
 
+// Codegen names this body by its symbol: `hasOwnProperty.call(o, k)` that
+// found this body and `Function.prototype.call`'s enters
+// `js_object_prototype_has_own_property_call` (`emit_call_lane`).
+#[no_mangle]
 pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -600,6 +655,9 @@ pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array
     )
 }
 
+// Codegen names this body by its symbol to dispatch `f.apply(..)` on the
+// value found (`emit_apply_lane`).
+#[no_mangle]
 pub(crate) extern "C" fn function_prototype_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

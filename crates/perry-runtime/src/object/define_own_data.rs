@@ -54,8 +54,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // Declared class fields commonly CREATE; retain their key-add-first
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
-        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE) < crate::codegen_abi::LAYOUT_RECORD_SPAN
     {
         // `obj`'s own header word: the receiver carries its row.
         super::shapes::shape_record_of_receiver(id)

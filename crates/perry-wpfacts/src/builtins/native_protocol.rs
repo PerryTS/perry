@@ -207,6 +207,35 @@ pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
     top || own
 }
 
+/// [`global_value_written`] past the writes that only delete (ECMA-262
+/// 13.5.1.2, OrdinaryDelete 10.1.10): a delete stores no value and runs no
+/// code (a Proxy's `deleteProperty` trap is the handler's call, modeled at
+/// the delete), so under any key, through ⊤ that may be the global object
+/// included, it can only make the binding absent. True: a writer that may
+/// have stored a value (a store, a define, an accessor, a prototype) may
+/// have written the key: the read takes ⊤ as before.
+pub fn global_value_stored(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, true, &|w| {
+        w.opaque || !w.stored.is_empty() || w.accessor || !w.getters.is_empty() || !w.setters.is_empty()
+    });
+    top || own
+}
+
+/// A global binding read (`NativeMiss::Global` into `dst`) that only
+/// deletes may have reached ([`global_value_stored`] false): it reads
+/// {its prior values} ∪ {`undefined`}; the caller keeps the read parked,
+/// so a later writer of a value replays it. A non-configurable global
+/// (`undefined`, `NaN`, `Infinity`; ECMA-262 19.1) is never removed.
+pub fn global_maybe_deleted(m: &mut Model, np: Tok, a: Atom, dst: NodeId) {
+    if !global_value_written(m, np, a) {
+        return;
+    }
+    if matches!(m.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+        return;
+    }
+    m.add_prim(dst, prim::UNDEF);
+}
+
 fn written_by(
     m: &Model,
     np: Tok,
@@ -295,15 +324,14 @@ fn written_by(
 }
 
 /// Unknown code holds the realm (ECMA-262 9.3, `Model::realm_held`): it may
-/// have replaced (or made an accessor of) any member the realm declares on a
-/// namespace, a host object or the global object, which no `LockHolder`
-/// covers (perry-abi lock.rs locks prototypes only), with any function or
-/// value it made. A call of such a member is the realm's function or unknown
-/// code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`), a read
-/// is the realm's value or the opaque member. Monotone: `note_realm_held`
-/// replays the lookups parked before it held. The Object.prototype method
-/// namespaces (`builtin_function`: members of a locked prototype) and the
-/// module's own `require` are not members of the realm.
+/// have replaced (or made an accessor of) a member of a built-in family's own
+/// prototype that the runtime's lock does not make final, with any function
+/// or value it made. A call of such a member is the realm's function or
+/// unknown code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`),
+/// a read is the realm's value or the opaque member. Monotone:
+/// `note_realm_held` replays the lookups parked before it held. A namespace
+/// member, the module's own `require` and the global object are not members
+/// it replaces (owner decisions 2026-11-18, closed world 11-14).
 fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if !m.realm_held {
         return false;
@@ -319,32 +347,25 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if let TokKind::NativeProto(what, _) = &m.toks[np as usize] {
         return !super::proto_read_final(m, what, a);
     }
-    let TokKind::Builtin(ns) = m.toks[np as usize] else {
-        return false;
-    };
-    if super::builtin_function(m, np) || ns == BuiltinNs::Require {
-        return false;
-    }
-    let name = m.atoms[a as usize].as_str();
-    if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
-        return true;
-    }
-    // The global object is an ordinary extensible object (ECMA-262 19.1,
-    // 9.1.1.4 its object record) that unknown code holding the realm holds:
-    // its [[Set]] (10.1.9.2) defines or replaces any key but the
-    // non-writable `undefined`, `NaN` and `Infinity` (19.1.1-19.1.4): a
-    // function the realm or the program declares, a key the program owns
-    // (`global_user_key`: `globalThis.gf = f`), and a key nobody declares
-    // (rule G reads it as absent, `undefined`, only while no unknown code
-    // holds the realm). A module's own bindings live in the module
-    // environment record, which no other code reaches.
-    super::global_object(m, np) && !matches!(name, "undefined" | "NaN" | "Infinity")
+    // A namespace member (`Math.max`, `console.error`, any key of one) and
+    // the global object (`globalThis` included): owner decisions 2026-11-18
+    // (closed world 11-14). The unknown code that holds the realm is the
+    // runtime's natives, which replace no member of an intrinsic namespace
+    // and write no key of the global object. Their writes are the program's
+    // own stores (`Math.foo = v`) and its stores into ⊤ once the object is in
+    // ⊤'s reach (`Model::global_in_top`, the caller); interpreted code and
+    // unseen modules keep their any-key writes there.
+    false
 }
 
 /// Unknown code now holds the realm: the lookups parked past a member it may
 /// have replaced (`realm_replaced`) take the opaque member.
 pub fn note_realm_held(m: &mut Model) {
     replay_native_missing(m);
+    // Unknown code may register a process listener: it is handed the
+    // process events (`Model::process_event`).
+    let (pe, e) = (m.process_event, m.esc_raise);
+    m.edge(pe, e);
 }
 
 /// Built-in object `np` was handed to unknown code (not reached along a
@@ -509,6 +530,9 @@ fn note_write(
             absent: false,
         });
     w.accessor |= accessor;
+    // A global read only deletes reached stays parked
+    // (`global_maybe_deleted`): this entry's first stored value replays it.
+    let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
     match value {
         WriteValue::Opaque => w.opaque = true,
         WriteValue::Value(n) => {
@@ -539,7 +563,7 @@ fn note_write(
     // `note_handed_to_unknown`), never on the other entries. Lookups parked
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
-    if fresh {
+    if fresh || first_value {
         replay_pending(m);
     }
 }
@@ -764,8 +788,21 @@ pub fn note_global_in_top(m: &mut Model) {
     m.global_written_own |= !m.shared_replay;
     if !m.global_in_top {
         m.global_in_top = true;
+        let fields: Vec<NodeId> = m.global_fields.iter().map(|&(_, n)| n).collect();
+        for n in fields {
+            global_field_read_by_unknown(m, n);
+        }
         replay_native_missing(m);
     }
+}
+
+/// Unknown code that holds the global object (`global_in_top`) reads its
+/// properties: what the program stored in global `n` leaves. R-GLOBAL (owner
+/// decision 2026-11-18) drops only the any-key write by that code, not its
+/// reads.
+fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
+    let r = m.reason("global property read by unknown code that holds the global object");
+    m.sink_node(n, r);
 }
 
 /// Lookups that passed a native prototype (or read a program-owned global)
@@ -822,7 +859,13 @@ fn replay_pending(m: &mut Model) {
         for (np, a, miss) in pending {
             m.census_native_read(np, a, miss.clone());
             let written = match miss {
-                NativeMiss::Global(..) => global_value_written(m, np, a),
+                NativeMiss::Global(dst, _) => {
+                    let stored = global_value_stored(m, np, a);
+                    if !stored {
+                        global_maybe_deleted(m, np, a, dst);
+                    }
+                    stored
+                }
                 NativeMiss::Lookup(dst, setter) => {
                     let unknown = native_accessor_written(m, np, a);
                     if !unknown {
@@ -1475,6 +1518,9 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    if m.global_in_top {
+        global_field_read_by_unknown(m, n);
+    }
     super::loads::global_shaped_replay(m, a);
     if m.global_cells {
         m.global_late = true;

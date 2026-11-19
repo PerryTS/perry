@@ -477,6 +477,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         &[I32, I32, PTR, I64, I64, PTR],
     );
     module.declare_function(
+        "js_class_static_super_call_guard",
+        I32,
+        &[I32, I32, PTR, I64, I64, PTR],
+    );
+    module.declare_function(
         "js_class_static_value_call_guard",
         I32,
         &[DOUBLE, I32, PTR, I64, I64, PTR],

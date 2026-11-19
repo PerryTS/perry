@@ -111,6 +111,30 @@ pub const GLOBAL_ANY_KEY: &str = "$global";
 /// site's verdict decides (MATHC1).
 pub const NS_ESCAPED: &str = "$escaped";
 
+/// Global functions a bare call binds straight to the runtime (`setTimeout(…)`
+/// lowers to the timer entry, `queueMicrotask(…)` to `Expr::QueueMicrotask`),
+/// without reading the global binding. A program store to one of these keys
+/// of the global object (`globalThis.setTimeout = f`, a bare `setTimeout = f`,
+/// `Object.assign(globalThis, { setTimeout })`) is recorded as
+/// `(GLOBAL_FUNCTION, name)`, and the bare call reads the binding instead
+/// ([`global_function_patched`]).
+const GLOBAL_FUNCTIONS: &[&str] = &[
+    "setTimeout",
+    "setInterval",
+    "setImmediate",
+    "clearTimeout",
+    "clearInterval",
+    "clearImmediate",
+    "queueMicrotask",
+];
+
+/// Pseudo-namespace of a store into a [`GLOBAL_FUNCTIONS`] binding.
+pub const GLOBAL_FUNCTION: &str = "$globalFunction";
+
+pub fn is_global_function(name: &str) -> bool {
+    GLOBAL_FUNCTIONS.contains(&name)
+}
+
 /// Identifiers that name the global object.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "window", "self"];
 
@@ -263,6 +287,10 @@ struct Scanner<'a> {
     /// Identifiers bound to a builtin namespace (`const M: any = Math`), by
     /// name for the same reason: a write through one patches the namespace.
     ns_aliases: BTreeMap<String, String>,
+    /// Identifiers bound to the global object (`const g = globalThis as any`),
+    /// by name for the same reason: a write through one is a store into the
+    /// global object.
+    global_aliases: BTreeSet<String>,
 }
 
 /// Collects `const AP = Array.prototype`-style aliases ahead of the scan, so a
@@ -270,6 +298,7 @@ struct Scanner<'a> {
 struct AliasCollector<'a> {
     aliases: &'a mut BTreeMap<String, String>,
     ns_aliases: &'a mut BTreeMap<String, String>,
+    global_aliases: &'a mut BTreeSet<String>,
 }
 
 impl Visit for AliasCollector<'_> {
@@ -279,6 +308,8 @@ impl Visit for AliasCollector<'_> {
                 self.aliases.insert(name.id.sym.to_string(), owner);
             } else if let Some(ns) = namespace_receiver(init) {
                 self.ns_aliases.insert(name.id.sym.to_string(), ns);
+            } else if is_global_object(init) {
+                self.global_aliases.insert(name.id.sym.to_string());
             }
         }
         d.visit_children_with(self);
@@ -311,7 +342,9 @@ impl Scanner<'_> {
                 return;
             }
             self.add(format!("{owner}{PROTOTYPE_SUFFIX}"), member);
-        } else if is_global_object(target) {
+        } else if is_global_object(target)
+            || matches!(peel(target), ast::Expr::Ident(id) if self.global_aliases.contains(id.sym.as_ref()))
+        {
             // `globalThis.console = {…}` replaces the whole namespace.
             // A dynamic key (`globalThis[k] = v`, `Object.assign(global,
             // shims)`) may name any namespace, but shim and bundle preludes
@@ -323,6 +356,7 @@ impl Scanner<'_> {
             // (DEC 255).
             match member {
                 Some(n) if is_builtin_namespace(&n) => self.add(n, None),
+                Some(n) if is_global_function(&n) => self.add(GLOBAL_FUNCTION.into(), Some(n)),
                 Some(_) => {}
                 None => self.add(GLOBAL_ANY_KEY.into(), None),
             }
@@ -367,6 +401,11 @@ impl Scanner<'_> {
     fn record_ident_target(&mut self, id: &ast::Ident) {
         if is_builtin_namespace(id.sym.as_ref()) {
             self.add(id.sym.to_string(), None);
+        } else if is_global_function(id.sym.as_ref()) {
+            // `setTimeout = f`: by name, not by scope. A same-named local
+            // binding is resolved before the global one, so recording its
+            // store only costs the global read of an unshadowed call.
+            self.add(GLOBAL_FUNCTION.into(), Some(id.sym.to_string()));
         }
     }
 
@@ -573,14 +612,17 @@ impl Visit for Scanner<'_> {
 pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
     let mut proto_aliases = BTreeMap::new();
     let mut ns_aliases = BTreeMap::new();
+    let mut global_aliases = BTreeSet::new();
     module.visit_with(&mut AliasCollector {
         aliases: &mut proto_aliases,
         ns_aliases: &mut ns_aliases,
+        global_aliases: &mut global_aliases,
     });
     module.visit_with(&mut Scanner {
         out,
         proto_aliases,
         ns_aliases,
+        global_aliases,
     });
     let mut escaped = BTreeSet::new();
     module.visit_with(&mut EscapeScan { out: &mut escaped });
@@ -692,6 +734,21 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
             || (!s.namespace_pairs && s.contains(&(NS_ESCAPED.to_string(), ns.to_string())))
     })
     .unwrap_or(false)
+}
+
+/// May the program rebind the global function `name` ([`GLOBAL_FUNCTIONS`])?
+/// True for a program store to that key of the global object, a store into the
+/// global object under a non-static key ([`GLOBAL_ANY_KEY`]), or dynamic code
+/// that reaches the global scope. A bare call then reads the binding off the
+/// global object; otherwise it binds the runtime entry directly.
+pub fn global_function_patched(name: &str) -> bool {
+    is_global_function(name)
+        && with_set(|s| {
+            s.contains(&(GLOBAL_FUNCTION.to_string(), name.to_string()))
+                || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
+                || s.dynamic_code_reach.disables_builtin_constants()
+        })
+        .unwrap_or(false)
 }
 
 /// May something the scan cannot name replace a builtin namespace member or

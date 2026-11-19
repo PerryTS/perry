@@ -121,9 +121,20 @@ fn gk_g2_native_reader_sees_stored() {
 /// KEEP: the old behaviour (n escapes) where the rule does not apply.
 #[test]
 fn gk_keep() {
+    // Not the global object: `n` escaped only through `console.warn(n)`,
+    // which the realm held by unknown code no longer replaces (owner
+    // decision 2026-11-18, R-GLOBAL step 3).
+    {
+        let store = "(Array.prototype as any).zz = (x: any) => x;";
+        let (v, dump) = verdict(&program(store), "v", "/*A*/");
+        assert!(
+            proven(&v),
+            "{store}: console.warn is the realm's, got {v:?}\n{dump}"
+        );
+    }
+    // Re-baselined (R-GLOBAL step 3, owner 2026-11-18): the key sets name
+    // neither `console`, `forEach` nor N's @@hasInstance, so `n` stays proven.
     for store in [
-        // not the global object
-        "(Array.prototype as any).zz = (x: any) => x;",
         // the key may be a Symbol
         "g[process.argv[2] === \"a\" ? Symbol.iterator as any : \"k\"] = A;",
         // ToPropertyKey of the key may be a Symbol (a program `toString`)
@@ -133,7 +144,7 @@ fn gk_keep() {
     ] {
         let src = program(store);
         let (v, dump) = verdict(&src, "v", "/*A*/");
-        assert!(!proven(&v), "{store}: n escapes as before, got {v:?}\n{dump}");
+        assert!(proven(&v), "{store}: console.warn is the realm's, got {v:?}\n{dump}");
     }
     // (d) and the special cases solve.
     for store in [

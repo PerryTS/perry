@@ -865,12 +865,13 @@ fn global_shaped_read(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     }
     m.global_shaped_reads.push((t, key, dst));
     super::native_protocol::global_any_read_key(m, key, dst);
-    if global_value_written(m, t, star) {
+    if super::native_protocol::global_value_stored(m, t, star) {
         m.add_top(dst, |_| {
             "globalThis[shaped key] written by unmodeled code".into()
         });
         m.add_prim(dst, prim::ALL);
     } else {
+        super::native_protocol::global_maybe_deleted(m, t, star, dst);
         let f = m.node_l("global-shaped-read");
         m.native_missing.push((t, star, NativeMiss::Global(dst, f)));
     }
@@ -910,12 +911,13 @@ fn declared_global_value(m: &mut Model, t: Tok, n: &str, dst: NodeId) {
         let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
         let f = global_field(m, g, a);
         m.edge(f, dst);
-        if global_value_written(m, t, a) {
+        if super::native_protocol::global_value_stored(m, t, a) {
             m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
             m.add_prim(dst, prim::ALL);
             let r = m.reason(&format!("globalThis.{n} reaches unmodeled code"));
             m.sink_node(f, r);
         } else {
+            super::native_protocol::global_maybe_deleted(m, t, a, dst);
             m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
         }
     }
@@ -994,7 +996,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         super::native_protocol::global_any_read(m, n, dst);
                     }
                     let f = global_field(m, t, a);
-                    if global_value_written(m, t, a) {
+                    if super::native_protocol::global_value_stored(m, t, a) {
                         if m.explain {
                             let op = m.tok_index.get(&TokKind::ObjectProto).copied();
                             let hits: Vec<String> = m

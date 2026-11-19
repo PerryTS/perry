@@ -959,7 +959,7 @@ where
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 f(v);
             }
         }

@@ -1247,7 +1247,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter_mut().flatten() {
                 replace_this_in_expr(e, this_id);
             }
         }

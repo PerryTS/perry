@@ -269,7 +269,9 @@ unsafe fn link_of_record(
     default_only: bool,
 ) -> Option<f64> {
     use crate::object::shapes as s;
-    if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
+    // An index store changes no link: `OrdinaryIndexed` reads its link as
+    // the ordinary layouts do.
+    if !record.object_kind().is_ordinary_family() || record.weak_collection_brand().is_some() {
         return None;
     }
     let pid = record.proto_id();
@@ -386,9 +388,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // Arrays, closures, handles, class and exotic identities
                 // decline without consulting their registries on this arm.
                 let id = unsafe { (*addr).shape_word() };
-                if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
-                    < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG
-                {
+                if crate::codegen_abi::is_ordinary_record_word(id) {
                     if let Some(proto) = unsafe { shape_link_prototype(addr, false) } {
                         return proto;
                     }
@@ -584,6 +584,10 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     let node_buffer_prototype = |addr: usize| -> Option<f64> {
         if !crate::buffer::is_node_buffer(addr) {
             return None;
+        }
+        // A link recorded by `Object.setPrototypeOf`, `null` included, wins.
+        if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
+            return Some(f64::from_bits(proto_bits));
         }
         let proto = crate::object::builtin_prototype_value("Buffer");
         if proto.to_bits() != crate::value::TAG_UNDEFINED {

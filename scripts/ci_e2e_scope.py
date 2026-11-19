@@ -170,7 +170,6 @@ _CODEGEN_SUITES = [
     "typed_shape_descriptor",
     "typed_shape_descriptors",
     "system_boolean_result",
-    "snap_image_literal_order",
     "ui_i64_boolean_args",
     "widget_max_width",
 ]

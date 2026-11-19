@@ -104,6 +104,13 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// Rule EK: the String keys of own properties (ECMA-262 20.1.2.5
+    /// Object.entries, 7.3.23 EnumerableOwnProperties): of a literal whose
+    /// enumerable keys are known (`Model::enum_keys`), those keys, each a
+    /// String constant; of any other value, any String. Looked at again
+    /// once the worklist is empty (`settle_for_in`), so a key written later,
+    /// an escape or a write under a key no name lists widens dst.
+    OwnKeys { dst: NodeId },
     /// The `value` field of an own-property descriptor of each t (20.1.2.8,
     /// 10.1.5.1 OrdinaryGetOwnProperty): `OwnValues`, plus the own data
     /// properties the realm makes, which `OwnValues` (EnumerableOwnProperties
@@ -297,6 +304,12 @@ pub enum Cons {
     /// equal, and the Null type has the one value `null`; `undefined`
     /// passes). A rule of the program text, like `NotNullish`.
     NotNull { dst: NodeId },
+    /// Rule RP2 (`solve/record_entry.rs`): the values the protocol arm of a
+    /// guarded iterator record may see: every value but an ordinary Array
+    /// the runtime takes the array arm for (`Model::record_entry_holds`),
+    /// which is held back until it no longer qualifies
+    /// (`settle_record_entry`).
+    RecordEntry { dst: NodeId },
     /// R9READ6 rule T6: a local `x` where `typeof x === s` held, `s`
     /// "string", "number", "boolean" or "undefined": only its primitives
     /// of `mask` (the one type with that typeof result, ECMA-262 13.5.3)
@@ -956,6 +969,7 @@ impl Cons {
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::RecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
         )
@@ -982,6 +996,7 @@ impl Cons {
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
+                | Cons::RecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
@@ -994,6 +1009,7 @@ impl Cons {
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::OwnKeys { .. } => "ownkeys",
             Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
             Cons::IndexHoleIn { .. } => "indexholein",
@@ -1029,6 +1045,7 @@ impl Cons {
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::NotNull { .. } => "notnull",
+            Cons::RecordEntry { .. } => "recordentry",
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::NotRegExp { .. } => "notregexp",

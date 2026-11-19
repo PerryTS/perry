@@ -506,7 +506,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 walk(e, out);
             }
         }

@@ -186,15 +186,16 @@ fn control_optional_chain_does_not_throw() {
     );
 }
 
-/// PRIMRECV2 step 2: an undeclared global reads `undefined` (rule G) only
-/// while no unknown code holds the realm; held, unknown code may define the
-/// global key (`globalThis.g = …`), so the call is not Throws.
+/// PRIMRECV2 step 2: an undeclared global reads `undefined` (rule G), also
+/// while unknown code holds the realm: it defines no key of the global
+/// object (owner decision 2026-11-18, closed world 11-14), so the call is
+/// Throws in both arms.
 #[test]
-fn undeclared_global_under_held_realm_does_not_throw() {
+fn undeclared_global_under_held_realm_still_throws() {
     let held = one(&format!(
         "{C}declare const g: any;\ndeclare function hostTake(x: any): void;\nhostTake(0);\nif (d) g.m();\n"
     ));
-    assert!(none(&at(&held, "m", true), "Throws"));
+    assert!(all(&at(&held, "m", true), "Throws"));
     let unheld = one(&format!("{C}declare const g: any;\nif (d) g.m();\n"));
     assert!(all(&at(&unheld, "m", true), "Throws"));
 }

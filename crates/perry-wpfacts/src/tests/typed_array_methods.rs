@@ -86,7 +86,9 @@ fn typed_set_runs_length_getter() {
 #[test]
 fn typed_constructor_runs_iterator() {
     check(
-        "o[Symbol.iterator] = function*() { this.leak(); yield 1; }; new Uint8Array(o)",
+        // `leak` calls the program's `hostTake`; a declared native is the
+        // unknown code the iterator hands `o` to.
+        "declare function sink2(x: any): void; o[Symbol.iterator] = function*() { sink2(this); yield 1; }; new Uint8Array(o)",
         false,
     );
 }

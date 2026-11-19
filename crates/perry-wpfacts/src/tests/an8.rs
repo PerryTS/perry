@@ -38,42 +38,8 @@ fn held_work(src: &str) -> (bool, u64) {
     (g.m.realm_held, g.m.work.get())
 }
 
-/// Whether the any-field of a program literal or a JSON object holds a
-/// built-in function (the pollution: chain members copied as values).
-fn copies_builtin_fn(src: &str) -> bool {
-    let mut g = solved(src);
-    let m = &mut g.m;
-    let objs: Vec<u32> = (0..m.toks.len() as u32)
-        .filter(|&t| match &m.toks[t as usize] {
-            TokKind::Obj(tm, _) => matches!(
-                m.tmpls[*tm as usize].kind,
-                TmplKind::Lit { .. } | TmplKind::BObj { what: "json", .. }
-            ),
-            _ => false,
-        })
-        .collect();
-    objs.into_iter().any(|t| {
-        let fa = m.field_any(t);
-        m.nodes[fa as usize]
-            .pts
-            .to_sorted()
-            .iter()
-            .any(|&v| matches!(m.toks[v as usize], TokKind::BuiltinFn(..)))
-    })
-}
-
 const HEAD: &str = r#"const text: string = process.argv[2] ?? "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":1},\"extensions\":{\"X\":{\"b\":2}}}";
 const json: any = JSON.parse(text);
-"#;
-
-const ADD_I: &str = r#"function addUnknown(known: any, object: any, def: any) {
-  for (const name in def.extensions) {
-    if (known[name] === undefined) {
-      object.userData.gltfExtensions = object.userData.gltfExtensions || {};
-      object.userData.gltfExtensions[name] = def.extensions[name];
-    }
-  }
-}
 "#;
 
 const ADD_J: &str = r#"function addUnknown(known: any, object: any, def: any) {

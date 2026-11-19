@@ -40,13 +40,13 @@ class PathPatternTests(unittest.TestCase):
 
 
 class CategoryRoutingTests(unittest.TestCase):
-    def test_workflow_contract_has_38_owned_modules_and_six_parents(self):
+    def test_workflow_contract_has_39_owned_modules_and_six_parents(self):
         categories = CATALOG["categories"]
         self.assertEqual(len(categories), 10)
         self.assertEqual(len({category['entrypoint'] for category in categories.values()}), 6)
         files = [module["file"] for c in categories.values() for module in c["modules"]]
-        self.assertEqual(len(files), 38)
-        self.assertEqual(len(set(files)), 38)
+        self.assertEqual(len(files), 39)
+        self.assertEqual(len(set(files)), 39)
 
     def test_native_host_qualification_is_an_isolated_manual_suite(self):
         result = select("ci", "workflow_dispatch", {}, suite="wasi-hosts", catalog=CATALOG)

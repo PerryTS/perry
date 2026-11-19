@@ -73,7 +73,9 @@ pub(crate) fn emit_static_call_guard(
     // The inline hit reads little-endian LP64 layouts (8-byte memo words, the
     // key's halves); other targets always ask the runtime.
     let triple = ctx.target_triple;
-    let lp64_le = (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
+    let lp64_le = (triple.starts_with("x86_64")
+        || triple.starts_with("aarch64")
+        || triple.starts_with("arm64"))
         && !triple.starts_with("aarch64_be")
         && !triple.contains("32");
     if !lp64_le {

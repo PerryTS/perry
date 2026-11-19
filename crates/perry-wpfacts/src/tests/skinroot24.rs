@@ -74,15 +74,17 @@ fn accessor_descriptor_get_called() {
     assert!(mono(&v), "the getter is the program's: {v:?}");
 }
 
-/// KEEP: unknown code holds the realm (a declared function's call): the
-/// unlocked `console.log(o)` may run unknown code with `o`.
+/// Unknown code holds the realm (a declared function's call). Re-baselined
+/// under R-GLOBAL step 3 (owner 2026-11-18; closed world 2026-11-14): that
+/// code is the runtime's natives, which replace no member of an intrinsic
+/// namespace, so `console.log(o)` stays the realm's and `o` stays proven.
 #[test]
 fn keep_held_by_unknown_code() {
     let src = format!(
         "declare function sink(x: any): void;\nsink(0);\n{OBJ}const d: any = Object.getOwnPropertyDescriptor(src, \"k\");\nconst s = `${{d}}`;\nconsole.log(o);\nconst r = o.m();\n"
     );
     let v = m_calls(&src);
-    assert!(!mono(&v), "held realm: {v:?}");
+    assert!(mono(&v), "held realm, console.log is the realm's: {v:?}");
 }
 
 /// SKINDESC1 k2: a described object the model does not know (a declared

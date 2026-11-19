@@ -46,8 +46,9 @@ use filter::descriptor_route;
 pub(crate) use filter::may_have_descriptor_entry;
 #[cfg(test)]
 pub(crate) use filter::test_may_have_descriptor_entry;
+pub(crate) use holder_edit::{KeyTarget, Restrict};
 mod holder_edit;
-use super::accessor_pair::{descriptor_from, own_accessor, pair_from, store_own_accessor};
+use super::accessor_pair::{descriptor_from, own_accessor, pair_from};
 pub(crate) use holder_edit::HolderEdit;
 #[cfg(test)]
 mod holder_route_tests;
@@ -105,7 +106,7 @@ fn object_proto_key_holder() -> *const ObjectHeader {
     let word = unsafe { (*intrinsic).parent_class_id };
     // A zero startup stand-in proves nothing about an already built but
     // unsealed intrinsic (including runtime fixtures).
-    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
+    if crate::codegen_abi::is_ordinary_record_word(word) {
         return std::ptr::null();
     }
     crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
@@ -240,26 +241,6 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 
 pub(crate) use super::key_attrs::AttrsEdit;
 
-/// A single DATA-descriptor install through the funnel.
-pub(crate) fn note_data_descriptor_target(obj: usize, key: &str, attrs: PropertyAttrs) {
-    note_descriptor_target_edits(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
-}
-
-/// An ACCESSOR install through the funnel. The keys record which halves are
-/// present, never the getter/setter identities, which differ per receiver
-/// (zod binds a fresh closure per schema) and live with the receiver.
-pub(crate) fn note_accessor_descriptor_target(obj: usize, key: &str, acc: &AccessorDescriptor) {
-    note_accessor_descriptor_target_bytes(obj, key.as_bytes(), acc);
-}
-
-pub(crate) fn note_accessor_descriptor_target_bytes(
-    obj: usize,
-    key: &[u8],
-    acc: &AccessorDescriptor,
-) {
-    note_descriptor_target_edits(obj, &[AttrsEdit::Accessor(key, acc.get != 0, acc.set != 0)]);
-}
-
 /// EK §3.1, the descriptor row: an install on an array index takes that
 /// slot out of the array's dense prefix. Every install entry calls this with
 /// the receiver itself, before it maps an array to its named bag (after
@@ -278,30 +259,16 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
     if let Some(edit) = &function {
         edit.materialize_data_keys(edits);
     }
-    let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
-    if crate::typedarray_hook_slots::lookup_typed_array_kind(obj).is_some() {
-        return;
-    }
-    unsafe {
-        // A write: prove the owner is a GC allocation before touching its
-        // header or keys (`attrs_live_in_keys_for_install`).
-        if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
-            let header = header.as_ptr();
-            if crate::gc_type_is_object!((*header).obj_type) {
-                // The header bit mirrors the resulting shape: "some key entry
-                // is non-default". The edits decide it: an install whose
-                // attributes are all default (`writable`, `enumerable` and
-                // `configurable` all true) leaves the shape a plain key add
-                // and sets no bit; a bit an earlier entry needed is set
-                // already. An empty edit list is a birth whose keys carry
-                // their attributes (`note_attrs_born_with_keys`).
-                if edits.is_empty() || edits.iter().any(|e| !e.leaves_default()) {
-                    (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
-                }
-                super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
-            }
+    let target = HolderEdit::target_of(&function, obj);
+    // A function's store is never a typed array (by type).
+    if let KeyTarget::Object(o) = target {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(o as usize).is_some() {
+            return;
         }
     }
+    // SAFETY: the target is the install's holder; the leaf proves it is a
+    // GC object before it touches its header or keys.
+    unsafe { target.note_descriptors(edits) }
 }
 
 /// The receiver-level bookkeeping of a descriptor install, for an object
@@ -318,21 +285,50 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
     get_property_attrs_bytes(obj, key.as_bytes())
 }
 
+/// A function's `prototype` in its slot has its birth attributes (w1 e0 c0).
+/// Asked only of a holder whose attributes are not its own keys.
+#[inline(always)]
+unsafe fn prototype_slot_attrs(obj: usize, key: &[u8]) -> bool {
+    key == b"prototype"
+        && crate::closure::is_closure_ptr(obj)
+        && crate::closure::props::prototype_slot_holds_key(obj)
+}
+
 pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<PropertyAttrs> {
     unsafe {
         let route = descriptor_route(obj);
-        let bag = route.bag;
+        let bag = match route.target {
+            KeyTarget::Object(bag) => bag,
+            KeyTarget::Function(p) => {
+                if let Some(entry) = crate::closure::props::fn_own_key_entry(p, key) {
+                    return Some(PropertyAttrs {
+                        bits: super::key_attrs::entry_to_attr_bits(entry),
+                    });
+                }
+                std::ptr::null_mut()
+            }
+        };
         if !bag.is_null() {
             let entry = super::key_attrs::object_key_entry(bag, key);
             let keys = super::object_keys(bag);
-            if entry != 0
-                || (bag as usize != obj
-                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some())
-            {
+            if entry != 0 {
                 return Some(PropertyAttrs {
                     bits: super::key_attrs::entry_to_attr_bits(entry),
                 });
             }
+            if bag as usize != obj {
+                if super::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some() {
+                    return Some(PropertyAttrs {
+                        bits: super::key_attrs::entry_to_attr_bits(entry),
+                    });
+                }
+                // A separate bag missed: a function's `prototype` may be in its slot.
+                if prototype_slot_attrs(obj, key) {
+                    return Some(PropertyAttrs::new(true, false, false));
+                }
+            }
+        } else if prototype_slot_attrs(obj, key) {
+            return Some(PropertyAttrs::new(true, false, false));
         }
         if !route.integrity_array.is_null() {
             return std::str::from_utf8(key)
@@ -441,8 +437,7 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     ) else {
         return true;
     };
-    let bag = descriptor_route(addr).bag;
-    !bag.is_null() && super::key_attrs::object_key_entry(bag, bytes) != 0
+    descriptor_route(addr).target.key_entry(bytes) != 0
 }
 
 include!("descriptor_state/skip_key.rs");
@@ -776,11 +771,7 @@ pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) ->
         if !accessor && !route.integrity_array.is_null() {
             return true;
         }
-        let bag = route.bag;
-        if bag.is_null() {
-            return false;
-        }
-        let summary = super::key_attrs::object_summary(bag);
+        let summary = route.target.summary();
         if accessor {
             summary & super::key_attrs::SUMMARY_ACCESSOR != 0
         } else {
@@ -880,17 +871,19 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     );
     note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
-    let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
-    crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
-    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
-    note_data_descriptor_target(obj, &key, attrs);
-    // Charter step 3: an ordinary object's attributes live with its keys
-    // (recorded by the funnel above) and nowhere else.
-    if unsafe {
-        crate::closure::is_closure_ptr(obj) || super::key_attrs::attrs_live_in_keys_for_install(obj)
-    } {
-        return;
+    if let Some(edit) = &byte_edit {
+        // Other attributes for a function's `prototype` live with its key in
+        // its bag: the slot gives the key up before they are recorded there.
+        if key == "prototype" && attrs.bits != PropertyAttrs::new(true, false, false).bits {
+            edit.prototype_leaves_slot();
+        }
     }
+    let target = HolderEdit::target_of(&byte_edit, obj);
+    target.note_named_mutation(key.as_bytes());
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    // Charter step 3: the attributes live with the holder's keys (recorded by
+    // the funnel) and nowhere else.
+    target.note_edits(&[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
 }
 
 /// Install a group of data descriptors without exposing intermediate states.
@@ -928,7 +921,10 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
         super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
         "descriptor",
     );
-    let bag = unsafe { descriptor_holder(obj) };
+    let bag = match unsafe { owner_key_target(obj) } {
+        KeyTarget::Function(p) => return unsafe { clear_function_attrs(p, key.as_bytes()) },
+        KeyTarget::Object(bag) => bag,
+    };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
             & super::key_attrs::ENTRY_ATTR_MASK
@@ -937,13 +933,26 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
         return;
     }
     let edit = HolderEdit::new(obj);
-    let obj = edit.as_ref().map_or(obj, |e| e.bag as usize);
+    let obj = HolderEdit::object_holder(&edit, obj);
     if unsafe { super::key_attrs::object_key_entry(obj as *const ObjectHeader, key.as_bytes()) }
         & super::key_attrs::ENTRY_ATTR_MASK
         != 0
     {
         super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
         note_descriptor_target_edits(obj, &[AttrsEdit::ClearData(key.as_bytes())]);
+    }
+}
+
+/// [`clear_property_attrs`] on a function's own store.
+#[inline(never)]
+unsafe fn clear_function_attrs(p: usize, key: &[u8]) {
+    if crate::closure::props::fn_key_entry(p, key) & super::key_attrs::ENTRY_ATTR_MASK == 0 {
+        return;
+    }
+    let _edit = HolderEdit::for_closure(p);
+    if crate::closure::props::fn_key_entry(p, key) & super::key_attrs::ENTRY_ATTR_MASK != 0 {
+        super::prop_plan::prop_plan_epoch_bump_for_owner(p);
+        crate::closure::props::fn_note_edits(p, &[AttrsEdit::ClearData(key)]);
     }
 }
 
@@ -954,11 +963,13 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
 
 pub(crate) fn get_accessor_descriptor_bytes(obj: usize, key: &[u8]) -> Option<AccessorDescriptor> {
     unsafe {
-        let bag = descriptor_route(obj).bag;
-        if bag.is_null() {
-            return None;
+        match descriptor_route(obj).target {
+            KeyTarget::Object(bag) if bag.is_null() => None,
+            KeyTarget::Object(bag) => own_accessor(bag as usize, key).map(descriptor_from),
+            KeyTarget::Function(p) => {
+                crate::closure::props::fn_own_accessor_entry(p, key).map(descriptor_from)
+            }
         }
-        own_accessor(bag as usize, key).map(descriptor_from)
     }
 }
 
@@ -1004,25 +1015,16 @@ pub(crate) fn get_handle_property_attrs(handle: usize, key: &str) -> Option<Prop
 /// per-index attribute checks. No owner index or descriptor-map scan exists.
 pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
     unsafe {
-        let bag = descriptor_route(owner).bag;
-        !bag.is_null()
-            && super::key_attrs::object_summary(bag)
-                & (super::key_attrs::SUMMARY_NON_WRITABLE
-                    | super::key_attrs::SUMMARY_NON_ENUMERABLE
-                    | super::key_attrs::SUMMARY_NON_CONFIGURABLE)
-                != 0
+        descriptor_route(owner).target.summary()
+            & (super::key_attrs::SUMMARY_NON_WRITABLE
+                | super::key_attrs::SUMMARY_NON_ENUMERABLE
+                | super::key_attrs::SUMMARY_NON_CONFIGURABLE)
+            != 0
     }
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
-    unsafe {
-        let bag = descriptor_route(obj).bag;
-        if bag.is_null() {
-            Vec::new()
-        } else {
-            super::key_attrs::object_accessor_key_names(bag)
-        }
-    }
+    unsafe { descriptor_route(obj).target.accessor_names() }
 }
 
 /// #2766: resolve an accessor *getter* closure for `(value, key)` if one is
@@ -1090,6 +1092,13 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
             return None;
         }
         let current = f64::from_bits(current_handle.get_nanbox_u64());
+        // A typed array answers a canonical numeric key itself, never from its chain.
+        let owner = unsafe { extract_obj_ptr(current) } as usize;
+        if crate::typedarray_props::is_typed_array_owner(owner)
+            && crate::typedarray_props::typed_array_canonical_index_validity(owner, &name).is_some()
+        {
+            return None;
+        }
         let proto = crate::object::js_object_get_prototype_of(current);
         if unsafe { extract_obj_ptr(proto) }.is_null() {
             return None;
@@ -1134,8 +1143,7 @@ pub(crate) unsafe fn json_object_getter_value(
 
 /// A per-key holder shape query; no owner index or string allocation.
 pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
-    let bag = descriptor_route(owner).bag;
-    !bag.is_null() && super::key_attrs::object_key_is_accessor(bag, key)
+    descriptor_route(owner).target.key_is_accessor(key)
 }
 
 /// Store an accessor descriptor for (obj, key).
@@ -1156,19 +1164,23 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
         )],
     );
     let function = HolderEdit::new(obj);
-    let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
+    let target = HolderEdit::target_of(&function, obj);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    let in_keys = unsafe { target.attrs_live_in_keys() };
     let previous = if in_keys {
-        unsafe { own_accessor(obj, key.as_bytes()) }
+        unsafe { target.own_accessor_pair(key.as_bytes()) }
     } else {
         None
     };
-    note_accessor_descriptor_target(obj, &key, &acc);
+    target.note_edits(&[AttrsEdit::Accessor(
+        key.as_bytes(),
+        acc.get != 0,
+        acc.set != 0,
+    )]);
     if in_keys {
         // Charter step 3: the pair lives in the key's slot.
-        unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
-        note_accessor_function_replaced(obj, &key, previous, pair_from(&acc));
+        unsafe { target.store_accessor_pair(key.as_bytes(), Some(pair_from(&acc))) };
+        target.accessor_replaced(key.as_bytes(), previous, pair_from(&acc));
         return;
     }
 }
@@ -1180,16 +1192,8 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
 /// primed on and validates only the holder's ShapeId and the pair's address,
 /// which a new pair could reuse once the old one dies (premise 5 of "Weak
 /// entries", `method_site/read_holder.rs`).
-fn note_accessor_function_replaced(
-    obj: usize,
-    key: &str,
-    previous: Option<super::accessor_pair::Accessor>,
-    now: super::accessor_pair::Accessor,
-) {
-    note_accessor_function_replaced_bytes(obj, key.as_bytes(), previous, now);
-}
-
-fn note_accessor_function_replaced_bytes(
+#[inline]
+pub(crate) fn note_accessor_function_replaced_bytes(
     obj: usize,
     key: &[u8],
     previous: Option<super::accessor_pair::Accessor>,
@@ -1247,22 +1251,19 @@ pub(crate) fn install_fresh_accessor_property(
         )],
     );
     let function = HolderEdit::new(obj);
-    let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
+    let target = HolderEdit::target_of(&function, obj);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     // One edit covers the pair: the keys record both halves, and a key that
     // is not yet own arrives WITH them (one trie edge; an in-place append on
     // the tip of an attribute backing).
-    note_descriptor_target_edits(
-        obj,
-        &[
-            AttrsEdit::Accessor(key.as_bytes(), acc.get != 0, acc.set != 0),
-            AttrsEdit::Data(key.as_bytes(), attrs.bits),
-        ],
-    );
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    target.note_edits(&[
+        AttrsEdit::Accessor(key.as_bytes(), acc.get != 0, acc.set != 0),
+        AttrsEdit::Data(key.as_bytes(), attrs.bits),
+    ]);
+    let in_keys = unsafe { target.attrs_live_in_keys() };
     if in_keys {
         // The pair lives in the key's ordinary value slot.
-        unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
+        unsafe { target.store_accessor_pair(key.as_bytes(), Some(pair_from(&acc))) };
         return;
     }
 }
@@ -1275,7 +1276,10 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
         super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
         "descriptor",
     );
-    let bag = unsafe { descriptor_holder(obj) };
+    let bag = match unsafe { owner_key_target(obj) } {
+        KeyTarget::Function(p) => return unsafe { clear_function_accessor(p, key.as_bytes()) },
+        KeyTarget::Object(bag) => bag,
+    };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
             & super::key_attrs::ENTRY_ACCESSOR
@@ -1284,13 +1288,27 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
         return;
     }
     let edit = HolderEdit::new(obj);
-    let obj = edit.as_ref().map_or(obj, |e| e.bag as usize);
+    let obj = HolderEdit::object_holder(&edit, obj);
     if unsafe {
         super::key_attrs::object_key_is_accessor(obj as *const ObjectHeader, key.as_bytes())
     } {
         super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
         note_descriptor_target_edits(obj, &[AttrsEdit::ClearAccessor(key.as_bytes())]);
-        unsafe { store_own_accessor(obj, key, None) };
+        unsafe { super::overflow::home::ObjHome::store_accessor_pair(obj, key.as_bytes(), None) };
+    }
+}
+
+/// [`clear_accessor_descriptor`] on a function's own store.
+#[inline(never)]
+unsafe fn clear_function_accessor(p: usize, key: &[u8]) {
+    if crate::closure::props::fn_key_entry(p, key) & super::key_attrs::ENTRY_ACCESSOR == 0 {
+        return;
+    }
+    let _edit = HolderEdit::for_closure(p);
+    if crate::closure::props::fn_key_is_accessor(p, key) {
+        super::prop_plan::prop_plan_epoch_bump_for_owner(p);
+        crate::closure::props::fn_note_edits(p, &[AttrsEdit::ClearAccessor(key)]);
+        crate::closure::props::fn_store_accessor_pair(p, key, None);
     }
 }
 
@@ -1325,31 +1343,28 @@ pub(crate) fn set_builtin_accessor_pair_bytes(
     crate::closure::shape::note_function_own_state_changed(obj);
     note_element_install(obj, &[AttrsEdit::Data(key, attrs.bits)]);
     let function = HolderEdit::new(obj);
-    let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
+    let target = HolderEdit::target_of(&function, obj);
     let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    let in_keys = unsafe { target.attrs_live_in_keys() };
     // An empty pair is a builtin accessor its static layout declares and no
     // installer has filled yet (the global object is born on
     // `GLOBAL_OBJECT`): this install is the declaration's first, not a
     // replacement of functions a read could have resolved through.
     let previous = if in_keys {
-        unsafe { own_accessor(obj, key) }
+        unsafe { target.own_accessor_pair(key) }
             .filter(|p| *p != super::accessor_pair::Accessor::default())
     } else {
         None
     };
-    note_descriptor_target_edits(
-        obj,
-        &[
-            AttrsEdit::Accessor(key, acc.get != 0, acc.set != 0),
-            AttrsEdit::Data(key, attrs.bits),
-        ],
-    );
+    target.note_edits(&[
+        AttrsEdit::Accessor(key, acc.get != 0, acc.set != 0),
+        AttrsEdit::Data(key, attrs.bits),
+    ]);
     if in_keys {
         // Charter step 3: the pair lives in the key's slot.
-        unsafe { super::accessor_pair::store_own_accessor_bytes(obj, key, Some(pair)) };
-        note_accessor_function_replaced_bytes(obj, key, previous, pair);
+        unsafe { target.store_accessor_pair(key, Some(pair)) };
+        target.accessor_replaced(key, previous, pair);
         return;
     }
 }
@@ -1360,6 +1375,16 @@ pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: Propert
 }
 
 pub(crate) fn set_builtin_property_attrs_bytes(obj: usize, key: &[u8], attrs: PropertyAttrs) {
+    // A function's `prototype` slot implies exactly these attributes.
+    if key == b"prototype"
+        && attrs.bits == PropertyAttrs::new(true, false, false).bits
+        && unsafe {
+            crate::closure::is_closure_ptr(obj)
+                && crate::closure::props::prototype_slot_holds_key(obj)
+        }
+    {
+        return;
+    }
     // A function born with this key's attributes (its bag's key entry
     // already says so): nothing changes.
     if unsafe { function_key_has_attrs_bytes(obj, key, attrs) } {
@@ -1384,9 +1409,7 @@ unsafe fn function_key_has_attrs_bytes(obj: usize, key: &[u8], attrs: PropertyAt
     if entry == 0 || !crate::closure::is_closure_ptr(obj) {
         return false;
     }
-    let bag = crate::closure::props::bag_of(obj);
-    !bag.is_null()
-        && super::key_attrs::object_key_entry(bag, key) == entry
+    crate::closure::props::store_key_entry(obj, key) == Some(entry)
         && crate::closure::props::bag_has_own(obj, key)
 }
 
@@ -1482,7 +1505,10 @@ pub(crate) unsafe fn holder_key_names(bag: *const ObjectHeader, enumerable: bool
 #[cfg(test)]
 pub(crate) fn clear_object_descriptors(obj: usize) {
     unsafe {
-        let bag = descriptor_route(obj).bag;
+        let bag = match descriptor_route(obj).target {
+            KeyTarget::Object(bag) => bag,
+            KeyTarget::Function(p) => return crate::closure::props::fn_clear_descriptors(p),
+        };
         if bag.is_null() {
             return;
         }
@@ -1493,9 +1519,15 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
     }
 }
 
-/// The ordinary holder reached by a value's own-property storage edge.
-#[inline]
-pub(crate) unsafe fn descriptor_holder(owner: usize) -> *mut ObjectHeader {
-    let bag = descriptor_route(owner).bag;
-    bag as *mut ObjectHeader
+/// The own-key target reached by a value's own-property storage edge.
+#[inline(always)]
+pub(crate) unsafe fn holder_target(owner: usize) -> KeyTarget {
+    descriptor_route(owner).target
+}
+
+/// [`holder_target`] behind one out-of-line body, for cold edits that
+/// match the owner kind once (the clear_* pair).
+#[inline(never)]
+pub(crate) unsafe fn owner_key_target(owner: usize) -> KeyTarget {
+    descriptor_route(owner).target
 }

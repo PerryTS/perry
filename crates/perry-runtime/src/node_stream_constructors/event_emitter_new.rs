@@ -9,7 +9,6 @@
 //! emitter lives in native memory, and the collector moves it like any other
 //! object.
 use super::*;
-use crate::codegen_abi::LayoutWord;
 use crate::value::JSValue;
 
 /// The export declaration owns its constructor and prototype decoration.
@@ -66,47 +65,7 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
         return None;
     }
     // SAFETY: a live closure cell (its header says so).
-    let bag = unsafe { (*(addr as *const crate::closure::ClosureHeader)).props };
-    // SAFETY: as above, for the bag object.
-    let bag_header = unsafe { crate::value::addr_class::try_read_gc_header(bag as usize) }?;
-    if crate::gc_type_is_not_object!(bag_header.obj_type)
-        || bag_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
-    }
-    // SAFETY: a live ordinary object; nothing below allocates.
-    unsafe {
-        const SPILL: u32 = 1 << 31;
-        let encoded = {
-            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
-            if !meta.is_null() && (*meta).elements != 0 {
-                return None;
-            }
-            let id = (*bag).shape_word();
-            if !crate::object::shapes::is_site_matchable_layout_word(id) {
-                return None;
-            }
-            let record = crate::object::shapes::shape_record_for_word(LayoutWord(id))?;
-            let pos = record.own_data_position_of_value(0, b"prototype")??;
-            pos | if pos >= record.live_inline_slot_count() {
-                SPILL
-            } else {
-                0
-            }
-        };
-        // The shape assigns the slot's canonical storage.
-        let slot = (encoded & !SPILL) as usize;
-        let bits = if encoded & SPILL == 0 {
-            let fields =
-                crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
-            *fields.add(slot)
-        } else {
-            let spill = (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).spill
-                as *const crate::array::ArrayHeader;
-            *crate::array::array_elements_ptr(spill).add(slot)
-        };
-        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
-    }
+    unsafe { crate::closure::props::own_data_prototype(addr) }
 }
 
 /// `Object.create(<export>.prototype)`: an ordinary object born on the

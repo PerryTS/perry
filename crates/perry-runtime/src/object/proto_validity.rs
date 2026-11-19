@@ -355,6 +355,13 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // lineage (`shapes::stamp_born_prototype_root`) already carries a
         // shape no ordinary object carries, and nothing has seen it yet: the
         // private lineage the transition would mint is the one it has.
+        // An inherited read walks layouts: a prototype keeps its index keys
+        // in its layout, so a plain elements store moves there first.
+        let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+                crate::array::plain_elements::leave(object);
+            }
+        });
         let born = flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
             && crate::object::shapes::object_on_born_prototype_lineage(object);
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
@@ -552,3 +559,15 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;
+
+/// Image replay (R1): position the prototype-serial counter so that the next draw is `next`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_prototype_serial_next(next: u64) {
+    PROTOTYPE_SERIAL_NEXT.store(next, Ordering::Relaxed);
+}
+
+/// Image replay (R1): the address of the prototype-serial counter.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_prototype_serial_cell() -> usize {
+    PROTOTYPE_SERIAL_NEXT.as_ptr() as usize
+}

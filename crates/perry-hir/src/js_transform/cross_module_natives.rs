@@ -869,7 +869,7 @@ pub fn fix_native_instance_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_native_instance_expr(value, native_instances, local_id_instances);
             }
         }

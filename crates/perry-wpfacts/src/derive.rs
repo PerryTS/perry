@@ -2261,7 +2261,7 @@ fn judge(
         }
         if !m.unit_mode {
             if let Some(name) = intrinsic_callee(m, toks, prim) {
-                if !m.realm_held {
+                if !m.realm_held || !intrinsic_replaceable(m, toks) {
                     return (
                         vec![name],
                         false,
@@ -3261,6 +3261,11 @@ fn judge_store(
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }
+            // BIRTH1 rule GS: a program-owned key of the global object.
+            _ if global_user_sets(m, t, key, s.key) => {
+                receivers.push(m.tok_name(t));
+                sets += 1;
+            }
             // R9STORE5 (i): a builtin function value or an Array.
             _ if builtin_store_sets(m, t, key, s.key) => {
                 receivers.push(m.tok_name(t));
@@ -3366,8 +3371,16 @@ fn judge_store(
     let verdict = match verdict {
         // A slot store's receiver test sends only a nullish base to the
         // complete [[Set]] (rule N); another primitive arm composes with the
-        // generic store a KnownObjectStore keeps.
-        v @ (Verdict::T0Mono | Verdict::T0Set | Verdict::KnownObjectStore | Verdict::ProxyTrap)
+        // generic store a KnownObjectStore keeps. COVER3: a store proven to
+        // call one setter takes the same receiver test (`undefined` / `null`
+        // only): the nullish base goes to the complete [[Set]], whose
+        // ToObject throws the TypeError after the value was evaluated
+        // (6.2.5.6 step 3.a, 13.15.2); an object calls the setter.
+        v @ (Verdict::T0Mono
+        | Verdict::T0Set
+        | Verdict::KnownObjectStore
+        | Verdict::ProxyTrap
+        | Verdict::AccessorSet)
             if nullish_beside && (prim_obj == 0 || matches!(v, Verdict::KnownObjectStore)) =>
         {
             receivers.extend(prim_throw_arms(prim));
@@ -3443,6 +3456,43 @@ fn builtin_store_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             && m.accessor_keys.get(&t).is_none_or(|k| !k.contains(&a))
     };
     builtin_chain_plain(m, key, a) && (crate::builtins::builtin_value_sets(m, t, a) || array())
+}
+
+/// BIRTH1 rule GS: a named store of `key` (atom `a`) onto the global
+/// object `t` (`globalThis.k = v`, `g["k"] = v` with `g` the global object)
+/// where `key` is a program-owned global (`global_user_key`: neither the
+/// realm's `%Global%` declarations nor `Object.prototype` list it) adds or
+/// overwrites an own data property and runs no user code. The global
+/// object is an ordinary extensible object (ECMA-262 19, 9.1.1.4); 10.1.9.2
+/// OrdinarySetWithOwnDescriptor: its own `key`, if any, is a writable data
+/// property, since only program stores make it (the solver models each as
+/// the global's field, `solve/store.rs`, while `native_written` is false:
+/// no store into ⊤ and no unknown writer names the key; in whole-program
+/// mode an escaped global records no any-key write, owner decision
+/// 2026-11-18, closed world 11-14) and no accessor, definition, freeze,
+/// seal or preventExtensions reaches it (`accessors`, `accessor_keys`,
+/// `hard`); else the chain `%Object.prototype%` lacks the key
+/// and no program write or definition reaches a builtin prototype under it
+/// (`object_proto_unwritten`, `builtin_protos_unwritten`), so step 2.e
+/// CreateDataProperty creates it. Not `__proto__`, not a private name, no
+/// interpreted code, not unit mode (another unit's writes are unseen).
+fn global_user_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let star = m.atom_index.get(crate::STAR_KEY).copied();
+    crate::builtins::global_object(m, t)
+        && !m.unit_mode
+        && !m.interp_runs
+        && !m.is_private_atom(a)
+        && key != "__proto__"
+        && crate::builtins::global_user_key(m, key)
+        && !crate::builtins::native_written(m, t, a)
+        && !m.hard.contains_key(&t)
+        && !m.super_relink.contains(&t)
+        && !m.accessors.contains_key(&(t, a))
+        && m.accessor_keys
+            .get(&t)
+            .is_none_or(|k| !k.iter().any(|&k| k == a || Some(k) == star))
+        && object_proto_unwritten(m, a)
+        && builtin_protos_unwritten(m, None, a).is_ok()
 }
 
 /// R9STORE6 item 3: `t.length = n`, `t` an Array exotic object
@@ -4369,6 +4419,28 @@ fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
 /// [`Verdict::IntrinsicCall`]: the callee set is one `BuiltinFn` token of a
 /// named native (closed markers stand for their callers' values beside
 /// them), no ⊤, no primitive. Its name. The caller adds `!realm_held`.
+/// May unknown code that holds the realm (`realm_held`) replace the
+/// intrinsic callee in `toks` (`intrinsic_callee`)? A built-in prototype's
+/// member, yes. A namespace member (`Math.max`), no: under the closed world
+/// (owner 2026-11-14) that code is the runtime's natives, which replace no
+/// member of a namespace (owner decision 2026-11-18, R-GLOBAL step 3); only
+/// interpreted code or an unseen module does.
+fn intrinsic_replaceable(m: &Model, toks: &[Tok]) -> bool {
+    if m.interp_runs || m.unseen_module_runs {
+        return true;
+    }
+    !toks.iter().all(|&t| {
+        m.closed_marker(t)
+            || matches!(
+                m.toks[t as usize],
+                TokKind::BuiltinFn(Native::Member { identity, .. })
+                    if identity
+                        .rsplit_once('.')
+                        .is_some_and(|(n, _)| crate::builtins::ns_by_name(n).is_some())
+            )
+    })
+}
+
 fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
     if prim != 0 {
         return None;
@@ -4475,9 +4547,12 @@ pub(crate) fn namespace_callee(
     if m.unit_mode {
         return no("units mode: the facts-off rule decides");
     }
-    // CLOSED-WORLD PREMISE (owner 2026-11-14).
-    if m.realm_held {
-        return no("unknown code holds the realm and may replace the member");
+    // CLOSED-WORLD PREMISE (owner 2026-11-14): unknown code that holds the
+    // realm is the runtime's natives, which replace no namespace member
+    // (owner decision 2026-11-18, R-GLOBAL step 3); interpreted code and an
+    // unseen module may.
+    if m.realm_held && (m.interp_runs || m.unseen_module_runs) {
+        return no("interpreted code holds the realm and may replace the member");
     }
     if !crate::builtins::members::ns_declares(ns, &member) {
         return no("not a member the realm declares on the namespace");

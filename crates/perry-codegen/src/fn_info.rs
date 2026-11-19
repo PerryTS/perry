@@ -36,7 +36,22 @@ use crate::runtime_abi::{
 /// `#[repr(C)]` layout; LLVM lays it out for the target exactly as the
 /// runtime's C layout does, 32-bit pointers included).
 pub(crate) const INFO_TYPE: &str =
-    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }";
+    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }";
+
+/// The own slots a body's function objects are born with
+/// (`JsFunctionInfo::own_slots`): one, `prototype`, for a body that owns it
+/// from birth (a constructing plain function, a generator, an async
+/// generator); none for an arrow, an async function or a method.
+pub(crate) fn own_slots_for_flags(flags: u32) -> u16 {
+    use crate::runtime_abi::{FN_ARROW, FN_ASYNC, FN_GENERATOR, FN_NON_CONSTRUCTOR};
+    if flags & FN_GENERATOR != 0 {
+        1
+    } else if flags & (FN_ARROW | FN_ASYNC | FN_NON_CONSTRUCTOR) != 0 {
+        0
+    } else {
+        1
+    }
+}
 
 /// The info symbol of `body` (no `@`).
 pub(crate) fn info_symbol(body: &str) -> String {
@@ -268,6 +283,11 @@ impl FnInfoState {
         self.request(body)
     }
 
+    /// The body-kind flags recorded for `body` so far (0: none).
+    pub(crate) fn flags_of(&self, body: &str) -> u32 {
+        self.facts.get(body).map_or(0, |f| f.flags)
+    }
+
     /// The facts of a body this module defines.
     pub(crate) fn facts_mut(&mut self, body: &str) -> &mut FnInfoFacts {
         self.facts.entry(body.to_string()).or_default()
@@ -449,7 +469,7 @@ fn render_definition(
     // A masked 64-bit symbol difference is not a portable object relocation.
     let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
     let info_type = if compressed_in_mask {
-        INFO_TYPE.strip_suffix("i64 }").unwrap().to_string() + "{ i32, i32 } }"
+        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "{ i32, i32 }, i16 }"
     } else {
         INFO_TYPE.to_string()
     };
@@ -465,7 +485,8 @@ fn render_definition(
     let value = format!(
         "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
          ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 {plain}, \
-         {mask_field} }}",
+         {mask_field}, i16 {own} }}",
+        own = own_slots_for_flags(flags),
         params = saturate_u16(def.params as u64),
         plain = plain_params(def.params, flags),
         rest = facts.rest_fixed,
@@ -545,7 +566,7 @@ mod tests {
     fn call_entry_offset_describes_native_and_wasm_optional_tails() {
         let mut facts = FnInfoFacts::default();
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 8);
+        assert_eq!(facts.call_entry_offset_words, 9);
         facts.source = Some(RetainedSource {
             global: "source".into(),
             offset: 0,
@@ -569,13 +590,13 @@ mod tests {
             symbols: 0,
         });
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 13);
+        assert_eq!(facts.call_entry_offset_words, 14);
         facts.set_call_entry("entry".into(), true);
         assert_eq!(facts.call_entry_offset_words, 11);
         // Framed source widens the tail by one more 8-byte unit.
         facts.source.as_mut().unwrap().decoded_offset = Some(7);
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 14);
+        assert_eq!(facts.call_entry_offset_words, 15);
         facts.set_call_entry("entry".into(), true);
         assert_eq!(facts.call_entry_offset_words, 12);
     }
@@ -620,7 +641,7 @@ mod tests {
                 assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
                 assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
             } else {
-                assert!(ir.contains("i16, { i32, i32 } }, i32, i32 }"), "{ir}");
+                assert!(ir.contains("i16, { i32, i32 }, i16 }, i32, i32 }"), "{ir}");
                 assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
             }
         }
@@ -688,7 +709,7 @@ mod tests {
             lines,
             vec![format!(
                 "@perry_closure_m__3$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__3, \
-                 i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0 }}",
+                 i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0, i16 0 }}",
                 FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
             )]
         );
@@ -722,7 +743,7 @@ mod tests {
             lines,
             vec![format!(
                 "@perry_closure_m__9$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__9, \
-                 i16 0, i16 0, i32 {}, i32 0, i32 3, ptr null, i64 17, ptr null, i32 0, i16 0, i16 1, i64 0 }}",
+                 i16 0, i16 0, i32 {}, i32 0, i32 3, ptr null, i64 17, ptr null, i32 0, i16 0, i16 1, i64 0, i16 0 }}",
                 FN_ARROW | FN_COMPILED_BODY | FN_RETURNS_CAPTURE
             )]
         );
@@ -762,7 +783,7 @@ mod tests {
                 .find(|l| l.starts_with(&format!("@{body}$info ")))
                 .unwrap();
             line.rsplit(", i16 ")
-                .next()
+                .nth(1)
                 .unwrap()
                 .split(',')
                 .next()
@@ -901,7 +922,7 @@ mod tests {
         assert!(line.contains("ptr @perry_closure_m__9$info to i64"));
         assert!(line.contains("ptr null, i32 31"));
         assert!(line.contains("i64 sub (i64 ptrtoint"));
-        assert!(line.ends_with(")) }"));
+        assert!(line.ends_with(")), i16 1 }"));
     }
 
     #[test]
@@ -925,7 +946,7 @@ mod tests {
             .remove(0);
         assert!(line.contains(&format!("{{ {INFO_TYPE}, i32, i32 }}")));
         assert!(line.contains("ptr @perry_closure_m__9$versioned"));
-        assert!(line.contains("i64 5 }"));
+        assert!(line.contains("i64 5, i16 1 }"));
         assert!(line.ends_with("i32 31 }"));
     }
 }

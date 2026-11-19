@@ -108,6 +108,11 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // A plain object's index key lives in its elements store (or takes one):
+    // no index key becomes a layout property beside a store.
+    if unsafe { crate::array::plain_elements::set_by_name(obj, key, value) } {
+        return;
+    }
     let obj_bits = obj as u64;
     let normalized_obj = if (obj_bits >> 48) == 0x7FFD {
         (obj_bits & crate::value::POINTER_MASK) as *mut ObjectHeader

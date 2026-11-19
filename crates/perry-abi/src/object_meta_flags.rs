@@ -45,6 +45,13 @@ pub const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 /// a cleared family field reads as family 0, `Object`, which withdraws every
 /// family.
 pub const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
+/// `ObjectMeta::elements` holds a PLAIN object's index store: a holey
+/// `GC_TYPE_ARRAY` whose element `i` is own data property `i` (writable,
+/// enumerable, configurable), with no exotic `length`. Clear on an
+/// Array-subclass instance, whose store is its Array elements and `length`.
+/// Set and cleared only with the store itself (`array::subclass_elements`),
+/// and projected into the shape kind (`ShapeObjectKind::OrdinaryIndexed`).
+pub const OBJECT_META_FLAG_PLAIN_ELEMENTS: u64 = 1 << 4;
 /// Shift of the sealed intrinsic's family (6 bits): a realm `BuiltinProto`
 /// (0..16; the host family Buffer is sealed as a runtime prototype), a
 /// builtin namespace (17..32, `builtin_namespace`), the realm
@@ -71,8 +78,7 @@ pub const OBJECT_META_IMAGE_KEYS_MASK: u64 = 0xFFFF;
 //   bit 1      packed-numeric payload valid       (#8690)
 //   bit 2      packed-numeric u32 entity proof    (#8690)
 //   bit 3      sealed intrinsic prototype         (here, #11915)
-//   bit 4      free (was the class-evaluation bit)  how a prototype was linked
-//                                                   is not a fact: its shape is
+//   bit 4      plain-object index store           (here)
 //   bit 5      this object is a prototype         (here)
 //   bit 6      exotic read receiver               (here)
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***
@@ -96,7 +102,5 @@ pub const OBJECT_META_IMAGE_KEYS_MASK: u64 = 0xFFFF;
 // per-object fact needs a new word, not a new flag — and #10826 returning
 // `OBJ_FLAG_STABLE_TOMBSTONES` is the only bit expected back from either.
 //
-// Note also that bit 4 is absent from #8690's own bit map in
-// `array/subclass.rs`: it was added later and that comment was not updated.
-// The same documentation failure one layer down from the one that put a mark
-// on `_reserved` bit 13. If you add a bit here, update BOTH maps.
+// If you add a bit here, update BOTH maps (this one and #8690's in
+// `array/subclass.rs`).

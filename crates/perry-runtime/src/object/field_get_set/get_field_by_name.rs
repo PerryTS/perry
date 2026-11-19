@@ -989,8 +989,11 @@ fn get_field_by_name_past_data_probe(
     if matches!(read_kind, NamedReadKind::Native | NamedReadKind::Other) {
         #[cfg(test)]
         super::exotic_named_read::note_probe(0, obj);
+        // A Node `Buffer` reads its members through `Buffer.prototype` first,
+        // in the buffer arm of the object tail.
         if let Some(addr) =
             crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+                .filter(|&addr| !crate::buffer::is_node_buffer(addr))
         {
             if !key.is_null() {
                 unsafe {
@@ -1009,6 +1012,23 @@ fn get_field_by_name_past_data_probe(
                     if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
                     {
                         let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
+                        // `buffer` and `BYTES_PER_ELEMENT` are inherited: an
+                        // instance with a recorded `[[Prototype]]` (a subclass
+                        // instance, a relinked one) reads them through that
+                        // chain, not from its kind.
+                        if matches!(key_bytes, b"buffer" | b"BYTES_PER_ELEMENT") {
+                            if let Some(proto_bits) =
+                                super::super::prototype_chain::object_static_prototype(addr)
+                            {
+                                if proto_bits == crate::value::TAG_NULL {
+                                    return JSValue::undefined();
+                                }
+                                return super::super::prototype_chain::resolve_inherited_field(
+                                    addr, key,
+                                )
+                                .unwrap_or_else(JSValue::undefined);
+                            }
+                        }
                         match key_bytes {
                             b"length" => {
                                 let len = crate::typedarray_hook_slots::js_typed_array_length(ta);

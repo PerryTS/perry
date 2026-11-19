@@ -81,6 +81,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     | "atob"
                     | "gc"
             ) && ctx.lookup_local(n).is_none()
+                && !crate::patched_builtins::global_function_patched(n)
             {
                 return Ok(Expr::String("function".to_string()));
             }

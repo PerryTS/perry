@@ -74,6 +74,19 @@ pub extern "C" fn js_put_value_set(
     }
     let target_bits = target.to_bits();
     let key_bits = key.to_bits();
+    // An integral Number key naming an own writable data property: the probe
+    // store of its atom (`runtime_read_site::store_integer_key`).
+    if target_bits == receiver.to_bits()
+        && unsafe {
+            crate::object::field_get_set::runtime_read_site::store_integer_key(
+                target_bits,
+                key,
+                value,
+            )
+        }
+    {
+        return value;
+    }
     // DEC 243(3): a symbol key on an ordinary receiver takes the probe store,
     // as an atom key does.
     if target_bits == receiver.to_bits()

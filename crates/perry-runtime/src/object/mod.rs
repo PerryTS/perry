@@ -331,6 +331,7 @@ pub(crate) use spill::{
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
+pub(crate) mod typed_array_chain;
 mod typed_array_define;
 pub(crate) mod typed_array_proto_thunks;
 mod util_types;
@@ -759,6 +760,7 @@ impl ObjectHotTables {
 /// faster than the hash overhead (memory access, cache footprint).
 const KEYS_INDEX_THRESHOLD: u32 = 32;
 
+pub(crate) mod key_owner;
 #[path = "keys_lookup.rs"]
 mod keys_lookup;
 mod object_keys;
@@ -1789,7 +1791,10 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 
 pub(crate) mod meta_flags;
 pub(crate) use meta_flags::OBJECT_META_FLAG_NATIVE_ALIAS;
-pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE};
+pub(crate) use meta_flags::{
+    OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE,
+    OBJECT_META_FLAG_PLAIN_ELEMENTS,
+};
 
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;

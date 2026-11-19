@@ -308,7 +308,7 @@ The Actions sidebar has six repository workflows. GitHub also registers four ind
 | **CI** | Required core CI and auxiliary security/coverage checks; defaults to `suite=core` |
 | **Extended Tests** (`compiler-runtime.yml`) | Compiler/runtime, compatibility, integration, and performance; choose a category such as `suite=compatibility`, one suite such as `suite=simctl-tests`, or `suite=all` |
 | **GC** | Six collector suites; choose an individual suite or `suite=all` |
-| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment |
+| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment. Every 30 minutes `auto-label` adds `platform:`, `area:` and `type:` labels to new issues and PRs (`scripts/auto_label.py`) |
 | **Publish to npm / GitHub Release** | Compiler packages, platform archives, and GitHub releases |
 | **Publish to npm / @perryts/hono-server** | Independent adapter package publication |
 

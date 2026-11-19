@@ -195,12 +195,13 @@ console.log(outer.a, outer.b, outer.c, process.argv[2]);
     assert!(!v.is_empty() && v.iter().all(|v| v == "ProxyTrap"), "{v:?}");
 }
 
-// K9: an operation the hook does not model (`Object.keys`: [[OwnPropertyKeys]];
-// a call of the proxy: [[Call]]) keeps the old path: E9, and no trap verdict.
+// K9: an operation the hook does not model (a call of the proxy: [[Call]],
+// twice) keeps the old path: E9, and no trap verdict.
 #[test]
 fn px3_k9_unmodeled_operation_keeps_old_path() {
     let src = r#"const p: any = new Proxy({ a: 1 } as any, { get: (_t: any, k: any) => "g:" + String(k) });
-console.log(p.a, Object.keys(p), process.argv[2]);
+try { p(); } catch (x) {}
+console.log(p.a, process.argv[2]);
 "#;
     let (tops, _) = solve(src);
     assert!(e9(&tops), "{tops:?}");
@@ -519,4 +520,128 @@ console.log(x.a, x.z, process.argv[2]);
         !v.is_empty() && v.iter().all(|v| !v.contains("E9") && !v.contains("escape")),
         "{v:?}"
     );
+}
+
+// PROXY11 (RED on 16c4381812: a Proxy serialized by JSON, or held by a
+// console argument the formatter's `%j` serializes, degraded to "E9 Proxy
+// target (implicit)"; the cube program's first ⊤, bloom's CSSStyleDeclaration
+// Proxy in an Element's `_style`). SerializeJSONProperty runs the Proxy's
+// internal methods: the `toJSON` [[Get]], [[OwnPropertyKeys]],
+// [[GetOwnProperty]] and the member [[Get]]s, each its trap or the target's.
+const JSONP: &str = r#"const N = String(process.argv[2]);
+function style(host: { tag: string }): any {
+  const api: Record<string, unknown> = { cssText: "a" + N, item: (i: number): string => "i" + i };
+  return new Proxy(api, {
+    get(t: any, key: any) { if (typeof key !== "string") return t[key]; if (key in api) return t[key]; return host.tag + key; },
+    set(t: any, key: any, v: any) { t[key] = String(v); return true; },
+    has(_t: any, key: any) { return typeof key === "string" && key in api; },
+  });
+}
+class El { tag = "div" + N; _style: any = null; get style(): any { if (this._style === null) this._style = style(this); return this._style; } }
+const e = new El();
+e.style.color = "red";
+console.log(e);
+console.log({ s: e.style, n: N });
+console.log(JSON.stringify(e.style), e.tag);
+"#;
+
+#[test]
+fn proxy11_json_of_a_proxy_runs_its_internal_methods() {
+    let (tops, held) = solve(JSONP);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// A Proxy console argument itself: `%j`, ToPrimitive and the unwrapped show;
+// with `ownKeys` / `getOwnPropertyDescriptor` traps.
+#[test]
+fn proxy11_console_argument_proxy_with_key_traps() {
+    let src = r#"const N = String(process.argv[2]);
+const api: Record<string, unknown> = { a: "x" + N };
+const p: any = new Proxy(api, {
+  ownKeys(t: any) { return Reflect.ownKeys(t); },
+  getOwnPropertyDescriptor(t: any, k: any) { return { value: t[k], enumerable: true, configurable: true, writable: true }; },
+  get(t: any, k: any) { return k === "toJSON" ? undefined : t[k]; },
+});
+console.log(p);
+console.log(JSON.stringify([p, { q: p }]), N);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: an operation the rule does not model (a call of the Proxy) still
+// takes the old path: its target is E9.
+#[test]
+fn proxy11_keep_called_proxy_stays_e9() {
+    let src = JSONP.replace(
+        "console.log(e);",
+        "console.log(e);\ntry { (e.style as any)(); } catch (x) {}",
+    );
+    let (tops, _) = solve(&src);
+    assert!(e9(&tops), "{tops:?}");
+}
+
+// PROXY12 (RED on 8742219af8: "E9 Proxy target (fieldtruthy)", the cube
+// program's next op on bloom's CSSStyleDeclaration Proxy). A truthiness or
+// Boolean test of a Proxy's field reads it by [[Get]] (the get trap or the
+// target) and runs no other trap.
+const TRUTHY: &str = r#"const N = String(process.argv[2]);
+function style(host: { tag: string }): any {
+  const api: Record<string, unknown> = { cssText: "a" + N, flag: N === "x" };
+  return new Proxy(api, {
+    get(t: any, key: any) { if (typeof key !== "string") return t[key]; if (key in api) return t[key]; return host.tag + key; },
+    set(t: any, key: any, v: any) { t[key] = String(v); return true; },
+  });
+}
+class El { tag = "div" + N; _style: any = null; get style(): any { if (this._style === null) this._style = style(this); return this._style; } }
+const e = new El();
+const s: any = N === "y" ? null : e.style;
+if (s && s.color) console.log(s.color);
+if (s && s.flag === true) console.log(s.cssText);
+if (s && !s.missing) console.log(s.tag);
+"#;
+
+#[test]
+fn proxy12_field_truthy_of_a_proxy() {
+    let (tops, held) = solve(TRUTHY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: the same program with a call of the Proxy still takes the old path.
+#[test]
+fn proxy12_keep_called_proxy_stays_e9() {
+    let src = TRUTHY.replace(
+        "const e = new El();",
+        "const e = new El();\ntry { (e.style as any)(); } catch (x) {}",
+    );
+    let (tops, _) = solve(&src);
+    assert!(e9(&tops), "{tops:?}");
+}
+
+// PROXY12 R-PXKEYS (RED on the FieldTruthy head: "E9 Proxy target (implicit
+// OwnKeys: primitive container builtin)"): for-in, Object.keys and
+// Reflect.ownKeys of a Proxy run its ownKeys / getOwnPropertyDescriptor /
+// getPrototypeOf traps (or the target's own) and nothing else.
+#[test]
+fn proxy12_own_keys_of_a_proxy() {
+    let src = r#"const N = String(process.argv[2]);
+const api: Record<string, unknown> = { a: "x" + N, b: 2 };
+const p: any = new Proxy(api, {
+  ownKeys(t: any) { return Reflect.ownKeys(t); },
+  getOwnPropertyDescriptor(t: any, k: any) { return { value: t[k], enumerable: true, configurable: true, writable: true }; },
+  getPrototypeOf(_t: any) { return null; },
+  get(t: any, k: any) { return t[k]; },
+});
+const q: any = new Proxy({ c: N }, {});
+const out: string[] = [];
+for (const k in p) out.push(k);
+for (const k in q) out.push(k);
+console.log(out.join(","), Object.keys(p).length, Object.getOwnPropertyNames(q).length, Reflect.ownKeys(p).length);
+"#;
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }

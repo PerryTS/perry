@@ -124,6 +124,7 @@ impl WasmModuleEmitter {
             "math_clz32",
             "math_imul",
             "closure_new",
+            "closure_this",
             "closure_set_capture",
             "closure_call_0",
             "closure_call_1",
@@ -155,6 +156,18 @@ impl WasmModuleEmitter {
             "class_method_home",
             "class_extends_null",
             "class_instanceof_value",
+            "class_eval_begin",
+            "class_eval_slot",
+            "class_eval_caps",
+            "class_eval_static",
+            "class_eval_static_computed",
+            "class_eval_block",
+            "class_eval_end",
+            "class_define_computed",
+            "class_static_define",
+            "class_static_this",
+            "class_init_computed_field",
+            "to_property_key",
             "reflect_apply",
             "class_set_method",
             "class_call_method",
@@ -412,6 +425,14 @@ impl WasmModuleEmitter {
                     }
                 }
                 self.collect_strings_in_stmts(&setter.body);
+            }
+            for member in &class.computed_members {
+                for param in &member.function.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
+                self.collect_strings_in_stmts(&member.function.body);
             }
             for field in &class.fields {
                 self.intern_string(&field.name);
@@ -683,14 +704,18 @@ impl WasmModuleEmitter {
             Expr::StaticFieldGet {
                 class_name,
                 field_name,
-            }
-            | Expr::StaticFieldSet {
-                class_name,
-                field_name,
-                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);
+            }
+            Expr::StaticFieldSet {
+                class_name,
+                field_name,
+                value,
+            } => {
+                self.intern_string(class_name);
+                self.intern_string(field_name);
+                self.collect_strings_in_expr(value);
             }
             Expr::StaticMethodCall {
                 class_name,
@@ -747,11 +772,13 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(index);
             }
             Expr::ObjectSpread { parts } => {
-                for (key_opt, val) in parts {
-                    if let Some(k) = key_opt {
+                for part in parts {
+                    if let ObjectPart::Define(k, _) = part {
                         self.intern_string(k);
                     }
-                    self.collect_strings_in_expr(val);
+                    for e in part {
+                        self.collect_strings_in_expr(e);
+                    }
                 }
             }
             Expr::ArraySpread(elements) => {
