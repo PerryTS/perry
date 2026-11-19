@@ -1882,7 +1882,6 @@ pub(crate) fn note_family_relink(previous: LayoutWord, id: LayoutWord) {
 #[path = "layout_desc/diagnostics.rs"]
 mod diagnostics;
 pub(crate) use diagnostics::diag_note_install;
-pub(crate) use diagnostics::family_diag_init;
 pub(crate) use diagnostics::family_diag_on;
 pub(crate) use diagnostics::family_diag_pairs_on;
 pub(crate) use diagnostics::install_cause;
@@ -1891,6 +1890,7 @@ use diagnostics::note_other_key;
 pub(crate) use diagnostics::note_out_of_order_pair;
 pub(crate) use diagnostics::note_run;
 use diagnostics::FAMILY_DIAG;
+pub(crate) use diagnostics::{family_diag_init, family_diag_report_before_immediate_exit};
 
 #[path = "layout_desc/store.rs"]
 mod store;
