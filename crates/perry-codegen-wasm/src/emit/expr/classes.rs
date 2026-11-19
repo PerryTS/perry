@@ -17,6 +17,10 @@ const BUILTIN_ERROR_PARENTS: &[&str] = &[
     "URIError",
 ];
 
+/// Built-in constructors whose instances hold internal state (entries, a length, a
+/// time value). A user class extending one is instantiated as the built-in object.
+const HOST_BASE_PARENTS: &[&str] = &["Map", "Set", "WeakMap", "WeakSet", "Array", "Date"];
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_classes(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
@@ -308,15 +312,30 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
+                let host_base = self.host_base_parent(class_name);
                 self.emit_frame_begin(func, 2);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
-                self.emit_memcall(func, "class_new", 2);
+                match &host_base {
+                    // The instance is the built-in object itself, so it has the internal
+                    // state (a Map's entries, an Array's length) the built-in's methods use.
+                    Some(base) => {
+                        self.emit_store_arg(func, 1, &Expr::String(base.to_string()));
+                        self.emit_memcall(func, "class_new_host", 2);
+                    }
+                    None => {
+                        self.emit_store_const(func, 1, args.len() as f64);
+                        self.emit_memcall(func, "class_new", 2);
+                    }
+                }
                 let ctor = self
                     .emitter
                     .class_ctor_map
                     .get(class_name.as_str())
                     .copied();
+                if host_base.is_some() && ctor.is_none() {
+                    // The implicit constructor forwards its args to the built-in's.
+                    self.emit_host_super_init(func, args);
+                }
                 if self.extends_builtin_error(class_name) {
                     // An Error's message is "" until a `super(msg)` sets it. With no
                     // compiled constructor, the implicit one forwards its args there.
@@ -419,10 +438,19 @@ impl<'a> FuncEmitCtx<'a> {
                         .current_class
                         .as_ref()
                         .is_some_and(|c| self.extends_builtin_error(c));
+                let host_parent = !called
+                    && self
+                        .current_class
+                        .as_ref()
+                        .is_some_and(|c| self.host_base_parent(c).is_some());
                 if error_parent {
                     // `super(msg)` into a built-in Error sets this.message.
                     func.instruction(&Instruction::LocalGet(0));
                     self.emit_error_super_init(func, args);
+                    func.instruction(&Instruction::Drop);
+                } else if host_parent {
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_host_super_init(func, args);
                     func.instruction(&Instruction::Drop);
                 } else if !called {
                     // No parent constructor found, drop args
@@ -890,6 +918,38 @@ impl FuncEmitCtx<'_> {
             name = parent;
         }
         false
+    }
+
+    /// The built-in at the end of `class_name`'s chain of user classes, when it is one
+    /// whose instances carry internal state that a plain object lacks.
+    fn host_base_parent(&self, class_name: &str) -> Option<&'static str> {
+        let mut name = class_name;
+        while let Some(parent) = self.emitter.class_parent_map.get(name) {
+            if !self.emitter.user_classes.contains(parent) {
+                return HOST_BASE_PARENTS
+                    .iter()
+                    .copied()
+                    .find(|base| *base == parent.as_str());
+            }
+            name = parent;
+        }
+        None
+    }
+
+    /// Stack: [instance] -> [instance], with the built-in's constructor applied to
+    /// `args` on the instance, as `super(...args)` does.
+    fn emit_host_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_frame_begin(func, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_store_arg(func, 1, &Expr::Array(args.to_vec(), None));
+        self.emit_memcall(func, "host_super_init", 2);
     }
 
     /// Stack: [instance] -> [instance], with the instance's message set from `args[0]`

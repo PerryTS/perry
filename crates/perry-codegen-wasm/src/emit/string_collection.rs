@@ -142,6 +142,8 @@ impl WasmModuleEmitter {
             "array_some",
             "array_every",
             "class_new",
+            "class_new_host",
+            "host_super_init",
             "tagged_template",
             "template_raw",
             "class_ref",

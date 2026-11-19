@@ -2450,6 +2450,40 @@ const __memDispatch = {
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
+  // `new C()` where C's chain of user classes ends at the built-in `base` (Map, Array,
+  // ...): the built-in object itself, on C's prototype. The first prototype up the chain
+  // that inherits from Object.prototype is re-parented onto base's.
+  class_new_host: (className, base) => {
+    const Base = globalThis[base];
+    for (let c = String(className); c && c !== base; c = classParentTable[c]) {
+      const p = __classProto(c);
+      const up = Object.getPrototypeOf(p);
+      if (up === Base.prototype) break;
+      if (up === Object.prototype) {
+        Object.setPrototypeOf(p, Base.prototype);
+        break;
+      }
+    }
+    return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(String(className)));
+  },
+  // `super(...args)` into the built-in an instance from class_new_host was made from.
+  host_super_init: (obj, args) => {
+    const a = Array.isArray(args) ? args : [];
+    if (obj instanceof Map || obj instanceof WeakMap) {
+      const set = obj instanceof Map ? Map.prototype.set : WeakMap.prototype.set;
+      if (a[0] != null) for (const [k, v] of a[0]) set.call(obj, k, v);
+    } else if (obj instanceof Set || obj instanceof WeakSet) {
+      const add = obj instanceof Set ? Set.prototype.add : WeakSet.prototype.add;
+      if (a[0] != null) for (const v of a[0]) add.call(obj, v);
+    } else if (Array.isArray(obj)) {
+      const made = Array(...a);
+      obj.length = made.length;
+      for (const i of Object.keys(made)) obj[i] = made[i];
+    } else if (obj instanceof Date) {
+      obj.setTime(new Date(...a).getTime());
+    }
+    return obj;
+  },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
   class_eval_begin: (className, ctorIdx) => {

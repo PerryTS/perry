@@ -1226,6 +1226,36 @@ console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k"
     );
 }
 
+// An instance of a class extending Map, Set, WeakMap, Array or Date is that built-in
+// object, initialized by `super(...)` or the implicit constructor, so the built-in's
+// methods and getters work on it. Expected output is Node's.
+#[test]
+fn a_subclass_of_a_stateful_builtin_is_that_builtin() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class M extends Map<string, number> {}
+class S extends Set<number> {}
+class Counted extends Map<string, number> { constructor() { super([["init", 1]]); this.set("x", 5); } extra() { return this.size * 10; } }
+class Deeper extends M {}
+class A extends Array<number> {}
+class D extends Date {}
+class W extends WeakMap<object, number> {}
+const m = new M([["p", 1]]); m.set("a", 2);
+const s = new S([1, 2]); s.add(2); s.add(3);
+const c = new Counted();
+const d = new Deeper([["q", 9]]);
+const a = new A(); a.push(4); a.push(5);
+const k = {}; const w = new W([[k, 7]]);
+console.log(m.size + " " + m.get("a") + " " + m.has("p") + " " + Array.from(m.keys()).join(",") + " " + (m instanceof M) + " " + (m instanceof Map));
+console.log(s.size + " " + s.has(3) + " " + c.size + " " + c.extra() + " " + c.get("init") + " " + d.size + " " + d.get("q") + " " + (d instanceof M));
+console.log(a.length + " " + a.join("-") + " " + Array.isArray(a) + " " + new D(0).getUTCFullYear() + " " + w.get(k) + " " + w.has({}));
+"#
+        ),
+        "2 2 true p,a true true\n3 true 2 20 1 1 9 true\n2 4-5 true 1970 7 false"
+    );
+}
+
 // `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
 // 0..1 scale, mapped onto CSS 100..900 and clamped.
 #[test]
