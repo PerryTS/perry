@@ -1487,7 +1487,6 @@ mod cycle_locked_member;
 mod date_methods;
 mod declared_constructor;
 mod declared_global_write;
-mod delegate_step;
 mod ek;
 mod field_read_calls;
 mod gen_next;
