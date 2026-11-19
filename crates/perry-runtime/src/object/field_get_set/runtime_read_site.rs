@@ -282,16 +282,14 @@ pub(crate) unsafe fn probe_integer_key(
     let text = integer_key_text(n, &mut buf);
     let index = (0..i64::from(u32::MAX)).contains(&n);
     // An index key of an object with an elements store (an Array subclass
-    // instance, an object that took index stores) lives in that store, which
-    // the probe does not read: the complete read answers. Only an ordinary
-    // object is handed an index key (an Array's index is an element read).
+    // instance, a plain object's index store) lives in that store, which the
+    // probe does not read: the complete read answers. Without a store, an
+    // index key an object owns is a layout key (an Array subclass's
+    // shape-carried elements included), which the probe reads as it is.
     if index {
         // A1_UNPROVEN: record-first: runtime read site (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        let class_id = (*obj).class_id;
-        if (!meta.is_null() && (*meta).elements != 0)
-            || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
-        {
+        if !meta.is_null() && (*meta).elements != 0 {
             return Err(obj);
         }
     }
