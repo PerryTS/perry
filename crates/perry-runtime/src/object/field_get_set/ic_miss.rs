@@ -290,8 +290,14 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
                 if gc_kind == Some(crate::gc::GC_TYPE_SYMBOL) {
+                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                    // Symbol.prototype declares no `description` accessor, so
+                    // the symbol answers it before the prototype read.
+                    if key_bytes_are(key, b"description") {
+                        return crate::symbol::js_symbol_description(receiver);
+                    }
                     return super::primitive_canonical_get(
-                        crate::value::js_nanbox_pointer(obj as i64),
+                        receiver,
                         crate::value::js_nanbox_string(key as i64),
                         "Symbol",
                     );

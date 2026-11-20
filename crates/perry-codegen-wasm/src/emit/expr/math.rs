@@ -70,6 +70,17 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::F64Max);
                 func.instruction(&Instruction::I64ReinterpretF64);
             }
+            // `Math.min(...xs)` / `Math.max(...xs)`, the one-spread form HIR keeps compact.
+            Expr::MathMinSpread(src) | Expr::MathMaxSpread(src) => {
+                let bridge = if matches!(expr, Expr::MathMinSpread(_)) {
+                    "math_min_spread"
+                } else {
+                    "math_max_spread"
+                };
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, src);
+                self.emit_memcall(func, bridge, 1);
+            }
             Expr::MathRandom => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "math_random", 0);

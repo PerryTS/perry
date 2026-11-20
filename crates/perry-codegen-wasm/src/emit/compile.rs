@@ -807,6 +807,9 @@ impl WasmModuleEmitter {
         for (_, module) in modules {
             for class in &module.classes {
                 self.user_classes.insert(class.name.clone());
+                if declares_no_constructor(class, &classes) {
+                    self.implicit_ctor_classes.insert(class.name.clone());
+                }
                 // Record parent class relationship
                 if let Some(parent) = &class.extends_name {
                     self.class_parent_map

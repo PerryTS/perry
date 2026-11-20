@@ -53,11 +53,30 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 2, key);
                 self.emit_memcall(func, "object_super_get", 3);
             }
+            Expr::ObjectCreate(proto, props) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, proto);
+                match props {
+                    Some(props) => self.emit_store_arg(func, 1, props),
+                    None => self.emit_store_const(func, 1, f64::from_bits(TAG_UNDEFINED)),
+                }
+                self.emit_memcall(func, "object_create", 2);
+            }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, obj);
                 self.emit_store_arg(func, 1, proto);
                 self.emit_memcall(func, "object_set_prototype_of", 2);
+            }
+            Expr::ObjectGetPrototypeOf(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "object_get_prototype_of", 1);
+            }
+            Expr::ReflectGetPrototypeOf(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "reflect_get_prototype_of", 1);
             }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
@@ -200,10 +219,9 @@ impl<'a> FuncEmitCtx<'a> {
                             .get(&func_idx)
                             .copied()
                             .unwrap_or(func_idx);
-                        self.emit_frame_begin(func, 2);
+                        self.emit_frame_begin(func, 1);
                         self.emit_store_const(func, 0, table_idx as f64);
-                        self.emit_store_const(func, 1, 0.0);
-                        self.emit_memcall(func, "closure_new", 2);
+                        self.emit_memcall(func, "function_value", 1);
                         return true;
                     }
                 }
@@ -478,9 +496,10 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             },
             Expr::In { property, object } => {
+                // JS evaluates the property before the object.
                 self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, object);
                 self.emit_store_arg(func, 1, property);
+                self.emit_store_arg(func, 0, object);
                 self.emit_memcall_i32(func, "object_has_property", 2);
                 // Convert i32 to NaN-boxed boolean
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(

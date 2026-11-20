@@ -276,6 +276,16 @@ pub(crate) extern "C" fn array_of_thunk(
     crate::array::array_of_full(c, &vals)
 }
 
+pub(crate) extern "C" fn array_from_async_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    input: f64,
+    map_fn: f64,
+    this_arg: f64,
+) -> f64 {
+    crate::promise::async_step::array_from_async_full(this.as_f64(), input, map_fn, this_arg)
+}
+
 pub(crate) extern "C" fn number_is_nan_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
