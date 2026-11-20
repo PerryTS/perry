@@ -1,6 +1,6 @@
 # RFC: Type-Driven Representation Selection — unbox-by-default for statically-typed values
 
-**Status:** Draft / RFC, v2 (2026-07-27)
+**Status:** Draft / RFC, v2 (2026-07-27); amended 2026-11-08 (§10, one whole-program representation, accepted)
 **Scope:** all value classes — scalars, strings, objects, typed arrays, closures — not only numeric code.
 **Driving benchmark:** bcryptjs `_encipher` (real, unrolled) — must compile to unboxed native and beat V8.
 
@@ -351,6 +351,8 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
 
 ## 6. Phasing (one design; each phase sound on its own)
 
+> Superseded for scalars, the ABI and heap slots by §10.8 (P0–P5).
+
 - **Phase 0** — Representation as a first-class IR property + inference skeleton; `Boxed` default
   everywhere → zero behavior change; scaffolding + tests.
 - **Phase 1** — Canonical unboxed **scalar locals** (typed slots + typed loop phis; drop scalar
@@ -414,3 +416,192 @@ Measured during the bcryptjs `_encipher` performance investigation (2026-07-27; 
   and help *looped, statically-typed* kernels (3541 → 1005 ms on a typed reproduction), but were
   0% on real (untyped-param) bcryptjs and net-negative on unrolled code — the empirical case for a
   structural, rather than incremental, fix.
+
+## 10. Amendment: one whole-program representation (2026-11-08)
+
+**Status:** accepted by the owner on 2026-11-08. This section overrides the conflicting
+parts of §5.2 (profitability term), §5.4 (tuple specialization and budgets) and §6 (the
+per-phase, per-local selection). §5.3 operation semantics, the §5.5 acceptance contracts,
+§5.6 GC rules and the §5.7 Phase 4b rejection all stay in force.
+
+### 10.1 Why
+
+The chess beat-Bun round (Perry #14262, #14294, #14295) measured what per-site selection
+costs. Every attempt to add i32 values *locally* (int32 params, int32 call results, signed
+index params, a relaxed index split) moved the conversions to the neighbouring boundary and
+changed the total by −1 % to −6 %, sometimes by nothing. The remaining gap is spread over the
+whole program, not concentrated in a single loop:
+
+| workload (macOS arm64, instructions retired) | Perry | Bun AOT | ratio |
+|---|---:|---:|---:|
+| search 250000 | 41.36 G | 12.71 G | 3.3× |
+| perft 4 | 1.055 G | 0.375 G | 2.8× |
+| evaluate 100000 | 3.538 G | 1.433 G | 2.5× |
+| legal 10000 | 1.465 G | 0.436 G | 3.4× |
+
+The cause is structural. The ABI is boxed, numbers have two encodings (raw double and
+INT32-tagged), and codegen picks a representation per function, per local and per site. So
+one value is boxed for a call, unboxed by the callee, tag-tested on every read for the INT32
+case, and re-boxed at the return. Each local decision is correct. The sum is the gap.
+
+### 10.2 The rule
+
+1. **wpfacts is the only representation authority.** Every value-holding node gets exactly one
+   representation from the whole-program facts: bindings, temporaries, parameters, returns,
+   call results, object fields and array elements. Codegen reads it and obeys it. Codegen
+   never picks a representation itself: no per-site heuristics, no profitability rule, no
+   local promotion.
+2. **Representation-typed signatures are the internal ABI.** A function's parameters and
+   return are passed in their representations. A boxed adapter exists only for a function
+   that escapes to code the analysis cannot see.
+3. **A proven Number is a canonical double.** It is never INT32-boxed, at rest or in flight,
+   so no reader of a proven Number tests the INT32 tag.
+
+Conversions exist only at **boundaries**: native/FFI calls, the dynamic constructs listed in
+§5.2 (soundness barriers), and ⊤ nodes, meaning nodes whose facts are unknown. Inside proven
+code a value keeps the representation it was given from production to last use.
+
+A **conversion** here means re-encoding one value because two pieces of code disagree on its
+representation: box, unbox, tag test, retag. An *operation* whose JavaScript semantics compute
+in another domain is not a conversion. `a / b` on two I32 operands is a double division
+(§5.3), and the `sitofp` it emits belongs to the operation, the same as `x | 0` emitting
+ToInt32.
+
+### 10.3 Representations and how wpfacts assigns them
+
+The scalar lattice is `I32 ⊑ F64 ⊑ Boxed` (Bool and the pointer representations of §5.1
+follow the same rule in later phases). `Boxed` is ⊤ and always sound.
+
+- **F64**: the node's values are all Numbers (the `prims` fact is exactly `{number}`).
+- **I32**: F64 holds, *and* the interval fact proves every value integral and inside
+  `[-2^31, 2^31)`, *and* the node carries **int demand** (below).
+- **Boxed**: everything else, including every ⊤ node.
+
+**Int demand** replaces the §5.2 profitability term with a fact. It is a backward property
+computed by the solver: a node has int demand when an int consumer is reachable from it along
+copy edges. Int consumers are array and typed-array indices, bitwise operands, `Math.imul`,
+int typed-array stores, and switch/compare chains against int constants. A counter that feeds
+only double arithmetic (the `15_mandelbrot` case from #7128) has no int demand, so it stays F64
+and pays no conversion. A chess square feeds indices on every path, so it is I32 everywhere it
+flows. Because demand is a whole-program fact, it gives the same answer in the caller, the
+callee, the field and the array element. That shared answer is what removes the churn.
+
+**The ring rule.** `+` and `-` on I32 operands have a result that is exact in a double (below
+2^33). When the interval fact proves that result inside i32, the node is I32 and lowers to a
+native `add`/`sub` with no check. When every consumer of the result is a ToInt32 context, the
+operation lowers to a wrapping i32 `add`/`sub`, which equals ToInt32 of the exact double. `*`
+qualifies only when the interval proves `|a·b| < 2^53`, because `(a*b)|0` is not
+`Math.imul(a, b)` above that bound. No other operation is inferred as integral (§5.3 still
+holds).
+
+**Joins.** A copy edge from an I32 node into an F64 node is a widening (`sitofp`, exact). Under
+this rule widening can only happen where the program itself merges an integer with a
+non-integer, which is a real join rather than a representation disagreement. A copy edge into
+`Boxed` is a boundary (§10.6).
+
+### 10.4 Representation-typed ABI
+
+- Each function has **one signature**: the representation of each parameter node and of the
+  return node. Parameter nodes already join every caller's arguments, so one signature serves
+  every resolved call. That replaces the §5.4 specialization tuples, the per-function and
+  module budgets, `PERRY_SPECIALIZED_ABI_MAX` and the boxed-plus-one-tuple scheme: there is
+  nothing to bound, because there are no clones.
+- A resolved call (the call graph edge is known, so the callee set is exactly known)
+  passes and receives raw values. A call that resolves to several callees with different
+  signatures calls through the join of those signatures, computed by the solver as a
+  property of the callee set.
+- **Boxed adapters** are emitted only for escaping functions: a function whose value reaches a
+  ⊤ node, a native callback, a dynamic call site, a module export consumed outside the program,
+  or a reflective surface. The adapter unboxes under the §5.5 contracts and calls the typed
+  body. Non-escaping functions have no boxed entry at all.
+- Methods follow the same rule (receiver plus parameters). This absorbs the approved "Phase 2
+  for methods" work: `spec_abi` on methods becomes the general ABI, not a special case.
+- GC: raw pointer parameters keep the §5.6 spill-to-shadow-slot rule. Raw scalars are not roots.
+
+### 10.5 Canonical doubles
+
+- Proven code never creates an INT32-boxed Number. When an F64 or I32 value is boxed at a
+  boundary, it boxes as a raw double.
+- Proven readers never test the INT32 tag. An INT32 box can only arrive from a boundary (native
+  code, the runtime's generic paths, a ⊤ value), and the §5.5 F64 acceptance contract
+  canonicalizes it on entry.
+- Heap storage is already canonical on the proven paths: number fields are raw IEEE bits
+  (§5.7 4b, finding 1), `runtime_store_jsvalue_slot` canonicalizes INT32 stores (4b.2), and
+  `canonicalize_array_numeric_store_bits` does the same for arrays.
+
+### 10.6 Boundaries
+
+Boundaries are exactly these:
+
+- native/FFI calls, with the manifest-declared representations as the contract
+- §5.2's soundness barriers (eval, `with`, Proxy, accessors on proof-relevant objects,
+  reflection, `delete`, prototype mutation, catch joins)
+- ⊤ nodes
+- escaping-function adapters (§10.4)
+
+Every boundary is explicit in the IR, and a per-module dump lists them with their counts
+(§10.8, P0). A conversion anywhere else is a bug in the facts or a codegen site that is not yet
+following them; it is never a tuning choice.
+
+The chess engine (`~/projects/chess`) is closed by design. The owner confirmed on 2026-11-08
+that none of these boundaries should occur in its hot paths. That makes it the end-to-end test:
+**any boundary in a chess hot function is a defect to fix, not a cost to accept.**
+
+### 10.7 Fields and array elements
+
+A field node (per class field per allocation token) and an element node (per array token)
+carry a representation like any other node. Their layouts do not change:
+
+- **F64 fields** are already raw double slots. The fact removes the remaining read-side and
+  store-side checks on every receiver the facts cover, not only `Ptr<Shape>`-proven locals.
+- **`number[]` elements** are already raw f64. The facts replace the local
+  provenance-and-containment collector (`collectors/ptr_numarray.rs`) as the eligibility source,
+  so arrays that are passed to callees qualify as well.
+- **Int32Array and other int typed-array elements** are I32 at rest already.
+
+**Open point: I32 at rest.** An I32 field still stores double bits, so an I32-rep read is a
+`fcvtzs`. There are two ways to close this. (a) Store i32 in the slot. That is the rejected 4b
+path: a third layout mask plus a probe at about 25 generic readers. (b) Keep double storage and
+make the read an operation of the field's representation. This RFC chooses **(b) by default**
+and reopens (a) only if P4 measures the read conversion as material on chess. Under the
+whole-program model, the generic readers would see an I32 slot only on objects the facts prove
+never reach them. That difference from the original 4b assessment is worth measuring, but it is
+not assumed.
+
+### 10.8 Phasing
+
+Each phase is sound on its own and ships with probes, parity tests, an env switch
+(`PERRY_WP_REP_<PHASE>=0` restores the previous behaviour), a changelog fragment, rustfmt and
+the file-size allowlist. Per the structural-only rule, no phase adds a cache, a side table or a
+memo: the representation is a field of the node's facts.
+
+- **P0: export.** wpfacts computes `rep` and the int-demand fact for every node and exports it
+  to codegen (bindings, params, returns, call results, fields, elements), with a dump and a
+  boundary census per module. No codegen change. Acceptance: chess and the tssrc corpus dumps
+  show which nodes are I32, F64 and Boxed, and tssrc compile RSS stays within +5 %.
+- **P1: locals and temporaries obey.** Binding slots, loop phis and expression temporaries
+  take the fact's representation, and the ring rule applies to `+ - *`. This subsumes
+  `facts_int32_locals` and the Phase 1 canonical-i32-locals collector.
+- **P2: typed signatures.** §10.4 for functions and methods, with boxed adapters only for
+  escaping functions. This retires `spec_abi_sites`, the tuple keys and the budgets.
+- **P3: canonical Numbers.** §10.5. Proven readers drop the INT32 tag test, and proven boxing
+  never emits INT32.
+- **P4: fields and elements.** §10.7, plus the measurement that decides the open point.
+- **P5: retire the heuristics.** Delete the §5.2 profitability term
+  (`collectors/repsel_benefit.rs`), the `$idx$i32` index-split clones, `spec_abi` tuples,
+  `facts_int32_locals` and the remaining per-site representation choices in codegen, so that
+  codegen has exactly one source for representation.
+
+### 10.9 Acceptance
+
+- **Chess, macOS instructions retired:** Perry is below Bun AOT on all four workloads (search
+  250000, perft 4, legal 10000, evaluate 100000). Peak RSS is no worse than today. The chess
+  source is not changed.
+- **Structural proof on chess:** in the post-`-O3` hot functions (move generation, make/unmake,
+  attack tests, evaluation, search) there are **zero** boxing or unboxing runtime calls,
+  **zero** INT32 tag tests, and no `sitofp`/`fptosi` except those that belong to an operation
+  (§10.2). The P0 boundary census for those functions is empty.
+- **Exactness:** the §7 gap corpus, conformance smoke and the §5.6.1 GC matrix show zero new
+  failures at every phase. Any new representation file is registered in the matrix corpus.
+- **Compile cost:** tssrc compile time and RSS are measured at every phase, with a budget of
+  +5 % RSS.
