@@ -135,37 +135,66 @@ pub fn start() -> i64 {
             return 0;
         }
 
-        // Set category to Record
+        // Record category in Measurement mode. The default mode runs the
+        // voice-processing chain (AGC, high-pass, noise reduction) on the
+        // built-in mics, which compresses levels and makes any SPL reading
+        // meaningless. Measurement mode is Apple's documented "minimal
+        // system-supplied signal processing" mode for metering apps; it is
+        // what the watchOS backend already uses.
         let category = objc2_foundation::NSString::from_str("AVAudioSessionCategoryRecord");
+        let mode = objc2_foundation::NSString::from_str("AVAudioSessionModeMeasurement");
+        let options: usize = 0;
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let _: bool = msg_send![session, setCategory: &*category error: &mut error];
+        let _: bool = msg_send![session, setCategory: &*category
+                                          mode: &*mode
+                                          options: options
+                                          error: &mut error];
         if !error.is_null() {
-            crate::ws_log!("[audio] failed to set audio session category");
+            crate::ws_log!("[audio] failed to set audio session category/mode");
             return 0;
         }
 
         // Activate the session
         let _: bool = msg_send![session, setActive: true error: &mut error];
 
-        // Request microphone permission
-        // On iOS, this shows the system permission dialog if not yet determined.
-        // The block is called asynchronously with the result.
-        // For simplicity, we proceed optimistically — if denied, the engine will fail to start.
-        let record_permission: i64 = msg_send![session, recordPermission];
-        // 0 = undetermined, 1 = denied, 2 = granted
-        if record_permission == 1 {
+        // Microphone permission. `recordPermission` is a FourCC-coded
+        // NSInteger, not 0/1/2:
+        //   undetermined = 'undt' (0x756E_6474)
+        //   denied       = 'deny' (0x6465_6E79)
+        //   granted      = 'grnt' (0x6772_6E74)
+        // The old `== 0` / `== 1` checks never matched, so the explicit
+        // request was never issued and the engine started before the user
+        // answered the implicit prompt (first launch read silence). Same fix
+        // as the watchOS backend. Prefer AVAudioApplication (iOS 17+), the
+        // non-deprecated API; fall back to AVAudioSession on older systems.
+        const PERM_GRANTED: usize = 0x6772_6E74; // 'grnt'
+        const PERM_DENIED: usize = 0x6465_6E79; // 'deny'
+
+        let record_permission: usize;
+        if let Some(app_cls) = AnyClass::get(c"AVAudioApplication") {
+            let app: *mut AnyObject = msg_send![app_cls, sharedInstance];
+            record_permission = msg_send![app, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () =
+                    msg_send![app_cls, requestRecordPermissionWithCompletionHandler: &*block];
+            }
+        } else {
+            record_permission = msg_send![session, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () = msg_send![session, requestRecordPermission: &*block];
+            }
+        }
+        if record_permission == PERM_DENIED {
             crate::ws_log!("[audio] microphone permission denied");
             return 0;
         }
-        if record_permission == 0 {
-            // Request permission - this will show the system dialog.
-            // Use a no-op block; the user calls audioStart() again after granting.
-            let permission_block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {
-                // Permission result handled on next audioStart() call
-            });
-            let _: () = msg_send![session, requestRecordPermission: &*permission_block];
+        if record_permission != PERM_GRANTED {
+            // Prompt is showing; the caller retries audioStart() and picks up
+            // the grant on a later tick.
             crate::ws_log!("[audio] requesting microphone permission");
-            return 0; // Caller should retry after permission is granted
+            return 0;
         }
 
         // Create AVAudioEngine
