@@ -290,7 +290,11 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
 #[no_mangle]
 pub extern "C" fn js_arraylike_flat(receiver: f64, depth: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver_handle = scope.root_nanbox_f64(receiver);
+    // ToObject(this) precedes ToNumber(depth), so a nullish receiver throws
+    // before depth's valueOf runs; boxing allocates, so depth is rooted first.
+    let depth_handle = scope.root_nanbox_f64(depth);
+    let receiver_handle = scope.root_nanbox_f64(super::generic::to_object(receiver));
+    let depth = depth_handle.get_nanbox_f64();
     let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
         1.0
     } else {

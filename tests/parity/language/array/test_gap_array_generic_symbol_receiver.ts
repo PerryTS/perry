@@ -29,6 +29,11 @@ try {
 } catch (e) {
   console.log("with", e instanceof RangeError);
 }
+try {
+  Reflect.apply(Array.prototype.flat, null, [{ valueOf() { throw new Error("depth first"); } }]);
+} catch (e) {
+  console.log("flat-null", e instanceof TypeError);
+}
 // The wrapper's prototype supplies array-like properties through ordinary Get.
 Object.defineProperty(Symbol.prototype, "length", { value: 1, configurable: true });
 Object.defineProperty(Symbol.prototype, "0", { value: "inherited", configurable: true });
