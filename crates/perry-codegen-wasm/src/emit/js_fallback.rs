@@ -954,8 +954,8 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(e, locals);
                 format!("({}, u64ToF64(TAG_UNDEFINED))", v)
             }
-            // The same bridges as the WASM `Delete` arms: `delete` must reach the property
-            // reference, not the value read through it.
+            // The bridges the WASM `Delete` arms in `emit/expr/objects.rs` call: `delete` must
+            // reach the property reference, not the value read through it.
             Expr::Delete(e) => match e.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
