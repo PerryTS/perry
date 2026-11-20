@@ -37,7 +37,7 @@ const arrow: any = Object.create(null, { x: { get: () => 7 } });
 const o: any = Object.create({}, {
   g: { get: function (this: any) { return this.q; }, enumerable: true },
   s: { set: function (this: any, v: number) { this.t = v * 2; } },
-  bad: { get: () => { throw new RangeError("no"); } },
+  bad: { get: () => { throw new RangeError("boom"); } },
 });
 o.q = 9;
 o.s = 3;
@@ -49,6 +49,6 @@ console.log([arrow.x, o.g, o.t, threw, Object.keys(o).join("+")].join(","));
 inAsync().then((v) => console.log("async " + v));
 "#
         ),
-        "7,9,6,no,g+q+t\nasync 4"
+        "7,9,6,boom,g+q+t\nasync 4"
     );
 }
