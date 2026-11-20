@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 
 import sys
@@ -241,10 +242,10 @@ class CategoryRoutingTests(unittest.TestCase):
                 matrix = (job.get("strategy") or {}).get("matrix") or {}
                 if not isinstance(matrix, dict):
                     matrix = {}
-                axes = [v for k, v in matrix.items() if k not in ("include", "exclude") and isinstance(v, list)]
-                legs = [dict(zip([k for k, v in matrix.items() if k not in ("include", "exclude") and isinstance(v, list)], combo))
-                        for combo in itertools.product(*axes)] if axes else []
-                legs += [leg for leg in matrix.get("include") or [] if isinstance(leg, dict)]
+                axes = {k: v for k, v in matrix.items() if k not in ("include", "exclude") and isinstance(v, list)}
+                # With axes, include entries merge into the combinations; alone, each is a leg.
+                legs = ([dict(zip(axes, combo)) for combo in itertools.product(*axes.values())] if axes
+                        else [leg for leg in matrix.get("include") or [] if isinstance(leg, dict)])
                 for step in job.get("steps", []):
                     uses = step.get("uses", "")
                     self.assertNotIn("Swatinem/rust-cache", uses, f"{name}/{job_id} bypasses perry-rust-cache")
@@ -259,7 +260,8 @@ class CategoryRoutingTests(unittest.TestCase):
                         restorers.append((key, f"{name}/{job_id}", signature))
                         continue
                     savers.setdefault(key, []).append((f"{name}/{job_id}", signature))
-                    runners = [str(job.get("runs-on")).replace("${{ matrix.os }}", str(leg.get("os"))) for leg in legs]
+                    runners = [re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", lambda m: str(leg.get(m.group(1))), str(job.get("runs-on")))
+                               for leg in legs]
                     if "matrix." not in key and len(set(runners)) < len(runners):
                         # rust-cache adds the OS and architecture, so only legs on one
                         # runner share the key; they may only if they build the same.
@@ -275,6 +277,18 @@ class CategoryRoutingTests(unittest.TestCase):
             self.assertIn(key, savers, f"{job} restores {key}, which no job saves")
             self.assertEqual(signature, savers[key][0][1], f"{job} cannot hit {key} saved by {savers[key][0][0]}")
 
+    def test_rust_cache_key_carries_the_weekly_epoch(self):
+        # cache-on-failure can save a near-empty entry that rust-cache never
+        # replaces; the epoch in the key bounds its life to a week.
+        import yaml
+        action = yaml.load(Path(".github/actions/perry-rust-cache/action.yml").read_text(), Loader=yaml.BaseLoader)
+        steps = action["runs"]["steps"]
+        self.assertTrue(any('PERRY_CACHE_EPOCH=$(date -u +%G-W%V)' in s.get("run", "") and "GITHUB_ENV" in s.get("run", "")
+                            for s in steps))
+        cache = next(s for s in steps if s.get("uses", "").endswith("Swatinem/rust-cache"))
+        self.assertIn("PERRY_CACHE_EPOCH", cache["with"]["env-vars"].split())
+        self.assertEqual(cache["with"]["cache-on-failure"], "true")
+
     def test_vendored_rust_cache_cleanup_keeps_listed_build_std_crates(self):
         # The "Perry patch" in the vendored rust-cache: without it every restore
         # rebuilds std, because build-std units are absent from cargo metadata.
@@ -285,7 +299,9 @@ class CategoryRoutingTests(unittest.TestCase):
         node = shutil.which("node")
         if node is None:
             self.skipTest("node is not installed")
-        dist = next(Path(".github/actions/perry/Swatinem/rust-cache/dist").glob("cleanup-*.js")).resolve()
+        chunks = sorted(Path(".github/actions/perry/Swatinem/rust-cache/dist").glob("cleanup-*.js"))
+        self.assertEqual(len(chunks), 1, "re-vendoring renamed the cleanup chunk; update this test")
+        dist = chunks[0].resolve()
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp, "target", "debug")
             entries = ["deps/libcore-1a.rlib", "deps/librustc_std_workspace_core-2b.rlib", "deps/libfoo-3c.rlib",
@@ -295,6 +311,7 @@ class CategoryRoutingTests(unittest.TestCase):
                 Path(profile, entry).parent.mkdir(parents=True, exist_ok=True)
                 Path(profile, entry).write_text("")
             script = Path(tmp, "clean.mjs")
+            # The bundle exports cleanTargetDir under the minified name `c` (see its export list).
             script.write_text(f"import {{ c as cleanTargetDir }} from {json.dumps(str(dist))};\n"
                               "await cleanTargetDir(process.argv[2], [], false);\n")
             env = dict(os.environ, PERRY_RUST_CACHE_KEEP="core rustc-std-workspace-core std")
