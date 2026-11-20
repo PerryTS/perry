@@ -43,12 +43,14 @@ o.q = 9;
 o.s = 3;
 let threw = "no";
 try { o.bad; } catch (e: any) { threw = e.message; }
+class Props { static f = { get: () => 8 }; }
+const fromClass: any = Object.create(null, Props as any);
 const later: any = { y: { get: () => 4 } };
 async function inAsync() { const a: any = Object.create(null, later); return a.y; }
-console.log([arrow.x, o.g, o.t, threw, Object.keys(o).join("+")].join(","));
+console.log([arrow.x, o.g, o.t, threw, Object.keys(o).join("+"), fromClass.f].join(","));
 inAsync().then((v) => console.log("async " + v));
 "#
         ),
-        "7,9,6,boom,g+q+t\nasync 4"
+        "7,9,6,boom,g+q+t,8\nasync 4"
     );
 }

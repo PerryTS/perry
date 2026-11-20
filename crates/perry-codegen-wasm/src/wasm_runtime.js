@@ -5908,12 +5908,12 @@ const hostCallbacks = new WeakMap();
 // copied, reading its fields once in ToPropertyDescriptor's order, so the caller's map
 // and descriptors stay as they are.
 function __hostDescriptors(props) {
-  if (props === null || typeof props !== 'object') return props;
+  if (!__holdsProperties(props)) return props;
   const descs = Object.create(null);
   for (const key of Reflect.ownKeys(props)) {
     if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
     const desc = props[key];
-    if (desc === null || typeof desc !== 'object') {
+    if (!__holdsProperties(desc)) {
       descs[key] = desc;
       continue;
     }
