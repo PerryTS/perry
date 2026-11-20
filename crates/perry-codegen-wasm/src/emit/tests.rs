@@ -2154,8 +2154,8 @@ console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any)
 }
 
 // A call with spread arguments passes the elements, in a sync and in an async body: to a
-// function, a closure, a method, `push`, `Math.max` / `Math.min`, a host static and
-// `console.log`. Expected output is Node's.
+// function (a void one too), a closure, a method (a computed key too), `push`, `Math.max` /
+// `Math.min`, a host static and `console.log`. Expected output is Node's.
 #[test]
 fn a_spread_call_passes_the_spread_elements() {
     assert_eq!(
@@ -2171,11 +2171,13 @@ const n = arr.push(...xs, 9);
 console.log(sum3(...(xs as [number, number, number])) + " " + sum3(0, ...(xs.slice(1) as [number, number])) + " " + add(...(xs as [number, number])) + " " + new K().plus(...(xs as [number, number])));
 console.log(n + " " + arr.join(",") + " " + Math.max(...xs) + " " + Math.min(...anyXs) + " " + Math.max(0, ...xs) + " " + String.fromCharCode(...[72, 105]));
 console.log(...["a", "b"], 1);
-async function inAsync(): Promise<string> { const ys = [1, 2, 3]; const a2: number[] = []; a2.push(...ys); return Math.max(...ys) + ":" + a2.length + ":" + sum3(...(ys as [number, number, number])) + ":" + add(...(ys as [number, number])); }
+function note(a: number, b: number): void { console.log("note " + (a + b)); }
+const o = { base: 10, m(a: number, b: number) { return this.base + a + b; } };
+async function inAsync(): Promise<string> { const ys = [1, 2, 3]; const a2: number[] = []; a2.push(...ys); note(...(ys as [number, number])); return Math.max(...ys) + ":" + a2.length + ":" + sum3(...(ys as [number, number, number])) + ":" + add(...(ys as [number, number])) + ":" + o["m"](...(ys as [number, number])); }
 inAsync().then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
-        "6 5 3 103\n5 0,1,2,3,9 3 4 3 Hi\na b 1\n3:3:6:3"
+        "6 5 3 103\n5 0,1,2,3,9 3 4 3 Hi\na b 1\nnote 3\n3:3:6:3:13"
     );
 }
 

@@ -512,6 +512,13 @@ impl WasmModuleEmitter {
                     Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
                     _ => None,
                 };
+                // A compiled function takes NaN-boxed i64 arguments, one per parameter;
+                // a void export returns `undefined`.
+                if let Some(func_idx) = direct {
+                    return format!(
+                        "((__a) => u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{func_idx}, ...__a.map((__v) => f64ToU64(fromJsValue(__v)))) ?? TAG_UNDEFINED))([{list}])"
+                    );
+                }
                 match callee.as_ref() {
                     Expr::PropertyGet {
                         object, property, ..
@@ -534,11 +541,11 @@ impl WasmModuleEmitter {
                             list
                         )
                     }
-                    // A compiled function takes NaN-boxed i64 arguments, one per parameter.
-                    _ if direct.is_some() => {
-                        let func_idx = direct.unwrap_or_default();
+                    Expr::IndexGet { object, index, .. } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        let key = self.emit_js_expr(index, locals);
                         format!(
-                            "((__f, __a) => u64ToF64(__f(...__padBigintArgs(__f, 0, __a.map((__v) => f64ToU64(fromJsValue(__v)))))))(wasmInstance.exports.__wasm_func_{func_idx}, [{list}])"
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({obj}), toJsValue({key})), [{list}]))"
                         )
                     }
                     _ => {
