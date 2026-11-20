@@ -528,6 +528,16 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                                 // Array instance methods called via NativeMethodCall
                                 "push" if !args.is_empty() => {
+                                    // `push(a, b, ...)` sends its values as one array,
+                                    // pushed by a single `push`.
+                                    let many;
+                                    let (bridge, value) = match args.as_slice() {
+                                        [one] => ("array_push", one),
+                                        _ => {
+                                            many = Expr::Array(args.to_vec(), None);
+                                            ("array_push_spread", &many)
+                                        }
+                                    };
                                     self.emit_frame_begin(func, 2);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
@@ -539,8 +549,8 @@ impl<'a> FuncEmitCtx<'a> {
                                             memory_index: 0,
                                         },
                                     ));
-                                    self.emit_store_arg(func, 1, &args[0]);
-                                    self.emit_memcall(func, "array_push", 2);
+                                    self.emit_store_arg(func, 1, value);
+                                    self.emit_memcall(func, bridge, 2);
                                     self.emit_frame_begin(func, 1);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
