@@ -713,13 +713,16 @@ unsafe fn record_class_object_template(
     if final_shape == LayoutWord(0)
         || d.hole_count != 0
         || d.rep != crate::object::field_rep::REP_ANY
+        || d.has_tail_constfn()
         || d.live_inline_slot_count < d.logical_key_count
         || count > (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR)
         || count >= 1 << 16
         || W_FILLS + 2 * count > cell.len()
         || static_field_mask > 0xff
-        || crate::object::shapes::shape_object_kind_of_receiver((final_shape).0)
-            != Some(crate::object::shapes::ShapeObjectKind::Class)
+        || !crate::object::shapes::shape_kind_of_receiver_is(
+            (final_shape).0,
+            crate::object::shapes::ShapeObjectKind::Class,
+        )
     {
         return;
     }
@@ -872,6 +875,7 @@ pub(crate) unsafe fn class_object_add_internal(
             || to == from
             || d.hole_count != 0
             || d.rep != crate::object::field_rep::REP_ANY
+            || d.has_tail_constfn()
             || d.live_inline_slot_count <= slot
             || !crate::string::js_string_key_matches_bytes(d.keys_view().get(slot), bytes)
             || *fields.add(slot as usize) != value.get_nanbox_f64().to_bits()
@@ -1078,6 +1082,7 @@ pub(crate) unsafe fn record_prototype_template(
         || d.proto_id != proto_id
         || d.hole_count != 0
         || d.rep != crate::object::field_rep::REP_ANY
+        || d.has_tail_constfn()
         || d.live_inline_slot_count < d.logical_key_count
         || count > (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR)
         || meta.is_null()
@@ -1487,3 +1492,8 @@ pub(crate) unsafe fn record_instance_link(
 #[cfg(test)]
 #[path = "class_object_template_tests.rs"]
 mod tests;
+
+/// The next class-template thread token (image run).
+pub(crate) fn snap_image_next_token() -> u64 {
+    NEXT_THREAD_TOKEN.load(Ordering::Relaxed)
+}

@@ -1,38 +1,3 @@
-pub(crate) fn class_own_symbol_method(
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) -> Option<(usize, u32, bool)> {
-    CLASS_SYMBOL_METHODS.with(|table| {
-        table
-            .read()
-            .ok()?
-            .as_ref()?
-            .get(&(class_id, sym_key, is_static))
-            .map(|&(body, arity, rest, _entry)| (body, arity, rest))
-    })
-}
-
-pub(crate) fn class_own_symbol_accessor_ptrs(
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) -> Option<(usize, usize)> {
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        table
-            .read()
-            .ok()?
-            .as_ref()?
-            .get(&(class_id, sym_key, is_static))
-            .copied()
-    })
-}
-
-pub(crate) fn class_has_own_symbol_member(class_id: u32, sym_key: usize, is_static: bool) -> bool {
-    class_own_symbol_method(class_id, sym_key, is_static).is_some()
-        || class_own_symbol_accessor_ptrs(class_id, sym_key, is_static).is_some()
-}
-
 fn dynamic_static_accessor_key(name: &str) -> String {
     let mut key = String::with_capacity(name.len() + 24);
     key.push('\0');

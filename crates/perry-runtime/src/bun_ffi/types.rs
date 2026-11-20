@@ -144,9 +144,7 @@ pub(crate) unsafe fn parse_ffi_type_checked(value: f64) -> Result<u8, String> {
         }
         return Err(unsupported_type_message("<string>"));
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else if jv.is_number() {
+    let n = if jv.is_number() {
         jv.as_number()
     } else {
         f64::NAN

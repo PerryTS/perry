@@ -1,0 +1,20 @@
+true false undefined undefined
+true
+true false
+DEC 250: Cannot add member Function.prototype.arrayicAbsent: built-in objects are read-only in a compiled program
+17 undefined
+DEC 250: Cannot add member Function.prototype.arrayicAbsent: built-in objects are read-only in a compiled program
+23 undefined
+31 37
+23 undefined
+42 52
+2 2 named
+3 7 renamed
+61 43
+83 57
+67 71
+73
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+undefined undefined
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+undefined undefined

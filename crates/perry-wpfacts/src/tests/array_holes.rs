@@ -7,7 +7,9 @@
 //! `undefined` either way.
 
 use super::*;
-use crate::model::{prim, Cons, Key, Model, NodeId, StoreSite, Template, TmplKind, Tok, TokKind, NO_CTX};
+use crate::model::{
+    prim, Cons, Key, Model, NodeId, StoreSite, Template, TmplKind, Tok, TokKind, NO_CTX,
+};
 
 fn arr(m: &mut Model, hole_free: bool) -> Tok {
     let tm = m.tmpls.len() as u32;
@@ -16,12 +18,15 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
             module: 0,
             site: tm,
             hole_free,
+            plain: false,
         },
         display: format!("arr{tm}"),
         birth_keys: vec![],
         definite: vec![],
         declared: Vec::new(),
         reserved: Vec::new(),
+        inert_definite: Vec::new(),
+        inert_reads: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,
@@ -33,6 +38,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
         per_evaluation: false,
         static_methods: Vec::new(),
@@ -45,6 +51,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
 
 fn site(m: &mut Model) -> u32 {
     m.stores.push(StoreSite {
+        proto_first: None,
         module: 0,
         func: 0,
         desc: "test".into(),
@@ -54,7 +61,11 @@ fn site(m: &mut Model) -> u32 {
         rooted: false,
         deep: false,
         key_value: None,
+        proto_named: false,
+        assign: false,
+        proto_of: None,
         in_loop: None,
+        define_attrs: None,
     });
     (m.stores.len() - 1) as u32
 }
@@ -84,7 +95,11 @@ fn a_dense_birth_iterates_its_elements_only() {
     let t = arr(&mut m, true);
     let d = iterated(&mut m, t);
     m.solve();
-    assert_eq!(m.nodes[d as usize].prim, prim::STR, "a dense array has no hole");
+    assert_eq!(
+        m.nodes[d as usize].prim,
+        prim::STR,
+        "a dense array has no hole"
+    );
     // An index read may be past the end.
     let e = m.node_l("elem");
     let ek = m.elem_key();
@@ -110,7 +125,11 @@ fn an_append_leaves_no_hole() {
     let ek = m.elem_key();
     store(&mut m, t, ek);
     m.solve();
-    assert_eq!(m.nodes[d as usize].prim, prim::STR, "push fills the next index");
+    assert_eq!(
+        m.nodes[d as usize].prim,
+        prim::STR,
+        "push fills the next index"
+    );
 }
 
 /// Each write that may leave a hole, after the read was made.
@@ -123,7 +142,7 @@ fn index_length_and_computed_stores_may_leave_a_hole() {
         m.solve();
         assert!(!holds_undef(&m, d), "{k}: dense before the store");
         let key = match k {
-            "*any" => Key::Any,
+            "*any" => Key::any(),
             _ => Key::Named(m.atom(k)),
         };
         store(&mut m, t, key);
@@ -154,7 +173,14 @@ fn define_index_delete_and_escape_may_leave_a_hole() {
         let r = m.reason("test");
         let key = m.atom("2");
         match what {
-            "define" => m.cons(n, Cons::DefineKey { key, data: true, reason: r }),
+            "define" => m.cons(
+                n,
+                Cons::DefineKey {
+                    key,
+                    data: true,
+                    reason: r,
+                },
+            ),
             "delete" => m.cons(n, Cons::DeleteKey { key, reason: r }),
             _ => m.escape(t, r),
         }

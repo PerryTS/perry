@@ -63,6 +63,7 @@ mod tests {
     use super::*;
     use crate::inline::call_inliner::inline_calls_in_stmts;
     use crate::inline::ExactReceiverFacts;
+    use crate::local_occurrences::WriteCensus;
     use perry_hir::types::Type;
     use perry_hir::BinaryOp;
 
@@ -81,6 +82,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_strict: true,
         }
     }
@@ -95,6 +97,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,
@@ -164,6 +167,7 @@ mod tests {
             &mut HashMap::new(),
             &mut ExactReceiverFacts::new(),
             &mut 100,
+            &WriteCensus::unwritten(),
             None,
             &HashMap::new(),
             false,

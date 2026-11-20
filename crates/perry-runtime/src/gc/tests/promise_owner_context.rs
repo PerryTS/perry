@@ -4,16 +4,10 @@ use super::support::*;
 
 #[test]
 fn promise_context_follows_owner_and_releases_its_native_tokens() {
-    check_owned_context(false);
+    check_owned_context();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Promise context edge"]
-fn negative_control_objtables_promise_context() {
-    check_owned_context(true);
-}
-
-fn check_owned_context(erase: bool) {
+fn check_owned_context() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let promise = crate::promise::js_promise_new();
@@ -36,9 +30,6 @@ fn check_owned_context(erase: bool) {
         holder,
         "the young holder moves with its promise"
     );
-    if erase {
-        crate::promise::clear_promise_context(moved);
-    }
     let child_after = crate::async_context::test_snapshot_first_store(
         &crate::promise::context_for_promise(moved),
     )

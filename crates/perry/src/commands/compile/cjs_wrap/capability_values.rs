@@ -705,6 +705,7 @@ impl<'a> Proof<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body, f);
                 if let Some(c) = catch {

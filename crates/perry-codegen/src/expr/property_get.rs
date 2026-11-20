@@ -44,11 +44,13 @@ use super::property_get_names::{
 
 mod accessor_arm;
 mod buffer_alias;
+mod byte_length;
 pub(crate) mod generic_dispatch;
 pub(crate) mod globalget;
 mod helpers;
 
 mod composed_ics;
+pub(crate) mod typed_named;
 use composed_ics::emit_array_subclass_length_ic;
 #[cfg(test)]
 mod tests;
@@ -56,7 +58,7 @@ mod tests;
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
 pub(crate) use helpers::{
-    builtin_prototype_method_read, class_has_computed_runtime_members,
+    builtin_prototype_method_read, class_has_evaluated_accessor,
     guarded_declared_class_get_candidate, is_global_builtin_value_expr, lower_class_method_bind,
     lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
     lower_runtime_property_get_by_name, promise_static_function_length_expr,
@@ -70,8 +72,22 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+            if ctx.deferred_namespace_imports.contains(name) {
+                return lower_runtime_property_get_by_name(ctx, object, property);
+            }
+        }
+    }
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
-    let _consumed = crate::facts_consumed::enter(expr);
+    let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    // I32 at rest (PR C): a read of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     // Object model step 1: a literal family's added key, one slot load.
     if let Expr::PropertyGet {
         object, property, ..
@@ -95,6 +111,49 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             return super::private_field_site::lower_get(ctx, site, property);
         }
     }
+    // A guarded private member belongs to its declaring class, independently
+    // of the receiver's public properties or prototype. Enter private dispatch
+    // with the original boxed receiver before any public lookup can replace it.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if matches!(
+            object.as_ref(),
+            Expr::PrivateGuard {
+                kind: 1 | 2 | 4,
+                ..
+            }
+        ) {
+            let receiver = lower_expr(ctx, object)?;
+            let key_idx = ctx.strings.intern(property);
+            let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let receiver_bits = blk.bitcast_double_to_i64(&receiver);
+            let key = blk.load(DOUBLE, &key_global);
+            let key_bits = blk.bitcast_double_to_i64(&key);
+            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+            return Ok(blk.call(
+                DOUBLE,
+                "js_object_get_field_by_name_f64",
+                &[(I64, &receiver_bits), (I64, &key_raw)],
+            ));
+        }
+    }
+    // ACCBUILD2 P3: a read proven to call one getter.
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = expr
+    {
+        if let Some(v) =
+            super::wpfacts_access::try_lower_proven_getter(ctx, object, property, *byte_offset)?
+        {
+            return Ok(v);
+        }
+    }
     if let Expr::PropertyGet {
         object, property, ..
     } = expr
@@ -105,6 +164,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             return Ok(value);
         }
         buffer_alias::invalidate_buffer_alias_for_read(ctx, object, property);
+    }
+    if let Some(value) = crate::codegen::facts_const_length::lower(ctx, expr)? {
+        return Ok(value);
     }
     // `split("literal")[constant].length` on a scalar-replaced split can
     // read the precomputed numeric length directly. The split part itself was
@@ -379,7 +441,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // refusal is too — a claim now costs a guard branch and nothing else,
             // which is exactly the deal element reads have always taken.
             //
-            // `test-files/test_gap_7853_declared_array_length_runtime_value.ts`
+            // `tests/parity/typescript/type-erasure/test_gap_7853_declared_array_length_runtime_value.ts`
             // and `test_gap_declared_field_type_refine_guarded.ts` are the
             // sabotage: both feed a `string[]`-declared local an array, a
             // string, a number, an array-like object with numeric and
@@ -387,6 +449,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `undefined`, and require node-identical output. They run the
             // inline arm now instead of the generic tower.
             && (matches!(object.as_ref(), Expr::LocalGet(id) if ctx.array_record_length_local == Some(*id))
+                || crate::expr::index_get::proven_array::receiver_is_proven_array(ctx, object)
                 || is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
@@ -424,8 +487,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .cached_length_slot(*arr_id)
                     .map(str::to_owned)
                 {
-                    return Ok(ctx.block().load(DOUBLE, &slot));
+                    let cached = ctx.block().load(DOUBLE, &slot);
+                    super::held_len::length_read(ctx, *arr_id, &cached)?;
+                    return Ok(cached);
                 }
+            }
+            // A receiver the facts give `Arr`: the header length, an integer.
+            if let Some(length) = crate::expr::index_get::proven_array::lower_length(ctx, object)? {
+                return Ok(length);
             }
             if is_array_expr(ctx, object) {
                 let recv_box = lower_expr(ctx, object)?;
@@ -546,7 +615,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let gc_type_addr = ctx.block().sub(I64, &recv_handle, "8");
             let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
             let gc_type = ctx.block().load(I8, &gc_type_ptr);
-            let is_array = ctx.block().icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
             let is_string = ctx.block().icmp_eq(I8, &gc_type, "3"); // GC_TYPE_STRING
             let has_length = ctx.block().or(I1, &is_array, &is_string);
             // Issue #233: a FORWARDED array's first 4 bytes are no
@@ -565,81 +634,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block()
                 .cond_br(&take_fast, &fast_label, &typed_array_label);
 
-            // Byte views and typed arrays keep a live length at payload +0,
-            // including shared storage: detach/resize update that word. Admit
-            // only these proven type bytes, not native-arena views. Own named
-            // metadata or prototype edits withdraw the accessor proof before
-            // publication; the cold edge uses its pooled literal key.
             ctx.current_block = typed_array_idx;
-            let owning_byte = ctx.block().icmp_uge(I8, &gc_type, "64");
-            let indexed_byte = ctx.block().icmp_ule(I8, &gc_type, "76");
-            let is_typed_array = ctx.block().and(I1, &owning_byte, &indexed_byte);
-            let byte_header_idx = ctx.new_block("plen.byte_header");
-            let byte_header_label = ctx.block_label(byte_header_idx);
-            let view_check_idx = ctx.new_block("plen.view_check");
-            let view_check_label = ctx.block_label(view_check_idx);
-            ctx.block()
-                .cond_br(&is_typed_array, &byte_header_label, &view_check_label);
-
-            // An indexed view keeps its fixed length at payload +0. It is the
-            // live length while the view is not length-tracking and its link
-            // is a plain owner (no bag, so no own `length`) that is neither
-            // RESIZABLE nor DETACHED: only those change an owner's extent.
-            ctx.current_block = view_check_idx;
-            let view_lo = crate::runtime_abi::BYTES_TYPE_BASE | crate::runtime_abi::BYTES_TYPE_VIEW;
-            let view_hi = view_lo | 12;
-            let is_view_lo = ctx.block().icmp_uge(I8, &gc_type, &view_lo.to_string());
-            let is_view_hi = ctx.block().icmp_ule(I8, &gc_type, &view_hi.to_string());
-            let is_view = ctx.block().and(I1, &is_view_lo, &is_view_hi);
-            let view_header_idx = ctx.new_block("plen.view_header");
-            let view_header_label = ctx.block_label(view_header_idx);
-            ctx.block()
-                .cond_br(&is_view, &view_header_label, &slow_label);
-            ctx.current_block = view_header_idx;
-            let h = crate::expr::byte_cell::header_word(ctx.block(), &recv_handle);
-            let tracking = ctx.block().and(I64, &h, &(1u64 << 23).to_string());
-            let fixed = ctx.block().icmp_eq(I64, &tracking, "0");
-            let link_addr = ctx.block().add(
-                I64,
+            byte_length::emit_byte_cell_length_guard(
+                ctx,
                 &recv_handle,
-                &crate::runtime_abi::BYTES_LINK.to_string(),
+                &gc_type,
+                &not_forwarded,
+                &fast_label,
+                &slow_label,
+                "plen",
+                true,
             );
-            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
-            let link = ctx.block().load(PTR, &link_ptr);
-            let link = ctx.block().ptrtoint(&link, I64);
-            let ho = crate::expr::byte_cell::header_word(ctx.block(), &link);
-            let mask = 0xe0u64 | (1 << 24) | (1 << 30);
-            let state = ctx.block().and(I64, &ho, &mask.to_string());
-            let plain_owner = ctx.block().icmp_eq(
-                I64,
-                &state,
-                &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
-            );
-            let view_ok = ctx.block().and(I1, &fixed, &plain_owner);
-            let view_ok = ctx.block().and(I1, &view_ok, &not_forwarded);
-            let named_invalidated =
-                ctx.block()
-                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
-            let view_ok = ctx.block().and(I1, &view_ok, &named_pristine);
-            ctx.block().cond_br(&view_ok, &fast_label, &slow_label);
-
-            ctx.current_block = byte_header_idx;
-            let link_addr = ctx.block().add(
-                I64,
-                &recv_handle,
-                &crate::runtime_abi::BYTES_LINK.to_string(),
-            );
-            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
-            let link = ctx.block().load(PTR, &link_ptr);
-            let empty = ctx.block().icmp_eq(PTR, &link, "null");
-            let ta_header_ok = ctx.block().and(I1, &empty, &not_forwarded);
-            let named_invalidated =
-                ctx.block()
-                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
-            let ta_ok = ctx.block().and(I1, &ta_header_ok, &named_pristine);
-            ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 
             ctx.current_block = fast_idx;
             let fast_len_i32 = ctx.block().safe_load_i32_from_ptr(&recv_handle);
@@ -1195,8 +1200,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `typeof Lib.A` is "undefined", `Lib.A` reads as
                     // undefined too. Resolve the class reference inline
                     // (mirrors the `Expr::ExternFuncRef` arm at the
-                    // bottom of this function): emit the INT32-tagged
-                    // class-id NaN-box that `Expr::ClassRef` produces.
+                    // bottom of this function): fetch the constructor
+                    // function object that `Expr::ClassRef` produces.
                     // #1758: a renamed export (`export { Number$ as Number }`)
                     // is keyed in `class_ids` under the ORIGIN name (`Number$`),
                     // but `property` here is the EXPORTED alias (`Number`). Try
@@ -1477,7 +1482,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // which classifies the receiver tag and has a class-ref arm —
                 // exactly what the same static method gets when its class
                 // carries no computed member.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_get_by_name(ctx, object, property);

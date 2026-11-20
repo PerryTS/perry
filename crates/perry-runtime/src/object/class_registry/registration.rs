@@ -81,27 +81,6 @@ pub(crate) fn invalidate_class_string_member_order_bytes(
     drop(guard);
 }
 
-pub(crate) unsafe fn record_class_symbol_member_order(
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-    definition_order: u32,
-) {
-    let symbol_id = (*(sym_key as *const crate::symbol::SymbolHeader)).id;
-    CLASS_SYMBOL_MEMBER_ORDERS.with(|orders| {
-        let mut guard = orders.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard
-            .as_mut()
-            .unwrap()
-            .entry((class_id, symbol_id, is_static))
-            .and_modify(|order| *order = (*order).min(definition_order))
-            .or_insert(definition_order);
-    });
-}
-
 /// Record the ClassBody position of a non-computed string-keyed method or
 /// accessor. Codegen emits this beside the existing dispatch registration;
 /// computed keys record the same metadata after runtime ToPropertyKey.

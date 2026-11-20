@@ -16,6 +16,10 @@ pub(super) fn numeric_order(ctx: &FnCtx<'_>, comparator: &Expr) -> Option<Numeri
                 let [body] = ctx.wpfacts.local_bodies.get(local)?.as_slice() else {
                     return None;
                 };
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::NumericBody,
+                    || serde_json::json!({"local":local,"body":body.func_id}),
+                );
                 crate::facts_consumed::used();
                 // FVA closes the values, not the temporal dead zone. A direct
                 // enclosing statement must also have initialized this binding.

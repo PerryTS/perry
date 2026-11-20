@@ -71,10 +71,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
     );
     module.declare_function("js_array_push_u31_with_length", I64, &[I64, I32, PTR]);
+    module.declare_function("js_array_grow_for_push", I64, &[I64]);
     module.declare_function("js_array_push_f64_spec", I64, &[I64, DOUBLE]);
     // #11021: the ArrayPush slow arms' push. Returns the new head with `*own = 0`,
     // or an own `push` method's result bits with `*own = 1`.
     module.declare_function("js_array_push_f64_spec_or_own", I64, &[I64, DOUBLE, PTR]);
+    // The same entry with the real `Get` for a receiver that is no Array.
+    module.declare_function("js_array_push_f64_spec_or_method", I64, &[I64, DOUBLE, PTR]);
     module.declare_function("llvm.expect.i1", I1, &[I1, I1]);
     module.declare_function("llvm.experimental.noalias.scope.decl", VOID, &["metadata"]);
     module.declare_function("js_array_push_guard", VOID, &[I64, I32]);
@@ -98,6 +101,24 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // element carries, or 0.
     module.declare_function("js_array_ensure_element_shape_ordinary", I32, &[I64]);
     module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
+    // I32 at rest (PR B, `expr::rest_elems`): the birth encoding and the
+    // cold arms of an at-rest element site (`perry-runtime` `layout_slot`).
+    module.declare_function("js_array_rest_encode", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_array_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // The birth of an at-rest Array that reserves a capacity (may collect).
+    module.declare_function("js_array_rest_reserve", DOUBLE, &[DOUBLE, I32]);
+    // A fill push of an at-rest push-filled birth: the handle, the value,
+    // the final length; returns the head (may collect on the first append).
+    module.declare_function("js_array_rest_push", I64, &[I64, DOUBLE, I32]);
+    // The fill birth (`expr::fill_birth`): `new Array(k).fill(v)` in one
+    // pass: length, reserved capacity (0: none), the value, I32 words or not.
+    module.declare_function("js_array_fill_birth", I64, &[I32, I32, DOUBLE, I32]);
+    module.declare_function("js_array_rest_set", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    // I32 at rest, PR C: the complete field read/store through the layout
+    // accessor, and the lanes of a class born keyless (`expr::rest_fields`).
+    module.declare_function("js_object_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_rest_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_object_rest_lanes", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
         "perry_array_read_cold_shared",
         DOUBLE,
@@ -241,6 +262,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64],
     );
+    // perry-runtime: `gc::barrier_store::js_slot_store_obligations`, an
+    // inline slot store's string alias demotion and gated slot barrier.
+    module.declare_function("js_slot_store_obligations", VOID, &[I64, I64, I64]);
     // perry-runtime: `gc::barrier_store::js_write_barrier_birth_slots` — the
     // barriers of one literal birth's slot stores, behind one parent gate.
     module.declare_function("js_write_barrier_birth_slots", VOID, &[I64, I64, I32, I32]);
@@ -275,13 +299,6 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length_strict", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
-    // #8772: non-allocating exact packed-array guard for a final spread tail.
-    // Writes at most four values to caller-owned stack storage and returns
-    // arity 0..4, or -1 for the generic iterator path.
-    module.declare_function("js_short_packed_spread_values", I32, &[DOUBLE, PTR]);
-    // Generic `fixed..., ...spread` materializer used after the short-array or
-    // guarded-method proof fails. It drives the complete iterator protocol.
-    module.declare_function("js_spread_tail_fallback_args", I64, &[PTR, I64, DOUBLE]);
     // #2773: Array.from(source) — throws TypeError for nullish sources, keeps
     // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
     // Takes the raw NaN-boxed value so the tag bits survive.
@@ -360,10 +377,14 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);
+    // The spread drain of an iterator the site obtained itself.
+    module.declare_function("js_array_spread_append_iterator", I64, &[I64, DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);
     module.declare_function("js_iterator_step", I32, &[DOUBLE, DOUBLE, PTR]);
+    module.declare_function("js_iterator_step_inner_result", I32, &[DOUBLE, PTR]);
+    module.declare_function("js_generator_resume_executing", DOUBLE, &[]);
     module.declare_function(
         "js_iterator_step_rest_to_array",
         DOUBLE,
@@ -392,6 +413,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("perry_array_iteration_init", crate::types::VOID, &[I32]);
     module.declare_function("js_array_record_stack_enter", I32, &[PTR, I32, I32]);
     module.declare_function("js_array_record_literal", DOUBLE, &[PTR, I32]);
+    // DESIGN-p4l4 VR-4b: record arrays (`codegen::record_array`). The array
+    // is its JSValue; `PTR` is words of the caller's frame.
+    module.declare_function("js_record_array_new", DOUBLE, &[I32, I32]);
+    module.declare_function("js_record_array_push", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function("js_record_array_pop", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function("js_record_array_get", DOUBLE, &[DOUBLE, DOUBLE, PTR]);
+    module.declare_function("js_record_array_length", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_array_record_enter_counted", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);
@@ -421,6 +449,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // inspecting its runtime GC kind (Map/Set/Array/string/iterable).
     // Returns a NaN-boxed array JSValue.
     module.declare_function("js_for_of_to_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_typed_array_for_of_admits", DOUBLE, &[DOUBLE]);
 
     declare_phase_b_objects(module);
 }

@@ -27,6 +27,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
                     byte_offset: 0,
                 }),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -40,6 +41,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,

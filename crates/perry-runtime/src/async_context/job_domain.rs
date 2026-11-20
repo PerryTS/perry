@@ -158,6 +158,10 @@ impl AsyncContextSnapshot {
     }
 
     pub(crate) fn prepare_job_enqueue(&mut self) -> bool {
+        #[cfg(perry_gc_instruments)]
+        {
+            self.snap_init = crate::snap_census::job_owner();
+        }
         prepare_enqueue(&mut self.job_domain)
     }
 

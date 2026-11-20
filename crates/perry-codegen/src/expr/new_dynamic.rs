@@ -475,10 +475,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 for extra in args.iter().skip(1) {
                                     let _ = lower_expr(ctx, extra)?;
                                 }
+                                let flag = crate::nanbox::double_literal(f64::from_bits(
+                                    if property == "DefaultDeserializer" {
+                                        crate::nanbox::TAG_TRUE
+                                    } else {
+                                        crate::nanbox::TAG_UNDEFINED
+                                    },
+                                ));
                                 return Ok(ctx.block().call(
                                     DOUBLE,
                                     "js_v8_deserializer_new",
-                                    &[(DOUBLE, &buf)],
+                                    &[(DOUBLE, &buf), (DOUBLE, &flag)],
                                 ));
                             }
                             _ => {}

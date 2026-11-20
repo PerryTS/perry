@@ -98,6 +98,15 @@ pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
         let header = crate::gc::header_from_trusted_user_ptr(closure as *const u8).cast_mut();
         debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_CLOSURE);
         (*header)._reserved |= crate::gc::GC_CLOSURE_NON_CONSTRUCTABLE;
+        // A builtin that cannot construct belongs to the family without `prototype`.
+        let c = closure as *mut crate::closure::ClosureHeader;
+        if (*c).shape_id
+            == crate::closure::shape::function_base_shape(
+                crate::closure::shape::FunctionProtoKind::Function,
+            )
+        {
+            (*c).shape_id = crate::closure::shape::function_non_constructor_shape();
+        }
     }
 }
 

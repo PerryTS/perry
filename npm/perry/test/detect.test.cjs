@@ -15,6 +15,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const {
   PLATFORM_PACKAGES,
   GLIBC_BUILD_FLOOR,
@@ -176,6 +177,32 @@ check("every platform package is an optionalDependency of @perryts/perry", () =>
     assert.ok(optional.includes(pkg), `${pkg} missing from optionalDependencies`);
   }
 });
+check("every archive kind ships independently and only hosts are wrapper dependencies", () => {
+  const published = new Set(execFileSync(process.execPath, [
+    path.join(REPO_ROOT, "scripts", "publish", "constants.mts"), "--print-packages",
+  ], { encoding: "utf8" }).trim().split("\n"));
+  const triples = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "npm", "packaged-triples.json"), "utf8"));
+  const kinds = new Set(fs.readFileSync(path.join(REPO_ROOT, "npm", "archive-kinds.rules"), "utf8")
+    .split("\n").map(line => line.trim()).filter(line => line && !line.startsWith("#"))
+    .map(line => line.split(/\s+/)[0]));
+  const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "npm", "perry", "package.json.tmpl"), "utf8")
+    .replace(/__VERSION__/g, "0.0.0"));
+  const hosts = Object.values(PLATFORM_PACKAGES);
+  assert.deepStrictEqual(Object.keys(manifest.optionalDependencies).sort(), [...hosts].sort());
+  const expected = new Set([...hosts, manifest.name]);
+  for (const kind of kinds) {
+    if (kind === "host") continue;
+    const available = triples[kind === "target" ? "targets" : kind];
+    assert.ok(Array.isArray(available) && available.length, `${kind} has no published triples`);
+    for (const triple of available) {
+      const name = `@perryts/perry-${kind}-${triple}`;
+      assert.ok(published.has(name), `${name} missing from the publish set`);
+      assert.ok(!(name in manifest.optionalDependencies), `${name} must be fetched on demand`);
+      expected.add(name);
+    }
+  }
+  assert.deepStrictEqual([...published].sort(), [...expected].sort());
+});
 check("every detected platform package has a publishable manifest", () => {
   for (const key of Object.keys(PLATFORM_PACKAGES)) {
     const dir = path.join(REPO_ROOT, "npm", "perry-" + key);
@@ -229,7 +256,10 @@ check(`glibc legs use glibc ${GLIBC_BUILD_FLOOR} builders`, () => {
     "utf8"
   );
   assert.ok(dockerfile.includes("debian:bullseye-slim@sha256:"));
-  assert.ok(dockerfile.includes("llvm-toolchain-bullseye-22"));
+  assert.ok(dockerfile.includes("COPY scripts/install-llvm22-bullseye.sh /tmp/install-llvm22-bullseye.sh"));
+  assert.ok(dockerfile.includes("&& /tmp/install-llvm22-bullseye.sh /tmp/apt.llvm.org.gpg.key"));
+  const installer = fs.readFileSync(path.join(REPO_ROOT, "scripts", "install-llvm22-bullseye.sh"), "utf8");
+  assert.ok(installer.includes("llvm-toolchain-bullseye-22"));
 });
 
 console.log("");

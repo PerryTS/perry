@@ -302,7 +302,7 @@ crate::perry_thread_local! {
     ///       18 ECDH P-521, 19 Argon2d, 20 Argon2i, 21 Argon2id,
     ///       22 ChaCha20-Poly1305, 23 KMAC128, 24 KMAC256, 25 AES-OCB,
     ///       26 X448, 27 Ed448, 30 ML-KEM-512, 31 ML-KEM-768,
-    ///       32 ML-KEM-1024
+    ///       32 ML-KEM-1024, 33 ML-DSA-44, 34 ML-DSA-65, 35 ML-DSA-87
     /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
     /// kind: 1 secret, 2 private, 3 public
     /// extractable: WebCrypto CryptoKey.extractable
@@ -545,8 +545,8 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
         (2 | 4 | 5 | 22 | 25, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
         (3, 1) => WRAP_KEY | UNWRAP_KEY,
         (6 | 7 | 19 | 20 | 21, 1) => DERIVE_KEY | DERIVE_BITS,
-        (8 | 10 | 12 | 14 | 15 | 17 | 27, 2) => SIGN,
-        (8 | 10 | 12 | 14 | 15 | 17 | 27, 3) => VERIFY,
+        (8 | 10 | 12 | 14 | 15 | 17 | 27 | 33..=35, 2) => SIGN,
+        (8 | 10 | 12 | 14 | 15 | 17 | 27 | 33..=35, 3) => VERIFY,
         (9 | 11 | 16 | 18 | 26, 2) => DERIVE_KEY | DERIVE_BITS,
         (13, 2) => DECRYPT | UNWRAP_KEY,
         (13, 3) => ENCRYPT | WRAP_KEY,
@@ -557,7 +557,8 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
 }
 
 /// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec (P-256), 3 ed25519,
-/// 4 x25519, 5 ec (P-384), 6 ec (P-521).
+/// 4 x25519, 5 ec (P-384), 6 ec (P-521), 7/8/9 ML-KEM-512/768/1024,
+/// 10/11/12 ML-DSA-44/65/87.
 pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
     // A non-byte-view brand revokes inline element admission (#10515).
     ASYMMETRIC_KEY_EVER_MARKED.arm();

@@ -1,0 +1,1 @@
+Organize external test suites under tests/ while retaining implementation-local and Cargo-native Rust tests. Preserve fixture references, logical test identities and CI coverage, including complete routing for large pull requests.

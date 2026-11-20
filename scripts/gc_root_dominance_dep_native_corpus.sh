@@ -27,7 +27,7 @@ PERRY_BIN="${PERRY_BIN:-target/release/perry}"
 # CWD at exec time rather than against the repo root. Pin it now.
 case "$PERRY_BIN" in /*) ;; *) PERRY_BIN="$PWD/$PERRY_BIN" ;; esac
 [ -x "$PERRY_BIN" ] || { echo "::error::$PERRY_BIN not found or not executable" >&2; exit 2; }
-ENTRY="${ENTRY:-test-files/gc-dep-corpus/main.ts}"
+ENTRY="${ENTRY:-tests/fixtures/programs/gc-dep-corpus/main.ts}"
 
 # Single-sourced from the Rust const through the same reader as the curated
 # native corpus. The reader requires one literal declaration anywhere under

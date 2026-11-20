@@ -78,7 +78,7 @@ pub(super) fn pad_omitted_native_params(
                 lowered,
                 arg_types,
             )?,
-            NativeAbiType::BufferAndLen => lower_buffer_and_len_param(
+            NativeAbiType::BufferAndLen { .. } => lower_buffer_and_len_param(
                 ctx,
                 descriptor,
                 *idx,

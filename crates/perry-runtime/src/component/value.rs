@@ -1,6 +1,6 @@
 //! Component transport values, with moving-GC roots at every allocating edge.
 use super::{fail, field, object_pointer, set_field, string};
-use crate::exception::catch_js_throw;
+use crate::exception::catch_thrown;
 use crate::{gc::RuntimeHandleScope, value::JSValue};
 use serde_json::{json, Value};
 
@@ -8,7 +8,7 @@ pub(super) mod retention;
 pub(super) mod typed;
 
 pub(super) fn encode(value: f64) -> Value {
-    encode_at(value, 0, None, None).unwrap_or_else(|error| crate::exception::js_throw(error))
+    encode_at(value, 0, None, None).unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 #[cfg(test)]
@@ -16,7 +16,7 @@ pub(super) fn encode_for(value: f64, owner: f64) -> Value {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     encode_at(value, 0, Some(&owner), None)
-        .unwrap_or_else(|error| crate::exception::js_throw(error))
+        .unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 /// Async submission snapshots bytes immediately but must also retain resource
@@ -29,11 +29,11 @@ pub(super) fn encode_for_retained(value: f64, owner: f64, retained: f64) -> Valu
     let owner = scope.root_nanbox_f64(owner);
     let retained = scope.root_nanbox_f64(retained);
     encode_at(value, 0, Some(&owner), Some(&retained))
-        .unwrap_or_else(|error| crate::exception::js_throw(error))
+        .unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
-fn encoding_error(message: &str) -> f64 {
-    catch_js_throw(|| fail(message)).unwrap_err()
+fn encoding_error(message: &str) -> crate::exception::Caught {
+    catch_thrown(|| fail(message)).unwrap_err()
 }
 
 // Native containers live outside each throwing JS operation. A getter or
@@ -43,7 +43,7 @@ fn encode_at(
     depth: usize,
     owner: Option<&crate::gc::RuntimeHandle<'_>>,
     retained: Option<&crate::gc::RuntimeHandle<'_>>,
-) -> Result<Value, f64> {
+) -> Result<Value, crate::exception::Caught> {
     if depth >= 128 {
         return Err(encoding_error(
             "Component value nesting exceeds 128 (or contains a cycle)",
@@ -93,7 +93,7 @@ fn encode_at(
         let len = crate::array::js_array_length(pointer());
         let mut values = Vec::with_capacity(len as usize);
         for i in 0..len {
-            let child = catch_js_throw(|| crate::array::js_array_get_f64(pointer(), i))?;
+            let child = catch_thrown(|| crate::array::js_array_get_f64(pointer(), i))?;
             values.push(encode_at(child, depth + 1, owner, retained)?);
         }
         return Ok(Value::Array(values));
@@ -110,7 +110,7 @@ fn encode_at(
         .map_err(|_| encoding_error("Detached component byte list"));
     }
     if object_pointer(root.get_nanbox_f64()).is_some() {
-        if let Some(value) = catch_js_throw(|| {
+        if let Some(value) = catch_thrown(|| {
             super::async_value::encode(
                 root.get_nanbox_f64(),
                 owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
@@ -119,7 +119,7 @@ fn encode_at(
             retain_resource(retained, &root, &value)?;
             return Ok(value);
         }
-        if let Some(resource) = catch_js_throw(|| {
+        if let Some(resource) = catch_thrown(|| {
             super::host_resource::encode(
                 root.get_nanbox_f64(),
                 owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
@@ -128,11 +128,11 @@ fn encode_at(
             retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
-        if let Some(resource) = catch_js_throw(|| super::resource::encode(root.get_nanbox_f64()))? {
+        if let Some(resource) = catch_thrown(|| super::resource::encode(root.get_nanbox_f64()))? {
             retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
-        let keys = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(catch_js_throw(|| {
+        let keys = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(catch_thrown(|| {
             crate::object::js_object_keys_value(root.get_nanbox_f64())
         })? as i64));
         let pointer = || {
@@ -148,7 +148,7 @@ fn encode_at(
                     "Reserved component transport key in a plain object",
                 ));
             }
-            let value = catch_js_throw(|| field(root.get_nanbox_f64(), key.as_bytes()))?;
+            let value = catch_thrown(|| field(root.get_nanbox_f64(), key.as_bytes()))?;
             object.insert(key, encode_at(value, depth + 1, owner, retained)?);
         }
         return Ok(Value::Object(object));
@@ -162,7 +162,7 @@ fn retain_resource(
     retained: Option<&crate::gc::RuntimeHandle<'_>>,
     resource: &crate::gc::RuntimeHandle<'_>,
     identity: &Value,
-) -> Result<(), f64> {
+) -> Result<(), crate::exception::Caught> {
     if let Some(retained) = retained {
         retention::retain(
             retained.get_nanbox_f64(),

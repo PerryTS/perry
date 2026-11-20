@@ -36,7 +36,7 @@ fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     crate::closure::js_closure_set_capture_bits(
         closure_ptr,
         0,
-        JSValue::int32(identity as i32 + 1).bits(),
+        crate::object::builtin_constructor_identity_word(identity as u32 + 1),
     );
     super::native_module::set_bound_native_closure_name(closure_ptr, name);
     if let Some(len) = crate::object::builtin_constructor_spec_length(name) {
@@ -1870,11 +1870,23 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
          static `lex`, not the same-named instance method"
     );
 
-    // The guard must not over-narrow: the PROTOTYPE ref names the instance
-    // method, and an extracted `C.prototype.lex` must keep resolving it.
-    let proto_ref = super::native_module::class_prototype_ref_value(LEX_METHOD_TEST_CLASS_ID);
-    let bound_proto =
-        super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
+    // The guard must not over-narrow: the PROTOTYPE names the instance
+    // method, and an extracted `C.prototype.lex` must keep resolving it. A
+    // `C.prototype` read is the prototype object (P3 B2/B4a), never a word.
+    const LEX_NAME: &[u8] = b"Lex7689";
+    unsafe {
+        js_register_class_name(
+            LEX_METHOD_TEST_CLASS_ID,
+            LEX_NAME.as_ptr(),
+            LEX_NAME.len() as u32,
+        )
+    };
+    let proto = super::class_registry::class_decl_prototype_value(LEX_METHOD_TEST_CLASS_ID);
+    assert!(
+        JSValue::from_bits(proto.to_bits()).is_pointer(),
+        "fixture: C.prototype is an object"
+    );
+    let bound_proto = super::native_module::js_class_method_bind(proto, NAME.as_ptr(), NAME.len());
     let result_proto = unsafe {
         crate::closure::js_native_call_value(
             bound_proto,

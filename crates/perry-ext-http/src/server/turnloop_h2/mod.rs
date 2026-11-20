@@ -11,8 +11,6 @@
 //! Protocol output is copied out of a server codec before any transport call
 //! or JS callback. Decoded requests and session events use the existing pumps.
 
-use std::collections::HashMap;
-
 use perry_ffi::turnloop_net as tl;
 
 pub(crate) mod conn;

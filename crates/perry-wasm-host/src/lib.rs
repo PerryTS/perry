@@ -566,12 +566,21 @@ fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
         WasmVal::F64(value) => value,
     };
     match expected {
-        ValType::I32 => Some(Val::I32(number as i32)),
+        ValType::I32 => Some(Val::I32(to_int32(number))),
         ValType::I64 => Some(Val::I64(number as i64)),
         ValType::F32 => Some(Val::F32(wasmi::F32::from_bits((number as f32).to_bits()))),
         ValType::F64 => Some(Val::F64(wasmi::F64::from_bits(number.to_bits()))),
         ValType::V128 | ValType::FuncRef | ValType::ExternRef => None,
     }
+}
+
+/// ECMAScript ToInt32: truncate, then reduce modulo 2^32. Rust's `as i32`
+/// saturates instead, so 2^32 - 1 would cross as `i32::MAX` rather than -1.
+fn to_int32(number: f64) -> i32 {
+    if !number.is_finite() {
+        return 0;
+    }
+    number.trunc().rem_euclid(4_294_967_296.0) as u32 as i32
 }
 
 /// Resolve an export function to a cache index, resolving by name at most
@@ -1333,6 +1342,22 @@ pub extern "C" fn perry_wasm_host_call_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_f64_argument_narrows_to_i32_modulo_2_pow_32() {
+        let i32_of = |n: f64| match coerce_numeric_value(WasmVal::F64(n), ValType::I32) {
+            Some(Val::I32(v)) => v,
+            other => panic!("{n} narrowed to {other:?}"),
+        };
+        assert_eq!(i32_of(4_294_967_295.0), -1);
+        assert_eq!(i32_of(2_147_483_648.0), i32::MIN);
+        assert_eq!(i32_of(-2_147_483_649.0), i32::MAX);
+        assert_eq!(i32_of(2.5), 2);
+        assert_eq!(i32_of(-2.5), -2);
+        assert_eq!(i32_of(1e20), 1_661_992_960);
+        assert_eq!(i32_of(f64::NAN), 0);
+        assert_eq!(i32_of(f64::NEG_INFINITY), 0);
+    }
 
     /// Minimal `(module (func (export "add") (param i32 i32) (result i32)
     ///                local.get 0 local.get 1 i32.add))`.

@@ -97,6 +97,7 @@ impl Budget {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body)
                     && catch.as_ref().is_none_or(|catch| self.stmts(&catch.body))

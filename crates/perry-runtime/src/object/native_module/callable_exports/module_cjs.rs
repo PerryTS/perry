@@ -407,7 +407,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "constructor",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.constructor.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_constructor_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.Module.prototype.constructor.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_constructor_getter, 0; with_name("get constructor"), with_declared(0)),
                 None,
                 None,
             ),
@@ -415,7 +415,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "isPreloading",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.isPreloading.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_false_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.Module.prototype.isPreloading.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_false_getter, 0; with_name("get isPreloading"), with_declared(0)),
                 None,
                 None,
             ),
@@ -423,8 +423,8 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "parent",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.parent.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_getter, 0; with_declared(0)),
-                Some(crate::fn_info!(#[realm("node:module.Module.prototype.parent.<set>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_setter, 1; with_declared(1))),
+                crate::fn_info!(#[realm("node:module.Module.prototype.parent.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_getter, 0; with_name("get parent"), with_declared(0)),
+                Some(crate::fn_info!(#[realm("node:module.Module.prototype.parent.<set>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_setter, 1; with_name("set parent"), with_declared(1))),
                 None,
             ),
         );

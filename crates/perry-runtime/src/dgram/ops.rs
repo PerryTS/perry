@@ -280,12 +280,13 @@ pub(crate) fn connect_impl(socket: f64, args: &[f64]) -> f64 {
         .unwrap_or_else(|| default_loopback_address(socket));
     let address = normalize_address(&address, socket);
     if send_blocked(socket, &address) {
-        let error = socket_error_value("connect ERR_IP_BLOCKED", "ERR_IP_BLOCKED", "connect");
+        let error =
+            super::net::socket_core_error("connect ERR_IP_BLOCKED", "ERR_IP_BLOCKED", "connect");
         if let Some(callback) = callback_from_args(args) {
-            call_function(callback, socket, &[error]);
+            call_function(callback, socket, &[error.value()]);
             return undefined_value();
         }
-        crate::exception::js_throw(error);
+        crate::exception::throw_core(error);
     }
     ensure_bound(socket);
     set_hidden_value(socket, KEY_REMOTE_ADDRESS, str_value(&address));
@@ -383,7 +384,12 @@ pub(crate) fn send_impl(socket: f64, args: &[f64]) -> f64 {
     let source_port = hidden_port(socket, KEY_PORT);
     if let Some(target) = lookup_bound_socket(&address, port, socket) {
         if !is_truthy_hidden(target, KEY_CLOSED) {
-            let rinfo = build_rinfo(&source_address, &source_family, source_port, size);
+            let rinfo = build_rinfo(
+                source_address.as_bytes(),
+                source_family == "IPv6",
+                source_port,
+                size,
+            );
             emit_event(target, "message", &[message, rinfo]);
         }
     }
@@ -522,6 +528,7 @@ fn invoke_lookup(socket: f64, lookup: f64, address: &str) {
 }
 
 pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
     if is_missing_membership_arg(multicast_address) {
         throw_missing_arg("multicastAddress");
@@ -568,6 +575,7 @@ pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) 
 }
 
 pub(crate) fn source_membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let source_address = validate_string_arg(
         args.first().copied().unwrap_or_else(undefined_value),
         "sourceAddress",
@@ -598,16 +606,25 @@ pub(crate) fn source_membership_impl(socket: f64, args: &[f64], syscall: &'stati
         .and_then(string_to_rust)
         .and_then(|s| s.parse::<Ipv4Addr>().ok())
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    let sock_ref = socket2::SockRef::from(&*udp);
-    let result = if syscall.starts_with("drop") {
-        sock_ref.leave_ssm_v4(&source_v4, &group_v4, &iface)
-    } else {
-        sock_ref.join_ssm_v4(&source_v4, &group_v4, &iface)
-    };
-    if result.is_err() {
-        throw_socket_errno(syscall, "EINVAL");
+    #[cfg(target_os = "wasi")]
+    {
+        // wasi:sockets/udp has no multicast membership at all.
+        let _ = (udp, source_v4, group_v4, iface);
+        throw_socket_errno(syscall, "ENOTSUP");
     }
-    undefined_value()
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let sock_ref = socket2::SockRef::from(&*udp);
+        let result = if syscall.starts_with("drop") {
+            sock_ref.leave_ssm_v4(&source_v4, &group_v4, &iface)
+        } else {
+            sock_ref.join_ssm_v4(&source_v4, &group_v4, &iface)
+        };
+        if result.is_err() {
+            throw_socket_errno(syscall, "EINVAL");
+        }
+        undefined_value()
+    }
 }
 
 pub(crate) fn set_broadcast_impl(socket: f64, args: &[f64]) -> f64 {
@@ -691,13 +708,22 @@ pub(crate) fn set_multicast_interface_impl(socket: f64, args: &[f64]) -> f64 {
         let iface = interface_address
             .parse::<Ipv4Addr>()
             .unwrap_or_else(|_| throw_socket_errno("setMulticastInterface", "EINVAL"));
-        let result = live_udp(socket).ok_or(()).and_then(|udp| {
-            socket2::SockRef::from(&*udp)
-                .set_multicast_if_v4(&iface)
-                .map_err(|_| ())
-        });
-        if result.is_err() {
-            throw_socket_errno("setMulticastInterface", "EINVAL");
+        // wasi:sockets/udp has no multicast interface option.
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = iface;
+            throw_socket_errno("setMulticastInterface", "ENOTSUP");
+        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let result = live_udp(socket).ok_or(()).and_then(|udp| {
+                socket2::SockRef::from(&*udp)
+                    .set_multicast_if_v4(&iface)
+                    .map_err(|_| ())
+            });
+            if result.is_err() {
+                throw_socket_errno("setMulticastInterface", "EINVAL");
+            }
         }
     }
     undefined_value()
@@ -723,7 +749,7 @@ fn validate_option_buffer_size(value: f64, name: &'static str) -> f64 {
 pub(crate) fn set_buffer_size_impl(
     socket: f64,
     args: &[f64],
-    key: &[u8],
+    key: Slot,
     syscall: &'static str,
 ) -> f64 {
     let size = validate_buffer_size(args.first().copied().unwrap_or_else(undefined_value));
@@ -732,7 +758,7 @@ pub(crate) fn set_buffer_size_impl(
     undefined_value()
 }
 
-pub(crate) fn get_buffer_size_impl(socket: f64, key: &[u8], syscall: &'static str) -> f64 {
+pub(crate) fn get_buffer_size_impl(socket: f64, key: Slot, syscall: &'static str) -> f64 {
     ensure_buffer_running(socket, syscall);
     get_hidden_value(socket, key).unwrap_or(65536.0)
 }

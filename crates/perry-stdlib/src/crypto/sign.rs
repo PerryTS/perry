@@ -77,6 +77,17 @@ pub unsafe extern "C" fn js_crypto_sign_rsa_sha256(
         let signature = signing_key.sign(&data);
         return alloc_buffer_from_slice(&signature.to_bytes());
     }
+    if let Some((algorithm, private_der)) = pq_private_key_from_pem(&pem) {
+        // ML-DSA signs the message itself; `{ key, context }` carries the
+        // FIPS 204 context string. An ML-KEM key cannot sign.
+        let context = ml_dsa_context(key_bits);
+        let signature = if algorithm.is_signature() {
+            pq_sign(algorithm, &private_der, &data, &context)
+        } else {
+            None
+        };
+        return alloc_buffer_from_slice(&signature.unwrap_or_default());
+    }
     let alg = bytes_from_ptr(alg_ptr);
     let alg = match normalize_sign_algorithm(&alg) {
         Some(alg) => alg,
@@ -100,6 +111,19 @@ pub unsafe extern "C" fn js_crypto_sign_rsa_sha256(
         sign_rsa_data(alg, private_key, &data)
     };
     alloc_buffer_from_slice(&signature)
+}
+
+/// The FIPS 204 context string of `crypto.sign` / `crypto.verify`'s
+/// `{ key, context }` key argument (empty when absent). node rejects one
+/// longer than 255 bytes with a RangeError.
+unsafe fn ml_dsa_context(key_bits: u64) -> Vec<u8> {
+    let context = object_field_bytes(key_bits, b"context").unwrap_or_default();
+    if context.len() > 255 {
+        let message = "context string must be at most 255 bytes";
+        let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        perry_runtime::exception::throw_core(perry_runtime::error::CoreError::range_error(message));
+    }
+    context
 }
 
 /// `crypto.sign(algorithm, data, key, callback)` callback form.
@@ -147,6 +171,13 @@ pub unsafe extern "C" fn js_crypto_verify_rsa_sha256(
             Err(_) => return js_bool(false),
         };
         return js_bool(verifying_key.verify(&data, &signature).is_ok());
+    }
+    if let Some((algorithm, public_der)) = pq_public_key_from_pem(&pem) {
+        let context = ml_dsa_context(key_bits);
+        return js_bool(
+            algorithm.is_signature()
+                && pq_verify(algorithm, &public_der, &data, &context, &sig_bytes),
+        );
     }
     let alg = bytes_from_ptr(alg_ptr);
     let alg = match normalize_sign_algorithm(&alg) {
@@ -580,6 +611,60 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_x25519(
     obj
 }
 
+/// crypto.generateKeyPairSync(type, options) for a `type` only known at run
+/// time: "ec", "ed25519", "x25519", the ML-KEM / ML-DSA parameter sets
+/// ("ml-kem-512" | "ml-kem-768" | "ml-kem-1024" | "ml-dsa-44" | "ml-dsa-65" |
+/// "ml-dsa-87"), else RSA.
+///
+/// An ML-KEM / ML-DSA key is PEM text (SPKI / seed-only PKCS#8), tagged as a
+/// KeyObject.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_named(
+    alg_ptr: i64,
+    options_bits: f64,
+) -> *mut ObjectHeader {
+    let name = String::from_utf8(bytes_from_ptr(alg_ptr)).unwrap_or_default();
+    let algorithm = match name.as_str() {
+        "ec" => return js_crypto_generate_key_pair_sync_ec_p256(options_bits),
+        "ed25519" => return js_crypto_generate_key_pair_sync_ed25519(options_bits),
+        "x25519" => return js_crypto_generate_key_pair_sync_x25519(options_bits),
+        _ => match PqAlgorithm::from_node_name(&name) {
+            Some(algorithm) => algorithm,
+            None => return js_crypto_generate_key_pair_sync_rsa(options_bits),
+        },
+    };
+    let Some((private_pem, public_pem)) = algorithm.generate_pem_pair() else {
+        return std::ptr::null_mut();
+    };
+    let asym_type = algorithm.asym_type();
+
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
+    for (field, pem, kind) in [
+        (&b"publicKey"[..], &public_pem, KeyKind::Public),
+        (&b"privateKey"[..], &private_pem, KeyKind::Private),
+    ] {
+        let key = scope.root_raw_mut_ptr(js_string_from_bytes(field.as_ptr(), field.len() as u32));
+        let value = js_string_from_bytes(pem.as_ptr(), pem.len() as u32);
+        mark_keyobject_string(value, kind, asym_type);
+        js_object_set_field_by_name(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_mut_ptr(),
+            nanbox_str(value),
+        );
+    }
+    obj.get_raw_mut_ptr::<ObjectHeader>()
+}
+
+/// node's `ERR_CRYPTO_OPERATION_FAILED` for a key `encapsulate` /
+/// `decapsulate` cannot use, or a ciphertext of the wrong length.
+fn throw_kem_failed(operation: &str) -> ! {
+    perry_runtime::fs::validate::throw_error_with_code(
+        &format!("{operation} failed"),
+        "ERR_CRYPTO_OPERATION_FAILED",
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_diffie_hellman(
     options_val: f64,
@@ -635,6 +720,21 @@ pub unsafe extern "C" fn js_crypto_encapsulate(key_val: f64) -> *mut ObjectHeade
         Some(value) => value,
         None => return js_object_alloc(0, 0),
     };
+    if let Some((algorithm, public_der)) = pq_public_key_from_pem(&public_value) {
+        // ML-KEM.Encaps (FIPS 203). An ML-DSA key cannot encapsulate.
+        let encapsulated = if algorithm.is_signature() {
+            None
+        } else {
+            pq_encapsulate(algorithm, &public_der)
+        };
+        let Some((ciphertext, shared)) = encapsulated else {
+            throw_kem_failed("Encapsulation");
+        };
+        let obj = js_object_alloc(0, 2);
+        set_object_value_field(obj, b"sharedKey", nanbox_buffer_from_slice(&shared));
+        set_object_value_field(obj, b"ciphertext", nanbox_buffer_from_slice(&ciphertext));
+        return obj;
+    }
     let public = match parse_x25519_public_surrogate(&public_value) {
         Some(public) => public,
         None => return js_object_alloc(0, 0),
@@ -682,6 +782,18 @@ pub unsafe extern "C" fn js_crypto_decapsulate(
         Some(value) => value,
         None => return alloc_buffer_from_slice(&[]),
     };
+    if let Some((algorithm, private_der)) = pq_private_key_from_pem(&private_value) {
+        let ciphertext = crypto_value_bytes(ciphertext_val);
+        let shared = if algorithm.is_signature() {
+            None
+        } else {
+            pq_decapsulate(algorithm, &private_der, &ciphertext)
+        };
+        return match shared {
+            Some(shared) => alloc_buffer_from_slice(&shared),
+            None => throw_kem_failed("Decapsulation"),
+        };
+    }
     let private = match parse_x25519_private_surrogate(&private_value) {
         Some(private) => private,
         None => return alloc_buffer_from_slice(&[]),

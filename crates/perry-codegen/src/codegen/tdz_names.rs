@@ -109,6 +109,7 @@ impl Names {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.stmts(body);
                     if let Some(catch) = catch {
@@ -170,6 +171,7 @@ mod tests {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,

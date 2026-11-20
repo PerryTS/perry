@@ -4,25 +4,15 @@ use crate::gc::*;
 use crate::object::test_wasm_wrapper_state::{attach, handle, Kind};
 #[test]
 fn module_state_follows_moving_wrapper_and_is_collectible() {
-    check(Kind::Module, false);
+    check(Kind::Module);
 }
 #[test]
 fn extern_state_follows_moving_wrapper_and_is_collectible() {
     for kind in [Kind::Memory, Kind::Table, Kind::Global] {
-        check(kind, false);
+        check(kind);
     }
 }
-#[test]
-#[ignore = "negative control: remove the module wrapper's native state edge"]
-fn negative_control_objtables_wasm_module_wrappers() {
-    check(Kind::Module, true);
-}
-#[test]
-#[ignore = "negative control: remove the external wrapper's native state edge"]
-fn negative_control_objtables_wasm_extern_wrappers() {
-    check(Kind::Memory, true);
-}
-fn check(kind: Kind, erase: bool) {
+fn check(kind: Kind) {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -53,11 +43,6 @@ fn check(kind: Kind, erase: bool) {
         ),
         None
     );
-    if erase {
-        unsafe {
-            (*(*moved).meta).native_state = 0;
-        }
-    }
     js_gc_collect();
     assert_ne!(
         crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1))).to_bits(),

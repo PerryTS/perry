@@ -42,7 +42,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -75,6 +74,7 @@
       "perry-native-registration",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime",
       "perry-runtime-manifest",
       "perry-runtime-static",
@@ -85,7 +85,6 @@
       "perry-ui-model",
       "perry-update-manifest",
       "perry-updater",
-      "perry-uuid",
       "perry-wasm-host",
       "perry-wpfacts"
     ],
@@ -94,7 +93,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -110,6 +108,7 @@
       "perry-http-client",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime-manifest",
       "perry-tls-session",
       "perry-transform",
@@ -139,10 +138,6 @@
       "category": "runtime-core",
       "decision": "keep"
     },
-    "perry-cli-support": {
-      "category": "tool",
-      "decision": "keep"
-    },
     "perry-codegen": {
       "category": "compiler-core",
       "decision": "keep"
@@ -153,7 +148,7 @@
     },
     "perry-codegen-glance": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-js": {
       "category": "codegen-adapter",
@@ -161,7 +156,7 @@
     },
     "perry-codegen-swiftui": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-wasm": {
       "category": "codegen-adapter",
@@ -169,7 +164,7 @@
     },
     "perry-codegen-wear-tiles": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-component-host": {
       "category": "runtime-core",
@@ -185,10 +180,6 @@
     },
     "perry-container-e2e": {
       "category": "test-support",
-      "decision": "keep"
-    },
-    "perry-db-turnloop": {
-      "category": "runtime-core",
       "decision": "keep"
     },
     "perry-diagnostics": {
@@ -303,6 +294,10 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-realm-table": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
     "perry-runtime": {
       "category": "runtime-core",
       "decision": "keep"
@@ -324,10 +319,6 @@
       "decision": "keep"
     },
     "perry-tls-session": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-tls-turnloop": {
       "category": "runtime-core",
       "decision": "keep"
     },
@@ -367,10 +358,6 @@
       "category": "test-support",
       "decision": "keep"
     },
-    "perry-ui-testkit": {
-      "category": "test-support",
-      "decision": "keep"
-    },
     "perry-ui-tvos": {
       "category": "platform-adapter",
       "decision": "keep"
@@ -389,17 +376,13 @@
     },
     "perry-ui-windows-winui": {
       "category": "platform-adapter",
-      "decision": "merge"
+      "decision": "keep"
     },
     "perry-update-manifest": {
       "category": "compiler-core",
       "decision": "keep"
     },
     "perry-updater": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-uuid": {
       "category": "runtime-core",
       "decision": "keep"
     },

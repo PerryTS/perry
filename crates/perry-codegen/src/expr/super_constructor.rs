@@ -45,6 +45,10 @@ pub(crate) fn static_heritage<'a>(ctx: &FnCtx<'a>, class: &Class) -> Option<Opti
         None if crate::proto_constants::heritage_is_unrelinked(ctx, id) => named_id,
         None => return None,
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::Super,
+        || serde_json::json!({"class":id,"parent":fact}),
+    );
     match (fact, named_id) {
         // A proven parent codegen has no class for constructs statically only
         // through its named (imported) constructor; an `extends <expression>`

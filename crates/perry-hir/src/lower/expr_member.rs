@@ -295,7 +295,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // (`Bun.stringWidth(...)`) lowers via `expr_call/module_static.rs`.
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         if obj_ident.sym.as_ref() == "Bun"
-            && ctx.lookup_local("Bun").is_none()
+            && !ctx.shadows_unqualified_global("Bun")
             && ctx.lookup_native_module("Bun").is_none()
         {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
@@ -343,9 +343,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // must keep the `Promise` receiver instead of collapsing to the legacy
     // property-only `GlobalGet(0).resolve` intrinsic shape.
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        let promise_is_source_bound = ctx.lookup_local("Promise").is_some()
-            || ctx.lookup_func("Promise").is_some()
-            || ctx.lookup_imported_func("Promise").is_some();
+        let promise_is_source_bound = ctx.shadows_unqualified_global("Promise");
         if obj_ident.sym.as_ref() == "Promise" && !promise_is_source_bound {
             let static_member = match &member.prop {
                 ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
@@ -540,6 +538,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // (#1401); the shape-only read is what closes #1346.
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
@@ -681,6 +680,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "report" => return Ok(process_native_property("report")),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
@@ -819,7 +819,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // Check if this is a process.env.VARNAME or process.env[expr] access
     if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
         if let ast::Expr::Ident(obj_ident) = inner_member.obj.as_ref() {
-            if obj_ident.sym.as_ref() == "process" {
+            if obj_ident.sym.as_ref() == "process" && !ctx.shadows_unqualified_global("process") {
                 if let ast::MemberProp::Ident(prop_ident) = &inner_member.prop {
                     if prop_ident.sym.as_ref() == "env" {
                         // This is process.env access
@@ -869,7 +869,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check for Math constants (e.g., Math.PI, Math.E)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        if obj_ident.sym.as_ref() == "Math" {
+        if obj_ident.sym.as_ref() == "Math" && !ctx.shadows_unqualified_global("Math") {
             if let Some(prop_name) = static_member_prop_name(&member.prop) {
                 let val = match prop_name.as_str() {
                     "PI" => Some(std::f64::consts::PI),
@@ -891,7 +891,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // Check for Number constants (e.g., Number.MAX_SAFE_INTEGER)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        if obj_ident.sym.as_ref() == "Number" {
+        if obj_ident.sym.as_ref() == "Number" && !ctx.shadows_unqualified_global("Number") {
             if let Some(prop_name) = static_member_prop_name(&member.prop) {
                 let val = match prop_name.as_str() {
                     "MAX_SAFE_INTEGER" => Some(9007199254740991.0),
@@ -921,10 +921,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
             if prop_ident.sym.as_ref() == "BYTES_PER_ELEMENT" {
                 if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
-                    let shadowed = ctx.lookup_local(obj_name).is_some()
-                        || ctx.lookup_func(obj_name).is_some()
-                        || ctx.lookup_imported_func(obj_name).is_some()
-                        || ctx.lookup_class(obj_name).is_some();
+                    let shadowed = ctx.shadows_unqualified_global(obj_name);
                     if !shadowed {
                         let bytes = match kind {
                             crate::ir::TYPED_ARRAY_KIND_INT8
@@ -957,6 +954,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     if matches!(value, crate::ir::EnumValue::Computed) {
                         if let Some(id) = ctx.lookup_local(&obj_name) {
                             return Ok(Expr::IndexGet {
+                                element_offset: 0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(id)),
@@ -1017,6 +1015,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         crate::lower_decl::enum_runtime_object(&members)
                     };
                 return Ok(Expr::IndexGet {
+                    element_offset: member.span.lo.0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(object),

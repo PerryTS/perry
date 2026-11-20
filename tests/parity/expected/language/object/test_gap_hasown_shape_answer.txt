@@ -1,0 +1,101 @@
+DEC 250: Cannot replace built-in member Object.prototype.hasOwnProperty: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Object.prototype.hasOwnProperty: built-in objects are read-only in a compiled program
+lit a true true true
+lit b true true true
+lit c true true true
+lit x false false false
+lit  false false false
+lit ab false false false
+lit toString false false false
+lit hasOwnProperty false false false
+built a true true true
+built b true true true
+built c true true true
+built x false false false
+long averyveryverylongpropertyname_1 true true true
+long averyveryverylongpropertyname_1 true true true
+long averyveryverylongpropertyname_2 false false false
+uni héllo true true true
+uni 日本 true true true
+uni hello false false false
+parent c false false false
+parent d false false false
+child c true true true
+child d true true true
+add/delete seen 4000
+deleted a false false false
+deleted b true true true
+deleted c true true true
+q c true true true
+q-del-last c false false false
+q-del-last b true true true
+q-add d true true true
+q-add c false false false
+wide k0 true true true
+wide k17 true true true
+wide k39 true true true
+wide k40 false false false
+wide k false false false
+wide x false false false
+wide-del k17 false false false
+wide-del k18 true true true
+num 0 true true true
+num 0 true true true
+num 2 false false false
+sym Symbol(s) true true true
+sym s true true true
+undef undefined true true true
+null null true true true
+objkey [object Object] true true true
+create-null a true true throws
+create-null b false false throws
+frozen a true true true
+frozen b false false false
+accessor a true true true
+accessor b true true true
+accessor c false false false
+json a true true true
+json c false false false
+json __proto__ true true true
+json-inner c true true true
+literal-proto __proto__ false false throws
+class pub true true true
+class #secret false false false
+class m false false false
+class-proto m true true true
+class-proto constructor true true true
+class-obj prototype true true true
+class-obj name true true true
+fn-proto call true true true
+fn-proto hasOwnProperty false false false
+fn-proto valueOf false false false
+obj-proto toString true true true
+obj-proto hasOwnProperty true true true
+obj-proto call false false false
+string-wrapper 0 true true true
+string-wrapper 2 false false false
+string-wrapper length true true true
+array-sub 0 true true true
+array-sub length true true true
+array-sub 1 false false false
+array 0 true true true
+array length true true true
+array 2 false false false
+map size false false false
+env PATH true true true
+env PERRY_DEFINITELY_NOT_SET_42 false false false
+arguments 0 true true true
+arguments length true true true
+arguments 1 false false false
+fn length true true true
+fn prototype true true true
+fn prototype false false false
+re lastIndex true true true
+re source false false false
+err message true true true
+err stack true true true
+date getTime false false false
+replaced true
+restored true
+shadow own true
+null throws true

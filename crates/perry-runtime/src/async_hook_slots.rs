@@ -8,13 +8,13 @@ pub struct AsyncResourceIds {
     pub trigger_async_id: u64,
 }
 #[inline(always)]
-pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), f64> {
+pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), crate::exception::Caught> {
     try_enter_resource_scope_at(crate::exception::frame_mark(), ids)
 }
 #[inline(always)]
 pub fn enter_resource_scope(ids: AsyncResourceIds) {
     if let Err(error) = try_enter_resource_scope(ids) {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
@@ -35,11 +35,11 @@ fn callback_without_hooks(
     let outcome = {
         let scope = crate::gc::RuntimeHandleScope::new();
         let _receiver = receiver.map(|value| scope.root_nanbox_f64(value));
-        crate::exception::js_call_catching(|| unsafe { callback(data) })
+        crate::exception::catch_thrown(|| unsafe { callback(data) })
     };
     match outcome {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 
@@ -582,18 +582,23 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         .map_or_else(|| (), |f| f(visitor))
 }
 
-static TRY_ENTER_RESOURCE_SCOPE_AT: Hook<fn(usize, AsyncResourceIds) -> Result<(), f64>> =
-    Hook::empty();
+static TRY_ENTER_RESOURCE_SCOPE_AT: Hook<
+    fn(usize, AsyncResourceIds) -> Result<(), crate::exception::Caught>,
+> = Hook::empty();
 #[inline]
-pub fn try_enter_resource_scope_at(mark: usize, ids: AsyncResourceIds) -> Result<(), f64> {
+pub fn try_enter_resource_scope_at(
+    mark: usize,
+    ids: AsyncResourceIds,
+) -> Result<(), crate::exception::Caught> {
     TRY_ENTER_RESOURCE_SCOPE_AT
         .get()
         .map_or_else(|| Ok(()), |f| f(mark, ids))
 }
 
-static TRY_LEAVE_RESOURCE_SCOPE: Hook<fn(u64) -> Result<(), f64>> = Hook::empty();
+static TRY_LEAVE_RESOURCE_SCOPE: Hook<fn(u64) -> Result<(), crate::exception::Caught>> =
+    Hook::empty();
 #[inline]
-pub fn try_leave_resource_scope(async_id: u64) -> Result<(), f64> {
+pub fn try_leave_resource_scope(async_id: u64) -> Result<(), crate::exception::Caught> {
     TRY_LEAVE_RESOURCE_SCOPE
         .get()
         .map_or_else(|| Ok(()), |f| f(async_id))
@@ -619,11 +624,15 @@ fn with_callback<F: FnOnce() -> f64, R>(
     run((&mut callback as *mut Option<F>).cast(), invoke_once::<F>)
 }
 
-static OWNED_PROVIDER_SCOPE: Hook<unsafe fn(f64, *mut (), Callback) -> Result<f64, f64>> =
-    Hook::empty();
-pub fn owned_provider_scope(resource: f64, callback: impl FnOnce() -> f64) -> Result<f64, f64> {
+static OWNED_PROVIDER_SCOPE: Hook<
+    unsafe fn(f64, *mut (), Callback) -> Result<f64, crate::exception::Caught>,
+> = Hook::empty();
+pub fn owned_provider_scope(
+    resource: f64,
+    callback: impl FnOnce() -> f64,
+) -> Result<f64, crate::exception::Caught> {
     let Some(run) = OWNED_PROVIDER_SCOPE.get() else {
-        return crate::exception::js_call_catching(callback);
+        return crate::exception::catch_thrown(callback);
     };
 
     with_callback(callback, |context, callback| unsafe {
@@ -637,15 +646,15 @@ static OWNED_PROVIDER_SCOPE_ROOTED: Hook<
         &crate::gc::RuntimeHandle<'_>,
         *mut (),
         Callback,
-    ) -> Result<f64, f64>,
+    ) -> Result<f64, crate::exception::Caught>,
 > = Hook::empty();
 pub fn owned_provider_scope_rooted(
     scope: &crate::gc::RuntimeHandleScope,
     owner: &crate::gc::RuntimeHandle<'_>,
     callback: impl FnOnce() -> f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     let Some(run) = OWNED_PROVIDER_SCOPE_ROOTED.get() else {
-        return crate::exception::js_call_catching(callback);
+        return crate::exception::catch_thrown(callback);
     };
 
     with_callback(callback, |context, callback| unsafe {

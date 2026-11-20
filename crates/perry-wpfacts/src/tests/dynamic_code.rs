@@ -107,10 +107,17 @@ fn object_prototype_method_value_runs_on_its_receiver() {
         console.log(h.z);
         "#,
     );
-    assert!(tmpl(&pf, "H").escape.is_some(), "{}", pf.dump_text());
-    // Its key is converted, its accessor function escapes.
+    assert!(tmpl(&pf, "H").escape.is_none(), "{}", pf.dump_text());
+    assert!(matches!(
+        site(&pf, "z").verdict,
+        Verdict::T0Mono | Verdict::T0Set
+    ));
+    // Installing does not hand the accessor or its result to unknown code.
     assert_eq!(d_escape("const t: any = {}; t[k](d);"), None);
-    assert!(d_escape("const t: any = {}; t[k]('y', () => d);").is_some());
+    assert_eq!(d_escape("const t: any = {}; t[k]('y', () => d);"), None);
+    assert!(
+        d_escape("const t: any = {}; t[k]('y', () => d); (globalThis as any).host(t.y);").is_some()
+    );
 }
 
 /// The family a chain's `ObjectProto` stands for answers with that
@@ -155,13 +162,18 @@ fn a_store_into_top_reaches_the_seeded_chains() {
             d_escape(&format!("{TOP}const o: any = {recv}; o[k](d);")),
             None
         );
-        for (body, _) in cases(recv, "o[k](d);") {
-            assert!(d_escape(&body).is_some(), "{body}");
+        // DEC 250: a store under `constructor` or an unknown key may replace
+        // the exempt `constructor` a computed read can name; a store under
+        // another constant key is an add on the locked chain, refused.
+        for (body, want) in cases(recv, "o[k](d);") {
+            assert_eq!(d_escape(&body).is_some(), want, "{body}");
         }
     }
 }
 
-const TOP: &str = "declare const unknown: any; const t: any = unknown.reach(0);";
+/// `t` is a value an unseen module's code supplies.
+const TOP: &str =
+    "import \"unseen-host\"; declare const unknown: any; const t: any = unknown.reach(0);";
 
 /// BFI census (6,450 sites in the all-knobs-off arm): a key whose values
 /// are all numbers names no `Object.prototype` method (no intrinsic
@@ -188,24 +200,25 @@ fn a_numeric_key_names_no_object_prototype_method() {
 /// `tests/proto_value.rs`.
 #[test]
 fn a_store_through_a_literals_prototype_reaches_every_object() {
-    let sees_e = |get: &str| {
+    let sees_e = |get: &str, key: &str| {
         let pf = facts(&format!(
             "class E {{ z = 3; }}
             const k = String(Math.random());
             const o: any = {{ a: 1 }};
             const p: any = {get};
-            p.y = new E();
+            try {{ p.{key} = new E(); }} catch (e) {{}}
             const q: any = {{}};
-            const r = q.y;
+            const r = q.{key};
             if (r) console.log(r.z);"
         ));
         let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
         assert_eq!(s.len(), 1, "{}", pf.dump_text());
         s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
     };
-    // Seen: the store names `Object.prototype` itself.
-    assert!(sees_e("Object.prototype"));
+    // DEC 250 refuses a new y; constructor is exempt and keeps the prototype-value mechanism live.
+    assert!(!sees_e("Object.prototype", "y"));
+    assert!(sees_e("Object.prototype", "constructor"));
     for get in ["o.__proto__", "o['__proto__']", "Object.getPrototypeOf(o)"] {
-        assert!(sees_e(get), "{get}");
+        assert!(sees_e(get, "constructor"), "{get}");
     }
 }

@@ -112,7 +112,7 @@ fn persistent_http_ffi_defers_callbacks_and_completes_reverse_order_under_fresh_
         let wasm =
             wat::parse_str(include_str!("../../../http/p3/concurrent.component.wat")).unwrap();
         let world = perry_wit::parse(
-            include_str!("../../../../../../test-wasi/components/http-p3/world.wit"),
+            include_str!("../../../../../../tests/integration/wasi/components/http-p3/world.wit"),
             None,
         )
         .unwrap();

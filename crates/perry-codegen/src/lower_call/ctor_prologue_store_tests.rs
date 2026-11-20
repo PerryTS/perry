@@ -14,7 +14,9 @@
 //! (`typed_shape_bake_tests`) so the pointer-free baked path and the
 //! pointer-bearing runtime-declared path differ by one field type only.
 
-use super::typed_shape_bake_tests::{emit, loop_new_module, outlined_new_module};
+use super::typed_shape_bake_tests::{
+    emit, loop_new_module, loop_new_module_unproven, outlined_new_module,
+};
 use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, Stmt};
 
@@ -62,6 +64,38 @@ fn a_prologue_only_ctor_stores_its_fields_at_the_new_site() {
         "the constructor-free arm exists but does not store both fields — an \
          arm that stores fewer fields than the constructor did is a WRONG \
          ANSWER, not a slow one:\n{ir}"
+    );
+}
+
+/// The plain-finite-number test a raw-`f64` lane store applies to an argument
+/// it cannot prove: `bits & 0x7FF0_0000_0000_0000 != 0x7FF0_0000_0000_0000`.
+const FINITE_TEST_MASK: &str = ", 9218868437227405312\n";
+
+/// P3 B4b: `new Pair(i + 1, 2)` passes proven Numbers, so the birth writes both
+/// raw lanes with no number test. The control passes `JSON.parse("1")`, which
+/// nothing proves a Number, and must keep the test — without it this assertion
+/// would also pass on a build that dropped the test for every argument.
+#[test]
+fn a_proven_number_birth_stores_its_lanes_without_a_number_test() {
+    let proven = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
+    assert!(
+        !proven.contains(FINITE_TEST_MASK),
+        "a proven-Number argument still pays the finite-number test:\n{proven}"
+    );
+    assert_eq!(
+        fast_arm_double_stores(&proven),
+        2,
+        "the untested birth must still write both lanes:\n{proven}"
+    );
+    let unproven = emit(&loop_new_module_unproven(
+        "Pair",
+        Type::Number,
+        Expr::Integer(2),
+    ));
+    assert!(
+        unproven.contains(FINITE_TEST_MASK),
+        "an unproven argument reached a raw-f64 lane without the finite-number \
+         test:\n{unproven}"
     );
 }
 
@@ -202,10 +236,11 @@ fn an_outlined_pointer_bearing_shape_keeps_its_write_barrier() {
     let ir = emit(&module);
     assert!(ir.contains("call i64 @js_object_alloc_class_inline_keys_stamped("));
     // The constructor's pointer stores are barriered: inline, or inside the
-    // store probe's runtime funnel (`perry_probe_set`, then `[[Set]]`).
+    // store probe's runtime funnel (`perry_store_or_put`: the probe, then
+    // `[[Set]]`).
     assert!(
         ir.contains("call void @js_write_barrier_slot")
-            || ir.contains("call i32 @perry_probe_set("),
+            || ir.contains("call double @perry_store_or_put("),
         "{ir}"
     );
 }
@@ -242,7 +277,7 @@ fn a_fresh_wide_prologue_needs_no_store_barrier() {
     // barriered inline or by the store probe's runtime funnel.
     assert!(
         ir.contains("call void @js_write_barrier_slot")
-            || ir.contains("call i32 @perry_probe_set("),
+            || ir.contains("call double @perry_store_or_put("),
         "{ir}"
     );
 }

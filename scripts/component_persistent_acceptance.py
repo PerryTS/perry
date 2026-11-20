@@ -21,7 +21,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for name in ["host.ts", "world.wit"]:
-        shutil.copyfile(root / "test-wasi/components/persistent" / name, out / name)
+        shutil.copyfile(root / "tests/integration/wasi/components/persistent" / name, out / name)
     heap = (root / "crates/perry-component-host/src/async_values/heap.wat").read_text()
     heap = heap.replace("(module", "(core module $heap", 1)
     fixture = (root / "crates/perry-component-host/src/async_values/task_context.component.wat").read_text()

@@ -249,7 +249,34 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
     if block == "@PERRY_AGENT_PTRS" {
         return Ok(());
     }
-    let rhs = def(blocks, block)?;
+    const TLS_BLOCK: &str = "call ptr @llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)";
+    let mut rhs = def(blocks, block)?;
+    // ELF: the function's one entry-block address of the thread's block.
+    if rhs == TLS_BLOCK {
+        return Ok(());
+    }
+    // Apple: the activation's one read at the body's start, the TSD lookup
+    // or the thread-local itself (`agent_ptr::finish_activation`).
+    let mut guards = ["pget.recv_ok", "agent_ptr.hot_tls.tsd"];
+    if let Some(phi) = rhs.strip_prefix("phi ptr [ ") {
+        let (fast_value, rest) = phi.split_once(", %").ok_or("block phi's fast value")?;
+        let (fast, slow) = rest
+            .split_once(" ], [ ")
+            .ok_or("block phi's two incoming edges")?;
+        let (slow_value, slow) = slow
+            .strip_suffix(" ]")
+            .and_then(|s| s.split_once(", %"))
+            .ok_or("block phi's slow edge")?;
+        let (fast_label, _) = tower_block(blocks, "agent_block.hot_tls.fast");
+        let (slow_label, _) = tower_block(blocks, "agent_block.hot_tls.slow");
+        if fast != fast_label || slow != slow_label || def(blocks, slow_value)? != TLS_BLOCK {
+            return Err(format!(
+                "block phi must select HotTls.agent_ptrs or the thread-local: {rhs}"
+            ));
+        }
+        rhs = def(blocks, fast_value)?;
+        guards = ["agent_block.head", "agent_block.hot_tls.tsd"];
+    }
     if let Some(field) = rhs.strip_prefix("load ptr, ptr ") {
         let field = def(blocks, field)?;
         if !field.starts_with("getelementptr i8, ptr %")
@@ -296,8 +323,8 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
             return Err("Apple directory must use the published TSD key".into());
         }
         for (prefix, predicate) in [
-            ("pget.recv_ok", format!("icmp ne i64 {key}, -1")),
-            ("agent_ptr.hot_tls.tsd", format!("icmp ne ptr {hot}, null")),
+            (guards[0], format!("icmp ne i64 {key}, -1")),
+            (guards[1], format!("icmp ne ptr {hot}, null")),
         ] {
             let (_, body) = tower_block(blocks, prefix);
             if !body.last().is_some_and(|l| l.starts_with("br i1 %")) {

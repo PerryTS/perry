@@ -100,11 +100,9 @@ fn math_number_arg(value: f64) -> f64 {
 
 fn math_to_int32(value: f64) -> i32 {
     let n = math_number_arg(value);
-    if !n.is_finite() || n == 0.0 {
-        return 0;
-    }
-    const TWO_32: f64 = 4_294_967_296.0;
-    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+    // ES ToInt32 without a floating-point remainder (#10511): one
+    // truncating conversion for |n| < 2^63, the exponent rule beyond.
+    crate::value::dyn_to_int32(n)
 }
 
 fn math_to_uint32(value: f64) -> u32 {
@@ -135,7 +133,7 @@ math_unary_thunk!(math_cbrt_thunk, |x: f64| crate::math::js_math_cbrt(x));
 math_unary_thunk!(math_ceil_thunk, |x: f64| x.ceil());
 math_unary_thunk!(math_cos_thunk, |x: f64| crate::math::js_math_cos(x));
 math_unary_thunk!(math_cosh_thunk, |x: f64| crate::math::js_math_cosh(x));
-math_unary_thunk!(math_exp_thunk, |x: f64| x.exp());
+math_unary_thunk!(math_exp_thunk, |x: f64| crate::math::js_math_exp(x));
 math_unary_thunk!(math_expm1_thunk, |x: f64| crate::math::js_math_expm1(x));
 math_unary_thunk!(math_floor_thunk, |x: f64| x.floor());
 math_unary_thunk!(math_fround_thunk, |x: f64| crate::math::js_math_fround(x));

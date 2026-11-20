@@ -1,0 +1,1 @@
+JSON.stringify with an array replacer (`JSON.stringify(v, ["a", "b"])`) now calls `toJSON(key)` on the root, on every listed member and on every array element, as Node does; own and inherited `toJSON` methods were skipped and the raw fields written. A root whose `toJSON` result has no JSON text now makes it return undefined.

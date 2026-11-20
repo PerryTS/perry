@@ -342,8 +342,8 @@ pub(super) unsafe fn grow(map: crate::gc::RuntimeHandle<'_>) -> *mut WeakStorage
                 let message = b"Weak collection capacity limit exceeded";
                 let string =
                     crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-                let error = crate::error::js_rangeerror_new(string);
-                crate::exception::js_throw(f64::from_bits(JSValue::pointer(error.cast()).bits()))
+                let error = crate::error::CoreError::range_error(string);
+                crate::exception::throw_core(error)
             })
     };
     let fresh = allocate(capacity);

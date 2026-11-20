@@ -12,7 +12,10 @@ pub(super) fn candidate(
     property: &str,
     setter: bool,
 ) -> Option<(String, String, bool)> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+    // wasm32 has the same guard: its authority is the holder's layout word,
+    // whose shadow bit the entry module's shadow-name table drives there too.
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
         || property.starts_with('#')
         || ctx.is_static_class_this(object)
     {

@@ -95,7 +95,7 @@ pub(super) fn admit_native(
             String::from_utf8_lossy(&output).into_owned()
         };
         drop((output, parsed));
-        let outcome = crate::exception::catch_js_throw(|| fail(&message));
+        let outcome = crate::exception::catch_thrown(|| fail(&message));
         drop(message);
         finish(outcome);
         unreachable!();
@@ -144,7 +144,7 @@ pub(super) fn call(
         interface: interface.to_owned(),
         function: function.to_owned(),
     };
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         available(component.get_nanbox_f64(), !asynchronous);
         retained.set_nanbox_f64(value::retention::new_plan());
         let world = unsafe { &(*context::get(component.get_nanbox_f64())).world };
@@ -214,7 +214,7 @@ pub(in crate::component) fn unit(component: f64, request: &Value) -> f64 {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let mut bytes = Vec::new();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         available(component.get_nanbox_f64(), true);
         bytes = serde_json::to_vec(request).unwrap();
         let saved = scope.root_nanbox_f64(callback::saved::current());
@@ -255,7 +255,7 @@ pub(super) fn collection(component: f64, request: &Value) {
     let component = scope.root_nanbox_f64(component);
     let mut bytes = Vec::new();
     let reply = ReplyKind::Collection(request.clone());
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         available(component.get_nanbox_f64(), false);
         bytes = serde_json::to_vec(&if request["kind"] == "async-writer" {
             serde_json::json!({"op":"collect-writer","writer":request["writer"]})
@@ -287,7 +287,7 @@ pub(super) fn collection(component: f64, request: &Value) {
     });
     drop((bytes, reply));
     if let Err(error) = outcome {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
@@ -308,7 +308,7 @@ pub(in crate::component) fn read(
         payload: payload.clone(),
         stream,
     };
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         available(component.get_nanbox_f64(), false);
         request =
             serde_json::to_vec(&serde_json::json!({"op":"read","value":value,"capacity":capacity}))

@@ -1,7 +1,5 @@
-// Narrowing a pre-existing compiler overflow that reproduces with `class A extends B`
-// in the same module as a top-level `const x = fn()` call to an unannotated factory.
-// NOT caused by Phase 1/Phase 4 — reproduces with both disabled. Left here as a
-// repro for a separate follow-up; actual shape tests live in shape_inference.rs.
+// `class A extends B` in the same module as a top-level `const x = fn()`
+// call to an unannotated factory lowers without overflowing the stack.
 
 use perry_diagnostics::SourceCache;
 use perry_hir::lower_module;
@@ -14,19 +12,7 @@ fn lower(src: &str) {
 }
 
 #[test]
-#[ignore = "pre-existing overflow: top-level `const x = fn()` + factory returning nested object literal. Same class of bug as class_extends_plus_top_level_call_overflows; filed separately."]
-fn just_factory() {
-    lower(
-        r#"
-        function makeCfg() { return { scale: 1, origin: { x: 0, y: 0 } }; }
-        const cfg = makeCfg();
-        "#,
-    );
-}
-
-#[test]
-#[ignore = "pre-existing overflow in class-extends + top-level call combo; filed separately"]
-fn class_extends_plus_top_level_call_overflows() {
+fn class_extends_beside_a_top_level_factory_call_lowers() {
     lower(
         r#"
         class Base { b: number; constructor(b: number) { this.b = b; } }

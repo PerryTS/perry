@@ -1765,14 +1765,6 @@ pub(crate) extern "C" fn collator_resolved_options_thunk(
     collator_resolved_options_object(obj)
 }
 
-pub(crate) extern "C" fn collator_bound_resolved_options_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let obj = captured_intl_object(closure, "resolvedOptions", KIND_COLLATOR);
-    collator_resolved_options_object(obj)
-}
-
 pub(crate) fn collator_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     let out = js_object_alloc(0, 7);
     // Property insertion order matches ECMA-402 (resolvedOptions/order.js):

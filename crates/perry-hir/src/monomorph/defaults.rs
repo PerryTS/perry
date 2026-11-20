@@ -170,6 +170,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
             body,
             catch,
             finally,
+            ..
         } => {
             fill_defaults_in_stmts(body, cx);
             if let Some(ref mut c) = catch {
@@ -304,7 +305,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, val) in parts {
+            for val in parts.iter_mut().flatten() {
                 fill_defaults_in_expr(val, cx);
             }
         }

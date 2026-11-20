@@ -9,9 +9,7 @@ use crate::value::JSValue;
 /// int32-boxed and double representations). Returns `None` for non-numbers.
 pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(jsval.as_number())
     } else {
         None
@@ -478,15 +476,15 @@ pub use pipeline::{
     js_node_stream_duplex_pair, js_node_stream_finished, js_node_stream_pipeline,
 };
 
+pub(crate) use web_adapter::{
+    construct_web_stream, js_node_stream_duplex_to_web_method_value,
+    js_node_stream_readable_to_web_method_value, js_node_stream_writable_to_web_method_value,
+};
 pub use web_adapter::{
     js_node_stream_duplex_from_web, js_node_stream_duplex_to_web, js_node_stream_from_web,
     js_node_stream_readable_from_web, js_node_stream_readable_to_web, js_node_stream_to_web,
     js_node_stream_writable_from_web, js_node_stream_writable_to_web,
-    js_register_node_stream_web_adapter_callbacks,
-};
-pub(crate) use web_adapter::{
-    js_node_stream_duplex_to_web_method_value, js_node_stream_readable_to_web_method_value,
-    js_node_stream_writable_to_web_method_value,
+    js_register_node_stream_web_adapter_callbacks, js_register_web_stream_constructors,
 };
 
 pub use crate::array::subclass_init::js_array_subclass_init;

@@ -13,7 +13,7 @@
 //! Every slot is an ordinary traced child edge (`GcRewriteDescriptorKind::
 //! Scope`), rewritten on evacuation like a box value. Compiler-private async
 //! control cells share the object: an i32 control word is stored in the low
-//! half of a slot whose high half keeps `INT32_TAG`, and an i1 word in the low
+//! half of a slot whose high half keeps `INTERNAL_WORD_TAG`, and an i1 word in the low
 //! byte of a slot whose high half keeps the special-constant tag, so no slot
 //! ever holds a word the collector could mistake for a pointer.
 

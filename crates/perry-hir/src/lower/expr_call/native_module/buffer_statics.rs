@@ -33,7 +33,7 @@ pub(super) fn try_buffer_uint8array_statics(
     // TAG_UNDEFINED, and any caller that subsequently treats the
     // result as a Buffer (e.g. `b[0]` → Uint8ArrayGet) segfaults
     // on the undefined value.
-    let is_buffer_ref = obj_name == "Buffer"
+    let is_buffer_ref = (obj_name == "Buffer" && !ctx.shadows_unqualified_global("Buffer"))
         || matches!(
             ctx.lookup_native_module(obj_name),
             Some(("buffer", Some("Buffer")))
@@ -171,7 +171,7 @@ pub(super) fn try_buffer_uint8array_statics(
     }
 
     // Check for Uint8Array static methods
-    if obj_name == "Uint8Array" {
+    if obj_name == "Uint8Array" && !ctx.shadows_unqualified_global("Uint8Array") {
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
             match method_name {

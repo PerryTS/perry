@@ -15,8 +15,8 @@ use crate::array::ArrayHeader;
 use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::{
-    BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
-    TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG,
+    STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 const POLYMORPHIC_CAP: usize = 4;
@@ -491,7 +491,10 @@ fn stable_value_kind(bits: u64) -> u16 {
         BIGINT_TAG => STABLE_VALUE_BIGINT,
         JS_HANDLE_TAG => STABLE_VALUE_JS_HANDLE,
         SHORT_STRING_TAG => STABLE_VALUE_SHORT_STRING,
-        INT32_TAG => STABLE_VALUE_INT32,
+        // An I32 slot word (`layout_slot`); no JS value is in this band.
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => STABLE_VALUE_INT32,
+        // Any other internal word: no stable kind.
+        INTERNAL_WORD_TAG => STABLE_VALUE_POINTER,
         _ => STABLE_VALUE_NUMBER,
     }
 }
@@ -649,7 +652,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
                 STABLE_VALUE_POINTER,
             );
         }
-        if gc_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(gc_type) {
             return (
                 0,
                 gc_type as u16,
@@ -705,7 +708,7 @@ fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     }
 
     match raw_heap_type(addr) as u8 {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
             (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
@@ -1203,11 +1206,6 @@ fn is_numeric_value_bits(bits: u64) -> bool {
 }
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
-    let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index < u32::MAX as f64 {
         Some(index as u32)
     } else {
@@ -1216,11 +1214,6 @@ fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
 }
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
-    let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= i32::MAX as f64 {
         Some(index as i32)
     } else {
@@ -1271,7 +1264,7 @@ fn plain_array_index_guard_impl(
         // patterns. Same applies to the sibling check in
         // `numeric_array_push_guard`. Do not remove either arm without
         // routing the guard through `clean_arr_ptr`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1407,7 +1400,7 @@ fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
     unsafe {
         // A pre-grow pointer is rejected before any length/capacity read
         // (#6486); see `plain_array_index_guard_impl`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1439,7 +1432,7 @@ pub(crate) unsafe fn packed_f64_loop_admits_live_array(
     }
     let len = (*arr).length;
     let cap = (*arr).capacity;
-    if cap > 16_000_000 || len > cap || len > i32::MAX as u32 {
+    if cap > perry_abi::PACKED_F64_LOOP_MAX_CAPACITY || len > cap || len > i32::MAX as u32 {
         return false;
     }
     crate::array::js_array_is_numeric_f64_layout_resolved(arr) != 0
@@ -1803,7 +1796,7 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         return false;
     };
     unsafe {
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -2276,6 +2269,11 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
+        // A null / undefined receiver behind an Array annotation: node's
+        // TypeError (RequireObjectCoercible), never `undefined`.
+        if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+            return crate::value::js_dyn_index_get(receiver, index);
+        }
         return f64::from_bits(TAG_UNDEFINED);
     }
 
@@ -2308,7 +2306,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
     {
         if let Some(key) = crate::buffer::canonical_index_key(index) {
             return crate::buffer::buffer_read_own_prop(raw_addr, &key)
-                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw_addr, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
@@ -2336,7 +2334,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // Fast path: a plain non-negative integer double indexes
                 // element storage directly.
                 if is_plain_number_bits(index.to_bits())
@@ -2370,7 +2368,12 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
                     key_ptr,
                 )
             }
-            _ => f64::from_bits(TAG_UNDEFINED),
+            // Any other object behind a `T[]` site (a Date, a Promise, an
+            // Error, a RegExp, ...): its ordinary [[Get]] of the key.
+            _ => crate::value::js_dyn_index_get(
+                crate::value::js_nanbox_pointer(raw_addr as i64),
+                index,
+            ),
         }
     }
 }
@@ -2593,7 +2596,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
         return numeric_array_push_guard(raw_addr as *const ArrayHeader, value) as i32;
     }
     let push_index = match gc_header_for_user_addr(raw_addr) {
-        Some(header) if unsafe { (*header).obj_type == crate::gc::GC_TYPE_ARRAY } => unsafe {
+        Some(header) if unsafe { crate::gc_type_is_array!((*header).obj_type) } => unsafe {
             (*(raw_addr as *const ArrayHeader)).length
         },
         _ => u32::MAX,
@@ -2620,6 +2623,19 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     } else {
         0
     }
+}
+
+/// `null[k] = v` / `undefined[k] = v`: the TypeError of `PutValue`'s
+/// `ToObject` (node: "Cannot set properties of null").
+#[cold]
+#[inline(never)]
+fn throw_nullish_index_set(receiver: f64) -> ! {
+    let what = if receiver.to_bits() == crate::value::TAG_NULL {
+        "null"
+    } else {
+        "undefined"
+    };
+    crate::collection_iter::throw_type_error(&format!("Cannot set properties of {what}"))
 }
 
 /// Cold continuation of a source-level `arr[index] = value` after the inline
@@ -2654,6 +2670,11 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
+        // A null / undefined receiver behind an Array annotation: `PutValue`
+        // throws node's TypeError (ToObject), in sloppy code too.
+        if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+            throw_nullish_index_set(receiver);
+        }
         return receiver;
     }
 
@@ -2678,10 +2699,10 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if let Some(index) = finite_nonnegative_i32_index(index) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw_addr as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
         }
         return receiver;
@@ -2695,7 +2716,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // #9220: the inherited-descriptor walk must run in BOTH
                 // modes — a prototype setter fires on a sloppy assignment
                 // too, and the pre-#9220 non-strict helper bypassed it
@@ -2746,7 +2767,14 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 }
                 f64::from_bits(receiver_handle.get_nanbox_u64())
             }
-            _ => receiver,
+            // Any other object behind a `T[]` site (a Date, a Map, a Promise,
+            // an Error, a RegExp, ...): its ordinary [[Set]] of the key, with
+            // the assignment's own `Throw` flag. The store was dropped.
+            _ => {
+                let target = crate::value::js_nanbox_pointer(raw_addr as i64);
+                crate::proxy::js_put_value_set(target, index, value, target, strict);
+                receiver
+            }
         }
     }
 }
@@ -2767,10 +2795,9 @@ pub extern "C" fn js_typed_feedback_array_set_string_key(
     key: *const crate::StringHeader,
     value: f64,
 ) -> *mut ArrayHeader {
-    // Class-ref receivers (INT32 tag 0x7FFE) are not arrays; skip the array
-    // shape observation (which would probe the GC header of a non-pointer) and
-    // route straight to the class-ref-aware string-key setter.
-    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
+    // Class constructor/prototype references are not arrays. Skip array
+    // shape observation and use the class-aware string-key setter.
+    if crate::object::class_value::class_ref_ptr_word(arr as u64).is_some() {
         return crate::array::js_array_set_string_key(arr, key, value);
     }
     observe_array(site_id, arr, u32::MAX);

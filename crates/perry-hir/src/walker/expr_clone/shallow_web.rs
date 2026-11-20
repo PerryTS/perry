@@ -148,6 +148,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             is_async,
             is_generator,
             is_strict,
+            construct_only,
         } => Expr::Closure {
             func_id: func_id.clone(),
             params: Shallow::shallow(params, n),
@@ -162,6 +163,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             is_async: is_async.clone(),
             is_generator: is_generator.clone(),
             is_strict: is_strict.clone(),
+            construct_only: construct_only.clone(),
         },
         Expr::RegExp { pattern, flags } => Expr::RegExp {
             pattern: pattern.clone(),
@@ -392,6 +394,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             value,
             receiver,
             strict,
+            element_offset,
             byte_offset,
             byte_end,
         } => Expr::PutValueSet {
@@ -400,6 +403,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             value: Shallow::shallow(value, n),
             receiver: Shallow::shallow(receiver, n),
             strict: strict.clone(),
+            element_offset: element_offset.clone(),
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
@@ -531,6 +535,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset,
             deferred_error,
             synchronous,
+            deferred,
         } => Expr::DynamicImport {
             paths: paths.clone(),
             arg: Shallow::shallow(arg, n),
@@ -538,6 +543,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset: byte_offset.clone(),
             deferred_error: deferred_error.clone(),
             synchronous: synchronous.clone(),
+            deferred: *deferred,
         },
         Expr::WorkerNew {
             paths,

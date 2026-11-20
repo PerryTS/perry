@@ -19,6 +19,7 @@ fn emit(body: Vec<Stmt>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         crate::compile_module(&module, super::prealloc_module_global_tests::ir_opts()).unwrap(),
@@ -69,6 +70,7 @@ fn tdz_finally_allocates_on_normal_and_exception_paths() {
                 init: Some(Expr::Integer(42)),
             },
         ]),
+        forof_completion: None,
     }]);
     let slots = allocated_slots(&ir, crate::nanbox::TAG_TDZ_I64);
     assert_eq!(

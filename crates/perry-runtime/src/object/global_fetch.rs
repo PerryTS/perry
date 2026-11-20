@@ -206,6 +206,54 @@ pub(crate) fn call_global_body_init_ptr(value: f64) -> *const crate::StringHeade
     crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
 }
 
+/// The object-URL natives perry-stdlib owns (the Blob registry lives there):
+/// `URL.createObjectURL` and `node:buffer.resolveObjectURL`, reached from the
+/// realm's function values (the `URL` static and the namespace member), which
+/// the runtime cannot link to the stdlib directly.
+type ObjectUrlCreateFn = unsafe extern "C" fn(f64) -> *mut crate::StringHeader;
+type ObjectUrlResolveFn = unsafe extern "C" fn(f64) -> f64;
+static OBJECT_URL_CREATE: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static OBJECT_URL_RESOLVE: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_object_url_fns(
+    create: ObjectUrlCreateFn,
+    resolve: ObjectUrlResolveFn,
+) {
+    OBJECT_URL_CREATE.store(create as *mut (), Ordering::Release);
+    OBJECT_URL_RESOLVE.store(resolve as *mut (), Ordering::Release);
+}
+
+/// `URL.createObjectURL(blob)` through the registered stdlib native: the URL
+/// string (a non-Blob throws its TypeError there).
+pub(crate) fn call_url_create_object_url(blob: f64) -> f64 {
+    let f = OBJECT_URL_CREATE.load(Ordering::Acquire);
+    if f.is_null() {
+        crate::stub_diag::perry_stub_warn("js_url_create_object_url", FETCH_REASON, None);
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
+    let func: ObjectUrlCreateFn = unsafe { std::mem::transmute(f) };
+    let s = unsafe { func(blob) };
+    f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
+}
+
+crate::realm_decl! { "node:buffer.resolveObjectURL", effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(undefined) | fresh(Blob.prototype)) } }
+/// `resolveObjectURL(url)` through the registered stdlib native: a new Blob
+/// or `undefined`.
+/// The stdlib body (`js_buffer_resolve_object_url`) runs ToString on `url`
+/// and returns `undefined` or a Blob it allocates, holding only bytes.
+pub(crate) fn call_buffer_resolve_object_url(url: f64) -> f64 {
+    let f = OBJECT_URL_RESOLVE.load(Ordering::Acquire);
+    if f.is_null() {
+        crate::stub_diag::perry_stub_warn("js_buffer_resolve_object_url", FETCH_REASON, None);
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
+    let func: ObjectUrlResolveFn = unsafe { std::mem::transmute(f) };
+    unsafe { func(url) }
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_global_fetch_with_options(f: FetchWithOptionsFn) {
     GLOBAL_FETCH_WITH_OPTIONS.store(f as *mut (), Ordering::Release);

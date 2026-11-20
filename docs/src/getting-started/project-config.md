@@ -109,6 +109,14 @@ such a package can still be compiled, but an actual `.node` edge fails. Naming
 the addon package exactly still fails immediately with the native-addon
 diagnostic.
 
+#### `packageAliases`
+
+`perry.packageAliases` maps exact module specifiers to replacement specifiers.
+The same mapping applies to imports and all export-from forms (`export *`,
+named re-exports and namespace re-exports). Rewritten dependencies retain
+source declaration order for module initialization; requests that converge
+on one target keep their first occurrence. Each specifier is mapped once.
+
 #### `codegen`
 
 Perry is an ahead-of-time compiler: it never runs a code string at runtime. Many libraries that would normally JIT a function from a schema or a config (`ajv`, `fast-json-stringify`, Prisma, Drizzle, …) ship a **build-time** mode that emits plain, eval-free source instead. The `codegen` field declares the commands that produce that source. Perry runs them **before** compiling, then compiles the generated output natively — so the shipped binary links no JavaScript engine.
@@ -157,7 +165,7 @@ import validate from "./generated/validator.cjs";
 if (!validate(input)) throw new Error("invalid config");
 ```
 
-`perry compile` runs the `codegen` step, ajv emits `generated/validator.cjs` (no `new Function`), and Perry compiles it natively. See `test-files/test_ajv_standalone.ts` for a runnable, byte-parity-tested sample.
+`perry compile` runs the `codegen` step, ajv emits `generated/validator.cjs` (no `new Function`), and Perry compiles it natively. See `tests/parity/npm/ajv/test_ajv_standalone.ts` for a runnable, byte-parity-tested sample.
 
 ##### Same convention, other tools
 

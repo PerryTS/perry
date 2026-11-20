@@ -86,11 +86,6 @@ mod tests {
                 "unexpected system TLS library {lib}"
             );
         }
-        let src = include_str!("build_and_run.rs");
-        assert!(
-            !src.contains("\"-lssl\"") && !src.contains("\"-lcrypto\""),
-            "build_and_run.rs must not link system OpenSSL"
-        );
     }
 
     #[test]

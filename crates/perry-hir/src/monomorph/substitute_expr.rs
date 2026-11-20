@@ -206,9 +206,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             byte_end,
+            element_offset,
             byte_offset,
             ..
         } => Expr::IndexGet {
+            element_offset: *element_offset,
             byte_offset: *byte_offset,
             byte_end: *byte_end,
             object: Box::new(substitute_expr(object, substitutions)),
@@ -218,6 +220,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             value,
+            element_offset,
             byte_offset,
             byte_end,
             ..
@@ -225,6 +228,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            element_offset: *element_offset,
             byte_offset: *byte_offset,
             byte_end: *byte_end,
         },
@@ -239,7 +243,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ObjectSpread { parts } => Expr::ObjectSpread {
             parts: parts
                 .iter()
-                .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
+                .map(|part| match part {
+                    ObjectPart::Spread(v) => ObjectPart::Spread(substitute_expr(v, substitutions)),
+                    ObjectPart::Define(k, v) => {
+                        ObjectPart::Define(k.clone(), substitute_expr(v, substitutions))
+                    }
+                    ObjectPart::Computed { key, value } => ObjectPart::Computed {
+                        key: Box::new(substitute_expr(key, substitutions)),
+                        value: substitute_expr(value, substitutions),
+                    },
+                })
                 .collect(),
         },
         Expr::Array(elems, _) => Expr::Array(
@@ -922,6 +935,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             is_async,
             is_generator,
             is_strict,
+            construct_only,
         } => Expr::Closure {
             func_id: *func_id,
             params: params
@@ -950,6 +964,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             is_async: *is_async,
             is_generator: *is_generator,
             is_strict: *is_strict,
+            construct_only: *construct_only,
         },
 
         // RegExp operations
@@ -1171,6 +1186,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             body,
             catch,
             finally,
+            forof_completion,
         } => Stmt::Try {
             body: substitute_stmts(body, substitutions),
             catch: catch.as_ref().map(|c| CatchClause {
@@ -1178,6 +1194,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
                 body: substitute_stmts(&c.body, substitutions),
             }),
             finally: finally.as_ref().map(|f| substitute_stmts(f, substitutions)),
+            forof_completion: *forof_completion,
         },
         Stmt::Switch {
             discriminant,

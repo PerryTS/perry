@@ -26,6 +26,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
         }
     } else {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object,
@@ -85,6 +86,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(
@@ -228,6 +230,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     decorators: vec![],
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                 });
                 if live_length {
                     let Stmt::For {

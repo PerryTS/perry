@@ -333,8 +333,8 @@ fn call_validator_capturing(validator: f64, arg: f64) -> Result<f64, f64> {
     })
 }
 
-fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
-    crate::exception::catch_js_throw(|| unsafe {
+fn call_block_capturing_throw(block: f64) -> Result<f64, crate::exception::Caught> {
+    crate::exception::catch_thrown(|| unsafe {
         crate::closure::js_native_call_value(
             block,
             crate::closure::plain_call_receiver(),
@@ -517,7 +517,9 @@ fn throw_assertion(
     operator: &str,
     generated: bool,
 ) -> ! {
-    crate::exception::js_throw(make_assertion_error(
+    // An AssertionError is built outside the error constructors and carries
+    // program values (`actual`, `expected`): open.
+    crate::exception::throw_open(make_assertion_error(
         message, actual, expected, operator, generated,
     ))
 }
@@ -525,7 +527,7 @@ fn throw_assertion(
 fn if_error_value_message(value: f64) -> Option<String> {
     match gc_type_of(value) {
         Some(
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR,
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!() | crate::gc::GC_TYPE_ERROR,
         ) => {}
         _ => return None,
     }
@@ -603,7 +605,7 @@ fn promise_from_assert_async_input(input: f64) -> AssertAsyncInput {
             Some(promise) => (promise, false),
             None => (rejected_promise(invalid_promise_fn_return(value)), true),
         },
-        Err(reason) => (rejected_promise(reason), false),
+        Err(reason) => (rejected_promise(reason.value()), false),
     };
     AssertAsyncInput {
         promise,
@@ -616,8 +618,7 @@ extern "C" fn assert_rejects_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     let err = make_assertion_error(
@@ -636,8 +637,7 @@ extern "C" fn assert_rejects_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     if expected_error_matches(reason, expected) {
@@ -660,8 +660,7 @@ extern "C" fn assert_does_not_reject_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     crate::promise::js_promise_resolve(result, undefined_f64());
     undefined_f64()
 }
@@ -671,8 +670,7 @@ extern "C" fn assert_does_not_reject_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let message = crate::closure::js_closure_get_capture_f64(closure, 1);
     let expected = crate::closure::js_closure_get_capture_f64(closure, 2);
     // With a matcher present, a rejection that does NOT match propagates the
@@ -700,7 +698,7 @@ fn closure3(
     message: f64,
 ) -> *const crate::closure::ClosureHeader {
     let closure = crate::closure::js_closure_alloc(func, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, result as i64);
+    crate::closure::closure_set_capture_ref(closure, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, expected);
     crate::closure::js_closure_set_capture_f64(closure, 2, message);
     closure
@@ -833,7 +831,7 @@ fn partial_deep_equal_bool(actual: f64, expected: f64) -> bool {
         return false;
     }
     match expected_type {
-        crate::gc::GC_TYPE_ARRAY => partial_array_equal(
+        crate::gc_array_type_pat!() => partial_array_equal(
             actual_ptr as *const crate::array::ArrayHeader,
             expected_ptr as *const crate::array::ArrayHeader,
         ),
@@ -851,18 +849,14 @@ fn assert_same_value(actual: f64, expected: f64) -> bool {
     fn numeric_value(raw: f64) -> Option<f64> {
         let bits = raw.to_bits();
         let value = crate::value::JSValue::from_bits(bits);
-        if value.is_int32() {
-            Some(value.as_int32() as f64)
+        // Plain IEEE-754 values, including the canonical raw NaN bucket
+        // (0x7FF8) and all negative numbers, are numbers. Perry tagged
+        // values use 0x7FF9..=0x7FFF, so do not classify them as NaN just
+        // because f64::is_nan observes their NaN-box encoding.
+        if value.is_number() {
+            Some(raw)
         } else {
-            // Plain IEEE-754 values, including the canonical raw NaN bucket
-            // (0x7FF8) and all negative numbers, are numbers. Perry tagged
-            // values use 0x7FF9..=0x7FFF, so do not classify them as NaN just
-            // because f64::is_nan observes their NaN-box encoding.
-            if value.is_number() {
-                Some(raw)
-            } else {
-                None
-            }
+            None
         }
     }
 
@@ -882,13 +876,15 @@ fn assert_same_value(actual: f64, expected: f64) -> bool {
     crate::value::js_jsvalue_equals(actual, expected) != 0
 }
 
+crate::fn_info!(#[realm(throws = passes(1))] declare
 #[no_mangle]
 pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
     if crate::value::js_is_truthy(value) != 0 {
         return undefined_f64();
     }
     if is_error_value(message) {
-        crate::exception::js_throw(message);
+        // The program's own error passed as the message is thrown as is.
+        crate::exception::throw_program_value(message);
     }
     throw_assertion(
         assertion_message(message, "The expression evaluated to a falsy value"),
@@ -898,11 +894,14 @@ pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
         is_null_or_undefined(message),
     )
 }
+);
 
+crate::fn_info!(#[realm(throws = passes(0))] declare
 #[no_mangle]
 pub extern "C" fn js_assert_fail(message: f64) -> f64 {
     if is_error_value(message) {
-        crate::exception::js_throw(message);
+        // The program's own error passed as the message is thrown as is.
+        crate::exception::throw_program_value(message);
     }
     throw_assertion(
         assertion_message(message, "Failed"),
@@ -912,6 +911,7 @@ pub extern "C" fn js_assert_fail(message: f64) -> f64 {
         is_null_or_undefined(message),
     )
 }
+);
 
 #[no_mangle]
 pub extern "C" fn js_assert_strict_equal(actual: f64, expected: f64, message: f64) -> f64 {
@@ -1189,13 +1189,13 @@ pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f
         invalid_function_argument("fn", block);
     }
     match call_block_capturing_throw(block) {
-        Err(thrown) if expected_error_matches(thrown, expected) => undefined_f64(),
+        Err(thrown) if expected_error_matches(thrown.value(), expected) => undefined_f64(),
         Err(thrown) => throw_assertion(
             assertion_message(
                 message,
                 "The thrown error did not match the expected matcher",
             ),
-            thrown,
+            thrown.value(),
             expected,
             "throws",
             false,
@@ -1221,13 +1221,14 @@ pub extern "C" fn js_assert_does_not_throw(block: f64, expected: f64, message: f
         // propagates the original error unchanged (Node behavior, #2971). Only
         // a matching throw (or no matcher at all) becomes an AssertionError.
         Err(thrown)
-            if !is_null_or_undefined(expected) && !expected_error_matches(thrown, expected) =>
+            if !is_null_or_undefined(expected)
+                && !expected_error_matches(thrown.value(), expected) =>
         {
-            crate::exception::js_throw(thrown)
+            crate::exception::rethrow_caught(thrown)
         }
         Err(thrown) => throw_assertion(
             assertion_message(message, "Got unwanted exception"),
-            thrown,
+            thrown.value(),
             undefined_f64(),
             "doesNotThrow",
             false,
@@ -1269,8 +1270,8 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_fulfilled, 1), 1);
     let on_rejected =
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_rejected, 1), 3);
-    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
-    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_fulfilled, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
     crate::closure::js_closure_set_capture_f64(on_rejected, 2, expected);
     crate::promise::js_promise_then(source.promise, on_fulfilled, on_rejected);

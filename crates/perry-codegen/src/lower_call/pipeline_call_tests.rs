@@ -29,6 +29,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),

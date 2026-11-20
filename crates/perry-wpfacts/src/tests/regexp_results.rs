@@ -8,19 +8,6 @@
 //! the captures are then what that code returns, unknown.
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;
@@ -86,14 +73,15 @@ fn match_element_or_empty_is_a_string() {
     );
 }
 
-/// A program-written `RegExp.prototype.exec` is what `@@split` calls: its
-/// captures are what it returns.
+/// `RegExp.prototype` is sealed (DEC 250, rt/lock.ts): `RegExp.prototype.exec = f`
+/// throws, so the splitter still calls the intrinsic and the captures keep
+/// their String|undefined fact. (Subclass and species `exec` below run.)
 #[test]
-fn written_exec_makes_split_captures_unknown() {
+fn sealed_prototype_exec_write_keeps_split_captures() {
     let src = format!(
         "(RegExp.prototype as any).exec = function (s: string): any {{ const r: any = [\"b\", {{ length: 9 }}]; r.index = 0; return r; }};\n{SPLIT}"
     );
-    unproven(&src, "(p[1]", "length");
+    proves(&src, "(p[1]", "length");
 }
 
 /// A subclass is the species constructor of its instances; its `exec` runs.
@@ -133,12 +121,26 @@ fn subclass_exec_makes_match_elements_unknown() {
     );
 }
 
-/// A written `exec` called directly is the program function.
+/// `RegExp.prototype.exec = f` throws (sealed): a direct `exec` of a
+/// literal is still the intrinsic and keeps its result facts.
 #[test]
-fn written_exec_result_is_unknown() {
-    unproven(
+fn sealed_prototype_exec_write_keeps_exec_result() {
+    proves(
         "(RegExp.prototype as any).exec = function (s: string): any { return [{ length: 9 }, 1]; };\n\
          function f(s: string) { const m = /(a)/.exec(s); return m === null ? 0 : (m[0] ?? \"\").length; }\n\
+         console.log(f(\"a\"));\n",
+        "(m[0]",
+        "length",
+    );
+}
+
+/// Named control: an own-key `exec` written on an escaped regexp instance
+/// is a program function, so its result is unknown (the caller's path, DESIGN 2).
+#[test]
+fn own_key_exec_write_on_an_instance_makes_exec_result_unknown() {
+    unproven(
+        "function f(s: string) { const re: any = /(a)/; re.exec = function (s: string): any { return (globalThis as any)[process.argv[2]](s); };\n\
+         const m = re.exec(s); return m === null ? 0 : (m[0] ?? \"\").length; }\n\
          console.log(f(\"a\"));\n",
         "(m[0]",
         "length",
@@ -184,32 +186,6 @@ fn written_exec_split_capture_call_is_unknown() {
     unproven(src, "return x()", "()");
 }
 
-/// Two modules: what `tests` sees of the program, per unit or whole.
-fn facts_of_modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// CHB13/CHB14: a RegExp object holds `lastIndex` as an own non-configurable
 /// data property (22.2.3.1 RegExpAlloc), and `new RegExp(p, f)` reads only
 /// `p[@@match]`, `p.source`, `p.flags` and ToStrings its operands
@@ -246,4 +222,43 @@ fn stored_last_index_is_read_back() {
     let src = "class K { k = 1; }\nconst r: any = /a/g;\nr.lastIndex = new K();\nconsole.log(r.lastIndex.k);\n";
     let v = verdict_at(&facts_of(src, false), src, "console.log(r.lastIndex", "k");
     assert!(proven(&v), "whole r.lastIndex.k: {v:?}");
+}
+
+fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
+}
+
+/// Two modules: what `tests` sees of the program, per unit or whole.
+fn facts_of_modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

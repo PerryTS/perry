@@ -362,7 +362,7 @@ pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f
                 ("stderr", stderr),
             ],
         );
-        crate::exception::js_throw(err)
+        crate::exception::throw_open(err)
     }
     // Node's execSync/execFileSync error enumerates exactly
     // status/signal/output/pid/stdout/stderr (no `cmd` own prop — that is on the
@@ -385,7 +385,7 @@ pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f
         fields.push(("code", cp_box_string(code)));
     }
     let err = cp_make_error(&message, &fields);
-    crate::exception::js_throw(err)
+    crate::exception::throw_open(err)
 }
 
 /// `file arg1 arg2…` — the human-readable command string Node uses for the

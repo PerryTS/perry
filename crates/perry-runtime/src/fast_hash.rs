@@ -347,6 +347,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Pointer-aligned keys collide trivially with multiply-only on the
     /// low bits — Fibonacci-hash mixing into the upper bits is what
     /// keeps the buckets evenly populated. Sanity-check that 1000 8-byte-
@@ -534,6 +535,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Bare-`usize`-keyed `FastKeyHashMap`s exist too (`attr_keys_by_owner`,
     /// `SYMBOL_PROPERTY_ATTRS`' first half), and a bare key runs only ONE fold
     /// round. Aligned heap addresses must still spread.
@@ -554,6 +556,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The descriptor side tables key on `(usize, String)`. Verify the FNV-1a
     /// composite-key hasher round-trips: distinct owner addresses and distinct
     /// key strings must not alias, and lookups by borrowed `&str`/`&(…)` keys

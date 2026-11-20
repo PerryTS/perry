@@ -8,6 +8,20 @@ For the dated source of truth on shipped collection paths, target-specific
 root lowerings, memory pressure, block pooling, supported knobs, and CI, see
 [Garbage collector: current architecture and operations](garbage-collector.md).
 
+## Class evaluation ownership
+
+A computed symbol method or accessor belongs to the prototype or constructor
+created by that class evaluation. Its key, callable, accessor halves and property
+attributes live on that object's shape. Evaluating a class expression again
+creates an independent surface; deleting a configurable symbol property removes
+it from reflection and calls alike.
+
+Immutable class declarations supply method bodies and compile-time symbol keys
+for prototype birth. Runtime keys are retained by their evaluation's existing
+traced computed-member slots until that prototype is materialized. Static symbol
+members are installed directly on the actual constructor. Property reads and
+calls use those objects rather than dispatch data indexed by a declaration id.
+
 ## Value representation: NaN-boxing
 
 The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native values and specialized storage can use other representations; boxing is required when crossing a generic value boundary.
@@ -25,14 +39,14 @@ The encoding piggy-backs on IEEE 754: any `f64` whose exponent is all-ones and w
 | `0x7FFB` | JS handle | low 48 bits = handle id (V8-backed objects) |
 | `0xFFF9` | Native handle | low 48 bits = registry id, not a heap pointer |
 | `0x7FFD` | Object / Array / Closure | low 48 bits = heap pointer |
-| `0x7FFE` | Int32 | low 32 bits = signed int |
+| `0x7FFE` | Runtime-internal word | never a JS value: I32 slot words, route markers, class-id and state captures |
 | `0x7FFF` | String | low 48 bits = heap pointer |
 | anything else | `f64` | the full 64 bits are the number |
 
 <!-- gc-fact: HANDLE_TAG = 0xFFF9_0000_0000_0000 in crates/perry-abi/src/lib.rs -->
 <!-- gc-fact: POINTER_TAG = 0x7FFD_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: STRING_TAG = 0x7FFF_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
-<!-- gc-fact: INT32_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
+<!-- gc-fact: INTERNAL_WORD_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: BIGINT_TAG = 0x7FFA_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: SHORT_STRING_TAG = 0x7FF9_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: TAG_UNDEFINED = 0x7FFC_0000_0000_0001 in crates/perry-runtime/src/value/tags.rs -->
@@ -47,6 +61,23 @@ Three consequences worth noting:
 1. **Numbers are free.** A plain `f64` value is its own representation — no boxing, no header, no allocation. Numeric hot loops cost nothing in memory traffic.
 2. **The GC can identify pointer values from the tag alone.** When tracing a value, the collector masks the high bits, checks for `0x7FFA`/`0x7FFD`/`0x7FFF`, and either follows the low-48-bit pointer or skips. There is no per-value runtime type lookup.
 3. **Type checks are bitwise.** `typeof` and many fast paths in the runtime are register-level mask-and-compare operations.
+
+## Property atoms during realm bootstrap
+
+A program property key has one atom per text. Literal property probes compare
+these atoms by identity, so runtime bootstrap must not create a second program
+atom before the executable registers its literal images. Builtin global names
+have shared static image atoms; constructor statics use ordinary keys in the
+constructor's complete attributed property bag.
+
+A provider can initialize the realm before source literals register. For example,
+the streams provider installs `ReadableStream.from` during startup. Error's
+`isError`, `captureStackTrace`, `prepareStackTrace` and `stackTraceLimit` are
+installed together through `ConstructorStatics`, so that early bootstrap keeps
+the same statics and inherited identities as later bootstrap. Debug builds assert
+that registration cannot encounter another program atom for the same text.
+`scripts/check_error_statics.py` compares the Error-family statics with Node across
+stream and fetch global references.
 
 ## Heap layout: per-thread arena, nursery + old-gen
 

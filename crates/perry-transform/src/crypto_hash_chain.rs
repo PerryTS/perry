@@ -280,6 +280,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|s| for_each_stmt_expr(s, f));
             if let Some(c) = catch {
@@ -392,6 +393,7 @@ fn for_each_let(module: &Module, f: &mut dyn FnMut(&Stmt, &[Stmt])) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts(body, f);
                 if let Some(c) = catch {
@@ -659,6 +661,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().map(|s| allowed_refs_stmt(s, id)).sum::<usize>()
                 + catch
@@ -881,6 +884,7 @@ impl Rewriter<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.block(body);
                 if let Some(c) = catch {
@@ -1080,6 +1084,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter_mut().for_each(|s| rewrite_refs_stmt(s, id));
             if let Some(c) = catch {

@@ -201,3 +201,8 @@ pub(super) unsafe fn js_array_slice_values(arr: i64, start_value: f64, end_value
 pub(super) unsafe fn js_array_shift_f64(arr: i64) -> f64 {
     crate::array::js_array_shift_f64(arr as *mut ArrayHeader)
 }
+
+#[inline(always)]
+pub(super) unsafe fn js_array_pop_f64(arr: i64) -> f64 {
+    crate::array::js_array_pop_f64(arr as *mut ArrayHeader)
+}

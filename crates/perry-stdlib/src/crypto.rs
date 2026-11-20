@@ -10,7 +10,7 @@
 //! re-exported only inside this module for sibling shards.
 mod certificate;
 mod cipher;
-mod ec_sign;
+pub(crate) mod ec_sign;
 mod ecdh;
 mod handles;
 mod hash;
@@ -22,6 +22,7 @@ mod prime;
 mod random;
 mod sign;
 pub(crate) mod util;
+mod uuid;
 mod wide_digest;
 mod x509;
 

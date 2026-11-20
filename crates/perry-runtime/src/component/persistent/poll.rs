@@ -94,7 +94,8 @@ fn complete(
     };
     let outcome = frame.run(|| {
         if let Some(error) = first_error(component.get_nanbox_f64(), origin) {
-            crate::exception::js_throw(error);
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(error);
         }
         if reply["ok"] != true {
             fail(
@@ -243,7 +244,7 @@ fn complete(
     });
     let mut escaped = None;
     if let Err(error) = outcome {
-        let error = scope.root_nanbox_f64(error);
+        let error = scope.root_nanbox_f64(error.value());
         let public = !JSValue::from_bits(promise.get_nanbox_f64().to_bits()).is_undefined();
         if public && !pending(promise.get_nanbox_f64()) {
             escaped = Some(error.get_nanbox_f64());
@@ -257,7 +258,7 @@ fn complete(
                     );
                     undefined()
                 }) {
-                    escaped = Some(error);
+                    escaped = Some(error.value());
                 }
             }
         }
@@ -391,7 +392,8 @@ pub(super) fn reject_pending(component: f64, message: &str) {
     }
     drop((ids, reply, batch));
     if failed {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(first.get_nanbox_f64());
     }
 }
 
@@ -464,7 +466,7 @@ pub(super) fn cycle(component: f64) -> bool {
     let mut output = Vec::new();
     let mut report = Value::Null;
     let mut event = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         if !unsafe { (*state(component.get_nanbox_f64())).retired } {
             collections::drain_collections(component.get_nanbox_f64());
             imports::drain_replies(component.get_nanbox_f64(), &primary);
@@ -586,7 +588,7 @@ pub(super) fn cycle(component: f64) -> bool {
             unsafe {
                 (*context::get(component.get_nanbox_f64())).alive = false;
             }
-            let rejected = crate::exception::catch_js_throw(|| {
+            let rejected = crate::exception::catch_thrown(|| {
                 reject_pending(
                     component.get_nanbox_f64(),
                     report["error"]
@@ -600,7 +602,7 @@ pub(super) fn cycle(component: f64) -> bool {
             });
             if !failed {
                 if let Err(error) = rejected {
-                    first.set_nanbox_f64(error);
+                    first.set_nanbox_f64(error.value());
                     failed = true;
                 } else if !delivered_failure {
                     if let Err(error) = disposed {
@@ -664,7 +666,7 @@ pub(super) fn cycle(component: f64) -> bool {
     });
     if let Err(error) = outcome {
         if !failed {
-            first.set_nanbox_f64(error);
+            first.set_nanbox_f64(error.value());
             failed = true;
         }
     }
@@ -676,7 +678,8 @@ pub(super) fn cycle(component: f64) -> bool {
     let active = needed(component.get_nanbox_f64());
     drop((primary, cleanup, output, report, event));
     if failed {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(first.get_nanbox_f64());
     }
     active
 }
@@ -685,7 +688,7 @@ pub(super) fn drive(component: f64, id: u64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     let result = scope.root_nanbox_f64(undefined());
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         loop {
             cycle(component.get_nanbox_f64());
             if unsafe {
@@ -700,12 +703,14 @@ pub(super) fn drive(component: f64, id: u64) -> f64 {
             std::thread::yield_now();
         }
         if let Some(error) = first_error(component.get_nanbox_f64(), id) {
-            crate::exception::js_throw(error);
+            // Caught callbacks and program Promise rejections share the persistent ERROR records.
+            crate::exception::throw_open(error);
         }
         records::get(origin_row(component.get_nanbox_f64(), id), records::RESULT)
     });
     result.set_nanbox_f64(if outcome.is_err() {
-        first_error(component.get_nanbox_f64(), id).unwrap_or_else(|| outcome.unwrap_err())
+        first_error(component.get_nanbox_f64(), id)
+            .unwrap_or_else(|| (outcome.unwrap_err()).value())
     } else {
         outcome.unwrap()
     });
@@ -718,7 +723,8 @@ pub(super) fn drive(component: f64, id: u64) -> f64 {
     }
     prune(component.get_nanbox_f64());
     if outcome.is_err() {
-        crate::exception::js_throw(result.get_nanbox_f64());
+        // Caught callbacks and program Promise rejections share the persistent ERROR records.
+        crate::exception::throw_open(result.get_nanbox_f64());
     }
     result.get_nanbox_f64()
 }
@@ -728,12 +734,12 @@ pub(super) extern "C" fn poll_components() -> i32 {
         return 0;
     }
     let scope = RuntimeHandleScope::new();
-    let first = scope.root_nanbox_f64(undefined());
+    let mut first = None;
     let mut failed = false;
     let mut completed = 0i32;
     let links = DRIVERS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     for link in links {
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             unsafe { payload::link_event_owner(link) }.is_some_and(|driver_owner| {
                 let component = payload::state_get(driver_owner, &PUMP, b"component");
                 cycle(component)
@@ -743,7 +749,7 @@ pub(super) extern "C" fn poll_components() -> i32 {
             Ok(active) => active,
             Err(error) => {
                 if !failed {
-                    first.set_nanbox_f64(error);
+                    first = Some(error.root(&scope));
                     failed = true;
                 }
                 unsafe { payload::link_event_owner(link) }.is_some_and(|driver_owner| {
@@ -768,7 +774,7 @@ pub(super) extern "C" fn poll_components() -> i32 {
     }
     RUNNING.with(|running| running.set(false));
     if failed {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        crate::exception::rethrow_caught(first.as_ref().unwrap().caught());
     }
     completed
 }

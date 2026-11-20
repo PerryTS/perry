@@ -155,6 +155,11 @@ pub(crate) fn lower_if(
     then_branch: &[Stmt],
     else_branch: Option<&[Stmt]>,
 ) -> Result<()> {
+    // A for-of walk over an immutable Array: its entry is decided by the
+    // facts, and its IteratorRecord arm is never lowered.
+    if const_array_walk::lower(ctx, condition, then_branch)? {
+        return Ok(());
+    }
     // Compile-time constant folding: when the condition involves only
     // known constants (e.g., `__platform__ === 1`), skip the dead branch
     // entirely. This prevents emitting `declare`/`call` instructions for

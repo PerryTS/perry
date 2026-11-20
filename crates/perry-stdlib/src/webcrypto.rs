@@ -15,12 +15,13 @@ mod jwk;
 mod kdf;
 mod key_object;
 mod keys;
+pub(crate) mod pq;
 mod supports;
 mod util;
 mod wrap;
 
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{aes::*, hmac::*, jwk::*, key_object::*, util::*};
+use self::{aes::*, hmac::*, jwk::*, key_object::*, pq::*, util::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{
@@ -106,6 +107,8 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
         "keyObjectToCryptoKey" if args_len >= 4 => {
             js_webcrypto_key_object_to_crypto_key(arg(0), arg(1), arg(2), arg(3))
         }
+        // Internal bridge for `asymmetricKeyObject.export({ format: "jwk" })`.
+        "keyObjectExportJwk" if args_len >= 1 => js_webcrypto_key_object_export_jwk(arg(0)),
         // Internal bridge for `crypto.KeyObject.from(<asymmetric CryptoKey>)`
         // (#6302) — the runtime owns the secret-key shape but the asymmetric
         // key encoders live here. Not a `crypto.subtle` method name.

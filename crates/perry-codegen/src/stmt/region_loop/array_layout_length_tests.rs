@@ -32,6 +32,7 @@ fn len(id: u32) -> Expr {
 }
 fn get(id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
@@ -161,6 +162,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     if recheck {
         m.functions.push(Function {
@@ -178,6 +180,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
     }
     let output = String::from_utf8(
@@ -311,6 +314,7 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let output = String::from_utf8(
         crate::compile_module(

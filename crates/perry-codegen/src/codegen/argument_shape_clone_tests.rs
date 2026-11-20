@@ -45,6 +45,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -83,6 +84,7 @@ fn class(id: u32, name: &str, fields: Vec<&str>, methods: Vec<Function>) -> Clas
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

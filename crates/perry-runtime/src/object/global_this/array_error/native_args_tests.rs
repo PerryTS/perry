@@ -42,7 +42,7 @@ fn closure_value(info: *const crate::closure::JsFunctionInfo) -> f64 {
 }
 
 fn call_info() -> *const crate::closure::JsFunctionInfo {
-    crate::fn_info!(native_args super::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR))
+    crate::fn_info!(native_args super::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR))
 }
 
 fn bind_info() -> *const crate::closure::JsFunctionInfo {

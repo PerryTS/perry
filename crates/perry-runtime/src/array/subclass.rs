@@ -42,8 +42,9 @@ pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_lo
 //     bit 0       native fallback after ordinary undefined
 //     bit 1       payload valid
 //     bit 2       compact nonnegative-int entity proof (mode 2)
-//     bit 3       sealed intrinsic prototype (#11915; family in bits 8..11)
-//     bit 4       free
+//     bit 3       sealed intrinsic prototype (#11915; family in bits 8..13,
+//                 image key count + 1 in bits 16..31: DEC 250)
+//     bit 4       plain-object index store (never on an Array subclass)
 //     bit 5       object is a prototype
 //     bit 6       exotic read receiver
 //     bits 8..31  verified prefix bound (24 bits, max 16,000,000)
@@ -435,9 +436,10 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     // `obj` is a live GC object by contract: its header needs no admission.
     let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if crate::gc_type_is_not_object!(header.obj_type)
-        || crate::object::shapes::shape_object_kind_of_receiver(
+        || !crate::object::shapes::shape_kind_of_receiver_is(
             (crate::object::shapes::object_shape_stamp(obj)).0,
-        ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
+            crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof,
+        )
     {
         return None;
     }
@@ -583,44 +585,23 @@ unsafe fn ensure_subclass_numeric_prefix(
                 .add(slot as usize)
         };
         let value = JSValue::from_bits(ptr::read(value_ptr));
-        let number = if value.is_int32() {
-            // `push(i)` commonly stores Perry's compact INT32 Number tag. The
-            // direct clone consumes raw doubles, so normalize that Number to
-            // its representation-equivalent f64 bits during the one-time
-            // verification walk. This is pointer-free -> pointer-free and
-            // changes no JS-observable type/value, hence needs neither a GC
-            // barrier nor a layout downgrade.
-            // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 Number bits
-            // replace compact int32 Number bits in an already numeric slot.
-            let integer = value.as_int32();
-            let number = integer as f64;
-            if !require_u32 {
-                ptr::write(value_ptr, number.to_bits());
-            }
-            number
-        } else if !value.is_number() {
+        let number = if !value.is_number() {
             return false;
         } else {
             value.as_number()
         };
         if require_u32 {
-            // ECS entity ids in this tier are normalized to Perry's ordinary
-            // compact INT32 Number representation. Generic reads still
-            // observe the same JS Number, while generated component access
-            // can consume the low native lane without an f64 conversion.
-            // Values outside the nonnegative i31 subset retain the generic
-            // loop; no public behavior is narrowed.
+            // ECS entity ids in this tier stay raw-f64 Numbers (a Number has
+            // one encoding). Admission only validates the nonnegative i31
+            // subset, so generated component access converts the loaded
+            // double to i32 exactly. Other values retain the generic loop;
+            // no public behavior is narrowed.
             if !number.is_finite()
                 || number < 0.0
                 || number > i32::MAX as f64
                 || number.fract() != 0.0
             {
                 return false;
-            }
-            if !value.is_int32() {
-                // GC_STORE_AUDIT(POINTER_FREE): compact Number bits replace
-                // raw-f64 Number bits in an already numeric slot.
-                ptr::write(value_ptr, JSValue::int32(number as i32).bits());
             }
         }
     }
@@ -667,9 +648,7 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
 }
 
 fn nonnegative_u32_length(value: JSValue) -> Option<u32> {
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else if value.is_number() {
+    let number = if value.is_number() {
         value.as_number()
     } else {
         return None;
@@ -1266,9 +1245,6 @@ fn dense_index_get_with_layout(
 
 fn canonical_u32_index(value: f64) -> Option<u32> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        return (js.as_int32() >= 0).then_some(js.as_int32() as u32);
-    }
     (js.is_number()
         && value.is_finite()
         && value >= 0.0
@@ -1557,7 +1533,11 @@ pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
         index as f64,
         value,
     );
-    maintain_array_exotic_length(handle.get_nanbox_f64(), index);
+    // Only an Array-subclass instance has the exotic `length`: an object
+    // literal behind a `T[]` site gains the index and nothing else.
+    if is_array_subclass_value(handle.get_nanbox_f64()) {
+        maintain_array_exotic_length(handle.get_nanbox_f64(), index);
+    }
 }
 
 /// The Array-exotic post-step for an indexed own-property write, applied by

@@ -17,13 +17,7 @@ fn throw_range(message: &str) -> ! {
 
 unsafe fn pointer_address(value: f64) -> usize {
     let jv = JSValue::from_bits(value.to_bits());
-    let address = if jv.is_int32() {
-        let n = jv.as_int32();
-        if n < 0 {
-            throw_type("ptr must be a non-negative number or bigint");
-        }
-        n as usize
-    } else if jv.is_number() {
+    let address = if jv.is_number() {
         let n = jv.as_number();
         if !n.is_finite() || n < 0.0 || n.fract() != 0.0 || n > usize::MAX as f64 {
             throw_type("ptr must be a non-negative integer number or bigint");
@@ -59,9 +53,7 @@ fn optional_integer(value: f64, name: &str) -> Option<i64> {
     if jv.is_undefined() {
         return None;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else if jv.is_number() {
+    let n = if jv.is_number() {
         jv.as_number()
     } else {
         throw_type(&format!("{name} must be a number"));

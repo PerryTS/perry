@@ -74,29 +74,7 @@ pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let ptr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
-        let old = super::props::bag_of(ptr);
-        let built = crate::value::js_nanbox_pointer(old as i64);
-        let Some(image) = crate::object::layout_desc::prototype_image(&*desc, built, serial, &[])
-        else {
-            eprintln!("Perry internal error: native constructor bag {module}.{name} differs from its static layout");
-            std::process::abort();
-        };
-        let bag = crate::value::js_nanbox_get_pointer(image) as *mut crate::object::ObjectHeader;
-        // The recorded constructor parent (and other private state) remains
-        // an owned edge. It is never a JS property of this null-prototype bag.
-        if !crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _)).is_null() {
-            let state = (*crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _))).expando;
-            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
-            // GC_STORE_AUDIT(BARRIERED): metadata-record child edge.
-            (*meta).expando = state;
-            crate::gc::runtime_write_barrier_slot(
-                meta as usize,
-                &(*meta).expando as *const _ as usize,
-                state,
-            );
-        }
-        crate::object::builtin_proto::seal_runtime_prototype(bag, serial);
-        super::props::install_bag(ptr, bag);
+        super::props::seal_to_layout(ptr, desc, serial, module, name);
     }
 }
 
@@ -121,31 +99,28 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
     if !matches!(name, b"call" | b"apply" | b"bind") {
         return false;
     }
-    let bag = (*closure).props;
-    if bag.is_null() {
+    let ptr = closure as usize;
+    let Some(serial) = super::props::sealed_serial(ptr) else {
         return false;
-    }
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
-    if meta.is_null() {
-        return false;
-    }
-    let word = (*bag).parent_class_id;
+    };
+    // SAFETY: `ptr` has a sealed store (sealed_serial answered Some).
+    let intact = |word: u32| unsafe { super::props::sealed_intact(ptr, word) };
     // The existing intrinsic identity selects a static definition; only
     // its layout word proves the contents and link. Ordinary function bags
     // have no such identity and leave before loading constructor layouts.
-    match (*meta).proto_serial {
+    match serial {
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER => {
-            word == layouts::NATIVE_CTOR_EVENT_EMITTER::WORD
+            intact(layouts::NATIVE_CTOR_EVENT_EMITTER::WORD)
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM => {
-            word == layouts::NATIVE_CTOR_STREAM::WORD
+            intact(layouts::NATIVE_CTOR_STREAM::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
                     layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE => {
-            word == layouts::NATIVE_CTOR_READABLE::WORD
+            intact(layouts::NATIVE_CTOR_READABLE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
                     layouts::NATIVE_CTOR_STREAM::WORD,
@@ -156,7 +131,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE => {
-            word == layouts::NATIVE_CTOR_WRITABLE::WORD
+            intact(layouts::NATIVE_CTOR_WRITABLE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
                     layouts::NATIVE_CTOR_STREAM::WORD,
@@ -167,7 +142,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX => {
-            word == layouts::NATIVE_CTOR_DUPLEX::WORD
+            intact(layouts::NATIVE_CTOR_DUPLEX::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
                     layouts::NATIVE_CTOR_READABLE::WORD,
@@ -182,7 +157,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM => {
-            word == layouts::NATIVE_CTOR_TRANSFORM::WORD
+            intact(layouts::NATIVE_CTOR_TRANSFORM::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
                     layouts::NATIVE_CTOR_DUPLEX::WORD,
@@ -201,7 +176,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH => {
-            word == layouts::NATIVE_CTOR_PASSTHROUGH::WORD
+            intact(layouts::NATIVE_CTOR_PASSTHROUGH::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
                     layouts::NATIVE_CTOR_TRANSFORM::WORD,
@@ -224,7 +199,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE => {
-            word == layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD
+            intact(layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
                     layouts::NATIVE_CTOR_STREAM::WORD,
@@ -235,7 +210,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE => {
-            word == layouts::NATIVE_CTOR_SERVER_RESPONSE::WORD
+            intact(layouts::NATIVE_CTOR_SERVER_RESPONSE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE,
                     layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD,
@@ -250,7 +225,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE => {
-            word == layouts::NATIVE_CTOR_INCOMING_MESSAGE::WORD
+            intact(layouts::NATIVE_CTOR_INCOMING_MESSAGE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
                     layouts::NATIVE_CTOR_READABLE::WORD,

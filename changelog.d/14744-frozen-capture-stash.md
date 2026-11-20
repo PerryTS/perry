@@ -1,0 +1,1 @@
+A constructor that freezes `this` (`Object.freeze(this)`) no longer throws "Cannot assign to read only property '__perry_cap_…'" when its class keeps captured locals on each instance — for example a CommonJS class with a computed member key, as mongodb's `HostAddress` is (#11043).

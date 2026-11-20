@@ -1,0 +1,7 @@
+DEC 250: Cannot redefine built-in member Function.prototype.name: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+before bound f bound m
+getter bound f bound m c 1
+no throw
+no throw

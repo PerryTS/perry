@@ -61,12 +61,15 @@ pub(crate) unsafe fn try_function_shape_method_call(
     if word == crate::closure::shape::function_dictionary_shape() {
         return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
     }
-    if !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name) {
+    if !crate::closure::shape::function_shape_inherits_from_function_prototype(
+        addr as *const ClosureHeader,
+        name,
+    ) {
         // A class constructor (`C.m()` on a class value): the class arm —
         // statics, callable static data, Function.prototype methods. Reached
         // only once the ordinary function test failed, so no other receiver
         // pays for it.
-        return function_shape_decline(object, addr, word, name, args_ptr, args_len);
+        return function_shape_decline(object, addr, name, args_ptr, args_len);
     }
     // (2) The prototype the shape names, and its own data slot for the key.
     let proto =
@@ -175,7 +178,6 @@ pub(crate) unsafe fn run_function_intrinsic(
 unsafe fn function_shape_decline(
     object: f64,
     addr: usize,
-    word: LayoutWord,
     name: &[u8],
     args_ptr: *const f64,
     args_len: usize,
@@ -188,7 +190,9 @@ unsafe fn function_shape_decline(
     // the tower's builtin answer is the inherited one. Once written (`gp.apply
     // = f`, an accessor, a relink), the chain decides, as for a dictionary
     // function.
-    if let Some(kind) = crate::closure::shape::function_shape_kind_lacking(word, name) {
+    if let Some(kind) =
+        crate::closure::shape::function_shape_kind_lacking(addr as *const ClosureHeader, name)
+    {
         if !crate::object::global_this::function_kind_prototype_unwritten(kind) {
             return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
         }

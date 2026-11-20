@@ -21,7 +21,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for name in ["host.ts", "world.wit", "resources.wit", "resource-stream.wit"]:
-        shutil.copyfile(root / "test-wasi/components/producers" / name, out / name)
+        shutil.copyfile(root / "tests/integration/wasi/components/producers" / name, out / name)
     scalar = (root / "crates/perry-component-host/src/async_values/factory-echo.component.wat").read_text()
     scalar = scalar.replace('(type $inner (future u32))', '(type $byte-stream (stream u8)) (type $inner (future u32))')
     scalar = scalar.replace('(func (export "strings")', '(func (export "bytes") (param "value" $byte-stream) (result $byte-stream) (canon lift (core func $code "echo")))\n  (func (export "strings")')

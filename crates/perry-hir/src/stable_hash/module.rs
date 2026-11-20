@@ -36,6 +36,7 @@ impl SH for Module {
             extern_funcs,
             init_was_unrolled,
             has_top_level_await,
+            async_init_function,
             init_kind,
             async_step_closures,
             closure_display_names,
@@ -112,6 +113,7 @@ impl SH for Module {
         extern_funcs.hash(h);
         init_was_unrolled.hash(h);
         has_top_level_await.hash(h);
+        async_init_function.hash(h);
         init_kind.hash(h);
         // HashSet has nondeterministic iteration order; sort for stable hashing.
         let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();
@@ -208,6 +210,7 @@ impl SH for Import {
             type_only,
             runtime_erased,
             is_dynamic,
+            is_deferred,
             is_dynamic_target,
             is_deferred_require,
             is_adopted_require,
@@ -225,6 +228,9 @@ impl SH for Import {
             tag(h, 0x5254);
         }
         is_dynamic.hash(h);
+        if *is_deferred {
+            tag(h, 0x4446);
+        }
         is_dynamic_target.hash(h);
         is_deferred_require.hash(h);
         is_adopted_require.hash(h);

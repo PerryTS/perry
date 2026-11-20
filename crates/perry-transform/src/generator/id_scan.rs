@@ -220,6 +220,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_local(body, max_id);
             if let Some(c) = catch {
@@ -461,6 +462,7 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_func(body, max_id);
             if let Some(c) = catch {
@@ -556,6 +558,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -601,6 +604,7 @@ mod tests {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -637,6 +641,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }
@@ -702,6 +707,7 @@ mod tests {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -748,6 +754,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -778,6 +785,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         assert_eq!(
             compute_max_local_id(&module),
@@ -804,6 +812,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -834,6 +843,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         let mut module = Module::new("test");
         module.classes.push(class);
@@ -865,6 +875,7 @@ mod tests {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -890,6 +901,7 @@ mod tests {
             decorators: vec![dec_with_closure(55, 95)],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         let mut class = class_with_fields("C", Vec::new());
         class.decorators.push(dec_with_closure(56, 96));
@@ -921,6 +933,7 @@ mod tests {
             is_strict: false,
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),

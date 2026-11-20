@@ -3,7 +3,7 @@
 Node, bucket the divergences, and write a JSON report (#800).
 
 This is a *coverage radar*, not a gate. Where the hand-authored
-`test-parity/node-suite` cases probe whatever a human thought to write, this
+`tests/parity/node-suite` cases probe whatever a human thought to write, this
 runner pulls Node's own tests for each API in `supported-apis.txt` — the
 canonical definition of correct behaviour, and exactly the corpus Deno and
 Bun lean on for their Node-compat suites.
@@ -14,7 +14,7 @@ Node's `test/parallel` cases are silent on success and `throw` (exit != 0) on
 failure, so the primary signal is **exit-code parity**, with stdout as a
 secondary tiebreak. Each case `require('../common')` — Node's ~1000-line test
 harness that Perry can't compile — so we stage a Perry-compilable shim
-(`test-compat/node-core/shim/`) as `common/` next to each test. BOTH runtimes
+(`tests/compat/node-core/shim/`) as `common/` next to each test. BOTH runtimes
 use the shim, so the differential still compares the two runtimes' *builtins*,
 never their private harnesses.
 
@@ -96,7 +96,7 @@ Three things kept the sweep unbounded, and all three are fixed here:
 A sweep that is cut short reports `complete: false` and exits non-zero: an
 incomplete radar must fail loudly, not quietly publish a number that looks whole.
 
-See test-compat/node-core/README.md.
+See tests/compat/node-core/README.md.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-NODE_CORE_DIR = REPO_ROOT / "test-compat" / "node-core"
+NODE_CORE_DIR = REPO_ROOT / "tests/compat" / "node-core"
 SHIM_DIR = NODE_CORE_DIR / "shim"
 
 # APIs whose well-known binding (see `crates/perry/well_known_bindings.toml`)

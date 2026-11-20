@@ -128,7 +128,12 @@ pub(crate) mod response_slot {
     pub(crate) const MAX_REQUESTS_PER_SOCKET: u32 = 30;
     pub(crate) const STATUS_MESSAGE: u32 = 31;
     pub(crate) const STATUS_CODE: u32 = 32;
+    pub(crate) const PAYLOAD: u32 = 33;
 }
+
+/// The payload slot's entry (`native_payload::PAYLOAD_ENTRY`), optional:
+/// the birth leaves it a hole and the payload attach fills it.
+const PAYLOAD_SLOT: u8 = crate::object::key_attrs::PRIVATE_FIELD_ENTRY | OPT;
 
 // `new ServerResponse(req)`: `OutgoingMessage.call(this)` (the emitter's
 // init, then its 24 fields), then `ServerResponse`'s own.
@@ -166,4 +171,5 @@ runtime_layout!(SERVER_RESPONSE, 0x53490007, 0, &raw const SERVER_RESPONSE_PROTO
     HI_ATOM_U_MAX_REQUESTS_PER_SOCKET @ response_slot::MAX_REQUESTS_PER_SOCKET => OPT,
     NP_ATOM_STATUS_MESSAGE @ response_slot::STATUS_MESSAGE => OPT,
     NP_ATOM_STATUS_CODE @ response_slot::STATUS_CODE => OPT,
+    NP_SYMBOL_NATIVE_PAYLOAD @ response_slot::PAYLOAD => PAYLOAD_SLOT,
 ], realm = ["node:http.ServerResponse", "node:http2.Http2ServerResponse.prototype"]);

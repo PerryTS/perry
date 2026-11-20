@@ -114,16 +114,6 @@ fn json_number_spelling_matches_ecmascript_boundaries() {
 }
 
 #[test]
-fn tagged_int32_json_numbers_keep_their_signed_value() {
-    for value in [i32::MIN, -1, 0, 1, i32::MAX] {
-        let bits = crate::value::INT32_TAG | value as u32 as u64;
-        let mut output = String::new();
-        unsafe { write_number(&mut output, f64::from_bits(bits)) };
-        assert_eq!(output, value.to_string());
-    }
-}
-
-#[test]
 fn vector_escaping_matches_json_encoder_at_every_boundary() {
     let characters: Vec<char> = (0..=127)
         .filter_map(char::from_u32)

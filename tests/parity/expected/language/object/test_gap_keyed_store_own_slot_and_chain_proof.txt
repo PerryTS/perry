@@ -1,0 +1,29 @@
+4002000
+setter 10
+inherited readonly TypeError
+readonly 5 0
+own readonly TypeError
+own 1 8
+frozen overwrite TypeError
+frozen add TypeError
+sealed overwrite stored
+sealed add TypeError
+frozen 1 undefined sealed 2 undefined
+proto true 0
+overflow 100 101 102 103 alpha,beta,gamma,delta
+overflow null 36 39 alpha,beta,gamma,delta
+overflow readonly TypeError
+overflow attrs 100 42 0
+overflow frozen TypeError
+overflow sealed overwrite stored
+overflow sealed add TypeError
+overflow frozen 1 sealed 2 undefined
+big 0 78 6 34 -3
+DEC 250: Cannot add member Object.prototype.delta: built-in objects are read-only in a compiled program
+added past setter
+added past setter
+added past setter
+added past setter
+added past setter
+proto setter 0
+after delete 4 [ 'delta' ]

@@ -337,6 +337,7 @@ pub(crate) fn inline_calls_in_expr(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut inlined = inline_one_call(&synth_func, &args, next_local, &remap_local_ids_in_stmts);
     let return_remapped = match inlined.last() {
@@ -567,6 +568,7 @@ pub(crate) fn remap_let_ids_in_stmt(stmt: &mut Stmt, remap: &HashMap<u32, u32>) 
             body,
             catch,
             finally,
+            ..
         } => {
             remap_let_ids_in_stmts(body, remap);
             if let Some(c) = catch {
@@ -614,6 +616,7 @@ pub(crate) fn collect_local_ids_in_stmts(stmts: &[Stmt], out: &mut Vec<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_local_ids_in_stmts(body, out);
                 if let Some(c) = catch {

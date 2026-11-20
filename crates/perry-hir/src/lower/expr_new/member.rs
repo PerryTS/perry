@@ -437,23 +437,19 @@ pub(crate) fn lower_new_member_native(
             if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
                 return lower_worker_new(ctx, new_expr).map(Some);
             }
-            let inspector_session_module =
+            let construct_fold =
                 ctx.lookup_native_module(module_alias)
-                    .and_then(
-                        |(module_name, _)| match (module_name, prop_ident.sym.as_ref()) {
-                            ("inspector" | "inspector/promises", "Session") => {
-                                Some(module_name.to_string())
-                            }
-                            _ => None,
-                        },
-                    );
-            if let Some(module_name) = inspector_session_module {
+                    .and_then(|(module_name, _)| {
+                        crate::folded_call::native_construct_fold(module_name, &prop_ident.sym)
+                            .then(|| module_name.to_string())
+                    });
+            if let Some(module_name) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Some(Expr::NativeMethodCall {
                     module: module_name,
                     class_name: None,
                     object: None,
-                    method: "Session".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args,
                 }));
             }

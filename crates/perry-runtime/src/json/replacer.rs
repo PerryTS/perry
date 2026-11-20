@@ -134,7 +134,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // `keys_array`). Buffer/TypedArray have no `GcHeader`, so exclude
         // them first — `gc_obj_type` would otherwise misread their raw bytes
         // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
-        if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(gc_obj_type(ptr))
             && !crate::buffer::is_registered_buffer(ptr as usize)
             && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
@@ -298,7 +298,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
         return;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
             // stub at the OLD location (`js_array_grow`, issue #233) — its first
             // 8 bytes now hold the forwarding pointer to the grown array, so
@@ -377,16 +377,33 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let (ptr, replacer) =
+        if crate::process::is_process_env_object(crate::value::js_nanbox_pointer(ptr as i64)) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let replacer = scope.root_raw_const_ptr(replacer);
+            let value =
+                crate::process::refresh_process_env(crate::value::js_nanbox_pointer(ptr as i64));
+            (
+                crate::value::js_nanbox_get_pointer(value) as *const u8,
+                replacer.get_raw_const_ptr::<crate::ClosureHeader>(),
+            )
+        } else {
+            (ptr, replacer)
+        };
+
     // Circular-reference detection (mirrors the pretty/array-replacer paths).
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+    // An elements-backed object keeps its indices outside its keys: the
+    // keys and [[Get]] walk, as the plain walk does.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        stringify_elements_backed_pretty(ptr, Some(replacer), buf, indent, depth);
+        return;
+    }
 
     // GC-safety: same rooting discipline as the array variant above — the
     // replacer / toJSON / getter callbacks can trigger a moving GC, so every
@@ -396,7 +413,6 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let obj_root = gc_scope.root_raw_const_ptr(ptr);
     let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -419,7 +435,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // num_fields can be smaller than keys_len — the min() silently DROPPED
     // every overflow property from replacer serialization (react-server-dom's
     // flight props objects routinely exceed 8 keys).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
@@ -594,10 +610,7 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
@@ -1003,6 +1016,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let ptr = super::stringify_object::refresh_environment_receiver(ptr);
+
     // Same deref-safety gate the plain path applies in `is_object_pointer`: the
     // `field_count` / `keys_array` reads below load straight through `ptr`, so an
     // in-range-but-unmapped garbage address (a denormal double that survived the
@@ -1023,10 +1038,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         // Use js_typeerror_new so error_kind == ERROR_KIND_TYPE_ERROR and
         // `e instanceof TypeError` returns true (matching Node).
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
@@ -1038,9 +1050,14 @@ pub(crate) unsafe fn stringify_object_pretty(
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         return;
     }
+    // An elements-backed object keeps its indices outside its keys: the
+    // keys and [[Get]] walk, as the plain walk does.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        stringify_elements_backed_pretty(ptr, None, buf, indent, depth);
+        return;
+    }
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -1060,7 +1077,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     // A per-object attribute (a builtin accessor installs no process gate)
@@ -1170,6 +1187,102 @@ pub(crate) unsafe fn stringify_object_pretty(
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
+/// SerializeJSONObject for an elements-backed object on the pretty and
+/// function-replacer walks: the own enumerable string keys in `Object.keys`
+/// order, each value read by [[Get]] (the plain walk's
+/// `stringify_elements_backed_object`). The caller pushed `ptr` on the
+/// stringify stack; this pops it.
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn stringify_elements_backed_pretty(
+    ptr: *const u8,
+    replacer: Option<*const crate::ClosureHeader>,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_u64(JSValue::pointer(ptr).bits());
+    let replacer_h = replacer.map(|r| scope.root_raw_const_ptr(r));
+    let keys = crate::object::js_object_keys(ptr as *const crate::ObjectHeader);
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_length(k));
+    let use_pretty = !indent.is_empty();
+    let inner_depth = depth + 1;
+    buf.push('{');
+    let mut first = true;
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_get(k, i));
+        let key_h = iter_scope.root_nanbox_u64(key.bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) = crate::string::js_string_key_bytes(key, &mut sso).map(<[u8]>::to_vec)
+        else {
+            continue;
+        };
+        let mut value = crate::value::js_get_property(
+            obj_h.get_nanbox_f64(),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        );
+        if let Some(r) = &replacer_h {
+            let after_to_json = apply_to_json_keyed(value, key_h.get_nanbox_f64());
+            value = call_replacer(
+                r.get_raw_const_ptr::<crate::ClosureHeader>(),
+                key_h.get_nanbox_f64(),
+                after_to_json,
+                obj_h.get_nanbox_f64(),
+            );
+        }
+        let bits = value.to_bits();
+        if bits == TAG_UNDEFINED
+            || is_closure_value(bits)
+            || super::stringify::is_symbol_value(bits)
+        {
+            continue;
+        }
+        let _value_h = iter_scope.root_nanbox_f64(value);
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        if use_pretty {
+            buf.push('\n');
+            for _ in 0..inner_depth {
+                buf.push_str(indent);
+            }
+        }
+        write_escaped_string(buf, &String::from_utf8_lossy(&name));
+        buf.push_str(if use_pretty { ": " } else { ":" });
+        match &replacer_h {
+            None => stringify_value_pretty(value, TYPE_UNKNOWN, buf, indent, inner_depth),
+            Some(r) => {
+                if !write_replaced_scalar(buf, value) {
+                    let inner_ptr = extract_pointer(bits).unwrap();
+                    dispatch_pointer_with_replacer(
+                        inner_ptr,
+                        value,
+                        r.get_raw_const_ptr::<crate::ClosureHeader>(),
+                        buf,
+                        indent,
+                        inner_depth,
+                    );
+                }
+            }
+        }
+    }
+    if use_pretty && !first {
+        buf.push('\n');
+        for _ in 0..depth {
+            buf.push_str(indent);
+        }
+    }
+    buf.push('}');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+}
+
 pub(crate) unsafe fn stringify_array_pretty(
     ptr: *const u8,
     buf: &mut String,
@@ -1195,7 +1308,7 @@ pub(crate) unsafe fn stringify_array_pretty(
     // and the `(*arr).length` read below would fault.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_ARRAY,
+        crate::gc_array_type_pat!(),
     )
     .is_none()
     {
@@ -1280,7 +1393,7 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
 #[inline]
 unsafe fn is_dense_array_header(resolved: *const crate::ArrayHeader) -> bool {
     !resolved.is_null()
-        && gc_obj_type(resolved as *const u8) == crate::gc::GC_TYPE_ARRAY
+        && crate::gc_type_is_array!(gc_obj_type(resolved as *const u8))
         && (*resolved).length <= (*resolved).capacity
 }
 
@@ -1331,8 +1444,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // Numeric zero needs no indentation or observable coercion. Admit it to
     // the canonical emitters only; leave lazy source-copy eligibility below
     // unchanged so zero spacing still reaches the general lazy-array walk.
-    let compact_emitter_spacer =
-        no_spacer || spacer_f64 == 0.0 || spacer_bits == crate::value::INT32_TAG;
+    let compact_emitter_spacer = no_spacer || spacer_f64 == 0.0;
     if no_replacer && compact_emitter_spacer {
         // These primitives cannot invoke toJSON. Restrict the other arguments
         // to inert values so replacers and spacer coercions remain observable.
@@ -1498,8 +1610,26 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // (`JSON.stringify([1, {a:2}], [])` → "[1,{}]"). The shared dispatcher
         // routes objects/arrays into the whitelist-aware walks and everything
         // else into the plain serializer.
+        //
+        // The root is a property too (key ""): its `toJSON` runs first, and a
+        // result that has no JSON text makes `JSON.stringify` return undefined.
+        // The result is rooted: `toJSON` can hand back a fresh object and the
+        // walk below allocates.
+        reset_to_json_key();
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let value_after_to_json = root_scope.root_nanbox_f64(apply_to_json(value));
+        if !property_list::serializable_member(value_after_to_json.get_nanbox_f64()) {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
+            restore_stringify_buf(buf);
+            match saved_cache {
+                Some(s) => restore_shape_cache(s),
+                None => clear_shape_cache(),
+            }
+            STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
+            return TAG_UNDEFINED as i64;
+        }
         stringify_value_with_array_replacer(
-            value,
+            value_after_to_json.get_nanbox_f64(),
             allowed_keys,
             &mut buf,
             &indent_str,

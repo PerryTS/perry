@@ -1069,3 +1069,32 @@ fn coff_stack_map_text_is_assembled_in_process() {
     result.expect("COFF text assembles without an external clang");
     assert_eq!(&object.expect("object written")[..2], &[0x64, 0x86]);
 }
+
+/// An Apple arm64 compile with no `-mcpu` was generated for `apple-m1` (the
+/// code generator's default), so the assembler must be told the same CPU:
+/// clang alone defaults `arm64-apple-ios` to `apple-a7` and rejects `ldapr`
+/// (`instruction requires: rcpc`). An explicit CPU still wins, and other
+/// triples keep the portable baseline.
+#[test]
+fn assembler_cpu_defaults_to_codegen_cpu_on_apple_arm64() {
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        super::assembler_cpu_flags(&none, "arm64-apple-ios17.0"),
+        vec!["-mcpu=apple-m1".to_string()]
+    );
+    assert_eq!(
+        super::assembler_cpu_flags(&none, "arm64-apple-ios17.0-simulator"),
+        vec!["-mcpu=apple-m1".to_string()]
+    );
+    assert_eq!(
+        super::assembler_cpu_flags(&none, "arm64-apple-macosx13.0"),
+        vec!["-mcpu=apple-m1".to_string()]
+    );
+    assert!(super::assembler_cpu_flags(&none, "aarch64-unknown-linux-gnu").is_empty());
+    assert!(super::assembler_cpu_flags(&none, "x86_64-apple-macosx13.0").is_empty());
+    let explicit = vec!["-O3".to_string(), "-mcpu=apple-a12".to_string()];
+    assert_eq!(
+        super::assembler_cpu_flags(&explicit, "arm64-apple-ios17.0"),
+        vec!["-mcpu=apple-a12".to_string()]
+    );
+}

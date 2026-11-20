@@ -16,7 +16,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn function_expandos_follow_ordinary_own_property_key_order() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = workspace_root().join("test-files/test_issue_9148_function_expando_order.ts");
+    let entry = workspace_root()
+        .join("tests/parity/language/function/test_issue_9148_function_expando_order.ts");
     let output = dir.path().join("main_bin");
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())

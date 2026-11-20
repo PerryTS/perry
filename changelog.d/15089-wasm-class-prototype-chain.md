@@ -1,0 +1,1 @@
+`--target web`: a class instance inherits from its class's `prototype`, which inherits from the parent class's, so `b.__proto__ === B.prototype` and a method added to a prototype later reaches every instance (#15082).

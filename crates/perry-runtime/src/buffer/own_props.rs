@@ -1,6 +1,45 @@
 //! Ordinary named properties live in the cell's shaped null-prototype bag.
 use super::store;
 
+/// `Get(view, prop)` for a key the view does not own: its prototype chain
+/// (`Object.setPrototypeOf(ab, p)` with `p[1]`, an index on
+/// `%Object.prototype%`), with the view as the receiver; `undefined` for a
+/// view whose `[[Prototype]]` is null.
+pub fn buffer_inherited_get(addr: usize, prop: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let view = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        view.get_nanbox_f64(),
+    ));
+    if proto.get_nanbox_f64().to_bits() == crate::value::TAG_NULL {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    crate::proxy::js_reflect_get(
+        proto.get_nanbox_f64(),
+        crate::value::js_nanbox_string(key as i64),
+        view.get_nanbox_f64(),
+    )
+}
+
+/// `HasProperty(view, prop)` for a key the view does not own: its prototype
+/// chain.
+pub fn buffer_inherited_has(addr: usize, prop: &str) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        crate::value::js_nanbox_pointer(addr as i64),
+    ));
+    if proto.get_nanbox_f64().to_bits() == crate::value::TAG_NULL {
+        return false;
+    }
+    let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    let has = crate::proxy::js_reflect_has(
+        proto.get_nanbox_f64(),
+        crate::value::js_nanbox_string(key as i64),
+    );
+    has.to_bits() == crate::value::TAG_TRUE
+}
+
 pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
     // This public probe also receives addresses released by thread teardown.
     if addr == 0 || !super::header::header_is_owned(addr) {

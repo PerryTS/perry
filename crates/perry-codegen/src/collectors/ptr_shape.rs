@@ -396,7 +396,7 @@ fn collect_shape_proven_ptr_locals_impl(
                             && c.extends_expr.is_none()
                             && c.native_extends.is_none()
                             && !c.heritage_lexically_shadowed
-                            && c.computed_members.is_empty()
+                            && !c.has_evaluated_members()
                             && c.fields.iter().all(|f| f.key_expr.is_none())
                             && named_accessors_are_disjoint(c)
                     })
@@ -506,6 +506,10 @@ fn collect_shape_proven_ptr_locals_impl(
         family_present,
         ..
     } = walk;
+    // An Array literal of numbers is numeric storage only while nothing but
+    // element and `length` reads use it.
+    let mut const_local_inits = const_local_inits;
+    numeric::retain_unwritten_literal_arrays(stmts, &[], &mut const_local_inits);
     // #7770: locals whose every write is number-producing by construction —
     // they let a provenance `new C(i, i + 1)` resolve its parameters.
     let mut numeric_locals = collect_numeric_by_construction_locals(
@@ -1370,6 +1374,7 @@ impl<'a> UseWalk<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {

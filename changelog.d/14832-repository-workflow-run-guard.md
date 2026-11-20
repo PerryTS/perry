@@ -1,0 +1,1 @@
+CI: the Repository workflow's routers decide `workflow_run` eligibility in their job-level `if`, so an upstream run no suite consumes no longer starts a runner just to select nothing; `check_actions_topology.py` requires that guard on every router of a `workflow_run`-triggered entrypoint.

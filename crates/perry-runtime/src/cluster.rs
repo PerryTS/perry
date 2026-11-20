@@ -236,6 +236,24 @@ thread_local! {
     static CLUSTER_EMITTER: RefCell<ClusterEmitter> = RefCell::new(ClusterEmitter::default());
 }
 
+/// [`cluster_default_value`] for the generic native-module paths
+/// (`cjs_default_export_value`), which every program links: a slot that
+/// `js_nm_install_cluster` fills, so the cluster default export (an
+/// EventEmitter) is linked only with the cluster module. Empty, it fails
+/// loudly instead of building a cluster object without its prototype.
+static DEFAULT_VALUE: crate::feature_hooks::Hook<fn() -> f64> = crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_default_value() {
+    DEFAULT_VALUE.set(cluster_default_value);
+}
+
+#[inline(never)]
+pub(crate) fn cluster_default_value_installed() -> f64 {
+    DEFAULT_VALUE
+        .get()
+        .expect("the cluster default export in a program compiled without the cluster module")()
+}
+
 /// The `cluster.default` namespace object — the value bound by
 /// `import cluster from "node:cluster"`. Cached (see
 /// `should_cache_native_module_namespace`), so EventEmitter methods can return
@@ -1126,12 +1144,7 @@ fn scheduling_policy_value() -> i32 {
         if let Some(v) =
             crate::object::native_namespace_prop_override_get(module, "schedulingPolicy")
         {
-            let jv = JSValue::from_bits(v.to_bits());
-            let n = if jv.is_int32() {
-                jv.as_int32()
-            } else {
-                v as i32
-            };
+            let n = v as i32;
             return n;
         }
     }
@@ -1257,11 +1270,7 @@ fn worker_reactor_handle(worker: f64) -> Option<u64> {
     if jv.is_undefined() || jv.is_null() {
         return None;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        h
-    };
+    let n = h;
     if n >= 0.0 {
         Some(n as u64)
     } else {
@@ -1273,12 +1282,7 @@ fn worker_reactor_handle(worker: f64) -> Option<u64> {
 /// int32-tagged number representations).
 fn number_field(message: f64, name: &[u8]) -> i32 {
     let v = get_field(message, name);
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        v as i32
-    }
+    v as i32
 }
 
 /// Emit `online` exactly once per worker — both the child reactor's `spawn`
@@ -1624,7 +1628,9 @@ fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(raw as *mut ArrayHeader),
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            Some(raw as *mut ArrayHeader)
+        }
         _ => None,
     }
 }

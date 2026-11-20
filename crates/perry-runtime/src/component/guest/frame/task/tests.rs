@@ -208,7 +208,7 @@ extern "C-unwind" fn throw_job(
     closure: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
+    crate::exception::test_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
 }
 
 #[test]

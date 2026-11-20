@@ -1027,13 +1027,27 @@ pub fn try_lower_func_ref_call(
     // SITE; Tier B keeps the guarded-diamond shape. Any mismatch falls
     // through to the existing typed/generic chain — the public boxed entry is
     // the permanent fallback ABI.
-    let spec_result: Option<String> = if crate::codegen::spec_abi_enabled()
+    // P2 (DESIGN-p2 §2): a typed call site enters `F$sig`.
+    let typed_result = if !callee_reads_this && !has_rest {
+        crate::codegen::signature_entry::try_emit_typed_call(ctx, *fid, &fname, args, &lowered)
+    } else {
+        None
+    };
+    let spec_result: Option<String> = if typed_result.is_some() {
+        typed_result
+    } else if crate::codegen::spec_abi_enabled()
         && !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && declared_count == args.len()
     {
-        match ctx.spec_abi_functions.get(fid).cloned() {
+        // A typed function's plan names `F$sig`, entered only above.
+        match ctx
+            .spec_abi_functions
+            .get(fid)
+            .filter(|plan| plan.signature.is_none())
+            .cloned()
+        {
             Some(plan) => match plan.dispatch {
                 crate::codegen::SpecDispatch::Static => {
                     try_emit_spec_static_call(ctx, &fname, &plan, args, &lowered)

@@ -34,6 +34,8 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         && format_lower != "spki"
         && format_lower != "pkcs8"
         && format_lower != "jwk"
+        && format_lower != "raw-public"
+        && format_lower != "raw-seed"
     {
         return reject_with_dom_exception("NotSupportedError", "Unsupported key format");
     }
@@ -169,11 +171,15 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             KeyAlgo::X25519
         };
         (key_algo, HashAlgo::Sha256, kind)
-    } else if let Some(key_algo) = ml_kem_key_algo_from_name(&algo_upper) {
-        if format_lower == "spki" {
+    } else if let Some(key_algo) = akp_key_algo_from_name(&algo_upper) {
+        if format_lower == "spki" || format_lower == "raw-public" {
             (key_algo, HashAlgo::Sha256, KeyKind::Public)
-        } else if format_lower == "pkcs8" {
+        } else if format_lower == "pkcs8" || format_lower == "raw-seed" {
             (key_algo, HashAlgo::Sha256, KeyKind::Private)
+        } else if format_lower == "raw" || format_lower == "raw-secret" {
+            let name = akp_algorithm_name(key_algo).unwrap_or("");
+            let message = format!("Unable to import {name} using {format_lower} format");
+            return reject_with_dom_exception("NotSupportedError", &message);
         } else if format_lower == "jwk" {
             let kind = if object_field_string(key_bits.to_bits(), b"priv").is_some() {
                 KeyKind::Private
@@ -229,6 +235,12 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         KeyAlgo::Argon2id => "Unsupported key usage for a Argon2id key",
         KeyAlgo::Kmac128 => "Unsupported key usage for KMAC128 key",
         KeyAlgo::Kmac256 => "Unsupported key usage for KMAC256 key",
+        KeyAlgo::MlKem512 => "Unsupported key usage for ML-KEM-512 key",
+        KeyAlgo::MlKem768 => "Unsupported key usage for ML-KEM-768 key",
+        KeyAlgo::MlKem1024 => "Unsupported key usage for ML-KEM-1024 key",
+        KeyAlgo::MlDsa44 => "Unsupported key usage for ML-DSA-44 key",
+        KeyAlgo::MlDsa65 => "Unsupported key usage for ML-DSA-65 key",
+        KeyAlgo::MlDsa87 => "Unsupported key usage for ML-DSA-87 key",
         _ => "Unsupported key usage for the requested algorithm",
     };
     let usages = match validate_key_usages(
@@ -242,11 +254,17 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         Ok(u) => u,
         Err((name, message)) => return reject_with_dom_exception(name, message),
     };
-    if format_lower == "jwk"
-        && is_ml_kem_key_algo(key_algo)
-        && !jwk_key_ops_match(key_bits.to_bits(), key_algo, kind, usages)
-    {
-        return reject_with_dom_exception("DataError", "Key operations and usage mismatch");
+    if format_lower == "jwk" && is_akp_key_algo(key_algo) {
+        if !jwk_key_ops_match(key_bits.to_bits(), key_algo, kind, usages) {
+            return reject_with_dom_exception("DataError", "Key operations and usage mismatch");
+        }
+        let alg = object_field_string(key_bits.to_bits(), b"alg");
+        if alg.is_some() && alg.as_deref() != akp_algorithm_name(key_algo) {
+            return reject_with_dom_exception(
+                "DataError",
+                "JWK \"alg\" Parameter and algorithm name mismatch",
+            );
+        }
     }
 
     let key_bytes = if format_lower == "jwk" {
@@ -257,9 +275,20 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             }
             None => Vec::new(),
         }
+    } else if is_akp_key_algo(key_algo) && format_lower == "raw-public" {
+        // The encoded public key; stored as SPKI like every ML-KEM / ML-DSA key.
+        akp_public_der_from_bytes(key_algo, &bytes_from_jsvalue(key_bits.to_bits()))
+            .unwrap_or_default()
+    } else if is_akp_key_algo(key_algo) && format_lower == "raw-seed" {
+        akp_der_pair_from_seed(key_algo, &bytes_from_jsvalue(key_bits.to_bits()))
+            .map(|(private_der, _)| private_der)
+            .unwrap_or_default()
     } else {
         bytes_from_jsvalue(key_bits.to_bits())
     };
+    if is_akp_key_algo(key_algo) && key_bytes.is_empty() {
+        return reject_with_dom_exception("DataError", "Invalid keyData");
+    }
     if key_algo == KeyAlgo::ChaCha20Poly1305 && key_bytes.len() != 32 {
         return reject_with_dom_exception("DataError", "Invalid key length");
     }
@@ -362,14 +391,20 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
-    if is_ml_kem_key_algo(key_algo) {
+    if is_akp_key_algo(key_algo) {
         let ok = if kind == KeyKind::Public {
-            ml_kem_public_bytes_from_der(key_algo, &key_bytes).is_some()
+            akp_public_bytes_from_der(key_algo, &key_bytes).is_some()
         } else {
-            ml_kem_private_seed_and_public_from_der(key_algo, &key_bytes).is_some()
+            akp_private_seed_and_public_from_der(key_algo, &key_bytes).is_some()
         };
         if !ok {
-            return reject_with_dom_exception("DataError", "Invalid keyData");
+            // A well-formed key of another ML-KEM / ML-DSA parameter set.
+            let message = if akp_der_is_some_key(&key_bytes, kind == KeyKind::Public) {
+                "Invalid key type"
+            } else {
+                "Invalid keyData"
+            };
+            return reject_with_dom_exception("DataError", message);
         }
     }
     let buf = alloc_crypto_key_from_slice(&key_bytes);
@@ -423,32 +458,67 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             "Unable to export AES-OCB secret key using raw format",
         );
     }
-    if is_ml_kem_key_algo(mat.algo) {
-        if format_lower != "raw"
-            && format_lower != "spki"
-            && format_lower != "pkcs8"
-            && format_lower != "jwk"
-        {
+    if is_akp_key_algo(mat.algo) {
+        if !matches!(
+            format_lower.as_str(),
+            "raw" | "raw-secret" | "raw-public" | "raw-seed" | "spki" | "pkcs8" | "jwk"
+        ) {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
-        let invalid_format = format_lower == "raw"
-            || (format_lower == "spki" && mat.kind != KeyKind::Public)
-            || (format_lower == "pkcs8" && mat.kind != KeyKind::Private);
-        if invalid_format {
-            return reject_with_dom_exception(
-                "NotSupportedError",
-                "Unsupported key format for ML-KEM key",
-            );
+        let valid_format = match format_lower.as_str() {
+            "jwk" => true,
+            "spki" | "raw-public" => mat.kind == KeyKind::Public,
+            "pkcs8" | "raw-seed" => mat.kind == KeyKind::Private,
+            _ => false,
+        };
+        if !valid_format {
+            let name = akp_algorithm_name(mat.algo).unwrap_or("");
+            let kind = if mat.kind == KeyKind::Public {
+                "public"
+            } else {
+                "private"
+            };
+            // A key of the other kind in a format that names one: node reports
+            // the kind it wanted. `raw` / `raw-secret` fit neither kind.
+            match format_lower.as_str() {
+                "spki" | "raw-public" => {
+                    return reject_with_dom_exception(
+                        "InvalidAccessError",
+                        "Key must be a public key",
+                    )
+                }
+                "pkcs8" | "raw-seed" => {
+                    return reject_with_dom_exception(
+                        "InvalidAccessError",
+                        "Key must be a private key",
+                    )
+                }
+                _ => {}
+            }
+            let message = format!("Unable to export {name} {kind} key using {format_lower} format");
+            return reject_with_dom_exception("NotSupportedError", &message);
         }
         let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
-        if format_lower == "jwk" {
-            let obj = match ml_kem_jwk_export_object(&key_bytes, mat) {
-                Some(o) => o,
-                None => return reject_with_dom_exception("OperationError", "The operation failed"),
-            };
-            return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
-        }
-        return resolve_with_bytes(&key_bytes);
+        let exported = match format_lower.as_str() {
+            "jwk" => {
+                let obj = match akp_jwk_export_object(&key_bytes, mat) {
+                    Some(o) => o,
+                    None => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+            }
+            "raw-public" => akp_public_bytes_from_der(mat.algo, &key_bytes),
+            "raw-seed" => {
+                akp_private_seed_and_public_from_der(mat.algo, &key_bytes).map(|(seed, _)| seed)
+            }
+            _ => Some(key_bytes),
+        };
+        return match exported {
+            Some(bytes) => resolve_with_bytes(&bytes),
+            None => reject_with_dom_exception("OperationError", "The operation failed"),
+        };
     }
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");
@@ -698,6 +768,8 @@ unsafe fn set_object_bool_field(obj: *mut perry_runtime::ObjectHeader, name: &[u
 
 unsafe fn key_ops_array(usages: u32) -> JSValue {
     let entries = [
+        (USAGE_SIGN, "sign"),
+        (USAGE_VERIFY, "verify"),
         (USAGE_ENCAPSULATE_KEY, "encapsulateKey"),
         (USAGE_ENCAPSULATE_BITS, "encapsulateBits"),
         (USAGE_DECAPSULATE_KEY, "decapsulateKey"),
@@ -720,8 +792,9 @@ pub(super) unsafe fn jwk_key_ops_match(
     kind: KeyKind,
     requested_usages: u32,
 ) -> bool {
+    // `key_ops` is optional; only a present one constrains the usages.
     let Some(bits) = object_field_bits(obj_bits, b"key_ops") else {
-        return false;
+        return true;
     };
     let Some(key_ops) = key_usages_from_jsvalue(bits) else {
         return false;
@@ -729,7 +802,7 @@ pub(super) unsafe fn jwk_key_ops_match(
     key_ops & !supported_usages(key_algo, kind) == 0 && requested_usages & !key_ops == 0
 }
 
-pub(super) unsafe fn jwk_ml_kem_bytes(
+pub(super) unsafe fn jwk_akp_bytes(
     obj_bits: u64,
     key_algo: KeyAlgo,
     kind: KeyKind,
@@ -739,7 +812,7 @@ pub(super) unsafe fn jwk_ml_kem_bytes(
         return None;
     }
     let alg = object_field_string(obj_bits, b"alg")?;
-    if alg != ml_kem_algorithm_name(key_algo)? {
+    if alg != akp_algorithm_name(key_algo)? {
         return None;
     }
     let public_value = object_field_string(obj_bits, b"pub")?;
@@ -747,15 +820,15 @@ pub(super) unsafe fn jwk_ml_kem_bytes(
         .decode(public_value.as_bytes())
         .ok()?;
     if kind == KeyKind::Public {
-        return ml_kem_public_der_from_bytes(key_algo, &public_bytes);
+        return akp_public_der_from_bytes(key_algo, &public_bytes);
     }
 
     let private_value = object_field_string(obj_bits, b"priv")?;
     let seed_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(private_value.as_bytes())
         .ok()?;
-    let (private_der, public_der) = ml_kem_der_pair_from_seed(key_algo, &seed_bytes)?;
-    let derived_public = ml_kem_public_bytes_from_der(key_algo, &public_der)?;
+    let (private_der, public_der) = akp_der_pair_from_seed(key_algo, &seed_bytes)?;
+    let derived_public = akp_public_bytes_from_der(key_algo, &public_der)?;
     if derived_public == public_bytes {
         Some(private_der)
     } else {
@@ -778,8 +851,8 @@ pub(super) unsafe fn jwk_import_key_bytes(
     ) {
         return jwk_okp_bytes(obj_bits, key_algo, kind);
     }
-    if is_ml_kem_key_algo(key_algo) {
-        return jwk_ml_kem_bytes(obj_bits, key_algo, kind);
+    if is_akp_key_algo(key_algo) {
+        return jwk_akp_bytes(obj_bits, key_algo, kind);
     }
     if matches!(
         key_algo,
@@ -968,16 +1041,16 @@ pub(super) unsafe fn okp_jwk_export_object(
     Some(obj)
 }
 
-pub(super) unsafe fn ml_kem_jwk_export_object(
+pub(super) unsafe fn akp_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
-    let alg = ml_kem_algorithm_name(mat.algo)?;
+    let alg = akp_algorithm_name(mat.algo)?;
     let (public_bytes, private_seed) = if mat.kind == KeyKind::Private {
-        let (seed, public) = ml_kem_private_seed_and_public_from_der(mat.algo, key_bytes)?;
+        let (seed, public) = akp_private_seed_and_public_from_der(mat.algo, key_bytes)?;
         (public, Some(seed))
     } else {
-        (ml_kem_public_bytes_from_der(mat.algo, key_bytes)?, None)
+        (akp_public_bytes_from_der(mat.algo, key_bytes)?, None)
     };
 
     let obj = js_object_alloc(0, if private_seed.is_some() { 6 } else { 5 });

@@ -56,3 +56,22 @@ checks independent-stream handshakes under backpressure. Run it against the actu
 installed npm compiler outside a source checkout for package acceptance. Its
 `--tiny-only` switch is a verifier development scope, never an enabling compiler
 flag; that scope does not satisfy full fallback acceptance.
+
+## JSON in normal programs
+
+Direct `JSON.stringify` (including replacers and spacing), `JSON.isRawJSON`,
+and `%j` formatting select serialization and its GC cache roots independently
+of parsing. The parser and lazy-array materializers are reached through slots
+filled by the JSON engine installer. The common root scanner visits stringify
+caches directly and parser caches through an engine-installed slot; generic TLS
+cache initialization remains independent of this selection.
+
+Direct parsing, runtime JSON-file `require`, `JSON.rawJSON`, and computed
+native JSON methods retain the engine. Native-module imports, UI/plugin programs, workers, and data imports
+also retain it conservatively: their return adapters and callbacks can parse
+JSON without a JavaScript parse call. A JSON namespace used as a value, an escaped global
+object, supported dynamic code, or native-addon access retains the full JSON
+namespace and engine conservatively. Worker images contribute their installers
+to the process-wide union, and each thread registers cache roots during GC
+initialization. This uses the existing installer symbols on native and wasm
+runtime targets.

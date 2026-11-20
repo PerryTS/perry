@@ -147,7 +147,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     if needs_arguments_synth {
         let mapped = !strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(&params, fn_decl.function.body.as_ref())
         } else {
             Vec::new()
         };
@@ -396,6 +396,9 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         is_strict,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: ctx
+            .construct_only_fn_spans
+            .contains(&(fn_decl.function.span.lo.0, fn_decl.function.span.hi.0)),
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),

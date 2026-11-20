@@ -54,7 +54,7 @@ def main():
     assert match, "compound fixture subject did not execute"
     guest = out / "guest"
     shutil.move(match.group(1), guest)
-    fixture = root / "test-wasi/components/async-compound-resources"
+    fixture = root / "tests/integration/wasi/components/async-compound-resources"
     for name in ["world.wit", "guest.ts"]:
         assert (guest / name).read_bytes() == (fixture / name).read_bytes(), "stale compound fixture"
     compile_env = {**env, "WASI_SDK_PATH": str(args.wasi_sdk.resolve()),

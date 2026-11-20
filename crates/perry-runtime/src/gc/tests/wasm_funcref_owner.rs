@@ -6,14 +6,9 @@ extern "C" fn body(_: *const crate::closure::ClosureHeader, _: crate::closure::J
 }
 #[test]
 fn wasm_funcref_native_payload_follows_a_moving_wrapper() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: erase the function's owning native capture"]
-fn negative_control_objtables_wasm_funcref() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::closure::js_closure_alloc(crate::fn_info!(body, 0), 7);
@@ -24,13 +19,6 @@ fn check(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
     assert_ne!(moved, owner);
-    if erase {
-        crate::closure::js_closure_set_capture_f64(
-            moved,
-            6,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-    }
     assert_eq!(
         unsafe { crate::closure::wasm_funcref::test_read(moved as usize) },
         Some(37)

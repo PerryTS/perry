@@ -274,12 +274,7 @@ pub(crate) fn valid_runtime_guard_helper(kind: &str, helper: &str) -> bool {
         "f32" => helper == "js_native_abi_check_f32",
         "f64" => helper == "js_native_abi_check_f64",
         "ptr" => helper == "js_native_abi_check_ptr",
-        "buffer+len" => {
-            matches!(
-                helper,
-                "js_native_abi_check_buffer_data_ptr" | "js_native_abi_check_buffer_byte_len"
-            )
-        }
+        "buffer+len" => buffer_span_partner(helper).is_some(),
         "pod+count" => {
             matches!(
                 helper,
@@ -293,6 +288,23 @@ pub(crate) fn valid_runtime_guard_helper(kind: &str, helper: &str) -> bool {
         "void" => false,
         _ => false,
     }
+}
+
+/// The other half of a `buffer+len` guard pair, and whether `helper` is the
+/// data-pointer half. A strict half pairs only with a strict half, a nullable
+/// half only with a nullable one.
+fn buffer_span_partner(helper: &str) -> Option<(&'static str, bool)> {
+    Some(match helper {
+        "js_native_abi_check_buffer_data_ptr" => ("js_native_abi_check_buffer_byte_len", true),
+        "js_native_abi_check_buffer_byte_len" => ("js_native_abi_check_buffer_data_ptr", false),
+        "js_native_abi_check_nullable_buffer_data_ptr" => {
+            ("js_native_abi_check_nullable_buffer_byte_len", true)
+        }
+        "js_native_abi_check_nullable_buffer_byte_len" => {
+            ("js_native_abi_check_nullable_buffer_data_ptr", false)
+        }
+        _ => return None,
+    })
 }
 
 pub(crate) fn validate_buffer_span_pairs(records: &[NativeRepRecord], errors: &mut Vec<String>) {
@@ -315,12 +327,10 @@ pub(crate) fn validate_buffer_span_pairs(records: &[NativeRepRecord], errors: &m
                 record.function, record.block_label, record.consumer
             )
         };
-        let partner_helper = match guard.helper.as_str() {
-            "js_native_abi_check_buffer_data_ptr" => "js_native_abi_check_buffer_byte_len",
-            "js_native_abi_check_buffer_byte_len" => "js_native_abi_check_buffer_data_ptr",
-            _ => continue,
+        let Some((partner_helper, is_data)) = buffer_span_partner(&guard.helper) else {
+            continue;
         };
-        let expected_partner_slot = if guard.helper == "js_native_abi_check_buffer_data_ptr" {
+        let expected_partner_slot = if is_data {
             abi.abi_slot_index + 1
         } else if abi.abi_slot_index == 0 {
             errors.push(format!(

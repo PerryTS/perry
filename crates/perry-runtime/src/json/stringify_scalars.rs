@@ -24,18 +24,6 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         super::stringify::stringify_value_depth(value, TYPE_UNKNOWN, buf, 1);
         return;
     }
-    // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN, so it
-    // would otherwise fall into the `is_nan()` → "null" arm below and silently
-    // drop the value. Decode and emit the signed integer. Integer columns from
-    // the sqlite binding (and other int32-tagged numbers) funnel here; numeric
-    // literals are stored as plain f64 doubles by codegen and never take this
-    // branch. Mirrors the BigInt funnel above.
-    if (value.to_bits() & 0xFFFF_0000_0000_0000) == INT32_TAG {
-        let n = (value.to_bits() & INT32_MASK) as u32 as i32;
-        let mut itoa_buf = itoa::Buffer::new();
-        super::stringify_copy::push_str(buf, itoa_buf.format(n));
-        return;
-    }
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
@@ -231,10 +219,7 @@ pub(crate) unsafe fn serialize_bigint(value: f64, buf: &mut String) {
 pub(crate) fn throw_bigint_serialize() -> ! {
     let msg = "Do not know how to serialize a BigInt";
     let msg_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-    crate::exception::js_throw(f64::from_bits(
-        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr))
 }
 
 #[cfg(test)]

@@ -51,6 +51,7 @@ fn ir_body(body: Vec<Stmt>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(
@@ -68,6 +69,7 @@ fn ir_body(body: Vec<Stmt>) -> String {
 #[test]
 fn array_record_unsigned_index_preserves_number_on_cold_read() {
     let ll = ir(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
@@ -145,6 +147,7 @@ fn array_record_cursor_increment_keeps_full_unsigned_range() {
             prefix: false,
         }),
         Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -297,6 +300,7 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
 #[test]
 fn array_record_index_retains_boxed_cold_forwarding_custody() {
     let ll = ir(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
@@ -315,6 +319,7 @@ fn array_record_index_retains_boxed_cold_forwarding_custody() {
 #[test]
 fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
     let ll = ir(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
@@ -558,6 +563,7 @@ fn stack_record_ir(fused: bool) -> String {
                             mode(),
                             Expr::LocalGet(8),
                             Expr::IndexGet {
+                                element_offset: 0,
                                 byte_offset: 0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(6)),
@@ -907,6 +913,7 @@ fn ir_proven(proven: bool, expr: Expr) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let elision = ElisionFacts {
         array_iterator_close_unwritten: proven,

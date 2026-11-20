@@ -208,6 +208,9 @@ pub(crate) struct ClosureCell<'a> {
     pub(crate) capture_flags: u32,
     pub(crate) props: Option<&'a str>,
     pub(crate) captures: &'a [Slot],
+    /// The body's own slots (`JsFunctionInfo::own_slots` of `info_symbol`),
+    /// born holes after the captures exactly as a runtime birth lays them out.
+    pub(crate) own_slots: u16,
 }
 
 /// A function object cell with the exact `ClosureHeader` payload and trailing
@@ -233,7 +236,7 @@ pub(crate) fn emit_closure_cell_with_fields(
     assert!(capture_count <= CAPTURE_COUNT_MASK);
     let count_and_flags = cell.capture_flags | capture_count;
     let header_size = GC_HEADER_SIZE + crate::target_layout::closure_header_size_bytes(&triple);
-    let size = header_size + 8 * u64::from(capture_count);
+    let size = header_size + 8 * (u64::from(capture_count) + u64::from(cell.own_slots));
     let props = cell.props.map_or_else(|| "null".into(), user_address);
     let mut fixups = Vec::new();
     let mut types = Vec::new();
@@ -250,9 +253,14 @@ pub(crate) fn emit_closure_cell_with_fields(
             });
         }
     }
+    for _ in 0..cell.own_slots {
+        let (ty, init, _) = slot_init(&triple, &Slot::Bits(crate::nanbox::TAG_HOLE));
+        types.push(ty);
+        inits.push(format!("{ty} {init}"));
+    }
     llmod.add_raw_global(format!(
         "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, ptr, ptr, {{ {} }} }} \
-         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 {}, i32 {}, ptr @{info_symbol}, ptr {props}, {{ {} }} {{ {} }} }}, \
+         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 {}, i32 {}, ptr {props}, ptr @{info_symbol}, {{ {} }} {{ {} }} }}, \
          section \"{}\", align 8",
         types.join(", "),
         cell.reserved,
@@ -278,6 +286,7 @@ pub(crate) fn emit_closure_cell(llmod: &mut LlModule, name: &str, info_symbol: &
             capture_flags: 0,
             props: None,
             captures: &[],
+            own_slots: 0,
         },
     );
 }
@@ -776,6 +785,7 @@ mod tests {
                 capture_flags: 1 << 23,
                 props: Some("props"),
                 captures: &captures,
+                own_slots: 0,
             };
             let fixups = emit_closure_cell_with_fields(&mut module, "function", &fields);
             // Several functions can share their body and info; LLVM permits
@@ -796,7 +806,7 @@ mod tests {
                 "{triple}: {ir}"
             );
             assert!(ir.contains(
-                "ptr @\"body_info::with_rest(0)\", ptr getelementptr (i8, ptr @props, i64 8)"
+                "ptr getelementptr (i8, ptr @props, i64 8), ptr @\"body_info::with_rest(0)\""
             ));
             if triple.contains("apple") {
                 assert_eq!(fixups.len(), 1, "raw captures and props must stay raw");
@@ -998,5 +1008,30 @@ mod tests {
         let wasm = fixture_ir("wasm32-wasip2");
         assert!(wasm.contains("{ i8 4, i8 5, i16 16384, i32 24,"), "{wasm}");
         assert!(wasm.contains("{ i8 2, i8 5, i16 512, i32 40,"), "{wasm}");
+        // A cell whose info owns one slot is born with it: +8, a hole.
+        for (triple, header) in [("x86_64-unknown-linux-gnu", 32), ("wasm32-wasip2", 24)] {
+            let mut module = LlModule::new(triple);
+            emit_closure_cell_with_fields(
+                &mut module,
+                "owner",
+                &ClosureCell {
+                    exported: false,
+                    info_symbol: "owner_info",
+                    shape: perry_abi::FUNCTION_LAYOUT_WORD,
+                    reserved: perry_abi::GC_LAYOUT_POINTER_FREE,
+                    capture_flags: 0,
+                    props: None,
+                    captures: &[],
+                    own_slots: 1,
+                },
+            );
+            let ir = module.to_ir();
+            assert!(
+                ir.contains(&format!("i32 {},", header + 8)),
+                "{triple}: {ir}"
+            );
+            let (_, hole, _) = slot_init(triple, &Slot::Bits(crate::nanbox::TAG_HOLE));
+            assert!(ir.contains(&hole), "{triple}: {ir}");
+        }
     }
 }

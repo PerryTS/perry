@@ -28,9 +28,11 @@ pub(super) fn try_lower_scalar_replaced_new(
     // no fields populated. The call must go through the standard
     // heap-allocation path so `lower_new` emits the cross-module
     // `<prefix>__<class>_constructor` call.
-    if let Some(perry_hir::Expr::New {
-        class_name, args, ..
-    }) = init
+    if let Some(
+        literal @ perry_hir::Expr::New {
+            class_name, args, ..
+        },
+    ) = init
     {
         let is_imported = ctx.imported_class_ctors.contains_key(class_name);
         if ctx.non_escaping_news.contains_key(&id) && !is_imported {
@@ -73,13 +75,11 @@ pub(super) fn try_lower_scalar_replaced_new(
                 } else {
                     all_fields.clone()
                 };
+                let existing = ctx.scalar_replaced.get(&id).cloned();
                 let mut field_slots: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
                 for fname in &stored_fields {
-                    let slot = ctx.func.alloca_entry(DOUBLE);
-                    let undef =
-                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                    let slot = scalar_slot(ctx, existing.as_ref().and_then(|m| m.get(fname)));
                     field_slots.insert(fname.clone(), slot);
                 }
 
@@ -87,8 +87,10 @@ pub(super) fn try_lower_scalar_replaced_new(
 
                 // Register type + dummy slot so LocalGet doesn't fail
                 ctx.local_types.insert(id, refined_ty.clone());
-                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.locals.insert(id, dummy_slot);
+                if !ctx.locals.contains_key(&id) {
+                    let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.locals.insert(id, dummy_slot);
+                }
 
                 // Anonymous-shape classes are synthesized for object
                 // literals. Their constructor is a straight field-assigner,
@@ -103,10 +105,18 @@ pub(super) fn try_lower_scalar_replaced_new(
                                 .and_then(|fields| fields.get(fname))
                                 .cloned()
                         });
-                        if slot.is_none() && lower_unused_expr(ctx, arg)? {
+                        // SNAP census: the argument's parent is the literal.
+                        let unused = slot.is_none()
+                            && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_unused_expr(ctx, arg)
+                            })?;
+                        if unused {
                             continue;
                         }
-                        let arg_val = lower_expr(ctx, arg)?;
+                        let arg_val =
+                            crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_expr(ctx, arg)
+                            })?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
                             // #6968: anonymous-shape scalar replacement stores
@@ -150,11 +160,19 @@ pub(super) fn try_lower_scalar_replaced_new(
                     .map(|arg| crate::type_analysis::proven_type_from_init(ctx, arg))
                     .collect();
 
-                // Lower args first
-                let mut lowered_args: Vec<String> = Vec::new();
+                // Lower args first, into a rooted group. Each one is live
+                // until the parameter stores below: across the later
+                // arguments, the class value read for `new.target` (its
+                // first read builds the class object) and the field
+                // initializers that run before the constructor body. A
+                // `double` register is not a statepoint root, so a moving
+                // collection anywhere in that window would leave the
+                // parameter naming from-space.
+                let mut args_group = crate::rooting::open_rooted_group(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    args_group.lower(ctx, a, true)?;
                 }
+                let mut args_group = Some(args_group);
 
                 // Push scalar ctor target so PropertySet on `this` routes to allocas
                 ctx.scalar_ctor_target.push(id);
@@ -167,8 +185,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                 // #2768/new.target: scalar replacement inlines the (own or
                 // inherited) constructor here without going through
                 // `lower_new`, so mirror its `new_target_stack` setup — bind
-                // `new.target` in the inlined body to this leaf class's ref
-                // (`INT32_TAG | class_id`). Without this a `new.target` read in
+                // `new.target` in the inlined body to this leaf class's
+                // constructor function object. Without this a `new.target` read in
                 // the ctor (notably `const t = new.target`) fell through to the
                 // runtime cell, which this path never sets, yielding undefined.
                 let new_target_value = match ctx.class_ids.get(class_name).copied() {
@@ -229,6 +247,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                     let saved_locals = ctx.locals.clone();
                     let saved_local_types = ctx.local_types.clone();
                     let saved_proven_local_types = ctx.proven_local_types.clone();
+                    let group = args_group.take().expect("arguments are stored once");
+                    let lowered_args = group.reread_all(ctx)?;
                     for (index, (param, arg_val)) in
                         ctor.params.iter().zip(lowered_args.iter()).enumerate()
                     {
@@ -238,9 +258,13 @@ pub(super) fn try_lower_scalar_replaced_new(
                         ctx.local_types.insert(param.id, param.ty.clone());
                         ctx.proven_local_types.remove(&param.id);
                         if let Some(Some(proof)) = arg_proofs.get(index) {
-                            ctx.proven_local_types.insert(param.id, proof.clone());
+                            if ctx.admits_contents_proof(param.id, proof) {
+                                ctx.proven_local_types.insert(param.id, proof.clone());
+                            }
                         }
                     }
+                    // The parameter slots hold the arguments from here on.
+                    group.release(ctx);
                     // #9081: the body is spliced into the enclosing frame,
                     // whose slot map never saw the ctor's locals.
                     crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
@@ -257,6 +281,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                         let saved_locals = ctx.locals.clone();
                         let saved_local_types = ctx.local_types.clone();
                         let saved_proven_local_types = ctx.proven_local_types.clone();
+                        let group = args_group.take().expect("arguments are stored once");
+                        let lowered_args = group.reread_all(ctx)?;
                         for (i, param) in parent_ctor.params.iter().enumerate() {
                             let slot = ctx.func.alloca_entry(DOUBLE);
                             if i < lowered_args.len() {
@@ -271,9 +297,12 @@ pub(super) fn try_lower_scalar_replaced_new(
                             ctx.local_types.insert(param.id, param.ty.clone());
                             ctx.proven_local_types.remove(&param.id);
                             if let Some(Some(proof)) = arg_proofs.get(i) {
-                                ctx.proven_local_types.insert(param.id, proof.clone());
+                                if ctx.admits_contents_proof(param.id, proof) {
+                                    ctx.proven_local_types.insert(param.id, proof.clone());
+                                }
                             }
                         }
+                        group.release(ctx);
                         ctx.class_stack.pop();
                         ctx.class_stack.push(pname.to_string());
                         // #9081: same frame-splice rooting as the
@@ -306,6 +335,12 @@ pub(super) fn try_lower_scalar_replaced_new(
                     )?;
                 }
 
+                // No constructor body took the arguments: they were
+                // evaluated for their effects only.
+                if let Some(group) = args_group.take() {
+                    group.release(ctx);
+                }
+
                 ctx.new_target_stack.pop();
                 ctx.this_stack.pop();
                 ctx.class_stack.pop();
@@ -316,4 +351,65 @@ pub(super) fn try_lower_scalar_replaced_new(
         }
     }
     Ok(false)
+}
+
+/// Is this declaration a second lowering of a binding that is already
+/// scalar-replaced, whose initializer takes the same scalar path again?
+/// A loop region lowers its body twice (F-body, then G-body), and the
+/// first lowering leaves a dummy `ctx.locals` entry that would otherwise
+/// route the second one through the `var`-redeclaration `LocalSet`.
+pub(super) fn scalar_rebind(ctx: &FnCtx<'_>, id: u32, init: Option<&perry_hir::Expr>) -> bool {
+    match init {
+        Some(perry_hir::Expr::Object(_)) => {
+            ctx.scalar_replaced.contains_key(&id)
+                && ctx.non_escaping_object_literals.contains_key(&id)
+        }
+        Some(perry_hir::Expr::New { class_name, .. }) => {
+            ctx.scalar_replaced.contains_key(&id)
+                && ctx.non_escaping_news.contains_key(&id)
+                && !ctx.imported_class_ctors.contains_key(class_name)
+        }
+        Some(perry_hir::Expr::Array(..)) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+        }
+        // Only the split the scalar path takes: any other call initializes
+        // ordinary storage, so it must take the redeclaration store.
+        Some(perry_hir::Expr::Call { callee, args, .. }) => {
+            ctx.scalar_replaced_arrays.contains_key(&id)
+                && ctx.non_escaping_arrays.contains_key(&id)
+                && is_scalar_split(ctx, callee, args)
+        }
+        _ => false,
+    }
+}
+
+/// The field slot of a scalar-replaced binding: the existing one when the
+/// binding was already scalar-replaced (see [`scalar_rebind`]), else a fresh
+/// entry alloca initialized to `undefined`.
+pub(super) fn scalar_slot(ctx: &mut FnCtx<'_>, existing: Option<&String>) -> String {
+    if let Some(slot) = existing {
+        return slot.clone();
+    }
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let slot = ctx.func.alloca_entry(DOUBLE);
+    ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+    slot
+}
+
+/// `s.split("sep")` on a string local with a non-empty literal separator: the
+/// call shape `lower_let` scalar-replaces when its result does not escape.
+pub(super) fn is_scalar_split(
+    ctx: &FnCtx<'_>,
+    callee: &perry_hir::Expr,
+    args: &[perry_hir::Expr],
+) -> bool {
+    matches!(args, [perry_hir::Expr::String(s)] if !s.is_empty())
+        && matches!(
+            callee,
+            perry_hir::Expr::PropertyGet { object, property, .. }
+                if crate::type_analysis::is_string_expr(ctx, object)
+                    && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                    && property == "split"
+        )
 }

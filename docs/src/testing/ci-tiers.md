@@ -27,10 +27,10 @@ copy is current.
 
 The PR gap tier uses twelve fast-mode shards after a six-way shard exhausted
 the 110-minute job bound; the sweep and full tiers run the same lane in three.
-The full tier's `parity` job runs every case of `test-files/` and
-`test-parity/node-suite/` in auto-optimize mode through `scripts/parity.py`,
+The full tier's `parity` job runs every case of `tests/fixtures/programs/` and
+`tests/parity/node-suite/` in auto-optimize mode through `scripts/parity.py`,
 in sixteen shards. Compile-smoke
-partitions the complete top-level `test-files/*.ts` inventory into four stable
+partitions the complete top-level `tests/fixtures/programs/*.ts` inventory into four stable
 round-robin shards, with at most two smoke shards running concurrently. Each
 file is assigned once before the existing platform exclusions are applied.
 Every shard retains the default compiler invocation and failure markers;
@@ -51,6 +51,7 @@ must still establish the new margin.
 | `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
+| `parity-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |
 | `windows-build` |  | yes | yes |
 | `windows-arm64-build` |  | yes | yes |
@@ -76,6 +77,14 @@ unread-peer probe also checks that destroying a socket releases the drain's
 duplicated handle while the JavaScript process remains alive.
 These fixtures skip their Windows bodies on other hosts; use the full tier
 (`run-extended-tests`) when reviewing changes to this behavior.
+
+`scripts/ci_pr_files.py` binds scope to the expected PR head and stable
+head/base/file-count metadata. It validates paginated file lists for ordinary
+PRs. Above GitHub's 3,000-file listing cap it compares immutable merge-base
+and head Git trees, retaining both endpoints of renames. Partial recursive
+tree arrays are discarded and replaced by complete child-tree traversal;
+malformed, truncated fallback or raced responses fail before emitting scope.
+This keeps large layout migrations scoped without accepting a shortened list.
 
 Within the **pr** tier the changed-file list narrows the plan further:
 
@@ -119,9 +128,8 @@ not a larger timeout. Keep
 `RUST_TEST_THREADS=1` for `perry-runtime`: its tests share process-global GC,
 arena, timer, and notification state. Keep `CARGO_BUILD_JOBS=1` for the
 runtime-linked test binaries until runner memory measurements support increasing
-it. The sccache-backed CI jobs set `CARGO_INCREMENTAL=0`, so sccache can reuse
-compiler outputs. Mr Boxington-backed release jobs use mbx's default cache
-policy instead; local `make build-dev` and `make build-prod` leave
+it. Mr Boxington-backed release jobs use mbx's default cache policy; local
+`make build-dev` and `make build-prod` leave
 `MBX_INCREMENTAL` unset so mbx can keep private incremental state for edited
 crates while sharing unchanged compilations.
 
@@ -130,6 +138,13 @@ crates while sharing unchanged compilations.
 nonempty, every core PR reruns each excluded exact test and fails if it no
 longer fails. This catches fixes made in HIR, transform, or another dependency
 without adding Rust setup to docs-only PRs.
+
+`parity-scoped` runs the program cases a PR owns, in auto mode against
+`tests/parity/snapshots/linux-auto/`: each changed case, the subject of each
+changed snapshot, and the node-suite modules that `scripts/test_owners.py`
+maps the changed source to. A source path no row owns is cross-cutting and adds
+nothing; the gap lane already runs for it. With nothing selected the job ends
+after computing the selection.
 
 An empty or failed file listing is treated as **core** and a failed `plan` job fails
 the gate outright — a broken planner must never turn into "everything skipped,
@@ -167,9 +182,9 @@ Two specific costs dominated:
   the only arm that sees auto-optimize-only link bugs.
 - Every job saved a fresh ~0.5–1.3 GB sccache tarball on every PR push (~200 GB/day
   into a 10 GB repo cache budget), evicting every useful entry within the hour —
-  and PR-scoped caches are not even readable by other PRs. sccache now saves only
-  from main-line runs; PRs restore the newest main-line blob. `cache-warm.yml` is
-  gone: the sweep is the cache-producing build on `main`.
+  and PR-scoped caches are not even readable by other PRs. No job saves an sccache
+  tarball now, and only main-line runs save caches; see [Build caches](#build-caches).
+  `cache-warm.yml` is gone: the sweep is the cache-producing build on `main`.
 
 A later release run exposed a separate serial bottleneck: its 246 `perry`
 integration-test binaries had not reached their midpoint when `cargo-test` hit
@@ -188,6 +203,45 @@ release-tag arms (see [CI gate scheduling](ci-gate-scheduling.md) and
 `run-extended-tests` label to a PR and they run on it, along with the `full` tier
 of `test.yml`. An unlabelled PR still gets a run of each — with every job skipped,
 which costs no runner slot.
+
+## Build caches
+
+The repository's Actions cache holds 10 GB on the organisation's Free plan, and a
+PR can restore only what `main` saved: PR-scoped entries are invisible to other
+PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
+`Swatinem/rust-cache` with one policy:
+
+- **One family per build.** `key` names the family (the job id by default).
+  rust-cache keeps the first save of a key, so a family has exactly one saving
+  job (`save: "true"`), chosen from the jobs a PR runs. Sweep and nightly jobs
+  that run the same build restore that family without saving it; the
+  release-profile `build-perry` jobs restore `gap-suite-build`. A restorer
+  needs the saver's `runs-on` and the same `CARGO*`/`RUST*`/`CC*` environment,
+  which rust-cache hashes into the key; the action exports
+  `CARGO_INCREMENTAL=0` first so that variable never splits a family.
+  `test_actions_plan.py` fails on a second saver, on a restorer that cannot
+  hit, and on a direct `Swatinem/rust-cache` use in the core workflows.
+- **Saves survive a red main.** `cache-on-failure` is on: a job that fails its
+  tests has still compiled valid dependencies, and a red `main` would otherwise
+  never save anything.
+- **The key follows the pinned toolchain only.** rust-cache hashes every
+  installed `rustc`, and the runner image's preinstalled stable changes with each
+  image rollout, so the action removes it before hashing.
+- **Restored dependencies stay fresh.** `.cargo/config.toml` builds std from
+  `rust-src`, which Cargo fingerprints by mtime, and every job installs the
+  toolchain anew. The action pins those mtimes to a fixed date, and the
+  vendored rust-cache keeps the build-std units it would otherwise drop for
+  being absent from `cargo metadata` (the "Perry patch" in its `cleanup.ts`).
+  Without both, std and every crate above it rebuild after a full cache hit.
+- **No sccache tarballs.** A per-run local-dir sccache tarball is ~4 GB; three
+  jobs saving one on every main run evicted the whole budget. The GitHub cache
+  backend of sccache (one entry per compilation unit) was measured at ~0 % Rust
+  hits under throttling. rust-cache stores dependencies only; workspace crates
+  rebuild in every job.
+
+The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their own
+`release-*` keys. GitHub evicts least-recently-used entries first, and the PR
+families are restored by every PR run, so cold families are the ones that go.
 
 ## Budgets
 
@@ -226,9 +280,10 @@ window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly g
 
 ## Re-baselining the gap snapshot
 
-The pull-request gap lane runs `scripts/parity.py run --suite test-files
---filter test_gap_ --mode fast` and is judged by
-`test-parity/snapshots/linux-fast/test-files.json`, a both-direction snapshot:
+The pull-request gap lane runs `scripts/parity.py run --suite all
+--filter test_gap_ --mode fast`, including migrated cases that retain their
+`test_gap_` basename. It is judged by the per-subject snapshots under
+`tests/parity/snapshots/linux-fast/`, each checked in both directions:
 any divergence — a case that started failing OR started passing — is red. When
 `main` has legitimately moved (a triaged regression, an oracle change),
 regenerate it **from CI**, not from a laptop (the required baseline is Linux,
@@ -238,14 +293,14 @@ regenerate it **from CI**, not from a laptop (the required baseline is Linux,
 gh workflow run test.yml --ref <branch> -f tier=pr -f update_gap_snapshot=true
 # wait for the run, then:
 gh run download <run-id> -n gap-snapshot-update -D /tmp/snap
-cp /tmp/snap/test-files.json test-parity/snapshots/linux-fast/test-files.json
+cp -R /tmp/snap/. tests/parity/snapshots/linux-fast/
 # fill in `issue` / `reason` for every new entry, then commit
 ```
 
 New entries land as `category: untriaged`; give each an issue and a reason before
 merging. A crash is never accepted into a snapshot (`parity.py` refuses).
 
-The full tier's `parity` job is judged by `test-parity/snapshots/linux-auto/`.
+The full tier's `parity` job is judged by `tests/parity/snapshots/linux-auto/`.
 Re-baseline it from a full run's shard reports:
 
 ```bash
@@ -273,10 +328,10 @@ Each shard compares its own cases with the snapshots in both directions, so its
 exit code is its verdict, and a shard that ran no case fails.
 
 `test262` runs every Test262 case (`scripts/test262_subset.py --full-corpus`) as
-16 shards at the SHA in `test-compat/test262/pinned-sha.txt`. `test262-aggregate`
+16 shards at the SHA in `tests/compat/test262/pinned-sha.txt`. `test262-aggregate`
 merges them with `scripts/test262_ratchet.py`, prints the pass rate over the
 whole corpus in the run summary, and fails on a new failure, on a known failure that now passes
-(remove it from `test-compat/test262/baseline.json`), or on a pass count below
+(remove it from `tests/compat/test262/baseline.json`), or on a pass count below
 the baseline. Re-baseline with `scripts/test262_ratchet.py --update <reports>`.
 
 
@@ -291,7 +346,7 @@ The Actions sidebar has six repository workflows. GitHub also registers four ind
 | **CI** | Required core CI and auxiliary security/coverage checks; defaults to `suite=core` |
 | **Extended Tests** (`compiler-runtime.yml`) | Compiler/runtime, compatibility, integration, and performance; choose a category such as `suite=compatibility`, one suite such as `suite=simctl-tests`, or `suite=all` |
 | **GC** | Six collector suites; choose an individual suite or `suite=all` |
-| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment |
+| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment. Every 30 minutes `auto-label` adds `platform:`, `area:` and `type:` labels to new issues and PRs (`scripts/auto_label.py`) |
 | **Publish to npm / GitHub Release** | Compiler packages, platform archives, and GitHub releases |
 | **Publish to npm / @perryts/hono-server** | Independent adapter package publication |
 
@@ -310,15 +365,28 @@ After a consolidation lands, Repository automatically deletes completed runs who
 
 ### Required WASI command and component execution
 
-`wasi-execution` joins the core PR, sweep and full tiers. On Linux it builds
-Perry with `target-wasi` and a matching wasm32-wasip2 runtime, checks the IR
-ABI, then runs all six smoke cases, twenty acceptance cases and ten pinned-Node
-comparisons. It then builds matching native component tools and instrumented
-runtimes and runs both component harnesses: native hosting, Perry-authored
-guests, resource lifetimes, forced moving GC and direct Rust/Perry composition.
-The job has a 120-minute budget for the combined build and execution. Per-case
-logs, component phase verdicts, source revision and artifacts are retained. The required
+The `wasi_execution` plan entry joins the core PR, sweep and full tiers and
+starts five Linux jobs in parallel, so the gate waits for the longest of them
+rather than their sum:
+
+- `wasi-native` runs the `target-wasi` codegen and link-argument unit tests.
+- `wasi-component-units` runs the component-model unit tests
+  (`scripts/component_unit_tests.sh`).
+- `wasi-execution` builds Perry with `target-wasi` and a matching wasm32-wasip2
+  runtime, checks the IR ABI, then runs all six smoke cases, twenty acceptance
+  cases and ten pinned-Node comparisons.
+- `wasi-execution-p1` builds the same compiler and a wasm32-wasip1 runtime,
+  checks its imports, then runs the preview 1 smoke, acceptance and gap suites
+  and the preview 1 host suite.
+- `wasi-components` builds matching native component tools and instrumented
+  runtimes and runs both component harnesses: native hosting, Perry-authored
+  guests, resource lifetimes, forced moving GC and direct Rust/Perry
+  composition.
+
+Per-case logs, component phase verdicts, source revision and artifacts are
+retained (`wasi-required-<sha>`, `wasi-required-p1-<sha>` and
+`wasi-components-<sha>`). The required
 `pr-gate` rejects a skipped or missing planned WASI job as well as failures and
-cancellation. Docs-only PRs skip this build. The wider Windows/macOS matrix
+cancellation, for each of the five. Docs-only PRs skip this build. The wider Windows/macOS matrix
 remains in the extended suite. Native component execution is currently
 qualified on Linux.

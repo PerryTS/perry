@@ -13,7 +13,7 @@ fn mkdtemp_disposable_buffer_encoding_error() -> ! {
     )
 }
 
-fn remove_temp_dir_result(path_value: f64) -> Result<(), f64> {
+fn remove_temp_dir_result(path_value: f64) -> Result<(), crate::error::CoreError> {
     unsafe {
         let path = match decode_path_value_named(path_value, "path") {
             Some(path) => path,
@@ -22,7 +22,7 @@ fn remove_temp_dir_result(path_value: f64) -> Result<(), f64> {
         match fs::remove_dir_all(&path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(build_fs_error_value(&err, "rm", &path)),
+            Err(err) => Err(fs_error(&err, "rm", &path)),
         }
     }
 }
@@ -45,7 +45,7 @@ extern "C" fn mkdtemp_disposable_remove_impl(
     let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
     match remove_temp_dir_result(path_value) {
         Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -56,7 +56,7 @@ extern "C" fn mkdtemp_disposable_async_remove_impl(
     let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
     match remove_temp_dir_result(path_value) {
         Ok(()) => resolved_promise(f64::from_bits(crate::value::TAG_UNDEFINED)),
-        Err(err) => rejected_promise(err),
+        Err(err) => rejected_promise(err.value()),
     }
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn js_fs_mkdtemp_disposable_object(
     }
     let bytes = match mkdtemp_bytes_result(prefix_value) {
         Ok(bytes) => bytes,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     };
     build_mkdtemp_disposable_object(bytes, options_value, async_remove)
 }

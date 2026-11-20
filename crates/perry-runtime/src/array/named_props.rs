@@ -96,8 +96,13 @@ pub(crate) unsafe fn array_named_property_set(
 ) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
     // A named write to `%Array.prototype%` sets its shadow bit, so every
-    // `Pristine(Array)` site takes the generic path.
-    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "named property");
+    // `Pristine(Array)` site takes the generic path. The bag's own slot and
+    // stamp funnels decide the key (DEC 250): this report only precedes them.
+    crate::object::builtin_proto::note_array_prototype_write(
+        arr as usize,
+        crate::object::builtin_proto::Mutation::Restructure,
+        "named property",
+    );
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let key = scope.root_string_ptr(key);
@@ -379,7 +384,7 @@ pub unsafe extern "C" fn perry_array_element_kind(arr: *const ArrayHeader) -> i3
     let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) else {
         return 1;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return 1;
     }
     i32::from(super::array_has_element_descriptors_resolved(arr))

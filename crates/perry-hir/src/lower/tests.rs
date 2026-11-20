@@ -16,6 +16,50 @@ fn make_ctx() -> LoweringContext {
 }
 
 #[test]
+fn import_defer_preserves_static_phase() {
+    let parsed = perry_parser::parse_typescript(
+        "import defer * as lazy from './lazy.js'; import * as eager from './eager.js';",
+        "defer-phase.ts",
+    )
+    .expect("source parses");
+    let hir = super::lower_module(&parsed, "defer-phase", "defer-phase.ts").expect("source lowers");
+    assert!(hir.imports[0].is_deferred);
+    assert!(!hir.imports[1].is_deferred);
+    let mut evaluation_phase = hir.clone();
+    evaluation_phase.imports[0].is_deferred = false;
+    assert_ne!(
+        crate::stable_hash::hash_module(&hir),
+        crate::stable_hash::hash_module(&evaluation_phase)
+    );
+}
+
+#[test]
+fn import_defer_preserves_dynamic_phase() {
+    let parsed = perry_parser::parse_typescript(
+        "const lazy = import.defer('./lazy.js'); const eager = import('./eager.js');",
+        "dynamic-defer-phase.ts",
+    )
+    .expect("source parses");
+    let hir = super::lower_module(&parsed, "dynamic-defer-phase", "dynamic-defer-phase.ts")
+        .expect("source lowers");
+    let mut phases = Vec::new();
+    fn collect_phases(expr: &Expr, phases: &mut Vec<bool>) {
+        if let Expr::DynamicImport { deferred, .. } = expr {
+            phases.push(*deferred);
+        }
+        crate::walker::walk_expr_children(expr, &mut |child| collect_phases(child, phases));
+    }
+    for stmt in &hir.init {
+        crate::walker::stmt_any_expr(stmt, &mut |expr| {
+            collect_phases(expr, &mut phases);
+            false
+        });
+    }
+    assert_eq!(phases, vec![true, false]);
+    assert_eq!(format!("{:?}", hir.init), format!("{:?}", hir.clone().init));
+}
+
+#[test]
 fn a_computed_instance_field_key_is_not_a_constructor_capture() {
     let source = r#"
         function make() {
@@ -907,40 +951,6 @@ fn test_module_native_instance_index_last_wins() {
     );
 }
 
-/// #5271 perf gate (run with `--release --ignored`): time M lookups against a
-/// K-sized registry to show indexed lookups are ~flat in K (O(1)) rather than
-/// O(K) per call. Prints timings; not asserted (machine-dependent) but the
-/// flatness across K is the observable signal. Covers the registries whose
-/// linear scans this change indexed.
-#[test]
-#[ignore]
-fn perf_registry_lookup_is_flat_in_k() {
-    use std::time::Instant;
-    const M: usize = 20_000;
-    for k in [0usize, 2_000, 8_000, 16_000] {
-        let mut ctx = make_ctx();
-        for i in 0..k {
-            ctx.register_class_statics(
-                format!("K{i}"),
-                vec![format!("f{i}")],
-                vec![format!("s{i}")],
-            );
-            ctx.register_native_instance(format!("ni{i}"), "net".into(), "Socket".into());
-            ctx.register_native_module(format!("nm{i}"), "fs".into(), None);
-        }
-        // The hot case the bug targets: the receiver is NOT in the registry, so
-        // the old reverse/forward scan walked the whole Vec and returned None.
-        let t = Instant::now();
-        let mut acc = 0u64;
-        for _ in 0..M {
-            acc += ctx.has_static_method("Missing", "s") as u64;
-            acc += ctx.lookup_native_instance("missing").is_some() as u64;
-            acc += ctx.lookup_native_module("missing").is_some() as u64;
-        }
-        eprintln!("K={k:<6} {M} x3 lookups: {:?}  (acc={acc})", t.elapsed());
-    }
-}
-
 /// A chain comfortably under the ceiling still lowers cleanly — the guard
 /// must not reject ordinary (if large) expressions.
 #[test]
@@ -1277,6 +1287,7 @@ mod anonymous_class_outer_binding;
 mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
+mod function_decl_store_binding;
 mod issue_11157_class_decl_self_statics;
 mod issue_11298_class_expr_evaluation_identity;
 
@@ -1460,3 +1471,80 @@ fn named_wasi_constructor_uses_registered_native_export() {
 }
 
 mod worker_constructor_imports;
+
+/// The wrapper of a computed-key object literal captures the enclosing
+/// bindings its keys and values use, never the parameters of a function
+/// value inside the literal: those are that function's own bindings.
+#[test]
+fn object_iife_captures_only_enclosing_bindings() {
+    let source = r#"
+export function make(k: number) {
+  let n = 0;
+  const t = {
+    [k]: function visit(node: any, cbNode: any, _cbNodes?: any) { return cbNode(node); },
+    [k + 1]: function bump() { n++; return n; },
+  };
+  return t;
+}
+"#;
+    let module = perry_parser::parse_typescript(source, "iife-captures.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "iife-captures", "iife-captures.ts").expect("source lowers");
+    let make = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "make")
+        .expect("make");
+    let k = make.params[0].id;
+    let mut n = None;
+    let mut wrapper = None;
+    for stmt in &make.body {
+        if let Stmt::Let {
+            id,
+            name,
+            init: Some(init),
+            ..
+        } = stmt
+        {
+            if name == "n" {
+                n = Some(*id);
+            }
+            if name == "t" {
+                wrapper = Some(init);
+            }
+        }
+    }
+    let n = n.expect("n");
+    let Some(Expr::Call { callee, .. }) = wrapper else {
+        panic!("t must be the computed-key IIFE: {wrapper:#?}");
+    };
+    let Expr::Closure {
+        params,
+        captures,
+        body,
+        ..
+    } = callee.as_ref()
+    else {
+        panic!("IIFE callee: {callee:#?}");
+    };
+    assert_eq!(params[0].name, "__perry_obj_iife");
+    let mut own = Vec::new();
+    for stmt in body {
+        if let Stmt::Let {
+            init: Some(Expr::Closure { params, .. }),
+            ..
+        } = stmt
+        {
+            own.extend(params.iter().map(|p| p.id));
+        }
+    }
+    assert_eq!(own.len(), 3, "visit's parameters: {body:#?}");
+    let mut want = vec![k, n];
+    want.sort();
+    assert_eq!(
+        captures, &want,
+        "wrapper captures k and n only (visit's parameters are {own:?})"
+    );
+}
+
+mod imported_class_new_spread;

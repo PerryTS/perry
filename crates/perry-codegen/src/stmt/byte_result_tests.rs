@@ -46,6 +46,7 @@ fn ir() -> String {
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
@@ -73,6 +74,7 @@ fn ir() -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         crate::compile_module(
@@ -106,10 +108,9 @@ fn admitted_general_byte_result_does_not_use_a_pointer_slot() {
         !result.contains("store ptr addrspace(1)"),
         "Number-or-undefined was put in a GC pointer slot:\n{result}"
     );
-    assert_eq!(
-        result.matches("32766").count(),
-        1,
-        "only the constant-side Number normalizer needs a compact tag check:\n{result}"
+    assert!(
+        !result.contains(crate::nanbox::INT32_TAG_I64),
+        "a Number has one encoding, so no side needs a tag check:\n{result}"
     );
     assert!(ir.contains("ta.read.oob"));
     let slow = ir

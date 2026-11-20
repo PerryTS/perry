@@ -4,6 +4,15 @@ fn key(name: &str) -> *const crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
+/// The birth rule: the meta record exists from birth and its birth word
+/// names the length and the layout the object was born with.
+unsafe fn assert_birth_record(args: *const ObjectHeader, len: u32) {
+    let (born_len, born_word) =
+        test_arguments_birth_word(args).expect("birth installs the meta record");
+    assert_eq!(born_len, len, "the birth word carries the length");
+    assert_ne!(born_word, 0, "the birth word carries the birth layout");
+}
+
 fn born(values: &[f64], mapped: u32) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let values = scope.root_nanbox_f64_slice(values);
@@ -21,7 +30,11 @@ fn born_arguments_forward_slots_and_shape_mutation_control() {
     crate::object::js_get_global_this();
     let args = born(&[3.0, 4.0], 0);
     unsafe {
-        assert!((*args).meta.is_null());
+        assert_birth_record(args, 2);
+        assert_eq!(
+            test_arguments_birth_word(args).unwrap().1,
+            (*args).shape_word()
+        );
         assert_eq!(arguments_object_born_slice(args).unwrap(), &[3.0, 4.0]);
         assert_eq!(arguments_object_get_index(args, 1), Some(4.0));
         let prototype = js_object_get_prototype_of(crate::value::js_nanbox_pointer(args as i64));
@@ -55,7 +68,11 @@ fn birth_shape_proves_indices_beyond_the_arity_cache() {
     let values: Vec<_> = (0..65).map(|i| i as f64).collect();
     let args = born(&values, 0);
     unsafe {
-        assert!((*args).meta.is_null());
+        assert_birth_record(args, 65);
+        assert_eq!(
+            test_arguments_birth_word(args).unwrap().1,
+            (*args).shape_word()
+        );
         assert_eq!(
             arguments_object_born_slice(args).unwrap(),
             values.as_slice()
@@ -72,7 +89,7 @@ fn mapped_aliases_and_length_values_are_not_raw_forwarded() {
     let cell = crate::r#box::js_box_alloc(9.0);
     js_arguments_object_map_index(args, 0, cell);
     unsafe {
-        assert!((*args).meta.is_null());
+        assert_birth_record(args, 2);
         assert!(arguments_object_born_slice(args).is_none());
         assert_eq!(arguments_object_to_vec(args).unwrap(), vec![9.0, 2.0]);
         crate::r#box::js_box_set(cell, 12.0);

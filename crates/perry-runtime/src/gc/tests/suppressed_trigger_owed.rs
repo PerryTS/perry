@@ -44,7 +44,10 @@ fn trigger_reached_inside_suppress_scope_runs_when_the_outermost_scope_drops() {
     // assertions below measure the scope and not the lever.
     arm_old_reclaim();
     gc_check_trigger();
-    assert!(safepoint_armed(), "control: the allocation point must arm the poll");
+    assert!(
+        safepoint_armed(),
+        "control: the allocation point must arm the poll"
+    );
     clear_old_reclaim_state();
 
     arm_old_reclaim();
@@ -54,14 +57,20 @@ fn trigger_reached_inside_suppress_scope_runs_when_the_outermost_scope_drops() {
         // What `arena_cell_alloc` does at a block boundary.
         gc_check_trigger();
         assert!(!safepoint_armed(), "a suppressed check must not act");
-        assert!(trigger_owed(), "a suppressed check must be recorded as owed");
+        assert!(
+            trigger_owed(),
+            "a suppressed check must be recorded as owed"
+        );
     }
     assert!(
         !safepoint_armed() && trigger_owed(),
         "a nested scope's exit is still inside the outer scope; the check stays owed"
     );
     drop(outer);
-    assert!(!trigger_owed(), "the outermost exit consumes the owed check");
+    assert!(
+        !trigger_owed(),
+        "the outermost exit consumes the owed check"
+    );
     assert!(
         safepoint_armed(),
         "the outermost exit must run the owed check, or the trigger is lost"

@@ -604,6 +604,7 @@ fn walk_lets(stmts: &[Stmt], depth: u32, f: &mut impl FnMut(u32, &str, u32)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_lets(body, depth, f);
                 if let Some(c) = catch {
@@ -799,6 +800,7 @@ fn scan_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body, depth, ctx, preamble, out);
                 if let Some(c) = catch {
@@ -974,7 +976,7 @@ pub(super) fn admission_cause(
         if !class.getters.is_empty() || !class.setters.is_empty() {
             return Some(ADMIT_ACCESSOR);
         }
-        if !class.computed_members.is_empty() || class.fields.iter().any(|f| f.key_expr.is_some()) {
+        if class.has_evaluated_members() || class.fields.iter().any(|f| f.key_expr.is_some()) {
             return Some(ADMIT_COMPUTED);
         }
         if class.extends_expr.is_some()

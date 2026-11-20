@@ -61,23 +61,37 @@ pub(crate) fn builtin_exec_data(value: f64) -> Option<*const crate::regex::RegEx
         // SAFETY: admitted just now; nothing collected since.
         Some(unsafe { crate::regex::instance::builtin_data(re) })
     } else {
-        crate::regex::regexp_data_of(value).filter(|_| {
-            let object = (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
-            matches!(unsafe { read::probe(object, Key::Name(b"exec")) },
-                Some(Answer::Data(bits))
-                if thunks::is_builtin_regexp_exec(f64::from_bits(bits)))
-        })
+        observable_exec_data(value)
     };
+    count_exec_proof(data.is_some());
+    data
+}
+
+/// The half of [`builtin_exec_data`] for a receiver `instance::builtin`
+/// declined: a branded receiver whose `exec` is still the builtin. Callers
+/// that took the builtin fact themselves ask only this.
+#[inline(always)]
+pub(crate) fn observable_exec_data(value: f64) -> Option<*const crate::regex::RegExpData> {
+    crate::regex::regexp_data_of(value).filter(|_| {
+        let object = (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
+        matches!(unsafe { read::probe(object, Key::Name(b"exec")) },
+            Some(Answer::Data(bits))
+            if thunks::is_builtin_regexp_exec(f64::from_bits(bits)))
+    })
+}
+
+/// The exec proof's diagnostic counters (off unless the regex diag is on).
+#[inline(always)]
+pub(crate) fn count_exec_proof(hit: bool) {
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_counters(|d| {
-            if data.is_some() {
+            if hit {
                 d.proof_exec_hit += 1;
             } else {
                 d.proof_exec_miss += 1;
             }
         });
     }
-    data
 }
 
 pub(crate) fn test(value: f64) -> bool {

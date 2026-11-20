@@ -24,8 +24,7 @@ unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
 fn throw_invalid_string_length() -> ! {
     let message = b"Invalid string length";
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_rangeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(string))
 }
 
 /// Read one exotic element while keeping the receiver current across a getter
@@ -763,12 +762,6 @@ fn join_values(
             result.append_static(if value.as_bool() { b"true" } else { b"false" });
         } else if value.is_number() {
             result.append_number(value.as_number());
-        } else if value.is_int32()
-            && !crate::object::is_class_id_registered((element_bits & 0xFFFF_FFFF) as u32)
-        {
-            // A registered class id shares the INT32 encoding (ClassRef);
-            // those need the spec ToString below for function-source text.
-            result.append_number(value.as_int32() as f64);
         } else {
             crate::builtins::reject_symbol_to_string(f64::from_bits(element_bits));
             let string = arr_handle.with_const_ptr(|arr| element_to_string(arr, element_bits));

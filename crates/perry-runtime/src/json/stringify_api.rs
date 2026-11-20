@@ -143,26 +143,12 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
     let maybe_ptr = if top16 == 0x7FFD {
         // POINTER_TAG NaN-box: lower 48 bits are the user pointer.
         (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
-    } else if is_raw_pointer(bits) {
-        // Raw heap pointer (no NaN-box tag). `top16 == 0` alone is NOT enough:
-        // it is a superset of the positive-subnormal doubles, so it classified
-        // every denormal `Number` as a pointer and dereferenced it —
-        // `JSON.stringify(1e-317)` (bits `0x1ee257`) SIGSEGV'd at `0x1ee24f`,
-        // reachable from untrusted input via
-        // `JSON.stringify(JSON.parse(text))`. It was already the second
-        // narrowing of this test (`top16 < 0x7FF8` before it, which crashed
-        // `JSON.stringify(42)`); a third narrowing would not have helped
-        // either, because a raw pointer and a denormal share bit patterns by
-        // construction. `is_raw_pointer` decides by GC allocation membership
-        // instead — see its doc in `json/mod.rs`.
-        bits as *const u8
     } else {
         return None;
     };
     // Handle-band synthetic ids are never lazy arrays and must not be deref'd
     // one word below the id (#6240/#6241). Above the band is not proof either:
-    // require a GC-tracked allocation before the header read. (Redundant for
-    // the `is_raw_pointer` arm, load-bearing for the `POINTER_TAG` one.)
+    // require a GC-tracked allocation before the header read.
     if maybe_ptr.is_null() || !stringify::ptr_is_tracked_heap_object(maybe_ptr) {
         return None;
     }

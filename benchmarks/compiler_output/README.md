@@ -73,7 +73,7 @@ representative material type-lowering gate for PRs and release sweeps.
 
 | Gate row | Evidence | Required proof |
 |---|---|---|
-| Native ABI correctness | `tests/test_native_abi_contract.sh` and `tests/test_c_layout_pod_records.sh` retained native-rep artifacts | runtime output passes and required ABI/materialization tokens are present |
+| Native ABI correctness | `tests/integration/test_native_abi_contract.sh` and `tests/integration/test_c_layout_pod_records.sh` retained native-rep artifacts | runtime output passes and required ABI/materialization tokens are present |
 | Native-region artifact chain | retained HIR, LLVM before opt, LLVM after opt analysis, object disassembly, compile plans, and native-rep JSON | artifacts exist, structural safety checks pass, semantic checksum checks pass |
 | Explain-lowering accounting | native-rep rows summarized into boxes, unboxes/coercions, dynamic fallbacks, barrier decisions, typed native records, and runtime counter summaries | typed/control material accounting rows pass |
 | Runtime safety | `perry-runtime native_async` tests | required native async/rooting test names pass and appear in logs |

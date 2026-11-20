@@ -643,13 +643,15 @@ pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::array::A
         "aes-256-gcm",
         "aes256-wrap",
         "id-aes256-wrap",
+        "chacha20-poly1305",
     ])
 }
 
 pub(super) struct CipherInfo {
     name: &'static str,
     nid: f64,
-    block_size: f64,
+    /// `None` for a stream cipher: node reports `blockSize: undefined`.
+    block_size: Option<f64>,
     iv_len: Option<f64>,
     key_len: f64,
     mode: &'static str,
@@ -660,7 +662,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-cbc" => Some(CipherInfo {
             name: "aes-128-cbc",
             nid: 419.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 16.0,
             mode: "cbc",
@@ -668,7 +670,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-cbc" => Some(CipherInfo {
             name: "aes-192-cbc",
             nid: 423.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 24.0,
             mode: "cbc",
@@ -676,7 +678,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-cbc" => Some(CipherInfo {
             name: "aes-256-cbc",
             nid: 427.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 32.0,
             mode: "cbc",
@@ -684,7 +686,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-ecb" => Some(CipherInfo {
             name: "aes-128-ecb",
             nid: 418.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 16.0,
             mode: "ecb",
@@ -692,7 +694,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-ecb" => Some(CipherInfo {
             name: "aes-192-ecb",
             nid: 422.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 24.0,
             mode: "ecb",
@@ -700,7 +702,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-ecb" => Some(CipherInfo {
             name: "aes-256-ecb",
             nid: 426.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 32.0,
             mode: "ecb",
@@ -708,7 +710,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes128-wrap" | "aes128-wrap" => Some(CipherInfo {
             name: "id-aes128-wrap",
             nid: 788.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 16.0,
             mode: "wrap",
@@ -716,7 +718,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes192-wrap" | "aes192-wrap" => Some(CipherInfo {
             name: "id-aes192-wrap",
             nid: 789.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 24.0,
             mode: "wrap",
@@ -724,7 +726,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes256-wrap" | "aes256-wrap" => Some(CipherInfo {
             name: "id-aes256-wrap",
             nid: 790.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 32.0,
             mode: "wrap",
@@ -732,7 +734,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-gcm" | "id-aes128-gcm" => Some(CipherInfo {
             name: "id-aes128-gcm",
             nid: 895.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 16.0,
             mode: "gcm",
@@ -740,7 +742,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-gcm" | "id-aes192-gcm" => Some(CipherInfo {
             name: "id-aes192-gcm",
             nid: 898.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 24.0,
             mode: "gcm",
@@ -748,10 +750,18 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-gcm" | "id-aes256-gcm" => Some(CipherInfo {
             name: "id-aes256-gcm",
             nid: 901.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 32.0,
             mode: "gcm",
+        }),
+        "chacha20-poly1305" => Some(CipherInfo {
+            name: "chacha20-poly1305",
+            nid: 1018.0,
+            block_size: None,
+            iv_len: Some(12.0),
+            key_len: 32.0,
+            mode: "stream",
         }),
         _ => None,
     }
@@ -771,6 +781,7 @@ pub(super) fn cipher_info_for_nid(nid: i32) -> Option<CipherInfo> {
         895 => cipher_info_for_name("aes-128-gcm"),
         898 => cipher_info_for_name("aes-192-gcm"),
         901 => cipher_info_for_name("aes-256-gcm"),
+        1018 => cipher_info_for_name("chacha20-poly1305"),
         _ => None,
     }
 }
@@ -806,7 +817,12 @@ pub unsafe extern "C" fn js_crypto_get_cipher_info(alg_bits: f64, options_bits: 
     let obj = js_object_alloc(0, 6);
     set_object_string_field(obj, b"name", info.name);
     set_object_value_field(obj, b"nid", info.nid);
-    set_object_value_field(obj, b"blockSize", info.block_size);
+    set_object_value_field(
+        obj,
+        b"blockSize",
+        info.block_size
+            .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+    );
     if let Some(iv_len) = iv_len {
         set_object_value_field(obj, b"ivLength", iv_len);
     }
@@ -1110,11 +1126,7 @@ fn scrypt_numeric_value(value: JSValue, name: &str, max: u64) -> u64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else {
-        value.as_number()
-    };
+    let number = value.as_number();
     if !number.is_finite() || number.fract() != 0.0 {
         let message = format!(
             "The value of \"{name}\" is out of range. It must be an integer. Received {}",

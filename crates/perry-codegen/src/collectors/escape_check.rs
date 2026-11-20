@@ -84,6 +84,7 @@ pub fn find_new_candidates(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 find_new_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
@@ -191,6 +192,7 @@ pub fn check_escapes_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 check_escapes_in_stmts(body, candidates, classes, escaped);
                 if let Some(c) = catch {
@@ -655,7 +657,7 @@ pub fn check_escapes_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }

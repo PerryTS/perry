@@ -1070,6 +1070,8 @@ pub struct LoweringContext {
     /// Spans of the class definitions evaluated at most once
     /// (`lower::run_once`), computed once per module before lowering.
     pub(crate) run_once_class_spans: HashSet<(u32, u32)>,
+    /// Spans of functions referenced only as `new` callees (`pre_scan::construct_only`).
+    pub(crate) construct_only_fn_spans: HashSet<(u32, u32)>,
     /// Enum IIFEs whose object is fresh (`lower::enum_image`), keyed by the
     /// call's span, computed once per module before lowering.
     pub(crate) enum_image_sites: HashMap<(u32, u32), super::enum_image::EnumImagePlan>,
@@ -1204,9 +1206,7 @@ pub struct LoweringContext {
     /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
     /// expression statement — see
     /// `collect_direct_top_level_reassigned_identifiers`, which deliberately
-    /// does NOT reuse the deeper, name-only (no scope tracking)
-    /// `collect_assigned_function_binding_candidates` scan: that would
-    /// false-positive on a same-named binding shadowed in a nested block.
+    /// does NOT use the function-binding scan (`module_assigned_bindings`).
     /// Consulted when lowering a top-level `class` declaration: a class name
     /// is normally
     /// resolved purely through the class registry (`ctx.lookup_class` /

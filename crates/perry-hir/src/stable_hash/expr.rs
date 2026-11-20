@@ -27,6 +27,17 @@ fn hash_with_set_fallback<H: StableHasher>(h: &mut H, fallback: &WithSetFallback
 }
 
 #[rustfmt::skip]
+impl SH for ObjectPart {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            ObjectPart::Spread(e) => { tag(h, 0); e.hash(h); }
+            ObjectPart::Define(k, e) => { tag(h, 1); k.hash(h); e.hash(h); }
+            ObjectPart::Computed { key, value } => { tag(h, 2); key.hash(h); value.hash(h); }
+        }
+    }
+}
+
+#[rustfmt::skip]
 impl SH for Expr {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         match self {
@@ -91,6 +102,7 @@ impl SH for Expr {
             Expr::PrivateLexicalBrand(value) => { tag(h, 12403); value.hash(h); }
             Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
             Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
+            Expr::ThisProvenClass(class) => { tag(h, 12406); class.hash(h); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::LiteralChunks(calls) => { tag(h, 12515); calls.hash(h); }
             Expr::LiteralChunkObject => { tag(h, 12516); }
@@ -569,7 +581,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, construct_only, } => { tag(h, 382); construct_only.hash(h); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }
@@ -686,7 +698,7 @@ impl SH for Expr {
             Expr::WebAssemblyModuleCustomSections { module, name } => { tag(h, 12054); module.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::WebAssemblyInstantiate { bytes, imports } => { tag(h, 12028); bytes.as_ref().hash(h); imports.hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
-            Expr::DynamicImport { paths, arg, options, byte_offset, deferred_error, synchronous } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); options.hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); }
+            Expr::DynamicImport { paths, arg, options, byte_offset, deferred_error, synchronous, deferred } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); options.hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); if *deferred { tag(h, 0x4446); } }
             Expr::WorkerNew { paths, filename, options, is_eval, partial } => {
                 tag(h, 12055);
                 for p in paths { p.hash(h); }

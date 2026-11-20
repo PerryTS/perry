@@ -40,6 +40,7 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
         mutable_captures: ids.to_vec(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -64,6 +65,7 @@ fn function(id: u32, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -325,6 +327,7 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
     if let Expr::Closure { body, .. } = &mut read {
         *body = vec![
             Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -399,6 +402,7 @@ fn writes_before_every_capture_need_no_cell() {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

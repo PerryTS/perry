@@ -93,7 +93,9 @@ const VALUES: &str = "[0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 1
      25.5, 26.5, 27.5, 28.5, 29.5, 30.5, 31.5]";
 
 fn admitted_source() -> &'static str {
-    include_str!("../../../test-files/test_issue_9254_receiver_descriptor_counted_loop.ts")
+    include_str!(
+        "../../../tests/parity/language/array/test_issue_9254_receiver_descriptor_counted_loop.ts"
+    )
 }
 
 #[test]

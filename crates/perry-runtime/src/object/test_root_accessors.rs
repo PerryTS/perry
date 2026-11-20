@@ -31,7 +31,7 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[0];
-        entry.key_ptr = 0;
+        entry.key_id = 0;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
         entry.prev_shape_id = LayoutWord(0);
         entry.target_shape_id = LayoutWord(0);
@@ -66,7 +66,7 @@ pub(crate) fn test_clear_transition_cache_root() {
         for i in 0..TRANSITION_CACHE_SIZE {
             // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
             (*t)[i] = TransitionEntry {
-                key_ptr: 0,
+                key_id: 0,
                 next_keys: 0,
                 prev_shape_id: LayoutWord(0),
                 target_shape_id: LayoutWord(0),

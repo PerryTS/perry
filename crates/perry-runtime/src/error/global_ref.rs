@@ -70,8 +70,7 @@ fn throw_missing_global(name_value: f64) -> ! {
     let name = value_to_lossy_string(name_value);
     let msg = format!("{} is not defined", name);
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = js_referenceerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg_str))
 }
 
 const _: extern "C-unwind" fn(f64) -> f64 = js_global_get_or_throw_unresolved;
@@ -142,8 +141,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
         let name = value_to_lossy_string(name_handle.get_nanbox_f64());
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = js_referenceerror_new(msg_str);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+        crate::exception::throw_core(crate::error::CoreError::reference_error(msg_str));
     }
     let old_handle = scope.root_nanbox_f64(old);
     let numeric = unsafe { crate::value::js_to_numeric(old_handle.get_nanbox_f64()) };
@@ -229,8 +227,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
         let name = value_to_lossy_string(name_handle.get_nanbox_f64());
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = js_referenceerror_new(msg_str);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+        crate::exception::throw_core(crate::error::CoreError::reference_error(msg_str));
     }
     let g = f64::from_bits(g_handle.get_nanbox_u64());
     let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;

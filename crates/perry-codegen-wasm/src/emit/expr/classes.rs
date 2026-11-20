@@ -5,6 +5,22 @@
 
 use super::*;
 
+/// Built-in Error constructors whose first argument is the message. A user class
+/// extending one of them has no compiled parent constructor to call.
+const BUILTIN_ERROR_PARENTS: &[&str] = &[
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+];
+
+/// Built-in constructors whose instances hold internal state (entries, a length, a
+/// time value). A user class extending one is instantiated as the built-in object.
+const HOST_BASE_PARENTS: &[&str] = &["Map", "Set", "WeakMap", "WeakSet", "Array", "Date"];
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_classes(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
@@ -14,6 +30,8 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 captures,
                 mutable_captures,
+                captures_this,
+                is_arrow,
                 ..
             } => {
                 // Compile closure body as a function (it was already registered if it's in module.functions)
@@ -27,17 +45,27 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    let this = closure_this(*captures_this, *is_arrow, body);
+                    self.emit_frame_begin(func, 3);
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
-                    self.emit_memcall(func, "closure_new", 2);
-                    // Set captures
-                    for (i, cap_id) in captures.iter().chain(mutable_captures.iter()).enumerate() {
+                    let receives_this = this == ClosureThis::Receiver;
+                    self.emit_store_const(func, 2, f64::from(u8::from(receives_this)));
+                    self.emit_memcall(func, "closure_new", 3);
+                    // Set captures, then the captured `this` (see compile_closure).
+                    let local_map = self.local_map;
+                    let cap_locals = captures
+                        .iter()
+                        .chain(mutable_captures.iter())
+                        .map(|id| local_map.get(id).copied());
+                    let this_cap = (this == ClosureThis::Captured)
+                        .then_some(Some(self.this_local.unwrap_or(0)));
+                    for (i, local) in cap_locals.chain(this_cap).enumerate() {
                         // Duplicate closure handle (it's returned by closure_new)
                         // closure_set_capture(handle, idx, value) -> handle (chaining)
                         func.instruction(&f64_const(i as f64));
                         func.instruction(&Instruction::I64ReinterpretF64);
-                        if let Some(&local_idx) = self.local_map.get(cap_id) {
+                        if let Some(local_idx) = local {
                             func.instruction(&Instruction::LocalGet(local_idx));
                         } else {
                             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
@@ -75,27 +103,54 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 let _ = (params, body);
             }
+            // A lowered sync generator: the runtime wraps its resume record in a generator.
+            Expr::LinkGeneratorPrototype {
+                obj,
+                is_async: false,
+                fixed_state: true,
+                ..
+            } => {
+                let params = match obj.as_ref() {
+                    Expr::Closure { params, .. } => params.len(),
+                    _ => 2,
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_const(func, 1, params as f64);
+                self.emit_memcall(func, "generator_new", 2);
+            }
+            Expr::LinkGeneratorPrototype { obj, .. } => self.emit_expr(func, obj),
+            Expr::SetFunctionPrototype {
+                func: f,
+                proto,
+                strict,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, f);
+                self.emit_store_arg(func, 1, proto);
+                self.emit_store_const(func, 2, f64::from(u8::from(*strict)));
+                self.emit_memcall(func, "function_set_prototype", 3);
+            }
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
-                    // Create a closure wrapper with 0 captures for function reference
+                    // The function's one value (see `function_value`)
                     let table_idx = self
                         .emitter
                         .func_to_table_idx
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: an `ExternFuncRef` used as a value can resolve
-                // either to (a) a cross-module function — wrap as closure with
-                // 0 captures, or (b) a cross-module exported variable — read
+                // either to (a) a cross-module function — its one value
+                // (`function_value`), or (b) a cross-module exported variable — read
                 // the source module's promoted-let global directly. Variables
                 // win when both apply (a let with the same name is closer to
                 // the user's intent than a like-named function); in practice
@@ -110,7 +165,7 @@ impl<'a> FuncEmitCtx<'a> {
                     .get(&mod_key)
                     .or_else(|| self.emitter.func_name_map.get(name))
                 {
-                    // Create a closure wrapper with 0 captures (like FuncRef).
+                    // The function's one value, as for FuncRef.
                     // Consumer import table first — bare names collide.
                     let table_idx = self
                         .emitter
@@ -118,10 +173,9 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -196,7 +250,8 @@ impl<'a> FuncEmitCtx<'a> {
                             align: 3,
                             memory_index: 0,
                         }));
-                        self.emit_memcall(func, "date_new", 1);
+                        // Same bridge as `Expr::DateNew`; see date_error.rs.
+                        self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
                         return true;
                     }
                     // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
@@ -266,14 +321,52 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
-                self.emit_frame_begin(func, 2);
+                let host_base = self.host_base_parent(class_name);
+                self.emit_frame_begin(func, if host_base.is_some() { 3 } else { 2 });
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
-                self.emit_memcall(func, "class_new", 2);
+                // The constructor slot, so the prototype's `constructor` is the class value.
+                let ctor_slot = if self.emitter.user_classes.contains(class_name.as_str()) {
+                    self.class_ctor_slot(class_name)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                self.emit_store_const(func, 1, ctor_slot);
+                match host_base {
+                    // The instance is the built-in object itself, so it has the internal
+                    // state (a Map's entries, an Array's length) the built-in's methods use.
+                    Some(base) => {
+                        self.emit_store_arg(func, 2, &Expr::String(base.to_string()));
+                        self.emit_memcall(func, "class_new_host", 3);
+                    }
+                    None => self.emit_memcall(func, "class_new", 2),
+                }
+                let ctor = self
+                    .emitter
+                    .class_ctor_map
+                    .get(class_name.as_str())
+                    .copied();
+                // An implicit constructor forwards its args to the built-in's; a
+                // synthesized one (field initializers only) then takes none.
+                let forwarded = host_base.is_some()
+                    && (ctor.is_none()
+                        || self
+                            .emitter
+                            .implicit_ctor_classes
+                            .contains(class_name.as_str()));
+                if forwarded {
+                    self.emit_host_super_init(func, args);
+                }
+                if self.extends_builtin_error(class_name) {
+                    // An Error's message is "" until a `super(msg)` sets it. With no
+                    // compiled constructor, the implicit one forwards its args there.
+                    let fwd: &[Expr] = if ctor.is_none() { args } else { &[] };
+                    self.emit_error_super_init(func, fwd);
+                }
                 // Call the compiled constructor if it exists
-                if let Some(&ctor_idx) = self.emitter.class_ctor_map.get(class_name.as_str()) {
+                if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
-                    for arg in args {
+                    let ctor_args: &[Expr] = if forwarded { &[] } else { args };
+                    for arg in ctor_args {
                         self.emit_expr(func, arg);
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
@@ -281,7 +374,7 @@ impl<'a> FuncEmitCtx<'a> {
                     // evaluated args so they don't outlive the `call` and
                     // accumulate on the enclosing block's stack (#183).
                     if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                        let provided = args.len() + 1;
+                        let provided = ctor_args.len() + 1;
                         for _ in provided..expected {
                             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                         }
@@ -290,37 +383,47 @@ impl<'a> FuncEmitCtx<'a> {
                         }
                     }
                     func.instruction(&Instruction::Call(ctor_idx));
+                    self.emit_exception_guard(func);
                 }
                 // If no compiled constructor, just leave the instance handle on stack
             }
+            Expr::ReflectApply {
+                func: target,
+                this_arg,
+                args,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, target);
+                self.emit_store_arg(func, 1, this_arg);
+                self.emit_store_arg(func, 2, args);
+                self.emit_memcall(func, "reflect_apply", 3);
+            }
             Expr::NewDynamic { callee, args, .. } => {
-                // Dynamic new — approximate with regular call via mem_call
+                // `new_dynamic` constructs a host constructor and calls a Perry closure.
                 self.emit_frame_begin(func, (args.len() + 1) as u32);
                 self.emit_store_arg(func, 0, callee);
                 for (i, arg) in args.iter().enumerate() {
                     self.emit_store_arg(func, (i + 1) as u32, arg);
                 }
-                match args.len() {
-                    0 => {
-                        self.emit_memcall(func, "closure_call_0", 1);
-                    }
-                    1 => {
-                        self.emit_memcall(func, "closure_call_1", 2);
-                    }
-                    2 => {
-                        self.emit_memcall(func, "closure_call_2", 3);
-                    }
-                    3 => {
-                        self.emit_memcall(func, "closure_call_3", 4);
-                    }
-                    _ => {
-                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    }
-                }
+                self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
+            }
+            // In a static method or block, `this` is its class, or the evaluation a
+            // static block initializes; a static method read it on entry.
+            Expr::This if self.this_local.is_none() && self.static_this_local.is_some() => {
+                func.instruction(&Instruction::LocalGet(self.static_this_local.unwrap_or(0)));
+            }
+            Expr::This if self.this_local.is_none() && self.static_class.is_some() => {
+                let class_name = self.static_class.clone().unwrap_or_default();
+                let ctor_slot = self.class_ctor_slot(&class_name);
+                self.emit_class_bridge(
+                    func,
+                    "class_static_this",
+                    &class_name,
+                    &[&Expr::Number(ctor_slot)],
+                );
             }
             Expr::This => {
-                // 'this' is passed as first parameter (local 0) in methods
-                func.instruction(&Instruction::LocalGet(0));
+                func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
             Expr::SuperCall(args) => {
                 // Call parent constructor: super(args)
@@ -330,13 +433,26 @@ impl<'a> FuncEmitCtx<'a> {
                     // Look up parent class name
                     if let Some(parent_name) = self.emitter.class_parent_map.get(current_class) {
                         if let Some(&ctor_idx) = self.emitter.class_ctor_map.get(parent_name) {
+                            // A declared constructor's args pass through a parent with only
+                            // synthesized constructors to the built-in's. Its own implicit
+                            // `super()` then forwards nothing, so the built-in is set up once.
+                            let implicit = &self.emitter.implicit_ctor_classes;
+                            let forwarded = implicit.contains(parent_name)
+                                && !implicit.contains(current_class)
+                                && self.host_base_parent(current_class).is_some();
+                            if forwarded {
+                                func.instruction(&Instruction::LocalGet(0));
+                                self.emit_host_super_init(func, args);
+                                func.instruction(&Instruction::Drop);
+                            }
+                            let ctor_args: &[Expr] = if forwarded { &[] } else { args };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
-                            for arg in args {
+                            for arg in ctor_args {
                                 self.emit_expr(func, arg);
                             }
                             if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                                let provided = args.len() + 1;
+                                let provided = ctor_args.len() + 1;
                                 for _ in provided..expected {
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                                 }
@@ -345,12 +461,32 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(ctor_idx));
+                            self.emit_exception_guard(func);
                             func.instruction(&Instruction::Drop); // parent ctor returns this, discard
                             called = true;
                         }
                     }
                 }
-                if !called {
+                let error_parent = !called
+                    && self
+                        .current_class
+                        .as_ref()
+                        .is_some_and(|c| self.extends_builtin_error(c));
+                let host_parent = !called
+                    && self
+                        .current_class
+                        .as_ref()
+                        .is_some_and(|c| self.host_base_parent(c).is_some());
+                if error_parent {
+                    // `super(msg)` into a built-in Error sets this.message.
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_error_super_init(func, args);
+                    func.instruction(&Instruction::Drop);
+                } else if host_parent {
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_host_super_init(func, args);
+                    func.instruction(&Instruction::Drop);
+                } else if !called {
                     // No parent constructor found, drop args
                     for arg in args {
                         self.emit_expr(func, arg);
@@ -360,51 +496,165 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::SuperMethodCall { method, args } => {
-                // Call parent method on this via class_call_method (walks parent chain)
-                self.emit_slot_addr(func, 0); // this handle
-                func.instruction(&Instruction::LocalGet(0));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                })); // slot 0 = this (already i64)
-                let method_id = self
-                    .emitter
-                    .string_map
-                    .get(method.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let method_bits = (STRING_TAG << 48) | (method_id as u64);
-                self.emit_store_const(func, 1, f64::from_bits(method_bits)); // slot 1 = method name
-                                                                             // Build args array
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall(func, "array_new", 0);
-                for arg in args {
-                    self.emit_frame_begin(func, 2);
-                    func.instruction(&Instruction::LocalSet(self.temp_local));
-                    self.emit_slot_addr(func, 0);
-                    func.instruction(&Instruction::LocalGet(self.temp_local));
-                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
-                    self.emit_store_arg(func, 1, arg);
-                    self.emit_memcall(func, "array_push", 2);
-                }
-                self.emit_frame_begin(func, 3);
-                func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array
-                self.emit_slot_addr(func, 2);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "class_call_method", 3);
+                let key = Expr::String(method.clone());
+                self.emit_super_method_call(func, &key, &Expr::This, args);
             }
-            Expr::ClassRef(_) => {
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            // A class method's `super.m()` lowers to this form with the class as its
+            // home object; its body is compiled with `current_class` set to that class.
+            Expr::ObjectSuperMethodCall {
+                key,
+                receiver,
+                args,
+                ..
+            } if self.current_class.is_some() => {
+                self.emit_super_method_call(func, key, receiver, args);
+            }
+            // A class declared in a function body: each evaluation, the first included,
+            // is its own constructor with its own captures. One with computed member
+            // names or static initializers is built by `class_eval.rs`.
+            Expr::ClassExprFresh {
+                template,
+                named_statics,
+                computed_keys,
+                computed_statics,
+                static_init_order,
+                captured_args,
+                definition_steps,
+                ..
+            } if named_statics.is_empty()
+                && computed_keys.is_empty()
+                && computed_statics.is_empty()
+                && static_init_order.is_empty()
+                && definition_steps.is_empty() =>
+            {
+                // The surrounding HIR assigns the self-binding (`evaluation_owner`), and
+                // the capture refresh after it republishes captures read before then.
+                let ctor_slot = self.class_ctor_slot(template);
+                let caps = Expr::Array(captured_args.clone(), None);
+                self.emit_class_bridge(
+                    func,
+                    "class_fresh",
+                    template,
+                    &[&Expr::Number(ctor_slot), &caps],
+                );
+            }
+            Expr::RefreshClassExprCaptures {
+                class_value,
+                captures,
+                ..
+            } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, class_value);
+                self.emit_store_arg(func, 1, &Expr::Array(captures.clone(), None));
+                self.emit_memcall(func, "class_env_refresh", 2);
+            }
+            Expr::ClassEnvGet {
+                class_name, index, ..
+            } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(
+                    func,
+                    "class_env_get",
+                    class_name,
+                    &[&Expr::Number(*index as f64), &receiver],
+                );
+            }
+            // The constructor's publish of a fresh class expression's capture params
+            // is dropped: the evaluation itself publishes them (`class_fresh`).
+            Expr::ClassEnvSet {
+                value,
+                guarded: true,
+                publish: true,
+                ..
+            } => self.emit_expr(func, value),
+            Expr::ClassEnvSet {
+                class_name,
+                index,
+                value,
+                publish,
+                ..
+            } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(
+                    func,
+                    "class_env_set",
+                    class_name,
+                    &[
+                        &Expr::Number(*index as f64),
+                        &receiver,
+                        value,
+                        &Expr::Bool(*publish),
+                    ],
+                );
+            }
+            Expr::ClassEnvStamp {
+                class_name,
+                instance,
+                evaluation,
+            } => {
+                self.emit_class_bridge(func, "class_env_stamp", class_name, &[instance, evaluation])
+            }
+            Expr::ClassEnvCurrent { class_name } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(func, "class_env_current", class_name, &[&receiver]);
+            }
+            Expr::RegisterClassCaptures {
+                class_name,
+                captures,
+            } => {
+                let caps = Expr::Array(captures.clone(), None);
+                self.emit_class_bridge(func, "class_register_captures", class_name, &[&caps]);
+            }
+            Expr::ClassCaptureValue {
+                class_name,
+                index,
+                fallback,
+                prefer_fallback,
+            } => {
+                let fallback = fallback.as_deref().cloned().unwrap_or(Expr::Undefined);
+                self.emit_class_bridge(
+                    func,
+                    "class_capture_value",
+                    class_name,
+                    &[
+                        &Expr::Number(*index as f64),
+                        &fallback,
+                        &Expr::Bool(*prefer_fallback),
+                    ],
+                );
+            }
+            Expr::ClassMethodHome {
+                class_name,
+                is_static,
+            } => {
+                self.emit_class_bridge(
+                    func,
+                    "class_method_home",
+                    class_name,
+                    &[&Expr::Bool(*is_static)],
+                );
+            }
+            // A literal `extends null` is recorded; any other dynamic heritage keeps the
+            // class table's static parent, and a function parent also lends its
+            // `prototype` to the class's (`class_extends_value`).
+            Expr::RegisterClassParentDynamic {
+                class_name,
+                parent_expr,
+            } => {
+                if matches!(parent_expr.as_ref(), Expr::Null) {
+                    self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+                } else {
+                    self.emit_class_bridge(
+                        func,
+                        "class_extends_value",
+                        class_name,
+                        &[parent_expr.as_ref()],
+                    );
+                }
+            }
+            Expr::ClassRef(class_name) => {
+                let ctor_slot = self.class_ctor_slot(class_name);
+                self.emit_class_bridge(func, "class_ref", class_name, &[&Expr::Number(ctor_slot)]);
             }
             Expr::StaticFieldGet {
                 class_name,
@@ -452,9 +702,8 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
                 self.emit_store_const(func, 1, f64::from_bits(field_bits));
                 self.emit_store_arg(func, 2, value);
-                self.emit_memcall_void(func, "class_set_static", 3);
-                // void return, push the value back
-                self.emit_expr(func, value);
+                // The bridge returns the stored value: the initializer runs once.
+                self.emit_memcall(func, "class_set_static", 3);
             }
             Expr::StaticMethodCall {
                 class_name,
@@ -467,6 +716,8 @@ impl<'a> FuncEmitCtx<'a> {
                         // Direct call to compiled static method (no this param).
                         // Same arity reconciliation as FuncRef/ExternFuncRef arms
                         // (#183): pad-up for missing args, drop-excess for extras.
+                        let packed = self.emitter.with_rest_packed(Some(static_idx), args);
+                        let args: &[Expr] = &packed;
                         for arg in args {
                             self.emit_expr(func, arg);
                         }
@@ -479,6 +730,7 @@ impl<'a> FuncEmitCtx<'a> {
                             }
                         }
                         func.instruction(&Instruction::Call(static_idx));
+                        self.emit_exception_guard(func);
                         return true;
                     }
                 }
@@ -497,6 +749,9 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let method_bits = (STRING_TAG << 48) | (method_id as u64);
+                // The frame is open before any slot store; the args array is built in
+                // frames above it.
+                self.emit_frame_begin(func, 3);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits)); // slot 0 = class handle
                 self.emit_store_const(func, 1, f64::from_bits(method_bits)); // slot 1 = method name
                                                                              // Build args array
@@ -515,7 +770,6 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_arg(func, 1, arg);
                     self.emit_memcall(func, "array_push", 2);
                 }
-                self.emit_frame_begin(func, 3);
                 func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array
                 self.emit_slot_addr(func, 2);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -567,6 +821,14 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // `x instanceof C` with C a value that may be a class-expression evaluation.
+            Expr::InstanceOf {
+                expr,
+                ty,
+                ty_expr: Some(ty_expr),
+            } if !matches!(**ty_expr, Expr::ClassRef(_)) => {
+                self.emit_class_bridge(func, "class_instanceof_value", ty, &[expr, ty_expr]);
+            }
             // --- InstanceOf ---
             Expr::InstanceOf { expr, ty, .. } => {
                 self.emit_expr(func, expr);
@@ -601,5 +863,157 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    pub(in crate::emit) fn class_ctor_slot(&self, class_name: &str) -> f64 {
+        self.emitter.class_ctor_slot(class_name)
+    }
+
+    /// The receiver a class-environment node resolves its evaluation from: `this`
+    /// in a member.
+    fn class_env_receiver(&self) -> Expr {
+        if self.this_local.is_some() {
+            Expr::This
+        } else {
+            Expr::Undefined
+        }
+    }
+
+    /// Call `bridge(class_name, args...)`.
+    pub(in crate::emit) fn emit_class_bridge(
+        &mut self,
+        func: &mut Function,
+        bridge: &str,
+        class_name: &str,
+        args: &[&Expr],
+    ) {
+        let class_id = self
+            .emitter
+            .string_map
+            .get(class_name)
+            .copied()
+            .unwrap_or(0);
+        let class_bits = (STRING_TAG << 48) | (class_id as u64);
+        self.emit_frame_begin(func, args.len() as u32 + 1);
+        self.emit_store_const(func, 0, f64::from_bits(class_bits));
+        for (i, arg) in args.iter().enumerate() {
+            self.emit_store_arg(func, i as u32 + 1, arg);
+        }
+        self.emit_memcall(func, bridge, args.len() as u32 + 1);
+    }
+}
+
+impl<'a> FuncEmitCtx<'a> {
+    /// `super[key](args)` in a method of `current_class`: the lookup starts at that
+    /// class's parent, not at the receiver's class, and `receiver` stays `this`.
+    /// As in `o.m(args)`, the property is read before the arguments are evaluated.
+    fn emit_super_method_call(
+        &mut self,
+        func: &mut Function,
+        key: &Expr,
+        receiver: &Expr,
+        args: &[Expr],
+    ) {
+        let class_id = self
+            .current_class
+            .as_ref()
+            .and_then(|name| self.emitter.string_map.get(name.as_str()))
+            .copied()
+            .unwrap_or(0);
+        let class_bits = (STRING_TAG << 48) | (class_id as u64);
+        let store = Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        });
+        // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
+        self.emit_frame_begin(func, 4);
+        self.emit_store_arg(func, 1, receiver);
+        self.emit_frame_begin(func, 3);
+        self.emit_store_arg(func, 0, receiver);
+        self.emit_store_const(func, 1, f64::from_bits(class_bits));
+        self.emit_store_arg(func, 2, key);
+        self.emit_memcall(func, "class_super_get", 3);
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&store);
+        // The key names the callee in the TypeError; a computed one is not evaluated twice.
+        match key {
+            Expr::String(_) => self.emit_store_arg(func, 2, key),
+            _ => self.emit_store_const(func, 2, f64::from_bits(TAG_UNDEFINED)),
+        }
+        self.emit_store_arg(func, 3, &Expr::Array(args.to_vec(), None));
+        self.emit_memcall(func, "class_super_call", 4);
+    }
+}
+
+impl FuncEmitCtx<'_> {
+    /// Whether `class_name`'s chain of user classes ends at a built-in Error.
+    fn extends_builtin_error(&self, class_name: &str) -> bool {
+        let mut name = class_name;
+        while let Some(parent) = self.emitter.class_parent_map.get(name) {
+            if !self.emitter.user_classes.contains(parent) {
+                return BUILTIN_ERROR_PARENTS.contains(&parent.as_str());
+            }
+            name = parent;
+        }
+        false
+    }
+
+    /// The built-in at the end of `class_name`'s chain of user classes, when it is one
+    /// whose instances carry internal state that a plain object lacks.
+    fn host_base_parent(&self, class_name: &str) -> Option<&'static str> {
+        let mut name = class_name;
+        while let Some(parent) = self.emitter.class_parent_map.get(name) {
+            if !self.emitter.user_classes.contains(parent) {
+                return HOST_BASE_PARENTS
+                    .iter()
+                    .copied()
+                    .find(|base| *base == parent.as_str());
+            }
+            name = parent;
+        }
+        None
+    }
+
+    /// Stack: [instance] -> [instance], with the built-in's constructor applied to
+    /// `args` on the instance, as `super(...args)` does.
+    fn emit_host_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_frame_begin(func, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_store_arg(func, 1, &Expr::Array(args.to_vec(), None));
+        self.emit_memcall(func, "host_super_init", 2);
+    }
+
+    /// Stack: [instance] -> [instance], with the instance's message set from `args[0]`
+    /// as the Error constructor sets it. Every arg is evaluated before the message is
+    /// converted; the rest (the options bag) only for their effects.
+    fn emit_error_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_frame_begin(func, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        match args.first() {
+            Some(msg) => self.emit_store_arg(func, 1, msg),
+            None => self.emit_store_const(func, 1, f64::from_bits(TAG_UNDEFINED)),
+        }
+        for arg in args.iter().skip(1) {
+            self.emit_expr(func, arg);
+            func.instruction(&Instruction::Drop);
+        }
+        self.emit_memcall(func, "error_super_init", 2);
     }
 }

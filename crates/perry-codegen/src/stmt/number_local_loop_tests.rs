@@ -141,6 +141,7 @@ fn module_ir_with(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = CompileOptions {
         emit_ir_only: true,
@@ -239,7 +240,6 @@ fn declines_a_body_write_that_may_concatenate() {
     );
 }
 
-
 fn labeled(label: &str, body: Stmt) -> Stmt {
     Stmt::Labeled {
         label: label.to_string(),
@@ -274,7 +274,10 @@ fn an_untargeted_label_lowers_the_loop_as_without_it() {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    assert!(strip(&plain) == strip(&labelled), "an untargeted label changed codegen");
+    assert!(
+        strip(&plain) == strip(&labelled),
+        "an untargeted label changed codegen"
+    );
 }
 
 /// The tier cannot register a label: a label that a `continue` targets keeps

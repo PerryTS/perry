@@ -42,6 +42,9 @@ pub struct IncomingMessage {
     pub raw_headers: Vec<(String, String)>,
     /// HTTP protocol version string, e.g. `"1.1"`.
     pub http_version: String,
+    /// The `http2` compat API's request: its prototype is
+    /// `Http2ServerRequest.prototype` (#13802).
+    pub(crate) http2_compat: bool,
     /// Fully-buffered request body. Phase 1 collects the entire body
     /// before invoking the user handler, so Readable-stream consumers
     /// can drain it on a single tick.
@@ -121,6 +124,7 @@ impl IncomingMessage {
             headers,
             raw_headers,
             http_version: "1.1".to_string(),
+            http2_compat: false,
             body_bytes: body,
             complete: false,
             destroyed: false,

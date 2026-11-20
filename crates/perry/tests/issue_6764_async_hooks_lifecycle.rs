@@ -50,7 +50,7 @@ fn compile_and_run(source: &str) -> String {
 
 fn assert_multiple_hook_callbacks_survive_allocating_siblings() {
     let output = compile_and_run(include_str!(
-        "../../../test-parity/node-suite/async_hooks/hooks/multiple-hooks.ts"
+        "../../../tests/parity/node-suite/async_hooks/hooks/multiple-hooks.ts"
     ));
     assert_eq!(
         output,
@@ -67,7 +67,7 @@ fn assert_multiple_hook_callbacks_survive_allocating_siblings() {
 
 fn assert_scheduler_resources_preserve_identity_execution_and_trigger_chain() {
     let output = compile_and_run(include_str!(
-        "../../../test-parity/node-suite/async_hooks/hooks/scheduler-resource-identity.ts"
+        "../../../tests/parity/node-suite/async_hooks/hooks/scheduler-resource-identity.ts"
     ));
     assert_eq!(
         output,
@@ -81,7 +81,7 @@ fn assert_scheduler_resources_preserve_identity_execution_and_trigger_chain() {
 
 fn assert_repeating_timer_uses_one_async_resource_until_clear() {
     let output = compile_and_run(include_str!(
-        "../../../test-parity/node-suite/async_hooks/hooks/interval-repeat-lifecycle.ts"
+        "../../../tests/parity/node-suite/async_hooks/hooks/interval-repeat-lifecycle.ts"
     ));
     assert_eq!(
         output,
@@ -95,7 +95,7 @@ fn assert_repeating_timer_uses_one_async_resource_until_clear() {
 
 fn assert_track_promises_selects_promise_lifecycle_per_hook() {
     let output = compile_and_run(include_str!(
-        "../../../test-parity/node-suite/async_hooks/hooks/track-promises.ts"
+        "../../../tests/parity/node-suite/async_hooks/hooks/track-promises.ts"
     ));
     assert_eq!(
         output,
@@ -110,7 +110,7 @@ fn assert_track_promises_selects_promise_lifecycle_per_hook() {
 
 fn assert_track_promises_validation_matches_node() {
     let output = compile_and_run(include_str!(
-        "../../../test-parity/node-suite/async_hooks/validation/track-promises.ts"
+        "../../../tests/parity/node-suite/async_hooks/validation/track-promises.ts"
     ));
     assert_eq!(
         output,

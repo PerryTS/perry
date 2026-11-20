@@ -18,7 +18,7 @@ use perry_hir::Expr;
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
 // sites keep resolving, and brought into scope for local callers.
 pub(crate) use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index,
+    class_field_declared_type, class_field_global_index, class_field_slot,
 };
 
 // The body of this module was split into topical sub-modules to keep each

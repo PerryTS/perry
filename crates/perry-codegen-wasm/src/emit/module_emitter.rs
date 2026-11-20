@@ -33,6 +33,10 @@ pub(super) struct WasmModuleEmitter {
     /// stored in WASM globals so cross-function references work, and so module-init
     /// LocalIds don't collide with other modules' identical LocalIds.
     pub(super) module_let_globals: BTreeMap<(usize, LocalId), u32>,
+    /// Locals a closure captures and someone mutates, as (mod_idx, LocalId). Each
+    /// holds a runtime cell, so the closures and the enclosing function share one
+    /// value; a plain local would give every closure its own snapshot.
+    pub(super) boxed_locals: std::collections::BTreeSet<(usize, LocalId)>,
     /// Current module index when compiling functions/methods, so LocalGet can resolve
     /// module-level Lets to the correct WASM global.
     pub(super) current_mod_idx: usize,
@@ -42,12 +46,21 @@ pub(super) struct WasmModuleEmitter {
     pub(super) class_method_map: BTreeMap<String, BTreeMap<String, u32>>,
     /// Class static method map: class_name → {method_name → wasm function index}
     pub(super) class_static_map: BTreeMap<String, BTreeMap<String, u32>>,
+    /// Computed member function: (class_name, function name) → wasm function index
+    pub(super) class_computed_map: BTreeMap<(String, String), u32>,
     /// Function name → wasm function index (for cross-module ExternFuncRef resolution)
     pub(super) func_name_map: BTreeMap<String, u32>,
     /// FFI imports: (name, param_count, has_return) — registered as WASM imports under "ffi" namespace
     pub(super) ffi_imports: Vec<(String, usize, bool)>,
     /// Class parent map: child_class_name → parent_class_name
     pub(super) class_parent_map: BTreeMap<String, String>,
+    /// Every class the modules declare, with or without a constructor. The async JS
+    /// emitter needs it to tell a user class (built through `class_new`) from a host
+    /// constructor such as `Map`.
+    pub(super) user_classes: std::collections::BTreeSet<String>,
+    /// The classes `declares_no_constructor` holds for: `new` forwards their
+    /// arguments to a built-in parent's constructor.
+    pub(super) implicit_ctor_classes: std::collections::BTreeSet<String>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -65,6 +78,11 @@ pub(super) struct WasmModuleEmitter {
     /// WASM function index → expected parameter count.
     /// Used to pad missing arguments with TAG_UNDEFINED for optional params.
     pub(super) func_param_counts: BTreeMap<u32, usize>,
+    /// WASM function index → the parameter slot of its rest parameter, counting
+    /// `this` and captures. A direct call packs the arguments from that slot on into
+    /// one array; the module exports the slot as `__wasm_rest_<idx>` for the runtime,
+    /// which packs them for a call through the function table.
+    pub(super) rest_params: BTreeMap<u32, usize>,
     /// Issue #1071: cross-module imported VARIABLE resolution.
     /// Maps `(consumer_mod_idx, imported_local_name)` → WASM global index
     /// of the source module's `Stmt::Let` that backs the export. Pre-fix
@@ -107,19 +125,24 @@ impl WasmModuleEmitter {
             global_map: BTreeMap::new(),
             num_globals: 0,
             module_let_globals: BTreeMap::new(),
+            boxed_locals: Default::default(),
             current_mod_idx: 0,
             class_ctor_map: BTreeMap::new(),
             class_method_map: BTreeMap::new(),
             class_static_map: BTreeMap::new(),
+            class_computed_map: BTreeMap::new(),
             func_name_map: BTreeMap::new(),
             ffi_imports: Vec::new(),
             class_parent_map: BTreeMap::new(),
+            user_classes: std::collections::BTreeSet::new(),
+            implicit_ctor_classes: std::collections::BTreeSet::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),
             module_func_maps: Vec::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
+            rest_params: BTreeMap::new(),
             async_js_code: Vec::new(),
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
@@ -140,6 +163,14 @@ impl WasmModuleEmitter {
         self.string_table.push((s.to_string(), offset, len));
         self.string_map.insert(s.to_string(), id);
         id
+    }
+
+    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
+    pub(super) fn class_ctor_slot(&self, class_name: &str) -> f64 {
+        self.class_ctor_map
+            .get(class_name)
+            .and_then(|idx| self.func_to_table_idx.get(idx))
+            .map_or(-1.0, |&slot| slot as f64)
     }
 
     /// Get or create a function type index for the given signature.

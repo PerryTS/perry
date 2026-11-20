@@ -883,4 +883,80 @@ mod tests {
         );
         assert!(ios.contains("<key>DTSDKBuild</key>\n    <string>23C57</string>"));
     }
+
+    /// Every Apple bundler derives its fallback bundle ID through the shared
+    /// sanitizer, so one hostile project stem yields the same lowercase,
+    /// argv-safe ID on every Apple target (#998).
+    #[test]
+    fn every_apple_target_sanitizes_the_fallback_bundle_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let stem = "My App;X";
+        let input = dir.path().join(format!("{stem}.ts"));
+        fs::write(&input, "").unwrap();
+        let ctx = CompilationContext::new(dir.path().to_path_buf());
+        let exe = |target: &str| {
+            let path = dir.path().join(target).join(stem);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "").unwrap();
+            path
+        };
+        let json = OutputFormat::Json;
+
+        let macos =
+            super::super::app_metadata::read_app_metadata(None, &input, Some("macos"), None);
+        let (_, ios) = super::super::bundle_ios::build_ios_app_bundle(
+            &input,
+            None,
+            &ctx,
+            &exe("ios"),
+            stem,
+            Some("ios-simulator"),
+            &[],
+            None,
+            None,
+            json,
+        )
+        .unwrap();
+        let (_, watchos) = bundle_for_watchos(
+            &exe("watchos"),
+            stem,
+            Some("watchos-simulator"),
+            &input,
+            &ctx,
+            None,
+            None,
+            json,
+        )
+        .unwrap();
+        let (_, tvos) = bundle_for_tvos(
+            &exe("tvos"),
+            stem,
+            Some("tvos-simulator"),
+            &input,
+            &ctx,
+            json,
+        )
+        .unwrap();
+        let (_, visionos) = bundle_for_visionos(
+            &exe("visionos"),
+            stem,
+            Some("visionos-simulator"),
+            &input,
+            &ctx,
+            None,
+            None,
+            json,
+        )
+        .unwrap();
+
+        for (target, bundle_id) in [
+            ("macos", macos.bundle_id),
+            ("ios", ios),
+            ("watchos", watchos),
+            ("tvos", tvos),
+            ("visionos", visionos),
+        ] {
+            assert_eq!(bundle_id, "com.perry.my_app_x", "{target}");
+        }
+    }
 }

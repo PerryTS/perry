@@ -187,15 +187,15 @@ pub(crate) fn guest_task_checkpoint() -> i32 {
     let depths = MICROTASK_RUN_DEPTH.with(std::cell::Cell::get);
     let bases = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow().len());
     let refs = async_box_execution_ref_depth();
-    match crate::exception::catch_js_throw(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
+    match crate::exception::catch_thrown(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
         Ok(count) => count,
         Err(error) => {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             unwind_async_box_execution_refs(refs);
             ASYNC_BOX_EXECUTION_REF_BASES.with(|stack| stack.borrow_mut().truncate(bases));
             MICROTASK_RUN_DEPTH.with(|depth| depth.set(depths));
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.caught());
         }
     }
 }
@@ -444,7 +444,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
         // exception, clear it, and reject the `next` promise of the
         // microtask that was running. The caller runs this recovery under
         // the next trap of the drain.
-        let exc = crate::exception::js_get_exception();
+        let exc = crate::exception::pending_exception();
         crate::exception::js_clear_exception();
         let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
         CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
@@ -468,16 +468,18 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
         if !cur.is_null() {
             unsafe {
                 if !(*cur).next.is_null() {
-                    js_promise_reject((*cur).next, exc);
+                    js_promise_reject((*cur).next, exc.value());
                 }
             }
             *ran += 1;
         } else {
             if !unwound_trap.trap_next.is_null() {
-                js_promise_reject(unwound_trap.trap_next, exc);
+                js_promise_reject(unwound_trap.trap_next, exc.value());
                 *ran += 1;
             } else {
-                crate::node_submodules::diagnostics::schedule_uncaught(exc);
+                crate::node_submodules::diagnostics::schedule_uncaught(
+                    crate::node_submodules::diagnostics::UncaughtError::Caught(exc),
+                );
                 *ran += 1;
             }
         }

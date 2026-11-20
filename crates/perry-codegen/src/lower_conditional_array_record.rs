@@ -419,6 +419,7 @@ mod tests {
                 )])],
                 catch: Some(catch),
                 finally: Some(finally),
+                forof_completion: None,
             });
             let ir = crate::temp_root_coverage::main_ir_for("outlined_record", body);
             assert_eq!(

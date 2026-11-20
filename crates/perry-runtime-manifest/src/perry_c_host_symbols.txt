@@ -1,0 +1,2 @@
+# Perry C ABI symbols resolved from native C addons, separate from Node-API.
+perry_vfs_read_file_v1

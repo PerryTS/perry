@@ -174,7 +174,7 @@ pub(super) fn try_lower(
                     // heap string needs the runtime addref's demotion.
                     let ptr = blk.gep(I8, &string_ptr, &[(I64, "12")]);
                     let refcount = blk.load(I32, &ptr);
-                    let unique = blk.icmp_ne(I32, &refcount, "0");
+                    let unique = blk.icmp_eq(I32, &refcount, "1");
                     blk.cond_br(&unique, &share, &fast);
                     ptr
                 };

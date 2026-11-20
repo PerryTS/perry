@@ -1,13 +1,73 @@
-//! Function/closure/class compilation + frame-slot helpers extracted from
-//! emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move. `WasmModuleEmitter::{compile_function, compile_closure,
-//! compile_class_constructor, compile_class_method}` and the
+//! Function, closure and class compilation plus the frame-slot helpers:
+//! `WasmModuleEmitter::{compile_function, compile_closure,
+//! compile_class_constructor, compile_class_method}`, `constructor_of`, and the
 //! `FuncEmitCtx` frame-slot helpers (`emit_frame_begin`, `emit_slot_addr`,
-//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`)
-//! each live on a dedicated inherent `impl` block for their struct.
+//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`).
 
+use super::closures::reads_this;
 use super::*;
+use perry_hir::walker::stmt_any_expr;
+
+/// The parameters and body `new C(...)` runs for a class.
+pub(super) struct Constructor {
+    pub params: Vec<Param>,
+    pub body: Vec<Stmt>,
+}
+
+/// The declared constructor, or JavaScript's implicit one when `new` has work to
+/// do without it: `constructor() {}` runs the field initializers, and a derived
+/// class's `constructor(...args) { super(...args) }` runs the parent's. A wasm
+/// constructor has fixed parameters, so the derived form forwards the parent's.
+pub(super) fn constructor_of(
+    class: &perry_hir::ir::Class,
+    classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+) -> Option<Constructor> {
+    if let Some(ctor) = &class.constructor {
+        return Some(Constructor {
+            params: ctor.params.clone(),
+            body: ctor.body.clone(),
+        });
+    }
+    let parent = class
+        .extends_name
+        .as_deref()
+        .and_then(|name| classes.get(name))
+        .and_then(|parent| constructor_of(parent, classes));
+    if let Some(parent) = parent {
+        let params: Vec<Param> = parent
+            .params
+            .into_iter()
+            .map(|p| Param { default: None, ..p })
+            .collect();
+        let args = params.iter().map(|p| Expr::LocalGet(p.id)).collect();
+        return Some(Constructor {
+            params,
+            body: vec![Stmt::Expr(Expr::SuperCall(args))],
+        });
+    }
+    class
+        .fields
+        .iter()
+        .any(|f| f.init.is_some())
+        .then(|| Constructor {
+            params: Vec::new(),
+            body: Vec::new(),
+        })
+}
+
+/// Whether neither `class` nor a user class above it declares a constructor, so
+/// `new` runs only implicit ones and its arguments reach the first non-user parent.
+pub(super) fn declares_no_constructor(
+    class: &perry_hir::ir::Class,
+    classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+) -> bool {
+    class.constructor.is_none()
+        && class
+            .extends_name
+            .as_deref()
+            .and_then(|name| classes.get(name))
+            .is_none_or(|parent| declares_no_constructor(parent, classes))
+}
 
 impl WasmModuleEmitter {
     pub(super) fn compile_function(&self, hir_func: &perry_hir::ir::Function) -> Function {
@@ -27,6 +87,24 @@ impl WasmModuleEmitter {
         &self,
         hir_func: &perry_hir::ir::Function,
         force_returning: bool,
+    ) -> Function {
+        self.compile_function_in(hir_func, force_returning, None)
+    }
+
+    /// A static method or static block of `class`: `(params) -> i64`, `this` its class.
+    pub(super) fn compile_static_method(
+        &self,
+        class: &perry_hir::ir::Class,
+        method: &perry_hir::ir::Function,
+    ) -> Function {
+        self.compile_function_in(method, true, Some(&class.name))
+    }
+
+    fn compile_function_in(
+        &self,
+        hir_func: &perry_hir::ir::Function,
+        force_returning: bool,
+        static_class: Option<&str>,
     ) -> Function {
         // Build local map: param locals come first, then body locals
         let mut local_map = BTreeMap::new();
@@ -49,6 +127,14 @@ impl WasmModuleEmitter {
             &mut extra_locals,
             param_count,
         );
+        // A static method that reads `this` takes it once, on entry, into its own local.
+        let static_this = static_class.filter(|_| {
+            hir_func
+                .body
+                .iter()
+                .any(|s| stmt_any_expr(s, &mut reads_this))
+        });
+        extra_locals += u32::from(static_this.is_some());
 
         let temp_local_idx = param_count + extra_locals;
         let temp_i32_idx = temp_local_idx + 3;
@@ -62,6 +148,24 @@ impl WasmModuleEmitter {
         let wasm_returns_i64 =
             force_returning || hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.returns_value = wasm_returns_i64;
+        ctx.static_class = static_class.map(str::to_string);
+        ctx.emit_box_params(&mut func, &hir_func.params);
+        if let Some(class_name) = static_this {
+            let local = temp_local_idx - 1;
+            let ctor_slot = ctx.class_ctor_slot(class_name);
+            ctx.emit_class_bridge(
+                &mut func,
+                "class_static_method_this",
+                class_name,
+                &[
+                    &Expr::Number(ctor_slot),
+                    &Expr::String(hir_func.name.clone()),
+                ],
+            );
+            func.instruction(&Instruction::LocalSet(local));
+            ctx.static_this_local = Some(local);
+        }
 
         for stmt in &hir_func.body {
             ctx.emit_stmt(&mut func, stmt, wasm_returns_i64);
@@ -82,8 +186,10 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
+        this: ClosureThis,
+        home_class: Option<&str>,
     ) -> Function {
-        // Closure parameters: captures first, then declared params
+        // Closure parameters: captures, the captured `this`, then declared params
         let mut local_map = BTreeMap::new();
         let mut param_idx = 0u32;
         for cap in captures {
@@ -94,6 +200,8 @@ impl WasmModuleEmitter {
             local_map.insert(*cap, param_idx);
             param_idx += 1;
         }
+        let captured_this = (this == ClosureThis::Captured).then_some(param_idx);
+        param_idx += u32::from(captured_this.is_some());
         for param in params {
             local_map.insert(param.id, param_idx);
             param_idx += 1;
@@ -103,6 +211,10 @@ impl WasmModuleEmitter {
         let mut extra_locals = 0u32;
         collect_param_locals(params, &mut local_map, &mut extra_locals, param_idx);
         collect_locals(body, &mut local_map, &mut extra_locals, param_idx);
+        let receiver = param_idx + extra_locals;
+        if this == ClosureThis::Receiver {
+            extra_locals += 1;
+        }
 
         let temp_local_idx = param_idx + extra_locals;
         let temp_i32_idx = temp_local_idx + 3;
@@ -110,6 +222,23 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = home_class.map(str::to_string);
+        ctx.this_local = captured_this;
+        if this == ClosureThis::Receiver {
+            // First, before any other call can take the pending receiver.
+            ctx.emit_frame_begin(&mut func, 0);
+            ctx.emit_memcall(&mut func, "closure_this", 0);
+            func.instruction(&Instruction::LocalSet(receiver));
+            ctx.this_local = Some(receiver);
+        }
+        ctx.emit_box_params(&mut func, params);
+        // A captured cell already exists; a `let` of it in the body (a lowered
+        // generator re-declares its locals per state) fills that cell.
+        for cap in captures.iter().chain(mutable_captures) {
+            if ctx.is_boxed(cap) {
+                ctx.preallocated.insert(*cap);
+            }
+        }
         let _has_ret = body.iter().any(has_return);
 
         for stmt in body {
@@ -125,7 +254,7 @@ impl WasmModuleEmitter {
     pub(super) fn compile_class_constructor(
         &self,
         class: &perry_hir::ir::Class,
-        ctor: &perry_hir::ir::Function,
+        ctor: &Constructor,
     ) -> Function {
         // Local 0 = this (the instance handle)
         // Params start at local index 1
@@ -161,11 +290,25 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        // Emit field initializers: class_set_field(this, field_name, value) via mem_call
-        for field in &class.fields {
-            if let Some(init) = &field.init {
+        // Field initializers: class_set_field(this, field_name, value) via mem_call
+        let emit_field_inits = |func: &mut Function| {
+            for field in &class.fields {
+                let Some(init) = &field.init else { continue };
                 let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-                ctx.emit_frame_begin(&mut func, 3);
+                // A computed field is named by the key its class definition resolved
+                // into the hidden slot `field.name`.
+                if field.key_expr.is_some() {
+                    let slot = Expr::String(field.name.clone());
+                    ctx.emit_class_bridge(
+                        func,
+                        "class_init_computed_field",
+                        &class.name,
+                        &[&slot, &Expr::This, init],
+                    );
+                    func.instruction(&Instruction::Drop);
+                    continue;
+                }
+                ctx.emit_frame_begin(func, 3);
                 // Compute base address (sp - 24) and save to temp_i32 local
                 let sp = self.nan_temp_global;
                 func.instruction(&Instruction::GlobalGet(sp));
@@ -197,10 +340,20 @@ impl WasmModuleEmitter {
                     memory_index: 0,
                 }));
                 // Store value to slot 2
-                ctx.emit_store_arg(&mut func, 2, init);
+                ctx.emit_store_arg(func, 2, init);
                 // Call via mem_call
-                ctx.emit_memcall_void(&mut func, "class_set_field", 3);
+                ctx.emit_memcall_void(func, "class_set_field", 3);
             }
+        };
+        // A derived class initializes its fields when `super()` returns, so the parent
+        // constructor sees none of them; a base class initializes them on entry. A
+        // `super()` nested below the top level falls back to entry.
+        let super_at = ctor
+            .body
+            .iter()
+            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::SuperCall(_))));
+        if super_at.is_none() {
+            emit_field_inits(&mut func);
         }
 
         // Emit constructor body.
@@ -214,8 +367,13 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
-        for stmt in &ctor.body {
+        ctx.this_local = Some(0);
+        ctx.emit_box_params(&mut func, &ctor.params);
+        for (index, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
+            if super_at == Some(index) {
+                emit_field_inits(&mut func);
+            }
         }
 
         // Fallthrough: return `this` as the constructor's result.
@@ -224,7 +382,11 @@ impl WasmModuleEmitter {
         func
     }
 
-    pub(super) fn compile_class_method(&self, method: &perry_hir::ir::Function) -> Function {
+    pub(super) fn compile_class_method(
+        &self,
+        class_name: &str,
+        method: &perry_hir::ir::Function,
+    ) -> Function {
         // Local 0 = this, params start at 1
         let mut local_map = BTreeMap::new();
         for (i, param) in method.params.iter().enumerate() {
@@ -252,6 +414,9 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = Some(class_name.to_string());
+        ctx.this_local = Some(0);
+        ctx.emit_box_params(&mut func, &method.params);
 
         for stmt in &method.body {
             ctx.emit_stmt(&mut func, stmt, true); // methods always return f64
@@ -281,7 +446,13 @@ impl<'a> FuncEmitCtx<'a> {
     /// Compute memory address for a slot in the current frame.
     /// Address = sp - (current_frame_size - slot) * 8
     /// This works correctly across nested calls because sp was advanced by emit_frame_begin.
+    #[track_caller]
     pub(super) fn emit_slot_addr(&self, func: &mut Function, slot: u32) {
+        debug_assert!(
+            slot < self.current_frame_size,
+            "slot {slot} lies outside the open frame of {} slots",
+            self.current_frame_size
+        );
         let sp = self.emitter.nan_temp_global;
         let offset_from_sp = (self.current_frame_size - slot) * 8;
         func.instruction(&Instruction::GlobalGet(sp));
@@ -290,6 +461,7 @@ impl<'a> FuncEmitCtx<'a> {
     }
 
     /// Store an expression's result to memory at the current frame's slot.
+    #[track_caller]
     pub(super) fn emit_store_arg(&mut self, func: &mut Function, slot: u32, expr: &Expr) {
         match expr {
             Expr::String(s) => {
@@ -324,6 +496,7 @@ impl<'a> FuncEmitCtx<'a> {
         }
     }
 
+    #[track_caller]
     pub(super) fn emit_store_const(&self, func: &mut Function, slot: u32, val: f64) {
         let bits = val.to_bits();
         self.emit_slot_addr(func, slot);
@@ -337,10 +510,8 @@ impl<'a> FuncEmitCtx<'a> {
 
     /// Emit a load of a HIR local by id. Top-level `let`s are stored in WASM globals
     /// (not locals), so we must check `module_let_globals` before `local_map`. Falls
-    /// back to `TAG_UNDEFINED`. Without this, Array* HIR nodes that reference a
-    /// top-level `const xs = []` were pushing `I64Const(0)` into the temp — see
-    /// Issue #133 item 3.
-    pub(super) fn emit_local_or_global_get(&self, func: &mut Function, id: &LocalId) {
+    /// back to `TAG_UNDEFINED`. A boxed local is read through its cell.
+    pub(super) fn emit_local_or_global_get(&mut self, func: &mut Function, id: &LocalId) {
         if self.scoped_temp_ids.contains(id) {
             func.instruction(&Instruction::LocalGet(self.local_map[id]));
         } else if let Some(&gidx) = self
@@ -351,8 +522,61 @@ impl<'a> FuncEmitCtx<'a> {
             func.instruction(&Instruction::GlobalGet(gidx));
         } else if let Some(&idx) = self.local_map.get(id) {
             func.instruction(&Instruction::LocalGet(idx));
+            if self.is_boxed(id) {
+                self.emit_box_call(func, "box_get");
+            }
         } else {
             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+        }
+    }
+
+    pub(super) fn is_boxed(&self, id: &LocalId) -> bool {
+        self.emitter
+            .boxed_locals
+            .contains(&(self.emitter.current_mod_idx, *id))
+    }
+
+    /// Calls a one-argument cell bridge on the value on the stack: `box_new(value)`
+    /// leaves a new cell, `box_get(cell)` its value.
+    pub(super) fn emit_box_call(&mut self, func: &mut Function, bridge: &str) {
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        self.emit_frame_begin(func, 1);
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_memcall(func, bridge, 1);
+    }
+
+    /// Stores the value on the stack into the cell local `idx` holds, leaving the value.
+    pub(super) fn emit_box_set(&mut self, func: &mut Function, idx: u32) {
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        self.emit_frame_begin(func, 2);
+        for (slot, local) in [(0, idx), (1, self.temp_store_local)] {
+            self.emit_slot_addr(func, slot);
+            func.instruction(&Instruction::LocalGet(local));
+            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+        self.emit_memcall(func, "box_set", 2);
+    }
+
+    /// Moves each boxed parameter's incoming value into a fresh cell.
+    pub(super) fn emit_box_params(&mut self, func: &mut Function, params: &[Param]) {
+        for param in params {
+            if let Some(&idx) = self.local_map.get(&param.id) {
+                if self.is_boxed(&param.id) {
+                    func.instruction(&Instruction::LocalGet(idx));
+                    self.emit_box_call(func, "box_new");
+                    func.instruction(&Instruction::LocalSet(idx));
+                }
+            }
         }
     }
 }

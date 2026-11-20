@@ -3,7 +3,7 @@
 //! there: the module-init mint, the inline allocation's birth fill and the
 //! class-field store precheck.
 
-use super::typed_shape_bake_tests::{emit, loop_new_module};
+use super::typed_shape_bake_tests::{emit, loop_new_module, loop_new_module_unproven};
 use perry_hir::types::Type;
 use perry_hir::Expr;
 
@@ -217,7 +217,9 @@ fn check_compact_birth(ir: &str, defaults: &str) {
 }
 
 /// The compact birth of a numeric (`numeric = true`) or an any-typed field:
-/// its IR and the exact capacity-default store.
+/// its IR and the exact capacity-default store. The first argument is
+/// unproven: a proven-Number birth writes its final lanes at once and has no
+/// capacity defaults to initialize.
 fn compact_birth_case(numeric: bool) -> (String, String) {
     let undefined = crate::nanbox::TAG_UNDEFINED_I64;
     let (ty, rhs, defaults) = if numeric {
@@ -233,7 +235,10 @@ fn compact_birth_case(numeric: bool) -> (String, String) {
             format!("store <2 x i64> <i64 0, i64 {undefined}>"),
         )
     };
-    (emit(&loop_new_module("Compact", ty, rhs)), defaults)
+    (
+        emit(&loop_new_module_unproven("Compact", ty, rhs)),
+        defaults,
+    )
 }
 
 /// Negative control: the birth no longer initializes its capacity slots.

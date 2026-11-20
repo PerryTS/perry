@@ -131,6 +131,21 @@ impl<K: Clone> Shallow for Vec<(K, Box<Expr>)> {
     }
 }
 
+impl Shallow for Vec<ObjectPart> {
+    fn shallow(&self, n: &mut usize) -> Vec<ObjectPart> {
+        self.iter()
+            .map(|part| match part {
+                ObjectPart::Spread(_) => ObjectPart::Spread(hole(n)),
+                ObjectPart::Define(k, _) => ObjectPart::Define(k.clone(), hole(n)),
+                ObjectPart::Computed { .. } => ObjectPart::Computed {
+                    key: Box::new(hole(n)),
+                    value: hole(n),
+                },
+            })
+            .collect()
+    }
+}
+
 impl Shallow for Vec<CallArg> {
     fn shallow(&self, n: &mut usize) -> Vec<CallArg> {
         self.iter()
@@ -357,11 +372,13 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::IndexGet {
             object,
             index,
+            element_offset,
             byte_offset,
             byte_end,
         } => Expr::IndexGet {
             object: Shallow::shallow(object, n),
             index: Shallow::shallow(index, n),
+            element_offset: element_offset.clone(),
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
@@ -369,12 +386,14 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             object,
             index,
             value,
+            element_offset,
             byte_offset,
             byte_end,
         } => Expr::IndexSet {
             object: Shallow::shallow(object, n),
             index: Shallow::shallow(index, n),
             value: Shallow::shallow(value, n),
+            element_offset: element_offset.clone(),
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
@@ -384,6 +403,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op,
             prefix,
             strict,
+            element_offset,
             byte_offset,
             byte_end,
         } => Expr::IndexUpdate {
@@ -392,6 +412,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op: op.clone(),
             prefix: prefix.clone(),
             strict: strict.clone(),
+            element_offset: element_offset.clone(),
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
@@ -441,6 +462,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::PrivateLexicalBrand(a0) => Expr::PrivateLexicalBrand(Shallow::shallow(a0, n)),
         Expr::PrivateLexicalBrandPush(a0) => Expr::PrivateLexicalBrandPush(Shallow::shallow(a0, n)),
         Expr::PrivateLexicalBrandPop => Expr::PrivateLexicalBrandPop,
+        Expr::ThisProvenClass(class) => Expr::ThisProvenClass(class.clone()),
         Expr::PrivateBrandCheck {
             class_name,
             class_id,

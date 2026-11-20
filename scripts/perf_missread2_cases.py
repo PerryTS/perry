@@ -13,7 +13,7 @@ out = root / 'cases' / 'trials2'
 out.mkdir(parents=True, exist_ok=True)
 results = {}
 for name in ['test_gap_missread_constructor_transitions', 'test_gap_missread_native_alias_holders']:
-    case = f'test-files/{name}.ts'
+    case = f'tests/fixtures/programs/{name}.ts'
     expected = (root / 'cases/main' / f'{name}.node.out').read_bytes()
     rows = {arm: [] for arm in ['main', 'head', 'node']}
     for trial in range(5):

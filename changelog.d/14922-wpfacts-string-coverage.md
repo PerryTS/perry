@@ -1,0 +1,1 @@
+Reduce compiler string-fact coverage work by indexing exclusion parts by suffix and mask cardinality instead of comparing every pair. The retained facts, their ordering, and analysis precision remain unchanged; this removes one coverage hotspot observed while compiling OpenCode without claiming to resolve all compilation costs.

@@ -63,3 +63,59 @@ fn buffer_index_classification_does_not_allocate_while_borrowing_a_key() {
     }
     assert_eq!(crate::arena::arena_live_allocated_bytes(), before);
 }
+
+/// A `Buffer` reads the `%TypedArray%.prototype` methods it inherits through
+/// `Uint8Array.prototype` as values (node: `typeof Buffer.alloc(1).join` is
+/// `"function"`); `Array.prototype.toString` reads `join` exactly this way.
+#[test]
+fn node_buffer_reads_inherited_typed_array_methods() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    // Materialize the realm's byte-cell families: `Uint8Array.prototype` and
+    // the `Buffer` host family whose prototype chains to it.
+    object::builtin_prototype_value("Uint8Array");
+    object::js_get_global_this_builtin_value(b"Buffer".as_ptr(), 6);
+    let buf = buffer::js_buffer_alloc(2, 0);
+    assert!(buffer::is_node_buffer(buf as usize));
+    let obj = buf as *const crate::ObjectHeader;
+    for name in [
+        "join",
+        "map",
+        "forEach",
+        "reduce",
+        "sort",
+        "findLast",
+        "with",
+        "toReversed",
+    ] {
+        let v = object::js_object_get_field_by_name(obj, key(name));
+        assert!(
+            object::value_is_callable(f64::from_bits(v.bits())),
+            "Buffer.{name} must be a function"
+        );
+    }
+    // A name neither prototype carries stays undefined.
+    assert!(object::js_object_get_field_by_name(obj, key("noSuchMember")).is_undefined());
+    // The dynamic by-name read (`Array.prototype.toString` reads `join` this
+    // way) reaches the same answer.
+    let join = unsafe {
+        value::js_get_property(
+            value::js_nanbox_pointer(buf as i64),
+            b"join".as_ptr() as i64,
+            4,
+        )
+    };
+    assert!(
+        object::value_is_callable(join),
+        "dynamic Buffer.join must be a function"
+    );
+    // node: `Object.setPrototypeOf(buf, null)` leaves `buf.join` undefined.
+    let bare = buffer::js_buffer_alloc(2, 0);
+    let bare_value = value::js_nanbox_pointer(bare as i64);
+    object::js_object_set_prototype_of(bare_value, f64::from_bits(crate::value::TAG_NULL));
+    assert_eq!(
+        object::js_object_get_prototype_of(bare_value).to_bits(),
+        crate::value::TAG_NULL
+    );
+    let bare = bare as *const crate::ObjectHeader;
+    assert!(object::js_object_get_field_by_name(bare, key("join")).is_undefined());
+}

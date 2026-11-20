@@ -19,7 +19,7 @@ fn expire(record: f64) {
 // Drop native scratch normally before propagating a managed allocation error.
 fn encoded_type(ty: &Value) -> f64 {
     let bytes = serde_json::to_vec(ty).expect("WIT result type");
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
             bytes.as_ptr(),
             bytes.len() as u32,
@@ -131,7 +131,7 @@ pub(super) fn drain(operation: f64, component: f64) {
         let mut encoded = Vec::new();
         let mut output = Vec::new();
         let mut ty = Value::Null;
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             let id = string(field(record.get_nanbox_f64(), b"request"))
                 .parse::<u64>()
                 .unwrap_or_else(|_| fail("Invalid async component request identity"));
@@ -182,7 +182,7 @@ pub(super) fn drain(operation: f64, component: f64) {
         );
         drop((encoded, output, ty));
         if let Err(error) = result {
-            remember(operation.get_nanbox_f64(), error);
+            remember(operation.get_nanbox_f64(), error.value());
         }
     }
 }

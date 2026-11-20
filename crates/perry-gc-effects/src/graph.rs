@@ -16,6 +16,9 @@ pub struct Node {
     pub indirect_calls: usize,
     pub indirect_jmps: usize,
     pub calls: BTreeSet<String>,
+    /// Symbols an instruction that is no call or jump names (an address
+    /// taken in code); emptied once `Graph::taken` is computed.
+    pub refs: BTreeSet<String>,
     pub externs: BTreeSet<String>,
     pub idioms: BTreeSet<String>,
     pub sites: Vec<String>,
@@ -38,6 +41,7 @@ impl Node {
             indirect_calls: 0,
             indirect_jmps: 0,
             calls: BTreeSet::new(),
+            refs: BTreeSet::new(),
             externs: BTreeSet::new(),
             idioms: BTreeSet::new(),
             sites: Vec::new(),
@@ -49,7 +53,7 @@ pub(crate) fn temp_label(name: &str) -> bool {
     crate::instructions::starts(
         name,
         &["ltmp", "Ltmp", ".L", "L_", "l_", "lCPI", "LCPI", "$"],
-    ) || rx!(r"^\.[A-Za-z_]+(\$[A-Za-z0-9_.]*)?$").is_match(name)
+    ) || rx!(r"^\.[A-Za-z_]+(\$[A-Za-z0-9_.]*)?(#\d+)?$").is_match(name)
 }
 pub(crate) fn crate_of(obj: &str) -> Option<&str> {
     let member = obj.rsplit(['/', '\\']).next()?;
@@ -59,6 +63,20 @@ pub(crate) fn crate_of(obj: &str) -> Option<&str> {
     let parts: Vec<_> = member.split('.').collect();
     if parts.len() < 3 {
         return None;
+    }
+    // Newer rustc versions put the crate name and disambiguator before the
+    // first dot (`perry_runtime-<hash>.<codegen-unit>.<hash>.rcgu.o`). Older
+    // archives use `<prefix>.<crate-name>.<hash>.rcgu.o`. Check both layouts;
+    // otherwise codegen-unit IDs are mistaken for crate names and runtime
+    // exports disappear from the GC effects table.
+    if let Some((crate_name, hash)) = parts[0].rsplit_once('-') {
+        if hash.len() == 16
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Some(crate_name);
+        }
     }
     Some(if let Some((head, hash)) = parts[1].rsplit_once('-') {
         if hash.len() == 16
@@ -81,6 +99,31 @@ pub struct Graph {
     pub by_global: HashMap<String, Vec<usize>>,
     pub dem: HashMap<String, String>,
     pub edge_count: usize,
+    /// Per node: some function's code takes its address without calling it
+    /// (a callback handed on, a task scheduled, a slot filled). An address
+    /// that only data holds is `in_data`.
+    pub taken: Vec<bool>,
+    /// Per node: a data section holds its address (a vtable, a static
+    /// table, a function-info record, an initializer array).
+    pub in_data: Vec<bool>,
+    /// Per node: the functions whose code takes its address, directly or
+    /// by naming data that holds it at any depth (a vtable, a table of
+    /// thunks, a function-info record). Whoever runs it got it from one of
+    /// them.
+    pub taken_by: Vec<Vec<usize>>,
+    /// Per node: its address sits in data no code of the archives names
+    /// (compiled code or the linker reads that data).
+    pub loose: Vec<bool>,
+    /// Per global data symbol: the functions its own section names.
+    pub held_by_symbol: HashMap<String, Vec<usize>>,
+}
+
+/// A data section that holds addresses: the names it is reached under (its
+/// own and its symbols') and what its relocations name.
+pub struct DataSection {
+    pub obj: std::sync::Arc<str>,
+    pub names: Vec<String>,
+    pub targets: Vec<String>,
 }
 fn plain_llvm(s: &str) -> &str {
     rx!(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")
@@ -92,6 +135,7 @@ impl Graph {
     pub(crate) fn new(
         mut nodes: Vec<Node>,
         globals: HashSet<(std::sync::Arc<str>, String)>,
+        held: Vec<DataSection>,
     ) -> Result<Self> {
         let mut local: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
         let mut sections: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -137,10 +181,117 @@ impl Graph {
             targets.remove(&i);
             succ[i] = targets.into_iter().collect();
         }
+        // Data sections by the names code and other data reach them under.
+        let mut data_local: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+        let mut data_global: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (d, sec) in held.iter().enumerate() {
+            for name in &sec.names {
+                data_local
+                    .entry((sec.obj.as_ref(), name.as_str()))
+                    .or_default()
+                    .push(d);
+                if globals.contains(&(sec.obj.clone(), name.clone())) {
+                    data_global.entry(name.as_str()).or_default().push(d);
+                }
+            }
+        }
+        type ByObj<'a> = HashMap<(&'a str, &'a str), Vec<usize>>;
+        fn function_of(
+            local: &ByObj<'_>,
+            by_global: &HashMap<String, Vec<usize>>,
+            sections: &ByObj<'_>,
+            obj: &str,
+            t: &str,
+        ) -> Option<Vec<usize>> {
+            let macho_sec = format!("__TEXT,{t}");
+            local
+                .get(&(obj, t))
+                .or_else(|| by_global.get(t))
+                .or_else(|| sections.get(&(obj, t)))
+                .or_else(|| sections.get(&(obj, macho_sec.as_str())))
+                .cloned()
+        }
+        fn data_of<'m, 'k>(
+            local: &'m ByObj<'k>,
+            global: &'m HashMap<&'k str, Vec<usize>>,
+            obj: &'k str,
+            t: &'k str,
+        ) -> Option<&'m Vec<usize>> {
+            local.get(&(obj, t)).or_else(|| global.get(t))
+        }
+        // Per data section: the functions and the data sections it names.
+        let mut data_fns: Vec<Vec<usize>> = vec![Vec::new(); held.len()];
+        let mut data_sub: Vec<Vec<usize>> = vec![Vec::new(); held.len()];
+        let mut in_data = vec![false; nodes.len()];
+        for (d, sec) in held.iter().enumerate() {
+            for t in &sec.targets {
+                if let Some(ts) = function_of(&local, &by_global, &sections, &sec.obj, t) {
+                    data_fns[d].extend(ts.iter().copied());
+                    for t in ts {
+                        in_data[t] = true;
+                    }
+                } else if let Some(ds) = data_of(&data_local, &data_global, &sec.obj, t) {
+                    data_sub[d].extend(ds.iter().copied().filter(|&s| s != d));
+                }
+            }
+        }
+        let mut taken = vec![false; nodes.len()];
+        let mut taken_by: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+        let mut data_seen = vec![false; held.len()];
+        for (i, n) in nodes.iter().enumerate() {
+            let mut mine: BTreeSet<usize> = BTreeSet::new();
+            let mut visited: HashSet<usize> = HashSet::new();
+            let mut stack: Vec<usize> = Vec::new();
+            for t in &n.refs {
+                if let Some(ts) = function_of(&local, &by_global, &sections, &n.obj, t) {
+                    for t in ts {
+                        taken[t] = true;
+                        mine.insert(t);
+                    }
+                } else if let Some(ds) = data_of(&data_local, &data_global, &n.obj, t) {
+                    stack.extend(ds.iter().copied());
+                }
+            }
+            // An address the data this code names holds, at any depth.
+            while let Some(d) = stack.pop() {
+                if !visited.insert(d) {
+                    continue;
+                }
+                data_seen[d] = true;
+                mine.extend(data_fns[d].iter().copied());
+                stack.extend(data_sub[d].iter().copied());
+            }
+            mine.remove(&i);
+            for t in mine {
+                taken_by[t].push(i);
+            }
+        }
+        // A function whose address sits in data no code in the archives
+        // names: whoever reads that data is not in the graph.
+        let mut loose = vec![false; nodes.len()];
+        for d in (0..held.len()).filter(|&d| !data_seen[d]) {
+            for &t in &data_fns[d] {
+                loose[t] = true;
+            }
+        }
+        // What a global data symbol holds directly (a function-info record
+        // names its body).
+        let held_by_symbol: HashMap<String, Vec<usize>> = data_global
+            .iter()
+            .filter_map(|(name, ds)| {
+                let fns: Vec<usize> = ds
+                    .iter()
+                    .flat_map(|&d| data_fns[d].iter().copied())
+                    .collect();
+                (!fns.is_empty()).then(|| ((*name).to_owned(), fns))
+            })
+            .collect();
+        drop((data_local, data_global));
         drop(local);
         drop(sections);
         for (n, ex) in nodes.iter_mut().zip(externs) {
             n.externs = ex;
+            n.refs = BTreeSet::new();
         }
         let mut pred = vec![Vec::new(); nodes.len()];
         for (i, ts) in succ.iter().enumerate() {
@@ -166,6 +317,11 @@ impl Graph {
             by_global,
             dem,
             edge_count,
+            taken,
+            in_data,
+            taken_by,
+            loose,
+            held_by_symbol,
         })
     }
     pub fn label(&self, i: usize) -> String {
@@ -247,6 +403,13 @@ pub struct Classification {
     pub stats: Stats,
     reason: Vec<Vec<Option<String>>>,
     witness: Vec<Vec<Option<usize>>>,
+    /// Reach of JS entries and of the write barrier, for effect declarations.
+    pub effect_reach: crate::effects::EffectReach,
+    pub throw_reach: crate::throw_class::ThrowReach,
+    /// The delegated indirect edges of the rules, callee to callers (a hook
+    /// wrapper and the operations its slot can hold): `Graph::pred` has only
+    /// the direct calls.
+    pub indirect_pred: Vec<Vec<usize>>,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
@@ -333,6 +496,23 @@ fn matching_nodes(g: &Graph, spell: &[Vec<&str>], rule: &Rule) -> Vec<usize> {
         .collect()
 }
 pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classification> {
+    classify_inner(g, rules, root, false)
+}
+/// Census upper bound only: omit unresolved indirect seeds without inventing
+/// target delegations. This result must never be used to write a sidecar.
+pub fn without_indirect_seeds(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+) -> Result<Classification> {
+    classify_inner(g, rules, root, true)
+}
+fn classify_inner(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+    omit_indirect: bool,
+) -> Result<Classification> {
     let nn = g.nodes.len();
     let spell = parallel_map(nn, |i| g.spellings(i));
     let kinds = |kind: &str| rules.iter().filter(|r| r.kind == kind).collect::<Vec<_>>();
@@ -618,6 +798,30 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     } else {
         HashSet::new()
     };
+    // Effect-declaration reach (crate::effects): not part of the classes.
+    let barrier_rules = kinds("barrier");
+    let barrier_seed = parallel_map(nn, |i| match_any(&barrier_rules, &spell[i]).map(|r| r.line));
+    let dead_barrier_rules = barrier_rules
+        .iter()
+        .filter(|r| !barrier_seed.contains(&Some(r.line)))
+        .map(|r| r.description())
+        .collect();
+    let named_kind =
+        |i: usize, kinds: &[&str]| named[i].is_some_and(|r| kinds.contains(&r.kind.as_str()));
+    let effect_reach = crate::effects::EffectReach::solve(
+        g,
+        &extra_pred,
+        |i| {
+            named_kind(i, &["js"])
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| !s.starts_with("unwind:"))
+        },
+        |i| barrier_seed[i].is_some(),
+        |i| named_kind(i, &["panic", "teardown"]),
+        |i| named_kind(i, &["panic", "teardown", "collector", "poll"]),
+        dead_barrier_rules,
+    );
     let mut node_of = BTreeMap::new();
     let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
@@ -633,7 +837,73 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
             }
         }
     }
-    let entry_of = |i: usize| {
+    // Coverage starts at exactly the definitions that produce sidecar rows.
+    let mut entry_roots = vec![false; nn];
+    for &i in defs.values().flatten() {
+        entry_roots[i] = true;
+    }
+    let program_rules = kinds("program");
+    let program = parallel_map(nn, |i| match_any(&program_rules, &spell[i]).map(|r| r.line));
+    for line in program.iter().flatten() {
+        *hits.entry(*line).or_default() += 1;
+    }
+    // JS seeds describe program-call edges, not whole runtime functions:
+    // native validation callees remain part of the native-origin bound.
+    let throw_cut: Vec<_> = (0..nn)
+        .map(|i| {
+            program[i].is_some()
+                || named_kind(i, &["panic", "teardown", "collector", "poll", "nothrow"])
+        })
+        .collect();
+    let throw_open: Vec<_> = (0..nn)
+        .map(|i| {
+            if throw_cut[i]
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("indirect"))
+                    && (omit_indirect || named_kind(i, &["js"]))
+            {
+                None
+            } else {
+                structural[i].clone()
+            }
+        })
+        .collect();
+    let declarations = if let Some(root) = root {
+        crate::throw_class::declarations(root)?
+    } else {
+        Vec::new()
+    };
+    let mut throw_reach = crate::throw_class::solve_owned(
+        g,
+        &extra_pred,
+        &throw_cut,
+        &throw_open,
+        &declarations,
+        &g.nodes
+            .iter()
+            .map(|n| crate::table::perry_object(&n.obj, &stems))
+            .collect::<Vec<_>>(),
+        &entry_roots,
+    )?;
+    // Count dynamic program execution separately: the solver must account for
+    // values it can construct, even though these are not native-origin throws.
+    let mut work = VecDeque::new();
+    for i in 0..nn {
+        if program[i].is_some() {
+            throw_reach.interpreted_reach[i] = true;
+            work.push_back(i);
+        }
+    }
+    while let Some(t) = work.pop_front() {
+        for &c in g.pred[t].iter().chain(&extra_pred[t]) {
+            if !throw_reach.interpreted_reach[c] {
+                throw_reach.interpreted_reach[c] = true;
+                work.push_back(c);
+            }
+        }
+    }
+    let entry_of = |name: &str, i: usize| {
         let class = if reason[0][i].is_none() {
             Class::Leaf
         } else if reason[1][i].is_none() {
@@ -643,9 +913,23 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         } else {
             Class::Reenters
         };
+        let mut passes = throw_reach.passes[i].clone();
+        let owns = declarations
+            .iter()
+            .any(|d| d.symbol == name && d.operands.iter().any(|p| p.source.is_none()));
+        let alias_unmapped = passes.iter().any(|p| p.source.is_none()) && !owns;
+        if alias_unmapped {
+            passes.retain(|p| p.source.is_some());
+        }
         Entry {
             class,
             throws: reason[3][i].is_some(),
+            throw_class: if alias_unmapped {
+                crate::table::ThrowClass::Open
+            } else {
+                throw_reach.class[i]
+            },
+            passes,
         }
     };
     // The join of the definitions: the weaker class and the OR of throws, so
@@ -653,11 +937,13 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     let table = defs
         .iter()
         .map(|(name, nodes)| {
-            let mut row = entry_of(nodes[0]);
+            let mut row = entry_of(name, nodes[0]);
             for &i in &nodes[1..] {
-                let e = entry_of(i);
+                let e = entry_of(name, i);
                 row.class = row.class.max(e.class);
                 row.throws |= e.throws;
+                row.throw_class = row.throw_class.max(e.throw_class);
+                row.passes.extend(e.passes);
             }
             (name.clone(), row)
         })
@@ -665,6 +951,10 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     let mut named_seed_nodes = BTreeMap::new();
     for r in named.iter().flatten() {
         *named_seed_nodes.entry(r.kind.clone()).or_default() += 1;
+    }
+    let program_count = program.iter().flatten().count();
+    if program_count != 0 {
+        named_seed_nodes.insert("program".into(), program_count);
     }
     let stats = Stats {
         nodes: nn,
@@ -683,14 +973,17 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
             .collect(),
         dead_rules: rules
             .iter()
-            .filter(|r| named_kinds.contains(&r.kind.as_str()) && !hits.contains_key(&r.line))
+            .filter(|r| {
+                (named_kinds.contains(&r.kind.as_str()) || r.kind == "program")
+                    && !hits.contains_key(&r.line)
+            })
             .map(Rule::description)
             .collect(),
         forbidden_calls: forbidden,
         unused_exemptions: rules
             .iter()
             .filter(|r| {
-                ["indirect", "extern", "unwind"].contains(&r.kind.as_str())
+                ["indirect", "indirect-all", "extern", "unwind"].contains(&r.kind.as_str())
                     && !hits.contains_key(&r.line)
             })
             .map(Rule::description)
@@ -704,11 +997,36 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         stats,
         reason,
         witness,
+        effect_reach,
+        throw_reach,
+        indirect_pred: extra_pred,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crate_of_supports_current_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of(
+                "perry_runtime-1e10f4d1c1694ef8.atmkte0qb3a7ttnlq3kuhpw14.1he7acv.rcgu.o"
+            ),
+            Some("perry_runtime")
+        );
+        assert_eq!(
+            super::crate_of("foreign_crate-abcdef0123456789.cgu.0.rcgu.o"),
+            Some("foreign_crate")
+        );
+    }
+
+    #[test]
+    fn crate_of_keeps_support_for_legacy_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of("runtime.perry_runtime.hash.rcgu.o"),
+            Some("perry_runtime")
+        );
+    }
+
     #[test]
     fn unicode_symbol_names_survive_llvm_suffix_normalization() {
         let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";
@@ -729,12 +1047,19 @@ mod tests {
         let rules: Vec<_> = rules.iter().collect();
         let mut node = Node::new("fixture.o".into(), ".text".into(), 0, Format::Elf);
         node.names = vec!["audited_initializer".into()];
-        let mut graph = Graph::new(vec![node], HashSet::new()).unwrap();
+        let mut graph = Graph::new(vec![node], HashSet::new(), Vec::new()).unwrap();
         let admitted = |g: &Graph| match_indirect(&rules, g, 0, &g.spellings(0)).is_some();
         assert!(admitted(&graph));
         graph.nodes[0].names.push("unrelated_initializer".into());
         assert!(!admitted(&graph));
-        for sec in [".text$unlikely", ".text", ".rdata$zzz", ".xdata$x"] {
+        for sec in [
+            ".text$unlikely",
+            ".text",
+            ".rdata$zzz",
+            ".xdata$x",
+            ".rdata#12",
+            ".text$mn#7",
+        ] {
             graph.nodes[0].names = vec!["audited_initializer".into(), sec.into()];
             assert!(admitted(&graph));
             assert!(temp_label(sec));
@@ -765,3 +1090,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "throw_class_tests.rs"]
+mod throw_class_tests;

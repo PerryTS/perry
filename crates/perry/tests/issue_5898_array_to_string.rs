@@ -10,7 +10,7 @@ fn perry_bin() -> PathBuf {
 }
 
 #[test]
-fn array_to_string_uses_the_live_prototype_method_and_generic_receiver() {
+fn array_to_string_replacement_is_a_type_error_subclass_and_generic_receiver_dispatch() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
@@ -51,12 +51,9 @@ fn array_to_string_uses_the_live_prototype_method_and_generic_receiver() {
         String::from_utf8_lossy(&run.stdout),
         concat!(
             "true\n",
-            "[object Array]\n",
-            "[object Array]\n",
-            "[object Array]\n",
-            "[object Array]\n",
-            "[object Array]\n",
-            "custom toString\n",
+            "0,1,2\n",
+            "\n",
+            "sub toString\n",
             "[object Boolean]\n",
             "[object Boolean]\n",
             "custom join\n",

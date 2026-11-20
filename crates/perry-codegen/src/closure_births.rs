@@ -46,7 +46,6 @@ pub(crate) const MIN_RUN: usize = 8;
 pub(crate) struct PlainBirth {
     func_id: u32,
     captures: Vec<u32>,
-    is_async: bool,
 }
 
 pub(crate) fn plain_birth(ctx: &FnCtx<'_>, expr: &Expr) -> Option<PlainBirth> {
@@ -57,7 +56,6 @@ pub(crate) fn plain_birth(ctx: &FnCtx<'_>, expr: &Expr) -> Option<PlainBirth> {
         captures,
         captures_this,
         captures_new_target,
-        is_async,
         ..
     } = expr
     else {
@@ -88,7 +86,6 @@ pub(crate) fn plain_birth(ctx: &FnCtx<'_>, expr: &Expr) -> Option<PlainBirth> {
     Some(PlainBirth {
         func_id: *func_id,
         captures,
-        is_async: *is_async,
     })
 }
 
@@ -124,7 +121,6 @@ pub(crate) struct Births {
     source_index: HashMap<SourceKey, u32>,
     /// Every capture of every birth, for the facts a birth records.
     captured: Vec<u32>,
-    async_bodies: Vec<String>,
 }
 
 impl Births {
@@ -151,9 +147,6 @@ impl Births {
         let func_name =
             crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), birth.func_id);
         let info = ctx.block().fn_info_ref(&func_name);
-        if birth.is_async {
-            self.async_bodies.push(func_name);
-        }
         let count = perry_abi::checked_closure_capture_count(birth.captures.len());
         let first = self.capture_indices.len() as u32;
         for &id in &birth.captures {
@@ -182,10 +175,6 @@ impl Births {
         Vec<(crate::types::LlvmType, String)>,
         crate::stmt::binding_cell::BirthWords,
     )> {
-        // The facts each inline birth records (`expr::closure::lower`).
-        for body in &self.async_bodies {
-            ctx.block().note_fn_info(body, |facts| facts.set_async());
-        }
         for &id in &self.captured {
             crate::expr::downgrade_buffer_alias(
                 ctx,

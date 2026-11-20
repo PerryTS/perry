@@ -1,0 +1,5 @@
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+before function function
+after function () { [native code] } function () { [native code] } function () { [native code] }
+restored function function

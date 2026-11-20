@@ -209,6 +209,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
                 body: original,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
+                forof_completion: None,
             },
         ];
         captures.push(brand_id);
@@ -242,6 +243,7 @@ pub(super) fn restore_in_continuations(
                         body: resume,
                         catch: None,
                         finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
+                        forof_completion: None,
                     },
                 ];
             }
@@ -263,6 +265,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow,
             is_async: false,
@@ -448,6 +451,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             };
             let mut local = 10;
             let mut func_id = 10;

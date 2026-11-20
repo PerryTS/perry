@@ -526,10 +526,14 @@ unsafe fn fetch_error_bits<S: AsRef<str>>(msg: S) -> u64 {
 const BODY_ALREADY_USED_MESSAGE: &str = "Body is unusable: Body has already been read";
 
 unsafe fn fetch_type_error_bits<S: AsRef<str>>(msg: S) -> u64 {
+    fetch_type_error(msg).value().to_bits()
+}
+
+unsafe fn fetch_type_error<S: AsRef<str>>(msg: S) -> perry_runtime::error::CoreError {
     let s = msg.as_ref();
     let msg_str = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg_str);
-    JSValue::pointer(err as *const u8).bits()
+    let err = perry_runtime::error::CoreError::type_error(msg_str);
+    err
 }
 
 unsafe fn reject_fetch_type_error(promise: *mut perry_runtime::Promise, msg: &str) {
@@ -537,13 +541,13 @@ unsafe fn reject_fetch_type_error(promise: *mut perry_runtime::Promise, msg: &st
 }
 
 unsafe fn throw_fetch_type_error(msg: &str) -> ! {
-    perry_runtime::exception::js_throw(f64::from_bits(fetch_type_error_bits(msg)))
+    perry_runtime::exception::throw_core(fetch_type_error(msg))
 }
 
 unsafe fn throw_fetch_range_error(msg: &str) -> ! {
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = perry_runtime::error::js_rangeerror_new(msg_str);
-    perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    let err = perry_runtime::error::CoreError::range_error(msg_str);
+    perry_runtime::exception::throw_core(err)
 }
 
 fn tagged_bool(value: bool) -> f64 {

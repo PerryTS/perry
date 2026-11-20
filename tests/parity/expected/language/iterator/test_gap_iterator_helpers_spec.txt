@@ -1,0 +1,77 @@
+meta map function map 1 true false true
+meta filter function filter 1 true false true
+meta take function take 1 true false true
+meta drop function drop 1 true false true
+meta flatMap function flatMap 1 true false true
+meta reduce function reduce 1 true false true
+meta toArray function toArray 0 true false true
+meta forEach function forEach 1 true false true
+meta some function some 1 true false true
+meta every function every 1 true false true
+meta find function find 1 true false true
+map.call ["0@0","1@1","2@2"] next,next,next,next
+helper proto true
+toArray.call [0,1]
+reduce.call 6
+counter f1:0 f2:1 f3:2 e1:0 e2:1 e3:2 s1:0 s2:1 s3:2 v1:0 v2:1 v3:2 d1:0 d2:1 d3:2 m1:0 m2:1 m3:2 r2:1 r3:2 R1:0 R2:1 R3:2
+this map TypeError TypeError
+this filter TypeError TypeError
+this take TypeError TypeError
+this drop TypeError TypeError
+this flatMap TypeError TypeError
+this reduce TypeError TypeError
+this toArray TypeError TypeError
+this forEach TypeError TypeError
+this some TypeError TypeError
+this every TypeError TypeError
+this find TypeError TypeError
+callable map TypeError return
+callable filter TypeError return
+callable flatMap TypeError return
+callable forEach TypeError return
+callable some TypeError return
+callable every TypeError return
+callable find TypeError return
+callable reduce TypeError return
+limit take NaN RangeError return
+limit take -1 RangeError return
+limit take x RangeError return
+limit take undefined RangeError return
+limit take Infinity [0,1]
+limit take valueOf [0] 1
+limit drop NaN RangeError return
+limit drop -1 RangeError return
+limit drop x RangeError return
+limit drop undefined RangeError return
+limit drop Infinity []
+limit drop valueOf [1,2] 1
+take [0,1] next,next,return
+reduce empty TypeError
+reduce empty init 7
+flatMap string TypeError
+flatMap number TypeError
+flatMap ok [1,2,-2,3]
+return start {"done":true} return
+after return {"done":true} return
+return yield {"done":true} next,return
+return twice {"done":true} next,return
+for-of take next,v0,return
+cb throws RangeError next,return
+cb throws done {"done":true}
+some closes true next,next,return
+find closes 2 next,next,next,return
+running TypeError
+next once [0,1,2] 1
+sub override sub-map
+sub inherited [0,1]
+own override own-map
+DEC 250: Cannot replace built-in member Iterator.prototype.map: built-in objects are read-only in a compiled program
+proto override gen {}
+proto override array iter {}
+proto override helper {}
+DEC 250: Cannot replace built-in member Iterator.prototype.map: built-in objects are read-only in a compiled program
+restored [10,20,30]
+chain [4,6]
+map iter ["aa","bb"]
+set iter true
+string iter ["e","y"]

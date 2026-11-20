@@ -1317,15 +1317,17 @@ and P3 remain open.
 
 ## Continuous execution checks
 
-`scripts/component_check.sh` builds matching native tools, ordinary and
+`scripts/component_check.sh` runs the component-model unit tests
+(`scripts/component_unit_tests.sh`), builds matching native tools, ordinary and
 instrumented runtime archives, and the WASI runtime, then runs native, command,
 guest and persistent future/stream acceptance. Configure wasi-sdk first, as for
 the standalone WASI checks. Fixture
 Cargo builds run from the checkout so they use its pinned Rust toolchain and
 unwind configuration; `CARGO_BUILD_JOBS` is respected.
 
-The Linux `wasi-execution` job invokes this script after the standalone suites
-in the core PR, sweep and full tiers. Its result feeds the required `pr-gate`;
+In the core PR, sweep and full tiers the Linux `wasi-components` job invokes
+this script with `COMPONENT_CHECK_UNIT_TESTS=0`, while the parallel
+`wasi-component-units` job runs the unit tests. Its result feeds the required `pr-gate`;
 a failed or skipped planned execution blocks the gate. Phase logs, JSON
 verdicts, component artifacts and the source revision are retained even on
 failure. Docs-only PRs skip this build. The extended `wasi-check / wasi-codegen`

@@ -44,6 +44,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,
@@ -402,6 +403,7 @@ fn process_env_computed_key_strips_below_the_value() {
             value: Box::new(allocating("v")),
             receiver: Box::new(Expr::ProcessEnv),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -428,6 +430,7 @@ fn process_env_literal_key_loads_below_the_value() {
             value: Box::new(allocating("v")),
             receiver: Box::new(Expr::ProcessEnv),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],

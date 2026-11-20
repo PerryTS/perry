@@ -121,11 +121,9 @@ fn set_super_property(ctor: f64, super_ctor: f64) {
     // or ObjectHeader pointers. Store super_ in the constructor-side static
     // property table, matching Object.defineProperty(C, "super_", ...).
     if let Some(class_id) = crate::object::class_ref_id(ctor) {
-        if crate::object::class_prototype_ref_id(ctor).is_none() {
-            crate::object::class_dynamic_prop_root_store(class_id, "super_", super_ctor);
-            crate::object::class_static_set_defined_attrs(class_id, "super_", true, false, true);
-            return;
-        }
+        crate::object::class_dynamic_prop_root_store(class_id, "super_", super_ctor);
+        crate::object::class_static_set_defined_attrs(class_id, "super_", true, false, true);
+        return;
     }
     let key = named_key(b"super_");
     let attrs = PropertyAttrs::new(true, false, true);

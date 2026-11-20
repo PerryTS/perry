@@ -39,7 +39,16 @@ pub fn closure_is_key_deleted(ptr: usize, key: &str) -> bool {
 /// walk the static-prototype chain, unlike `closure_get_dynamic_prop`). Used
 /// by `hasOwnProperty`/`getOwnPropertyNames` to report own user props and the
 /// constructor `prototype` slot without inheriting from a set prototype.
+#[inline(never)]
 pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
+    // Presence is not a read: an unborn lazy constructor (no bag yet) owns its
+    // declared statics without a birth (`props::is_declared_static`). Every
+    // other closure answers through the one out-of-line own-value read.
+    // One call per caller, as before the declared statics (it called the
+    // out-of-line read): no inlined copy of the closure test per call site.
+    if ptr != 0 && is_closure_ptr(ptr) && unsafe { !super::props::has_store(ptr) } {
+        return unsafe { super::props::is_declared_static(ptr, prop.as_bytes()) };
+    }
     closure_get_own_dynamic_prop(ptr, prop).is_some()
 }
 
@@ -204,6 +213,12 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
 ) -> f64 {
     if !is_closure_ptr(ptr) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    // An unborn lazy builtin family answers `prototype` by being born (F2).
+    if prop == "prototype" {
+        // SAFETY: `ptr` is a proven, live closure cell.
+        unsafe { crate::object::birth_unborn_family_of(ptr) };
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a built-in static accessor:
@@ -1019,5 +1034,45 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         rebuild_closure_layout_and_barriers(new_closure, count);
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
+    }
+}
+
+#[cfg(test)]
+mod differs_word_tests {
+    use super::*;
+
+    extern "C" fn empty_body(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+
+    /// DESIGN_FR U3 option B: a closure carrying the "may differ" word is
+    /// still a closure to every word pre-check, and no layout id names it.
+    #[test]
+    fn a_differs_word_keeps_the_closure_a_closure() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let c =
+            crate::closure::js_closure_alloc(crate::fn_info!(empty_body, 0; with_declared(0)), 0);
+        let word = unsafe { (c as *mut u8).add(super::super::CLOSURE_SHAPE_OFFSET) as *mut u32 };
+        let family = unsafe { *word };
+        assert!(
+            perry_abi::is_function_family_word(family),
+            "premise: {family:#x}"
+        );
+        let differs = perry_abi::function_differs_word(family);
+        assert!(perry_abi::is_function_differs_word(differs));
+        unsafe { *word = differs };
+        assert!(
+            is_closure_ptr(c as usize),
+            "{differs:#x} must stay a closure word"
+        );
+        assert_eq!(
+            crate::object::layout_desc::layout_id_of_word(differs),
+            differs
+        );
+        assert!(!crate::object::shapes::is_site_matchable_layout_word(
+            differs
+        ));
+        unsafe { *word = family };
     }
 }

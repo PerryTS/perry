@@ -403,7 +403,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- process.pid / process.ppid — raw f64 number --------
         Expr::ProcessPid => Ok(ctx.block().call(DOUBLE, "js_process_pid", &[])),
         Expr::ProcessPpid => Ok(ctx.block().call(DOUBLE, "js_process_ppid", &[])),
-        Expr::ProcessArgv => Ok(ctx.block().call(DOUBLE, "js_process_argv_value", &[])),
+        Expr::ProcessArgv => {
+            super::snap_argv_site::emit(ctx, expr);
+            Ok(ctx.block().call(DOUBLE, "js_process_argv_value", &[]))
+        }
 
         // -------- structuredClone(v[, options]) — real deep copy --------
         Expr::StructuredClone { value, options } => {

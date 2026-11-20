@@ -52,7 +52,7 @@ impl ReportStage {
 }
 
 /// Maps to the `category` field of a parity snapshot entry
-/// (`test-parity/README.md`, "Category definitions") so
+/// (`tests/parity/README.md`, "Category definitions") so
 /// user-reported gaps and maintainer-curated gaps are comparable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

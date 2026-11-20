@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn node_api_metadata_moves_with_its_owner() {
-    check_metadata(false);
+    check_metadata();
 }
-#[test]
-#[ignore = "negative control: erase the moved object's metadata payload edge"]
-fn negative_control_objtables_node_api_metadata() {
-    check_metadata(true);
-}
-fn check_metadata(erase: bool) {
+fn check_metadata() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::object::js_object_alloc(0, 0);
@@ -19,9 +14,6 @@ fn check_metadata(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        crate::node_api_host::test_erase_owned_metadata(moved);
-    }
     assert_eq!(
         crate::node_api_host::test_owned_metadata(moved),
         Some((37, 11, 13))

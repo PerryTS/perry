@@ -200,13 +200,7 @@ pub(crate) fn date_to_json_value(this: f64) -> f64 {
     };
     // Step 3: if the primitive is a Number and is not finite, return null.
     let tv_jsv = crate::value::JSValue::from_bits(tv.to_bits());
-    let as_num = if tv_jsv.is_int32() {
-        Some(((tv.to_bits() & 0xFFFF_FFFF) as u32 as i32) as f64)
-    } else if tv_jsv.is_number() {
-        Some(tv)
-    } else {
-        None
-    };
+    let as_num = if tv_jsv.is_number() { Some(tv) } else { None };
     if let Some(n) = as_num {
         if !n.is_finite() {
             return f64::from_bits(crate::value::TAG_NULL);

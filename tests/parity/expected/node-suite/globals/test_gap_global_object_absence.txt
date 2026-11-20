@@ -1,0 +1,25 @@
+DEC 250: Cannot add member Object.prototype.nxpaInherited: built-in objects are read-only in a compiled program
+undefined
+undefined
+undefined,false,false
+undefined,false,false
+undefined,false,false
+undefined,false
+undefined
+41,number,true,true
+42
+true,undefined,false,false,undefined
+back
+undefined
+TypeError,1
+true,true
+true,function
+undefined,false
+true,true
+Array:function,true,true,true
+Math:object,true,false,true
+parseInt:function,true,false,true
+undefined:undefined,false,false,false
+NaN:number,false,false,false
+globalThis:object,true,false,true
+Symbol:function,true,false,true

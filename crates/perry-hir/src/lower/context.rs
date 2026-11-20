@@ -141,6 +141,7 @@ impl LoweringContext {
                     mutable_captures: vec![],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: false,
                     is_async: false,
@@ -219,7 +220,13 @@ impl LoweringContext {
         name: &str,
         scope_key: u32,
     ) -> Option<Option<(String, u32)>> {
-        if self.lookup_class(name).is_none() {
+        // A class that shadows a global built-in constructor (`function f() {
+        // class MessageChannel {} }`) is scope-local too: registered under its
+        // plain name, it captured every `new MessageChannel()` of the module,
+        // the global ones outside its scope included.
+        if self.lookup_class(name).is_none()
+            && !super::expr_new_builtins::is_reified_global_builtin_constructor(name)
+        {
             return None;
         }
         if self
@@ -1022,6 +1029,7 @@ impl LoweringContext {
             is_strict: true,
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),
@@ -1057,6 +1065,7 @@ impl LoweringContext {
             // Synthetic anon-shape class; no static fields, so static-init
             // timing is irrelevant.
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint,
             specialized_from: None,
         });
@@ -1132,6 +1141,7 @@ impl LoweringContext {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         });

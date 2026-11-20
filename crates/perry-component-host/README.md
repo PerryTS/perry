@@ -66,7 +66,7 @@ The host unit tests cover capability isolation, all stable provider groups,
 file confinement and mutation, stream ownership, TCP/UDP traffic and polling,
 DNS, command exits, component resource lifetimes and interruption. The runtime
 test checks that a guest wait preserves unrelated completions and other
-component operations. `test-wasi/components/network` additionally schedules a
+component operations. `tests/integration/wasi/components/network` additionally schedules a
 JavaScript timer during a guest wait and checks deferred, exactly-once delivery.
 
 Run the three `scripts/component_*_acceptance.py` harnesses with matching

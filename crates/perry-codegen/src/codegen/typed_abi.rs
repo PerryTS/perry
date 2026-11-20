@@ -66,72 +66,40 @@ impl TypedParamRep {
     }
 }
 
-/// Inline the exact contract of runtime `js_typed_i32_arg_guard` and return
-/// both its predicate and the decoded signed lane.
+/// The int32 lane's inline entry predicate, and the decoded signed lane. A
+/// Number is a plain double, so the value admits when it round-trips the
+/// SATURATING conversion exactly. Every NaN, and so every NaN-boxed tag
+/// pattern, converts to 0 and compares unequal, and an out-of-range value
+/// saturates and compares unequal, so no separate tag or range test is
+/// needed. `-0` round-trips as `+0` and is excluded by its bits: the i32 lane
+/// cannot carry it. `bits` is `value`'s word.
 ///
 /// Typed/nonnegative method dispatch is itself hot enough that two leaf calls
 /// (guard, then conversion) dominate small bodies such as ECS `SparseSet.has`.
 /// Keep the proof in generated IR so LLVM can reuse `raw` for the subsequent
-/// nonnegative test and specialized call.  The safe-value select is
-/// load-bearing: `fptosi` is poison for tagged NaNs, infinities, and
-/// out-of-range doubles even when a later select would choose the tagged arm.
-pub(crate) fn emit_typed_i32_guard_and_raw(
+/// nonnegative test and specialized call.
+pub(crate) fn emit_typed_i32_plain_guard_and_raw(
     blk: &mut crate::block::LlBlock,
     value: &str,
+    bits: &str,
 ) -> (String, String) {
     use crate::types::{DOUBLE, I1, I32, I64};
 
-    let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
-
-    // Sign-closed numeric proof, shared with boxed numeric-loop admission.
-    // Numeric ingress canonicalizes payload NaNs; mirroring the tag band
-    // excludes HANDLE_TAG while preserving finite values and default NaNs.
-    let magnitude = blk.and(I64, &bits, "9223372036854775807");
-    let is_plain_number = blk.icmp_ult(
-        I64,
-        &magnitude,
-        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    );
-    let above_min = blk.fcmp("oge", value, "-2147483648.0");
-    let below_max = blk.fcmp("ole", value, "2147483647.0");
-    let in_range = blk.and(I1, &above_min, &below_max);
-    let plain_candidate = blk.and(I1, &is_plain_number, &in_range);
-
-    // Never feed a rejected/tagged bit pattern to fptosi.
-    let safe_plain = blk.select(I1, &plain_candidate, DOUBLE, value, "0.0");
-    let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
-    let roundtrip = blk.sitofp(I32, &plain_raw, DOUBLE);
+    let raw = blk.call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, value)]);
+    let roundtrip = blk.sitofp(I32, &raw, DOUBLE);
     let integral = blk.fcmp("oeq", &roundtrip, value);
-    let not_negative_zero = blk.icmp_ne(I64, &bits, "-9223372036854775808");
-    let plain_ok = blk.and(I1, &plain_candidate, &integral);
-    let plain_ok = blk.and(I1, &plain_ok, &not_negative_zero);
-    let admitted = blk.or(I1, &is_tagged, &plain_ok);
-
-    let tagged_raw = blk.trunc(I64, &bits, I32);
-    let raw = blk.select(I1, &is_tagged, I32, &tagged_raw, &plain_raw);
-    (admitted, raw)
+    let not_negative_zero = blk.icmp_ne(I64, bits, "-9223372036854775808");
+    (blk.and(I1, &integral, &not_negative_zero), raw)
 }
 
 /// Decode a value after an enclosing entry guard has established the contract
-/// above.  The select again shields `fptosi` from canonical INT32 NaN-boxes;
-/// no range/integrality work is repeated in the specialized body.
+/// above: an exact int32 double, so one `fptosi`. No range/integrality work is
+/// repeated in the specialized body.
 pub(crate) fn emit_typed_i32_raw_assuming_guarded(
     blk: &mut crate::block::LlBlock,
     value: &str,
 ) -> String {
-    use crate::types::{DOUBLE, I1, I32, I64};
-
-    let bits = blk.bitcast_double_to_i64(value);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
-    let safe_plain = blk.select(I1, &is_tagged, DOUBLE, "0.0", value);
-    let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
-    let tagged_raw = blk.trunc(I64, &bits, I32);
-    blk.select(I1, &is_tagged, I32, &tagged_raw, &plain_raw)
+    blk.fptosi(crate::types::DOUBLE, value, crate::types::I32)
 }
 
 pub(crate) fn typed_param_rep_for_type(ty: &Type) -> Option<TypedParamRep> {
@@ -195,7 +163,7 @@ fn typed_closure_capture_reps(
     let mut referenced = HashSet::new();
     crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets = HashSet::new();
-    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    crate::collectors::collect_own_binding_ids(body, &mut inner_lets);
     let param_ids: HashSet<u32> = params.iter().map(|param| param.id).collect();
     let explicit: HashSet<u32> = effective.iter().copied().collect();
     let mut auto: Vec<u32> = referenced.into_iter().collect();
@@ -243,7 +211,10 @@ pub(crate) fn emit_typed_arg_guard(
 ) -> String {
     match rep {
         TypedParamRep::F64 => emit_typed_f64_guard(blk, arg),
-        TypedParamRep::I32 => emit_typed_i32_guard_and_raw(blk, arg).0,
+        TypedParamRep::I32 => {
+            let bits = blk.bitcast_double_to_i64(arg);
+            emit_typed_i32_plain_guard_and_raw(blk, arg, &bits).0
+        }
         TypedParamRep::I1 => emit_typed_i1_guard(blk, arg),
         TypedParamRep::StringRef => emit_typed_string_guard(blk, arg),
     }
@@ -270,9 +241,8 @@ pub(crate) fn emit_typed_string_guard(blk: &mut crate::block::LlBlock, arg: &str
     blk.or(I1, &heap, &short)
 }
 
-/// Inline the exact contract of runtime `js_typed_f64_arg_guard`
-/// (`JSValue::is_number || JSValue::is_int32`), the way
-/// [`emit_typed_i32_guard_and_raw`] already does for the i32 lane.
+/// The Number lane's inline entry predicate (`JSValue::is_number`), the way
+/// [`emit_typed_i32_plain_guard_and_raw`] does for the i32 lane.
 ///
 /// The public entry of every function with a boxed-double clone runs this
 /// guard on each numeric parameter before dispatching; a one-line predicate
@@ -280,37 +250,17 @@ pub(crate) fn emit_typed_string_guard(blk: &mut crate::block::LlBlock, arg: &str
 /// for a compare it could have done in four instructions. Same predicate,
 /// same routing decision.
 pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -> String {
-    use crate::types::{I1, I64};
+    use crate::types::I64;
     let bits = blk.bitcast_double_to_i64(arg);
     // The sign-closed numeric proof excludes both the positive tag band and
     // its negative mirror (including HANDLE_TAG). Ingress canonicalization
     // ensures numeric payload NaNs cannot reach this boxed entry.
     let magnitude = blk.and(I64, &bits, "9223372036854775807");
-    let is_plain_number = blk.icmp_ult(
+    blk.icmp_ult(
         I64,
         &magnitude,
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    );
-    // JSValue::is_int32: the INT32 tag with any payload.
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
-    blk.or(I1, &is_plain_number, &is_int32)
-}
-
-/// Inline `js_typed_f64_arg_to_raw` for a value the F64 guard admitted: an
-/// INT32-tagged value converts its low lane, anything else is already the
-/// double the clone wants. Only valid after [`emit_typed_f64_guard`] passed
-/// (a tagged non-number would otherwise reach the clone as its raw bits).
-pub(crate) fn emit_typed_f64_to_raw_guarded(blk: &mut crate::block::LlBlock, arg: &str) -> String {
-    use crate::types::{DOUBLE, I1, I32, I64};
-    let bits = blk.bitcast_double_to_i64(arg);
-    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
-    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
-    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
-    let low = blk.trunc(I64, &bits, I32);
-    let converted = blk.sitofp(I32, &low, DOUBLE);
-    blk.select(I1, &is_int32, DOUBLE, &converted, arg)
+    )
 }
 
 pub(crate) fn emit_typed_arg_to_raw(
@@ -319,7 +269,8 @@ pub(crate) fn emit_typed_arg_to_raw(
     arg: &str,
 ) -> String {
     match rep {
-        TypedParamRep::F64 => emit_typed_f64_to_raw_guarded(blk, arg),
+        // The F64 guard admitted a plain double, the value the clone wants.
+        TypedParamRep::F64 => arg.to_string(),
         TypedParamRep::I32 => emit_typed_i32_raw_assuming_guarded(blk, arg),
         // `js_typed_i1_arg_to_raw`: the guard admitted only the two boolean
         // tags, so the raw bit is plain tag identity.
@@ -1358,7 +1309,7 @@ fn typed_receiver_chain_fields<'a>(
         if !accessor && (!link.getters.is_empty() || !link.setters.is_empty()) {
             return Err(TypedCloneRejectionReason::ReceiverClassHasAccessor);
         }
-        if !link.computed_members.is_empty() {
+        if link.has_evaluated_members() {
             return Err(TypedCloneRejectionReason::ReceiverClassHasComputedMember);
         }
         if link.fields.iter().any(|field| field.key_expr.is_some()) {

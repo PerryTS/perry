@@ -29,7 +29,7 @@ impl Model {
         }
         if let Some(&pn) = self.proto_node.get(&t) {
             for &p in &fresh {
-                let pt = self.tok(TokKind::Proto(p));
+                let pt = self.tok(TokKind::Proto(self.constructor_origin(p)));
                 self.add_tok(pn, pt);
             }
         }
@@ -102,7 +102,7 @@ impl Model {
             || (shadow && !stored)
             || (stored && marker)
         {
-            let f = self.field(t, a);
+            let f = self.field_r(t, a);
             self.edge(f, n);
         }
         Some(n)
@@ -172,8 +172,11 @@ impl Model {
             self.atoms[a as usize], self.tmpls[tm as usize].display
         );
         self.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: 0,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name,
             params: Vec::new(),
             rest: None,
@@ -181,17 +184,23 @@ impl Model {
             ret,
             args_all,
             has_arguments: true,
+            arguments: None,
+            own_test: crate::model::OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
-            gen_step: false,
+            foreign_params: true,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
         let r = self.reason("passed to an unknown function");
         self.sink_node(args_all, r);
@@ -281,7 +290,7 @@ impl Model {
                     for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
                         if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
                             if self.is_marker(vt) {
-                                let f = self.field(vt, a);
+                                let f = self.field_r(vt, a);
                                 self.edge(f, n);
                             } else {
                                 self.edge(s, n);
@@ -354,7 +363,7 @@ impl Model {
                 };
                 for a in keys {
                     if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
-                        let f = self.field(vt, a);
+                        let f = self.field_r(vt, a);
                         self.edge(f, n);
                     }
                 }
@@ -458,7 +467,7 @@ impl Model {
                     self.store_into(t, Key::Named(a), v, site);
                 }
             }
-            None => self.store_into(t, Key::Any, top, site),
+            None => self.store_into(t, Key::any(), top, site),
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
@@ -468,14 +477,14 @@ impl Model {
             self.cons(
                 h,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );
             self.cons(
                 q,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );

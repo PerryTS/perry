@@ -97,12 +97,15 @@ fn constructor_validates_transfer_list_without_worker_data() {
 #[test]
 fn worker_options_keep_default_and_valid_string_names() {
     unsafe { js_shape_run_static_seed() };
-    assert_eq!(WorkerOptions::from_value(js_undefined()).thread_name, "");
+    assert_eq!(
+        WorkerOptions::from_value(js_undefined()).thread_name,
+        "WorkerThread"
+    );
     let scope = RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(object_value(perry_runtime::object::js_object_alloc(0, 0)));
     assert_eq!(
         WorkerOptions::from_value(options.get_nanbox_f64()).thread_name,
-        ""
+        "WorkerThread"
     );
     for name in [
         js_undefined(),
@@ -115,7 +118,7 @@ fn worker_options_keep_default_and_valid_string_names() {
         set_field(options.get_nanbox_f64(), "name", name);
         assert_eq!(
             WorkerOptions::from_value(options.get_nanbox_f64()).thread_name,
-            ""
+            "WorkerThread"
         );
     }
     set_field(options.get_nanbox_f64(), "name", string_value("worker"));

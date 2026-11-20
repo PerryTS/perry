@@ -238,6 +238,109 @@ pub(crate) fn emit_for_of_pattern_binding(
     var_idx: &mut usize,
     out: &mut Vec<Stmt>,
 ) -> Result<()> {
+    if matches!(pat, ast::Pat::Array(_) | ast::Pat::Object(_)) && for_of_pattern_protocol_on() {
+        return emit_for_of_pattern_protocol(ctx, pat, source, var_ids, var_idx, out);
+    }
+    emit_for_of_pattern_binding_indexed(ctx, pat, source, var_ids, var_idx, out)
+}
+
+/// `PERRY_FOR_OF_PATTERN_PROTOCOL=0` (also `off` / `false`) is main's for-of
+/// head pattern: an array pattern reads `elem[0]`, `elem[1]`, ... and an
+/// object pattern skips numeric and computed keys, so
+/// `for (const [p] of [iterator])` binds `undefined` and never calls `next`.
+pub(crate) fn for_of_pattern_protocol_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FOR_OF_PATTERN_PROTOCOL").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// The spans that key the leaves of `pat` in [`collect_for_of_pattern_leaves`]
+/// order (one per leaf, the same walk).
+fn for_of_pattern_leaf_spans(pat: &ast::Pat, out: &mut Vec<u32>) {
+    match pat {
+        ast::Pat::Ident(ident) => out.push(ident.id.span.lo.0),
+        ast::Pat::Array(arr_pat) => {
+            for ep in arr_pat.elems.iter().flatten() {
+                for_of_pattern_leaf_spans(ep, out);
+            }
+        }
+        ast::Pat::Object(obj_pat) => {
+            for prop in &obj_pat.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => out.push(assign.key.span.lo.0),
+                    ast::ObjectPatProp::KeyValue(kv) => for_of_pattern_leaf_spans(&kv.value, out),
+                    ast::ObjectPatProp::Rest(rest) => for_of_pattern_leaf_spans(&rest.arg, out),
+                }
+            }
+        }
+        ast::Pat::Assign(assign_pat) => for_of_pattern_leaf_spans(&assign_pat.left, out),
+        ast::Pat::Rest(rest) => for_of_pattern_leaf_spans(&rest.arg, out),
+        _ => {}
+    }
+}
+
+/// A for-of / for-await head pattern bound like the same pattern in a
+/// declaration (BindingInitialization): an array pattern drives the element's
+/// own iterator (`Symbol.iterator`, `next`, IteratorClose when it stops
+/// early), behind the declaration's guard that reads a plain Array with the
+/// default iterator by index; an object pattern takes every key kind. The
+/// leaves keep the ids the loop body was lowered against: they are handed to
+/// the shared binder as forward declarations, the mechanism it already uses
+/// for a binding a closure captured before its declaration.
+fn emit_for_of_pattern_protocol(
+    ctx: &mut LoweringContext,
+    pat: &ast::Pat,
+    source: Expr,
+    var_ids: &[(String, LocalId)],
+    var_idx: &mut usize,
+    out: &mut Vec<Stmt>,
+) -> Result<()> {
+    let mut spans = Vec::new();
+    for_of_pattern_leaf_spans(pat, &mut spans);
+    let ids = var_ids
+        .get(*var_idx..*var_idx + spans.len())
+        .ok_or_else(|| {
+            anyhow!(
+                "for-of pattern: {} leaves, {} pre-defined ids",
+                spans.len(),
+                var_ids.len()
+            )
+        })?;
+    for (lo, (_, id)) in spans.iter().zip(ids) {
+        ctx.lexical_forward_decls.insert(*lo, *id);
+    }
+    *var_idx += spans.len();
+    let bound = match pat {
+        ast::Pat::Array(arr_pat) => {
+            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out);
+            crate::destructuring::lower_array_pattern_binding_guarded(
+                ctx, arr_pat, plan, false, false, out,
+            )
+        }
+        _ => crate::destructuring::lower_pattern_binding_into(ctx, pat, source, false, false, out),
+    };
+    // A leaf the binder did not reach (an error) must not leak its id into a
+    // later declaration at the same span.
+    for lo in &spans {
+        ctx.lexical_forward_decls.remove(lo);
+    }
+    bound
+}
+
+/// Main's for-of head binder (`PERRY_FOR_OF_PATTERN_PROTOCOL=0`), and the
+/// binder of a bare identifier head.
+fn emit_for_of_pattern_binding_indexed(
+    ctx: &mut LoweringContext,
+    pat: &ast::Pat,
+    source: Expr,
+    var_ids: &[(String, LocalId)],
+    var_idx: &mut usize,
+    out: &mut Vec<Stmt>,
+) -> Result<()> {
     match pat {
         ast::Pat::Ident(_) => {
             let (name, id) = var_ids[*var_idx].clone();
@@ -285,6 +388,7 @@ pub(crate) fn emit_for_of_pattern_binding(
                     break;
                 }
                 let elem_src = Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp_id)),
@@ -1028,6 +1132,7 @@ fn lower_stmt_inner(
                                         value: Box::new(Expr::LocalGet(id)),
                                         receiver: Box::new(Expr::GlobalThisExpr),
                                         strict: false,
+                                        element_offset: 0,
                                         byte_offset: 0,
                                         byte_end: 0,
                                     }));
@@ -1038,7 +1143,9 @@ fn lower_stmt_inner(
                 }
                 ast::Decl::Class(class_decl) => {
                     let binding_name = class_decl.ident.sym.to_string();
-                    let class = lower_class_decl(ctx, class_decl, false)?;
+                    let mut class = lower_class_decl(ctx, class_decl, false)?;
+                    // R9BIRTH6: the init index its evaluation starts at.
+                    class.decl_stmt = (!class.is_nested).then_some(module.init.len() as u32);
                     // #5833: give the class NAME a real mutable lexical
                     // binding slot, matching GlobalDeclarationInstantiation's
                     // "a class declaration creates a MUTABLE binding" step
@@ -1650,6 +1757,7 @@ fn lower_stmt_inner(
                 body,
                 catch,
                 finally,
+                forof_completion: None,
             });
         }
         ast::Stmt::Throw(throw_stmt) => {

@@ -210,7 +210,84 @@ mod tests {
         {
             assert_eq!(core::mem::size_of::<FunctionMetadataOwner>(), 24);
             assert_eq!(core::mem::size_of::<FunctionMetadataIdentity>(), 16);
-            assert_eq!(core::mem::size_of::<NativeFunctionInfo>(), 80);
+            assert_eq!(core::mem::size_of::<NativeFunctionInfo>(), 88);
         }
+    }
+}
+
+impl JsFunctionInfo {
+    /// Declares that the record is stored as a [`NamedNativeFunctionInfo`]:
+    /// the name text sits in the same static, so the name is read from the
+    /// record with no run-time naming call. Only `fn_info!` forms that name a
+    /// literal use it; the argument is the text the storage carries.
+    pub const fn with_name(self, _name: &'static str) -> Self {
+        self.with_flags(FN_HAS_NAME)
+    }
+}
+
+/// A native declaration's record with its JS-visible name stored in the same
+/// static: the name tail (self-relative offset and length) follows the info
+/// and the identity follows the tail, exactly the layout every reader of
+/// `FN_HAS_NAME` records expects. The text follows the identity.
+#[repr(C)]
+pub struct NamedNativeFunctionInfo<const N: usize> {
+    pub info: JsFunctionInfo,
+    name: [u32; 2],
+    pub identity: FunctionMetadataIdentity,
+    bytes: [u8; N],
+}
+impl<const N: usize> NamedNativeFunctionInfo<N> {
+    pub const fn new(
+        info: JsFunctionInfo,
+        owner: &'static FunctionMetadataOwner,
+        name: &str,
+    ) -> Self {
+        assert!(name.len() == N && N != 0);
+        let text = name.as_bytes();
+        let mut bytes = [0u8; N];
+        let mut i = 0;
+        while i < N {
+            bytes[i] = text[i];
+            i += 1;
+        }
+        Self {
+            info: info.with_flags(FN_HAS_METADATA | FN_HAS_NAME),
+            name: [core::mem::offset_of!(Self, bytes) as u32, N as u32],
+            identity: FunctionMetadataIdentity { owner, ordinal: 0 },
+            bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod named_record_tests {
+    use super::*;
+    extern "C" fn body(_: *const (), _: crate::JsThis) -> f64 {
+        0.0
+    }
+    #[test]
+    fn named_record_tails_read_where_readers_expect_them() {
+        static OWNER: FunctionMetadataOwner = FunctionMetadataOwner::native();
+        static NAMED: NamedNativeFunctionInfo<8> = NamedNativeFunctionInfo::new(
+            unsafe { JsFunctionInfo::from_code(body as *const u8, 0) },
+            &OWNER,
+            "parseInt",
+        );
+        let info = &NAMED.info;
+        assert!(info.flags & FN_HAS_NAME != 0 && info.flags & FN_HAS_METADATA != 0);
+        let base = info as *const JsFunctionInfo as *const u8;
+        let tail = unsafe { base.add(core::mem::size_of::<JsFunctionInfo>()) };
+        let (delta, len) = unsafe {
+            (
+                tail.cast::<i32>().read_unaligned(),
+                tail.add(4).cast::<u32>().read_unaligned() as usize,
+            )
+        };
+        let text = unsafe { core::slice::from_raw_parts(base.offset(delta as isize), len) };
+        assert_eq!(text, b"parseInt");
+        let identity = info
+            .metadata_identity()
+            .expect("identity follows the name tail");
+        assert_eq!(identity.owner, &OWNER as *const _);
     }
 }

@@ -110,11 +110,54 @@ fn native_index_source_local(ctx: &FnCtx<'_>, expr: &Expr) -> Option<u32> {
     }
 }
 
+/// 2^53. Up to it every integer is a double and `+`, `-`, `*` of two
+/// integers whose exact result stays inside is that result; past it the
+/// program's double arithmetic rounds, and the `i64` a rule computes here is
+/// no longer the value the program holds (`(i + 2^60) - 2^60` is 0 or 256,
+/// never `i`).
+const EXACT_LIMIT: u64 = 1 << 53;
+
+/// The range rules of this module are those of doubles: a bound or a
+/// constant past ±2^53 proves nothing ([`exact_int`]), a quotient is a range
+/// only where it is an integer ([`checked_range_div`],
+/// [`truncated_quotient_range`]), and a constant's bitwise operators wrap to
+/// int32 as the language does ([`constant_i64_expr`]).
+/// `PERRY_INT_RANGE_EXACT=0` (`off`, `false`) restores the `i64` rules
+/// before, which claim `b[i / 4]` an integer key in `[0, 2]` for `i` in
+/// `[0, 8]` and `x & (6442450944 >> 31)` inside `[0, 3]`.
+fn exact_rules() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INT_RANGE_EXACT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// `value` when the program's doubles hold it exactly ([`EXACT_LIMIT`]).
+fn exact_int(value: i64) -> Option<i64> {
+    (!exact_rules() || value.unsigned_abs() <= EXACT_LIMIT).then_some(value)
+}
+
+/// The range a rule computed from its operands' bounds with checked `i64`
+/// arithmetic: `None` when a bound overflowed or left the exact integers.
+fn checked_range(min: Option<i64>, max: Option<i64>) -> Option<IntRange> {
+    Some(IntRange {
+        min: exact_int(min?)?,
+        max: exact_int(max?)?,
+    })
+}
+
 fn f64_to_i64_constant(value: f64) -> Option<i64> {
     if value.is_finite() && value.fract() == 0.0 {
         let min = i64::MIN as f64;
         let max = i64::MAX as f64;
-        if value >= min && value <= max {
+        // `max` is 2^63, which `as i64` saturates: exclusive.
+        if value >= min && value < max {
+            return exact_int(value as i64);
+        }
+        if value == max && !exact_rules() {
             return Some(value as i64);
         }
     }
@@ -122,17 +165,11 @@ fn f64_to_i64_constant(value: f64) -> Option<i64> {
 }
 
 fn checked_range_add(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
-    Some(IntRange {
-        min: lhs.min.checked_add(rhs.min)?,
-        max: lhs.max.checked_add(rhs.max)?,
-    })
+    checked_range(lhs.min.checked_add(rhs.min), lhs.max.checked_add(rhs.max))
 }
 
 fn checked_range_sub(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
-    Some(IntRange {
-        min: lhs.min.checked_sub(rhs.max)?,
-        max: lhs.max.checked_sub(rhs.min)?,
-    })
+    checked_range(lhs.min.checked_sub(rhs.max), lhs.max.checked_sub(rhs.min))
 }
 
 fn checked_range_mul(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
@@ -142,20 +179,41 @@ fn checked_range_mul(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
         lhs.max.checked_mul(rhs.min)?,
         lhs.max.checked_mul(rhs.max)?,
     ];
-    Some(IntRange {
-        min: *candidates.iter().min()?,
-        max: *candidates.iter().max()?,
-    })
+    checked_range(
+        candidates.iter().min().copied(),
+        candidates.iter().max().copied(),
+    )
 }
 
+/// `l / d` as an integer range: one dividend the positive constant divisor
+/// divides. A range of dividends has fractions between its bounds (`i / 4`
+/// for `i` in `[0, 8]` is 0.25 at 1), and an integer range claims an
+/// integer key: its truncation is [`truncated_quotient_range`]'s.
 fn checked_range_div(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
     if rhs.min == rhs.max && rhs.min > 0 && lhs.min % rhs.min == 0 && lhs.max % rhs.min == 0 {
+        if exact_rules() && lhs.min != lhs.max {
+            return None;
+        }
         return Some(IntRange {
             min: lhs.min / rhs.min,
             max: lhs.max / rhs.min,
         });
     }
     None
+}
+
+/// `(l / d) | 0` for a positive constant `d`: the quotient truncated toward
+/// zero, which is monotone in the dividend, so its bounds are the truncated
+/// quotients of the dividend's. Inside int32 the `| 0` adds no wrap.
+fn truncated_quotient_range(lhs: IntRange, rhs: IntRange) -> Option<IntRange> {
+    if rhs.min != rhs.max || rhs.min <= 0 {
+        return None;
+    }
+    let range = IntRange {
+        min: lhs.min / rhs.min,
+        max: lhs.max / rhs.min,
+    };
+    (range.min >= i32::MIN as i64 && range.max <= i32::MAX as i64).then_some(range)
 }
 
 /// Smallest all-ones value covering `value` (`255 → 255`, `256 → 511`,
@@ -323,8 +381,43 @@ fn int_range_for_local(
     // parameter. Without it one unbounded parameter leaf poisons the whole
     // index expression and demotes EVERY array access in the function.
     let result = result.or_else(|| ctx.param_int_ranges.get(&id).copied());
+    // The whole-program interval of a proven int32 `let`: the weakest proof,
+    // read only when nothing local bounds the local.
+    let result = result.or_else(|| facts_local_range(ctx, id));
     seen.remove(&id);
     result
+}
+
+/// `PERRY_FACTS_LOCAL_RANGES=0` (`off`, `false`): codegen's range proofs do
+/// not read the whole-program interval of a proven int32 `let` or of a typed
+/// body's I32 parameter (main before this rule).
+pub(crate) fn facts_local_ranges() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_LOCAL_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// The whole-program interval (wpfacts `BindingFacts::int_range`) of local
+/// `id` when this body holds it as a proven int32 `let`
+/// (`FnCtx::facts_int32_locals`): every value the local ever holds is an
+/// integer in it, at every read, so it is a range proof that needs no
+/// dominating guard. Check mode witnesses the interval at every store into
+/// such a local (`codegen::facts_int32_locals::witness_exact`). The negative
+/// control `PERRY_FACTS_SABOTAGE=localrange` claims the interval's lower
+/// bound alone.
+pub(crate) fn facts_local_range(ctx: &FnCtx<'_>, id: u32) -> Option<IntRange> {
+    if !facts_local_ranges() || ctx.wpfacts_off || !ctx.facts_int32_locals.contains(&id) {
+        return None;
+    }
+    let &(min, max) = ctx.wpfacts.int32_ranges.get(&id)?;
+    if std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("localrange") {
+        return Some(IntRange { min, max: min });
+    }
+    Some(IntRange { min, max })
 }
 
 fn int_range_expr_inner(
@@ -333,7 +426,7 @@ fn int_range_expr_inner(
     seen: &mut std::collections::HashSet<u32>,
 ) -> Option<IntRange> {
     match expr {
-        Expr::Integer(n) => Some(IntRange::exact(*n)),
+        Expr::Integer(n) => exact_int(*n).map(IntRange::exact),
         Expr::Number(n) => f64_to_i64_constant(*n).map(IntRange::exact),
         Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
@@ -398,6 +491,26 @@ fn int_range_expr_inner(
                     _ => i64::from(u32::MAX),
                 };
                 return Some(IntRange { min: 0, max });
+            }
+            // `(n / d) | 0`: the truncated quotient, where the quotient
+            // itself is no integer range.
+            if exact_rules() && matches!(op, BinaryOp::BitOr) {
+                for (quotient, zero) in [(left, right), (right, left)] {
+                    let Expr::Binary {
+                        op: BinaryOp::Div,
+                        left: dividend,
+                        right: divisor,
+                    } = quotient.as_ref()
+                    else {
+                        continue;
+                    };
+                    if constant_i64_expr(ctx, zero) != Some(0) {
+                        continue;
+                    }
+                    let n = int_range_expr_inner(ctx, dividend, seen)?;
+                    let d = int_range_expr_inner(ctx, divisor, seen)?;
+                    return truncated_quotient_range(n, d);
+                }
             }
             let lhs = int_range_expr_inner(ctx, left, seen)?;
             let rhs = int_range_expr_inner(ctx, right, seen)?;
@@ -497,9 +610,13 @@ fn exact_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
     (range.min == range.max).then_some(range.min)
 }
 
+/// The integer `expr` is at every evaluation, computed as the program
+/// computes it: `+ - * /` exact inside ±2^53 ([`exact_int`]), the bitwise
+/// operators and shifts over the operands' ToInt32 (an exact integer's low
+/// 32 bits) with the count modulo 32.
 fn constant_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
     match expr {
-        Expr::Integer(n) => Some(*n),
+        Expr::Integer(n) => exact_int(*n),
         Expr::Number(n) => f64_to_i64_constant(*n),
         Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
@@ -512,6 +629,22 @@ fn constant_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
         Expr::Binary { op, left, right } => {
             let lhs = constant_i64_expr(ctx, left)?;
             let rhs = constant_i64_expr(ctx, right)?;
+            if exact_rules() {
+                let (a, b) = (lhs as i32, rhs as i32);
+                let count = (rhs as u32) & 31;
+                return match op {
+                    BinaryOp::Add => lhs.checked_add(rhs).and_then(exact_int),
+                    BinaryOp::Sub => lhs.checked_sub(rhs).and_then(exact_int),
+                    BinaryOp::Mul => lhs.checked_mul(rhs).and_then(exact_int),
+                    BinaryOp::Div if rhs != 0 && lhs % rhs == 0 => Some(lhs / rhs),
+                    BinaryOp::BitOr => Some(i64::from(a | b)),
+                    BinaryOp::BitAnd => Some(i64::from(a & b)),
+                    BinaryOp::BitXor => Some(i64::from(a ^ b)),
+                    BinaryOp::Shl => Some(i64::from(a.wrapping_shl(count))),
+                    BinaryOp::Shr => Some(i64::from(a >> count)),
+                    _ => None,
+                };
+            }
             match op {
                 BinaryOp::Add => lhs.checked_add(rhs),
                 BinaryOp::Sub => lhs.checked_sub(rhs),
@@ -1144,4 +1277,63 @@ fn native_owned_ranges_may_overlap(
     let b_start = b_offset as i128;
     let b_end = b_start + b_len as i128;
     a_start < b_end && b_start < a_end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(min: i64, max: i64) -> IntRange {
+        IntRange { min, max }
+    }
+
+    #[test]
+    fn a_range_past_2_53_proves_nothing() {
+        let exact = 1i64 << 53;
+        // `(i + 2^60) - 2^60`: the sum rounds, so it has no range.
+        assert_eq!(checked_range_add(r(0, 200), r(1 << 60, 1 << 60)), None);
+        assert_eq!(
+            checked_range_add(r(0, 200), r(1 << 52, 1 << 52)),
+            Some(r(1 << 52, (1 << 52) + 200))
+        );
+        assert_eq!(
+            checked_range_add(r(0, 1), r(exact - 1, exact - 1)),
+            Some(r(exact - 1, exact))
+        );
+        assert_eq!(checked_range_add(r(0, 2), r(exact - 1, exact - 1)), None);
+        assert_eq!(checked_range_sub(r(-exact, 0), r(1, 1)), None);
+        assert_eq!(
+            checked_range_sub(r(1 - exact, 0), r(1, 1)),
+            Some(r(-exact, -1))
+        );
+        // int32 x int32 leaves the exact integers; i64 overflow is no range.
+        assert_eq!(checked_range_mul(r(0, 1 << 31), r(0, 1 << 31)), None);
+        assert_eq!(
+            checked_range_mul(r(-46341, 46341), r(0, 46341)),
+            Some(r(-2147488281, 2147488281))
+        );
+        assert_eq!(checked_range_mul(r(i64::MAX, i64::MAX), r(2, 2)), None);
+        assert_eq!(f64_to_i64_constant(9007199254740992.0), Some(exact));
+        assert_eq!(f64_to_i64_constant(9007199254740994.0), None);
+        // 2^63 is `i64::MAX as f64`, which `as i64` saturates.
+        assert_eq!(f64_to_i64_constant(9223372036854775808.0), None);
+        assert_eq!(f64_to_i64_constant(0.5), None);
+        assert_eq!(f64_to_i64_constant(f64::NAN), None);
+    }
+
+    #[test]
+    fn a_quotient_is_an_integer_range_for_one_divisible_dividend() {
+        assert_eq!(checked_range_div(r(8, 8), r(4, 4)), Some(r(2, 2)));
+        // `i / 4` over [0, 8] is 0.25 at 1: no integer range.
+        assert_eq!(checked_range_div(r(0, 8), r(4, 4)), None);
+        assert_eq!(checked_range_div(r(8, 8), r(3, 3)), None);
+        assert_eq!(checked_range_div(r(8, 8), r(0, 0)), None);
+        // `(i / 4) | 0` truncates toward zero.
+        assert_eq!(truncated_quotient_range(r(0, 15), r(4, 4)), Some(r(0, 3)));
+        assert_eq!(truncated_quotient_range(r(-7, 7), r(2, 2)), Some(r(-3, 3)));
+        assert_eq!(truncated_quotient_range(r(0, 15), r(0, 4)), None);
+        assert_eq!(truncated_quotient_range(r(0, 15), r(-4, -4)), None);
+        // Past int32 the `| 0` wraps.
+        assert_eq!(truncated_quotient_range(r(0, 1 << 40), r(2, 2)), None);
+    }
 }

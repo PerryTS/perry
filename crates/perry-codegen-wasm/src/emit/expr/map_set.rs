@@ -90,11 +90,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "set_new_from_array", 1);
             }
             Expr::SetAdd { set_id, value } => {
-                if let Some(&idx) = self.local_map.get(set_id) {
-                    func.instruction(&Instruction::LocalGet(idx));
-                } else {
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                }
+                self.emit_local_or_global_get(func, set_id);
                 self.emit_frame_begin(func, 2);
                 func.instruction(&Instruction::LocalSet(self.temp_local));
                 self.emit_slot_addr(func, 0);
@@ -107,11 +103,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, value);
                 self.emit_memcall_void(func, "set_add", 2);
                 // void, push set back
-                if let Some(&idx) = self.local_map.get(set_id) {
-                    func.instruction(&Instruction::LocalGet(idx));
-                } else {
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                }
+                self.emit_local_or_global_get(func, set_id);
             }
             Expr::SetHas { set, value } => {
                 self.emit_frame_begin(func, 2);
@@ -148,6 +140,21 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, set);
                 self.emit_memcall(func, "set_values", 1);
+            }
+            // The Set/Map `for...of` fast path reads the slot its cursor names (see the
+            // `js_*_cursor_next` arm in `calls.rs`).
+            Expr::SetValueAt { set: coll, idx }
+            | Expr::MapEntryKeyAt { map: coll, idx }
+            | Expr::MapEntryValueAt { map: coll, idx } => {
+                let bridge = match expr {
+                    Expr::SetValueAt { .. } => "set_value_at",
+                    Expr::MapEntryKeyAt { .. } => "map_entry_key_at",
+                    _ => "map_entry_value_at",
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, coll);
+                self.emit_store_arg(func, 1, idx);
+                self.emit_memcall(func, bridge, 2);
             }
 
             // --- Date ---

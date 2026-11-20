@@ -469,7 +469,7 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
                 assert_eq!(slot_bits(obj, 0), 0.0f64.to_bits(), "{path}: F64 lane");
                 assert_eq!(slot_bits(obj, 1), 0.0f64.to_bits(), "{path}: F64 lane");
                 // An INT32 immediate through the funnel: lane kept, canonical.
-                crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
+                crate::object::store_object_field_slot(obj, 1, crate::value::INTERNAL_WORD_TAG | 7);
                 assert_eq!(
                     object_shape_stamp(obj),
                     LayoutWord(id),

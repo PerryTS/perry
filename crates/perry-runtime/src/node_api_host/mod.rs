@@ -1,10 +1,14 @@
 #![allow(clippy::missing_safety_doc)]
 //! Node-API host core (#8523).
 //!
-//! Addons see opaque `napi_value` tokens, never Perry heap addresses. Each
-//! token carries an environment-local slot index and generation. Slots belong
-//! to a strict handle-scope stack and are mutable GC roots, so a copying
-//! collection rewrites the actual storage an addon will later read.
+//! Addons see opaque `napi_value` tokens, never Perry heap addresses. A token
+//! is the pair (slot index, generation) packed into the pointer word itself:
+//! the handle names its slot on the environment's handle stack, so resolving
+//! it is an index and a compare, and making one allocates nothing. Slots are
+//! pushed in order; a handle scope records the stack height at open and
+//! closing it lowers the height back (V8's handle-block model). The live part
+//! of the stack is a set of mutable GC roots, so a copying collection
+//! rewrites the actual storage an addon will later read.
 //!
 //! The exported functions use Node-API's raw-pointer ABI. Their pointer
 //! validity requirements are defined by `js_native_api.h`; each entry point
@@ -99,35 +103,50 @@ pub struct NapiExtendedErrorInfo {
     pub error_code: NapiStatus,
 }
 
+/// One entry of the handle stack. `generation` is the write that filled it;
+/// a `napi_value` reads the slot only while it names that same write.
 #[derive(Clone, Copy)]
 pub(crate) struct HandleSlot {
     pub value_bits: u64,
     pub generation: u32,
-    pub scope_depth: u32,
-    pub live: bool,
 }
 
-pub(crate) struct HandleToken {
-    env_serial: u64,
-    slot: u32,
+/// An open handle scope: the handle-stack height when it opened. An
+/// escapable scope opens one slot higher; the slot below its base is the
+/// parent's, reserved for the one handle it may escape.
+pub(crate) struct HandleScopeRecord {
+    base: usize,
     generation: u32,
-}
-
-pub(crate) struct ScopeToken {
-    env_serial: u64,
-    depth: u32,
     escapable: bool,
     escaped: bool,
-    closed: bool,
+}
+
+/// The low half of an opaque handle word is the stack index plus one (so no
+/// handle is null), the high half the generation of the write it names.
+const HANDLE_INDEX_BITS: u32 = usize::BITS / 2;
+const HANDLE_INDEX_MASK: usize = (1usize << HANDLE_INDEX_BITS) - 1;
+const HANDLE_GENERATION_MASK: u32 = (usize::MAX >> HANDLE_INDEX_BITS) as u32;
+
+fn encode_handle(index: usize, generation: u32) -> *mut c_void {
+    debug_assert!(index < HANDLE_INDEX_MASK);
+    (((generation as usize) << HANDLE_INDEX_BITS) | (index + 1)) as *mut c_void
+}
+
+fn decode_handle(handle: *mut c_void) -> Option<(usize, u32)> {
+    let word = handle as usize;
+    let index = (word & HANDLE_INDEX_MASK).checked_sub(1)?;
+    Some((index, (word >> HANDLE_INDEX_BITS) as u32))
 }
 
 pub(crate) struct ReferenceRecord {
     env_serial: u64,
     value_bits: u64,
-    /// A Perry `WeakRef` object rooted by this record while `refcount == 0`.
-    /// The weak holder is traced, but its target is not. Primitive values,
-    /// which cannot be weak targets, remain in `value_bits` instead.
-    weak_holder_bits: Option<u64>,
+    /// `value_bits` is held weakly: the count is 0 and the value is an object
+    /// or symbol. A weak target is not traced; a moving collection rewrites
+    /// it and [`prune_dead_weak_references`] clears it to undefined when the
+    /// target dies, so `napi_get_reference_value` answers NULL as in node.
+    /// Primitive values cannot be weak targets and stay strong at count 0.
+    weak: bool,
     refcount: u32,
     deleted: bool,
     /// A rooted WeakRef to the metadata payload and its scalar finalizer id;
@@ -150,10 +169,12 @@ pub(crate) struct CallbackInfoRecord {
     pub new_target: NapiValue,
 }
 
+/// A pending deferred. It is in `Env::deferreds` exactly while it is
+/// unsettled: settling removes it, so the root scan walks pending promises
+/// only.
 pub(crate) struct DeferredRecord {
     env_serial: u64,
     promise_bits: u64,
-    settled: bool,
 }
 
 // The boxed records are intentional: their addresses are the opaque pointers
@@ -161,17 +182,20 @@ pub(crate) struct DeferredRecord {
 #[allow(clippy::vec_box)]
 pub(crate) struct Env {
     serial: u64,
-    owner: std::thread::ThreadId,
+    /// The handle stack. `slots[..handle_top]` are the live handles (GC
+    /// roots); `slots[handle_top..]` are released handles that still read
+    /// until a new handle overwrites them or a collection drops them.
     slots: Vec<HandleSlot>,
-    free_slots: Vec<u32>,
-    // Tokens are intentional tombstones: their addon-visible addresses are
-    // never reused, so an out-of-scope handle cannot alias a later value.
-    tokens: Vec<Box<HandleToken>>,
-    token_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
-    scopes: Vec<usize>,
-    // Scope and reference records follow the same stable-address rule as
-    // value tokens. Their compact backing slots/roots are released instead.
-    scope_tokens: Vec<Box<ScopeToken>>,
+    handle_top: usize,
+    /// The open handle scopes, innermost last.
+    scopes: Vec<HandleScopeRecord>,
+    /// The generation of the next handle or scope this environment makes.
+    /// Every write takes a new one, so a released handle never reads a later
+    /// value written to its slot. It starts at an environment-specific
+    /// point, so a handle from an earlier environment does not alias either.
+    next_generation: u32,
+    // Reference records keep the stable-address rule: their addresses are the
+    // opaque pointers addon code holds.
     references: Vec<Box<ReferenceRecord>>,
     reference_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
     callbacks: Vec<NativeCallbackRecord>,
@@ -199,8 +223,13 @@ pub(crate) struct Env {
     cleanup_order: u64,
     external_memory: i64,
     pending_exception_bits: Option<u64>,
+    /// The last call's status and message: two stores per call. The
+    /// NUL-terminated copy `napi_get_last_error_info` hands out is made there,
+    /// its only reader, and only when the message changed.
     last_status: NapiStatus,
     last_message: &'static str,
+    /// The message `last_error_message` holds a copy of.
+    copied_message: &'static str,
     last_error_message: CString,
     error_info: NapiExtendedErrorInfo,
 }
@@ -209,13 +238,11 @@ impl Env {
     fn new(serial: u64) -> Self {
         let mut env = Self {
             serial,
-            owner: std::thread::current().id(),
             slots: Vec::new(),
-            free_slots: Vec::new(),
-            tokens: Vec::new(),
-            token_lookup: crate::fast_hash::new_ptr_hash_map(),
+            handle_top: 0,
             scopes: Vec::new(),
-            scope_tokens: Vec::new(),
+            next_generation: ((serial as u32).wrapping_mul(0x9E37_79B9) & HANDLE_GENERATION_MASK)
+                .max(1),
             references: Vec::new(),
             reference_lookup: crate::fast_hash::new_ptr_hash_map(),
             callbacks: Vec::new(),
@@ -243,6 +270,7 @@ impl Env {
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
             last_message: "napi_ok",
+            copied_message: "napi_ok",
             last_error_message: CString::new("napi_ok").unwrap(),
             error_info: NapiExtendedErrorInfo {
                 error_message: std::ptr::null(),
@@ -255,21 +283,24 @@ impl Env {
         env
     }
 
+    /// Publish the last status as `napi_extended_error_info`. A message is
+    /// named by its address: the copy is redone only when the call recorded a
+    /// different message (an equal text at another address copies once more,
+    /// which is still correct).
     fn refresh_error_info(&mut self) {
+        if !std::ptr::eq(self.copied_message, self.last_message) {
+            self.copied_message = self.last_message;
+            self.last_error_message =
+                CString::new(self.last_message).expect("static N-API error has no NUL");
+        }
         self.error_info.error_message = self.last_error_message.as_ptr();
         self.error_info.error_code = self.last_status;
     }
 
+    #[inline]
     fn set_status(&mut self, status: NapiStatus, message: &'static str) -> NapiStatus {
-        // Nearly every call reports the `napi_ok` it reported last time; only
-        // a changed status or message needs a new NUL-terminated copy, so a
-        // successful call no longer allocates for its bookkeeping.
-        if self.last_status != status || self.last_message != message {
-            self.last_status = status;
-            self.last_message = message;
-            self.last_error_message = CString::new(message).expect("static N-API error has no NUL");
-        }
-        self.refresh_error_info();
+        self.last_status = status;
+        self.last_message = message;
         status
     }
 
@@ -278,76 +309,74 @@ impl Env {
         self.cleanup_order
     }
 
-    fn current_scope_depth(&self) -> u32 {
-        self.scopes.len() as u32
+    fn take_generation(&mut self) -> u32 {
+        let generation = self.next_generation;
+        self.next_generation = (generation.wrapping_add(1) & HANDLE_GENERATION_MASK).max(1);
+        generation
     }
 
-    fn add_handle_at_depth(&mut self, value_bits: u64, scope_depth: u32) -> NapiValue {
-        let (slot, generation) = if let Some(slot) = self.free_slots.pop() {
-            let record = &mut self.slots[slot as usize];
-            debug_assert!(!record.live);
-            // Reuse ends the released handle: its token no longer reads.
-            record.generation = record.generation.wrapping_add(1).max(1);
-            record.value_bits = value_bits;
-            record.scope_depth = scope_depth;
-            record.live = true;
-            (slot, record.generation)
-        } else {
-            let slot = self.slots.len() as u32;
-            let generation = 1;
-            self.slots.push(HandleSlot {
-                value_bits,
-                generation,
-                scope_depth,
-                live: true,
-            });
-            (slot, generation)
-        };
-        let mut token = Box::new(HandleToken {
-            env_serial: self.serial,
-            slot,
+    /// Write `value_bits` into stack slot `index` as a new handle. Any earlier
+    /// handle naming that slot stops reading.
+    fn write_slot(&mut self, index: usize, value_bits: u64) -> NapiValue {
+        let generation = self.take_generation();
+        let slot = HandleSlot {
+            value_bits,
             generation,
-        });
-        let ptr = (&mut *token) as *mut HandleToken as NapiValue;
-        self.token_lookup.insert(ptr as usize, self.tokens.len());
-        self.tokens.push(token);
-        ptr
+        };
+        if index < self.slots.len() {
+            self.slots[index] = slot;
+        } else {
+            debug_assert_eq!(index, self.slots.len());
+            self.slots.push(slot);
+        }
+        encode_handle(index, generation)
     }
 
+    /// A new handle in the innermost open scope: the next stack slot.
     fn add_handle(&mut self, value_bits: u64) -> NapiValue {
-        self.add_handle_at_depth(value_bits, self.current_scope_depth())
+        let index = self.handle_top;
+        self.handle_top += 1;
+        self.write_slot(index, value_bits)
     }
 
-    fn token(&self, value: NapiValue) -> Option<&HandleToken> {
-        if value.is_null() {
-            return None;
-        }
-        let index = *self.token_lookup.get(&(value as usize))?;
-        self.tokens.get(index).map(Box::as_ref)
-    }
-
+    /// A released slot still reads until a new handle reuses it or a
+    /// collection runs (V8 moves only the handle-block top when a scope
+    /// closes): a callback may close its own scope and still return the
+    /// object it built there.
     fn value_bits(&self, value: NapiValue) -> Option<u64> {
-        let token = self.token(value)?;
-        if token.env_serial != self.serial {
-            return None;
-        }
-        let slot = self.slots.get(token.slot as usize)?;
-        // A released slot still reads until a new handle reuses it or a
-        // collection runs (V8 moves only the handle-block top when a scope
-        // closes).
-        (slot.generation == token.generation).then_some(slot.value_bits)
+        let (index, generation) = decode_handle(value)?;
+        let slot = self.slots.get(index)?;
+        (slot.generation == generation).then_some(slot.value_bits)
     }
 
-    /// Closing a scope releases its slots for reuse. A released slot keeps its
-    /// value and generation, so a handle the scope made stays readable until
-    /// a new handle takes the slot: a callback may close its own scope and
-    /// still return the object it built there, as under V8.
-    fn release_scope(&mut self, depth: u32) {
-        for (index, slot) in self.slots.iter_mut().enumerate() {
-            if slot.live && slot.scope_depth >= depth {
-                slot.live = false;
-                self.free_slots.push(index as u32);
-            }
+    fn open_handle_scope(&mut self, escapable: bool) -> *mut c_void {
+        if escapable {
+            // The parent's slot for the escapee, below the new scope's base.
+            self.add_handle(crate::value::TAG_UNDEFINED);
+        }
+        let generation = self.take_generation();
+        self.scopes.push(HandleScopeRecord {
+            base: self.handle_top,
+            generation,
+            escapable,
+            escaped: false,
+        });
+        encode_handle(self.scopes.len() - 1, generation)
+    }
+
+    /// The innermost open scope, when `scope` names it.
+    fn innermost_scope(&mut self, scope: *mut c_void) -> Option<&mut HandleScopeRecord> {
+        let (index, generation) = decode_handle(scope)?;
+        let innermost = self.scopes.len().checked_sub(1)?;
+        let record = self.scopes.last_mut()?;
+        (index == innermost && record.generation == generation).then_some(record)
+    }
+
+    /// Close the innermost scope: its handles are released, the stack height
+    /// returns to the scope's base.
+    fn close_innermost_scope(&mut self) {
+        if let Some(record) = self.scopes.pop() {
+            self.handle_top = record.base;
         }
     }
 
@@ -381,18 +410,22 @@ impl Env {
         self.deferreds
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn deferred_mut(&mut self, deferred: NapiDeferred) -> Option<&mut DeferredRecord> {
-        if deferred.is_null() {
-            return None;
+    /// Settling ends a deferred (as in Node, where the deferred is freed by
+    /// `napi_resolve_deferred`/`napi_reject_deferred`): its record leaves the
+    /// list and the record that took its place is re-indexed. Returns the
+    /// promise it held.
+    fn take_deferred(&mut self, deferred: NapiDeferred) -> Option<u64> {
+        let promise_bits = self.deferred(deferred)?.promise_bits;
+        let index = self.deferred_lookup.remove(&(deferred as usize))?;
+        self.deferreds.swap_remove(index);
+        if let Some(moved) = self.deferreds.get(index) {
+            let pointer = (&**moved) as *const DeferredRecord as usize;
+            self.deferred_lookup.insert(pointer, index);
         }
-        let index = *self.deferred_lookup.get(&(deferred as usize))?;
-        self.deferreds
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+        Some(promise_bits)
     }
 
     fn async_context(&self, context: NapiAsyncContext) -> Option<&AsyncContextRecord> {
@@ -403,18 +436,23 @@ impl Env {
         self.async_contexts
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn async_context_mut(&mut self, context: NapiAsyncContext) -> Option<&mut AsyncContextRecord> {
-        if context.is_null() {
-            return None;
+    /// `napi_async_destroy` ends a context: its record leaves the list and
+    /// the record that took its place is re-indexed. Returns its ids.
+    fn take_async_context(
+        &mut self,
+        context: NapiAsyncContext,
+    ) -> Option<crate::async_hook_slots::AsyncResourceIds> {
+        let ids = self.async_context(context)?.ids;
+        let index = self.async_context_lookup.remove(&(context as usize))?;
+        self.async_contexts.swap_remove(index);
+        if let Some(moved) = self.async_contexts.get(index) {
+            let pointer = (&**moved) as *const AsyncContextRecord as usize;
+            self.async_context_lookup.insert(pointer, index);
         }
-        let index = *self.async_context_lookup.get(&(context as usize))?;
-        self.async_contexts
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+        Some(ids)
     }
 }
 
@@ -457,6 +495,8 @@ pub fn current_env() -> NapiEnv {
     })
 }
 
+// The environment lives in this thread's TLS, so pointer identity with it
+// proves both that `env` is live and that this is its thread.
 pub(crate) fn with_env<R>(env: NapiEnv, f: impl FnOnce(&Env) -> R) -> Option<R> {
     if env.is_null() {
         return None;
@@ -464,8 +504,7 @@ pub(crate) fn with_env<R>(env: NapiEnv, f: impl FnOnce(&Env) -> R) -> Option<R> 
     NODE_API_ENV.with(|cell| {
         let borrowed = cell.borrow();
         let current = borrowed.as_deref()?;
-        if !std::ptr::eq(current, env.cast::<Env>()) || current.owner != std::thread::current().id()
-        {
+        if !std::ptr::eq(current, env.cast::<Env>()) {
             return None;
         }
         Some(f(current))
@@ -481,12 +520,19 @@ pub(crate) fn with_env_mut<R>(env: NapiEnv, f: impl FnOnce(&mut Env) -> R) -> Op
     NODE_API_ENV.with(|cell| {
         let mut borrowed = cell.borrow_mut();
         let current = borrowed.as_deref_mut()?;
-        if !std::ptr::eq(current, env.cast::<Env>()) || current.owner != std::thread::current().id()
-        {
+        if !std::ptr::eq(current, env.cast::<Env>()) {
             return None;
         }
         Some(f(current))
     })
+}
+
+/// One environment entry for a whole call: `f` does the call's work and
+/// returns its status (via [`Env::set_status`]), recorded in the same borrow.
+/// Like [`with_env_mut`], `f` must not allocate in Perry's GC heap.
+#[inline]
+pub(crate) fn enter(env: NapiEnv, f: impl FnOnce(&mut Env) -> NapiStatus) -> NapiStatus {
+    with_env_mut(env, f).unwrap_or(NapiStatus::InvalidArg)
 }
 
 pub(crate) fn value_bits(env: NapiEnv, value: NapiValue) -> Result<u64, NapiStatus> {
@@ -534,7 +580,6 @@ pub(crate) fn catch_value_call(env: NapiEnv, f: impl FnOnce() -> f64) -> Result<
 pub(crate) const ROOT_SCANNER_NAME: &str = "crate::node_api_host::scan_node_api_roots_mut";
 
 pub(crate) fn install() {
-    symbols::retain();
     hooks::install();
 }
 
@@ -544,33 +589,26 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         let Some(env) = borrowed.as_deref_mut() else {
             return;
         };
+        // A released slot is not a root: the collection may free or move its
+        // value, so its handle stops reading here. Only the live stack is
+        // scanned.
+        let top = env.handle_top;
+        env.slots.truncate(top);
         for slot in &mut env.slots {
-            if slot.live {
-                visitor.visit_nanbox_u64_slot(&mut slot.value_bits);
-            } else if slot.value_bits != crate::value::TAG_UNDEFINED {
-                // A released slot is not a root: the collection may free or
-                // move its value, so its handle stops reading here.
-                slot.generation = slot.generation.wrapping_add(1).max(1);
-                slot.value_bits = crate::value::TAG_UNDEFINED;
-            }
+            visitor.visit_nanbox_u64_slot(&mut slot.value_bits);
         }
         if let Some(exception) = env.pending_exception_bits.as_mut() {
             visitor.visit_nanbox_u64_slot(exception);
         }
+        // The list holds pending deferreds only (settling removes the record).
         for deferred in &mut env.deferreds {
-            if !deferred.settled {
-                visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
-            }
+            visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
         }
         // Each native async context owns its token until napi_async_destroy,
-        // including contexts created without a JavaScript resource value.
+        // including contexts created without a JavaScript resource value;
+        // destroying it removes the record.
         for context in &mut env.async_contexts {
-            if !context.destroyed {
-                crate::async_hook_slots::resource_state::scan_token(
-                    &mut context.ids.async_id,
-                    visitor,
-                );
-            }
+            crate::async_hook_slots::resource_state::scan_token(&mut context.ids.async_id, visitor);
         }
         for tsfn in &env.tsfns {
             tsfn::scan_tsfn_function_root(tsfn, visitor);
@@ -582,14 +620,46 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
             if reference.deleted {
                 continue;
             }
-            if reference.refcount > 0 || reference.weak_holder_bits.is_none() {
+            if reference.weak {
+                let mut target = f64::from_bits(reference.value_bits);
+                if visitor.visit_metadata_nanbox_f64_slot(&mut target) {
+                    reference.value_bits = target.to_bits();
+                }
+            } else {
                 visitor.visit_nanbox_u64_slot(&mut reference.value_bits);
-            }
-            if let Some(holder) = reference.weak_holder_bits.as_mut() {
-                visitor.visit_nanbox_u64_slot(holder);
             }
             if let Some((holder, _)) = reference.finalizer_link.as_mut() {
                 visitor.visit_nanbox_u64_slot(holder);
+            }
+        }
+    });
+}
+
+/// The heap address a weak reference's target occupies, if it has one.
+fn weak_target_addr(bits: u64) -> Option<usize> {
+    use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+    if !matches!(bits & TAG_MASK, POINTER_TAG | STRING_TAG | BIGINT_TAG) {
+        return None;
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    (addr != 0 && !crate::value::addr_class::is_handle_band(addr)).then_some(addr)
+}
+
+/// Clear every weak reference whose target this collection found dead
+/// (`gc::dead_owner::DEAD_KEY_PRUNES`). The target word becomes undefined,
+/// which a weak record reads as "collected".
+pub(crate) fn prune_dead_weak_references(is_dead: &dyn Fn(usize) -> bool) {
+    NODE_API_ENV.with(|cell| {
+        let mut borrowed = cell.borrow_mut();
+        let Some(env) = borrowed.as_deref_mut() else {
+            return;
+        };
+        for reference in &mut env.references {
+            if reference.deleted || !reference.weak {
+                continue;
+            }
+            if weak_target_addr(reference.value_bits).is_some_and(is_dead) {
+                reference.value_bits = crate::value::TAG_UNDEFINED;
             }
         }
     });

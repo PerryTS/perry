@@ -1,0 +1,6 @@
+subclass map 101 101
+subclass set 20 20
+plain 3 3 1
+relinked proto
+DEC 250: Cannot redefine built-in member Set.prototype.size: built-in objects are read-only in a compiled program (adding a new member is allowed)
+redefined set 2 3
