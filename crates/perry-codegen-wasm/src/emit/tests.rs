@@ -1553,13 +1553,13 @@ async function f(): Promise<string> {
   const xs = [1, 2];
   const ys: any[] = [0, ...xs, 3, , ];
   const ks = [...xs.keys(), ...xs.values(), ..."ab", [...xs.entries()][1][0]];
-  const m = Math.max(at(3), at(9), at(4)) + "," + Math.min(at(3), at(9)) + "," + Math.max("7" as any, 2) + "," + Math.min(1, NaN) + "," + Math.max() + "," + Math.min();
+  const m = Math.max(at(3), at(9), at(4)) + "," + Math.min(at(3), at(9)) + "," + Math.max("7" as any, 2) + "," + Math.min(1, NaN) + "," + Math.max() + "," + Math.min() + "," + Math.min(Infinity, 5) + "," + Math.max(-Infinity, -1);
   return ys.length + " " + ys.join("|") + " " + ks.join(",") + " " + m + " " + log;
 }
 f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
-        "5 0|1|2|3| 0,1,1,2,a,b,1 9,3,7,NaN,-Infinity,Infinity 39439"
+        "5 0|1|2|3| 0,1,1,2,a,b,1 9,3,7,NaN,-Infinity,Infinity,5,-1 39439"
     );
 }
 

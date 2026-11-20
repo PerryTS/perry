@@ -247,6 +247,10 @@ impl WasmModuleEmitter {
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
         match expr {
+            // Rust spells an infinity `inf`, which is not a JS literal.
+            Expr::Number(n) if n.is_infinite() => {
+                if *n > 0.0 { "Infinity" } else { "(-Infinity)" }.to_string()
+            }
             Expr::Number(n) => format!("{}", n),
             Expr::Integer(i) => format!("{}", *i as f64),
             Expr::Bool(true) => "u64ToF64(TAG_TRUE)".to_string(),
