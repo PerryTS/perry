@@ -983,7 +983,7 @@ fn classify_inner(
         unused_exemptions: rules
             .iter()
             .filter(|r| {
-                ["indirect", "extern", "unwind"].contains(&r.kind.as_str())
+                ["indirect", "indirect-all", "extern", "unwind"].contains(&r.kind.as_str())
                     && !hits.contains_key(&r.line)
             })
             .map(Rule::description)
