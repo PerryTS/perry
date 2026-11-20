@@ -129,19 +129,25 @@ else:
         signer = self.root / "perry"
         signer.write_text('#!/bin/sh\nprintf \'{"kind":"%s"}\\n\' "$3"\n')
         signer.chmod(0o755)
-        archive = self.root / "host.tar.gz"
-        subprocess.run(["tar", "czf", str(archive), "perry"], cwd=self.root, check=True)
-        out = self.root / "out"
+        staging = self.root / "staging"
+        staging.mkdir()
+        signer.rename(staging / "perry")
         env = dict(os.environ, PACKAGED_TRIPLES=str(self.catalog), REPO="PerryTS/perry", TAG=f"v{VERSION}",
                    PERRY_CLI_UPDATE_SIGNING_KEY="throwaway", PERRY_CLI_UPDATE_KEY_ID="test",
                    RUNNER_TEMP=str(self.root), VERIFY_NPM="false", RELEASE_VERSION=VERSION)
-        result = subprocess.run(["bash", "scripts/publish/sign-target-assets.sh", str(archive),
-                                 str(self.packages), str(out)], cwd=ROOT, env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = out / f"perry-target-wasm32-wasip2-{VERSION}.tgz.update.json"
-        self.assertEqual(json.loads(manifest.read_text()), {"kind": "--artifact"})
-        ui = out / f"perry-ui-x86_64-unknown-linux-gnu-{VERSION}.tgz.update.json"
-        self.assertEqual(json.loads(ui.read_text()), {"kind": "--ui"})
+        # The workflow's `-C host-staging .` layout stores ./perry; older tags store perry.
+        for layout, members in (("current", ["-C", str(staging), "."]), ("older", ["-C", str(staging), "perry"])):
+            with self.subTest(layout=layout):
+                archive = self.root / f"host-{layout}.tar.gz"
+                subprocess.run(["tar", "czf", str(archive), *members], check=True)
+                out = self.root / f"out-{layout}"
+                result = subprocess.run(["bash", "scripts/publish/sign-target-assets.sh", str(archive),
+                                         str(self.packages), str(out)], cwd=ROOT, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = out / f"perry-target-wasm32-wasip2-{VERSION}.tgz.update.json"
+                self.assertEqual(json.loads(manifest.read_text()), {"kind": "--artifact"})
+                ui = out / f"perry-ui-x86_64-unknown-linux-gnu-{VERSION}.tgz.update.json"
+                self.assertEqual(json.loads(ui.read_text()), {"kind": "--ui"})
 
 
 if __name__ == "__main__":

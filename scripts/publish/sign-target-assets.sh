@@ -15,8 +15,9 @@ if [ "${VERIFY_NPM:-false}" = true ]; then args+=(--verify-npm); fi
 # Complete selection and verification before signing any package.
 python3 scripts/publish/select-target-assets.py "$packages" "${args[@]}" > "$work/packages.tsv"
 mkdir -p "$assets"
-# The host archive is written with `tar czf ... *` from the staging directory.
-tar xzf "$archive" -C "$work" perry
+# Current archives store ./perry (`tar czf ... -C host-staging .`); older tags store perry.
+member=$(tar tzf "$archive" | grep -xE '(\./)?perry')
+tar xzf "$archive" -C "$work" "$member"
 while IFS=$'\t' read -r tgz kind triple version package; do
   name="${package}-${version}.tgz"
   cp "$tgz" "$assets/$name"
