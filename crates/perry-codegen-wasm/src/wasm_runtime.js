@@ -1719,6 +1719,12 @@ const __classFunctionParentProtos = new Map();
 function __classFunctionParentProto(className) {
   return __classFunctionParentProtos.has(className) ? __classFunctionParentProtos.get(className) : Object.prototype;
 }
+// A collection constructor's adder (`set` or `add`), which must be callable.
+function __hostAdder(obj, name) {
+  const fn = obj[name];
+  if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
+  return fn;
+}
 // The class name, after recording its constructor slot the first time `new` sees it.
 function __classNoteCtorSlot(className, ctorIdx) {
   const cls = String(className);
@@ -2648,19 +2654,25 @@ const __memDispatch = {
     return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
-  // A collection's entries go through the instance's own `set`/`add`, so a subclass
-  // override sees them, and a Map entry is any object with keys 0 and 1, as the built-in
+  // A collection's entries go through the instance's `set`/`add`, read once before the
+  // iteration, so a subclass override sees them, and a Map entry is any object with keys 0 and 1, as the built-in
   // constructors do. Array elements are own data properties and a Date's time value is
   // set directly, past any accessor or override on the subclass.
   host_super_init: (obj, args) => {
     const a = Array.isArray(args) ? args : [];
     if (obj instanceof Map || obj instanceof WeakMap) {
-      if (a[0] != null) for (const e of a[0]) {
-        if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
-        obj.set(e[0], e[1]);
+      if (a[0] != null) {
+        const set = __hostAdder(obj, 'set');
+        for (const e of a[0]) {
+          if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
+          set.call(obj, e[0], e[1]);
+        }
       }
     } else if (obj instanceof Set || obj instanceof WeakSet) {
-      if (a[0] != null) for (const v of a[0]) obj.add(v);
+      if (a[0] != null) {
+        const add = __hostAdder(obj, 'add');
+        for (const v of a[0]) add.call(obj, v);
+      }
     } else if (Array.isArray(obj)) {
       const made = Array(...a);
       obj.length = made.length;
