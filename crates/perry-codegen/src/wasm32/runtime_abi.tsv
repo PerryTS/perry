@@ -5221,6 +5221,7 @@ perry_ffi_promise_resolve_deferred	void	ptr,ptr,ptr
 perry_ffi_run_pending	void	i64
 perry_ffi_spawn_blocking	void	ptr,ptr
 perry_function_family_symbol_set	f64	ptr,i32u,f64,f64,f64,i32s
+perry_function_run_admits	i32s	ptr,ptr,i64,i32u
 perry_geisterhand_find_by_shortcut	f64	ptr,usize
 perry_geisterhand_free_string	void	ptr,usize
 perry_geisterhand_get_closure	f64	i64,i8u

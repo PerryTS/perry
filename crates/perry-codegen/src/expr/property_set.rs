@@ -350,10 +350,18 @@ fn lower_static_key_store(
             // value's lowering, which is arbitrary user code: a collection that
             // moved it, or a shape change it made, is already visible here.
             let obj_box = vals[0].clone();
-            let run = plan.take().and_then(|plan| {
-                let bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                super::layout_read::family_run_arm(ctx, plan, &bits, property)
-            });
+            let run = match plan.take() {
+                Some(plan) => {
+                    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                    super::layout_read::family_run_arm(ctx, plan, &bits, property)
+                }
+                // An ordinary function constructor's store.
+                None if matches!(object, Expr::This) => {
+                    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                    crate::layout_desc::function_families::run_arm(ctx, &bits, property, value)
+                }
+                None => None,
+            };
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);

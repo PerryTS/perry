@@ -1005,6 +1005,11 @@ pub(crate) struct RunArm {
     pub slot: u32,
     /// The stored key (its `PERRY_PROBE_VERIFY` slot witness).
     pub key: String,
+    /// The slot's byte offset when the run is an ordinary function
+    /// constructor's (`layout_desc::function_families::run_arm`): its check
+    /// proved the receiver at the constructor's own birth layout, so the store
+    /// tests no family word.
+    pub function_off: Option<u64>,
 }
 
 /// A constructor run in flight in the innermost constructor body
@@ -1034,7 +1039,7 @@ pub(crate) enum RunValue {
     Runs,
 }
 
-fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
+pub(crate) fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
     fn free(e: &Expr, keys: &[&str]) -> bool {
         match e {
             Expr::Undefined
@@ -1384,6 +1389,7 @@ fn run_arm(
         ok: run.ok.clone(),
         slot: plan.slot,
         key: property.to_owned(),
+        function_off: None,
     });
     (out, run)
 }
@@ -1472,24 +1478,34 @@ pub(crate) fn begin_family_init_store(
         .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
 
     ctx.current_block = word_idx;
-    // The run's check proved the receiver a family object of the class (or
-    // a descendant), whose layouts all hold the key at `slot`; its word still
-    // carries no shadow bit (a store of the run that took the site below may
-    // have given it an overflow, which orders its keys from then on).
-    let blk = ctx.block();
-    let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
-    let word = blk.load(I32, &word_ptr);
-    let in_band = emit_family_word_test(blk, &word);
-    blk.cond_br(&in_band, &load_label, &miss_label);
+    let off = match arm.function_off {
+        // A function constructor's run: every store of it is a slot store
+        // while its check holds, so none leaves the birth layout.
+        Some(off) => {
+            ctx.block().br(&load_label);
+            off
+        }
+        None => {
+            // The run's check proved the receiver a family object of the
+            // class (or a descendant), whose layouts all hold the key at
+            // `slot`; its word still carries no shadow bit (a store of the
+            // run that took the site below may have given it an overflow,
+            // which orders its keys from then on).
+            let blk = ctx.block();
+            let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+            let word = blk.load(I32, &word_ptr);
+            let in_band = emit_family_word_test(blk, &word);
+            blk.cond_br(&in_band, &load_label, &miss_label);
+            header + 8 * slot as u64
+        }
+    };
 
     ctx.current_block = load_idx;
-    super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
+    if arm.function_off.is_none() {
+        super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
+    }
     let blk = ctx.block();
-    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
-        blk,
-        &recv.biased,
-        (header + 8 * slot as u64) as i64,
-    );
+    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, off as i64);
     blk.br(&hit_label);
 
     ctx.current_block = hit_idx;

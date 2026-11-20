@@ -287,7 +287,36 @@ unsafe fn try_symbol_store(
 ///
 /// The shared descriptor holds no per-evaluation word (each evaluation's
 /// record is interned by facts), so the fact is on the holder, as for the
-/// birth itself (`allocate_layout`): the receiver's prototype's
+/// birth itself (`allocate_layout`): see [`function_birth_record`]. The key
+/// at `position` is still compared directly, and the entry must be the
+/// descriptor's optional plain data entry: anything else takes the complete
+/// `[[Set]]`. The answer is that record's [[Prototype]] link, which an add at
+/// a hole must still ask.
+#[inline]
+unsafe fn function_layout_admits_store(
+    obj: *const ObjectHeader,
+    d: &PerryLayoutDesc,
+    position: u32,
+    key: f64,
+) -> Option<u64> {
+    if position < 32 && (d.rep >> (2 * position)) & 0b11 != 0 {
+        return None;
+    }
+    let record = function_birth_record(obj, d)?;
+    let keys = record.keys() as *const crate::array::ArrayHeader;
+    if keys.is_null()
+        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
+    {
+        return None;
+    }
+    let entry = super::key_attrs::keys_entry(keys, position);
+    (entry == super::key_attrs::ENTRY_OPTIONAL
+        && super::key_attrs::entry_is_plain_writable_data(entry))
+    .then_some(record.prototype_word())
+}
+
+/// The record of `obj`'s word when `obj` carries exactly the layout its
+/// birth from descriptor `d` gave it. The receiver's prototype's
 /// `ObjectMeta::function_layout_birth` names this descriptor and holds the
 /// word its instances are born with, and that holder was validated against
 /// the record (prototype identity, serial, current symbol bindings) when it
@@ -296,21 +325,14 @@ unsafe fn try_symbol_store(
 /// attribute change, generalization, prototype change or shadowing restamps
 /// the receiver with another word and fails the compare. The receiver names
 /// its prototype through its own record, so the holder read is the one the
-/// birth wrote for that prototype. The key at `position` is still compared
-/// directly, and the entry must be the descriptor's optional plain data
-/// entry: anything else takes the complete `[[Set]]`. The answer is that
-/// record's [[Prototype]] link, which an add at a hole must still ask.
+/// birth wrote for that prototype.
 #[inline]
-unsafe fn function_layout_admits_store(
+pub(crate) unsafe fn function_birth_record(
     obj: *const ObjectHeader,
     d: &PerryLayoutDesc,
-    position: u32,
-    key: f64,
-) -> Option<u64> {
+) -> Option<super::shapes::ShapeRecordRef> {
     let word = (*obj).parent_class_id;
-    if !super::shapes::is_site_matchable_layout_word(word)
-        || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
-    {
+    if !super::shapes::is_site_matchable_layout_word(word) {
         return None;
     }
     // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
@@ -335,24 +357,8 @@ unsafe fn function_layout_admits_store(
     }
     let prototype = address as *const ObjectHeader;
     // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
-    let Some(holder) =
-        crate::meta_read!(crate::meta_obj_runtime_born!(prototype as *mut _)).as_ref()
-    else {
-        return None;
-    };
-    if holder.function_layout_birth != (u64::from(tag) << 32) | u64::from(word) {
-        return None;
-    }
-    let keys = record.keys() as *const crate::array::ArrayHeader;
-    if keys.is_null()
-        || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
-    {
-        return None;
-    }
-    let entry = super::key_attrs::keys_entry(keys, position);
-    (entry == super::key_attrs::ENTRY_OPTIONAL
-        && super::key_attrs::entry_is_plain_writable_data(entry))
-    .then_some(prototype_bits)
+    let holder = crate::meta_read!(crate::meta_obj_runtime_born!(prototype as *mut _)).as_ref()?;
+    (holder.function_layout_birth == (u64::from(tag) << 32) | u64::from(word)).then_some(record)
 }
 
 /// Checked fixed-position symbol store, preserving full borrowed-call and

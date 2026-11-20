@@ -476,6 +476,7 @@ fn end_family_run(ctx: &mut FnCtx<'_>) {
     if let Some(body) = ctx.inline_ctor_return.last_mut() {
         body.family_run = None;
     }
+    ctx.fn_ctor_run = None;
 }
 
 fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {

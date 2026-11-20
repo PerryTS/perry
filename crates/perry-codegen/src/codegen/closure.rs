@@ -1220,6 +1220,7 @@ pub(super) fn compile_closure(
         inline_ctor_return: Vec::new(),
         recv_run: None,
         recv_run_store_member: false,
+        fn_ctor_run: None,
         methods,
         module_globals,
         import_function_prefixes,
