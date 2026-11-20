@@ -471,15 +471,20 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
 }
 
 /// `@@split` and `@@matchAll` (22.2.6.14, 22.2.6.11) build their splitter or
-/// matcher with SpeciesConstructor(rx, %RegExp%): `constructor` (and its
-/// `@@species`) is read from the regexp and the result constructed from
-/// `(rx, flags)`, so a constructor the program stored runs with any arguments.
+/// matcher with SpeciesConstructor(rx, %RegExp%) (7.3.22): `C` = the
+/// regexp's `constructor`, `S` = `C[@@species]`, then Construct(S, [rx,
+/// flags]) with flags = ToString(Get(rx, "flags")). Each read is keyed: a
+/// realm constructor's `@@species` is the constructor itself, and a realm
+/// constructor builds the realm's own regexp (`Cons::NewProgram` makes
+/// nothing for it). A constructor the program stored runs with `(rx,
+/// flags)`, and what it makes the builtin then uses as its regexp (Set of
+/// `lastIndex`, RegExpExec's `exec` call, 22.2.7.1): any protocol on it.
 pub(super) fn regexp_species(name: &str) -> bool {
     name.strip_prefix(WK_PREFIX)
         .is_some_and(|s| matches!(s, "split" | "matchAll"))
 }
 
-fn regexp_species_constructor(m: &mut Model, t: Tok) {
+fn regexp_species_constructor(m: &mut Model, t: Tok, call: CallId) {
     let recv = m.node_l("regexp");
     m.add_tok(recv, t);
     let k = m.atom("constructor");
@@ -491,9 +496,49 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
             dst: cn,
         },
     );
-    let r = m.reason("argument of builtin species constructor of the RegExp");
+    let sa = m.atom("@@__perry_wk_species");
+    let sp = m.node_l("species");
     m.cons(
         cn,
+        Cons::Load {
+            key: Key::Named(sa),
+            dst: sp,
+        },
+    );
+    let fk = m.atom("flags");
+    let flags = m.node_l("regexp-flags");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(fk),
+            dst: flags,
+        },
+    );
+    to_prim(
+        m,
+        flags,
+        "ToString of the RegExp flags for its species constructor",
+    );
+    let fstr = m.node_l("regexp-flags-string");
+    m.add_prim(fstr, prim::STR);
+    let made = m.node_l("species-regexp");
+    let c = m.calls[call as usize].clone();
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Undef,
+            args: vec![recv, fstr],
+            spread: vec![],
+            ret: made,
+            site: c.site,
+            region: m.thrown,
+        },
+    );
+    m.cons(sp, Cons::NewProgram { call: mc });
+    let r = m.reason("regexp a program species constructor made for a RegExp builtin");
+    m.cons(
+        made,
         Cons::Implicit {
             reason: r,
             proto: Protocol::Any,
@@ -1992,7 +2037,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 method_call(m, call, recv, "toISOString", vec![]);
             }
             if what == "RegExp" && regexp_species(n) {
-                regexp_species_constructor(m, t);
+                regexp_species_constructor(m, t, call);
             }
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
