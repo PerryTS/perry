@@ -54,21 +54,52 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, exp);
                 self.emit_memcall(func, "math_pow", 2);
             }
-            Expr::MathMin(args) if args.len() == 2 => {
+            // Two numbers compare inline. Any other operand goes through the bridge, which
+            // converts both with ToNumber as `Math.min` / `Math.max` do.
+            Expr::MathMin(args) | Expr::MathMax(args) if args.len() == 2 => {
+                let (op, bridge) = if matches!(expr, Expr::MathMin(_)) {
+                    (Instruction::F64Min, "math_min")
+                } else {
+                    (Instruction::F64Max, "math_max")
+                };
                 self.emit_expr(func, &args[0]);
-                func.instruction(&Instruction::F64ReinterpretI64);
                 self.emit_expr(func, &args[1]);
+                func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                func.instruction(&Instruction::LocalSet(self.temp_local));
+                // A NaN-boxed tag (undefined, null, a boolean, a string, a pointer, an
+                // int32) has its top 14 bits set; a number, NaN included, does not.
+                for local in [self.temp_local, self.temp_store_local] {
+                    func.instruction(&Instruction::LocalGet(local));
+                    func.instruction(&Instruction::I64Const(50));
+                    func.instruction(&Instruction::I64ShrU);
+                    func.instruction(&Instruction::I64Const(0x1FFF));
+                    func.instruction(&Instruction::I64Ne);
+                }
+                func.instruction(&Instruction::I32And);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                self.block_depth += 1;
+                func.instruction(&Instruction::LocalGet(self.temp_local));
                 func.instruction(&Instruction::F64ReinterpretI64);
-                func.instruction(&Instruction::F64Min);
+                func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                func.instruction(&Instruction::F64ReinterpretI64);
+                func.instruction(&op);
                 func.instruction(&Instruction::I64ReinterpretF64);
-            }
-            Expr::MathMax(args) if args.len() == 2 => {
-                self.emit_expr(func, &args[0]);
-                func.instruction(&Instruction::F64ReinterpretI64);
-                self.emit_expr(func, &args[1]);
-                func.instruction(&Instruction::F64ReinterpretI64);
-                func.instruction(&Instruction::F64Max);
-                func.instruction(&Instruction::I64ReinterpretF64);
+                func.instruction(&Instruction::Else);
+                self.emit_frame_begin(func, 2);
+                for (slot, local) in [(0, self.temp_local), (1, self.temp_store_local)] {
+                    self.emit_slot_addr(func, slot);
+                    func.instruction(&Instruction::LocalGet(local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                self.emit_memcall(func, bridge, 2);
+                self.block_depth -= 1;
+                func.instruction(&Instruction::End);
             }
             // `Math.min(...xs)` / `Math.max(...xs)`, the one-spread form HIR keeps compact.
             Expr::MathMinSpread(src) | Expr::MathMaxSpread(src) => {
