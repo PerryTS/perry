@@ -128,9 +128,7 @@ not a larger timeout. Keep
 `RUST_TEST_THREADS=1` for `perry-runtime`: its tests share process-global GC,
 arena, timer, and notification state. Keep `CARGO_BUILD_JOBS=1` for the
 runtime-linked test binaries until runner memory measurements support increasing
-it. The sccache-backed CI jobs set `CARGO_INCREMENTAL=0`, so sccache can reuse
-compiler outputs. Mr Boxington-backed release jobs use mbx's default cache
-policy instead; local `make build-dev` and `make build-prod` leave
+it. Mr Boxington-backed release jobs use mbx's default cache policy; local `make build-dev` and `make build-prod` leave
 `MBX_INCREMENTAL` unset so mbx can keep private incremental state for edited
 crates while sharing unchanged compilations.
 
@@ -183,9 +181,9 @@ Two specific costs dominated:
   the only arm that sees auto-optimize-only link bugs.
 - Every job saved a fresh ~0.5–1.3 GB sccache tarball on every PR push (~200 GB/day
   into a 10 GB repo cache budget), evicting every useful entry within the hour —
-  and PR-scoped caches are not even readable by other PRs. sccache now saves only
-  from main-line runs; PRs restore the newest main-line blob. `cache-warm.yml` is
-  gone: the sweep is the cache-producing build on `main`.
+  and PR-scoped caches are not even readable by other PRs. No job saves an sccache
+  tarball now, and only main-line runs save caches; see [Build caches](#build-caches).
+  `cache-warm.yml` is gone: the sweep is the cache-producing build on `main`.
 
 A later release run exposed a separate serial bottleneck: its 246 `perry`
 integration-test binaries had not reached their midpoint when `cargo-test` hit
@@ -204,6 +202,35 @@ release-tag arms (see [CI gate scheduling](ci-gate-scheduling.md) and
 `run-extended-tests` label to a PR and they run on it, along with the `full` tier
 of `test.yml`. An unlabelled PR still gets a run of each — with every job skipped,
 which costs no runner slot.
+
+## Build caches
+
+The repository's Actions cache holds 10 GB on the organisation's Free plan, and a
+PR can restore only what `main` saved: PR-scoped entries are invisible to other
+PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
+`Swatinem/rust-cache` with one policy:
+
+- **One family per build.** `key` names the family (the job id by default).
+  rust-cache keeps the first save of a key, so a family has exactly one saving
+  job (`save: "true"`), chosen from the jobs a PR runs. Sweep and nightly jobs
+  that run the same build restore that family without saving it; the
+  release-profile `build-perry` jobs restore `gap-suite-build`. `test_actions_plan.py` fails on a second
+  saver or on a direct `Swatinem/rust-cache` use in the core workflows.
+- **Saves survive a red main.** `cache-on-failure` is on: a job that fails its
+  tests has still compiled valid dependencies, and a red `main` would otherwise
+  never save anything.
+- **The key follows the pinned toolchain only.** rust-cache hashes every
+  installed `rustc`, and the runner image's preinstalled stable changes with each
+  image rollout, so the action removes it before hashing.
+- **No sccache tarballs.** A per-run local-dir sccache tarball is ~4 GB; three
+  jobs saving one on every main run evicted the whole budget. The GitHub cache
+  backend of sccache (one entry per compilation unit) was measured at ~0 % Rust
+  hits under throttling. rust-cache stores dependencies only; workspace crates
+  rebuild in every job.
+
+The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their own
+`release-*` keys. GitHub evicts least-recently-used entries first, and the PR
+families are restored by every PR run, so cold families are the ones that go.
 
 ## Budgets
 

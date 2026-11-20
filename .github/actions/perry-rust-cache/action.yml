@@ -1,0 +1,36 @@
+name: Perry Rust cache
+description: Swatinem/rust-cache with Perry's key and save policy (docs/src/testing/ci-tiers.md, "Build caches")
+inputs:
+  key:
+    description: Cache family. Jobs that run the same cargo build restore one family; exactly one of them saves it.
+    default: ${{ github.job }}
+  save:
+    description: Save the family from main-line runs. Set it on the one job that owns the family.
+    default: "false"
+  workspaces:
+    description: Passed to rust-cache unchanged.
+    default: ""
+runs:
+  using: composite
+  steps:
+    # rust-cache hashes every installed rustc into the key, and the runner
+    # image's preinstalled stable changes with each image rollout, which forks
+    # the key between runners. Only the pinned toolchains may remain.
+    - name: Remove the runner's preinstalled stable Rust
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup toolchain list | awk '/^stable-/ {print $1}' | while read -r toolchain; do
+          rustup toolchain uninstall "$toolchain"
+        done
+        # Steps outside the checkout no longer have a default without this.
+        pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+        rustup default "$pinned"
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        prefix-key: v1-rust
+        shared-key: ${{ inputs.key }}
+        workspaces: ${{ inputs.workspaces }}
+        # Main is often red; a failing job's compiled dependencies are still valid.
+        cache-on-failure: true
+        save-if: ${{ inputs.save == 'true' && github.ref == 'refs/heads/main' }}
