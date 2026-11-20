@@ -1392,6 +1392,7 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
     let input = scope.root_nanbox_f64(input);
     let map_fn = scope.root_nanbox_f64(map_fn);
     let this_arg = scope.root_nanbox_f64(this_arg);
+    let c = scope.root_nanbox_f64(c);
     let iter_value = iterator_value_for_from_async(input.get_nanbox_f64());
     let input = input.get_nanbox_f64();
     let source_arr = if iter_value.is_some() {
@@ -1409,6 +1410,7 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
     } else {
         crate::value::js_nanbox_pointer(source_arr as i64)
     });
+    let c = c.get_nanbox_f64();
     let constructed = if crate::object::js_value_is_constructor(c) {
         let len = (!source_arr.is_null()).then(|| unsafe { (*source_arr).length as f64 });
         let args = len.as_slice();
@@ -1601,18 +1603,26 @@ fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
 /// Resolves the result promise with the collected values: the accumulator,
 /// or the constructed result once `Set(A, "length", k, true)` closed it.
 fn array_from_async_finish(closure: *const crate::closure::ClosureHeader) {
-    let result_promise =
-        crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE) as *mut Promise;
+    let result_promise = crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
     let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
     if constructed.to_bits() == crate::value::TAG_UNDEFINED {
         let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY);
-        js_promise_resolve(result_promise, crate::value::js_nanbox_pointer(result_arr));
+        js_promise_resolve(
+            result_promise as *mut Promise,
+            crate::value::js_nanbox_pointer(result_arr),
+        );
         return;
     }
     let len = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
-    match crate::exception::catch_js_throw(|| {
+    // A `length` setter on the result runs user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(result_promise));
+    let settled = crate::exception::catch_js_throw(|| {
         crate::array::finish_constructed_length(constructed, len)
-    }) {
+    });
+    let result_promise =
+        crate::value::js_nanbox_get_pointer(result_promise.get_nanbox_f64()) as *mut Promise;
+    match settled {
         Ok(result) => js_promise_resolve(result_promise, result),
         Err(reason) => js_promise_reject(result_promise, reason),
     }
@@ -1677,7 +1687,10 @@ extern "C" fn array_from_async_mapped_step(
     0.0
 }
 
-fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHeader, value: f64) {
+fn array_from_async_push_and_continue(
+    mut closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) {
     let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX);
     let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
     if constructed.to_bits() == crate::value::TAG_UNDEFINED {
@@ -1693,9 +1706,15 @@ fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHea
             result_arr as i64,
         );
     } else {
-        match crate::exception::catch_js_throw(|| {
+        // The define reaches the result's own traps and setters: user code.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+        let defined = crate::exception::catch_js_throw(|| {
             crate::array::define_constructed_index(constructed, index as usize, value)
-        }) {
+        });
+        closure = crate::value::js_nanbox_get_pointer(state.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
+        match defined {
             Ok(result) => crate::closure::js_closure_set_capture_f64(
                 closure as *mut _,
                 AFA_CONSTRUCTED,

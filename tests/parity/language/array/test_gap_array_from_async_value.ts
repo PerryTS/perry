@@ -29,4 +29,20 @@ console.log(Object.getOwnPropertyNames(Array).includes("fromAsync"));
   const list = await (List as any).fromAsync([8, 9]);
   console.log(list instanceof List, Array.isArray(list), JSON.stringify(list));
   console.log(Array.isArray(await fromAsync.call({}, [1])));
+
+  // The result's own definitions and length write fail loudly.
+  function Sealed() {
+    return Object.preventExtensions([]);
+  }
+  await fromAsync.call(Sealed, [1]).then(
+    () => console.log("sealed resolved"),
+    (e: any) => console.log("sealed rejected", e instanceof TypeError),
+  );
+  function FixedLength() {
+    return Object.defineProperty([], "length", { writable: false });
+  }
+  await fromAsync.call(FixedLength, []).then(
+    () => console.log("fixed length resolved"),
+    (e: any) => console.log("fixed length rejected", e instanceof TypeError),
+  );
 })();
