@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: canonical Effect compile/run smoke for issue #802.",
   "dependencies": {
-    "effect": "3.21.2"
+    "effect": "3.22.1"
   },
   "perry": {
     "compilePackages": ["effect"],
