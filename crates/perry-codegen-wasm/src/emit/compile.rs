@@ -1573,10 +1573,6 @@ impl WasmModuleEmitter {
             }
 
             // Register class methods with the bridge and set up inheritance
-            let user_classes: std::collections::BTreeSet<&str> = modules
-                .iter()
-                .flat_map(|(_, m)| m.classes.iter().map(|c| c.name.as_str()))
-                .collect();
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
                 self.current_mod_idx = mod_idx; // see the globals loop above
@@ -1671,13 +1667,8 @@ impl WasmModuleEmitter {
                         // A user parent's constructor slot, as `Expr::ClassRef` passes it, so
                         // the child's class value inherits from the parent's; undefined for a
                         // built-in parent (`extends Error`), which has no class value here.
-                        let parent_slot = if user_classes.contains(parent_name.as_str()) {
-                            let slot = self
-                                .class_ctor_map
-                                .get(parent_name.as_str())
-                                .and_then(|idx| self.func_to_table_idx.get(idx))
-                                .map_or(-1.0, |&slot| slot as f64);
-                            slot.to_bits()
+                        let parent_slot = if self.user_classes.contains(parent_name) {
+                            self.class_ctor_slot(parent_name).to_bits()
                         } else {
                             TAG_UNDEFINED
                         };

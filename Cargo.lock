@@ -5594,6 +5594,7 @@ dependencies = [
  "turnloop",
  "unicode-normalization",
  "unicode-segmentation",
+ "unicode-width 0.2.2",
  "unsafe-libyaml",
  "url",
  "windows-sys 0.61.2",
