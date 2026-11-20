@@ -960,12 +960,12 @@ impl WasmModuleEmitter {
                 Expr::PropertyGet {
                     object, property, ..
                 } => format!(
-                    "(delete toJsValue({})[{}], u64ToF64(TAG_TRUE))",
+                    "fromJsValue(delete toJsValue({})[{}])",
                     self.emit_js_expr(object, locals),
                     js_string_literal(property)
                 ),
                 Expr::IndexGet { object, index, .. } => format!(
-                    "(delete toJsValue({})[toJsValue({})], u64ToF64(TAG_TRUE))",
+                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
                     self.emit_js_expr(object, locals),
                     self.emit_js_expr(index, locals)
                 ),

@@ -1217,16 +1217,16 @@ let n = 0;
 function bump() { n++; return n; }
 async function del() {
   const o: any = { a: 1, b: 2 }; const k = "b";
-  delete o.a; delete o[k];
+  const d = delete o.a; delete o[k];
   let caught = "no";
   try { const z: any = null; delete z.x; } catch (e) { caught = "yes"; }
   delete (bump() as any);
-  return JSON.stringify(o) + " " + caught + " " + n;
+  return d + " " + JSON.stringify(o) + " " + caught + " " + n;
 }
 del().then((v) => console.log(v));
 "#
         ),
-        "{} yes 1"
+        "true {} yes 1"
     );
 }
 
