@@ -46,3 +46,20 @@ console.log((pc === P) + " " + pc.name + " " + Object.keys(p).length + " | " + (
         "true P 0 | true true"
     );
 }
+
+// A class prototype is an instance of its parent class only, not of its own class.
+// Expected output is Node's.
+#[test]
+fn a_class_prototype_is_not_an_instance_of_its_own_class() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A {}
+class B extends A {}
+class E extends Error {}
+console.log([A.prototype instanceof A, B.prototype instanceof A, B.prototype instanceof B, A.prototype instanceof Object, E.prototype instanceof Error, new B() instanceof B].join(","));
+"#
+        ),
+        "false,true,false,true,true,true"
+    );
+}

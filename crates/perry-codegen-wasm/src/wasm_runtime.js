@@ -1686,6 +1686,13 @@ const classCtorSlotTable = Object.create(null);
 // `{}`. `proto` is a class-expression evaluation's prototype (see __classCtor).
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
+// The class whose instance `obj` is, for `instanceof`: a class prototype holds its
+// class's tag as an own key and is an instance of the parent class only.
+function __instanceClassOf(obj) {
+  return Object.prototype.hasOwnProperty.call(obj, __classTag)
+    ? classParentTable[obj[__classTag]] || null
+    : __classOf(obj);
+}
 // That prototype is also the class value's `prototype`. It inherits from a user parent
 // class's prototype and holds the class's own methods, non-enumerable. A declared class
 // with a known constructor slot gets its class value here, so `constructor` holds
@@ -1818,10 +1825,10 @@ function __classCtor(className, ctorIdx, caps) {
   Object.defineProperty(ctor, Symbol.hasInstance, {
     value: (obj) => {
       if (!obj || typeof obj !== 'object') return false;
-      if (evaluated && __classOf(obj) === className) {
+      if (evaluated && __instanceClassOf(obj) === className) {
         return (__instanceEvaluationOf(obj) || __classTemplate(className).first) === ctor;
       }
-      for (let c = __classOf(obj); c; c = classParentTable[c] || null) {
+      for (let c = __instanceClassOf(obj); c; c = classParentTable[c] || null) {
         if (c === className) return true;
       }
       return false;
@@ -2712,7 +2719,7 @@ const __memDispatch = {
   // template answers for the evaluation that built it.
   class_instanceof_value: (classId, obj, ctor) => {
     const e = __evaluationOf(ctor);
-    if (e && obj && typeof obj === 'object' && __classOf(obj) === e.template) {
+    if (e && obj && typeof obj === 'object' && __instanceClassOf(obj) === e.template) {
       return (__instanceEvaluationOf(obj) || __classTemplate(e.template).first) === ctor;
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
@@ -2880,7 +2887,7 @@ const __memDispatch = {
     // A user-class instance (see __classInstance): its chain is the class table,
     // and as a plain object it is also an instance of Object.
     if (__classOf(obj)) {
-      let cls = __classOf(obj);
+      let cls = __instanceClassOf(obj);
       while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
       return target === 'Object' ? 1 : 0;
     }
