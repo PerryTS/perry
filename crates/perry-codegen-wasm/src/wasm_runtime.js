@@ -2227,6 +2227,8 @@ const __memDispatch = {
   console_warn: (...args) => { console.warn(...args); },
   console_error: (...args) => { console.error(...args); },
   console_log_multi: (args) => { if (Array.isArray(args)) console.log(...args); },
+  // `console.<m>(...xs)`: the argument list arrives as one array.
+  console_call_spread: (name, args) => { console[name](...(Array.isArray(args) ? args : [])); },
 
   // String core — args are already decoded JS values via __bitsToJsValue
   string_concat: (a, b) => String(a) + String(b),
@@ -2261,6 +2263,8 @@ const __memDispatch = {
   math_log10: (x) => Math.log10(x),
   math_min: (a, b) => Math.min(a, b),
   math_max: (a, b) => Math.max(a, b),
+  math_min_spread: (src) => Math.min(...src),
+  math_max_spread: (src) => Math.max(...src),
   // Trig / exp / sign / trunc / cbrt / hypot / etc. (Issue #133 item 4)
   math_sin: (x) => Math.sin(x),
   math_cos: (x) => Math.cos(x),
@@ -2573,8 +2577,13 @@ const __memDispatch = {
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
     const padded = __padBigintArgs(fn, closure.captures.length, argArr.map(v => __jsValueToBits(v)));
-    return __bitsToJsValue(fn(...closure.captures, ...padded));
+    // A void function's export returns `undefined`, not bits.
+    const result = fn(...closure.captures, ...padded);
+    return result === undefined ? undefined : __bitsToJsValue(result);
   },
+  // `obj.name(...xs)` / `obj[key](...xs)`: the member is read and invoked as the async
+  // path does, so an own property wins and a non-callable one throws.
+  method_call_spread: (obj, name, args) => __jsMethodInvoke(__jsMethodGet(obj, name), args),
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
   array_map: (arr, cb) => {
@@ -6159,7 +6168,8 @@ function __jsNativeMember(obj, name) {
 // chain defines wins over what the object inherits from Object.prototype (`toString`),
 // and loses only to an own property. Otherwise the property is read exactly once (an
 // inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
-// only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
+// only names in `__uiMethodMap`, on an instance or a primitive UI handle, keep the bridge
+// route, which `__classDispatch` ends with.
 function __jsMethodGet(obj, mname) {
   const tagged = obj && typeof obj === 'object' && __classOf(obj)
     && !Object.prototype.hasOwnProperty.call(obj, mname);
@@ -6167,7 +6177,8 @@ function __jsMethodGet(obj, mname) {
     return { r: obj, m: mname, user: true };
   }
   const f = obj[mname];
-  if (tagged && typeof f !== 'function' && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
+  if ((tagged || typeof obj !== 'object') && typeof f !== 'function'
+    && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
     return { r: obj, m: mname, user: true };
   }
   return { r: obj, m: mname, f };
@@ -6187,6 +6198,8 @@ function __jsMethodInvoke(ref, args) {
     return result;
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
+  // A compiled class method takes Perry values, as `reflect_apply` passes them.
+  if (__classMethodFns.has(ref.f)) return ref.f.apply(ref.r, args);
   return ref.f.apply(ref.r, args.map(__hostCallback));
 }
 

@@ -318,6 +318,75 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // `f(a, ...xs)` / `o.m(a, ...xs)`: the argument list is built as the array
+            // literal `[a, ...xs]` would be, then applied by the host.
+            Expr::CallSpread { callee, args, .. } => {
+                let list = Expr::ArraySpread(
+                    args.iter()
+                        .map(|arg| match arg {
+                            CallArg::Expr(e) => ArrayElement::Expr(e.clone()),
+                            CallArg::Spread(e) => ArrayElement::Spread(e.clone()),
+                        })
+                        .collect(),
+                );
+                // A namespace import's function is called as the value `W.f` reads.
+                let ns_func = |object: &Expr, property: &str| {
+                    matches!(object, Expr::ExternFuncRef { name, .. }
+                        if self.emitter.imported_ns_funcs.contains_key(
+                            &(self.emitter.current_mod_idx, format!("{name}.{property}"))))
+                };
+                let member = match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if !ns_func(object, property) => Some((
+                        object,
+                        Expr::String(property.clone()),
+                        Some(property.as_str()),
+                    )),
+                    Expr::IndexGet { object, index, .. } => Some((object, (**index).clone(), None)),
+                    _ => None,
+                };
+                if let Some((object, name, property)) = member {
+                    // HIR keeps `console.<m>` collapsed onto the unresolved global.
+                    let unresolved_global = matches!(object.as_ref(), Expr::GlobalGet(id)
+                        if !self.emitter.global_map.contains_key(id));
+                    if unresolved_global
+                        && matches!(property, Some("log" | "info" | "warn" | "error" | "debug"))
+                    {
+                        self.emit_frame_begin(func, 2);
+                        self.emit_store_arg(func, 0, &name);
+                        self.emit_store_arg(func, 1, &list);
+                        self.emit_memcall(func, "console_call_spread", 2);
+                        return true;
+                    }
+                    if unresolved_global {
+                        self.emit_frame_begin(func, 0);
+                        self.emit_memcall(func, "global_receiver", 0);
+                        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                    }
+                    self.emit_frame_begin(func, 3);
+                    if unresolved_global {
+                        self.emit_slot_addr(func, 0);
+                        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    } else {
+                        self.emit_store_arg(func, 0, object);
+                    }
+                    self.emit_store_arg(func, 1, &name);
+                    self.emit_store_arg(func, 2, &list);
+                    self.emit_memcall(func, "method_call_spread", 3);
+                } else {
+                    self.emit_frame_begin(func, 2);
+                    self.emit_store_arg(func, 0, callee);
+                    self.emit_store_arg(func, 1, &list);
+                    self.emit_memcall(func, "closure_call_spread", 2);
+                }
+            }
+
             _ => return false,
         }
         true
