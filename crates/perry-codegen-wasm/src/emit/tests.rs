@@ -555,25 +555,6 @@ console.log(Number.isSafeInteger(9007199254740991) + " " + Number.isSafeInteger(
     );
 }
 
-// Two-argument `Math.max` / `Math.min` convert a non-number argument with ToNumber, as the
-// variadic forms do; two numbers keep their result. Expected output is Node's.
-#[test]
-fn two_argument_math_max_and_min_convert_their_arguments() {
-    assert_eq!(
-        run_web_source(
-            r#"
-function id(v: any): any { return v; }
-const show = (v: any) => v + ":" + typeof v;
-const nul: any = id(null); const und: any = id(undefined); const tru: any = id(true); const s5: any = id("5"); const s9: any = id("9");
-console.log([show(Math.max(1, nul)), show(Math.min(1, nul)), show(Math.max(1, und)), show(Math.max(tru, 0)), show(Math.max(1, s5)), show(Math.max(s9, s5)), show(Math.min(s9, s5))].join(" "));
-function two(a: number, b: number) { return Math.max(a, b) + "," + Math.min(a, b); }
-console.log(two(3, 9) + " " + two(-0, 0) + " " + two(NaN, 1) + " " + (1 / Math.min(0, -0)) + " " + Math.max(1, 2, nul));
-"#
-        ),
-        "1:number 0:number NaN:number 1:number 5:number 9:number 5:number\n9,3 0,0 NaN,NaN -Infinity 2"
-    );
-}
-
 #[test]
 fn uri_globals_encode_decode_and_throw_like_node() {
     assert_eq!(
@@ -2441,6 +2422,9 @@ mod class_prototype;
 
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
+
+#[path = "math_minmax_tests.rs"]
+mod math_minmax;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
