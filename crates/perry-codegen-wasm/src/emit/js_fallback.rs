@@ -130,10 +130,20 @@ impl WasmModuleEmitter {
                     .as_ref()
                     .map(|u| self.emit_js_expr(u, locals))
                     .unwrap_or_default();
-                let release = condition
-                    .as_ref()
-                    .and_then(super::stmt::collection_cursor_release)
-                    .map(|r| self.emit_js_expr(&r, locals));
+                let release = |threw| {
+                    condition
+                        .as_ref()
+                        .and_then(|c| super::stmt::collection_cursor_release(c, threw))
+                };
+                let release =
+                    release(true)
+                        .zip(release(false))
+                        .map(|((_, on_throw), (_, on_exit))| {
+                            (
+                                self.emit_js_expr(&on_throw, locals),
+                                self.emit_js_expr(&on_exit, locals),
+                            )
+                        });
                 if release.is_some() {
                     out.push_str(&format!("{pad}      try {{\n"));
                 }
@@ -142,8 +152,10 @@ impl WasmModuleEmitter {
                     self.emit_js_stmt(out, s, locals, indent + 2);
                 }
                 out.push_str(&format!("{pad}      }}\n"));
-                if let Some(release) = release {
-                    out.push_str(&format!("{pad}      }} finally {{ {release}; }}\n"));
+                if let Some((on_throw, on_exit)) = release {
+                    out.push_str(&format!(
+                        "{pad}      }} catch (__e) {{ {on_throw}; throw __e; }} finally {{ {on_exit}; }}\n"
+                    ));
                 }
                 out.push_str(&format!("{pad}    }}\n"));
             }

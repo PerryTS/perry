@@ -175,7 +175,7 @@ impl<'a> FuncEmitCtx<'a> {
                             Some(("collection_cursor_epoch", 1u32))
                         }
                         // Emitted around that loop by `stmt::collection_cursor_release`.
-                        "js_collection_cursor_release" => Some(("collection_cursor_release", 2u32)),
+                        "js_collection_cursor_release" => Some(("collection_cursor_release", 3u32)),
                         _ => None,
                     };
                     if let Some((bridge, arity)) = timer {

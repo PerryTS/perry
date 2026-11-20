@@ -301,15 +301,26 @@ impl<'a> FuncEmitCtx<'a> {
                 update,
                 body,
             } => {
-                // The cursor loop runs inside a `finally` that releases its cursor; the
-                // flag lets the wrapped copy of this loop through on the way back.
+                // The cursor loop runs inside a `catch` and a `finally` that release its
+                // cursor; the flag lets the wrapped copy of this loop through on the way back.
                 if !std::mem::take(&mut self.cursor_loop_wrapped) {
-                    if let Some(release) = condition.as_ref().and_then(collection_cursor_release) {
+                    let release = |threw| {
+                        condition
+                            .as_ref()
+                            .and_then(|c| collection_cursor_release(c, threw))
+                    };
+                    if let (Some((step, on_throw)), Some((_, on_exit))) =
+                        (release(true), release(false))
+                    {
                         self.cursor_loop_wrapped = true;
+                        // The step local is dead once the loop ends, so it holds the error.
                         let wrapped = Stmt::Try {
                             body: vec![stmt.clone()],
-                            catch: None,
-                            finally: Some(vec![Stmt::Expr(release)]),
+                            catch: Some(perry_hir::CatchClause {
+                                param: Some((step, String::new())),
+                                body: vec![Stmt::Expr(on_throw), Stmt::Throw(Expr::LocalGet(step))],
+                            }),
+                            finally: Some(vec![Stmt::Expr(on_exit)]),
                             forof_completion: None,
                         };
                         self.emit_stmt(func, &wrapped, in_returning_func);
@@ -558,13 +569,14 @@ impl<'a> FuncEmitCtx<'a> {
 
 /// A Set/Map `for...of` cursor loop (`map_set_delete_safe_for_of` in perry-hir) owns a
 /// host cursor; this is the call that releases it, built from the loop's condition
-/// `nx = js_*_cursor_next(coll, idx, ep); ...`. The emitters run it in a `finally` around
-/// the loop, so a `break`, `return` or `throw` cannot leave the cursor behind.
-pub(super) fn collection_cursor_release(condition: &Expr) -> Option<Expr> {
+/// `nx = js_*_cursor_next(coll, idx, ep); ...`, with the step local `nx`. The emitters run
+/// it in a `catch` (`threw`) and a `finally` around the loop, so a `break`, `return` or
+/// `throw` closes the iterator and cannot leave the cursor behind.
+pub(super) fn collection_cursor_release(condition: &Expr, threw: bool) -> Option<(LocalId, Expr)> {
     let Expr::Sequence(steps) = condition else {
         return None;
     };
-    let Some(Expr::LocalSet(_, next)) = steps.first() else {
+    let Some(Expr::LocalSet(step, next)) = steps.first() else {
         return None;
     };
     let Expr::Call { callee, args, .. } = next.as_ref() else {
@@ -576,17 +588,18 @@ pub(super) fn collection_cursor_release(condition: &Expr) -> Option<Expr> {
     let [coll, _, ep] = args.as_slice() else {
         return None;
     };
-    matches!(name.as_str(), "js_set_cursor_next" | "js_map_cursor_next").then(|| Expr::Call {
+    let release = Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_collection_cursor_release".to_string(),
             param_types: Vec::new(),
             return_type: perry_hir::types::Type::Number,
         }),
-        args: vec![coll.clone(), ep.clone()],
+        args: vec![coll.clone(), ep.clone(), Expr::Bool(threw)],
         type_args: Vec::new(),
         byte_offset: 0,
-    })
+    };
+    matches!(name.as_str(), "js_set_cursor_next" | "js_map_cursor_next").then_some((*step, release))
 }
 
 /// Check if a statement or its children contain a return statement

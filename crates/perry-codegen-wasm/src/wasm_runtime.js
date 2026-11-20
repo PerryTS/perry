@@ -2786,7 +2786,8 @@ const __memDispatch = {
   // `ep` carries its id (0 before the first step) and the slot is that same id, so a
   // nested loop over the same collection cannot move it, and entries added or deleted
   // mid-loop behave as in a host loop.
-  // The emitters release a loop's cursor in a `finally` around it (`cursor_release`).
+  // The emitters release a loop's cursor around it (`cursor_release`): a loop that
+  // ends by `break`, `return` or `throw` still holds it, so its iterator is closed.
   collection_cursor_next: (coll, _slot, ep) => {
     __collectionCursorLast = 0;
     if (!(coll instanceof Set || coll instanceof Map)) return -1;
@@ -2810,9 +2811,20 @@ const __memDispatch = {
   },
   // Read right after `cursor_next`: the id of the loop it stepped.
   collection_cursor_epoch: () => __collectionCursorLast,
-  collection_cursor_release: (coll, ep) => {
+  // After a `throw` (`threw`), the body's error wins over any from closing (IteratorClose).
+  collection_cursor_release: (coll, ep, threw) => {
     const loops = __collectionCursors.get(coll);
-    if (loops) loops.delete(ep);
+    const cur = loops && loops.get(ep);
+    if (!cur) return;
+    loops.delete(ep);
+    try {
+      const close = cur.iter.return;
+      if (close == null) return;
+      const result = Reflect.apply(close, cur.iter, []);
+      if (Object(result) !== result) throw new TypeError('Iterator result is not an object');
+    } catch (error) {
+      if (!threw) throw error;
+    }
   },
   set_value_at: (s, slot) => __collectionCursorValue(s, slot),
   map_entry_key_at: (m, slot) => (__collectionCursorValue(m, slot) || [])[0],
