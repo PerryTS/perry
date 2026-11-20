@@ -220,10 +220,26 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertTrue(any(step.get("env", {}).get("COMPONENT_CHECK_UNIT_TESTS") == "0"
                             for step in jobs["wasi-components"]["steps"]
                             if "component_check.sh" in step.get("run", "")))
-        keys = {name: next(step["with"]["shared-key"] for step in jobs[name]["steps"]
+        keys = {name: next(step["with"]["key"] for step in jobs[name]["steps"]
                            if "rust-cache" in step.get("uses", "")) for name in WASI_JOBS}
         self.assertEqual(len(set(keys.values())), len(WASI_JOBS), keys)
         self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in jobs["wasi-execution"]["steps"]))
+
+    def test_each_rust_cache_family_has_at_most_one_saver(self):
+        # rust-cache keeps the first save of a key, so two savers of one family
+        # leave whichever job finished first as the cache the other restores.
+        import yaml
+        savers = {}
+        for name in ("test.yml", "gc.yml", "compiler-runtime.yml"):
+            workflow = yaml.load(Path(".github/workflows", name).read_text(), Loader=yaml.BaseLoader)
+            for job_id, job in workflow["jobs"].items():
+                for step in job.get("steps", []):
+                    uses = step.get("uses", "")
+                    self.assertNotIn("Swatinem/rust-cache", uses, f"{name}/{job_id} bypasses perry-rust-cache")
+                    if uses.endswith("/perry-rust-cache") and step.get("with", {}).get("save", "false") != "false":
+                        savers.setdefault(step["with"].get("key", job_id), []).append(f"{name}/{job_id}")
+        self.assertEqual({k: v for k, v in savers.items() if len(v) > 1}, {})
+        self.assertIn("gap-suite-build", savers)
 
     def test_actual_pr_gate_rejects_one_skipped_planned_wasi_job(self):
         import os

@@ -550,10 +550,10 @@ jobs:
           cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
           "$cc_llvm_prefix/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: cc-parity-wasm-host
-          save-if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+          key: cc-parity-wasm-host
+          save: ${{ github.event_name == 'workflow_dispatch' }}
       - name: Build compiler, then all runtime archives together
         run: python3 scripts/cc_parity_gate.py build --work-dir "$CC_PARITY_WORK"
       - name: Compile the pinned bundle natively
@@ -672,10 +672,10 @@ jobs:
         uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: eh-transport
+          save: "true"
       - name: Build compiler + runtime archives
         run: |
           cargo build-perry --profile perry-dev
@@ -808,10 +808,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "8G"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout repository (inline git)
@@ -871,22 +867,11 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - if: steps.scope.outputs.pkgs != ''
         uses: ./.github/actions/setup-llvm22
-      - name: Install sccache
-        if: steps.scope.outputs.pkgs != ''
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action
-      - name: Cache sccache objects
-        if: steps.scope.outputs.pkgs != ''
-        uses: ./.github/actions/perry/actions/cache
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.scope.outputs.pkgs != ''
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: ext-link
+          save: "true"
       - name: Link the ext crates
         if: steps.scope.outputs.pkgs != ''
         env:
@@ -1071,12 +1056,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - name: Start sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Setup Node.js (executes the runner; oracle is the pinned dist)
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1097,9 +1079,6 @@ jobs:
       - route-compatibility
     if: ${{ needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['node-compat-matrix'] }}
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
       CARGO_INCREMENTAL: "0"
 
     permissions:
@@ -1187,10 +1166,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Resolve Node version from the pinned test-corpus ref
         id: node_core_version
         run: |
@@ -1420,10 +1398,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry-feature-matrix"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: feature-matrix
+          save: "true"
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1527,10 +1505,10 @@ jobs:
           fi
       - name: Install Rust toolchain with the WASI target
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-wasi-check"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: wasi-check
+          save: "true"
       - name: Install the WASI C compiler and sysroot
         shell: bash
         run: |
@@ -1592,10 +1570,10 @@ jobs:
       - name: Install Rust toolchain with the WASI target
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-wasi-codegen"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: wasi-check-codegen
+          save: "true"
       - name: Install pinned Node oracle for WASI compatibility tests
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1734,10 +1712,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry-npm-sweep"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: npm-package-sweep
+          save: "true"
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -2398,9 +2376,6 @@ jobs:
     timeout-minutes: 180
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "4G"
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -2427,11 +2402,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/mozilla-actions/sccache-action
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: next-app-route
+          save: "true"
       - uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
@@ -2549,11 +2523,10 @@ jobs:
         if: steps.relevance.outputs.run == 'true'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Install clang
         if: steps.relevance.outputs.run == 'true'
         run: |
@@ -3483,11 +3456,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Build perry and the runtime archives
         if: steps.relevance.outputs.run == 'true'
         run: |
@@ -3550,3 +3522,5 @@ jobs:
               raise SystemExit(1)
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
+
+
