@@ -1630,9 +1630,10 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
   constructor(funcIdx, captureCount) {
-    this.funcIdx = funcIdx;
-    this.captures = new Array(captureCount | 0);
+    __defineHidden(this, 'funcIdx', funcIdx);
+    __defineHidden(this, 'captures', new Array(captureCount | 0));
   }
 }
 // A function expression whose body reads its own `this`: its body takes the
@@ -1703,8 +1704,29 @@ function __classRef(className, ctorIdx) {
     ctor = __classCtor(className, ctorIdx, undefined);
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
+    for (const key of Reflect.ownKeys(classStaticTable[className] || {})) __classExposeStatic(className, key);
   }
   return ctor;
+}
+
+// A static field lives in `classStaticTable`. The class value has it as an own
+// enumerable property that reads and writes the table entry, so `Object.keys`, `in`
+// and `hasOwnProperty` see it. A field replaces a configurable, non-enumerable own
+// property (`name`, `length`, a static method or accessor), as a class definition
+// does; an enumerable one is already the field's accessor. A computed
+// member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
+// shares the table and stays hidden.
+function __classExposeStatic(className, key) {
+  const ctor = __classRefs.get(className);
+  if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
+  const own = Object.getOwnPropertyDescriptor(ctor, key);
+  if (own && (own.enumerable || !own.configurable)) return;
+  Object.defineProperty(ctor, key, {
+    get() { return classStaticTable[className][key]; },
+    set(value) { classStaticTable[className][key] = value; },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
@@ -2200,9 +2222,32 @@ const __memDispatch = {
   },
   object_delete: (obj, key) => { if (__holdsProperties(obj)) delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
+  // `for (k in o)`: the enumerable string keys of o and its prototype chain, in the
+  // order a `for...in` visits them. A primitive is boxed, so a string yields its indices.
+  for_in_keys: (obj) => {
+    const keys = [];
+    if (obj !== null && obj !== undefined) for (const k in Object(obj)) keys.push(k);
+    return keys;
+  },
   object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
+  // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
+  // included, except the statically named ones (CopyDataProperties). Defined, not
+  // assigned, so an own `__proto__` key stays a data property.
+  object_rest: (obj, exclude) => {
+    const rest = {};
+    if (obj === null || obj === undefined) return rest;
+    const from = Object(obj);
+    for (const key of Reflect.ownKeys(from)) {
+      if (typeof key === 'string' && exclude.includes(key)) continue;
+      const desc = Object.getOwnPropertyDescriptor(from, key);
+      if (desc && desc.enumerable) {
+        Object.defineProperty(rest, key, { value: from[key], writable: true, enumerable: true, configurable: true });
+      }
+    }
+    return rest;
+  },
   object_has_property: (obj, key) => {
     if (!__holdsProperties(obj)) return 0;
     return (key in obj) ? 1 : 0;
@@ -2494,7 +2539,9 @@ const __memDispatch = {
     if (evaluation) {
       Object.defineProperty(evaluation, key, { value, writable: true, configurable: true, enumerable: true });
     } else {
-      (classStaticTable[cls] ||= {})[typeof key === 'symbol' ? key : String(key)] = value;
+      const k = typeof key === 'symbol' ? key : String(key);
+      (classStaticTable[cls] ||= {})[k] = value;
+      __classExposeStatic(cls, k);
     }
   },
   class_static_this: (className, ctorIdx) => {
@@ -2694,8 +2741,10 @@ const __memDispatch = {
       const fname = String(name);
       const cls = obj[__classRefName];
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
-      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) statics[fname] = value;
-      else obj[fname] = value;
+      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) {
+        statics[fname] = value;
+        __classExposeStatic(cls, fname);
+      } else obj[fname] = value;
       return;
     }
     if (!__holdsProperties(obj)) return;
@@ -2718,6 +2767,7 @@ const __memDispatch = {
     const cls = String(classId);
     if (!classStaticTable[cls]) classStaticTable[cls] = {};
     classStaticTable[cls][String(name)] = value;
+    __classExposeStatic(cls, String(name));
     return value;
   },
   class_get_static: (classId, name) => {
@@ -2774,7 +2824,7 @@ const __memDispatch = {
 
   // Set — args are plain JS values (s is the Set object itself)
   set_new: () => new Set(),
-  set_new_from_array: (arr) => new Set(Array.isArray(arr) ? arr : []),
+  set_new_from_array: (iterable) => new Set(iterable),
   set_add: (s, value) => { if (s instanceof Set) s.add(value); },
   set_has: (s, value) => (s instanceof Set && s.has(value)) ? 1 : 0,
   set_delete: (s, value) => { if (s instanceof Set) s.delete(value); },
@@ -5746,8 +5796,8 @@ function __classMethodValue(cls, mname, evaluation) {
   let fn = byName.get(mname);
   if (!fn || fn.funcIdx !== funcIdx) {
     fn = function (...args) { return __classMemberCall(funcIdx, evaluation, this, args); };
-    fn.funcIdx = funcIdx;
-    fn.captures = [TAG_UNDEFINED];
+    __defineHidden(fn, 'funcIdx', funcIdx);
+    __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
     __classMethodFns.add(fn);
     byName.set(mname, fn);
   }

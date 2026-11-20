@@ -280,7 +280,7 @@ fn a_slice_with_another_species_or_receiver_is_not_plain() {
     let src = "const o: any = { length: 2, 0: 1, 1: 2 };\n\
                const K = Array.prototype.slice.call(o);\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
-    let src = "const L = [3, 1, 2];\nconst K = L.slice();\n(globalThis as any).hostTake(K);\nconsole.log(K[0]);";
+    let src = "declare function external(x: unknown): void;\nconst L = [3, 1, 2];\nconst K = L.slice();\nexternal(K);\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
     let src = "const L = [3, 1, 2];\nconst K = Object.freeze(L.slice());\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
@@ -288,7 +288,9 @@ fn a_slice_with_another_species_or_receiver_is_not_plain() {
 
 #[test]
 fn an_escaped_or_reshaped_array_is_boxed() {
-    let src = format!("const K = [1, 2, 3, 4];\n(globalThis as any).hostTake(K);{READ}");
+    let src = format!(
+        "declare function external(x: unknown): void;\nconst K = [1, 2, 3, 4];\nexternal(K);{READ}"
+    );
     assert_eq!(rep(&src, "K"), Rep::Boxed);
     let src = format!("const K: any = [1, 2, 3, 4];\nK.tag = 1;{READ}");
     assert_eq!(rep(&src, "K"), Rep::Boxed);
