@@ -218,6 +218,11 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     }
     unsafe {
         js_stdlib_process_pending();
+        // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+        {
+            extern "C" { fn js_loop_turn_nonblocking(); }
+            js_loop_turn_nonblocking();
+        }
         js_callback_timer_tick();
         js_interval_timer_tick();
         // Issue #1865: perry/ui `onFrame` display-link callbacks. Real

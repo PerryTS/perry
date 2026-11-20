@@ -335,6 +335,11 @@ pub fn app_run(_app_handle: i64) {
                 js_frame_pump_default();
                 js_run_ext_pump();
                 js_run_stdlib_pump();
+                // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+                {
+                    extern "C" { fn js_loop_turn_nonblocking(); }
+                    js_loop_turn_nonblocking();
+                }
                 js_promise_run_microtasks();
                 // #6183 (2026-07-09 GC audit): spend a bounded idle budget
                 // on any active budgeted GC cycle at the pump boundary — the

@@ -267,6 +267,15 @@ pub fn js_loop_turn_bounded(budget_ms: u64) {
     loop_hooks::turn_bounded(budget_ms);
 }
 
+/// One non-blocking turn of this thread's loop, for native UI hosts whose
+/// run-loop pump otherwise never turns it (fetch / node:http only progress
+/// on a turn).
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub extern "C" fn js_loop_turn_nonblocking() {
+    js_loop_turn_bounded(0);
+}
+
 /// Test-only: install an unrouted net-profile loop on this thread.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn install_net_loop_for_test() -> bool {
