@@ -1655,6 +1655,14 @@ function __callClosureMethod(closure, receiver, args) {
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
 }
+// A closure's host prototype is its class's; the program sees Function.prototype.
+// The closure records no function kind, so an async or generator function answers
+// Function.prototype too.
+function __programPrototype(proto) {
+  return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
+    ? Function.prototype
+    : proto;
+}
 
 // Class method/static/parent tables
 const classMethodTable = {};
@@ -2188,8 +2196,8 @@ const __memDispatch = {
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // Object.getPrototypeOf boxes a primitive; Reflect.getPrototypeOf throws for one.
-  object_get_prototype_of: (obj) => Object.getPrototypeOf(obj),
-  reflect_get_prototype_of: (obj) => Reflect.getPrototypeOf(obj),
+  object_get_prototype_of: (obj) => __programPrototype(Object.getPrototypeOf(obj)),
+  reflect_get_prototype_of: (obj) => __programPrototype(Reflect.getPrototypeOf(obj)),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
   // at call time (see __superGet, which also takes a class method's home).
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
