@@ -4952,7 +4952,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: gap-suite-build
+          key: doc-tests
+          save: "true"
 
       - name: Build compiler + UI backend + harness
         # The database/mail examples route through async wrapper staticlibs.
@@ -5075,7 +5076,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: gap-suite-build
+          key: binary-size
+          save: "true"
 
       - name: Install linker retention diagnostics (ELF)
         if: runner.os == 'Linux'
@@ -6617,5 +6619,3 @@ jobs:
               raise SystemExit(1)
           print('All planned native host platforms passed')
           PY
-
-

@@ -228,18 +228,33 @@ class CategoryRoutingTests(unittest.TestCase):
     def test_each_rust_cache_family_has_at_most_one_saver(self):
         # rust-cache keeps the first save of a key, so two savers of one family
         # leave whichever job finished first as the cache the other restores.
+        # A job restoring another job's family also needs the saver's runner and
+        # the env rust-cache hashes into the key, or it can never hit.
         import yaml
-        savers = {}
+        hashed = ("CARGO", "CC", "CFLAGS", "CXX", "CMAKE", "RUST")
+        savers, restorers = {}, []
         for name in ("test.yml", "gc.yml", "compiler-runtime.yml"):
             workflow = yaml.load(Path(".github/workflows", name).read_text(), Loader=yaml.BaseLoader)
             for job_id, job in workflow["jobs"].items():
+                env = {**(workflow.get("env") or {}), **(job.get("env") or {})}
+                # The action exports CARGO_INCREMENTAL=0 before rust-cache hashes.
+                signature = (job.get("runs-on"), sorted((k, v) for k, v in env.items()
+                                                        if k.startswith(hashed) and k != "CARGO_INCREMENTAL"))
                 for step in job.get("steps", []):
                     uses = step.get("uses", "")
                     self.assertNotIn("Swatinem/rust-cache", uses, f"{name}/{job_id} bypasses perry-rust-cache")
-                    if uses.endswith("/perry-rust-cache") and step.get("with", {}).get("save", "false") != "false":
-                        savers.setdefault(step["with"].get("key", job_id), []).append(f"{name}/{job_id}")
-        self.assertEqual({k: v for k, v in savers.items() if len(v) > 1}, {})
+                    if not uses.endswith("/perry-rust-cache"):
+                        continue
+                    key = step.get("with", {}).get("key", job_id)
+                    if step.get("with", {}).get("save", "false") != "false":
+                        savers.setdefault(key, []).append((f"{name}/{job_id}", signature))
+                    else:
+                        restorers.append((key, f"{name}/{job_id}", signature))
+        self.assertEqual({k: [j for j, _ in v] for k, v in savers.items() if len(v) > 1}, {})
         self.assertIn("gap-suite-build", savers)
+        for key, job, signature in restorers:
+            self.assertIn(key, savers, f"{job} restores {key}, which no job saves")
+            self.assertEqual(signature, savers[key][0][1], f"{job} cannot hit {key} saved by {savers[key][0][0]}")
 
     def test_actual_pr_gate_rejects_one_skipped_planned_wasi_job(self):
         import os
