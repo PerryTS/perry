@@ -111,6 +111,14 @@ pub enum Cons {
     /// once the worklist is empty (`settle_for_in`), so a key written later,
     /// an escape or a write under a key no name lists widens dst.
     OwnKeys { dst: NodeId },
+    /// Rule PK: the String keys of own properties, enumerable or not
+    /// (ECMA-262 20.1.2.10 Object.getOwnPropertyNames, 10.1.11.1
+    /// OrdinaryOwnPropertyKeys). Of a class prototype of this unit whose
+    /// keys are known (`Model::proto_names`): the keys the class defines on
+    /// it (methods, accessors, `constructor`) and those the program wrote
+    /// on it, each a String constant; of any other value, any String.
+    /// Looked at again in `settle_for_in`, as rule EK.
+    OwnNames { dst: NodeId },
     /// The `value` field of an own-property descriptor of each t (20.1.2.8,
     /// 10.1.5.1 OrdinaryGetOwnProperty): `OwnValues`, plus the own data
     /// properties the realm makes, which `OwnValues` (EnumerableOwnProperties
@@ -1024,6 +1032,7 @@ impl Cons {
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::OwnKeys { .. } => "ownkeys",
+            Cons::OwnNames { .. } => "ownnames",
             Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
             Cons::IndexHoleIn { .. } => "indexholein",

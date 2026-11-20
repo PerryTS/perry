@@ -96,6 +96,15 @@ impl Model {
                     self.own_keys_of(t, dst);
                 }
             }
+            Cons::OwnNames { dst } => {
+                // A String's own names: its indices and `length`.
+                if prim & prim::STR != 0 {
+                    self.add_prim(dst, prim::STR);
+                }
+                for &t in toks {
+                    self.own_names_of(t, dst);
+                }
+            }
             Cons::OwnDescValues { dst } => {
                 // A String's own properties: its characters and `length`.
                 if prim & prim::STR != 0 {

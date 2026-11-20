@@ -284,6 +284,92 @@ impl Model {
         before != (self.nodes[dst as usize].prim, self.nodes[dst as usize].strs)
     }
 
+    /// Rule PK: the own String keys of `t` when `t` is the prototype of a
+    /// class of this unit whose keys are known: the keys its class
+    /// definition creates on it (ECMA-262 15.7.14 ClassDefinitionEvaluation:
+    /// `constructor`, each non-static method and accessor) plus the names
+    /// the program wrote on it, a superset of its own ones. `None` (any
+    /// String) when it escaped, is HARD, has a computed member, was written
+    /// under a key no name lists, has an accessor of an unknown key, holds
+    /// a key a solver rule made (`spelled_atoms`, as `enum_keys`) or
+    /// `__proto__`, or is another unit's class (its prototype lists only
+    /// its contract's methods).
+    pub(crate) fn proto_names(&self, t: Tok) -> Option<Vec<Atom>> {
+        let TokKind::Proto(tm) = self.toks[t as usize] else {
+            return None;
+        };
+        let tpl = &self.tmpls[tm as usize];
+        if !matches!(
+            tpl.kind,
+            TmplKind::Class {
+                literal_shape: false,
+                ..
+            }
+        ) || self.foreign.contains_key(&tm)
+            || tpl.has_computed_members
+            || self.is_escaped(t)
+            || self.hard.contains_key(&t)
+            || self.enum_any_written(t)
+        {
+            return None;
+        }
+        let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
+        let acc = self.accessor_keys.get(&t).into_iter().flatten();
+        let written = self.field_keys.get(&t).into_iter().flatten();
+        let named = self
+            .proto_writers
+            .keys()
+            .filter(|&&(w, _)| w == tm)
+            .map(|(_, a)| a);
+        let mut keys: Vec<Atom> = Vec::new();
+        for &a in tpl
+            .proto_members
+            .iter()
+            .chain(acc)
+            .chain(written)
+            .chain(named)
+        {
+            let name = self.atoms[a as usize].as_str();
+            if name == "__proto__" || star(a) || self.spelled_atoms.is_some_and(|n| a as usize >= n)
+            {
+                return None;
+            }
+            // A symbol is no String key.
+            if !name.starts_with(crate::builtins::WK_PREFIX)
+                && self.enum_string_key(a)
+                && !keys.contains(&a)
+            {
+                keys.push(a);
+            }
+        }
+        Some(keys)
+    }
+
+    /// Rule PK (`Cons::OwnNames`): dst ⊇ the own String keys of `t`
+    /// (ECMA-262 20.1.2.10, 10.1.11.1). A class prototype whose names are
+    /// known (`proto_names`) gives those names; it is looked at again in
+    /// `settle_for_in`. Any other value (⊤ among them) gives any String.
+    pub(crate) fn own_names_of(&mut self, t: Tok, dst: NodeId) -> bool {
+        let keys = if t == TOP { None } else { self.proto_names(t) };
+        let before = (self.nodes[dst as usize].prim, self.nodes[dst as usize].strs);
+        match keys {
+            None => self.add_prim(dst, prim::STR),
+            Some(mut v) => {
+                if self.own_names_seen.insert((t, dst)) {
+                    self.own_names_on.push((t, dst));
+                }
+                if !v.is_empty() {
+                    v.sort_unstable();
+                    v.dedup();
+                    let set = self.str_set(&v);
+                    let set = self.run_born(set);
+                    self.add_s(dst, &[], prim::STR, set);
+                }
+            }
+        }
+        before != (self.nodes[dst as usize].prim, self.nodes[dst as usize].strs)
+    }
+
     /// May `Object.prototype`, the chain of every literal, hold a key the
     /// program wrote (`native_writes` on it: a store, an accessor, E5/E6/E7,
     /// a reach into unmodeled code, another unit's write)? A for-in over a
@@ -336,6 +422,10 @@ impl Model {
         // Rule EK: the keys `Cons::OwnKeys` gave, the same way.
         for (t, dst) in self.own_keys_on.clone() {
             more |= self.own_keys_of(t, dst);
+        }
+        // Rule PK: the names `Cons::OwnNames` gave, the same way.
+        for (t, dst) in self.own_names_on.clone() {
+            more |= self.own_names_of(t, dst);
         }
         more
     }

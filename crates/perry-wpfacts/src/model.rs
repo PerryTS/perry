@@ -2837,6 +2837,11 @@ pub struct Model {
     /// `settle_for_in`; the set dedups.
     pub own_keys_on: Vec<(Tok, NodeId)>,
     pub own_keys_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
+    /// Rule PK: (class prototype, key node) of each `Cons::OwnNames` that
+    /// gave the prototype's known names (`own_names_of`), checked again in
+    /// `settle_for_in`; the set dedups.
+    pub own_names_on: Vec<(Tok, NodeId)>,
+    pub own_names_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
     /// FORIN1: (key node, stored value, constant) of a for-in keyed store
     /// made per String constant of its key (`Cons::StoreKeyed`).
     pub keyed_named: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,

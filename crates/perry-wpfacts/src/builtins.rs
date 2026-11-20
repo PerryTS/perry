@@ -3593,11 +3593,12 @@ fn ns_method_inner(
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
             let pb = site_tmpl(m, call, "keys");
             let fa = m.field_any(pb);
-            let p = match name {
-                "getOwnPropertySymbols" => prim::SYMBOL,
-                _ => prim::STR,
-            };
-            m.add_prim(fa, p);
+            match (name, arg(m, call, 0)) {
+                // Rule PK: the own names of the argument.
+                ("getOwnPropertyNames", Some(o)) => m.cons(o, Cons::OwnNames { dst: fa }),
+                ("getOwnPropertySymbols", _) => m.add_prim(fa, prim::SYMBOL),
+                _ => m.add_prim(fa, prim::STR),
+            }
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {

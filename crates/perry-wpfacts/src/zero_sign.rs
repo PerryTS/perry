@@ -238,6 +238,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::EnumKeyAny { .. }
         // A key list reads no Number (rule EK).
         | Cons::OwnKeys { .. }
+        | Cons::OwnNames { .. }
         | Cons::CjsPublish { .. } => Use::Absorb,
         // A property read or a method call on a Number runs its prototype's
         // code with the Number as `this` (`(-0).toLocaleString()` is "-0");

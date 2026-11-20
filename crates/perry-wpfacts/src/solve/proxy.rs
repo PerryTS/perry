@@ -697,6 +697,14 @@ impl Model {
             // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
             // arm), the enumeration itself `proxy_own_keys`.
             Cons::ForInKeys { ft, call } => self.for_in_every_key(call, ft),
+            // Rule PK on a Proxy (Object.getOwnPropertyNames): its own
+            // keys are what its ownKeys trap (or the target's own) returns
+            // (10.5.11 [[OwnPropertyKeys]]), kept to Strings (20.1.2.10):
+            // any String. The traps run in the operand's own
+            // `Implicit OwnKeys` (`proxy_own_keys`).
+            Cons::OwnNames { dst } => {
+                self.add_prim(dst, prim::STR);
+            }
             // Another protocol touch: its hold names the protocol and the
             // touch's own reason.
             Cons::Implicit { reason, proto } => {

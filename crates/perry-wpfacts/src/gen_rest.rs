@@ -496,23 +496,32 @@ impl<'a> Gen<'a> {
             | Expr::ObjectGetOwnPropertySymbols(..)
             | Expr::ReflectOwnKeys(..) => {
                 let ks = kids(e);
-                let _ = self.prim_op(
-                    fx,
-                    &ks,
-                    prim::UNDEF,
-                    "primitive container builtin",
-                    Protocol::OwnKeys,
-                );
+                let r = self.m.reason("primitive container builtin");
+                let mut ops = Vec::with_capacity(ks.len());
+                for o in &ks {
+                    let v = self.expr(fx, o);
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::OwnKeys,
+                        },
+                    );
+                    ops.push(v);
+                }
                 let (t, n) = self.bobj(mi, "arraybox");
                 let fa = self.m.field_any(t);
                 // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
-                // Symbols; 28.1.11 Reflect.ownKeys: both.
-                let p = match e {
-                    Expr::ObjectGetOwnPropertySymbols(..) => prim::SYMBOL,
-                    Expr::ReflectOwnKeys(..) => prim::STR | prim::SYMBOL,
-                    _ => prim::STR,
-                };
-                self.m.add_prim(fa, p);
+                // Symbols; 28.1.11 Reflect.ownKeys: both. Rule PK:
+                // getOwnPropertyNames gives the operand's own names.
+                match (e, ops.first()) {
+                    (Expr::ObjectGetOwnPropertyNames(..), Some(&o)) => {
+                        self.m.cons(o, Cons::OwnNames { dst: fa });
+                    }
+                    (Expr::ObjectGetOwnPropertySymbols(..), _) => self.m.add_prim(fa, prim::SYMBOL),
+                    (Expr::ReflectOwnKeys(..), _) => self.m.add_prim(fa, prim::STR | prim::SYMBOL),
+                    _ => self.m.add_prim(fa, prim::STR),
+                }
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
